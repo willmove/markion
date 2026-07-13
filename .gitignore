@@ -1,0 +1,31 @@
+# --- Rust build artifacts ---
+/target/
+
+# Packaging output (cargo-packager writes installers/.app/.deb/.exe here)
+/dist/
+
+# Profiling / coverage output (from -Cprofile, -Cinstrument-coverage, etc.)
+*.profraw
+*.profdata
+*.prof
+/coverage/
+
+# --- Node toolchain (icon-generation scripts) ---
+/node_modules/
+
+# --- Local OpenSpec planning workspace ---
+/openspec/
+
+# --- IDE / editor ---
+/.vscode/
+/.idea/
+/.codex/
+*.iml
+*.swp
+*.swo
+*~
+
+# --- OS metadata ---
+.DS_Store
+Thumbs.db
+desktop.ini

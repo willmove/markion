@@ -1,0 +1,28 @@
+{
+  "name": "markion",
+  "version": "1.0.0",
+  "description": "<p align=\"center\">   <img src=\"assets/markion-logo-simple.svg\" alt=\"Markion logo\" width=\"96\" height=\"96\"> </p>",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/willmove/markion.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/willmove/markion/issues"
+  },
+  "homepage": "https://github.com/willmove/markion#readme",
+  "devDependencies": {
+    "png2icons": "^2.0.1",
+    "sharp": "^0.35.3"
+  }
+}

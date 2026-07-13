@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1ad02561ea7e22bae86d307cd97522655c6116d9584264d3554cf15f8fdd0274 # shrinks to doc = Document { blocks: [BlockQuote { content: [BlockQuote { content: [Paragraph { content: [Link { text: [InlineMath("*-*a*0*")], url: "http://a", title: None }], id: 0 }], id: 0 }], id: 0 }], metadata: None, version: 0 }
+cc eb120554fa349b86aaf9866613881043b08cbb3a900e034ea382721bec283c89 # shrinks to doc = Document { blocks: [BlockQuote { content: [List { items: [ListItem { content: [Link { text: [Code("a")], url: "https://0.aa", title: None }, Strikethrough([Code("a")])], blocks: [], checked: None, sub_items: [] }], ordered: false, start: None, id: 0 }], id: 0 }], metadata: None, version: 0 }
+cc 903ca2bbc0ac736a5e497d8744f2949d222cbf867895d4a40d0f46e0c699b212 # shrinks to doc = Document { blocks: [HorizontalRule { id: 0 }, HorizontalRule { id: 0 }], metadata: None, version: 0, footnote_map: {} }
+cc 396d377c2b65bf3dd874d7e8f4dd85835949ce523743ddf9fd13c92f9a62e6fb # shrinks to doc = Document { blocks: [List { items: [ListItem { content: [Text("0.")], blocks: [], checked: None, sub_items: [] }], ordered: true, start: None, id: 0 }], metadata: None, version: 0, footnote_map: {} }

@@ -1,0 +1,116 @@
+# cargo-packager configuration (CrabNebula cargo-packager 0.11.x).
+# Docs: https://docs.crabnebula.dev/packager/
+#
+# Format notes (verified from the crate's `Config` struct serde attributes):
+#   - Keys are at the TOP LEVEL of this file. There is no `[packager]` wrapper
+#     table in a standalone Packager.toml (that table form only exists inside
+#     Cargo.toml as `[package.metadata.packager]`).
+#   - cargo-packager accepts camelCase / kebab-case / snake_case for most keys
+#     (via serde aliases). We use kebab-case to match the repo's own example.
+#   - `formats` is a single top-level array; the CI workflow overrides it per OS
+#     via `cargo packager --formats <list>`, so the value here is just a safe
+#     default for a local `cargo packager --release` invocation.
+#   - `[nsis]` and `[deb]` are top-level tables (siblings of `[windows]`/...),
+#     NOT nested under `[windows]`/`[linux]`. Every struct has
+#     `deny_unknown_fields`, so misspelled keys error out immediately.
+#
+# This file is consumed by .github/workflows/release.yml after each platform's
+# native `cargo build --release` has produced target/release/markion. The packager
+# then wraps that binary into:
+#   - macOS:   .app + .dmg        (--formats app,dmg)
+#   - Linux:   .deb + .AppImage   (--formats deb,appimage)
+#   - Windows: NSIS .exe installer (--formats nsis)
+#
+# NOTE on signing: builds are UNSIGNED (no paid code-signing certificate). Users
+# will see Gatekeeper (macOS) / SmartScreen (Windows) warnings on first launch
+# and must bypass them manually. See README "Install" section.
+
+product-name = "Markion"
+# `name` is the internal app/package identifier. Setting it explicitly is
+# IMPORTANT: when omitted, cargo-packager tries to auto-derive it by walking
+# the config file's parent (find_nearset_pkg_name), which does an unsafe
+# set_current_dir() on the config *file path* and errors "Not a directory".
+# Providing `name` skips that buggy path entirely.
+name = "markion"
+identifier = "dev.markion.app"
+version = "0.1.2"
+category = "Productivity"
+publisher = "Willmove"
+homepage = "https://github.com/willmove/markion"
+description = "A Rust + GPUI Markdown editor with live preview, themes, and i18n."
+long-description = "Markion is a Rust + GPUI Markdown editor with live preview, themes, and i18n."
+
+# All three icon files; the packager picks the right one per format
+# (.ico → nsis/wix, .icns → app/dmg, .png → deb/appimage).
+icons = [
+    "assets/markion.ico",
+    "assets/markion.icns",
+    "assets/markion.png",
+]
+# Non-binary files bundled alongside the app (logo, icons for reuse).
+resources = ["assets"]
+
+# The freshly built binary lives in target/release/markion (crate name = `markion`).
+# `binaries` tells the packager which file(s) to wrap and which is the main
+# executable. `path` is relative to `binaries-dir`.
+binaries-dir = "target/release"
+binaries = [{ path = "markion", main = true }]
+
+# Build the binary fresh before packaging. The CI workflow also builds
+# explicitly with the right --target, so this is a safety net for local
+# `cargo packager --release` runs.
+before-packaging-command = "cargo build --release"
+
+out-dir = "dist"
+log-level = "info"
+
+# Default formats for a local `cargo packager --release` run. The CI matrix
+# overrides this per OS via `--formats`, so this just needs to be valid.
+formats = ["nsis", "app", "dmg", "deb", "appimage"]
+
+# ---------------------------------------------------------------------------
+# macOS options
+# ---------------------------------------------------------------------------
+[macos]
+# Unsigned build: signing-identity is intentionally omitted. Gatekeeper will
+# warn end users. Minimum macOS version for the arm64 build.
+minimum-system-version = "11.0"
+
+# ---------------------------------------------------------------------------
+# Linux options
+# ---------------------------------------------------------------------------
+[linux]
+# LinuxConfig's only field: emit the .desktop entry inside deb/AppImage.
+generate-desktop-entry = true
+
+[deb]
+# gpui's Linux runtime deps (Wayland/X11/Vulkan/xkbcommon/fontconfig/alsa).
+# Listed so `apt install ./markion_*.deb` pulls them in automatically.
+depends = [
+    "libwayland-client0",
+    "libxkbcommon0",
+    "libxcb1",
+    "libvulkan1",
+    "libfontconfig1",
+    "libasound2",
+    "libglib2.0-0",
+]
+
+# ---------------------------------------------------------------------------
+# Windows options
+# ---------------------------------------------------------------------------
+[windows]
+# NSIS digests; SHA-256 is the modern default.
+digest-algorithm = "sha256"
+allow-downgrades = true
+
+# NSIS is a TOP-LEVEL table, not [windows.nsis].
+[nsis]
+# Install for the current user only (no UAC prompt, no admin needed) — safer
+# default for an unsigned hobby/prototype distribution. Accepted values:
+# "currentUser" (default), "perMachine", "both". The field is `installer-mode`
+# (NOT `install-mode` — that key is rejected by the NSIS config struct).
+installer-mode = "currentUser"
+# Show a language selector on the installer's first page.
+languages = ["English", "SimpChinese"]
+display-language-selector = true

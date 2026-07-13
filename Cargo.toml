@@ -1,0 +1,136 @@
+# Root-package workspace: the markion app crate lives here at the repo root, and
+# library crates absorbed from Typune (see docs/typune-integration-plan.md) join
+# as members under crates/*. The app crate is NOT relocated — root cargo
+# commands and the release pipeline keep targeting it unchanged.
+[workspace]
+members = ["crates/*"]
+
+# Shared metadata for workspace members (crates absorbed from Typune inherit
+# these via `version.workspace = true` / `edition.workspace = true`). The root
+# markion package declares its own values explicitly and does not inherit.
+[workspace.package]
+version = "0.1.2"
+edition = "2021"
+
+# Dependencies referenced by member crates via `.workspace = true`. Versions
+# match Typune @ 0b9e313 except pulldown-cmark, unified on 0.13 for the whole
+# workspace (openspec change unify-pulldown-cmark; was 0.11 for members).
+[workspace.dependencies]
+pulldown-cmark = "0.13"
+tree-sitter = "0.22"
+syntect = "5.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+toml = "0.8"
+regex = "1.10"
+tokio = { version = "1.36", features = ["full"] }
+proptest = "1.4"
+# bat's curated extended syntax set for syntect (TypeScript, TOML, Kotlin,
+# Swift, Dockerfile, PowerShell, ... — closes the modern-language gap in
+# syntect's bundled defaults). Default feature = syntect-onig, matching our
+# syntect backend.
+two-face = "0.5"
+
+[package]
+name = "markion"
+version = "0.1.2"
+edition = "2024"
+description = "A Rust + GPUI Markdown editor."
+license = "MIT"
+authors = ["Willmove"]
+repository = "https://github.com/willmove/markion"
+
+[dependencies]
+anyhow = "1.0"
+gpui = "0.2.2"
+font8x8 = "0.3"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+pulldown-cmark.workspace = true
+regex = "1.11"
+serde_yaml = "0.9"
+unicode-segmentation = "1.12"
+
+# Workspace members absorbed from Typune (see docs/typune-integration-plan.md),
+# renamed on import: markion already has a crate-root `mod export`, and a direct
+# `export` dependency would make `use export::...` paths ambiguous (E0659).
+# `typune-export` provides the pandoc-backed PDF/DOCX engine; `typune-markdown`
+# is its input AST/parser (and carries syntect highlighting + incremental
+# parsing for later integration phases).
+typune-markdown = { package = "markdown", path = "crates/markdown" }
+typune-export = { package = "export", path = "crates/export" }
+# Drives syntect scope parsing directly in src/highlight.rs (colors keep coming
+# from Markion's theme-mapped token classes, not syntect themes). two-face
+# supplies the extended grammar set the registry is built from.
+syntect.workspace = true
+two-face.workspace = true
+
+# TOML preferences (config.toml) and diagnostic file logging — designs adopted
+# from Typune's filesystem crate without copying it (its rfd/GTK dependency
+# would break the Linux release build; see the toml-config-logging-autosave
+# OpenSpec change).
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+
+[dev-dependencies]
+tempfile = "3.20"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+# Legacy bundle metadata (cargo-bundle compatible). The cross-platform release
+# pipeline reads the richer `Packager.toml` instead; this block is kept so a
+# plain `cargo bundle` still works for local macOS .app builds.
+[package.metadata.bundle]
+name = "Markion"
+identifier = "dev.markion.app"
+icon = ["assets/markion.icns", "assets/markion.ico", "assets/markion.png"]
+category = "Productivity"
+short_description = "A Markdown editor."
+long_description = "Markion is a Rust + GPUI Markdown editor with live preview, themes, and i18n."
+
+# Optimize dependencies (gpui in particular) even in debug builds. GPUI is a
+# heavily-generic, performance-sensitive GUI framework that is extremely slow
+# when built unoptimized — this is a major contributor to the editor feeling
+# laggy during `cargo run`.
+#
+# NOTE: the "*" wildcard covers external dependencies only — it does NOT apply
+# to workspace members under crates/*. Any compute-heavy member crate on the
+# typing path (parsing, highlighting, export) must get its own explicit
+# `[profile.dev.package.<name>]` opt-level override here when it is added.
+[profile.dev.package."*"]
+opt-level = 2
+
+# Explicit overrides for compute-heavy workspace members (the "*" wildcard
+# above does not cover them — see crate-architecture spec).
+[profile.dev.package.markdown]
+opt-level = 2
+
+[profile.dev.package.export]
+opt-level = 2
+
+# Our own crate runs markdown parsing, preview collection, and syntax
+# highlighting on the typing path; opt-level 1 keeps those responsive during
+# `cargo run` while staying close to opt-level 0 incremental compile times.
+[profile.dev]
+opt-level = 1
+
+# Release builds: trade some compile time for a smaller, faster binary.
+# `lto = "thin"` + `codegen-units = 1` let the optimizer see the whole crate
+# (notably inlining across gpui call sites); `strip` drops debug symbols for a
+# noticeably smaller installer payload. Unwinding is left at the default
+# (`unwind`) so panics still produce backtraces and GPUI's panic hooks behave.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+

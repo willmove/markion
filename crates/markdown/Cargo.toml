@@ -1,0 +1,21 @@
+[package]
+name = "markdown"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pulldown-cmark.workspace = true
+tree-sitter.workspace = true
+syntect.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+regex.workspace = true
+once_cell = "1.19"
+tokio.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
