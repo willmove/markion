@@ -1074,17 +1074,94 @@ pub(super) fn file_tree_entry_icon(
 ) -> Div {
     match kind {
         FileTreeEntryKind::Directory if expanded => div()
+            .relative()
             .w(px(16.))
             .h(px(16.))
             .flex_none()
-            .text_color(color)
-            .child(svg().path("icons/folder-open.svg").size_full()),
+            // The rear cover and tab stay visible above the wider front flap.
+            .child(
+                div()
+                    .absolute()
+                    .top(px(1.))
+                    .left(px(2.))
+                    .w(px(7.))
+                    .h(px(5.))
+                    .rounded_t_xs()
+                    .border_1()
+                    .border_color(color)
+                    .bg(palette.surface_bg),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(4.))
+                    .left(px(1.))
+                    .w(px(14.))
+                    .h(px(9.))
+                    .rounded_xs()
+                    .border_1()
+                    .border_color(color)
+                    .bg(palette.surface_bg),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(4.))
+                    .left(px(3.))
+                    .w(px(5.))
+                    .h(px(1.))
+                    .bg(palette.surface_bg),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(7.))
+                    .left(px(0.))
+                    .w(px(16.))
+                    .h(px(8.))
+                    .rounded_xs()
+                    .border_1()
+                    .border_color(color)
+                    .bg(palette.panel_bg),
+            ),
         FileTreeEntryKind::Directory => div()
+            .relative()
             .w(px(16.))
             .h(px(16.))
             .flex_none()
-            .text_color(color)
-            .child(svg().path("icons/folder.svg").size_full()),
+            .child(
+                div()
+                    .absolute()
+                    .top(px(2.))
+                    .left(px(2.))
+                    .w(px(7.))
+                    .h(px(5.))
+                    .rounded_t_xs()
+                    .border_1()
+                    .border_color(color)
+                    .bg(palette.panel_bg),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(5.))
+                    .left(px(1.))
+                    .w(px(14.))
+                    .h(px(10.))
+                    .rounded_xs()
+                    .border_1()
+                    .border_color(color)
+                    .bg(palette.panel_bg),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(5.))
+                    .left(px(3.))
+                    .w(px(5.))
+                    .h(px(1.))
+                    .bg(palette.panel_bg),
+            ),
         FileTreeEntryKind::File => div()
             .relative()
             .w(px(14.))

@@ -38,6 +38,7 @@ pub use model::{
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
 pub use i18n::{Language, Msg, shortcut_reference, sidebar_tab_label, t, tf};
 pub use math::{render_math, validate_latex};
+pub use parse::{HtmlPreviewPart, html_preview_parts, html_preview_plain_text};
 
 pub use storage::{
     FileTree, FileTreeEntry, FileTreeEntryKind, MARKDOWN_EXTENSIONS, delete_recovery_file,
@@ -54,9 +55,8 @@ use table::{
 
 use parse::{
     ImageDraft, InlineStateDraft, ListItemDraft, ListLevelDraft, append_span, clean_preview_text,
-    finish_rich_text, flush_list_item, heading_level_to_u8, html_preview_plain_text,
-    html_preview_parts, markdown_options, push_nonempty_block, push_preview_rich,
-    render_extended_html_text_nodes, slugify,
+    finish_rich_text, flush_list_item, heading_level_to_u8, markdown_options, push_nonempty_block,
+    push_preview_rich, render_extended_html_text_nodes, slugify,
 };
 
 use render::{
@@ -1950,6 +1950,76 @@ mod tests {
         assert!(html.contains("<h1>Hello</h1>"));
         assert!(html.contains("checkbox"));
         assert!(html.contains("<table>"));
+    }
+
+    #[test]
+    fn preview_keeps_raw_html_blocks_for_rendering() {
+        let doc = MarkdownDocument::from_text(
+            r#"<p align="center">
+  <img src="assets/markion-logo.svg" alt="Markion logo" width="128" height="128">
+</p>
+
+# Markion"#,
+        );
+        let blocks = doc.preview_blocks();
+
+        assert!(
+            matches!(
+                blocks.first(),
+                Some(PreviewBlock::Html { html, .. })
+                    if html.contains("assets/markion-logo.svg")
+            ),
+            "raw HTML blocks should reach the rendered preview instead of disappearing"
+        );
+        assert!(matches!(blocks.get(1), Some(PreviewBlock::Heading { .. })));
+    }
+
+    #[test]
+    fn html_preview_parts_render_common_readme_html() {
+        let html = r#"<p align="center">
+  <img src="assets/markion-logo.svg" alt="Markion logo" width="128" height="128">
+</p>
+
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+</p>"#;
+        let parts = html_preview_parts(html);
+
+        assert!(matches!(
+            &parts[0],
+            HtmlPreviewPart::Image { url, alt, centered, .. }
+                if url == "assets/markion-logo.svg" && alt == "Markion logo" && *centered
+        ));
+        let HtmlPreviewPart::Text { text, centered } = &parts[1] else {
+            panic!("expected text part");
+        };
+        assert!(*centered);
+        assert_eq!(text.text, "English · 简体中文");
+        assert!(
+            text.spans
+                .iter()
+                .any(|span| span.text == "English" && span.style.bold)
+        );
+        assert!(
+            text.spans
+                .iter()
+                .any(|span| span.text == "简体中文"
+                    && span.link.as_deref() == Some("README.zh-CN.md"))
+        );
+    }
+
+    #[test]
+    fn visual_edit_keeps_html_as_source_island() {
+        let doc = MarkdownDocument::from_text("<p><strong>HTML</strong></p>\n\nText");
+        let blocks = doc.visual_blocks();
+
+        assert!(matches!(
+            blocks.first(),
+            Some(VisualBlock {
+                source_island: Some(VisualSourceIslandKind::Html),
+                ..
+            })
+        ));
     }
 
     #[test]

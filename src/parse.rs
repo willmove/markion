@@ -15,7 +15,7 @@ use crate::model::{InlineSpan, InlineStyle, PreviewBlock, RichText};
 use crate::table::TableDraft;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum HtmlPreviewPart {
+pub enum HtmlPreviewPart {
     Text {
         text: RichText,
         centered: bool,
@@ -410,7 +410,7 @@ pub(crate) fn render_extended_html_text_nodes(html: &str) -> String {
     output
 }
 
-pub(crate) fn html_preview_plain_text(html: &str) -> String {
+pub fn html_preview_plain_text(html: &str) -> String {
     html_preview_parts(html)
         .into_iter()
         .filter_map(|part| match part {
@@ -428,7 +428,7 @@ pub(crate) fn html_preview_plain_text(html: &str) -> String {
         .join("\n")
 }
 
-pub(crate) fn html_preview_parts(html: &str) -> Vec<HtmlPreviewPart> {
+pub fn html_preview_parts(html: &str) -> Vec<HtmlPreviewPart> {
     HtmlPreviewBuilder::new(html).finish()
 }
 
@@ -444,6 +444,7 @@ struct HtmlPreviewBuilder<'a> {
     strike_depth: usize,
     links: Vec<String>,
     centered_depth: usize,
+    text_centered: bool,
 }
 
 impl<'a> HtmlPreviewBuilder<'a> {
@@ -460,6 +461,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
             strike_depth: 0,
             links: Vec::new(),
             centered_depth: 0,
+            text_centered: false,
         }
     }
 
@@ -500,8 +502,8 @@ impl<'a> HtmlPreviewBuilder<'a> {
 
         match parsed.name.as_str() {
             "br" => self.push_line_break(),
-            "p" | "div" | "section" | "article" | "header" | "footer" | "li" | "tr"
-            | "table" | "blockquote" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+            "p" | "div" | "section" | "article" | "header" | "footer" | "li" | "tr" | "table"
+            | "blockquote" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 if parsed.closing {
                     if self.centered_depth > 0 {
                         self.centered_depth -= 1;
@@ -596,6 +598,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
 
     fn push_line_break(&mut self) {
         if self.has_text() && !self.ends_with_line_break() {
+            self.text_centered |= self.centered_depth > 0;
             append_span(
                 &mut self.spans,
                 "\n",
@@ -606,6 +609,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
     }
 
     fn push_visible(&mut self, text: &str) {
+        self.text_centered |= self.centered_depth > 0;
         append_span(
             &mut self.spans,
             text,
@@ -619,9 +623,10 @@ impl<'a> HtmlPreviewBuilder<'a> {
         if !text.is_empty() {
             self.parts.push(HtmlPreviewPart::Text {
                 text,
-                centered: self.centered_depth > 0,
+                centered: self.text_centered,
             });
         }
+        self.text_centered = false;
     }
 
     fn has_text(&self) -> bool {
@@ -823,7 +828,9 @@ fn decode_html_entity(entity: &str) -> Option<char> {
         "apos" | "#39" => Some('\''),
         "nbsp" => Some(' '),
         _ if entity.starts_with("#x") || entity.starts_with("#X") => {
-            u32::from_str_radix(&entity[2..], 16).ok().and_then(char::from_u32)
+            u32::from_str_radix(&entity[2..], 16)
+                .ok()
+                .and_then(char::from_u32)
         }
         _ if entity.starts_with('#') => entity[1..].parse::<u32>().ok().and_then(char::from_u32),
         _ => None,

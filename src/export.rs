@@ -19,6 +19,7 @@ use crate::MarkdownDocument;
 use crate::escape::escape_xml_text;
 use crate::math::render_math;
 use crate::model::PreviewBlock;
+use crate::parse::{HtmlPreviewPart, html_preview_parts};
 
 /// Runs a Typune exporter over the raw Markdown source. Returns `None` on any
 /// failure (pandoc missing, conversion error) so callers fall back to the
@@ -249,6 +250,21 @@ fn render_docx_block(block: &PreviewBlock) -> String {
             };
             docx_paragraph(&format!("{prefix}{}", rendered.text), None)
         }
+        PreviewBlock::Html { html, .. } => html_preview_parts(html)
+            .into_iter()
+            .map(|part| match part {
+                HtmlPreviewPart::Text { text, .. } => docx_paragraph(&text.text, None),
+                HtmlPreviewPart::Image { alt, url, .. } => {
+                    let label = if alt.is_empty() {
+                        "Image"
+                    } else {
+                        alt.as_str()
+                    };
+                    docx_paragraph(&format!("{label}: {url}"), None)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(""),
         PreviewBlock::Image { alt, url, .. } => {
             let label = if alt.is_empty() { "Image" } else { alt };
             docx_paragraph(&format!("{label}: {url}"), None)

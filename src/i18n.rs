@@ -16,7 +16,11 @@ use crate::model::SidebarTab;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
     En,
-    Zh,
+    /// Simplified Chinese (简体中文). Persisted as `zh-hans`; also accepts the
+    /// legacy aliases `zh` / `chs` / `zh-cn` / `chinese` for backwards compat.
+    ZhHans,
+    /// Traditional Chinese (繁體中文). Persisted as `zh-hant`.
+    ZhHant,
     Ja,
     Fr,
     De,
@@ -28,7 +32,8 @@ impl Language {
     pub fn code(self) -> &'static str {
         match self {
             Self::En => "en",
-            Self::Zh => "zh",
+            Self::ZhHans => "zh-hans",
+            Self::ZhHant => "zh-hant",
             Self::Ja => "ja",
             Self::Fr => "fr",
             Self::De => "de",
@@ -41,7 +46,8 @@ impl Language {
     /// `sidebar_tab` and other prefs tolerate forward-compat values.
     pub fn from_code(code: &str) -> Self {
         match code.trim().to_ascii_lowercase().as_str() {
-            "zh" | "chs" | "zh-cn" | "zh-hans" | "chinese" => Self::Zh,
+            "zh" | "chs" | "zh-cn" | "zh-hans" | "chinese" => Self::ZhHans,
+            "zh-hant" | "zh-tw" | "zh-hk" | "cht" | "traditional chinese" => Self::ZhHant,
             "ja" | "jp" | "japanese" | "jpn" => Self::Ja,
             "fr" | "francais" | "français" | "french" | "fra" => Self::Fr,
             "de" | "deutsch" | "german" | "ger" | "deu" => Self::De,
@@ -52,11 +58,12 @@ impl Language {
     }
 
     /// Native display name used in the View → Language submenu (the name is
-    /// always shown in its own language, following common OS conventions).
+    /// always shown in its own script, following common OS conventions).
     pub fn native_name(self) -> &'static str {
         match self {
             Self::En => "English",
-            Self::Zh => "中文",
+            Self::ZhHans => "简体中文",
+            Self::ZhHant => "繁體中文",
             Self::Ja => "日本語",
             Self::Fr => "Français",
             Self::De => "Deutsch",
@@ -64,9 +71,18 @@ impl Language {
         }
     }
 
-    /// All selectable languages, in display order.
+    /// All selectable languages, in display order. The two Chinese variants
+    /// sit next to each other so users can pick their script at a glance.
     pub fn all() -> &'static [Language] {
-        &[Self::En, Self::Zh, Self::De, Self::Es, Self::Fr, Self::Ja]
+        &[
+            Self::En,
+            Self::ZhHans,
+            Self::ZhHant,
+            Self::De,
+            Self::Es,
+            Self::Fr,
+            Self::Ja,
+        ]
     }
 }
 
@@ -524,7 +540,8 @@ pub enum Msg {
 pub fn t(lang: Language, msg: Msg) -> &'static str {
     match lang {
         Language::En => en(msg),
-        Language::Zh => zh(msg),
+        Language::ZhHans => zh(msg),
+        Language::ZhHant => zh_hant(msg),
         Language::Ja => ja(msg),
         Language::Fr => fr(msg),
         Language::De => de(msg),
@@ -544,8 +561,10 @@ pub fn shortcut_reference(lang: Language, heading_menu_max_level: u8) -> &'stati
     match (lang, extended) {
         (Language::En, false) => SHORTCUTS_EN,
         (Language::En, true) => SHORTCUTS_EN_EXTENDED,
-        (Language::Zh, false) => SHORTCUTS_ZH,
-        (Language::Zh, true) => SHORTCUTS_ZH_EXTENDED,
+        (Language::ZhHans, false) => SHORTCUTS_ZH,
+        (Language::ZhHans, true) => SHORTCUTS_ZH_EXTENDED,
+        (Language::ZhHant, false) => SHORTCUTS_ZH_HANT,
+        (Language::ZhHant, true) => SHORTCUTS_ZH_HANT_EXTENDED,
         (Language::Ja, _) => SHORTCUTS_JA,
         (Language::Fr, _) => SHORTCUTS_FR,
         (Language::De, _) => SHORTCUTS_DE,
@@ -559,8 +578,10 @@ pub fn sidebar_tab_label(lang: Language, tab: SidebarTab) -> &'static str {
     match (lang, tab) {
         (Language::En, SidebarTab::Files) => "files",
         (Language::En, SidebarTab::Outline) => "outline",
-        (Language::Zh, SidebarTab::Files) => "文件",
-        (Language::Zh, SidebarTab::Outline) => "大纲",
+        (Language::ZhHans, SidebarTab::Files) => "文件",
+        (Language::ZhHans, SidebarTab::Outline) => "大纲",
+        (Language::ZhHant, SidebarTab::Files) => "檔案",
+        (Language::ZhHant, SidebarTab::Outline) => "大綱",
         (Language::Ja, SidebarTab::Files) => "ファイル",
         (Language::Ja, SidebarTab::Outline) => "アウトライン",
         (Language::Fr, SidebarTab::Files) => "fichiers",
@@ -2782,6 +2803,450 @@ DOCX：Secondary-Shift-D
 PNG/JPEG：Secondary-Shift-G / Secondary-Alt-Shift-G";
 
 // ---------------------------------------------------------------------------
+// Traditional Chinese (Taiwan regional terminology)
+// ---------------------------------------------------------------------------
+
+fn zh_hant(msg: Msg) -> &'static str {
+    match msg {
+        Msg::MenuFile => "檔案",
+        Msg::MenuEdit => "編輯",
+        Msg::MenuView => "檢視",
+        Msg::MenuFormat => "格式",
+        Msg::MenuExport => "匯出",
+        Msg::MenuHelp => "說明",
+
+        Msg::ItemNew => "新增",
+        Msg::ItemOpen => "開啟",
+        Msg::ItemOpenFolder => "開啟資料夾",
+        Msg::ItemSave => "儲存",
+        Msg::ItemSaveAs => "另存新檔",
+        Msg::ItemNewTab => "新增分頁",
+        Msg::ItemOpenInNewTab => "在新分頁開啟",
+        Msg::ItemCloseTab => "關閉分頁",
+        Msg::ItemNextTab => "下一個分頁",
+        Msg::ItemPrevTab => "上一個分頁",
+        Msg::ItemExit => "結束",
+
+        Msg::ItemUndo => "復原",
+        Msg::ItemRedo => "取消復原",
+        Msg::ItemCopy => "複製",
+        Msg::ItemCut => "剪下",
+        Msg::ItemPaste => "貼上",
+        Msg::ItemSelectAll => "全選",
+        Msg::ItemPreviewCopyPlain => "複製為純文字",
+        Msg::ItemPreviewCopyMarkdown => "複製為 Markdown",
+        Msg::ItemPreviewCopyHtml => "複製為 HTML",
+        Msg::ItemPreviewSelectAll => "全選",
+        Msg::ItemPreviewCopyLinkAddress => "複製連結地址",
+
+        Msg::ItemToggleView => "循環切換檢視模式",
+        Msg::ItemEditMode => "編輯模式",
+        Msg::ItemVisualEditMode => "視覺化編輯模式",
+        Msg::ItemSplitPreviewMode => "分割預覽模式",
+        Msg::ItemReadMode => "閱讀模式",
+        Msg::ItemToggleSidebar => "切換側邊欄",
+        Msg::ItemFiles => "檔案",
+        Msg::ItemOutline => "大綱",
+        Msg::ItemFocusMode => "專注模式",
+        Msg::ItemTypewriterMode => "打字機模式",
+        Msg::ItemCodeLineNumbers => "程式碼行號",
+        Msg::ItemFind => "尋找",
+        Msg::ItemReplace => "取代",
+        Msg::ItemFindNext => "尋找下一個",
+        Msg::ItemFindPrevious => "尋找上一個",
+        Msg::ItemCycleTheme => "切換佈景主題",
+        Msg::ItemLanguage => "語言",
+
+        Msg::ItemBold => "粗體",
+        Msg::ItemItalic => "斜體",
+        Msg::ItemInlineCode => "行內程式碼",
+        Msg::ItemLink => "連結",
+        Msg::ItemImage => "圖片",
+        Msg::ItemH1 => "一級標題",
+        Msg::ItemH2 => "二級標題",
+        Msg::ItemH3 => "三級標題",
+        Msg::ItemH4 => "四級標題",
+        Msg::ItemH5 => "五級標題",
+        Msg::ItemH6 => "六級標題",
+        Msg::ItemBullets => "無序清單",
+        Msg::ItemNumbers => "有序清單",
+        Msg::ItemTask => "工作清單",
+        Msg::ItemQuote => "引用",
+        Msg::ItemCodeFence => "程式碼區塊",
+        Msg::ItemFormatTable => "格式化表格",
+        Msg::ItemAddTableRow => "新增表格列",
+        Msg::ItemDeleteTableRow => "刪除表格列",
+        Msg::ItemMoveRowUp => "上移表格列",
+        Msg::ItemMoveRowDown => "下移表格列",
+        Msg::ItemAddTableColumn => "新增表格欄",
+        Msg::ItemDeleteTableColumn => "刪除表格欄",
+
+        Msg::ItemExportHtml => "匯出 HTML",
+        Msg::ItemExportPlainHtml => "匯出純 HTML",
+        Msg::ItemExportPdf => "匯出 PDF",
+        Msg::ItemExportLatex => "匯出 LaTeX",
+        Msg::ItemExportDocx => "匯出 DOCX",
+        Msg::ItemExportPng => "匯出 PNG",
+        Msg::ItemExportJpeg => "匯出 JPEG",
+
+        Msg::ItemPreferences => "偏好設定",
+        Msg::ItemResetPreferences => "重設偏好設定",
+        Msg::ItemKeyboardShortcuts => "鍵盤快速鍵",
+        Msg::ItemAboutMarkion => "關於 Markion",
+
+        Msg::LabelEditor => "編輯器",
+        Msg::LabelPreview => "預覽",
+        Msg::LabelFiles => "檔案",
+        Msg::LabelOutline => "大綱",
+        Msg::LabelTable => "表格",
+
+        Msg::SearchFind => "尋找",
+        Msg::SearchReplace => "取代",
+        Msg::SearchPrev => "上一個",
+        Msg::SearchNext => "下一個",
+        Msg::SearchAll => "全部",
+        Msg::SearchLiteral => "文字",
+        Msg::SearchRegexMark => ".*",
+        Msg::SearchCaseInsensitiveMark => "aa",
+        Msg::SearchCaseSensitiveMark => "Aa",
+        Msg::SearchProgress => "{0}/{1}",
+
+        Msg::StatusReady => "就緒",
+        Msg::StatusRecoveryAvailable => "有可復原的文件",
+        Msg::StatusRecoveredDocument => "已復原未儲存的文件",
+        Msg::StatusRecoveryDiscarded => "已放棄復原",
+        Msg::StatusWaitingFileTreeConfirm => "等待檔案樹確認…",
+        Msg::StatusOpenCanceled => "已取消開啟",
+        Msg::StatusOpenFolderCanceled => "已取消開啟資料夾",
+        Msg::StatusJumpedToHeading => "已跳至標題",
+        Msg::StatusNewDocument => "新文件",
+        Msg::StatusOpening => "正在開啟…",
+        Msg::StatusOpeningFolder => "正在開啟資料夾…",
+        Msg::StatusChoosingSaveLocation => "正在選擇儲存位置…",
+        Msg::StatusEditMode => "編輯模式",
+        Msg::StatusVisualEditMode => "視覺化編輯模式",
+        Msg::StatusSplitPreviewMode => "分割預覽模式",
+        Msg::StatusReadMode => "閱讀模式",
+        Msg::StatusSidebarShown => "已顯示側邊欄",
+        Msg::StatusSidebarHidden => "已隱藏側邊欄",
+        Msg::StatusOutlineShown => "已顯示大綱",
+        Msg::StatusFileTreeShown => "已顯示檔案樹",
+        Msg::StatusFilteringFiles => "正在篩選檔案",
+        Msg::StatusFileTreeRefreshed => "已重新整理檔案樹",
+        Msg::StatusSelectTreeEntryFirst => "請先選擇一個檔案樹項目",
+        Msg::StatusSaveBeforeRename => "重新命名前請先儲存目前文件",
+        Msg::StatusWaitingDeleteConfirm => "等待刪除確認…",
+        Msg::StatusDeleteCanceled => "已取消刪除",
+        Msg::StatusAboutMarkion => "關於 Markion",
+        Msg::StatusKeyboardShortcuts => "鍵盤快速鍵",
+        Msg::StatusUndo => "已復原",
+        Msg::StatusNothingToUndo => "沒有可復原的動作",
+        Msg::StatusRedo => "已取消復原",
+        Msg::StatusNothingToRedo => "沒有可取消復原的動作",
+        Msg::StatusNoFormattingChange => "格式無變化",
+        Msg::StatusNoTableAtCursor => "游標處沒有表格",
+        Msg::StatusTableAlreadyFormatted => "表格已是格式化的",
+        Msg::StatusWaitingConfirm => "等待確認…",
+        Msg::StatusCanceled => "已取消",
+        Msg::StatusExitingMarkion => "正在結束 Markion",
+        Msg::StatusWaitingExitConfirm => "等待結束確認…",
+        Msg::StatusExitCanceled => "已取消結束",
+        Msg::StatusWaitingQuitConfirm => "等待結束確認…",
+        Msg::StatusEditingFindQuery => "正在編輯尋找內容",
+        Msg::StatusEditingReplacement => "正在編輯取代內容",
+        Msg::StatusEditing => "編輯中",
+        Msg::StatusIndentedSelection => "已增加縮排",
+        Msg::StatusOutdentedSelection => "已減少縮排",
+        Msg::StatusNothingToIndent => "沒有可縮排的內容",
+        Msg::StatusNothingToOutdent => "沒有可減少縮排的內容",
+        Msg::StatusNoEdit => "無編輯",
+        Msg::StatusClipboardEmpty => "剪貼簿為空",
+        Msg::StatusCopiedSelection => "已複製所選內容",
+        Msg::StatusCopiedPreviewPlain => "已複製為純文字",
+        Msg::StatusCopiedPreviewMarkdown => "已複製為 Markdown",
+        Msg::StatusCopiedPreviewHtml => "已複製為 HTML",
+        Msg::StatusCopiedLinkAddress => "已複製連結地址",
+        Msg::StatusPreviewSelectedAll => "已選取全部預覽文字",
+        Msg::StatusNothingToCopy => "沒有可複製的內容",
+        Msg::StatusCutSelection => "已剪下所選內容",
+        Msg::StatusNothingToCut => "沒有可剪下的內容",
+        Msg::StatusComposing => "輸入中",
+        Msg::StatusSelectedTreeEntry => "已選擇檔案樹項目",
+        Msg::StatusNoMatchSelected => "未選取符合項目",
+        Msg::StatusReplacedCurrent => "已取代目前符合項目",
+        Msg::StatusNoMatchesToReplace => "沒有可取代的符合項目",
+        Msg::StatusFindQueryEmpty => "尋找內容為空",
+        Msg::StatusNoMatches => "未找到符合項目",
+
+        Msg::StatusFmtBold => "粗體",
+        Msg::StatusFmtItalic => "斜體",
+        Msg::StatusFmtInlineCode => "行內程式碼",
+        Msg::StatusFmtLink => "插入連結",
+        Msg::StatusFmtImage => "插入圖片",
+        Msg::StatusFmtHeading => "{0} 級標題",
+        Msg::StatusFmtBulletedList => "無序清單",
+        Msg::StatusFmtNumberedList => "有序清單",
+        Msg::StatusFmtTaskList => "工作清單",
+        Msg::StatusFmtBlockQuote => "引用",
+        Msg::StatusFmtCodeBlock => "程式碼區塊",
+        Msg::StatusFmtFormatTable => "格式化表格",
+        Msg::StatusFmtAddRow => "新增表格列",
+        Msg::StatusFmtDeleteRow => "刪除表格列",
+        Msg::StatusFmtMoveRowUp => "上移表格列",
+        Msg::StatusFmtMoveRowDown => "下移表格列",
+        Msg::StatusFmtAddColumn => "新增表格欄",
+        Msg::StatusFmtDeleteColumn => "刪除表格欄",
+        Msg::StatusFocusModeOn => "專注模式已開啟",
+        Msg::StatusFocusModeOff => "專注模式已關閉",
+        Msg::StatusTypewriterModeOn => "打字機模式已開啟",
+        Msg::StatusTypewriterModeOff => "打字機模式已關閉",
+        Msg::StatusCodeLineNumbersOn => "程式碼行號已開啟",
+        Msg::StatusCodeLineNumbersOff => "程式碼行號已關閉",
+        Msg::StatusRegexFind => "正規表示式尋找",
+        Msg::StatusLiteralFind => "字面尋找",
+        Msg::StatusPreferences => "偏好設定",
+        Msg::StatusWaitingPreferenceResetConfirm => "等待重設偏好設定確認…",
+        Msg::StatusPreferencesReset => "偏好設定已重設",
+        Msg::StatusPreviewAdaptiveWidthOn => "預覽自適應寬度已開啟",
+        Msg::StatusPreviewAdaptiveWidthOff => "預覽自適應寬度已關閉",
+        Msg::StatusSyncScrollOn => "同步捲動已開啟",
+        Msg::StatusSyncScrollOff => "同步捲動已關閉",
+        Msg::StatusPreferenceResetCanceled => "已取消重設偏好設定",
+        Msg::StatusLanguageSet => "已設定語言",
+
+        Msg::StatusRecoveryFailed => "復原失敗：{0}",
+        Msg::StatusOpened => "已開啟 {0}",
+        Msg::StatusOpenFailed => "開啟失敗：{0}",
+        Msg::StatusOpenedFolder => "已開啟資料夾 {0}",
+        Msg::StatusOpenFolderFailed => "開啟資料夾失敗：{0}",
+        Msg::StatusAutoSaved => "已自動儲存 {0}",
+        Msg::StatusRecoverySaved => "已儲存復原副本 {0}",
+        Msg::StatusAutoSaveFailed => "自動儲存失敗：{0}",
+        Msg::StatusFindFailed => "尋找失敗：{0}",
+        Msg::StatusPreferencesSaveFailed => "偏好設定儲存失敗：{0}",
+        Msg::StatusSampleThemeSaveFailed => "範例佈景主題儲存失敗：{0}",
+        Msg::StatusSaved => "已儲存 {0}",
+        Msg::StatusSaveFailed => "儲存失敗：{0}",
+        Msg::StatusSaveCanceled => "已取消儲存",
+        Msg::StatusExportCanceled => "已取消匯出",
+        Msg::StatusChoosingExportLocation => "正在選擇 .{0} 匯出位置…",
+        Msg::StatusExported => "已匯出 {0}",
+        Msg::StatusExportedEngine => "已匯出 {0}（pandoc 引擎）",
+        Msg::StatusExportedBuiltin => {
+            "已匯出 {0}（內建簡易匯出——安裝 pandoc 可獲得更高品質的輸出）"
+        }
+        Msg::StatusExportFailed => "匯出失敗：{0}",
+        Msg::StatusCreated => "已建立 {0}",
+        Msg::StatusCreateFileFailed => "建立檔案失敗：{0}",
+        Msg::StatusCreateFolderFailed => "建立資料夾失敗：{0}",
+        Msg::StatusRenamedTo => "已重新命名為 {0}",
+        Msg::StatusRenameFailed => "重新命名失敗：{0}",
+        Msg::StatusDeleted => "已刪除 {0}",
+        Msg::StatusDeleteFailed => "刪除失敗：{0}",
+        Msg::StatusShownInFileManager => "已在系統檔案管理員中顯示：{0}",
+        Msg::StatusShowInFileManagerFailed => "在系統檔案管理員中顯示失敗：{0}",
+        Msg::StatusTheme => "佈景主題：{0}",
+        Msg::StatusMatches => "找到 {0} 個符合項目",
+        Msg::StatusReplaceFailed => "取代失敗：{0}",
+        Msg::StatusReplacedMatches => "已取代 {0} 處符合項目",
+        Msg::StatusMatchPosition => "第 {0} 個，共 {1} 個符合項目（{2}:{3}）",
+        Msg::StatusFilesVisible => "可見 {0} 個檔案",
+        Msg::StatusFileMatches => "{0} 個符合檔案",
+
+        Msg::DialogButtonOk => "確定",
+        Msg::DialogButtonCancel => "取消",
+        Msg::DialogButtonDiscard => "放棄",
+        Msg::DialogButtonDelete => "刪除",
+        Msg::DialogButtonReset => "重設",
+        Msg::DialogButtonRestore => "復原",
+        Msg::DialogButtonExitWithoutSaving => "不儲存結束",
+
+        Msg::DialogAboutTitle => "關於 Markion",
+        Msg::DialogAboutDetail => {
+            "版本：{0}\n\n一款使用 Rust 與 GPUI 打造的本機優先 Markdown 編輯器。\n\nGitHub：{1}"
+        }
+        Msg::DialogShortcutsTitle => "鍵盤快速鍵",
+        Msg::DialogPreferencesTitle => "偏好設定",
+        Msg::DialogPreferencesDetail => PREFERENCES_DETAIL_ZH_HANT,
+        Msg::DialogRestoreTitle => "復原未儲存的文件？",
+        Msg::DialogRestoreDetail => "Markion 發現了一個未儲存的復原檔案：\n{0}",
+        Msg::DialogDiscardTitle => "放棄未儲存的變更？",
+        Msg::DialogDiscardNewDetail => "新增文件而不儲存目前的變更。",
+        Msg::DialogDiscardOpenDetail => "開啟其他文件而不儲存目前的變更。",
+        Msg::DialogDiscardOpenTreeDetail => "開啟 {0} 而不儲存目前的變更。",
+        Msg::DialogExitTitle => "不儲存就結束 Markion？",
+        Msg::DialogExitDetail => "未儲存的變更將會遺失。",
+        Msg::DialogDeleteTitle => "刪除選取的檔案樹項目？",
+        Msg::DialogDeleteDetail => "從磁碟刪除 {0}。",
+        Msg::DialogDeleteFolderRecursiveTitle => "刪除資料夾及其所有內容？",
+        Msg::DialogDeleteFolderRecursiveDetail => "資料夾 {0} 及其中的所有內容將被永久刪除。",
+        Msg::DialogResetTitle => "重設偏好設定？",
+        Msg::DialogResetDetail => {
+            "佈景主題、專注模式、打字機模式、程式碼行號、預覽寬度以及側邊欄設定將還原為預設值。"
+        }
+        Msg::PromptOpenMarkdown => "開啟 Markdown",
+        Msg::PromptOpenFolder => "開啟資料夾",
+
+        Msg::SummaryFilesUnit => "個檔案",
+        Msg::SummaryMatchesUnit => "個符合項目",
+
+        Msg::FileTreeFilterPlaceholder => "篩選檔案",
+        Msg::FileTreeFilterActive => "篩選：{0}",
+        Msg::FileTreeWorkspaceFallback => "工作區",
+        Msg::FileTreeMoreHidden => "……還有 {0} 項（篩選以縮小範圍）",
+        Msg::FileTreeEmptyState => "開啟一個 Markdown 檔案即可在此處查看。",
+        Msg::FileTreeContextOpen => "開啟",
+        Msg::FileTreeContextOpenInNewTab => "在新分頁中開啟",
+        Msg::FileTreeContextCreateFile => "新增檔案",
+        Msg::FileTreeContextCreateFolder => "新增資料夾",
+        Msg::FileTreeContextRename => "重新命名",
+        Msg::FileTreeContextDelete => "刪除",
+        Msg::FileTreeContextShowInFileManager => "在系統檔案管理員中顯示",
+        Msg::FileTreeContextRefresh => "重新整理",
+        Msg::FileTreeContextFilterFiles => "篩選檔案",
+        Msg::FileTreeNamePromptLabel => "名稱",
+        Msg::StatusNamingEntry => "輸入名稱後按 Enter 確認（Esc 取消）",
+        Msg::StatusNameRequired => "名稱不能為空",
+
+        Msg::PrefOn => "開",
+        Msg::PrefOff => "關",
+        Msg::PrefSidebarHidden => "隱藏",
+        Msg::CustomThemeLabel => "{0}（自訂）",
+
+        Msg::PrefPanelTitle => "偏好設定",
+        Msg::PrefPanelThemeSection => "佈景主題",
+        Msg::PrefPanelLanguageSection => "語言",
+        Msg::PrefPanelOtherSection => "其他",
+        Msg::PrefPanelFocusMode => "專注模式",
+        Msg::PrefPanelTypewriterMode => "打字機模式",
+        Msg::PrefPanelCodeLineNumbers => "程式碼行號",
+        Msg::PrefPanelPreviewAdaptiveWidth => "預覽自適應寬度",
+        Msg::PrefPanelSyncScroll => "同步捲動",
+        Msg::PrefPanelSidebar => "側邊欄",
+        Msg::PrefPanelHeadingMenu => "標題選單",
+        Msg::PrefPanelHeadingMenuThree => "H1–H5",
+        Msg::PrefPanelHeadingMenuSix => "H1–H6",
+        Msg::PrefPanelClose => "關閉",
+        Msg::TitleModified => "已修改",
+        Msg::TitleSaved => "已儲存",
+    }
+}
+
+const PREFERENCES_DETAIL_ZH_HANT: &str = "佈景主題：{0}\n專注模式：{1}\n打字機模式：{2}\n程式碼行號：{3}\n預覽自適應寬度：{4}\n側邊欄：{5}\n\n偏好設定：{6}\n佈景主題目錄：{7}\n已安裝自訂佈景主題：{8}";
+
+const SHORTCUTS_ZH_HANT: &str = "檔案
+新增：Secondary-N
+開啟：Secondary-O
+儲存：Secondary-S
+另存新檔：Secondary-Shift-S
+結束：Secondary-Q
+
+分頁
+在新分頁開啟：Secondary-T
+關閉分頁：Secondary-W
+下一個/上一個分頁：Ctrl-Tab / Ctrl-Shift-Tab
+
+編輯
+粗體：Secondary-B
+斜體：Secondary-I
+行內程式碼：Secondary-E
+連結：Secondary-K
+圖片：Secondary-Shift-I
+標題：Secondary-1/2/3/4/5
+復原/取消復原：Secondary-Z / Secondary-Shift-Z
+
+檢視
+循環切換檢視模式：Secondary-Shift-V
+編輯模式：Secondary-Alt-1
+視覺化編輯模式：Secondary-Alt-4
+分割預覽模式：Secondary-Alt-2
+閱讀模式：Secondary-Alt-3
+側邊欄：Secondary-Alt-B
+檔案：Secondary-Shift-F
+大綱：F6
+篩選檔案：Secondary-Alt-F
+佈景主題：Secondary-Shift-T
+專注模式：F7
+打字機模式：F8
+程式碼行號：Secondary-Shift-4
+偏好設定：Secondary-Comma
+
+搜尋
+尋找：Secondary-F
+取代：Secondary-H
+上一個/下一個符合項目：F3 / Shift-F3
+
+表格
+格式化表格：Secondary-Shift-M
+新增/刪除列：Secondary-Alt-Enter / Secondary-Alt-Backspace
+移動列：Secondary-Alt-Up / Secondary-Alt-Down
+新增/刪除欄：Secondary-Alt-Right / Secondary-Alt-Left
+
+匯出
+HTML：Secondary-Shift-H
+純 HTML：Secondary-Alt-Shift-H
+PDF：Secondary-Shift-P
+LaTeX：Secondary-Shift-L
+DOCX：Secondary-Shift-D
+PNG/JPEG：Secondary-Shift-G / Secondary-Alt-Shift-G";
+
+const SHORTCUTS_ZH_HANT_EXTENDED: &str = "檔案
+新增：Secondary-N
+開啟：Secondary-O
+儲存：Secondary-S
+另存新檔：Secondary-Shift-S
+結束：Secondary-Q
+
+分頁
+在新分頁開啟：Secondary-T
+關閉分頁：Secondary-W
+下一個/上一個分頁：Ctrl-Tab / Ctrl-Shift-Tab
+
+編輯
+粗體：Secondary-B
+斜體：Secondary-I
+行內程式碼：Secondary-E
+連結：Secondary-K
+圖片：Secondary-Shift-I
+標題：Secondary-1/2/3/4/5/6
+復原/取消復原：Secondary-Z / Secondary-Shift-Z
+
+檢視
+切換檢視模式：Secondary-Shift-V
+編輯模式：Secondary-Alt-1
+視覺化編輯模式：Secondary-Alt-4
+分割預覽模式：Secondary-Alt-2
+閱讀模式：Secondary-Alt-3
+側邊欄：Secondary-Alt-B
+檔案：Secondary-Shift-F
+大綱：F6
+篩選檔案：Secondary-Alt-F
+佈景主題：Secondary-Shift-T
+專注模式：F7
+打字機模式：F8
+程式碼行號：Secondary-Shift-4
+偏好設定：Secondary-Comma
+
+搜尋
+尋找：Secondary-F
+取代：Secondary-H
+上一個/下一個符合項目：F3 / Shift-F3
+
+表格
+格式化表格：Secondary-Shift-M
+新增/刪除列：Secondary-Alt-Enter / Secondary-Alt-Backspace
+移動列：Secondary-Alt-Up / Secondary-Alt-Down
+新增/刪除欄：Secondary-Alt-Right / Secondary-Alt-Left
+
+匯出
+HTML：Secondary-Shift-H
+純 HTML：Secondary-Alt-Shift-H
+PDF：Secondary-Shift-P
+LaTeX：Secondary-Shift-L
+DOCX：Secondary-Shift-D
+PNG/JPEG：Secondary-Shift-G / Secondary-Alt-Shift-G";
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -2845,8 +3310,17 @@ mod tests {
 
     #[test]
     fn language_from_code_accepts_common_aliases() {
-        assert_eq!(Language::from_code("zh-CN"), Language::Zh);
-        assert_eq!(Language::from_code("ZH"), Language::Zh);
+        // Simplified-Chinese aliases.
+        assert_eq!(Language::from_code("zh"), Language::ZhHans);
+        assert_eq!(Language::from_code("zh-CN"), Language::ZhHans);
+        assert_eq!(Language::from_code("ZH"), Language::ZhHans);
+        assert_eq!(Language::from_code("zh-hans"), Language::ZhHans);
+        assert_eq!(Language::from_code("chinese"), Language::ZhHans);
+        // Traditional-Chinese aliases.
+        assert_eq!(Language::from_code("zh-hant"), Language::ZhHant);
+        assert_eq!(Language::from_code("zh-tw"), Language::ZhHant);
+        assert_eq!(Language::from_code("cht"), Language::ZhHant);
+        assert_eq!(Language::from_code("traditional chinese"), Language::ZhHant);
         assert_eq!(Language::from_code("ja"), Language::Ja);
         assert_eq!(Language::from_code("JP"), Language::Ja);
         assert_eq!(Language::from_code("japanese"), Language::Ja);
@@ -2881,13 +3355,26 @@ mod tests {
 
     #[test]
     fn chinese_shortcut_reference_is_translated() {
-        let reference = shortcut_reference(Language::Zh, 3);
+        let reference = shortcut_reference(Language::ZhHans, 3);
         assert!(reference.contains("保存：Secondary-S"));
         assert!(reference.contains("编辑模式：Secondary-Alt-1"));
         assert!(reference.contains("可视化编辑模式：Secondary-Alt-4"));
         assert!(reference.contains("分栏预览模式：Secondary-Alt-2"));
         assert!(reference.contains("阅读模式：Secondary-Alt-3"));
         assert!(reference.contains("首选项：Secondary-Comma"));
+        // The key bindings themselves stay in English (they are key names).
+        assert!(reference.contains("Secondary-S"));
+    }
+
+    #[test]
+    fn traditional_chinese_shortcut_reference_is_translated() {
+        let reference = shortcut_reference(Language::ZhHant, 3);
+        assert!(reference.contains("儲存：Secondary-S"));
+        assert!(reference.contains("編輯模式：Secondary-Alt-1"));
+        assert!(reference.contains("視覺化編輯模式：Secondary-Alt-4"));
+        assert!(reference.contains("分割預覽模式：Secondary-Alt-2"));
+        assert!(reference.contains("閱讀模式：Secondary-Alt-3"));
+        assert!(reference.contains("偏好設定：Secondary-Comma"));
         // The key bindings themselves stay in English (they are key names).
         assert!(reference.contains("Secondary-S"));
     }
@@ -2954,15 +3441,20 @@ mod tests {
     fn tf_uses_template_per_language() {
         assert_eq!(tf(Language::En, Msg::StatusMatches, &["5"]), "5 matches");
         assert_eq!(
-            tf(Language::Zh, Msg::StatusMatches, &["5"]),
+            tf(Language::ZhHans, Msg::StatusMatches, &["5"]),
             "找到 5 个匹配"
+        );
+        assert_eq!(
+            tf(Language::ZhHant, Msg::StatusMatches, &["5"]),
+            "找到 5 個符合項目"
         );
     }
 
     #[test]
     fn open_folder_chrome_is_localized() {
         assert_eq!(t(Language::En, Msg::ItemOpenFolder), "Open Folder");
-        assert_eq!(t(Language::Zh, Msg::ItemOpenFolder), "打开文件夹");
+        assert_eq!(t(Language::ZhHans, Msg::ItemOpenFolder), "打开文件夹");
+        assert_eq!(t(Language::ZhHant, Msg::ItemOpenFolder), "開啟資料夾");
         assert_eq!(t(Language::Ja, Msg::PromptOpenFolder), "フォルダーを開く");
         assert_eq!(
             t(Language::Fr, Msg::StatusOpeningFolder),
@@ -3284,7 +3776,8 @@ mod tests {
         ];
         for &msg in all.iter() {
             assert!(!t(Language::En, msg).is_empty(), "empty En for {msg:?}");
-            assert!(!t(Language::Zh, msg).is_empty(), "empty Zh for {msg:?}");
+            assert!(!t(Language::ZhHans, msg).is_empty(), "empty ZhHans for {msg:?}");
+            assert!(!t(Language::ZhHant, msg).is_empty(), "empty ZhHant for {msg:?}");
             assert!(!t(Language::Ja, msg).is_empty(), "empty Ja for {msg:?}");
             assert!(!t(Language::Fr, msg).is_empty(), "empty Fr for {msg:?}");
             assert!(!t(Language::De, msg).is_empty(), "empty De for {msg:?}");

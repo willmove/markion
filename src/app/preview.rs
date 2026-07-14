@@ -98,6 +98,9 @@ pub(super) fn preview_run_plain_text(
         (PreviewBlock::MathBlock { latex, .. }, PreviewTextRunId::MathRendered) => {
             Some(render_math(latex, true).text)
         }
+        (PreviewBlock::Html { html, .. }, PreviewTextRunId::HtmlText) => {
+            Some(html_preview_plain_text(html))
+        }
         (PreviewBlock::Image { alt, url, .. }, PreviewTextRunId::ImageCaption) => {
             let caption = if alt.is_empty() {
                 url.as_str()
@@ -131,6 +134,10 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
         PreviewBlock::MathBlock { .. } => {
             vec![PreviewTextRunId::MathRendered, PreviewTextRunId::MathLatex]
         }
+        PreviewBlock::Html { html, .. } => (!html_preview_plain_text(html).is_empty())
+            .then_some(PreviewTextRunId::HtmlText)
+            .into_iter()
+            .collect(),
         PreviewBlock::Image { .. } => {
             vec![PreviewTextRunId::ImageCaption, PreviewTextRunId::ImageMeta]
         }
@@ -1428,6 +1435,46 @@ pub(super) fn visual_table_view(
         }))
 }
 
+fn html_preview_block_view(
+    app: &MarkionApp,
+    html: &str,
+    block_index: usize,
+    document_dir: Option<&Path>,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let parts = html_preview_parts(html);
+    if parts.is_empty() {
+        return div();
+    }
+
+    div()
+        .mb_3()
+        .children(parts.into_iter().enumerate().map(|(part_index, part)| {
+            match part {
+                HtmlPreviewPart::Text { text, centered } => div()
+                    .mb_2()
+                    .line_height(px(24.))
+                    .text_size(px(14.))
+                    .when(centered, |style| style.text_center())
+                    .child(rich_text_element(
+                        app,
+                        ElementId::from((
+                            "preview-html-text",
+                            ((block_index as u64) << 32) | part_index as u64,
+                        )),
+                        &text,
+                        block_index,
+                        PreviewTextRunId::HtmlText,
+                        cx,
+                    )),
+                HtmlPreviewPart::Image { url, centered, .. } => div()
+                    .mb_2()
+                    .when(centered, |style| style.flex().justify_center())
+                    .child(img(preview_image_source(&url, document_dir)).max_w_full()),
+            }
+        }))
+}
+
 pub(super) fn preview_block_view(
     app: &MarkionApp,
     block: &PreviewBlock,
@@ -1647,6 +1694,9 @@ pub(super) fn preview_block_view(
             } else {
                 panel
             }
+        }
+        PreviewBlock::Html { html, .. } => {
+            html_preview_block_view(app, html, block_index, document_dir, cx)
         }
         PreviewBlock::Image {
             alt, url, title, ..

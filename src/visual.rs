@@ -90,6 +90,10 @@ fn visual_block_from_preview(text: &str, block: &PreviewBlock) -> VisualBlock {
             VisualBlockKind::MathBlock,
             Some(VisualSourceIslandKind::Math),
         ),
+        PreviewBlock::Html { .. } => (
+            VisualBlockKind::Unsupported,
+            Some(VisualSourceIslandKind::Html),
+        ),
         PreviewBlock::Image {
             alt, url, title, ..
         } => (

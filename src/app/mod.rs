@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
     env,
@@ -14,28 +13,29 @@ use std::{
 
 use gpui::prelude::*;
 use gpui::{
-    App, Application, AssetSource, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle,
-    DefiniteLength, DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler,
-    Empty, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle,
-    FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageSource, KeyBinding,
-    LayoutId, ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton,
-    PromptLevel, Rgba, ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText,
-    TextLayout, TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window,
-    WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, img, list,
-    point, px, rgb, rgba, size, svg,
+    App, Application, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle, DefiniteLength,
+    DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler, Empty, Entity,
+    EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle, FontWeight,
+    GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageSource, KeyBinding, LayoutId,
+    ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, Rgba,
+    ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText, TextLayout,
+    TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window, WindowBounds,
+    WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, img, list, point, px, rgb,
+    rgba, size,
 };
 use markion::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,
     EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences, FileTree,
-    FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, Language, MarkdownDocument,
-    MarkdownFormat, Msg, PreviewBlock, RichText, SearchMatchRange, SearchOptions, SidebarTab,
-    TableEdit, ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind,
+    FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, Language,
+    MarkdownDocument, MarkdownFormat, Msg, PreviewBlock, RichText, SearchMatchRange, SearchOptions,
+    SidebarTab, TableEdit, ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind,
     VisualInlineRun, VisualSourceIslandKind, builtin_theme_definitions, default_preferences_path,
     default_recovery_dir, default_themes_dir, delete_recovery_file, highlight_code,
-    is_markdown_path, list_recovery_files, list_theme_definitions, load_app_preferences,
-    load_recovery_file, normalize_heading_menu_max_level, render_math, save_app_preferences,
-    save_theme_definition, shortcut_reference, sidebar_tab_label, t, tf, title_from_path,
+    html_preview_parts, html_preview_plain_text, is_markdown_path, list_recovery_files,
+    list_theme_definitions, load_app_preferences, load_recovery_file,
+    normalize_heading_menu_max_level, render_math, save_app_preferences, save_theme_definition,
+    shortcut_reference, sidebar_tab_label, t, tf, title_from_path,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -193,13 +193,15 @@ impl AppMenu {
                 Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
                 AppMenu::Help,
             ) => px(304.),
-            // Chinese labels (文件/编辑/视图/格式/导出/帮助) — narrower.
-            (Language::Zh, AppMenu::File) => px(8.),
-            (Language::Zh, AppMenu::Edit) => px(50.),
-            (Language::Zh, AppMenu::View) => px(92.),
-            (Language::Zh, AppMenu::Format) => px(134.),
-            (Language::Zh, AppMenu::Export) => px(178.),
-            (Language::Zh, AppMenu::Help) => px(222.),
+            // Chinese labels (文件/編輯/檢視/格式/匯出/說明) — narrower. Both
+            // Simplified and Traditional share this column: the glyph widths
+            // are nearly identical, so the hand-tuned offsets apply to both.
+            (Language::ZhHans | Language::ZhHant, AppMenu::File) => px(8.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Edit) => px(50.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::View) => px(92.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Format) => px(134.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Export) => px(178.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(222.),
         }
     }
 
@@ -490,6 +492,7 @@ enum PreviewTextRunId {
     CodeLine(usize),
     MathLatex,
     MathRendered,
+    HtmlText,
     ImageCaption,
     ImageMeta,
     TableCell { row: usize, col: usize },
@@ -504,9 +507,10 @@ impl PreviewTextRunId {
             Self::CodeLine(i) => (2, i, 0),
             Self::MathRendered => (3, 0, 0),
             Self::MathLatex => (4, 0, 0),
-            Self::ImageCaption => (5, 0, 0),
-            Self::ImageMeta => (6, 0, 0),
-            Self::TableCell { row, col } => (7, row, col),
+            Self::HtmlText => (5, 0, 0),
+            Self::ImageCaption => (6, 0, 0),
+            Self::ImageMeta => (7, 0, 0),
+            Self::TableCell { row, col } => (8, row, col),
         }
     }
 }
