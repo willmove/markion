@@ -13,9 +13,6 @@
 # --- Node toolchain (icon-generation scripts) ---
 /node_modules/
 
-# --- Local OpenSpec planning workspace ---
-/openspec/
-
 # --- IDE / editor ---
 /.vscode/
 /.idea/

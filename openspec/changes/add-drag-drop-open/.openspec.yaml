@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-07-08
+goal: Enable opening Markdown files via OS drag-and-drop onto the editor/preview
+  panes

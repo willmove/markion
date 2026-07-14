@@ -1,0 +1,28 @@
+schema: spec-driven
+
+# Project context (shown to AI when creating artifacts)
+context: |
+  Markion — a Rust + GPUI Markdown editor prototype.
+  Tech stack: Rust (stable), GPUI (Zed's GPU-accelerated UI crate), pulldown-cmark (CommonMark + GFM).
+  Single crate, no workspace. Entry points: src/main.rs (bootstrap/window/menus), src/lib.rs (module root).
+  Domain types in src/model.rs; persistence in src/storage/; localization in src/i18n.rs.
+  Build/test: cargo build, cargo test.
+  Architecture invariants to preserve:
+    - Derived Markdown state (preview blocks, outline, stats, line count) is cached per document
+      version and shared via Arc — do NOT recompute on every keystroke.
+    - Syntax highlighting is memoized across edits.
+    - The editor reuses a cached text handle per version; undo snapshots skip derived caches.
+    - The file tree renders a bounded number of rows per frame.
+  Legacy specs in .kiro/specs/markdown-editor/ are historical reference, NOT the OpenSpec source of truth.
+  Conventions: write spec/scenario prose in English; user-facing strings must go through src/i18n.rs.
+
+# Per-artifact rules
+rules:
+  proposal:
+    - Keep proposals focused; always include a short "Non-goals" line when scope could creep.
+    - Call out any invariant from the project context that the change touches.
+  tasks:
+    - Break tasks into chunks that map to single, testable commits.
+    - Each task should preserve the cached-per-version Markdown invariants unless explicitly redesigning them.
+  design:
+    - When the change touches rendering or editing state, sketch the data flow and where caching/versioning is affected.
