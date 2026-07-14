@@ -13,6 +13,109 @@ fn open_folder_prompt_selects_one_directory() {
 }
 
 #[test]
+fn startup_open_intent_classifies_paths_and_ignores_extra_args() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let relative_md = root.join("notes.MD");
+    let absolute_md = root.join("absolute.markdown");
+    let folder = root.join("workspace");
+    let unsupported = root.join("image.png");
+    std::fs::write(&relative_md, "# Notes").unwrap();
+    std::fs::write(&absolute_md, "# Absolute").unwrap();
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(&unsupported, "png").unwrap();
+
+    assert_eq!(
+        StartupOpenIntent::from_args(Vec::new(), root),
+        StartupOpenIntent::None
+    );
+    assert_eq!(
+        StartupOpenIntent::from_args(vec![OsString::from("notes.MD")], root),
+        StartupOpenIntent::File(relative_md.clone())
+    );
+    assert_eq!(
+        StartupOpenIntent::from_args(vec![absolute_md.clone().into_os_string()], root),
+        StartupOpenIntent::File(absolute_md.clone())
+    );
+    assert_eq!(
+        StartupOpenIntent::from_args(vec![folder.clone().into_os_string()], root),
+        StartupOpenIntent::Folder(folder.clone())
+    );
+    assert_eq!(
+        StartupOpenIntent::from_args(vec![unsupported.clone().into_os_string()], root),
+        StartupOpenIntent::Invalid {
+            path: unsupported,
+            reason: StartupOpenInvalidReason::UnsupportedFile,
+        }
+    );
+
+    let missing = root.join("missing.md");
+    assert_eq!(
+        StartupOpenIntent::from_args(vec![OsString::from("missing.md")], root),
+        StartupOpenIntent::Invalid {
+            path: missing,
+            reason: StartupOpenInvalidReason::Missing,
+        }
+    );
+    assert_eq!(
+        StartupOpenIntent::from_args(
+            vec![
+                folder.clone().into_os_string(),
+                absolute_md.clone().into_os_string(),
+            ],
+            root,
+        ),
+        StartupOpenIntent::Folder(folder)
+    );
+}
+
+#[test]
+fn startup_path_resolution_preserves_absolute_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path();
+    let absolute = cwd.join("note.md");
+
+    assert_eq!(
+        resolve_startup_path(PathBuf::from("note.md"), cwd),
+        cwd.join("note.md")
+    );
+    assert_eq!(resolve_startup_path(absolute.clone(), cwd), absolute);
+}
+
+#[test]
+fn startup_application_flow_reuses_existing_open_behaviour() {
+    let bootstrap_source = include_str!("bootstrap.rs");
+    let application_source = include_str!("application.rs");
+    assert!(bootstrap_source.contains("pub(super) fn run_with_startup_intent"));
+    assert!(bootstrap_source.contains("StartupOpenIntent::from_env_args()"));
+
+    let apply = bootstrap_source
+        .find("app.apply_startup_open_intent")
+        .expect("startup intent application");
+    let recovery = bootstrap_source
+        .find("app.check_recovery_on_startup")
+        .expect("recovery startup check");
+    assert!(apply < recovery);
+
+    let apply_fn = application_source
+        .split_once("fn apply_startup_open_intent")
+        .and_then(|(_, rest)| {
+            rest.split_once("fn after_document_changed")
+                .map(|(body, _)| body)
+        })
+        .expect("startup intent handler");
+    assert!(apply_fn.contains("self.replace_active_tab(document, cx);"));
+    assert!(apply_fn.contains("self.update_workspace_root_from_document(cx);"));
+    assert!(apply_fn.contains("self.set_workspace_root(path);"));
+    assert!(apply_fn.contains("self.sidebar_visible = true;"));
+    assert!(apply_fn.contains("self.sidebar_tab = SidebarTab::Files;"));
+    assert!(apply_fn.contains("self.schedule_file_tree_scan(Some(display_path), cx);"));
+    assert!(apply_fn.contains("Msg::StatusOpened"));
+    assert!(apply_fn.contains("Msg::StatusOpenFailed"));
+    assert!(!apply_fn.contains("Msg::StatusStartup"));
+}
+
+#[test]
 fn open_folder_action_is_wired_after_open_without_a_shortcut() {
     let root_view_source = include_str!("root_view.rs");
     let bootstrap_source = include_str!("bootstrap.rs");

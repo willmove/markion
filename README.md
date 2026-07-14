@@ -2,97 +2,130 @@
   <img src="assets/markion-logo.svg" alt="Markion logo" width="128" height="128">
 </p>
 
+<p align="center">
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 # Markion
 
-Markion is a native Markdown editor built with Rust and GPUI, focusing on responsive source editing, live preview, flexible export options, and a streamlined desktop workflow. No Electron. No Tauri. No WebView.
+Markion is a native desktop Markdown editor built with Rust and GPUI. It combines responsive source editing, a source-backed Visual Edit mode, live preview, workspace tools, and multi-format export in one lightweight application. Markdown remains the canonical document format—no Electron, Tauri, or WebView.
 
 ## Install
 
 Download the latest build from [GitHub Releases](https://github.com/willmove/markion/releases).
 
-Release packages are built by GitHub Actions for:
+| Platform | Release packages | Target |
+|---|---|---|
+| Windows | NSIS `.exe` installer | x86_64 |
+| Linux | `.deb` and AppImage | x86_64 |
+| macOS | `.app` and `.dmg` | Apple Silicon (arm64), macOS 11+ |
 
-- Windows x86_64: NSIS installer
-- Linux x86_64: `.deb` and AppImage
-- macOS Apple Silicon: `.app` and `.dmg`
+Releases are currently unsigned. Windows SmartScreen may require **More info → Run anyway**, and macOS Gatekeeper may require right-clicking the app and choosing **Open**. Intel Macs can run the arm64 build through Rosetta; a universal binary, notarization, and automatic updates are not currently provided.
 
-Builds are currently unsigned, so macOS Gatekeeper and Windows SmartScreen may require a manual trust step on first launch.
+## Editing modes
 
-The project logo is maintained at `assets/markion-logo.svg`; the generated `markion.png`, `markion.ico`, and `markion.icns` assets provide the Linux, Windows, and macOS platform icons respectively.
+Markion has four view modes. Split Preview is the default.
 
-## Highlights
+- **Edit** — a focused raw Markdown source editor.
+- **Visual Edit** — a single, source-backed live-preview surface for headings, paragraphs, emphasis, links, images, blockquotes, lists, task lists, rules, and tables. Focused syntax can be exposed for precise editing; code, math, HTML, front matter, and ambiguous constructs use conservative source islands. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
+- **Split Preview** — source and rendered preview side by side, with an optional proportional Sync scroll setting.
+- **Read** — a rendered, non-editing view centered at a readable 860 px maximum width by default; Preview adaptive width can use the full pane.
 
-- GPUI desktop app with Edit, Split Preview, and Read modes.
-- Multi-tab editing with per-tab cursor, scroll, undo, preview, outline, and cached derived Markdown state.
-- Reopens an already-open Markdown file by focusing its existing tab instead of creating duplicates.
-- File tree sidebar with filtering, Markdown file opening, current-file marking, and file/folder create, rename, refresh, and delete actions.
-- Drag and drop Markdown files from the OS file manager into the editor.
-- Toggleable file and outline panels, draggable sidebar and split-preview dividers, visible draggable pane scrollbars, and a compact status bar.
-- In-window and native menus for File, Edit, View, Format, Export, and Help actions.
-- In-app Preferences panel for theme, interface language, sidebar visibility, preview behavior, focus/typewriter modes, code line numbers, sync scroll, and heading-menu depth.
-- Six interface languages: English, Simplified Chinese, Japanese, French, German, and Spanish.
+Switching modes preserves the active document, cursor and selection, undo history, and per-tab scroll state.
 
-## Editing and Preview
+## Documents and workspace
 
-- Markdown parsing powered by `pulldown-cmark` with CommonMark/GFM-oriented behavior.
-- Formatting actions for bold, italic, inline code, links, images, headings, lists, task lists, blockquotes, fenced code blocks, and source Markdown tables.
-- Heading commands expose H1-H5 by default, with an H1-H6 option in Preferences.
-- Source table commands can format tables and add, delete, or move rows and columns.
-- Preview tables include a compact toolbar for adding, deleting, and moving source table rows or columns.
-- Find and replace supports case-sensitive search, regex search, next/previous navigation, replace current, and replace all.
-- YAML front matter is parsed; preview hides front matter and HTML export uses title, author, and date metadata.
-- Auto-save writes changed files after a configurable inactivity interval and saves recovery copies for unsaved documents.
+- Multi-tab editing with per-tab cursor, selection, scroll, undo/redo, preview, outline, and cached derived Markdown state.
+- Opening an already-open Markdown file focuses its existing tab instead of creating a duplicate.
+- **Open Folder** changes the workspace root and populates the Files sidebar with Markdown files and folders.
+- Right-click file-tree menus provide open, open in new tab, create file/folder, rename, delete, reveal in the system file manager, filter, and refresh actions where applicable.
+- Files and folders can be named inline; deleting a non-empty folder requires an additional confirmation.
+- Markdown files can be dragged from the operating-system file manager into Markion.
+- The Files and Outline panels are toggleable, and sidebar and split-pane dividers are draggable.
 
-The preview supports:
+## Markdown editing and preview
 
-- Native inline styles for bold, italic, strikethrough, inline code, links, highlights, superscript, subscript, and footnote references.
-- Ordered lists with correct start numbers, nested list structure, task-list checkboxes, per-depth bullets, and hanging indentation.
-- Images, embedded HTML, automatic links, footnotes, task lists, common emoji shortcodes, and extended inline syntax.
-- Markdown math parsing for `$...$` and `$$...$$`, with readable fallback rendering and simple validation errors.
-- Syntax-highlighted code blocks using syntect plus the two-face extended grammar set, with fallback token classification and optional line numbers.
-- Optional Sync scroll in Split Preview mode, coupling source and preview panes proportionally without reparsing Markdown.
+- Parsing is powered by `pulldown-cmark` with CommonMark and GFM-oriented support.
+- Formatting commands cover bold, italic, inline code, links, images, headings, lists, task lists, blockquotes, fenced code blocks, and source Markdown tables.
+- Heading commands expose H1–H5 by default, with an H1–H6 option in Preferences.
+- Find and replace supports case sensitivity, regular expressions, next/previous navigation, replace current, and replace all.
+- Source table commands can format tables and add, delete, or move rows and columns. Visual Edit tables expose the same source-backed row/column operations; ordinary preview tables remain read-only, and direct visual cell editing is not yet supported.
+- YAML front matter is parsed and hidden from preview; `title`, `author`, and `date` feed export metadata.
+- Auto-save defaults to a five-second inactivity delay and writes recovery copies for unsaved documents.
 
-## Themes and Preferences
+Rendered preview supports:
+
+- Bold, italic, strikethrough, inline code, links, highlights, superscript, subscript, footnotes, task lists, common emoji shortcodes, and automatic links.
+- Correct ordered-list start numbers, nested lists, per-depth bullets, hanging indentation, images, and embedded HTML.
+- Selectable preview text with a context menu for copying as plain text, Markdown, or HTML, plus link-address copying where applicable.
+- `$...$` inline math and `$$...$$` block math with simple validation and a readable Unicode fallback.
+- Syntax-highlighted fenced code using syntect and the two-face extended grammar set, with a fallback lexer and optional line numbers.
+
+## Themes, languages, and preferences
 
 - Fourteen built-in themes: Paper, Ink, Solar, Forest, Rose, Graphite, GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light.
-- Custom `.toml` theme files in Markion's local themes directory extend the theme list; legacy `.theme` files migrate automatically on first load.
-- Preferences persist to `config.toml`; legacy `preferences.conf` files migrate automatically.
-- Config-only options include auto-save settings and the PDF export engine.
+- Custom themes use `.toml` files in Markion's local themes directory. Legacy `.theme` files migrate automatically when first loaded.
+- Six interface languages: English, Simplified Chinese, Japanese, French, German, and Spanish.
+- The in-app Preferences panel covers theme, language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, and heading-menu depth.
+- Preferences persist in `config.toml`; legacy `preferences.conf` files migrate automatically.
+
+All configuration fields are optional. The main defaults and file-only settings are:
+
+```toml
+theme = "Paper"
+language = "en"
+focus_mode = false
+typewriter_mode = false
+code_line_numbers = true
+preview_adaptive_width = false
+heading_menu_max_level = 5        # 5 or 6
+sync_scroll = false
+sidebar_visible = true
+sidebar_tab = "files"             # "files" or "outline"
+
+[auto_save]
+enabled = true
+delay_secs = 5
+
+[export]
+pdf_engine = "xelatex"
+```
+
+Configuration, recovery files, themes, and rotating diagnostic logs use platform-appropriate Markion data directories. Set `RUST_LOG=debug` before launch for more detailed logs.
 
 ## Export
 
-Markion can export to:
+Markion exports to:
 
 - Markdown
-- Styled HTML
-- Plain HTML
+- Styled HTML and plain HTML
 - LaTeX
 - DOCX
 - PDF
-- PNG/JPEG text snapshots
+- PNG and JPEG text snapshots
 
-DOCX and PDF export use the absorbed Typune export engine where available, with built-in fallback paths for simpler outputs.
+PDF and DOCX try the absorbed Typune/pandoc export engine first. If pandoc or the selected PDF engine is unavailable, Markion falls back to a simpler built-in writer and reports the backend in the status bar. Installing pandoc and a suitable PDF engine produces richer output. PNG/JPEG and built-in PDF output are intentionally basic text snapshots.
 
-## Performance Notes
+## Performance
 
-- Derived Markdown state such as preview blocks, outline, stats, and line counts is cached per document version and shared via `Arc`.
-- Syntax highlighting is memoized across edits.
-- Undo snapshots skip derived caches.
-- The editor reuses a cached text handle per version.
-- Preview rendering updates changed ranges and the file tree renders a bounded number of rows per frame.
-- Wrapped source lines measure their rendered height so long soft-wrapped lines scroll fully and multi-line selections render correctly.
+- Preview blocks, Visual Edit blocks, outline, statistics, and line counts are cached per document version and shared via `Arc`.
+- Syntax highlighting is memoized across edits, and grammar loading is warmed in the background.
+- Undo snapshots skip derived caches, while the editor reuses a cached text handle per version.
+- Preview/Visual Edit lists update changed ranges, the file tree renders a bounded row set, and wrapped source lines measure their actual rendered height.
 
-## Not Yet Implemented
+Markion still performs full Markdown reparses when document text changes; it does not yet use a rope buffer or a fully incremental parser.
 
-- Single-surface WYSIWYG editing that hides Markdown markers around the cursor.
-- KaTeX/MathJax-quality math rendering.
-- Direct cell-level preview table editing.
-- Drag-and-drop file tree moves.
-- Full custom theme installation UI.
-- Rich image export and virtualized rendering for very large documents.
-- Inline styles inside preview table cells; HTML export keeps full table-cell fidelity.
+## Current limitations
+
+- Visual Edit is an Obsidian-style source-backed surface, not full Typora-style WYSIWYG; complex or ambiguous constructs may expose Markdown source.
+- Math uses a readable fallback rather than KaTeX/MathJax-quality typesetting.
+- Direct cell-level Visual Edit table editing and inline styling inside preview table cells are not implemented; HTML export preserves table-cell fidelity.
+- Drag-and-drop file-tree moves and a full custom-theme installation UI are not implemented.
+- Image export is a basic text snapshot, and very large documents do not yet use fully virtualized/incremental parsing.
 
 ## Development
+
+Rust stable is required. From the repository root:
 
 ```powershell
 cargo run
@@ -100,12 +133,20 @@ cargo test
 cargo build
 ```
 
-The root package is the Markion app crate. Additional Typune-derived library crates live under `crates/*`; use `cargo test -p <member>` for one member or `cargo test --workspace` for every crate.
+The root package is the `markion` application crate. Typune-derived, GPUI-free library crates live under `crates/*`:
 
-On Windows the app is built as a GUI subsystem executable, so the editor window is not tied to a console window lifecycle. After `cargo build`, you can also launch:
+```powershell
+cargo test -p markdown
+cargo test -p export
+cargo test --workspace
+```
+
+Plain `cargo test` tests only the root package; use `cargo test --workspace` for every member. On Windows the app is a GUI-subsystem executable and can also be launched after a debug build with:
 
 ```powershell
 .\target\debug\markion.exe
 ```
 
-Save prompts for a path the first time a document is saved. Export actions prompt for an output path and suggest a filename based on the current document.
+## License
+
+Markion is available under the [MIT License](LICENSE).

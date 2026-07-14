@@ -641,6 +641,88 @@ pub(super) fn open_folder_prompt_options(language: Language) -> PathPromptOption
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum StartupOpenIntent {
+    None,
+    File(PathBuf),
+    Folder(PathBuf),
+    Invalid {
+        path: PathBuf,
+        reason: StartupOpenInvalidReason,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StartupOpenInvalidReason {
+    Missing,
+    UnsupportedFile,
+    UnsupportedPath,
+}
+
+impl StartupOpenInvalidReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Missing => "path does not exist",
+            Self::UnsupportedFile => "unsupported file type",
+            Self::UnsupportedPath => "path is not a file or folder",
+        }
+    }
+}
+
+impl StartupOpenIntent {
+    pub(super) fn from_env_args() -> Self {
+        let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::from_args(env::args_os().skip(1), &cwd)
+    }
+
+    pub(super) fn from_args<I>(args: I, cwd: &Path) -> Self
+    where
+        I: IntoIterator<Item = OsString>,
+    {
+        let Some(path) = args.into_iter().next().map(PathBuf::from) else {
+            return Self::None;
+        };
+        Self::from_path(resolve_startup_path(path, cwd))
+    }
+
+    pub(super) fn from_path(path: PathBuf) -> Self {
+        if path.is_file() {
+            if is_markdown_path(&path) {
+                Self::File(path)
+            } else {
+                Self::Invalid {
+                    path,
+                    reason: StartupOpenInvalidReason::UnsupportedFile,
+                }
+            }
+        } else if path.is_dir() {
+            Self::Folder(path)
+        } else if !path.exists() {
+            Self::Invalid {
+                path,
+                reason: StartupOpenInvalidReason::Missing,
+            }
+        } else {
+            Self::Invalid {
+                path,
+                reason: StartupOpenInvalidReason::UnsupportedPath,
+            }
+        }
+    }
+}
+
+pub(super) fn resolve_startup_path(path: PathBuf, cwd: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
+}
+
+pub(super) fn startup_open_failure_detail(path: &Path, reason: StartupOpenInvalidReason) -> String {
+    format!("{} ({})", path.display(), reason.label())
+}
+
 pub(super) fn find_tab_with_document_path(tabs: &[EditorTab], path: &Path) -> Option<usize> {
     let target = comparable_document_path(path);
     tabs.iter().position(|tab| {

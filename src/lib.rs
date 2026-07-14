@@ -54,8 +54,9 @@ use table::{
 
 use parse::{
     ImageDraft, InlineStateDraft, ListItemDraft, ListLevelDraft, append_span, clean_preview_text,
-    finish_rich_text, flush_list_item, heading_level_to_u8, markdown_options, push_nonempty_block,
-    push_preview_rich, render_extended_html_text_nodes, slugify,
+    finish_rich_text, flush_list_item, heading_level_to_u8, html_preview_plain_text,
+    html_preview_parts, markdown_options, push_nonempty_block, push_preview_rich,
+    render_extended_html_text_nodes, slugify,
 };
 
 use render::{
@@ -912,6 +913,30 @@ impl MarkdownDocument {
                     output.push_str(latex.trim());
                     output.push_str("\n\\]\n\n");
                 }
+                PreviewBlock::Html { html, .. } => {
+                    for part in html_preview_parts(&html) {
+                        match part {
+                            parse::HtmlPreviewPart::Text { text, .. } => {
+                                output.push_str(&render_latex_rich_text(&text));
+                                output.push_str("\n\n");
+                            }
+                            parse::HtmlPreviewPart::Image { alt, url, .. } => {
+                                output.push_str("\\begin{figure}[h]\n\\centering\n");
+                                output.push_str(&format!(
+                                    "\\includegraphics[width=\\linewidth]{{{}}}\n",
+                                    escape_latex_path(&url)
+                                ));
+                                if !alt.is_empty() {
+                                    output.push_str(&format!(
+                                        "\\caption{{{}}}\n",
+                                        escape_latex(&alt)
+                                    ));
+                                }
+                                output.push_str("\\end{figure}\n\n");
+                            }
+                        }
+                    }
+                }
                 PreviewBlock::Image { alt, url, .. } => {
                     output.push_str("\\begin{figure}[h]\n\\centering\n");
                     output.push_str(&format!(
@@ -984,6 +1009,9 @@ impl MarkdownDocument {
         for event in Parser::new_ext(self.body_text(), markdown_options()) {
             match event {
                 Event::Text(text) | Event::Code(text) => output.push_str(&text),
+                Event::Html(text) | Event::InlineHtml(text) => {
+                    output.push_str(&html_preview_plain_text(&text));
+                }
                 Event::SoftBreak | Event::HardBreak => output.push('\n'),
                 Event::End(TagEnd::Paragraph | TagEnd::Heading(_)) => output.push_str("\n\n"),
                 Event::End(TagEnd::Item) => output.push('\n'),
@@ -1372,20 +1400,37 @@ impl MarkdownDocument {
                     );
                 }
                 Event::Html(text) | Event::InlineHtml(text) => {
-                    push_preview_rich(
-                        &mut heading,
-                        &mut paragraph,
-                        &mut quote,
-                        quote_depth,
-                        &mut list_item,
-                        &mut image,
-                        &mut code,
-                        &mut table,
-                        &text,
-                        inline.style(),
-                        inline.link(),
-                        false,
-                    );
+                    let standalone_html = heading.is_none()
+                        && paragraph.is_none()
+                        && quote_depth == 0
+                        && list_item.is_none()
+                        && image.is_none()
+                        && code.is_none()
+                        && table.is_none();
+                    if standalone_html {
+                        blocks.push(PreviewBlock::Html {
+                            html: text.to_string(),
+                            source_range,
+                        });
+                    } else {
+                        let text = html_preview_plain_text(&text);
+                        if !text.is_empty() {
+                            push_preview_rich(
+                                &mut heading,
+                                &mut paragraph,
+                                &mut quote,
+                                quote_depth,
+                                &mut list_item,
+                                &mut image,
+                                &mut code,
+                                &mut table,
+                                &text,
+                                inline.style(),
+                                inline.link(),
+                                false,
+                            );
+                        }
+                    }
                 }
                 Event::FootnoteReference(text) => {
                     let mut style = inline.style();

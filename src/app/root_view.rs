@@ -1074,75 +1074,17 @@ pub(super) fn file_tree_entry_icon(
 ) -> Div {
     match kind {
         FileTreeEntryKind::Directory if expanded => div()
-            .relative()
             .w(px(16.))
-            .h(px(14.))
+            .h(px(16.))
             .flex_none()
-            .child(
-                div()
-                    .absolute()
-                    .top(px(2.))
-                    .left(px(1.))
-                    .w(px(12.))
-                    .h(px(8.))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.surface_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(1.))
-                    .left(px(2.))
-                    .w(px(6.))
-                    .h(px(4.))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.surface_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(6.))
-                    .left(px(0.))
-                    .w(px(15.))
-                    .h(px(7.))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.panel_bg),
-            ),
+            .text_color(color)
+            .child(svg().path("icons/folder-open.svg").size_full()),
         FileTreeEntryKind::Directory => div()
-            .relative()
             .w(px(16.))
-            .h(px(14.))
+            .h(px(16.))
             .flex_none()
-            .child(
-                div()
-                    .absolute()
-                    .top(px(2.))
-                    .left(px(2.))
-                    .w(px(6.))
-                    .h(px(4.))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.surface_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(5.))
-                    .left(px(1.))
-                    .w(px(14.))
-                    .h(px(8.))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.surface_bg),
-            ),
+            .text_color(color)
+            .child(svg().path("icons/folder.svg").size_full()),
         FileTreeEntryKind::File => div()
             .relative()
             .w(px(14.))

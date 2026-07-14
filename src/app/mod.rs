@@ -1,7 +1,10 @@
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
-    env, fs, io,
+    env,
+    ffi::OsString,
+    fs, io,
     ops::Range,
     path::{Path, PathBuf},
     process::Command,
@@ -11,16 +14,16 @@ use std::{
 
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle, DefiniteLength,
-    DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler, Empty, Entity,
-    EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle, FontWeight,
-    GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageSource, KeyBinding, LayoutId,
-    ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, Rgba,
-    ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText, TextLayout,
-    TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window, WindowBounds,
-    WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, img, list, point, px, rgb,
-    rgba, size,
+    App, Application, AssetSource, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle,
+    DefiniteLength, DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler,
+    Empty, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle,
+    FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageSource, KeyBinding,
+    LayoutId, ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton,
+    PromptLevel, Rgba, ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText,
+    TextLayout, TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window,
+    WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, img, list,
+    point, px, rgb, rgba, size, svg,
 };
 use markion::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,

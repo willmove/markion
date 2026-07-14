@@ -611,6 +611,10 @@ pub enum PreviewBlock {
         error: Option<String>,
         source_range: Range<usize>,
     },
+    Html {
+        html: String,
+        source_range: Range<usize>,
+    },
     Image {
         alt: String,
         url: String,
@@ -638,6 +642,7 @@ impl PreviewBlock {
             | Self::BlockQuote { source_range, .. }
             | Self::CodeBlock { source_range, .. }
             | Self::MathBlock { source_range, .. }
+            | Self::Html { source_range, .. }
             | Self::Image { source_range, .. }
             | Self::Rule { source_range }
             | Self::Table { source_range, .. } => source_range,

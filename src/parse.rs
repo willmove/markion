@@ -14,6 +14,20 @@ use crate::escape::escape_html_attribute;
 use crate::model::{InlineSpan, InlineStyle, PreviewBlock, RichText};
 use crate::table::TableDraft;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HtmlPreviewPart {
+    Text {
+        text: RichText,
+        centered: bool,
+    },
+    Image {
+        alt: String,
+        url: String,
+        title: Option<String>,
+        centered: bool,
+    },
+}
+
 pub(crate) struct ListItemDraft {
     pub level: usize,
     pub ordered: bool,
@@ -394,6 +408,426 @@ pub(crate) fn render_extended_html_text_nodes(html: &str) -> String {
     }
 
     output
+}
+
+pub(crate) fn html_preview_plain_text(html: &str) -> String {
+    html_preview_parts(html)
+        .into_iter()
+        .filter_map(|part| match part {
+            HtmlPreviewPart::Text { text, .. } if !text.is_empty() => Some(text.text),
+            HtmlPreviewPart::Image { alt, url, .. } => {
+                if alt.is_empty() {
+                    Some(url)
+                } else {
+                    Some(alt)
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(crate) fn html_preview_parts(html: &str) -> Vec<HtmlPreviewPart> {
+    HtmlPreviewBuilder::new(html).finish()
+}
+
+struct HtmlPreviewBuilder<'a> {
+    html: &'a str,
+    index: usize,
+    parts: Vec<HtmlPreviewPart>,
+    spans: Vec<InlineSpan>,
+    style: InlineStyle,
+    bold_depth: usize,
+    italic_depth: usize,
+    code_depth: usize,
+    strike_depth: usize,
+    links: Vec<String>,
+    centered_depth: usize,
+}
+
+impl<'a> HtmlPreviewBuilder<'a> {
+    fn new(html: &'a str) -> Self {
+        Self {
+            html,
+            index: 0,
+            parts: Vec::new(),
+            spans: Vec::new(),
+            style: InlineStyle::default(),
+            bold_depth: 0,
+            italic_depth: 0,
+            code_depth: 0,
+            strike_depth: 0,
+            links: Vec::new(),
+            centered_depth: 0,
+        }
+    }
+
+    fn finish(mut self) -> Vec<HtmlPreviewPart> {
+        while self.index < self.html.len() {
+            if self.html[self.index..].starts_with('<') {
+                if let Some(tag_end) = find_html_tag_end(self.html, self.index) {
+                    let tag = &self.html[self.index..tag_end];
+                    self.handle_tag(tag);
+                    self.index = tag_end;
+                    continue;
+                }
+            }
+
+            let next_tag = self.html[self.index..]
+                .find('<')
+                .map_or(self.html.len(), |relative| self.index + relative);
+            let text = &self.html[self.index..next_tag];
+            self.push_text(text);
+            self.index = next_tag;
+        }
+        self.flush_text();
+        self.parts
+    }
+
+    fn handle_tag(&mut self, tag: &str) {
+        let Some(parsed) = ParsedHtmlTag::parse(tag) else {
+            return;
+        };
+        if parsed.name == "script" || parsed.name == "style" {
+            if !parsed.closing {
+                if let Some(end) = find_html_closing_tag(self.html, self.index, &parsed.name) {
+                    self.index = end;
+                }
+            }
+            return;
+        }
+
+        match parsed.name.as_str() {
+            "br" => self.push_line_break(),
+            "p" | "div" | "section" | "article" | "header" | "footer" | "li" | "tr"
+            | "table" | "blockquote" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                if parsed.closing {
+                    if self.centered_depth > 0 {
+                        self.centered_depth -= 1;
+                    }
+                    self.push_line_break();
+                } else {
+                    if self.has_text() {
+                        self.push_line_break();
+                    }
+                    if parsed.is_centered() {
+                        self.centered_depth += 1;
+                    }
+                }
+            }
+            "strong" | "b" => {
+                if parsed.closing {
+                    self.bold_depth = self.bold_depth.saturating_sub(1);
+                } else if !parsed.self_closing {
+                    self.bold_depth += 1;
+                }
+                self.update_style();
+            }
+            "em" | "i" => {
+                if parsed.closing {
+                    self.italic_depth = self.italic_depth.saturating_sub(1);
+                } else if !parsed.self_closing {
+                    self.italic_depth += 1;
+                }
+                self.update_style();
+            }
+            "code" | "kbd" | "samp" => {
+                if parsed.closing {
+                    self.code_depth = self.code_depth.saturating_sub(1);
+                } else if !parsed.self_closing {
+                    self.code_depth += 1;
+                }
+                self.update_style();
+            }
+            "s" | "del" | "strike" => {
+                if parsed.closing {
+                    self.strike_depth = self.strike_depth.saturating_sub(1);
+                } else if !parsed.self_closing {
+                    self.strike_depth += 1;
+                }
+                self.update_style();
+            }
+            "a" => {
+                if parsed.closing {
+                    self.links.pop();
+                } else if let Some(href) = parsed.attr("href") {
+                    self.links.push(href);
+                }
+            }
+            "img" if !parsed.closing => {
+                if let Some(url) = parsed.attr("src") {
+                    self.flush_text();
+                    self.parts.push(HtmlPreviewPart::Image {
+                        alt: parsed.attr("alt").unwrap_or_default(),
+                        url,
+                        title: parsed.attr("title").filter(|title| !title.is_empty()),
+                        centered: self.centered_depth > 0 || parsed.is_centered(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn update_style(&mut self) {
+        self.style.bold = self.bold_depth > 0;
+        self.style.italic = self.italic_depth > 0;
+        self.style.code = self.code_depth > 0;
+        self.style.strikethrough = self.strike_depth > 0;
+    }
+
+    fn push_text(&mut self, text: &str) {
+        let decoded = decode_html_entities(text);
+        let mut pending_space = false;
+        for ch in decoded.chars() {
+            if ch.is_whitespace() {
+                pending_space = true;
+                continue;
+            }
+            if pending_space && self.needs_space_before_text() {
+                self.push_visible(" ");
+            }
+            pending_space = false;
+            let mut buf = [0u8; 4];
+            self.push_visible(ch.encode_utf8(&mut buf));
+        }
+    }
+
+    fn push_line_break(&mut self) {
+        if self.has_text() && !self.ends_with_line_break() {
+            append_span(
+                &mut self.spans,
+                "\n",
+                InlineStyle::default(),
+                self.links.last().map(String::as_str),
+            );
+        }
+    }
+
+    fn push_visible(&mut self, text: &str) {
+        append_span(
+            &mut self.spans,
+            text,
+            self.style,
+            self.links.last().map(String::as_str),
+        );
+    }
+
+    fn flush_text(&mut self) {
+        let text = finish_rich_text(std::mem::take(&mut self.spans));
+        if !text.is_empty() {
+            self.parts.push(HtmlPreviewPart::Text {
+                text,
+                centered: self.centered_depth > 0,
+            });
+        }
+    }
+
+    fn has_text(&self) -> bool {
+        self.spans.iter().any(|span| !span.text.trim().is_empty())
+    }
+
+    fn ends_with_line_break(&self) -> bool {
+        self.spans
+            .last()
+            .is_some_and(|span| span.text.ends_with('\n'))
+    }
+
+    fn needs_space_before_text(&self) -> bool {
+        self.spans
+            .last()
+            .and_then(|span| span.text.chars().last())
+            .is_some_and(|ch| !ch.is_whitespace())
+    }
+}
+
+struct ParsedHtmlTag {
+    name: String,
+    closing: bool,
+    self_closing: bool,
+    attrs: Vec<(String, String)>,
+}
+
+impl ParsedHtmlTag {
+    fn parse(tag: &str) -> Option<Self> {
+        let mut rest = tag.strip_prefix('<')?.strip_suffix('>')?.trim();
+        if rest.starts_with('!') || rest.starts_with('?') {
+            return None;
+        }
+        let closing = rest.starts_with('/');
+        if closing {
+            rest = rest[1..].trim_start();
+        }
+        let self_closing = rest.ends_with('/');
+        if self_closing {
+            rest = rest[..rest.len() - 1].trim_end();
+        }
+        let name_end = rest
+            .char_indices()
+            .find_map(|(index, ch)| (!ch.is_ascii_alphanumeric()).then_some(index))
+            .unwrap_or(rest.len());
+        let name = rest[..name_end].to_ascii_lowercase();
+        if name.is_empty() {
+            return None;
+        }
+        Some(Self {
+            name,
+            closing,
+            self_closing,
+            attrs: parse_html_attrs(&rest[name_end..]),
+        })
+    }
+
+    fn attr(&self, name: &str) -> Option<String> {
+        self.attrs
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.clone())
+    }
+
+    fn is_centered(&self) -> bool {
+        self.attr("align")
+            .is_some_and(|value| value.eq_ignore_ascii_case("center"))
+            || self
+                .attr("style")
+                .is_some_and(|value| value.to_ascii_lowercase().contains("text-align: center"))
+    }
+}
+
+fn find_html_tag_end(html: &str, start: usize) -> Option<usize> {
+    let mut quote = None;
+    for (relative, ch) in html[start..].char_indices() {
+        if relative == 0 {
+            continue;
+        }
+        match (quote, ch) {
+            (Some(q), c) if c == q => quote = None,
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, '>') => return Some(start + relative + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn find_html_closing_tag(html: &str, start: usize, name: &str) -> Option<usize> {
+    let needle = format!("</{name}");
+    html[start..]
+        .to_ascii_lowercase()
+        .find(&needle)
+        .and_then(|relative| find_html_tag_end(html, start + relative))
+}
+
+fn parse_html_attrs(input: &str) -> Vec<(String, String)> {
+    let mut attrs = Vec::new();
+    let mut index = 0usize;
+    while index < input.len() {
+        while input[index..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+        {
+            index += input[index..].chars().next().unwrap().len_utf8();
+            if index >= input.len() {
+                return attrs;
+            }
+        }
+        let name_start = index;
+        while index < input.len()
+            && input[index..]
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            index += input[index..].chars().next().unwrap().len_utf8();
+        }
+        if index == name_start {
+            break;
+        }
+        let name = input[name_start..index].to_ascii_lowercase();
+        while index < input.len()
+            && input[index..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+        {
+            index += input[index..].chars().next().unwrap().len_utf8();
+        }
+        let mut value = String::new();
+        if input[index..].starts_with('=') {
+            index += 1;
+            while index < input.len()
+                && input[index..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_whitespace)
+            {
+                index += input[index..].chars().next().unwrap().len_utf8();
+            }
+            if let Some(quote @ ('"' | '\'')) = input[index..].chars().next() {
+                index += quote.len_utf8();
+                let value_start = index;
+                while index < input.len() && !input[index..].starts_with(quote) {
+                    index += input[index..].chars().next().unwrap().len_utf8();
+                }
+                value = decode_html_entities(&input[value_start..index]);
+                if index < input.len() {
+                    index += quote.len_utf8();
+                }
+            } else {
+                let value_start = index;
+                while index < input.len()
+                    && input[index..]
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| !ch.is_whitespace())
+                {
+                    index += input[index..].chars().next().unwrap().len_utf8();
+                }
+                value = decode_html_entities(&input[value_start..index]);
+            }
+        }
+        attrs.push((name, value));
+    }
+    attrs
+}
+
+fn decode_html_entities(text: &str) -> String {
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < text.len() {
+        if text[index..].starts_with('&') {
+            if let Some(end) = text[index + 1..].find(';') {
+                let entity = &text[index + 1..index + 1 + end];
+                if let Some(decoded) = decode_html_entity(entity) {
+                    output.push(decoded);
+                    index += end + 2;
+                    continue;
+                }
+            }
+        }
+        let ch = text[index..].chars().next().unwrap();
+        output.push(ch);
+        index += ch.len_utf8();
+    }
+    output
+}
+
+fn decode_html_entity(entity: &str) -> Option<char> {
+    match entity {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" | "#39" => Some('\''),
+        "nbsp" => Some(' '),
+        _ if entity.starts_with("#x") || entity.starts_with("#X") => {
+            u32::from_str_radix(&entity[2..], 16).ok().and_then(char::from_u32)
+        }
+        _ if entity.starts_with('#') => entity[1..].parse::<u32>().ok().and_then(char::from_u32),
+        _ => None,
+    }
 }
 
 fn is_math_container_tag(tag: &str) -> bool {

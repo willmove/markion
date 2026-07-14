@@ -282,6 +282,54 @@ impl MarkionApp {
         .detach();
     }
 
+    pub(super) fn apply_startup_open_intent(
+        &mut self,
+        intent: StartupOpenIntent,
+        cx: &mut Context<Self>,
+    ) {
+        match intent {
+            StartupOpenIntent::None => {}
+            StartupOpenIntent::File(path) => {
+                let display_path = path.display().to_string();
+                match MarkdownDocument::open(&path) {
+                    Ok(document) => {
+                        self.replace_active_tab(document, cx);
+                        self.update_workspace_root_from_document(cx);
+                        self.active_menu = None;
+                        self.status = self.trf(Msg::StatusOpened, &[&display_path]);
+                    }
+                    Err(err) => {
+                        tracing::warn!(path = ?path, error = %err, "startup file open failed");
+                        self.active_menu = None;
+                        self.status = self.trf(Msg::StatusOpenFailed, &[&err.to_string()]);
+                    }
+                }
+                cx.notify();
+            }
+            StartupOpenIntent::Folder(path) => {
+                let display_path = path.display().to_string();
+                self.set_workspace_root(path);
+                self.sidebar_visible = true;
+                self.sidebar_tab = SidebarTab::Files;
+                self.active_menu = None;
+                self.persist_preferences();
+                self.schedule_file_tree_scan(Some(display_path), cx);
+                cx.notify();
+            }
+            StartupOpenIntent::Invalid { path, reason } => {
+                let detail = startup_open_failure_detail(&path, reason);
+                tracing::warn!(
+                    path = ?path,
+                    reason = ?reason,
+                    "startup path could not be opened"
+                );
+                self.active_menu = None;
+                self.status = self.trf(Msg::StatusOpenFailed, &[&detail]);
+                cx.notify();
+            }
+        }
+    }
+
     pub(super) fn after_document_changed(&mut self, cx: &mut Context<Self>) {
         self.refresh_search_matches();
         self.center_cursor_if_typewriter();
