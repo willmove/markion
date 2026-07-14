@@ -702,38 +702,54 @@ impl MarkionApp {
             cx,
         );
         // A non-empty folder is removed recursively, which is destructive and
-        // not undoable, so a second confirmation specifically calls out that
-        // the folder *and all of its contents* will be removed. Files and
-        // empty folders keep the single confirm above. The second prompt is
-        // only awaited (and thus shown) after the first is accepted.
-        let recursive_answer = if path.is_dir() && dir_is_non_empty(&path) {
-            let recursive_detail = tf(
+        // not undoable, so prepare a second confirmation that specifically
+        // calls out that the folder *and all of its contents* will be removed.
+        // It must not be created until the first prompt has been accepted:
+        // GPUI custom prompts are not re-entrant and a second immediate call
+        // replaces the first prompt before the user can answer it.
+        let recursive_prompt = if path.is_dir() && dir_is_non_empty(&path) {
+            let detail = tf(
                 self.language,
                 Msg::DialogDeleteFolderRecursiveDetail,
                 &[&path.display().to_string()],
             );
-            Some(window.prompt(
-                PromptLevel::Warning,
-                self.tr(Msg::DialogDeleteFolderRecursiveTitle),
-                Some(&recursive_detail),
-                &[
-                    PromptButton::ok(self.tr(Msg::DialogButtonDelete)),
-                    PromptButton::cancel(self.tr(Msg::DialogButtonCancel)),
-                ],
-                cx,
+            Some((
+                self.tr(Msg::DialogDeleteFolderRecursiveTitle).to_string(),
+                detail,
+                self.tr(Msg::DialogButtonDelete).to_string(),
+                self.tr(Msg::DialogButtonCancel).to_string(),
             ))
         } else {
             None
         };
+        let window_handle = window.window_handle();
         self.active_menu = None;
         self.status = t(self.language, Msg::StatusWaitingDeleteConfirm).into();
         cx.notify();
 
         cx.spawn(async move |this, cx| {
             let confirmed = matches!(answer.await, Ok(0));
-            let recursive_confirmed = match recursive_answer {
-                Some(second) => confirmed && matches!(second.await, Ok(0)),
-                None => confirmed,
+            let recursive_confirmed = match (confirmed, recursive_prompt) {
+                (true, Some((title, detail, delete_label, cancel_label))) => {
+                    let second = cx.update_window(window_handle, |_, window, cx| {
+                        window.prompt(
+                            PromptLevel::Warning,
+                            &title,
+                            Some(&detail),
+                            &[
+                                PromptButton::ok(delete_label),
+                                PromptButton::cancel(cancel_label),
+                            ],
+                            cx,
+                        )
+                    });
+                    match second {
+                        Ok(second) => matches!(second.await, Ok(0)),
+                        Err(_) => false,
+                    }
+                }
+                (true, None) => true,
+                (false, _) => false,
             };
             let _ = this.update(cx, |app, cx| {
                 if !recursive_confirmed {

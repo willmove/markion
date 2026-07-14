@@ -932,6 +932,12 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                         })
                         .on_mouse_up(MouseButton::Right, {
                             move |event, window, cx| {
+                                // The scroll container also handles right-clicks to
+                                // open the workspace/background menu. Without stopping
+                                // propagation here, that parent handler runs next and
+                                // immediately replaces this file/folder menu (which has
+                                // Rename/Delete) with the workspace menu (which does not).
+                                cx.stop_propagation();
                                 let focus_handle = right_app_entity.read(cx).focus_handle.clone();
                                 window.focus(&focus_handle);
                                 let _ = right_app_entity.update(cx, |app, cx| {
@@ -1706,53 +1712,59 @@ pub(super) fn toolbar_button(
         .child(label)
 }
 
-pub(super) fn file_tree_context_menu_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+pub(super) fn file_tree_context_menu_view(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
     let palette = app.palette();
-    let Some(menu) = &app.file_tree_context_menu else {
-        return div().hidden();
-    };
+    let menu = app
+        .file_tree_context_menu
+        .as_ref()
+        .expect("file-tree context menu view requires open menu state");
     let position = menu.position;
     let target_kind = menu.target.kind();
     let app_entity = cx.entity();
 
-    div()
-        .absolute()
-        .top(position.y)
-        .left(position.x)
-        .w(px(208.))
-        // Without occlude, mouse-down on a menu item falls through to
-        // #main-content-row's close_menu handler, which clears the menu state
-        // before the item's on_mouse_up can dispatch its action (same bug the
-        // app-menu dropdown had — see active_menu_dropdown).
-        .occlude()
-        .p_1()
-        .rounded_md()
-        .border_1()
-        .border_color(palette.border)
-        .bg(palette.surface_bg)
-        .shadow_md()
-        .children(
-            file_tree_context_actions(target_kind)
-                .iter()
-                .copied()
-                .map(move |action| {
-                    let app_entity = app_entity.clone();
-                    div()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .text_size(px(12.))
-                        .text_color(palette.text)
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(palette.active_bg))
-                        .child(t(app.language, file_tree_context_action_label(action)))
-                        .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                            let _ = app_entity.update(cx, |app, cx| {
-                                app.handle_file_tree_context_action(action, window, cx);
-                            });
-                        })
-                }),
-        )
+    // `anchored` measures the menu and flips/snaps it back inside the viewport.
+    // A raw absolute cursor position lets the lower actions (notably Delete)
+    // fall below the window when a row near the bottom is right-clicked.
+    anchored().position(position).child(
+        div()
+            .w(px(208.))
+            // Without occlude, mouse-down on a menu item falls through to
+            // #main-content-row's close_menu handler, which clears the menu state
+            // before the item's on_mouse_up can dispatch its action (same bug the
+            // app-menu dropdown had — see active_menu_dropdown).
+            .occlude()
+            .p_1()
+            .rounded_md()
+            .border_1()
+            .border_color(palette.border)
+            .bg(palette.surface_bg)
+            .shadow_md()
+            .children(
+                file_tree_context_actions(target_kind)
+                    .iter()
+                    .copied()
+                    .map(move |action| {
+                        let app_entity = app_entity.clone();
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_size(px(12.))
+                            .text_color(palette.text)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(palette.active_bg))
+                            .child(t(app.language, file_tree_context_action_label(action)))
+                            .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                                let _ = app_entity.update(cx, |app, cx| {
+                                    app.handle_file_tree_context_action(action, window, cx);
+                                });
+                            })
+                    }),
+            ),
+    )
 }
 
 pub(super) fn preview_context_action_label(action: PreviewContextAction) -> Msg {

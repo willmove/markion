@@ -19,7 +19,8 @@ use gpui::{
     MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, Rgba,
     ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText, TextLayout,
     TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window, WindowBounds,
-    WindowOptions, WrappedLine, actions, canvas, div, fill, img, list, point, px, rgb, rgba, size,
+    WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, img, list, point, px, rgb,
+    rgba, size,
 };
 use markion::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,

@@ -23,3 +23,5 @@
 - [x] 4.2 Add focused tests for context-menu action availability, file/folder/background target scoping, and i18n coverage.
 - [x] 4.3 Run `cargo fmt`, `cargo test`, and `openspec validate file-tree-context-menu-actions`.
 - [ ] 4.4 Manually verify the Files panel no longer shows the red-box controls, right-click menus appear for files/folders/background space, and existing file-tree behavior is preserved.
+- [x] 4.5 Keep the file/folder context menu inside the viewport so Delete remains visible near window edges, and serialize recursive-folder confirmation prompts so the action can complete reliably.
+- [x] 4.6 Stop file/folder row right-click events from bubbling to the tree background and replacing the entry menu (including Delete) with the workspace menu.

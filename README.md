@@ -4,7 +4,7 @@
 
 # Markion
 
-Markion is a Markdown editor built with Rust and GPUI, focusing on responsive source editing, live preview, flexible export options, and a streamlined desktop workflow.
+Markion is a native Markdown editor built with Rust and GPUI, focusing on responsive source editing, live preview, flexible export options, and a streamlined desktop workflow. No Electron. No Tauri. No WebView.
 
 ## Install
 
