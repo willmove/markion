@@ -197,6 +197,7 @@ pub struct ThemeColors {
 impl ThemeColors {
     /// Convenience constructor so the built-in theme table reads as labelled
     /// hex values instead of positional struct fields.
+    #[allow(clippy::too_many_arguments)]
     const fn new(
         app_bg: u32,
         panel_bg: u32,
@@ -377,16 +378,11 @@ pub enum ViewMode {
 }
 
 /// Which panel the unified sidebar is currently showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SidebarTab {
+    #[default]
     Files,
     Outline,
-}
-
-impl Default for SidebarTab {
-    fn default() -> Self {
-        Self::Files
-    }
 }
 
 impl ViewMode {

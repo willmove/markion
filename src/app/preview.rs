@@ -187,8 +187,12 @@ pub(super) fn preview_selection_plain_text(
         return None;
     }
     let mut parts = Vec::new();
-    for block_index in start.block_index..=end.block_index {
-        let block = &blocks[block_index];
+    for (block_index, block) in blocks
+        .iter()
+        .enumerate()
+        .take(end.block_index + 1)
+        .skip(start.block_index)
+    {
         let runs = preview_block_runs(block);
         for run_id in runs {
             let Some(text) = preview_run_plain_text(block, run_id) else {
@@ -266,8 +270,12 @@ pub(super) fn preview_selection_markdown(
         return None;
     }
     let mut slices = Vec::new();
-    for block_index in start.block_index..=end.block_index {
-        let range = preview_block_source_range(&blocks[block_index])?;
+    for block in blocks
+        .iter()
+        .take(end.block_index + 1)
+        .skip(start.block_index)
+    {
+        let range = preview_block_source_range(block)?;
         if range.start >= document.len() {
             continue;
         }
@@ -507,7 +515,7 @@ impl Element for VisualEditableText {
             let source = visual_source_for_visible(&segments, visible);
             let focus_handle = entity.read(cx).focus_handle.clone();
             window.focus(&focus_handle);
-            let _ = entity.update(cx, |app, cx| {
+            entity.update(cx, |app, cx| {
                 app.file_tree_query_focused = false;
                 app.search_focus = None;
                 app.input_marked_len = 0;
@@ -536,13 +544,13 @@ impl Element for VisualEditableText {
             }
             let visible = preview_index_for_position(&text_layout, event.position);
             let source = visual_source_for_visible(&segments, visible);
-            let _ = entity.update(cx, |app, cx| app.select_to(source, cx));
+            entity.update(cx, |app, cx| app.select_to(source, cx));
         });
 
         let entity = self.entity.clone();
         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
             if phase == DispatchPhase::Bubble {
-                let _ = entity.update(cx, |app, _| {
+                entity.update(cx, |app, _| {
                     app.active_tab_mut().is_selecting = false;
                 });
             }
@@ -690,7 +698,7 @@ impl Element for SelectablePreviewText {
                         return;
                     }
                     let up_index = preview_index_for_position(&text_layout, event.position);
-                    let _ = entity.update(cx, |app, cx| {
+                    entity.update(cx, |app, cx| {
                         if app.active_tab().preview_is_selecting && hitbox.is_hovered(window) {
                             app.update_preview_selection_head(
                                 block_index,
@@ -709,13 +717,14 @@ impl Element for SelectablePreviewText {
                             .as_ref()
                             .and_then(|sel| preview_selection_plain_text(sel, &blocks))
                             .is_none();
-                        if selection_empty && hitbox.is_hovered(window) {
-                            if let Some(anchor) = drag_anchor_offset {
-                                for (range, url) in link_ranges.iter().zip(link_urls.iter()) {
-                                    if range.contains(&anchor) && range.contains(&up_index) {
-                                        cx.open_url(url);
-                                        break;
-                                    }
+                        if selection_empty
+                            && hitbox.is_hovered(window)
+                            && let Some(anchor) = drag_anchor_offset
+                        {
+                            for (range, url) in link_ranges.iter().zip(link_urls.iter()) {
+                                if range.contains(&anchor) && range.contains(&up_index) {
+                                    cx.open_url(url);
+                                    break;
                                 }
                             }
                         }
@@ -736,7 +745,7 @@ impl Element for SelectablePreviewText {
                     return;
                 }
                 let index = preview_index_for_position(&text_layout, event.position);
-                let _ = entity.update(cx, |app, cx| {
+                entity.update(cx, |app, cx| {
                     app.begin_preview_selection(block_index, run_id, index, run_text.clone(), cx);
                 });
                 window.refresh();
@@ -760,7 +769,7 @@ impl Element for SelectablePreviewText {
                     return;
                 }
                 let index = preview_index_for_position(&text_layout, event.position);
-                let _ = entity.update(cx, |app, cx| {
+                entity.update(cx, |app, cx| {
                     app.update_preview_selection_head(
                         block_index,
                         run_id,
@@ -803,7 +812,7 @@ impl Element for SelectablePreviewText {
                         break;
                     }
                 }
-                let _ = entity.update(cx, |app, cx| {
+                entity.update(cx, |app, cx| {
                     app.show_preview_context_menu(event.position, link_url, cx);
                 });
                 window.refresh();

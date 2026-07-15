@@ -933,18 +933,16 @@ impl MarkionApp {
         if preview_selection_takes_copy_precedence(
             self.active_tab().preview_selection.as_ref(),
             &blocks,
-        ) {
-            if let Some(text) = self
-                .active_tab()
-                .preview_selection
-                .as_ref()
-                .and_then(|sel| preview_selection_plain_text(sel, &blocks))
-            {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                self.status = t(self.language, Msg::StatusCopiedSelection).into();
-                cx.notify();
-                return;
-            }
+        ) && let Some(text) = self
+            .active_tab()
+            .preview_selection
+            .as_ref()
+            .and_then(|sel| preview_selection_plain_text(sel, &blocks))
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.status = t(self.language, Msg::StatusCopiedSelection).into();
+            cx.notify();
+            return;
         }
         let selected = self.active_tab().selected_range.clone();
         if !selected.is_empty() {

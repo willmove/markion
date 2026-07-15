@@ -12,9 +12,10 @@
 use crate::model::SidebarTab;
 
 /// Supported interface languages. Add a variant here and fill in the `match`
-/// arms in [`t`] / [`tf`] / [`shortcut_reference`] to ship a new language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// arms in [`t`] / [`tf`] / [`shortcut_catalog`] to ship a new language.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Language {
+    #[default]
     En,
     /// Simplified Chinese (简体中文). Persisted as `zh-hans`; also accepts the
     /// legacy aliases `zh` / `chs` / `zh-cn` / `chinese` for backwards compat.
@@ -83,12 +84,6 @@ impl Language {
             Self::Fr,
             Self::Ja,
         ]
-    }
-}
-
-impl Default for Language {
-    fn default() -> Self {
-        Self::En
     }
 }
 
@@ -565,19 +560,109 @@ pub fn tf(lang: Language, msg: Msg, args: &[&str]) -> String {
     substitute(template, args)
 }
 
-pub fn shortcut_reference(lang: Language, heading_menu_max_level: u8) -> String {
-    let extended = heading_menu_max_level >= crate::model::EXTENDED_HEADING_MENU_MAX_LEVEL;
-    build_shortcut_reference(shortcut_labels(lang), extended)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShortcutPlatform {
+    WindowsLinux,
+    MacOS,
 }
 
-#[derive(Clone, Copy)]
+impl ShortcutPlatform {
+    pub const ALL: [Self; 2] = [Self::WindowsLinux, Self::MacOS];
+
+    pub const fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOS
+        } else {
+            Self::WindowsLinux
+        }
+    }
+
+    pub const fn label(self, _lang: Language) -> &'static str {
+        match self {
+            Self::WindowsLinux => "Windows/Linux",
+            Self::MacOS => "macOS",
+        }
+    }
+}
+
+impl Default for ShortcutPlatform {
+    fn default() -> Self {
+        Self::current()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShortcutCategory {
+    #[default]
+    Files,
+    Tabs,
+    Editing,
+    View,
+    Search,
+    Tables,
+    Export,
+}
+
+impl ShortcutCategory {
+    pub const ALL: [Self; 7] = [
+        Self::Files,
+        Self::Tabs,
+        Self::Editing,
+        Self::View,
+        Self::Search,
+        Self::Tables,
+        Self::Export,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ShortcutKeys {
-    win: &'static str,
-    mac: &'static str,
+    windows_linux: &'static [&'static str],
+    macos: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShortcutAction {
+    pub label: &'static str,
+    windows_linux: &'static [&'static str],
+    macos: &'static [&'static str],
+}
+
+impl ShortcutAction {
+    pub const fn combinations(self, platform: ShortcutPlatform) -> &'static [&'static str] {
+        match platform {
+            ShortcutPlatform::WindowsLinux => self.windows_linux,
+            ShortcutPlatform::MacOS => self.macos,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShortcutSection {
+    pub category: ShortcutCategory,
+    pub label: &'static str,
+    pub actions: Vec<ShortcutAction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShortcutCatalog {
+    pub sections: Vec<ShortcutSection>,
+}
+
+impl ShortcutCatalog {
+    pub fn section(&self, category: ShortcutCategory) -> Option<&ShortcutSection> {
+        self.sections
+            .iter()
+            .find(|section| section.category == category)
+    }
+}
+
+pub fn shortcut_catalog(lang: Language, heading_menu_max_level: u8) -> ShortcutCatalog {
+    let extended = heading_menu_max_level >= crate::model::EXTENDED_HEADING_MENU_MAX_LEVEL;
+    build_shortcut_catalog(shortcut_labels(lang), extended)
 }
 
 struct ShortcutLabels {
-    action: &'static str,
     sections: [&'static str; 7],
     files: [&'static str; 5],
     tabs: [&'static str; 3],
@@ -590,320 +675,306 @@ struct ShortcutLabels {
 
 const FILE_KEYS: [ShortcutKeys; 5] = [
     ShortcutKeys {
-        win: "Ctrl+N",
-        mac: "Cmd+N",
+        windows_linux: &["Ctrl+N"],
+        macos: &["Cmd+N"],
     },
     ShortcutKeys {
-        win: "Ctrl+O",
-        mac: "Cmd+O",
+        windows_linux: &["Ctrl+O"],
+        macos: &["Cmd+O"],
     },
     ShortcutKeys {
-        win: "Ctrl+S",
-        mac: "Cmd+S",
+        windows_linux: &["Ctrl+S"],
+        macos: &["Cmd+S"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+S",
-        mac: "Cmd+Shift+S",
+        windows_linux: &["Ctrl+Shift+S"],
+        macos: &["Cmd+Shift+S"],
     },
     ShortcutKeys {
-        win: "Ctrl+Q",
-        mac: "Cmd+Q",
+        windows_linux: &["Ctrl+Q"],
+        macos: &["Cmd+Q"],
     },
 ];
 
 const TAB_KEYS: [ShortcutKeys; 3] = [
     ShortcutKeys {
-        win: "Ctrl+T",
-        mac: "Cmd+T",
+        windows_linux: &["Ctrl+T"],
+        macos: &["Cmd+T"],
     },
     ShortcutKeys {
-        win: "Ctrl+W",
-        mac: "Cmd+W",
+        windows_linux: &["Ctrl+W"],
+        macos: &["Cmd+W"],
     },
     ShortcutKeys {
-        win: "Ctrl+Tab / Ctrl+Shift+Tab",
-        mac: "Ctrl+Tab / Ctrl+Shift+Tab",
+        windows_linux: &["Ctrl+Tab", "Ctrl+Shift+Tab"],
+        macos: &["Ctrl+Tab", "Ctrl+Shift+Tab"],
     },
 ];
 
 const EDITING_KEYS: [ShortcutKeys; 7] = [
     ShortcutKeys {
-        win: "Ctrl+B",
-        mac: "Cmd+B",
+        windows_linux: &["Ctrl+B"],
+        macos: &["Cmd+B"],
     },
     ShortcutKeys {
-        win: "Ctrl+I",
-        mac: "Cmd+I",
+        windows_linux: &["Ctrl+I"],
+        macos: &["Cmd+I"],
     },
     ShortcutKeys {
-        win: "Ctrl+E",
-        mac: "Cmd+E",
+        windows_linux: &["Ctrl+E"],
+        macos: &["Cmd+E"],
     },
     ShortcutKeys {
-        win: "Ctrl+K",
-        mac: "Cmd+K",
+        windows_linux: &["Ctrl+K"],
+        macos: &["Cmd+K"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+I",
-        mac: "Cmd+Shift+I",
+        windows_linux: &["Ctrl+Shift+I"],
+        macos: &["Cmd+Shift+I"],
     },
     ShortcutKeys {
-        win: "Ctrl+1/2/3/4/5",
-        mac: "Cmd+1/2/3/4/5",
+        windows_linux: &["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5"],
+        macos: &["Cmd+1", "Cmd+2", "Cmd+3", "Cmd+4", "Cmd+5"],
     },
     ShortcutKeys {
-        win: "Ctrl+Z / Ctrl+Shift+Z",
-        mac: "Cmd+Z / Cmd+Shift+Z",
+        windows_linux: &["Ctrl+Z", "Ctrl+Shift+Z"],
+        macos: &["Cmd+Z", "Cmd+Shift+Z"],
     },
 ];
 
 const EDITING_KEYS_EXTENDED: [ShortcutKeys; 7] = [
     ShortcutKeys {
-        win: "Ctrl+B",
-        mac: "Cmd+B",
+        windows_linux: &["Ctrl+B"],
+        macos: &["Cmd+B"],
     },
     ShortcutKeys {
-        win: "Ctrl+I",
-        mac: "Cmd+I",
+        windows_linux: &["Ctrl+I"],
+        macos: &["Cmd+I"],
     },
     ShortcutKeys {
-        win: "Ctrl+E",
-        mac: "Cmd+E",
+        windows_linux: &["Ctrl+E"],
+        macos: &["Cmd+E"],
     },
     ShortcutKeys {
-        win: "Ctrl+K",
-        mac: "Cmd+K",
+        windows_linux: &["Ctrl+K"],
+        macos: &["Cmd+K"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+I",
-        mac: "Cmd+Shift+I",
+        windows_linux: &["Ctrl+Shift+I"],
+        macos: &["Cmd+Shift+I"],
     },
     ShortcutKeys {
-        win: "Ctrl+1/2/3/4/5/6",
-        mac: "Cmd+1/2/3/4/5/6",
+        windows_linux: &["Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5", "Ctrl+6"],
+        macos: &["Cmd+1", "Cmd+2", "Cmd+3", "Cmd+4", "Cmd+5", "Cmd+6"],
     },
     ShortcutKeys {
-        win: "Ctrl+Z / Ctrl+Shift+Z",
-        mac: "Cmd+Z / Cmd+Shift+Z",
+        windows_linux: &["Ctrl+Z", "Ctrl+Shift+Z"],
+        macos: &["Cmd+Z", "Cmd+Shift+Z"],
     },
 ];
 
 const VIEW_KEYS: [ShortcutKeys; 14] = [
     ShortcutKeys {
-        win: "Ctrl+Shift+V",
-        mac: "Cmd+Shift+V",
+        windows_linux: &["Ctrl+Shift+V"],
+        macos: &["Cmd+Shift+V"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+1",
-        mac: "Cmd+Option+1",
+        windows_linux: &["Ctrl+Alt+1"],
+        macos: &["Cmd+Option+1"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+4",
-        mac: "Cmd+Option+4",
+        windows_linux: &["Ctrl+Alt+4"],
+        macos: &["Cmd+Option+4"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+2",
-        mac: "Cmd+Option+2",
+        windows_linux: &["Ctrl+Alt+2"],
+        macos: &["Cmd+Option+2"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+3",
-        mac: "Cmd+Option+3",
+        windows_linux: &["Ctrl+Alt+3"],
+        macos: &["Cmd+Option+3"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+B",
-        mac: "Cmd+Shift+B",
+        windows_linux: &["Ctrl+Shift+B"],
+        macos: &["Cmd+Shift+B"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+F",
-        mac: "Cmd+Shift+F",
+        windows_linux: &["Ctrl+Shift+F"],
+        macos: &["Cmd+Shift+F"],
     },
     ShortcutKeys {
-        win: "F6",
-        mac: "F6",
+        windows_linux: &["F6"],
+        macos: &["F6"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+F",
-        mac: "Cmd+Option+F",
+        windows_linux: &["Ctrl+Alt+F"],
+        macos: &["Cmd+Option+F"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+T",
-        mac: "Cmd+Shift+T",
+        windows_linux: &["Ctrl+Shift+T"],
+        macos: &["Cmd+Shift+T"],
     },
     ShortcutKeys {
-        win: "F7",
-        mac: "F7",
+        windows_linux: &["F7"],
+        macos: &["F7"],
     },
     ShortcutKeys {
-        win: "F8",
-        mac: "F8",
+        windows_linux: &["F8"],
+        macos: &["F8"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+4",
-        mac: "Cmd+Shift+4",
+        windows_linux: &["Ctrl+Shift+4"],
+        macos: &["Cmd+Shift+4"],
     },
     ShortcutKeys {
-        win: "Ctrl+,",
-        mac: "Cmd+,",
+        windows_linux: &["Ctrl+,"],
+        macos: &["Cmd+,"],
     },
 ];
 
 const SEARCH_KEYS: [ShortcutKeys; 3] = [
     ShortcutKeys {
-        win: "Ctrl+F",
-        mac: "Cmd+F",
+        windows_linux: &["Ctrl+F"],
+        macos: &["Cmd+F"],
     },
     ShortcutKeys {
-        win: "Ctrl+H",
-        mac: "Cmd+H",
+        windows_linux: &["Ctrl+H"],
+        macos: &["Cmd+H"],
     },
     ShortcutKeys {
-        win: "F3 / Shift+F3",
-        mac: "F3 / Shift+F3",
+        windows_linux: &["F3", "Shift+F3"],
+        macos: &["F3", "Shift+F3"],
     },
 ];
 
 const TABLE_KEYS: [ShortcutKeys; 4] = [
     ShortcutKeys {
-        win: "Ctrl+Shift+M",
-        mac: "Cmd+Shift+M",
+        windows_linux: &["Ctrl+Shift+M"],
+        macos: &["Cmd+Shift+M"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+Enter / Ctrl+Alt+Backspace",
-        mac: "Cmd+Option+Enter / Cmd+Option+Backspace",
+        windows_linux: &["Ctrl+Alt+Enter", "Ctrl+Alt+Backspace"],
+        macos: &["Cmd+Option+Enter", "Cmd+Option+Backspace"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+Up / Ctrl+Alt+Down",
-        mac: "Cmd+Option+Up / Cmd+Option+Down",
+        windows_linux: &["Ctrl+Alt+Up", "Ctrl+Alt+Down"],
+        macos: &["Cmd+Option+Up", "Cmd+Option+Down"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+Right / Ctrl+Alt+Left",
-        mac: "Cmd+Option+Right / Cmd+Option+Left",
+        windows_linux: &["Ctrl+Alt+Right", "Ctrl+Alt+Left"],
+        macos: &["Cmd+Option+Right", "Cmd+Option+Left"],
     },
 ];
 
 const EXPORT_KEYS: [ShortcutKeys; 7] = [
     ShortcutKeys {
-        win: "Ctrl+Shift+H",
-        mac: "Cmd+Shift+H",
+        windows_linux: &["Ctrl+Shift+H"],
+        macos: &["Cmd+Shift+H"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+Shift+H",
-        mac: "Cmd+Option+Shift+H",
+        windows_linux: &["Ctrl+Alt+Shift+H"],
+        macos: &["Cmd+Option+Shift+H"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+P",
-        mac: "Cmd+Shift+P",
+        windows_linux: &["Ctrl+Shift+P"],
+        macos: &["Cmd+Shift+P"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+L",
-        mac: "Cmd+Shift+L",
+        windows_linux: &["Ctrl+Shift+L"],
+        macos: &["Cmd+Shift+L"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+D",
-        mac: "Cmd+Shift+D",
+        windows_linux: &["Ctrl+Shift+D"],
+        macos: &["Cmd+Shift+D"],
     },
     ShortcutKeys {
-        win: "Ctrl+Shift+G",
-        mac: "Cmd+Shift+G",
+        windows_linux: &["Ctrl+Shift+G"],
+        macos: &["Cmd+Shift+G"],
     },
     ShortcutKeys {
-        win: "Ctrl+Alt+Shift+G",
-        mac: "Cmd+Option+Shift+G",
+        windows_linux: &["Ctrl+Alt+Shift+G"],
+        macos: &["Cmd+Option+Shift+G"],
     },
 ];
 
-fn build_shortcut_reference(labels: ShortcutLabels, extended: bool) -> String {
-    let mut out = String::new();
-    append_shortcut_section(
-        &mut out,
-        labels.sections[0],
-        labels.action,
-        &labels.files,
-        &FILE_KEYS,
-    );
-    append_shortcut_section(
-        &mut out,
-        labels.sections[1],
-        labels.action,
-        &labels.tabs,
-        &TAB_KEYS,
-    );
-    append_shortcut_section(
-        &mut out,
-        labels.sections[2],
-        labels.action,
-        &labels.editing,
-        if extended {
-            &EDITING_KEYS_EXTENDED
-        } else {
-            &EDITING_KEYS
-        },
-    );
-    append_shortcut_section(
-        &mut out,
-        labels.sections[3],
-        labels.action,
-        &labels.view,
-        &VIEW_KEYS,
-    );
-    append_shortcut_section(
-        &mut out,
-        labels.sections[4],
-        labels.action,
-        &labels.search,
-        &SEARCH_KEYS,
-    );
-    append_shortcut_section(
-        &mut out,
-        labels.sections[5],
-        labels.action,
-        &labels.tables,
-        &TABLE_KEYS,
-    );
-    append_shortcut_section(
-        &mut out,
-        labels.sections[6],
-        labels.action,
-        &labels.export,
-        &EXPORT_KEYS,
-    );
-    out
+fn build_shortcut_catalog(labels: ShortcutLabels, extended: bool) -> ShortcutCatalog {
+    ShortcutCatalog {
+        sections: vec![
+            build_shortcut_section(
+                ShortcutCategory::Files,
+                labels.sections[0],
+                &labels.files,
+                &FILE_KEYS,
+            ),
+            build_shortcut_section(
+                ShortcutCategory::Tabs,
+                labels.sections[1],
+                &labels.tabs,
+                &TAB_KEYS,
+            ),
+            build_shortcut_section(
+                ShortcutCategory::Editing,
+                labels.sections[2],
+                &labels.editing,
+                if extended {
+                    &EDITING_KEYS_EXTENDED
+                } else {
+                    &EDITING_KEYS
+                },
+            ),
+            build_shortcut_section(
+                ShortcutCategory::View,
+                labels.sections[3],
+                &labels.view,
+                &VIEW_KEYS,
+            ),
+            build_shortcut_section(
+                ShortcutCategory::Search,
+                labels.sections[4],
+                &labels.search,
+                &SEARCH_KEYS,
+            ),
+            build_shortcut_section(
+                ShortcutCategory::Tables,
+                labels.sections[5],
+                &labels.tables,
+                &TABLE_KEYS,
+            ),
+            build_shortcut_section(
+                ShortcutCategory::Export,
+                labels.sections[6],
+                &labels.export,
+                &EXPORT_KEYS,
+            ),
+        ],
+    }
 }
 
-fn append_shortcut_section(
-    out: &mut String,
-    title: &str,
-    action_header: &str,
-    actions: &[&str],
+fn build_shortcut_section(
+    category: ShortcutCategory,
+    title: &'static str,
+    actions: &[&'static str],
     keys: &[ShortcutKeys],
-) {
+) -> ShortcutSection {
     debug_assert_eq!(actions.len(), keys.len());
-    if !out.is_empty() {
-        out.push('\n');
-        out.push('\n');
+    ShortcutSection {
+        category,
+        label: title,
+        actions: actions
+            .iter()
+            .zip(keys.iter())
+            .map(|(&label, keys)| ShortcutAction {
+                label,
+                windows_linux: keys.windows_linux,
+                macos: keys.macos,
+            })
+            .collect(),
     }
-    out.push_str(title);
-    out.push('\n');
-    out.push_str("| ");
-    out.push_str(action_header);
-    out.push_str(" | Windows/Linux | macOS |\n");
-    out.push_str("|---|---|---|\n");
-    for (action, key) in actions.iter().zip(keys.iter()) {
-        out.push_str("| ");
-        out.push_str(action);
-        out.push_str(" | ");
-        out.push_str(key.win);
-        out.push_str(" | ");
-        out.push_str(key.mac);
-        out.push_str(" |\n");
-    }
-    out.pop();
 }
 
 fn shortcut_labels(lang: Language) -> ShortcutLabels {
     match lang {
         Language::En => ShortcutLabels {
-            action: "Action",
             sections: [
                 "Files", "Tabs", "Editing", "View", "Search", "Tables", "Export",
             ],
@@ -944,7 +1015,6 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
             export: ["HTML", "Plain HTML", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
         },
         Language::ZhHans => ShortcutLabels {
-            action: "操作",
             sections: ["文件", "标签页", "编辑", "视图", "搜索", "表格", "导出"],
             files: ["新建", "打开", "保存", "另存为", "退出"],
             tabs: ["在新标签页中打开", "关闭标签页", "下一个/上一个标签页"],
@@ -978,7 +1048,6 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
             export: ["HTML", "纯 HTML", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
         },
         Language::ZhHant => ShortcutLabels {
-            action: "操作",
             sections: ["檔案", "分頁", "編輯", "檢視", "搜尋", "表格", "匯出"],
             files: ["新增", "開啟", "儲存", "另存新檔", "結束"],
             tabs: ["在新分頁中開啟", "關閉分頁", "下一個/上一個分頁"],
@@ -1012,7 +1081,6 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
             export: ["HTML", "純 HTML", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
         },
         Language::Ja => ShortcutLabels {
-            action: "操作",
             sections: [
                 "ファイル",
                 "タブ",
@@ -1062,7 +1130,6 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
             ],
         },
         Language::Fr => ShortcutLabels {
-            action: "Action",
             sections: [
                 "Fichiers",
                 "Onglets",
@@ -1123,7 +1190,6 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
             export: ["HTML", "HTML simple", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
         },
         Language::De => ShortcutLabels {
-            action: "Aktion",
             sections: [
                 "Dateien",
                 "Tabs",
@@ -1182,7 +1248,6 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
             ],
         },
         Language::Es => ShortcutLabels {
-            action: "Accion",
             sections: [
                 "Archivos", "Pestanas", "Edicion", "Ver", "Busqueda", "Tablas", "Exportar",
             ],
@@ -3633,11 +3698,11 @@ fn substitute(template: &str, args: &[&str]) -> String {
             }
         }
         if closed {
-            if let Ok(index) = index_str.parse::<usize>() {
-                if let Some(value) = args.get(index) {
-                    out.push_str(value);
-                    continue;
-                }
+            if let Ok(index) = index_str.parse::<usize>()
+                && let Some(value) = args.get(index)
+            {
+                out.push_str(value);
+                continue;
             }
             // Unknown index / missing arg: keep the original token verbatim.
             out.push('{');
@@ -3692,89 +3757,155 @@ mod tests {
         assert_eq!(Language::from_code("klingon"), Language::En);
     }
 
-    fn assert_platform_shortcut_table(
-        reference: &str,
-        action_header: &str,
-        save_label: &str,
-        edit_mode_label: &str,
-        prefs_label: &str,
+    #[test]
+    fn shortcut_platform_defaults_to_the_build_target() {
+        assert_eq!(
+            ShortcutPlatform::current(),
+            if cfg!(target_os = "macos") {
+                ShortcutPlatform::MacOS
+            } else {
+                ShortcutPlatform::WindowsLinux
+            }
+        );
+        assert_eq!(
+            ShortcutPlatform::WindowsLinux.label(Language::ZhHans),
+            "Windows/Linux"
+        );
+        assert_eq!(ShortcutPlatform::MacOS.label(Language::Ja), "macOS");
+    }
+
+    fn assert_shortcut_action(
+        catalog: &ShortcutCatalog,
+        category: ShortcutCategory,
+        action_label: &str,
+        windows_linux: &[&str],
+        macos: &[&str],
     ) {
-        assert!(reference.contains(&format!("| {action_header} | Windows/Linux | macOS |")));
-        assert!(reference.contains(&format!("| {save_label} | Ctrl+S | Cmd+S |")));
-        assert!(reference.contains(&format!(
-            "| {edit_mode_label} | Ctrl+Alt+1 | Cmd+Option+1 |"
-        )));
-        assert!(
-            reference.contains("| Sidebar | Ctrl+Shift+B | Cmd+Shift+B |")
-                || reference.contains("| 侧边栏 | Ctrl+Shift+B | Cmd+Shift+B |")
-                || reference.contains("| 側邊欄 | Ctrl+Shift+B | Cmd+Shift+B |")
-                || reference.contains("| サイドバー | Ctrl+Shift+B | Cmd+Shift+B |")
-                || reference.contains("| Barre laterale | Ctrl+Shift+B | Cmd+Shift+B |")
-                || reference.contains("| Seitenleiste | Ctrl+Shift+B | Cmd+Shift+B |")
-                || reference.contains("| Barra lateral | Ctrl+Shift+B | Cmd+Shift+B |")
+        let section = catalog.section(category).expect("shortcut category");
+        let action = section
+            .actions
+            .iter()
+            .find(|action| action.label == action_label)
+            .unwrap_or_else(|| panic!("missing shortcut action: {action_label}"));
+        assert_eq!(
+            action.combinations(ShortcutPlatform::WindowsLinux),
+            windows_linux
         );
-        assert!(reference.contains(&format!("| {prefs_label} | Ctrl+, | Cmd+, |")));
-        assert!(!reference.contains("Secondary-"));
+        assert_eq!(action.combinations(ShortcutPlatform::MacOS), macos);
     }
 
     #[test]
-    fn english_shortcut_reference_is_platform_table() {
-        let reference = shortcut_reference(Language::En, 3);
-        assert_platform_shortcut_table(&reference, "Action", "Save", "Edit Mode", "Preferences");
-        assert!(reference.contains("| DOCX | Ctrl+Shift+D | Cmd+Shift+D |"));
+    fn shortcut_catalog_is_complete_and_platform_explicit_for_every_language() {
+        for &language in Language::all() {
+            let catalog = shortcut_catalog(language, 3);
+            assert_eq!(catalog.sections.len(), ShortcutCategory::ALL.len());
+            for (section, category) in catalog.sections.iter().zip(ShortcutCategory::ALL) {
+                assert_eq!(section.category, category);
+                assert!(!section.label.is_empty());
+                assert!(!section.actions.is_empty());
+                for action in &section.actions {
+                    assert!(!action.label.is_empty());
+                    for platform in ShortcutPlatform::ALL {
+                        let combinations = action.combinations(platform);
+                        assert!(!combinations.is_empty());
+                        assert!(combinations.iter().all(|shortcut| {
+                            !shortcut.contains("Secondary")
+                                && !shortcut.contains("|---")
+                                && !shortcut.starts_with('+')
+                        }));
+                    }
+                }
+            }
+        }
     }
 
     #[test]
-    fn chinese_shortcut_reference_is_translated() {
-        let reference = shortcut_reference(Language::ZhHans, 3);
-        assert_platform_shortcut_table(&reference, "操作", "保存", "编辑模式", "首选项");
-    }
-
-    #[test]
-    fn traditional_chinese_shortcut_reference_is_translated() {
-        let reference = shortcut_reference(Language::ZhHant, 3);
-        assert_platform_shortcut_table(&reference, "操作", "儲存", "編輯模式", "偏好設定");
-    }
-
-    #[test]
-    fn japanese_shortcut_reference_is_translated() {
-        let reference = shortcut_reference(Language::Ja, 3);
-        assert_platform_shortcut_table(&reference, "操作", "保存", "編集モード", "設定");
-    }
-
-    #[test]
-    fn french_shortcut_reference_is_translated() {
-        let reference = shortcut_reference(Language::Fr, 3);
-        assert_platform_shortcut_table(
-            &reference,
-            "Action",
-            "Enregistrer",
-            "Mode edition",
+    fn english_shortcut_catalog_lists_core_workflows() {
+        let catalog = shortcut_catalog(Language::En, 3);
+        assert_shortcut_action(
+            &catalog,
+            ShortcutCategory::Files,
+            "Save",
+            &["Ctrl+S"],
+            &["Cmd+S"],
+        );
+        assert_shortcut_action(
+            &catalog,
+            ShortcutCategory::View,
+            "Edit Mode",
+            &["Ctrl+Alt+1"],
+            &["Cmd+Option+1"],
+        );
+        assert_shortcut_action(
+            &catalog,
+            ShortcutCategory::View,
+            "Sidebar",
+            &["Ctrl+Shift+B"],
+            &["Cmd+Shift+B"],
+        );
+        assert_shortcut_action(
+            &catalog,
+            ShortcutCategory::View,
             "Preferences",
+            &["Ctrl+,"],
+            &["Cmd+,"],
+        );
+        assert_shortcut_action(
+            &catalog,
+            ShortcutCategory::Export,
+            "DOCX",
+            &["Ctrl+Shift+D"],
+            &["Cmd+Shift+D"],
         );
     }
 
     #[test]
-    fn german_shortcut_reference_is_translated() {
-        let reference = shortcut_reference(Language::De, 3);
-        assert_platform_shortcut_table(
-            &reference,
-            "Aktion",
-            "Speichern",
-            "Bearbeitungsmodus",
-            "Einstellungen",
-        );
+    fn shortcut_catalog_translates_category_and_action_labels() {
+        let expectations = [
+            (Language::En, "Files", "Save"),
+            (Language::ZhHans, "文件", "保存"),
+            (Language::ZhHant, "檔案", "儲存"),
+            (Language::Ja, "ファイル", "保存"),
+            (Language::Fr, "Fichiers", "Enregistrer"),
+            (Language::De, "Dateien", "Speichern"),
+            (Language::Es, "Archivos", "Guardar"),
+        ];
+        for (language, category_label, save_label) in expectations {
+            let catalog = shortcut_catalog(language, 3);
+            let files = catalog.section(ShortcutCategory::Files).unwrap();
+            assert_eq!(files.label, category_label);
+            assert!(
+                files
+                    .actions
+                    .iter()
+                    .any(|action| action.label == save_label)
+            );
+        }
     }
 
     #[test]
-    fn spanish_shortcut_reference_is_translated() {
-        let reference = shortcut_reference(Language::Es, 3);
-        assert_platform_shortcut_table(
-            &reference,
-            "Accion",
-            "Guardar",
-            "Modo edicion",
-            "Preferencias",
+    fn extended_heading_depth_adds_h6_shortcuts() {
+        let standard = shortcut_catalog(Language::En, 5);
+        let extended = shortcut_catalog(Language::En, 6);
+        let standard_headings = standard.section(ShortcutCategory::Editing).unwrap().actions[5];
+        let extended_headings = extended.section(ShortcutCategory::Editing).unwrap().actions[5];
+        assert_eq!(
+            standard_headings
+                .combinations(ShortcutPlatform::WindowsLinux)
+                .len(),
+            5
+        );
+        assert_eq!(
+            extended_headings
+                .combinations(ShortcutPlatform::WindowsLinux)
+                .last(),
+            Some(&"Ctrl+6")
+        );
+        assert_eq!(
+            extended_headings
+                .combinations(ShortcutPlatform::MacOS)
+                .last(),
+            Some(&"Cmd+6")
         );
     }
 

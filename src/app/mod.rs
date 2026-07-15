@@ -30,13 +30,14 @@ use markion::{
     EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences, FileTree,
     FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, Language,
     MarkdownDocument, MarkdownFormat, Msg, PreviewBlock, RichText, SearchMatchRange, SearchOptions,
-    SidebarTab, TableEdit, ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind,
-    VisualInlineRun, VisualSourceIslandKind, builtin_diagram_registry, builtin_theme_definitions,
-    default_preferences_path, default_recovery_dir, default_themes_dir, delete_recovery_file,
-    diagram_backend_id, highlight_code, html_preview_parts, html_preview_plain_text,
-    is_markdown_path, list_recovery_files, list_theme_definitions, load_app_preferences,
-    load_recovery_file, normalize_heading_menu_max_level, render_math, save_app_preferences,
-    save_theme_definition, shortcut_reference, sidebar_tab_label, t, tf, title_from_path,
+    ShortcutCategory, ShortcutPlatform, SidebarTab, TableEdit, ThemeColors, ThemeDefinition,
+    ViewMode, VisualBlock, VisualBlockKind, VisualInlineRun, VisualSourceIslandKind,
+    builtin_diagram_registry, builtin_theme_definitions, default_preferences_path,
+    default_recovery_dir, default_themes_dir, delete_recovery_file, diagram_backend_id,
+    highlight_code, html_preview_parts, html_preview_plain_text, is_markdown_path,
+    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
+    normalize_heading_menu_max_level, render_math, save_app_preferences, save_theme_definition,
+    shortcut_catalog, sidebar_tab_label, t, tf, title_from_path,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -145,13 +146,6 @@ const MARKION_WINDOW_TITLE: &str = "Markion";
 
 const MAX_HISTORY_LEN: usize = 200;
 const GITHUB_REPO_URL: &str = "https://github.com/willmove/markion";
-
-#[cfg(test)]
-fn shortcut_reference_text() -> String {
-    // Kept as an English-only entry point for the existing unit test; the live
-    // UI uses `shortcut_reference(self.language)` via the i18n module.
-    shortcut_reference(Language::En, DEFAULT_HEADING_MENU_MAX_LEVEL)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppMenu {
@@ -606,6 +600,8 @@ pub(super) fn run() {
     bootstrap::run();
 }
 
+type HighlightCache = RefCell<HashMap<(Option<String>, String), Rc<Vec<Vec<HighlightedSpan>>>>>;
+
 struct MarkionApp {
     tabs: Vec<EditorTab>,
     active_tab: usize,
@@ -625,6 +621,12 @@ struct MarkionApp {
     selected_theme_name: String,
     /// Whether the in-app Preferences panel (theme + language picker) is open.
     preferences_panel_open: bool,
+    /// Modal Help -> Keyboard Shortcuts panel state. This is transient UI state
+    /// and is deliberately not persisted with editor preferences.
+    shortcut_panel_open: bool,
+    shortcut_panel_focus: FocusHandle,
+    shortcut_platform: ShortcutPlatform,
+    shortcut_category: ShortcutCategory,
     focus_mode: bool,
     typewriter_mode: bool,
     code_line_numbers: bool,
@@ -656,6 +658,9 @@ struct MarkionApp {
     input_marked_len: usize,
     selected_tree_path: Option<PathBuf>,
     collapsed_tree_paths: HashSet<PathBuf>,
+    /// Set when a replacement workspace root still needs its first successful
+    /// scan to seed the one-level default tree view.
+    file_tree_needs_initial_collapse: bool,
     file_tree_context_menu: Option<FileTreeContextMenu>,
     /// Right-click menu for the rendered preview pane.
     preview_context_menu: Option<PreviewContextMenu>,
@@ -683,7 +688,7 @@ struct MarkionApp {
     /// are re-collected on every edit, but the code blocks themselves rarely
     /// change while typing prose, so their token spans are reused across
     /// edits instead of being re-lexed on every keystroke.
-    highlight_cache: RefCell<HashMap<(Option<String>, String), Rc<Vec<Vec<HighlightedSpan>>>>>,
+    highlight_cache: HighlightCache,
     /// Shared across tabs and frames; pending entries are never evicted.
     diagram_cache: DiagramCache,
     /// Active interface language. Persisted via `AppPreferences::language`.

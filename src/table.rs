@@ -89,20 +89,18 @@ pub(crate) fn table_ranges(text: &str) -> Vec<Range<usize>> {
         let line_end = text[offset..]
             .find('\n')
             .map_or(text.len(), |relative| offset + relative);
-        if is_markdown_table_candidate(&text[offset..line_end]) {
-            if let Some(range) = table_range_at(text, offset) {
-                if ranges
-                    .last()
-                    .is_none_or(|last: &Range<usize>| *last != range)
-                {
-                    offset = range.end;
-                    ranges.push(range);
-                    if offset < text.len() && text[offset..].starts_with('\n') {
-                        offset += 1;
-                    }
-                    continue;
-                }
+        if is_markdown_table_candidate(&text[offset..line_end])
+            && let Some(range) = table_range_at(text, offset)
+            && ranges
+                .last()
+                .is_none_or(|last: &Range<usize>| *last != range)
+        {
+            offset = range.end;
+            ranges.push(range);
+            if offset < text.len() && text[offset..].starts_with('\n') {
+                offset += 1;
             }
+            continue;
         }
 
         offset = if line_end < text.len() {

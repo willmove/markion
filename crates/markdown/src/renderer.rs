@@ -349,7 +349,7 @@ fn render_table(
     let col_count = headers.len();
 
     // Compute max width for each column for pretty-printing
-    let mut col_widths: Vec<usize> = headers.iter().map(|c| cell_text_width(c)).collect();
+    let mut col_widths: Vec<usize> = headers.iter().map(cell_text_width).collect();
 
     for row in rows {
         for (ci, cell) in row.iter().enumerate() {
@@ -424,17 +424,13 @@ fn render_list(
     indent: usize,
 ) {
     let prefix = " ".repeat(indent);
-    let mut counter = start.unwrap_or(1);
-
-    for item in items {
+    for (counter, item) in (start.unwrap_or(1)..).zip(items.iter()) {
         // Build the bullet/number marker
         let marker = if ordered {
             format!("{}. ", counter)
         } else {
             "- ".to_string()
         };
-        counter += 1;
-
         out.push_str(&prefix);
         out.push_str(&marker);
 

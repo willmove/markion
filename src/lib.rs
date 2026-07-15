@@ -25,6 +25,80 @@ mod table;
 mod text_util;
 mod visual;
 
+/// Markdown shown in the first in-memory document when Markion starts.
+///
+/// This is document content rather than localized UI chrome, so it stays in
+/// English regardless of the selected application language.
+pub const DEFAULT_WELCOME_MARKDOWN: &str = r#"# Welcome to Markion
+
+This starter document is a quick tour of Markdown in Markion. Edit the source on the left and see the preview update on the right.
+
+## Heading hierarchy
+
+### Level three heading
+
+#### Level four heading
+
+##### Level five heading
+
+###### Level six heading
+
+## Inline formatting
+
+Write with *italic*, **bold**, ***bold italic***, ~~strikethrough~~, `inline code`, ==highlighted text==, H~2~O, and x^2^. Visit the [Markion project page](https://github.com/willmove/markion), or use the reference link below.[^links]
+
+![Local image placeholder](markion-example.png "Replace with your image")
+
+## Quotes and lists
+
+> Markdown keeps ideas easy to read in plain text and in preview.
+
+---
+
+- Unordered list item
+  - Nested list item
+    - A deeper detail
+1. Ordered list item
+   1. Nested ordered item
+2. Another ordered item
+
+- [x] Draft in Markdown
+- [x] Review in preview
+- [ ] Export when ready
+
+## Table
+
+| Syntax | Example | Purpose |
+| :--- | :---: | ---: |
+| `**bold**` | **bold** | Emphasis |
+| `[text](url)` | [link](https://github.com/willmove/markion) | Navigation |
+| `- [ ] task` | - [ ] | Checklist |
+
+## Code and math
+
+Use `cargo run` to start Markion locally.
+
+```rust
+fn greeting(name: &str) -> String {
+    format!("Welcome, {name}!")
+}
+```
+
+Inline math: $E = mc^2$.
+
+$$
+\sum_{n=1}^{10} n = 55
+$$
+
+## Notes
+
+Reference-style links work too: [Markion repository][markion-repo].
+
+[^links]: Links can point to project pages, files, and useful references.
+
+[markion-repo]: https://github.com/willmove/markion
+"#;
+
 pub use model::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,
     DocumentStats, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences,
@@ -38,7 +112,10 @@ pub use model::{
 
 pub use diagram::{builtin_diagram_registry, diagram_backend_id};
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
-pub use i18n::{Language, Msg, shortcut_reference, sidebar_tab_label, t, tf};
+pub use i18n::{
+    Language, Msg, ShortcutAction, ShortcutCatalog, ShortcutCategory, ShortcutPlatform,
+    ShortcutSection, shortcut_catalog, sidebar_tab_label, t, tf,
+};
 pub use math::{render_math, validate_latex};
 pub use parse::{HtmlPreviewPart, html_preview_parts, html_preview_plain_text};
 
@@ -350,10 +427,10 @@ impl MarkdownDocument {
     /// Number of logical lines (newline count + 1), cached per text version.
     /// The editor layout asks for this every frame.
     pub fn line_count(&self) -> usize {
-        if let Some((version, count)) = self.cached_line_count.get() {
-            if version == self.text_version {
-                return count;
-            }
+        if let Some((version, count)) = self.cached_line_count.get()
+            && version == self.text_version
+        {
+            return count;
         }
         let count = self.text.bytes().filter(|byte| *byte == b'\n').count() + 1;
         self.cached_line_count.set(Some((self.text_version, count)));
@@ -1001,9 +1078,11 @@ impl MarkdownDocument {
                 )
             })
             .unwrap_or_default();
-        let style = styled
-            .then(|| format!("\n<style>{DEFAULT_CSS}</style>"))
-            .unwrap_or_default();
+        let style = if styled {
+            format!("\n<style>{DEFAULT_CSS}</style>")
+        } else {
+            String::new()
+        };
 
         format!(
             "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>{author}{date}{style}\n</head>\n<body>\n{}\n</body>\n</html>\n",
@@ -1036,10 +1115,10 @@ impl MarkdownDocument {
     /// Cached preview blocks behind an `Arc`, so the per-frame render path can
     /// take a reference-counted handle instead of deep-copying every block.
     pub fn preview_blocks_shared(&self) -> std::sync::Arc<Vec<PreviewBlock>> {
-        if let Some(cached) = self.cached_preview_blocks.borrow().as_ref() {
-            if cached.version == self.text_version {
-                return cached.value.clone();
-            }
+        if let Some(cached) = self.cached_preview_blocks.borrow().as_ref()
+            && cached.version == self.text_version
+        {
+            return cached.value.clone();
         }
 
         // One pulldown pass yields both the preview blocks and the outline
@@ -1316,27 +1395,29 @@ impl MarkdownDocument {
                 }
                 Event::Rule => blocks.push(PreviewBlock::Rule { source_range }),
                 Event::Start(Tag::Table(alignments)) => {
-                    let mut draft = TableDraft::default();
-                    draft.alignments = alignments
-                        .iter()
-                        .map(|alignment| match alignment {
-                            Alignment::Left => TableAlignment::Left,
-                            Alignment::Center => TableAlignment::Center,
-                            Alignment::Right => TableAlignment::Right,
-                            Alignment::None => TableAlignment::Default,
-                        })
-                        .collect();
+                    let draft = TableDraft {
+                        alignments: alignments
+                            .iter()
+                            .map(|alignment| match alignment {
+                                Alignment::Left => TableAlignment::Left,
+                                Alignment::Center => TableAlignment::Center,
+                                Alignment::Right => TableAlignment::Right,
+                                Alignment::None => TableAlignment::Default,
+                            })
+                            .collect(),
+                        ..TableDraft::default()
+                    };
                     table = Some(draft);
                 }
                 Event::End(TagEnd::Table) => {
-                    if let Some(table) = table.take() {
-                        if !table.rows.is_empty() {
-                            blocks.push(PreviewBlock::Table {
-                                rows: table.rows,
-                                alignments: table.alignments,
-                                source_range: table_ranges.next().unwrap_or(0..0),
-                            });
-                        }
+                    if let Some(table) = table.take()
+                        && !table.rows.is_empty()
+                    {
+                        blocks.push(PreviewBlock::Table {
+                            rows: table.rows,
+                            alignments: table.alignments,
+                            source_range: table_ranges.next().unwrap_or(0..0),
+                        });
                     }
                 }
                 Event::Start(Tag::TableHead) => {
@@ -1345,10 +1426,10 @@ impl MarkdownDocument {
                     }
                 }
                 Event::End(TagEnd::TableHead) => {
-                    if let Some(table) = table.as_mut() {
-                        if let Some(row) = table.current_row.take() {
-                            table.rows.push(row);
-                        }
+                    if let Some(table) = table.as_mut()
+                        && let Some(row) = table.current_row.take()
+                    {
+                        table.rows.push(row);
                     }
                 }
                 Event::Start(Tag::TableRow) => {
@@ -1357,10 +1438,10 @@ impl MarkdownDocument {
                     }
                 }
                 Event::End(TagEnd::TableRow) => {
-                    if let Some(table) = table.as_mut() {
-                        if let Some(row) = table.current_row.take() {
-                            table.rows.push(row);
-                        }
+                    if let Some(table) = table.as_mut()
+                        && let Some(row) = table.current_row.take()
+                    {
+                        table.rows.push(row);
                     }
                 }
                 Event::Start(Tag::TableCell) => {
@@ -1369,10 +1450,10 @@ impl MarkdownDocument {
                     }
                 }
                 Event::End(TagEnd::TableCell) => {
-                    if let Some(table) = table.as_mut() {
-                        if let Some(row) = table.current_row.as_mut() {
-                            row.push(clean_preview_text(&table.current_cell));
-                        }
+                    if let Some(table) = table.as_mut()
+                        && let Some(row) = table.current_row.as_mut()
+                    {
+                        row.push(clean_preview_text(&table.current_cell));
                     }
                 }
                 Event::Text(text) => {
@@ -1613,10 +1694,10 @@ impl MarkdownDocument {
     }
 
     pub fn outline(&self) -> Vec<Heading> {
-        if let Some(cached) = self.cached_outline.borrow().as_ref() {
-            if cached.version == self.text_version {
-                return cached.value.clone();
-            }
+        if let Some(cached) = self.cached_outline.borrow().as_ref()
+            && cached.version == self.text_version
+        {
+            return cached.value.clone();
         }
 
         // Reached only when the outline is needed but the (much heavier) preview
@@ -1872,10 +1953,10 @@ impl MarkdownDocument {
     }
 
     pub fn stats(&self) -> DocumentStats {
-        if let Some(cached) = self.cached_stats.borrow().as_ref() {
-            if cached.version == self.text_version {
-                return cached.value.clone();
-            }
+        if let Some(cached) = self.cached_stats.borrow().as_ref()
+            && cached.version == self.text_version
+        {
+            return cached.value.clone();
         }
 
         let stats = DocumentStats {
@@ -1949,12 +2030,11 @@ fn push_html_block(blocks: &mut Vec<PreviewBlock>, html: String, source_range: R
         html: existing_html,
         source_range: existing_range,
     }) = blocks.last_mut()
+        && existing_range.end == source_range.start
     {
-        if existing_range.end == source_range.start {
-            existing_html.push_str(&html);
-            existing_range.end = source_range.end;
-            return;
-        }
+        existing_html.push_str(&html);
+        existing_range.end = source_range.end;
+        return;
     }
 
     blocks.push(PreviewBlock::Html { html, source_range });
@@ -2765,7 +2845,7 @@ mod tests {
             let range = doc.apply_markdown_format(5..5, MarkdownFormat::Heading(target));
             let expected = format!("{} Title\nBody", "#".repeat(target as usize));
             assert_eq!(doc.text(), expected, "switching H1 -> H{target}");
-            let expected_cursor = (5 + target as usize - 1) as usize;
+            let expected_cursor = 5 + target as usize - 1;
             assert_eq!(
                 range,
                 expected_cursor..expected_cursor,

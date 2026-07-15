@@ -10,5 +10,5 @@
 
 ## 3. Verification
 
-- [ ] 3.1 Run the two targeted HTML preview regression tests and `cargo test --workspace`, then resolve any regressions within this change's scope.
-- [ ] 3.2 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `openspec validate fix-html-preview-regressions`.
+- [x] 3.1 Run the two targeted HTML preview regression tests and `cargo test --workspace`, then resolve any regressions within this change's scope.
+- [x] 3.2 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `openspec validate fix-html-preview-regressions`.

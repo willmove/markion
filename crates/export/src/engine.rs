@@ -200,14 +200,12 @@ impl ExportEngine {
     ) -> Result<ExportWithFallbackResult, ExportError> {
         // Try the primary export first
         match self.export(document, format, options) {
-            Ok(data) => {
-                return Ok(ExportWithFallbackResult {
-                    data,
-                    actual_format: format.clone(),
-                    fallback_used: false,
-                    original_error: None,
-                });
-            }
+            Ok(data) => Ok(ExportWithFallbackResult {
+                data,
+                actual_format: format.clone(),
+                fallback_used: false,
+                original_error: None,
+            }),
             Err(err) => {
                 // If already requesting HTML, no fallback available
                 if *format == ExportFormat::Html {

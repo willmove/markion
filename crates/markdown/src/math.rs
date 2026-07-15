@@ -300,7 +300,6 @@ mod tests {
     #[test]
     fn renderer_creation() {
         let _renderer = MathRenderer::new();
-        assert!(true); // Just verify it constructs
     }
 
     #[test]

@@ -282,7 +282,10 @@ fn hide_search_overlay_state_closes_without_clearing_buffers() {
 #[test]
 fn normalize_preview_selection_range_clamps_and_orders() {
     assert_eq!(normalize_preview_selection_range("hello", 1..4), 1..4);
-    assert_eq!(normalize_preview_selection_range("hello", 4..1), 1..4);
+    assert_eq!(
+        normalize_preview_selection_range("hello", std::ops::Range { start: 4, end: 1 }),
+        1..4
+    );
     assert_eq!(normalize_preview_selection_range("hello", 0..99), 0..5);
     // Mid-codepoint end advances to the next boundary ("é" is bytes 1..3).
     assert_eq!(normalize_preview_selection_range("héllo", 1..2), 1..3);
@@ -546,6 +549,184 @@ fn blk(tag: &str) -> PreviewBlock {
 
 fn blocks(tags: &[&str]) -> Vec<PreviewBlock> {
     tags.iter().map(|t| blk(t)).collect()
+}
+
+fn nested_file_tree_fixture(root: &Path) -> FileTree {
+    let docs = root.join("docs");
+    let guides = docs.join("guides");
+    let source = root.join("src");
+    FileTree {
+        root: root.to_path_buf(),
+        entries: vec![
+            FileTreeEntry {
+                path: docs.clone(),
+                name: "docs".to_string(),
+                depth: 0,
+                kind: FileTreeEntryKind::Directory,
+                is_markdown: false,
+            },
+            FileTreeEntry {
+                path: guides.clone(),
+                name: "guides".to_string(),
+                depth: 1,
+                kind: FileTreeEntryKind::Directory,
+                is_markdown: false,
+            },
+            FileTreeEntry {
+                path: guides.join("intro.md"),
+                name: "intro.md".to_string(),
+                depth: 2,
+                kind: FileTreeEntryKind::File,
+                is_markdown: true,
+            },
+            FileTreeEntry {
+                path: docs.join("draft.md"),
+                name: "draft.md".to_string(),
+                depth: 1,
+                kind: FileTreeEntryKind::File,
+                is_markdown: true,
+            },
+            FileTreeEntry {
+                path: source.clone(),
+                name: "src".to_string(),
+                depth: 0,
+                kind: FileTreeEntryKind::Directory,
+                is_markdown: false,
+            },
+            FileTreeEntry {
+                path: source.join("api.md"),
+                name: "api.md".to_string(),
+                depth: 1,
+                kind: FileTreeEntryKind::File,
+                is_markdown: true,
+            },
+            FileTreeEntry {
+                path: root.join("root.md"),
+                name: "root.md".to_string(),
+                depth: 0,
+                kind: FileTreeEntryKind::File,
+                is_markdown: true,
+            },
+        ],
+    }
+}
+
+fn visible_tree_entry_names(
+    tree: &FileTree,
+    query: &str,
+    collapsed: &HashSet<PathBuf>,
+) -> Vec<String> {
+    filtered_visible_file_tree_entries(tree, query, collapsed, 300)
+        .0
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect()
+}
+
+#[test]
+fn initial_file_tree_collapse_shows_root_children_and_expands_one_branch() {
+    let root = PathBuf::from("workspace");
+    let tree = nested_file_tree_fixture(&root);
+    let scanned = Ok(tree.clone());
+    let mut collapsed = HashSet::new();
+    let mut needs_initial_collapse = true;
+
+    update_file_tree_collapse_state_from_scan(
+        &scanned,
+        &mut collapsed,
+        &mut needs_initial_collapse,
+    );
+
+    assert!(!needs_initial_collapse);
+    assert_eq!(
+        collapsed,
+        HashSet::from([root.join("docs"), root.join("src")])
+    );
+    assert_eq!(
+        visible_tree_entry_names(&tree, "", &collapsed),
+        vec!["docs", "src", "root.md"]
+    );
+
+    collapsed.remove(&root.join("docs"));
+    assert_eq!(
+        visible_tree_entry_names(&tree, "", &collapsed),
+        vec!["docs", "guides", "intro.md", "draft.md", "src", "root.md"]
+    );
+    assert!(collapsed.contains(&root.join("src")));
+}
+
+#[test]
+fn file_tree_scan_collapse_state_preserves_refresh_resets_and_failure_pending() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_root = temp.path().join("first");
+    std::fs::create_dir_all(first_root.join("docs")).unwrap();
+    std::fs::create_dir_all(first_root.join("src")).unwrap();
+    let first_tree = nested_file_tree_fixture(&first_root);
+    let first_scan = Ok(first_tree);
+    let mut collapsed = HashSet::new();
+    let mut needs_initial_collapse = true;
+    update_file_tree_collapse_state_from_scan(
+        &first_scan,
+        &mut collapsed,
+        &mut needs_initial_collapse,
+    );
+
+    collapsed.remove(&first_root.join("docs"));
+    collapsed.insert(first_root.join("removed"));
+    update_file_tree_collapse_state_from_scan(
+        &first_scan,
+        &mut collapsed,
+        &mut needs_initial_collapse,
+    );
+    assert_eq!(collapsed, HashSet::from([first_root.join("src")]));
+
+    let second_root = temp.path().join("second");
+    std::fs::create_dir_all(second_root.join("docs")).unwrap();
+    std::fs::create_dir_all(second_root.join("src")).unwrap();
+    let second_scan = Ok(nested_file_tree_fixture(&second_root));
+    needs_initial_collapse = true;
+    update_file_tree_collapse_state_from_scan(
+        &second_scan,
+        &mut collapsed,
+        &mut needs_initial_collapse,
+    );
+    assert_eq!(
+        collapsed,
+        HashSet::from([second_root.join("docs"), second_root.join("src")])
+    );
+    assert!(!needs_initial_collapse);
+
+    let before_failure = collapsed.clone();
+    needs_initial_collapse = true;
+    let failed_scan = Err(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "denied",
+    ));
+    update_file_tree_collapse_state_from_scan(
+        &failed_scan,
+        &mut collapsed,
+        &mut needs_initial_collapse,
+    );
+    assert_eq!(collapsed, before_failure);
+    assert!(needs_initial_collapse);
+}
+
+#[test]
+fn file_tree_filter_reveals_collapsed_descendants_without_mutating_state() {
+    let root = PathBuf::from("workspace");
+    let tree = nested_file_tree_fixture(&root);
+    let collapsed = HashSet::from([root.join("docs"), root.join("src")]);
+    let before_filter = collapsed.clone();
+
+    assert_eq!(
+        visible_tree_entry_names(&tree, "intro.md", &collapsed),
+        vec!["intro.md"]
+    );
+    assert_eq!(collapsed, before_filter);
+    assert_eq!(
+        visible_tree_entry_names(&tree, "", &collapsed),
+        vec!["docs", "src", "root.md"]
+    );
 }
 
 #[test]
@@ -910,24 +1091,94 @@ fn builtin_theme_table_exposes_popular_themes_with_unique_names() {
 }
 
 #[test]
-fn shortcut_reference_lists_core_workflows() {
-    let reference = shortcut_reference_text();
+fn shortcut_catalog_lists_core_workflows() {
+    let catalog = shortcut_catalog(Language::En, DEFAULT_HEADING_MENU_MAX_LEVEL);
+    let has_action = |category, label: &str, windows: &str, macos: &str| {
+        catalog
+            .section(category)
+            .and_then(|section| section.actions.iter().find(|action| action.label == label))
+            .is_some_and(|action| {
+                action
+                    .combinations(ShortcutPlatform::WindowsLinux)
+                    .contains(&windows)
+                    && action
+                        .combinations(ShortcutPlatform::MacOS)
+                        .contains(&macos)
+            })
+    };
 
-    assert!(reference.contains("| Action | Windows/Linux | macOS |"));
-    assert!(reference.contains("| Save | Ctrl+S | Cmd+S |"));
-    assert!(reference.contains("| Cycle View Mode | Ctrl+Shift+V | Cmd+Shift+V |"));
-    assert!(reference.contains("| Edit Mode | Ctrl+Alt+1 | Cmd+Option+1 |"));
-    assert!(reference.contains("| Visual Edit Mode | Ctrl+Alt+4 | Cmd+Option+4 |"));
-    assert!(reference.contains("| Split Preview Mode | Ctrl+Alt+2 | Cmd+Option+2 |"));
-    assert!(reference.contains("| Read Mode | Ctrl+Alt+3 | Cmd+Option+3 |"));
-    assert!(reference.contains("| Sidebar | Ctrl+Shift+B | Cmd+Shift+B |"));
-    assert!(reference.contains("| Preferences | Ctrl+, | Cmd+, |"));
-    assert!(reference.contains("| Find | Ctrl+F | Cmd+F |"));
-    assert!(reference.contains("| DOCX | Ctrl+Shift+D | Cmd+Shift+D |"));
-    assert!(!reference.contains("Secondary-"));
+    assert_eq!(catalog.sections.len(), ShortcutCategory::ALL.len());
+    assert!(has_action(
+        ShortcutCategory::Files,
+        "Save",
+        "Ctrl+S",
+        "Cmd+S"
+    ));
+    assert!(has_action(
+        ShortcutCategory::View,
+        "Cycle View Mode",
+        "Ctrl+Shift+V",
+        "Cmd+Shift+V"
+    ));
+    assert!(has_action(
+        ShortcutCategory::View,
+        "Edit Mode",
+        "Ctrl+Alt+1",
+        "Cmd+Option+1"
+    ));
+    assert!(has_action(
+        ShortcutCategory::View,
+        "Sidebar",
+        "Ctrl+Shift+B",
+        "Cmd+Shift+B"
+    ));
+    assert!(has_action(
+        ShortcutCategory::Export,
+        "DOCX",
+        "Ctrl+Shift+D",
+        "Cmd+Shift+D"
+    ));
 }
 
 #[test]
+fn shortcut_panel_uses_target_default_and_replaces_native_prompt() {
+    assert_eq!(
+        ShortcutPlatform::current(),
+        if cfg!(target_os = "macos") {
+            ShortcutPlatform::MacOS
+        } else {
+            ShortcutPlatform::WindowsLinux
+        }
+    );
+
+    let search_source = include_str!("search.rs");
+    let show_shortcuts = search_source
+        .split_once("pub(super) fn show_shortcuts")
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn select_shortcut_platform"))
+        .map(|(body, _)| body)
+        .expect("shortcut panel open handler");
+    assert!(show_shortcuts.contains("self.shortcut_panel_open = true"));
+    assert!(show_shortcuts.contains("ShortcutPlatform::current()"));
+    assert!(show_shortcuts.contains("ShortcutCategory::Files"));
+    assert!(!show_shortcuts.contains("window.prompt"));
+    assert!(search_source.contains("self.shortcut_platform = platform"));
+    assert!(search_source.contains("self.shortcut_category = category"));
+
+    let root_view_source = include_str!("root_view.rs");
+    assert!(root_view_source.contains("root.child(shortcut_panel_view(self, cx))"));
+    assert!(root_view_source.contains("ShortcutPlatform::ALL"));
+    assert!(root_view_source.contains("catalog.sections.iter()"));
+
+    let bootstrap_source = include_str!("bootstrap.rs");
+    assert!(bootstrap_source.contains("KeyBinding::new(\"f1\", ShowShortcuts, None)"));
+    assert!(bootstrap_source.contains("KeyBinding::new(\"secondary-b\", Bold, None)"));
+    assert!(
+        bootstrap_source.contains("KeyBinding::new(\"secondary-shift-b\", ToggleSidebar, None)")
+    );
+}
+
+#[test]
+#[allow(clippy::assertions_on_constants)]
 fn pane_density_and_scrollbar_constants_stay_compact_and_usable() {
     assert!(
         PANE_OUTER_PADDING <= 16. * 0.20,
@@ -1402,7 +1653,7 @@ fn active_tab_accessors_clamp_a_stale_index() {
     // outright rather than trusting it:
     let index_from_closure = 2usize;
     assert!(
-        !(index_from_closure < app_tabs.len()),
+        (index_from_closure >= app_tabs.len()),
         "tab-bar closure must skip a stale index instead of assigning it"
     );
 }

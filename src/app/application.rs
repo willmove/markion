@@ -2,9 +2,7 @@ use super::*;
 
 impl MarkionApp {
     pub(super) fn new(cx: &mut Context<Self>) -> Self {
-        let document = MarkdownDocument::from_text(
-            "# Welcome to Markion\n\nStart writing Markdown here. Use **bold**, lists, tables, code blocks, and task lists.\n\n- [x] Edit Markdown\n- [x] Preview document text\n- [x] Export Markdown, HTML, and PDF\n",
-        );
+        let document = MarkdownDocument::from_text(markion::DEFAULT_WELCOME_MARKDOWN);
         let workspace_root = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         // Defer the file tree scan out of the window-creation path. Scanning the
         // workspace synchronously here freezes the first frame (and the whole UI)
@@ -46,6 +44,10 @@ impl MarkionApp {
             themes_dir,
             selected_theme_name,
             preferences_panel_open: false,
+            shortcut_panel_open: false,
+            shortcut_panel_focus: cx.focus_handle(),
+            shortcut_platform: ShortcutPlatform::current(),
+            shortcut_category: ShortcutCategory::Files,
             focus_mode: preferences.focus_mode,
             typewriter_mode: preferences.typewriter_mode,
             code_line_numbers: preferences.code_line_numbers,
@@ -67,6 +69,7 @@ impl MarkionApp {
             input_marked_len: 0,
             selected_tree_path: None,
             collapsed_tree_paths: HashSet::new(),
+            file_tree_needs_initial_collapse: false,
             file_tree_context_menu: None,
             preview_context_menu: None,
             pending_name_input: None,
@@ -344,6 +347,7 @@ impl MarkionApp {
 
         if root_changed {
             self.collapsed_tree_paths.clear();
+            self.file_tree_needs_initial_collapse = true;
             self.selected_tree_path = None;
             self.file_tree_scroll = ScrollHandle::new();
             self.file_tree = Some(FileTree {
@@ -403,6 +407,11 @@ impl MarkionApp {
                     return;
                 }
 
+                update_file_tree_collapse_state_from_scan(
+                    &scanned,
+                    &mut app.collapsed_tree_paths,
+                    &mut app.file_tree_needs_initial_collapse,
+                );
                 match scanned {
                     Ok(tree) => {
                         app.file_tree = Some(tree);
@@ -416,7 +425,6 @@ impl MarkionApp {
                         {
                             app.selected_tree_path = None;
                         }
-                        app.collapsed_tree_paths.retain(|path| path.exists());
                     }
                     Err(err) => {
                         app.status = app.trf(Msg::StatusOpenFolderFailed, &[&err.to_string()]);
@@ -647,10 +655,10 @@ impl MarkionApp {
                         .into();
                     }
                     Ok(AutosaveOutcome::SavedRecovery(path)) => {
-                        if let Some(previous) = tab.last_recovery_file.replace(path.clone()) {
-                            if previous != path {
-                                let _ = delete_recovery_file(previous);
-                            }
+                        if let Some(previous) = tab.last_recovery_file.replace(path.clone())
+                            && previous != path
+                        {
+                            let _ = delete_recovery_file(previous);
                         }
                         app.status = tf(
                             app.language,

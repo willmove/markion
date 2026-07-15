@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "export"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "markdown",
@@ -3046,7 +3046,7 @@ dependencies = [
 
 [[package]]
 name = "markdown"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -3064,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "markion"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "export",
@@ -3092,7 +3092,7 @@ dependencies = [
 
 [[package]]
 name = "markion-diagram"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "mermaid-rs-renderer",
  "svg-hush",

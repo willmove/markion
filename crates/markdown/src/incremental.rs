@@ -254,10 +254,10 @@ fn starts_with_continuation(segment: &str) -> bool {
     }
 
     let bytes = trimmed.as_bytes();
-    if matches!(bytes[0], b'-' | b'*' | b'+') {
-        if bytes.len() == 1 || bytes[1] == b' ' || bytes[1] == b'\t' {
-            return true;
-        }
+    if matches!(bytes[0], b'-' | b'*' | b'+')
+        && (bytes.len() == 1 || bytes[1] == b' ' || bytes[1] == b'\t')
+    {
+        return true;
     }
 
     let digits = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
@@ -1107,7 +1107,7 @@ mod tests {
 
         for ch in ['h', 'i', '!'] {
             let offset = inc.source().rfind('\n').unwrap();
-            inc.apply_changes(&[TextChange::insertion(offset, &ch.to_string())])
+            inc.apply_changes(&[TextChange::insertion(offset, ch.to_string())])
                 .unwrap();
             assert_equivalent(inc.document(), &full_parse(inc.source()));
         }

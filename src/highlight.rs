@@ -207,10 +207,10 @@ pub fn highlight_code(code: &str, language: Option<&str>) -> Vec<Vec<Highlighted
     // Grammar-based path first. An unspecified language stays plain (the
     // legacy path below renders it as unstyled text), so only named languages
     // consult the registry.
-    if !raw_language.is_empty() {
-        if let Some(lines) = syntect_highlight(code, raw_language) {
-            return lines;
-        }
+    if !raw_language.is_empty()
+        && let Some(lines) = syntect_highlight(code, raw_language)
+    {
+        return lines;
     }
 
     let normalized_language = normalized_highlight_language(language.unwrap_or_default());
@@ -349,11 +349,11 @@ fn push_highlight_span(spans: &mut Vec<HighlightedSpan>, text: &str, kind: Highl
         return;
     }
 
-    if let Some(last) = spans.last_mut() {
-        if last.kind == kind {
-            last.text.push_str(text);
-            return;
-        }
+    if let Some(last) = spans.last_mut()
+        && last.kind == kind
+    {
+        last.text.push_str(text);
+        return;
     }
 
     spans.push(HighlightedSpan {

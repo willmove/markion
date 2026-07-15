@@ -235,9 +235,13 @@ impl MarkionApp {
     pub(super) fn clear_file_tree_search(
         &mut self,
         _: &ClearFileTreeSearch,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.shortcut_panel_open {
+            self.close_shortcut_panel(window, cx);
+            return;
+        }
         // Escape first cancels any open name prompt (create/rename); only if
         // none is open does it fall back to clearing the file-tree filter.
         if self.pending_name_input.is_some() {
@@ -652,10 +656,10 @@ impl MarkionApp {
                         // in place so the open document follows the rename.
                         let mut to_reload: Vec<(usize, MarkdownDocument)> = Vec::new();
                         for (i, tab) in self.tabs.iter_mut().enumerate() {
-                            if tab.document.path() == Some(target.as_path()) {
-                                if let Ok(document) = MarkdownDocument::open(&new_path) {
-                                    to_reload.push((i, document));
-                                }
+                            if tab.document.path() == Some(target.as_path())
+                                && let Ok(document) = MarkdownDocument::open(&new_path)
+                            {
+                                to_reload.push((i, document));
                             }
                         }
                         for (i, document) in to_reload {

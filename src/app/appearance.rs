@@ -38,6 +38,7 @@ impl MarkionApp {
         // theme file dropped into the themes dir since launch shows up.
         self.ensure_sample_custom_theme();
         self.custom_themes = list_theme_definitions(&self.themes_dir).unwrap_or_default();
+        self.shortcut_panel_open = false;
         self.preferences_panel_open = true;
         self.active_menu = None;
         cx.notify();
@@ -274,12 +275,12 @@ impl MarkionApp {
         // Determine the driver: the pane whose stored fraction drifted from its
         // current fraction. First-frame (None) seeds the cache without writing,
         // so we don't yank a pane on the very first Split render.
-        let editor_changed = tab.sync_scroll_editor_fraction.map_or(false, |stored| {
-            (stored - editor_frac).abs() > SYNC_SCROLL_EPSILON
-        });
-        let preview_changed = tab.sync_scroll_preview_fraction.map_or(false, |stored| {
-            (stored - preview_frac).abs() > SYNC_SCROLL_EPSILON
-        });
+        let editor_changed = tab
+            .sync_scroll_editor_fraction
+            .is_some_and(|stored| (stored - editor_frac).abs() > SYNC_SCROLL_EPSILON);
+        let preview_changed = tab
+            .sync_scroll_preview_fraction
+            .is_some_and(|stored| (stored - preview_frac).abs() > SYNC_SCROLL_EPSILON);
 
         // Seed caches on the first observed frame (or after a reset) without
         // driving, so the next real change is the first to couple.

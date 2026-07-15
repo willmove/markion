@@ -240,13 +240,13 @@ impl MarkionApp {
             Msg::DialogAboutDetail,
             &[env!("CARGO_PKG_VERSION"), GITHUB_REPO_URL],
         );
-        let _ = window.prompt(
+        std::mem::drop(window.prompt(
             PromptLevel::Info,
             self.tr(Msg::DialogAboutTitle),
             Some(&detail),
             &[PromptButton::ok(self.tr(Msg::DialogButtonOk))],
             cx,
-        );
+        ));
         self.status = t(self.language, Msg::StatusAboutMarkion).into();
         self.active_menu = None;
         cx.notify();
@@ -258,16 +258,46 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let shortcuts = shortcut_reference(self.language, self.heading_menu_max_level);
-        let _ = window.prompt(
-            PromptLevel::Info,
-            self.tr(Msg::DialogShortcutsTitle),
-            Some(&shortcuts),
-            &[PromptButton::ok(self.tr(Msg::DialogButtonOk))],
-            cx,
-        );
+        self.shortcut_panel_open = true;
+        self.shortcut_platform = ShortcutPlatform::current();
+        self.shortcut_category = ShortcutCategory::Files;
+        self.preferences_panel_open = false;
+        self.file_tree_context_menu = None;
+        self.preview_context_menu = None;
         self.status = t(self.language, Msg::StatusKeyboardShortcuts).into();
         self.active_menu = None;
+        window.focus(&self.shortcut_panel_focus);
+        cx.notify();
+    }
+
+    pub(super) fn select_shortcut_platform(
+        &mut self,
+        platform: ShortcutPlatform,
+        cx: &mut Context<Self>,
+    ) {
+        if self.shortcut_platform != platform {
+            self.shortcut_platform = platform;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn select_shortcut_category(
+        &mut self,
+        category: ShortcutCategory,
+        cx: &mut Context<Self>,
+    ) {
+        if self.shortcut_category != category {
+            self.shortcut_category = category;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn close_shortcut_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.shortcut_panel_open {
+            return;
+        }
+        self.shortcut_panel_open = false;
+        window.focus(&self.focus_handle);
         cx.notify();
     }
 }

@@ -227,10 +227,10 @@ impl Element for EditorElement {
                     font_size,
                     line_height,
                 };
-                if let Some((key, height)) = *app.active_tab().measured_height_cache.borrow() {
-                    if key == cache_key {
-                        return size(width, height);
-                    }
+                if let Some((key, height)) = *app.active_tab().measured_height_cache.borrow()
+                    && key == cache_key
+                {
+                    return size(width, height);
                 }
                 let text = app.shared_document_text();
                 let run = TextRun {

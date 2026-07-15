@@ -503,7 +503,7 @@ fn task_list_with_code_block_in_item() {
         }
         // The code block should be in the blocks field
         assert!(
-            !items[0].blocks.is_empty() || items[0].content.len() > 0,
+            !items[0].blocks.is_empty() || !items[0].content.is_empty(),
             "Task item should have some content"
         );
     } else {

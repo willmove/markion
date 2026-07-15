@@ -35,7 +35,7 @@ pub(super) fn install_window_close_guard(
             cx,
         );
 
-        let _ = app_entity.update(cx, |app, cx| {
+        app_entity.update(cx, |app, cx| {
             app.confirming_close = true;
             app.active_menu = None;
             app.status = t(app.language, Msg::StatusWaitingQuitConfirm).into();
@@ -46,7 +46,7 @@ pub(super) fn install_window_close_guard(
         cx.spawn(async move |cx| {
             let confirmed = matches!(answer.await, Ok(0));
             let _ = cx.update(|cx| {
-                let _ = app_entity.update(cx, |app, cx| {
+                app_entity.update(cx, |app, cx| {
                     app.confirming_close = false;
                     if confirmed {
                         app.discard_current_recovery_file();

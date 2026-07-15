@@ -289,8 +289,10 @@ mod tests {
 
     #[test]
     fn sync_scroll_round_trips_through_toml() {
-        let mut preferences = AppPreferences::default();
-        preferences.sync_scroll = true;
+        let preferences = AppPreferences {
+            sync_scroll: true,
+            ..AppPreferences::default()
+        };
         let rendered = render_app_preferences(&preferences);
         assert!(
             rendered.contains("sync_scroll = true"),

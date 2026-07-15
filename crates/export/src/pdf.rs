@@ -199,11 +199,11 @@ fn escape_yaml_string(s: &str) -> String {
 /// Replaces the title in existing YAML front matter, or prepends a YAML block
 /// with the given title if no front matter exists.
 fn replace_or_prepend_title(md: &str, title: &str) -> String {
-    if md.starts_with("---\n") {
+    if let Some(stripped) = md.strip_prefix("---\n") {
         // Find the closing ---
-        if let Some(end_idx) = md[4..].find("\n---\n") {
-            let front_matter = &md[4..4 + end_idx];
-            let rest = &md[4 + end_idx + 5..]; // skip past "\n---\n"
+        if let Some(end_idx) = stripped.find("\n---\n") {
+            let front_matter = &stripped[..end_idx];
+            let rest = &stripped[end_idx + 5..]; // skip past "\n---\n"
 
             // Replace or add title line
             let mut new_fm = String::new();

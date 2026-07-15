@@ -88,15 +88,17 @@ pub struct Parser {
     options: ParserOptions,
 }
 
+impl Default for Parser {
+    /// Creates a parser with all extensions enabled.
+    fn default() -> Self {
+        Self::new(ParserOptions::default())
+    }
+}
+
 impl Parser {
     /// Creates a new parser with the given options.
     pub fn new(options: ParserOptions) -> Self {
         Self { options }
-    }
-
-    /// Creates a parser with all extensions enabled (the default).
-    pub fn default() -> Self {
-        Self::new(ParserOptions::default())
     }
 
     /// Returns a new [`Parser`] with the same options as this one.
@@ -304,8 +306,7 @@ impl AstBuilder {
                     pos += consumed;
                 }
                 Event::Start(Tag::Table(alignments)) => {
-                    let aligns: Vec<Alignment> =
-                        alignments.iter().map(|a| convert_alignment(a)).collect();
+                    let aligns: Vec<Alignment> = alignments.iter().map(convert_alignment).collect();
                     let (table, consumed) = self.parse_table(events, pos, aligns)?;
                     blocks.push(table);
                     pos += consumed;
@@ -557,8 +558,7 @@ impl AstBuilder {
                     pos += consumed;
                 }
                 Event::Start(Tag::Table(alignments)) => {
-                    let aligns: Vec<Alignment> =
-                        alignments.iter().map(|a| convert_alignment(a)).collect();
+                    let aligns: Vec<Alignment> = alignments.iter().map(convert_alignment).collect();
                     let (table, consumed) = self.parse_table(events, pos, aligns)?;
                     block_content.push(table);
                     pos += consumed;
@@ -702,7 +702,7 @@ impl AstBuilder {
                     pos += 1;
                 }
                 Event::End(TagEnd::TableHead) => {
-                    headers = current_row.drain(..).collect();
+                    headers = std::mem::take(&mut current_row);
                     in_header = false;
                     pos += 1;
                 }
@@ -712,7 +712,7 @@ impl AstBuilder {
                 }
                 Event::End(TagEnd::TableRow) => {
                     if !in_header {
-                        rows.push(current_row.drain(..).collect());
+                        rows.push(std::mem::take(&mut current_row));
                     }
                     pos += 1;
                 }

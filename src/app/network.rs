@@ -121,7 +121,7 @@ pub(super) fn install_http_client(cx: &mut App) -> Result<()> {
 mod tests {
     use std::{
         io::{Read as _, Write as _},
-        net::TcpListener,
+        net::{Shutdown, TcpListener, TcpStream},
         thread,
     };
 
@@ -129,31 +129,61 @@ mod tests {
 
     use super::*;
 
+    fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
+    fn serve_http_response(listener: TcpListener, response: Vec<u8>) -> String {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        stream.write_all(&response).unwrap();
+        stream.flush().unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
+        let mut trailing = Vec::new();
+        stream.read_to_end(&mut trailing).unwrap();
+        request
+    }
+
     #[test]
     fn concrete_http_client_executes_loopback_request() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let mut requests = Vec::new();
-            for response in [
-                b"HTTP/1.1 302 Found\r\nLocation: /image.png\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    .as_slice(),
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let redirect_address = redirect_listener.local_addr().unwrap();
+        let image_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let image_address = image_listener.local_addr().unwrap();
+        let redirect_response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://{image_address}/image.png\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .into_bytes();
+        let redirect_server =
+            thread::spawn(move || serve_http_response(redirect_listener, redirect_response));
+        let image_server = thread::spawn(move || {
+            serve_http_response(
+                image_listener,
                 b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: image/png\r\nConnection: close\r\n\r\nok"
-                    .as_slice(),
-            ] {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut request = [0_u8; 2048];
-                let request_len = stream.read(&mut request).unwrap();
-                requests.push(String::from_utf8_lossy(&request[..request_len]).into_owned());
-                stream.write_all(response).unwrap();
-            }
-            requests
+                    .to_vec(),
+            )
         });
 
         let client = MarkionHttpClient::new().unwrap();
         let response = client
             .handle
-            .block_on(client.get(&format!("http://{address}/redirect"), ().into(), true))
+            .block_on(client.get(
+                &format!("http://{redirect_address}/redirect"),
+                ().into(),
+                true,
+            ))
             .unwrap();
 
         assert_eq!(response.status(), http::StatusCode::OK);
@@ -161,10 +191,11 @@ mod tests {
             Inner::Bytes(bytes) => assert_eq!(bytes.into_inner().as_ref(), b"ok"),
             _ => panic!("expected a buffered response body"),
         }
-        let requests = server.join().unwrap();
-        assert!(requests[0].starts_with("GET /redirect "));
-        assert!(requests[1].starts_with("GET /image.png "));
-        assert!(requests[0].to_ascii_lowercase().contains(&format!(
+        let redirect_request = redirect_server.join().unwrap();
+        let image_request = image_server.join().unwrap();
+        assert!(redirect_request.starts_with("GET /redirect "));
+        assert!(image_request.starts_with("GET /image.png "));
+        assert!(redirect_request.to_ascii_lowercase().contains(&format!(
             "user-agent: markion/{}",
             env!("CARGO_PKG_VERSION")
         )));

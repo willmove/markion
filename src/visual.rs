@@ -424,23 +424,69 @@ mod tests {
 
     #[test]
     fn welcome_prose_stays_visual_outside_the_focused_block() {
-        let doc = MarkdownDocument::from_text(
-            "# Welcome to Markion\n\nStart writing Markdown here. Use **bold**, lists, tables, code blocks, and task lists.\n\n- [x] Edit Markdown\n- [x] Preview document text\n- [x] Export Markdown, HTML, and PDF\n",
-        );
+        let doc = MarkdownDocument::from_text(crate::DEFAULT_WELCOME_MARKDOWN);
         let blocks = doc.visual_blocks();
-        assert_eq!(blocks.len(), 5);
-        for block in blocks {
+        assert!(crate::DEFAULT_WELCOME_MARKDOWN.starts_with("# Welcome to Markion\n"));
+        for marker in [
+            "**bold**",
+            "![Local image placeholder]",
+            "- [ ] Export when ready",
+            "| Syntax | Example | Purpose |",
+            "```rust",
+            "$E = mc^2$",
+            "[^links]:",
+            "==highlighted text==",
+            "H~2~O",
+            "x^2^",
+        ] {
             assert!(
-                block.source_island.is_none(),
-                "unexpected source island: {block:?}"
-            );
-            assert!(
-                block
-                    .editable_runs
-                    .iter()
-                    .all(|run| !run.conservative_fallback),
-                "unexpected fallback run: {block:?}"
+                crate::DEFAULT_WELCOME_MARKDOWN.contains(marker),
+                "welcome document is missing {marker:?}"
             );
         }
+
+        let editable_blocks = blocks
+            .iter()
+            .filter(|block| block.source_island.is_none())
+            .collect::<Vec<_>>();
+        assert!(
+            editable_blocks.len() >= 10,
+            "expected substantial directly editable prose: {blocks:?}"
+        );
+        assert!(editable_blocks.iter().any(|block| {
+            block
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text.contains("starter document"))
+        }));
+        assert!(
+            blocks.iter().any(|block| {
+                matches!(block.source_island, Some(VisualSourceIslandKind::Image))
+            })
+        );
+        assert!(
+            blocks
+                .iter()
+                .any(|block| { matches!(block.source_island, Some(VisualSourceIslandKind::Code)) })
+        );
+        assert!(
+            blocks
+                .iter()
+                .any(|block| { matches!(block.source_island, Some(VisualSourceIslandKind::Math)) })
+        );
+        assert!(
+            blocks.iter().any(|block| {
+                matches!(block.source_island, Some(VisualSourceIslandKind::Table))
+            })
+        );
+
+        assert!(editable_blocks.iter().any(|block| {
+            matches!(block.kind, VisualBlockKind::ListItem { .. })
+                && !block.editable_runs.is_empty()
+                && block
+                    .editable_runs
+                    .iter()
+                    .all(|run| !run.conservative_fallback)
+        }));
     }
 }

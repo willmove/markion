@@ -290,13 +290,13 @@ mod tests {
     fn test_nested_delimiters() {
         let result = parse_extended_inlines("^x^2^^");
         // Should parse "x" as superscript, then regular "2^^"
-        assert!(matches!(result.get(0), Some(Inline::Superscript(_))));
+        assert!(matches!(result.first(), Some(Inline::Superscript(_))));
     }
 
     #[test]
     fn test_escaped_delimiter() {
         let result = parse_extended_inlines("^escaped\\^caret^");
-        if let Some(Inline::Superscript(inner)) = result.get(0) {
+        if let Some(Inline::Superscript(inner)) = result.first() {
             assert_eq!(inner, &vec![Inline::Text("escaped^caret".to_string())]);
         }
     }
@@ -305,14 +305,14 @@ mod tests {
     fn test_empty_delimiters() {
         let result = parse_extended_inlines("^^");
         // Empty superscript should be parsed
-        assert!(matches!(result.get(0), Some(Inline::Superscript(_))));
+        assert!(matches!(result.first(), Some(Inline::Superscript(_))));
     }
 
     #[test]
     fn test_unclosed_delimiter() {
         let result = parse_extended_inlines("^unclosed");
         // Should be treated as regular text
-        assert!(matches!(result.get(0), Some(Inline::Text(_))));
+        assert!(matches!(result.first(), Some(Inline::Text(_))));
     }
 
     #[test]

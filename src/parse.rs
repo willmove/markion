@@ -92,6 +92,7 @@ pub(crate) fn flush_list_item(blocks: &mut Vec<PreviewBlock>, item: Option<ListI
 /// Routes one run of inline text to whichever block draft is currently open,
 /// mirroring the old plain-text routing priority. Styled targets receive
 /// spans; image alts, code bodies, and table cells stay plain text.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn push_preview_rich(
     heading: &mut Option<(u8, Vec<InlineSpan>, Range<usize>)>,
     paragraph: &mut Option<(Vec<InlineSpan>, Range<usize>)>,
@@ -149,11 +150,12 @@ pub(crate) fn append_span(
     if text.is_empty() {
         return;
     }
-    if let Some(last) = spans.last_mut() {
-        if last.style == style && last.link.as_deref() == link {
-            last.text.push_str(text);
-            return;
-        }
+    if let Some(last) = spans.last_mut()
+        && last.style == style
+        && last.link.as_deref() == link
+    {
+        last.text.push_str(text);
+        return;
     }
     spans.push(InlineSpan {
         text: text.to_string(),
@@ -475,13 +477,13 @@ impl<'a> HtmlPreviewBuilder<'a> {
 
     fn finish(mut self) -> Vec<HtmlPreviewPart> {
         while self.index < self.html.len() {
-            if self.html[self.index..].starts_with('<') {
-                if let Some(tag_end) = find_html_tag_end(self.html, self.index) {
-                    let tag = &self.html[self.index..tag_end];
-                    self.handle_tag(tag);
-                    self.index = tag_end;
-                    continue;
-                }
+            if self.html[self.index..].starts_with('<')
+                && let Some(tag_end) = find_html_tag_end(self.html, self.index)
+            {
+                let tag = &self.html[self.index..tag_end];
+                self.handle_tag(tag);
+                self.index = tag_end;
+                continue;
             }
 
             let next_tag = self.html[self.index..]
@@ -500,10 +502,10 @@ impl<'a> HtmlPreviewBuilder<'a> {
             return;
         };
         if parsed.name == "script" || parsed.name == "style" {
-            if !parsed.closing {
-                if let Some(end) = find_html_closing_tag(self.html, self.index, &parsed.name) {
-                    self.index = end;
-                }
+            if !parsed.closing
+                && let Some(end) = find_html_closing_tag(self.html, self.index, &parsed.name)
+            {
+                self.index = end;
             }
             return;
         }
@@ -824,14 +826,14 @@ fn decode_html_entities(text: &str) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < text.len() {
-        if text[index..].starts_with('&') {
-            if let Some(end) = text[index + 1..].find(';') {
-                let entity = &text[index + 1..index + 1 + end];
-                if let Some(decoded) = decode_html_entity(entity) {
-                    output.push(decoded);
-                    index += end + 2;
-                    continue;
-                }
+        if text[index..].starts_with('&')
+            && let Some(end) = text[index + 1..].find(';')
+        {
+            let entity = &text[index + 1..index + 1 + end];
+            if let Some(decoded) = decode_html_entity(entity) {
+                output.push(decoded);
+                index += end + 2;
+                continue;
             }
         }
         let ch = text[index..].chars().next().unwrap();
@@ -936,53 +938,54 @@ fn parse_extended_inline_segments(text: &str) -> Vec<ExtendedInlineSegment> {
     while index < text.len() {
         let rest = &text[index..];
 
-        if rest.starts_with("==") {
-            if let Some(end) = rest[2..].find("==") {
-                let inner = &rest[2..2 + end];
-                if !inner.trim().is_empty() {
-                    segments.push(ExtendedInlineSegment::Highlight(
-                        parse_extended_inline_segments(inner),
-                    ));
-                    index += end + 4;
-                    continue;
-                }
+        if let Some(stripped) = rest.strip_prefix("==")
+            && let Some(end) = stripped.find("==")
+        {
+            let inner = &stripped[..end];
+            if !inner.trim().is_empty() {
+                segments.push(ExtendedInlineSegment::Highlight(
+                    parse_extended_inline_segments(inner),
+                ));
+                index += end + 4;
+                continue;
             }
         }
 
-        if rest.starts_with('^') {
-            if let Some(end) = rest[1..].find('^') {
-                let inner = &rest[1..1 + end];
-                if is_valid_short_inline_extent(inner) {
-                    segments.push(ExtendedInlineSegment::Superscript(
-                        parse_extended_inline_segments(inner),
-                    ));
-                    index += end + 2;
-                    continue;
-                }
+        if let Some(stripped) = rest.strip_prefix('^')
+            && let Some(end) = stripped.find('^')
+        {
+            let inner = &stripped[..end];
+            if is_valid_short_inline_extent(inner) {
+                segments.push(ExtendedInlineSegment::Superscript(
+                    parse_extended_inline_segments(inner),
+                ));
+                index += end + 2;
+                continue;
             }
         }
 
-        if rest.starts_with('~') && !rest.starts_with("~~") {
-            if let Some(end) = rest[1..].find('~') {
-                let inner = &rest[1..1 + end];
-                if is_valid_short_inline_extent(inner) {
-                    segments.push(ExtendedInlineSegment::Subscript(
-                        parse_extended_inline_segments(inner),
-                    ));
-                    index += end + 2;
-                    continue;
-                }
+        if !rest.starts_with("~~")
+            && let Some(stripped) = rest.strip_prefix('~')
+            && let Some(end) = stripped.find('~')
+        {
+            let inner = &stripped[..end];
+            if is_valid_short_inline_extent(inner) {
+                segments.push(ExtendedInlineSegment::Subscript(
+                    parse_extended_inline_segments(inner),
+                ));
+                index += end + 2;
+                continue;
             }
         }
 
-        if rest.starts_with(':') {
-            if let Some(end) = rest[1..].find(':') {
-                let shortcode = &rest[1..1 + end];
-                if let Some(emoji) = emoji_for_shortcode(shortcode) {
-                    segments.push(ExtendedInlineSegment::Emoji(emoji));
-                    index += end + 2;
-                    continue;
-                }
+        if let Some(stripped) = rest.strip_prefix(':')
+            && let Some(end) = stripped.find(':')
+        {
+            let shortcode = &stripped[..end];
+            if let Some(emoji) = emoji_for_shortcode(shortcode) {
+                segments.push(ExtendedInlineSegment::Emoji(emoji));
+                index += end + 2;
+                continue;
             }
         }
 

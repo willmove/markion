@@ -462,6 +462,9 @@ impl Render for MarkionApp {
             .when(self.preferences_panel_open, |root| {
                 root.child(preferences_panel_view(self, cx))
             })
+            .when(self.shortcut_panel_open, |root| {
+                root.child(shortcut_panel_view(self, cx))
+            })
     }
 }
 
@@ -719,7 +722,7 @@ pub(super) fn pending_name_prompt_view(app: &MarkionApp, cx: &mut Context<Markio
         .child(text)
         .on_mouse_up(MouseButton::Left, move |_, _window, cx| {
             // Re-assert focus if the user clicks the prompt while it is open.
-            let _ = app_entity.update(cx, |app, cx| {
+            app_entity.update(cx, |app, cx| {
                 if app.pending_name_input.is_some() {
                     app.input_marked_len = 0;
                     cx.notify();
@@ -811,7 +814,7 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                 .scrollbar_width(px(8.))
                 .track_scroll(&app.file_tree_scroll)
                 .on_mouse_up(MouseButton::Right, move |event, _, cx| {
-                    let _ = background_app_entity.update(cx, |app, cx| {
+                    background_app_entity.update(cx, |app, cx| {
                         app.show_file_tree_context_menu(
                             FileTreeContextTarget::Workspace,
                             event.position,
@@ -899,7 +902,7 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                             let focus_handle = left_app_entity.read(cx).focus_handle.clone();
                             window.focus(&focus_handle);
                             let path = path.clone();
-                            let _ = left_app_entity.update(cx, |app, cx| {
+                            left_app_entity.update(cx, |app, cx| {
                                 app.selected_tree_path = Some(path.clone());
                                 app.file_tree_query_focused = false;
                                 app.input_marked_len = 0;
@@ -924,9 +927,7 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                                     }
                                 }
                             });
-                            if !clickable {
-                                return;
-                            }
+                            if !clickable {}
                         })
                         .on_mouse_up(MouseButton::Right, {
                             move |event, window, cx| {
@@ -938,7 +939,7 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                                 cx.stop_propagation();
                                 let focus_handle = right_app_entity.read(cx).focus_handle.clone();
                                 window.focus(&focus_handle);
-                                let _ = right_app_entity.update(cx, |app, cx| {
+                                right_app_entity.update(cx, |app, cx| {
                                     app.show_file_tree_context_menu(
                                         context_target.clone(),
                                         event.position,
@@ -978,8 +979,9 @@ pub(super) fn filtered_visible_file_tree_entries(
             collapsed_depth = None;
         }
 
-        let collapsed =
-            entry.kind == FileTreeEntryKind::Directory && collapsed_paths.contains(&entry.path);
+        let collapsed = query.is_empty()
+            && entry.kind == FileTreeEntryKind::Directory
+            && collapsed_paths.contains(&entry.path);
         if file_tree_entry_matches_query(entry, &tree.root, &query) {
             if matched < limit {
                 entries.push(entry.clone());
@@ -1251,7 +1253,7 @@ pub(super) fn outline_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>)
                         .on_mouse_up(MouseButton::Left, move |_, window, cx| {
                             let focus_handle = app_entity.read(cx).focus_handle.clone();
                             window.focus(&focus_handle);
-                            let _ = app_entity.update(cx, |app, cx| {
+                            app_entity.update(cx, |app, cx| {
                                 app.jump_to_offset(offset, cx);
                             });
                         })
@@ -1332,7 +1334,7 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
                         .on_mouse_up(MouseButton::Left, {
                             let app_entity = app_entity.clone();
                             move |_, _, cx| {
-                                let _ = app_entity.update(cx, |app, cx| {
+                                app_entity.update(cx, |app, cx| {
                                     app.set_sidebar_tab(SidebarTab::Files, cx);
                                 });
                             }
@@ -1356,7 +1358,7 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
                         .on_mouse_up(MouseButton::Left, {
                             let app_entity = app_entity.clone();
                             move |_, _, cx| {
-                                let _ = app_entity.update(cx, |app, cx| {
+                                app_entity.update(cx, |app, cx| {
                                     app.set_sidebar_tab(SidebarTab::Outline, cx);
                                 });
                             }
@@ -1429,7 +1431,7 @@ pub(super) fn pane_scrollbar_view(
                             if !thumb_bounds.contains(&event.position) {
                                 return;
                             }
-                            let _ = entity.update(cx, |app, _| {
+                            entity.update(cx, |app, _| {
                                 app.pane_scrollbar_drag = Some(PaneScrollbarDrag {
                                     target,
                                     thumb_grab_offset_y: event.position.y - thumb_bounds.top(),
@@ -1440,7 +1442,7 @@ pub(super) fn pane_scrollbar_view(
                     window.on_mouse_event({
                         let entity = entity.clone();
                         move |_: &MouseUpEvent, _, _, cx| {
-                            let _ = entity.update(cx, |app, _| {
+                            entity.update(cx, |app, _| {
                                 if app
                                     .pane_scrollbar_drag
                                     .is_some_and(|drag| drag.target == target)
@@ -1562,7 +1564,7 @@ pub(super) fn preview_list_scrollbar_view(
                                 return;
                             }
                             list_state.scrollbar_drag_started();
-                            let _ = entity.update(cx, |app, _| {
+                            entity.update(cx, |app, _| {
                                 app.pane_scrollbar_drag = Some(PaneScrollbarDrag {
                                     target,
                                     thumb_grab_offset_y: event.position.y - thumb_bounds.top(),
@@ -1574,7 +1576,7 @@ pub(super) fn preview_list_scrollbar_view(
                         let entity = entity.clone();
                         let list_state = list_state.clone();
                         move |_: &MouseUpEvent, _, _, cx| {
-                            let _ = entity.update(cx, |app, _| {
+                            entity.update(cx, |app, _| {
                                 if app
                                     .pane_scrollbar_drag
                                     .is_some_and(|drag| drag.target == target)
@@ -1775,7 +1777,7 @@ pub(super) fn file_tree_context_menu_view(
                             .hover(move |style| style.bg(palette.active_bg))
                             .child(t(app.language, file_tree_context_action_label(action)))
                             .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                                let _ = app_entity.update(cx, |app, cx| {
+                                app_entity.update(cx, |app, cx| {
                                     app.handle_file_tree_context_action(action, window, cx);
                                 });
                             })
@@ -1848,7 +1850,7 @@ pub(super) fn preview_context_menu_view(app: &MarkionApp, cx: &mut Context<Marki
                         .cursor_pointer()
                         .hover(move |style| style.bg(palette.active_bg))
                         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
-                            let _ = app_entity.update(cx, |app, cx| {
+                            app_entity.update(cx, |app, cx| {
                                 app.handle_preview_context_action(action, cx);
                             });
                         })
@@ -2189,6 +2191,320 @@ pub(super) fn active_menu_dropdown(
     }
 }
 
+/// Theme-aware Help -> Keyboard Shortcuts modal. The platform and category
+/// selectors only change transient app state; the catalog itself stays in the
+/// i18n layer so labels and displayed bindings share one source of truth.
+pub(super) fn shortcut_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+    let palette = app.palette();
+    let language = app.language;
+    let selected_platform = app.shortcut_platform;
+    let selected_category = app.shortcut_category;
+    let catalog = shortcut_catalog(language, app.heading_menu_max_level);
+    let section = catalog
+        .section(selected_category)
+        .expect("shortcut catalog contains every category");
+
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .p_4()
+        .bg(rgba(0x00000066))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .occlude()
+                .track_focus(&app.shortcut_panel_focus)
+                .w(px(720.))
+                .max_w(px(720.))
+                .flex_none()
+                .min_w_0()
+                .h(px(560.))
+                .overflow_hidden()
+                .bg(palette.panel_bg)
+                .border_1()
+                .border_color(palette.border)
+                .rounded_lg()
+                .shadow_lg()
+                .text_color(palette.text)
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .w(px(718.))
+                        .h(px(52.))
+                        .px_4()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_4()
+                        .child(
+                            div()
+                                .min_w_0()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(app.tr(Msg::DialogShortcutsTitle)),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .text_color(palette.muted)
+                                .hover(move |style| style.bg(palette.surface_bg))
+                                .child("✕")
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                                        app.close_shortcut_panel(window, cx);
+                                    }),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(718.))
+                        .px_4()
+                        .pb_3()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .p(px(2.))
+                                .rounded_md()
+                                .bg(palette.surface_bg)
+                                .border_1()
+                                .border_color(palette.border)
+                                .flex()
+                                .gap_1()
+                                .children(ShortcutPlatform::ALL.into_iter().map(|platform| {
+                                    shortcut_platform_tab(
+                                        platform.label(language),
+                                        platform == selected_platform,
+                                        palette,
+                                        cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                                            app.select_shortcut_platform(platform, cx);
+                                        }),
+                                    )
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(718.))
+                        .flex_1()
+                        .min_h_0()
+                        .border_t_1()
+                        .border_color(palette.border)
+                        .overflow_hidden()
+                        .flex()
+                        .child(
+                            div()
+                                .id("shortcut-panel-categories")
+                                .w(px(152.))
+                                .flex_none()
+                                .py_2()
+                                .border_r_1()
+                                .border_color(palette.border)
+                                .bg(palette.surface_bg)
+                                .overflow_y_scroll()
+                                .scrollbar_width(px(8.))
+                                .children(catalog.sections.iter().map(|section| {
+                                    let category = section.category;
+                                    shortcut_category_button(
+                                        section.label,
+                                        category == selected_category,
+                                        palette,
+                                        cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                                            app.select_shortcut_category(category, cx);
+                                        }),
+                                    )
+                                })),
+                        )
+                        .child(
+                            div()
+                                .w(px(566.))
+                                .flex_none()
+                                .min_w_0()
+                                .min_h_0()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .h(px(42.))
+                                        .px_4()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_size(px(13.))
+                                        .child(section.label),
+                                )
+                                .child(
+                                    div()
+                                        .id("shortcut-panel-actions")
+                                        .flex_1()
+                                        .min_h_0()
+                                        .overflow_y_scroll()
+                                        .scrollbar_width(px(8.))
+                                        .border_t_1()
+                                        .border_color(palette.border)
+                                        .children(section.actions.iter().map(|action| {
+                                            shortcut_action_row(
+                                                action.label,
+                                                action.combinations(selected_platform),
+                                                palette,
+                                            )
+                                        })),
+                                ),
+                        ),
+                ),
+        )
+}
+
+fn shortcut_platform_tab(
+    label: &'static str,
+    active: bool,
+    palette: ThemePalette,
+    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    let background = if active {
+        palette.active_bg
+    } else {
+        palette.surface_bg
+    };
+    let foreground = if active {
+        palette.active_text
+    } else {
+        palette.text
+    };
+
+    div()
+        .min_w(px(128.))
+        .px_3()
+        .py_1()
+        .rounded_sm()
+        .bg(background)
+        .text_color(foreground)
+        .text_size(px(12.))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .justify_center()
+        .hover(move |style| {
+            if !active {
+                style.bg(palette.active_bg).text_color(palette.active_text)
+            } else {
+                style
+            }
+        })
+        .on_mouse_up(MouseButton::Left, listener)
+        .child(label)
+}
+
+fn shortcut_category_button(
+    label: &'static str,
+    active: bool,
+    palette: ThemePalette,
+    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    let background = if active {
+        palette.active_bg
+    } else {
+        palette.surface_bg
+    };
+    let foreground = if active {
+        palette.active_text
+    } else {
+        palette.text
+    };
+
+    div()
+        .w_full()
+        .min_h(px(38.))
+        .px_4()
+        .py_2()
+        .bg(background)
+        .text_color(foreground)
+        .text_size(px(12.))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .hover(move |style| {
+            if !active {
+                style.bg(palette.active_bg).text_color(palette.active_text)
+            } else {
+                style
+            }
+        })
+        .on_mouse_up(MouseButton::Left, listener)
+        .child(label)
+}
+
+fn shortcut_action_row(
+    label: &'static str,
+    combinations: &'static [&'static str],
+    palette: ThemePalette,
+) -> Div {
+    div()
+        .w_full()
+        .min_h(px(46.))
+        .px_4()
+        .py_2()
+        .border_b_1()
+        .border_color(palette.border)
+        .flex()
+        .items_start()
+        .justify_between()
+        .gap_3()
+        .child(
+            div()
+                .w(px(150.))
+                .flex_none()
+                .pt_1()
+                .text_size(px(13.))
+                .child(label),
+        )
+        .child(
+            div()
+                .w(px(350.))
+                .flex_none()
+                .flex()
+                .flex_wrap()
+                .justify_end()
+                .gap_1()
+                .children(
+                    combinations
+                        .iter()
+                        .copied()
+                        .map(|shortcut| shortcut_key_label(shortcut, palette)),
+                ),
+        )
+}
+
+fn shortcut_key_label(shortcut: &'static str, palette: ThemePalette) -> Div {
+    div()
+        .min_h(px(26.))
+        .px_2()
+        .py_1()
+        .rounded_sm()
+        .border_1()
+        .border_color(palette.border)
+        .bg(palette.surface_bg)
+        .text_color(palette.text)
+        .text_size(px(11.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(shortcut)
+}
+
 /// Modal overlay for the in-app Preferences panel. Clicks dispatch through
 /// `cx.listener` closures so each setting updates live app state and persists
 /// through the existing preferences path.
@@ -2336,7 +2652,7 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                             .flex_col()
                                             .gap_1()
                                             .on_mouse_up(MouseButton::Left, move |_, _, cx| {
-                                                let _ = app_entity.update(cx, |app, cx| {
+                                                app_entity.update(cx, |app, cx| {
                                                     app.apply_theme_by_name(&theme_name, cx);
                                                 });
                                             })

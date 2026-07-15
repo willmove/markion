@@ -70,7 +70,7 @@ fn yaml_front_matter_empty_block() {
     // The parser should handle it without error
     // Note: empty YAML may result in None metadata or Some with default values
     // Both behaviors are acceptable
-    assert!(doc.blocks.len() > 0, "Document should have body content");
+    assert!(!doc.blocks.is_empty(), "Document should have body content");
 }
 
 #[test]
@@ -245,8 +245,7 @@ fn yaml_invalid_syntax_indentation() {
     let result = default_parser().parse(md);
     // This might parse successfully or fail depending on YAML strictness
     // But we're testing that invalid indentation is handled
-    if result.is_err() {
-        let err = result.unwrap_err();
+    if let Err(err) = result {
         assert!(
             err.to_string().contains("YAML"),
             "Error should mention YAML"
@@ -267,8 +266,7 @@ fn yaml_invalid_syntax_tab_character() {
     let result = default_parser().parse(md);
     // YAML typically doesn't allow tabs for indentation, but may accept them in values
     // Test that we handle it (either accept or reject consistently)
-    if result.is_err() {
-        let err = result.unwrap_err();
+    if let Err(err) = result {
         assert!(err.to_string().contains("YAML"));
     }
 }
@@ -278,8 +276,8 @@ fn yaml_invalid_syntax_duplicate_keys() {
     let md = "---\ntitle: First\ntitle: Second\n---\n";
     let result = default_parser().parse(md);
     // serde_yaml may accept this and use the last value
-    if result.is_ok() {
-        let fm = result.unwrap().metadata.unwrap();
+    if let Ok(doc) = result {
+        let fm = doc.metadata.unwrap();
         // Should have one title value (typically the last one)
         assert!(fm.title.is_some());
     }
@@ -433,7 +431,7 @@ fn yaml_empty_strings() {
     let doc = default_parser().parse(md).unwrap();
     let fm = doc.metadata.unwrap();
     // Empty string might be parsed as empty string or None depending on serde_yaml
-    assert!(fm.title == Some("".to_string()) || fm.title == None);
+    assert!(matches!(fm.title.as_deref(), None | Some("")));
 }
 
 #[test]

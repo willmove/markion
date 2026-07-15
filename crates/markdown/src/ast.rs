@@ -301,7 +301,7 @@ impl ListItem {
 // ---------------------------------------------------------------------------
 
 /// Parsed YAML front matter from the top of a Markdown document.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct YamlFrontMatter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -318,18 +318,6 @@ pub struct YamlFrontMatter {
     /// Any additional key–value pairs not captured by the named fields.
     #[serde(flatten)]
     pub custom: HashMap<String, serde_yaml::Value>,
-}
-
-impl Default for YamlFrontMatter {
-    fn default() -> Self {
-        Self {
-            title: None,
-            author: None,
-            date: None,
-            tags: Vec::new(),
-            custom: HashMap::new(),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

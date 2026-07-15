@@ -471,7 +471,7 @@ pub(crate) fn write_image_snapshot(
     let image = render_image_snapshot(text);
     image
         .save_with_format(path, format)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+        .map_err(io::Error::other)
 }
 
 fn render_image_snapshot(text: &str) -> image::RgbImage {

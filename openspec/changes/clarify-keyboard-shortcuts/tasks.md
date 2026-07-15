@@ -9,9 +9,10 @@
 - [x] 2.2 Convert the Simplified and Traditional Chinese shortcut reference text to the same platform-specific table shape.
 - [x] 2.3 Convert the Japanese, French, German, and Spanish shortcut reference text to the same platform-specific table shape.
 - [x] 2.4 Ensure the sidebar row documents Ctrl+Shift+B on Windows/Linux and Cmd+Shift+B on macOS.
+- [x] 2.5 Render the shortcut tables as prompt-safe plain text instead of Markdown table source.
 
 ## 3. Verification
 
 - [x] 3.1 Update shortcut-reference tests to assert table headers, explicit platform keys, and absence of leaked `Secondary-` labels.
 - [x] 3.2 Run `openspec validate clarify-keyboard-shortcuts`.
-- [ ] 3.3 Run `cargo test`. (Ran; currently blocked by unrelated HTML preview test failures.)
+- [x] 3.3 Run `cargo test`.

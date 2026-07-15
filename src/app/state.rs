@@ -42,6 +42,7 @@ pub(super) struct EditorSnapshot {
 /// therefore retains at most one whole-document copy (its newest entry) no
 /// matter how long the history grows; previously a 1 MB document accumulated
 /// up to `MAX_HISTORY_LEN` full clones (~200 MB) while typing.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum UndoEntry {
     Full(EditorSnapshot),
     Diff(UndoDiff),
@@ -63,10 +64,10 @@ pub(super) struct UndoDiff {
 /// already compact, and its presence means the buried full entry pops against
 /// a text we cannot know yet). Caps the stack at [`MAX_HISTORY_LEN`].
 pub(super) fn push_history_entry(stack: &mut Vec<UndoEntry>, entry: UndoEntry) {
-    if let (UndoEntry::Full(new), Some(top)) = (&entry, stack.last_mut()) {
-        if let UndoEntry::Full(old) = top {
-            *top = UndoEntry::Diff(compact_history_entry(old, new.document.text()));
-        }
+    if let (UndoEntry::Full(new), Some(top)) = (&entry, stack.last_mut())
+        && let UndoEntry::Full(old) = top
+    {
+        *top = UndoEntry::Diff(compact_history_entry(old, new.document.text()));
     }
     stack.push(entry);
     if stack.len() > MAX_HISTORY_LEN {
@@ -309,10 +310,10 @@ impl EditorTab {
     /// version. Cloning the returned value is an `Arc` bump, not a text copy.
     pub(super) fn shared_document_text(&self) -> SharedString {
         let version = self.document.version();
-        if let Some((cached_version, text)) = self.display_text_cache.borrow().as_ref() {
-            if *cached_version == version {
-                return text.clone();
-            }
+        if let Some((cached_version, text)) = self.display_text_cache.borrow().as_ref()
+            && *cached_version == version
+        {
+            return text.clone();
         }
         let text: SharedString = self.document.text().to_string().into();
         *self.display_text_cache.borrow_mut() = Some((version, text.clone()));
@@ -323,10 +324,10 @@ impl EditorTab {
     /// version. Cloning the returned value is an `Rc` bump.
     pub(super) fn shared_line_offsets(&self) -> Rc<Vec<usize>> {
         let version = self.document.version();
-        if let Some((cached_version, offsets)) = self.line_offsets_cache.borrow().as_ref() {
-            if *cached_version == version {
-                return offsets.clone();
-            }
+        if let Some((cached_version, offsets)) = self.line_offsets_cache.borrow().as_ref()
+            && *cached_version == version
+        {
+            return offsets.clone();
         }
         let text = self.document.text();
         let offsets = Rc::new(
@@ -555,7 +556,7 @@ impl EditorTab {
         }
         text[scan_start..offset]
             .grapheme_indices(true)
-            .last()
+            .next_back()
             .map(|(idx, _)| scan_start + idx)
             .unwrap_or(scan_start)
     }
@@ -630,6 +631,28 @@ pub(super) fn workspace_root_needs_reset(
     next_root: &Path,
 ) -> bool {
     !has_file_tree || !scan_result_matches_workspace(current_root, next_root)
+}
+
+pub(super) fn update_file_tree_collapse_state_from_scan(
+    scanned: &io::Result<FileTree>,
+    collapsed_paths: &mut HashSet<PathBuf>,
+    needs_initial_collapse: &mut bool,
+) {
+    let Ok(tree) = scanned else {
+        return;
+    };
+
+    if *needs_initial_collapse {
+        *collapsed_paths = tree
+            .entries
+            .iter()
+            .filter(|entry| entry.depth == 0 && entry.kind == FileTreeEntryKind::Directory)
+            .map(|entry| entry.path.clone())
+            .collect();
+        *needs_initial_collapse = false;
+    } else {
+        collapsed_paths.retain(|path| path.exists());
+    }
 }
 
 pub(super) fn open_folder_prompt_options(language: Language) -> PathPromptOptions {
