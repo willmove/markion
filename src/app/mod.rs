@@ -157,6 +157,165 @@ enum AppMenu {
     Help,
 }
 
+/// One source of truth for a keyboard binding and the text shown beside its
+/// in-window menu item. Explicit platform labels keep GPUI's internal
+/// `secondary` modifier out of user-facing chrome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MenuShortcut {
+    binding: &'static str,
+    aliases: &'static [&'static str],
+    windows_linux: &'static str,
+    macos: &'static str,
+}
+
+impl MenuShortcut {
+    const fn new(binding: &'static str, windows_linux: &'static str, macos: &'static str) -> Self {
+        Self {
+            binding,
+            aliases: &[],
+            windows_linux,
+            macos,
+        }
+    }
+
+    const fn with_aliases(
+        binding: &'static str,
+        aliases: &'static [&'static str],
+        windows_linux: &'static str,
+        macos: &'static str,
+    ) -> Self {
+        Self {
+            binding,
+            aliases,
+            windows_linux,
+            macos,
+        }
+    }
+
+    const fn label(self, platform: ShortcutPlatform) -> &'static str {
+        match platform {
+            ShortcutPlatform::WindowsLinux => self.windows_linux,
+            ShortcutPlatform::MacOS => self.macos,
+        }
+    }
+
+    #[cfg(test)]
+    fn bindings(self) -> impl Iterator<Item = &'static str> {
+        std::iter::once(self.binding).chain(self.aliases.iter().copied())
+    }
+}
+
+/// Shared descriptors for actions that appear in the six application menus.
+/// Unbound menu actions intentionally have no entry in this module.
+mod menu_shortcuts {
+    use super::MenuShortcut;
+
+    pub const NEW_DOCUMENT: MenuShortcut = MenuShortcut::new("secondary-n", "Ctrl+N", "Cmd+N");
+    pub const OPEN_DOCUMENT: MenuShortcut = MenuShortcut::new("secondary-o", "Ctrl+O", "Cmd+O");
+    pub const SAVE_DOCUMENT: MenuShortcut = MenuShortcut::new("secondary-s", "Ctrl+S", "Cmd+S");
+    pub const SAVE_DOCUMENT_AS: MenuShortcut =
+        MenuShortcut::new("secondary-shift-s", "Ctrl+Shift+S", "Cmd+Shift+S");
+    pub const OPEN_IN_NEW_TAB: MenuShortcut = MenuShortcut::new("secondary-t", "Ctrl+T", "Cmd+T");
+    pub const CLOSE_TAB: MenuShortcut = MenuShortcut::new("secondary-w", "Ctrl+W", "Cmd+W");
+    pub const NEXT_TAB: MenuShortcut = MenuShortcut::new("ctrl-tab", "Ctrl+Tab", "Ctrl+Tab");
+    pub const PREV_TAB: MenuShortcut =
+        MenuShortcut::new("ctrl-shift-tab", "Ctrl+Shift+Tab", "Ctrl+Shift+Tab");
+    pub const SHOW_PREFERENCES: MenuShortcut =
+        MenuShortcut::new("secondary-comma", "Ctrl+,", "Cmd+,");
+    pub const QUIT: MenuShortcut = MenuShortcut::new("secondary-q", "Ctrl+Q", "Cmd+Q");
+
+    pub const UNDO: MenuShortcut = MenuShortcut::new("secondary-z", "Ctrl+Z", "Cmd+Z");
+    pub const REDO: MenuShortcut = MenuShortcut::with_aliases(
+        "secondary-shift-z",
+        &["secondary-y"],
+        "Ctrl+Shift+Z / Ctrl+Y",
+        "Cmd+Shift+Z / Cmd+Y",
+    );
+    pub const COPY: MenuShortcut = MenuShortcut::new("secondary-c", "Ctrl+C", "Cmd+C");
+    pub const CUT: MenuShortcut = MenuShortcut::new("secondary-x", "Ctrl+X", "Cmd+X");
+    pub const PASTE: MenuShortcut = MenuShortcut::new("secondary-v", "Ctrl+V", "Cmd+V");
+    pub const SELECT_ALL: MenuShortcut = MenuShortcut::new("secondary-a", "Ctrl+A", "Cmd+A");
+
+    pub const TOGGLE_VIEW_MODE: MenuShortcut =
+        MenuShortcut::new("secondary-shift-v", "Ctrl+Shift+V", "Cmd+Shift+V");
+    pub const SET_EDIT_MODE: MenuShortcut =
+        MenuShortcut::new("secondary-alt-1", "Ctrl+Alt+1", "Cmd+Option+1");
+    pub const SET_VISUAL_EDIT_MODE: MenuShortcut =
+        MenuShortcut::new("secondary-alt-4", "Ctrl+Alt+4", "Cmd+Option+4");
+    pub const SET_SPLIT_PREVIEW_MODE: MenuShortcut =
+        MenuShortcut::new("secondary-alt-2", "Ctrl+Alt+2", "Cmd+Option+2");
+    pub const SET_READ_MODE: MenuShortcut =
+        MenuShortcut::new("secondary-alt-3", "Ctrl+Alt+3", "Cmd+Option+3");
+    pub const TOGGLE_SIDEBAR: MenuShortcut =
+        MenuShortcut::new("secondary-shift-b", "Ctrl+Shift+B", "Cmd+Shift+B");
+    pub const TOGGLE_FILE_TREE: MenuShortcut =
+        MenuShortcut::new("secondary-shift-f", "Ctrl+Shift+F", "Cmd+Shift+F");
+    pub const TOGGLE_OUTLINE: MenuShortcut = MenuShortcut::new("f6", "F6", "F6");
+    pub const TOGGLE_FOCUS_MODE: MenuShortcut = MenuShortcut::new("f7", "F7", "F7");
+    pub const TOGGLE_TYPEWRITER_MODE: MenuShortcut = MenuShortcut::new("f8", "F8", "F8");
+    pub const TOGGLE_CODE_LINE_NUMBERS: MenuShortcut =
+        MenuShortcut::new("secondary-shift-4", "Ctrl+Shift+4", "Cmd+Shift+4");
+    pub const SHOW_FIND: MenuShortcut = MenuShortcut::new("secondary-f", "Ctrl+F", "Cmd+F");
+    pub const SHOW_REPLACE: MenuShortcut = MenuShortcut::new("secondary-h", "Ctrl+H", "Cmd+H");
+    pub const FIND_NEXT: MenuShortcut = MenuShortcut::new("f3", "F3", "F3");
+    pub const FIND_PREVIOUS: MenuShortcut = MenuShortcut::new("shift-f3", "Shift+F3", "Shift+F3");
+    pub const CYCLE_THEME: MenuShortcut =
+        MenuShortcut::new("secondary-shift-t", "Ctrl+Shift+T", "Cmd+Shift+T");
+
+    pub const BOLD: MenuShortcut = MenuShortcut::new("secondary-b", "Ctrl+B", "Cmd+B");
+    pub const ITALIC: MenuShortcut = MenuShortcut::new("secondary-i", "Ctrl+I", "Cmd+I");
+    pub const INLINE_CODE: MenuShortcut = MenuShortcut::new("secondary-e", "Ctrl+E", "Cmd+E");
+    pub const INSERT_LINK: MenuShortcut = MenuShortcut::new("secondary-k", "Ctrl+K", "Cmd+K");
+    pub const INSERT_IMAGE: MenuShortcut =
+        MenuShortcut::new("secondary-shift-i", "Ctrl+Shift+I", "Cmd+Shift+I");
+    pub const HEADING_1: MenuShortcut = MenuShortcut::new("secondary-1", "Ctrl+1", "Cmd+1");
+    pub const HEADING_2: MenuShortcut = MenuShortcut::new("secondary-2", "Ctrl+2", "Cmd+2");
+    pub const HEADING_3: MenuShortcut = MenuShortcut::new("secondary-3", "Ctrl+3", "Cmd+3");
+    pub const HEADING_4: MenuShortcut = MenuShortcut::new("secondary-4", "Ctrl+4", "Cmd+4");
+    pub const HEADING_5: MenuShortcut = MenuShortcut::new("secondary-5", "Ctrl+5", "Cmd+5");
+    pub const HEADING_6: MenuShortcut = MenuShortcut::new("secondary-6", "Ctrl+6", "Cmd+6");
+    pub const FORMAT_TABLE: MenuShortcut =
+        MenuShortcut::new("secondary-shift-m", "Ctrl+Shift+M", "Cmd+Shift+M");
+    pub const TABLE_ADD_ROW: MenuShortcut =
+        MenuShortcut::new("secondary-alt-enter", "Ctrl+Alt+Enter", "Cmd+Option+Enter");
+    pub const TABLE_DELETE_ROW: MenuShortcut = MenuShortcut::new(
+        "secondary-alt-backspace",
+        "Ctrl+Alt+Backspace",
+        "Cmd+Option+Backspace",
+    );
+    pub const TABLE_MOVE_ROW_UP: MenuShortcut =
+        MenuShortcut::new("secondary-alt-up", "Ctrl+Alt+Up", "Cmd+Option+Up");
+    pub const TABLE_MOVE_ROW_DOWN: MenuShortcut =
+        MenuShortcut::new("secondary-alt-down", "Ctrl+Alt+Down", "Cmd+Option+Down");
+    pub const TABLE_ADD_COLUMN: MenuShortcut =
+        MenuShortcut::new("secondary-alt-right", "Ctrl+Alt+Right", "Cmd+Option+Right");
+    pub const TABLE_DELETE_COLUMN: MenuShortcut =
+        MenuShortcut::new("secondary-alt-left", "Ctrl+Alt+Left", "Cmd+Option+Left");
+
+    pub const EXPORT_HTML: MenuShortcut =
+        MenuShortcut::new("secondary-shift-h", "Ctrl+Shift+H", "Cmd+Shift+H");
+    pub const EXPORT_PLAIN_HTML: MenuShortcut = MenuShortcut::new(
+        "secondary-alt-shift-h",
+        "Ctrl+Alt+Shift+H",
+        "Cmd+Option+Shift+H",
+    );
+    pub const EXPORT_PDF: MenuShortcut =
+        MenuShortcut::new("secondary-shift-p", "Ctrl+Shift+P", "Cmd+Shift+P");
+    pub const EXPORT_LATEX: MenuShortcut =
+        MenuShortcut::new("secondary-shift-l", "Ctrl+Shift+L", "Cmd+Shift+L");
+    pub const EXPORT_DOCX: MenuShortcut =
+        MenuShortcut::new("secondary-shift-d", "Ctrl+Shift+D", "Cmd+Shift+D");
+    pub const EXPORT_PNG: MenuShortcut =
+        MenuShortcut::new("secondary-shift-g", "Ctrl+Shift+G", "Cmd+Shift+G");
+    pub const EXPORT_JPEG: MenuShortcut = MenuShortcut::new(
+        "secondary-alt-shift-g",
+        "Ctrl+Alt+Shift+G",
+        "Cmd+Option+Shift+G",
+    );
+
+    pub const SHOW_SHORTCUTS: MenuShortcut = MenuShortcut::new("f1", "F1", "F1");
+}
+
 impl AppMenu {
     /// Left offset of a top-level menu's dropdown panel. The values are
     /// hand-tuned per language because the in-window menu bar lays buttons
@@ -201,14 +360,16 @@ impl AppMenu {
     }
 
     fn dropdown_width(self, _language: Language) -> Pixels {
-        // Keep enough room for the longest localized label in each menu.
+        // Keep enough room for the longest localized label plus the menu's
+        // right-aligned platform shortcut. Left offsets remain language-tuned
+        // independently above, so widening a dropdown does not move its title.
         match self {
-            AppMenu::View => px(172.),
-            AppMenu::Format => px(188.),
-            AppMenu::Export => px(168.),
-            AppMenu::Help => px(196.),
-            AppMenu::File => px(176.),
-            AppMenu::Edit => px(128.),
+            AppMenu::File => px(280.),
+            AppMenu::Edit => px(264.),
+            AppMenu::View => px(304.),
+            AppMenu::Format => px(344.),
+            AppMenu::Export => px(288.),
+            AppMenu::Help => px(236.),
         }
     }
 }

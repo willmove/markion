@@ -40,7 +40,7 @@ use std::sync::Arc;
 use crate::{
     ast::{Block, Document, ListItem, NodeId, SharedBlocks},
     error::MarkdownResult,
-    parser::{build_footnote_map, extract_front_matter, Parser},
+    parser::{Parser, build_footnote_map, extract_front_matter},
 };
 
 // ---------------------------------------------------------------------------
@@ -213,11 +213,7 @@ fn fence_open(trimmed: &str) -> Option<(char, usize)> {
         return None;
     }
     let run = trimmed.chars().take_while(|&c| c == first).count();
-    if run >= 3 {
-        Some((first, run))
-    } else {
-        None
-    }
+    if run >= 3 { Some((first, run)) } else { None }
 }
 
 /// Returns `true` if `trimmed` is a closing fence line for the given marker.

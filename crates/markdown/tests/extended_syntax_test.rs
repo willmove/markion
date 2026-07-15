@@ -214,9 +214,11 @@ fn test_subscript_vs_strikethrough() {
     if let Block::Paragraph { content, .. } = &doc.blocks[0] {
         // Should have subscript, not strikethrough
         assert!(content.iter().any(|i| matches!(i, Inline::Subscript(_))));
-        assert!(!content
-            .iter()
-            .any(|i| matches!(i, Inline::Strikethrough(_))));
+        assert!(
+            !content
+                .iter()
+                .any(|i| matches!(i, Inline::Strikethrough(_)))
+        );
     }
 }
 

@@ -1,6 +1,185 @@
 use super::*;
 
 #[test]
+fn menu_shortcut_labels_follow_platform_conventions() {
+    assert_eq!(
+        menu_shortcuts::OPEN_DOCUMENT.label(ShortcutPlatform::WindowsLinux),
+        "Ctrl+O"
+    );
+    assert_eq!(
+        menu_shortcuts::OPEN_DOCUMENT.label(ShortcutPlatform::MacOS),
+        "Cmd+O"
+    );
+    assert_eq!(
+        menu_shortcuts::SET_EDIT_MODE.label(ShortcutPlatform::WindowsLinux),
+        "Ctrl+Alt+1"
+    );
+    assert_eq!(
+        menu_shortcuts::SET_EDIT_MODE.label(ShortcutPlatform::MacOS),
+        "Cmd+Option+1"
+    );
+    assert_eq!(
+        menu_shortcuts::NEXT_TAB.label(ShortcutPlatform::MacOS),
+        "Ctrl+Tab",
+        "the fixed ctrl-tab binding must not be relabeled as Cmd"
+    );
+
+    let expected_current = if cfg!(target_os = "macos") {
+        "Cmd+O"
+    } else {
+        "Ctrl+O"
+    };
+    assert_eq!(
+        menu_shortcuts::OPEN_DOCUMENT.label(ShortcutPlatform::current()),
+        expected_current
+    );
+}
+
+#[test]
+fn menu_shortcut_metadata_preserves_bindings_and_aliases() {
+    assert_eq!(menu_shortcuts::SAVE_DOCUMENT.binding, "secondary-s");
+    assert_eq!(
+        menu_shortcuts::EXPORT_PLAIN_HTML.label(ShortcutPlatform::MacOS),
+        "Cmd+Option+Shift+H"
+    );
+    assert_eq!(
+        menu_shortcuts::REDO.bindings().collect::<Vec<_>>(),
+        vec!["secondary-shift-z", "secondary-y"]
+    );
+    assert_eq!(
+        menu_shortcuts::REDO.label(ShortcutPlatform::WindowsLinux),
+        "Ctrl+Shift+Z / Ctrl+Y"
+    );
+}
+
+#[test]
+fn every_application_dropdown_uses_shortcut_aware_rows() {
+    let source = include_str!("root_view.rs");
+    let menu_source = source
+        .split_once("pub(super) fn active_menu_dropdown")
+        .and_then(|(_, rest)| {
+            rest.split_once("/// Theme-aware Help")
+                .map(|(menu, _)| menu)
+        })
+        .expect("in-window application menu builder");
+
+    let menu_boundaries = [
+        "AppMenu::File =>",
+        "AppMenu::Edit =>",
+        "AppMenu::View =>",
+        "AppMenu::Format =>",
+        "AppMenu::Export =>",
+        "AppMenu::Help =>",
+    ];
+    for (index, boundary) in menu_boundaries.iter().enumerate() {
+        let body = menu_source
+            .split_once(boundary)
+            .map(|(_, body)| body)
+            .expect("menu match arm");
+        let body = menu_boundaries
+            .get(index + 1)
+            .and_then(|next| body.split_once(next).map(|(body, _)| body))
+            .unwrap_or(body);
+        assert!(
+            body.contains("menu_shortcuts::"),
+            "{boundary} must supply shortcut metadata for its bound items"
+        );
+    }
+
+    let row_source = source
+        .split_once("pub(super) fn menu_action_button")
+        .and_then(|(_, rest)| {
+            rest.split_once("pub(super) fn menu_separator")
+                .map(|(row, _)| row)
+        })
+        .expect("shortcut-aware menu row");
+    assert!(row_source.contains("shortcut: Option<&'static str>"));
+    assert!(row_source.contains(".justify_between()"));
+    assert!(row_source.contains(".text_color(palette.muted)"));
+}
+
+#[test]
+fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
+    let source = include_str!("root_view.rs");
+    let menu_source = source
+        .split_once("pub(super) fn active_menu_dropdown")
+        .and_then(|(_, rest)| {
+            rest.split_once("/// Theme-aware Help")
+                .map(|(menu, _)| menu)
+        })
+        .expect("in-window application menu builder");
+
+    let invocation = |message: &str| {
+        let rest = menu_source
+            .split_once(message)
+            .map(|(_, rest)| rest)
+            .unwrap_or_else(|| panic!("menu invocation for {message}"));
+        let end = rest
+            .find("))")
+            .unwrap_or_else(|| panic!("end of menu invocation for {message}"));
+        &rest[..end]
+    };
+
+    for (message, descriptor) in [
+        ("Msg::ItemSave,", "menu_shortcuts::SAVE_DOCUMENT"),
+        ("Msg::ItemRedo,", "menu_shortcuts::REDO"),
+        ("Msg::ItemFind,", "menu_shortcuts::SHOW_FIND"),
+        ("Msg::ItemBold,", "menu_shortcuts::BOLD"),
+        ("Msg::ItemExportPdf,", "menu_shortcuts::EXPORT_PDF"),
+        (
+            "Msg::ItemKeyboardShortcuts,",
+            "menu_shortcuts::SHOW_SHORTCUTS",
+        ),
+    ] {
+        assert!(
+            invocation(message).contains(descriptor),
+            "{message} must use {descriptor}"
+        );
+    }
+
+    for message in [
+        "Msg::ItemOpenFolder,",
+        "Msg::ItemNewTab,",
+        "Msg::ItemResetPreferences,",
+        "Msg::ItemBullets,",
+        "Msg::ItemAboutMarkion,",
+    ] {
+        assert!(
+            !invocation(message).contains("menu_shortcuts::"),
+            "unbound {message} must not render a shortcut marker"
+        );
+    }
+
+    assert_eq!(menu_shortcuts::REDO.aliases, &["secondary-y"]);
+}
+
+#[test]
+fn conditional_heading_menu_wires_only_visible_heading_shortcuts() {
+    let source = include_str!("root_view.rs");
+    let format_menu = source
+        .split_once("AppMenu::Format =>")
+        .and_then(|(_, rest)| {
+            rest.split_once("AppMenu::Export =>")
+                .map(|(format, _)| format)
+        })
+        .expect("Format menu arm");
+
+    for level in 1..=5 {
+        assert!(
+            format_menu.contains(&format!("menu_shortcuts::HEADING_{level}")),
+            "visible default heading {level} must show its shortcut"
+        );
+    }
+    let h6_condition = format_menu
+        .find("heading_menu_max_level >= EXTENDED_HEADING_MENU_MAX_LEVEL")
+        .expect("conditional H6 branch");
+    let h6_shortcut = format_menu
+        .find("menu_shortcuts::HEADING_6")
+        .expect("H6 shortcut descriptor");
+    assert!(h6_condition < h6_shortcut);
+}
+
+#[test]
 fn open_folder_prompt_selects_one_directory() {
     let options = open_folder_prompt_options(Language::En);
     assert!(!options.files);
@@ -1170,10 +1349,16 @@ fn shortcut_panel_uses_target_default_and_replaces_native_prompt() {
     assert!(root_view_source.contains("catalog.sections.iter()"));
 
     let bootstrap_source = include_str!("bootstrap.rs");
-    assert!(bootstrap_source.contains("KeyBinding::new(\"f1\", ShowShortcuts, None)"));
-    assert!(bootstrap_source.contains("KeyBinding::new(\"secondary-b\", Bold, None)"));
     assert!(
-        bootstrap_source.contains("KeyBinding::new(\"secondary-shift-b\", ToggleSidebar, None)")
+        bootstrap_source.contains(
+            "KeyBinding::new(menu_shortcuts::SHOW_SHORTCUTS.binding, ShowShortcuts, None)"
+        )
+    );
+    assert!(bootstrap_source.contains("KeyBinding::new(menu_shortcuts::BOLD.binding, Bold, None)"));
+    assert!(
+        bootstrap_source.contains(
+            "KeyBinding::new(menu_shortcuts::TOGGLE_SIDEBAR.binding, ToggleSidebar, None)"
+        )
     );
 }
 

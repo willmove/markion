@@ -282,10 +282,12 @@ fn parse_task_with_code() {
 
     if let Block::List { items, .. } = &doc.blocks[0] {
         assert_eq!(items[0].checked, Some(false));
-        assert!(items[0]
-            .content
-            .iter()
-            .any(|i| matches!(i, Inline::Code(_))));
+        assert!(
+            items[0]
+                .content
+                .iter()
+                .any(|i| matches!(i, Inline::Code(_)))
+        );
     } else {
         panic!("Expected List block");
     }

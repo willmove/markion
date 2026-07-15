@@ -281,11 +281,7 @@ impl AstBuilder {
                     let lang = match kind {
                         pulldown_cmark::CodeBlockKind::Fenced(lang) => {
                             let s = lang.to_string();
-                            if s.is_empty() {
-                                None
-                            } else {
-                                Some(s)
-                            }
+                            if s.is_empty() { None } else { Some(s) }
                         }
                         pulldown_cmark::CodeBlockKind::Indented => None,
                     };
@@ -540,11 +536,7 @@ impl AstBuilder {
                     let lang = match kind {
                         pulldown_cmark::CodeBlockKind::Fenced(lang) => {
                             let s = lang.to_string();
-                            if s.is_empty() {
-                                None
-                            } else {
-                                Some(s)
-                            }
+                            if s.is_empty() { None } else { Some(s) }
                         }
                         pulldown_cmark::CodeBlockKind::Indented => None,
                     };
@@ -1257,12 +1249,16 @@ mod tests {
         let Block::Paragraph { content, .. } = &doc.blocks[0] else {
             panic!("expected paragraph");
         };
-        assert!(content
-            .iter()
-            .any(|inline| matches!(inline, Inline::InlineMath(m) if m == "a^2+b^2")));
-        assert!(content
-            .iter()
-            .any(|inline| matches!(inline, Inline::Text(t) if t.contains("prose"))));
+        assert!(
+            content
+                .iter()
+                .any(|inline| matches!(inline, Inline::InlineMath(m) if m == "a^2+b^2"))
+        );
+        assert!(
+            content
+                .iter()
+                .any(|inline| matches!(inline, Inline::Text(t) if t.contains("prose")))
+        );
     }
 
     #[test]
@@ -1273,9 +1269,11 @@ mod tests {
         let Block::Paragraph { content, .. } = &doc.blocks[0] else {
             panic!("expected paragraph");
         };
-        assert!(content
-            .iter()
-            .any(|inline| matches!(inline, Inline::InlineMath(m) if m.trim() == "x")));
+        assert!(
+            content
+                .iter()
+                .any(|inline| matches!(inline, Inline::InlineMath(m) if m.trim() == "x"))
+        );
     }
 
     // --- YAML front matter ---
@@ -1358,9 +1356,11 @@ mod tests {
     fn parse_strikethrough() {
         let doc = default_parser().parse("~~struck~~\n").unwrap();
         if let Block::Paragraph { content, .. } = &doc.blocks[0] {
-            assert!(content
-                .iter()
-                .any(|i| matches!(i, Inline::Strikethrough(_))));
+            assert!(
+                content
+                    .iter()
+                    .any(|i| matches!(i, Inline::Strikethrough(_)))
+            );
         }
     }
 
@@ -1627,9 +1627,11 @@ mod tests {
         let md = "This is text[^1].\n\n[^1]: The note.\n";
         let doc = default_parser().parse(md).unwrap();
         if let Block::Paragraph { content, .. } = &doc.blocks[0] {
-            assert!(content
-                .iter()
-                .any(|i| matches!(i, Inline::FootnoteReference(_))));
+            assert!(
+                content
+                    .iter()
+                    .any(|i| matches!(i, Inline::FootnoteReference(_)))
+            );
             // Verify the label
             for inline in content {
                 if let Inline::FootnoteReference(label) = inline {
@@ -1698,9 +1700,11 @@ mod tests {
             } = &content[0]
             {
                 assert!(para_content.iter().any(|i| matches!(i, Inline::Strong(_))));
-                assert!(para_content
-                    .iter()
-                    .any(|i| matches!(i, Inline::Emphasis(_))));
+                assert!(
+                    para_content
+                        .iter()
+                        .any(|i| matches!(i, Inline::Emphasis(_)))
+                );
             }
         } else {
             panic!("Expected FootnoteDefinition");

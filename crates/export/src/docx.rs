@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use markdown::{render_to_markdown, Document};
+use markdown::{Document, render_to_markdown};
 
 use crate::engine::{ExportFormat, ExportOptions, Exporter, PageSize};
 use crate::error::ExportError;

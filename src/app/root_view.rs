@@ -1896,19 +1896,30 @@ pub(super) fn menu_title_button(
 
 pub(super) fn menu_action_button(
     label: &'static str,
+    shortcut: Option<&'static str>,
     palette: ThemePalette,
     listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    div()
+    let row = div()
         .w_full()
         .px_3()
         .py_1()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_4()
         .text_size(px(12.))
         .text_color(palette.text)
         .cursor_pointer()
         .hover(move |style| style.bg(palette.surface_bg))
         .on_mouse_up(MouseButton::Left, listener)
-        .child(label)
+        .child(div().min_w_0().child(label));
+
+    if let Some(shortcut) = shortcut {
+        row.child(div().flex_none().text_color(palette.muted).child(shortcut))
+    } else {
+        row
+    }
 }
 
 pub(super) fn menu_separator(palette: ThemePalette) -> Div {
@@ -1983,44 +1994,90 @@ pub(super) fn active_menu_dropdown(
     //
     // Labels are translated at render time from the app's active language, so
     // switching language via View → Language reflows the menu immediately.
+    let shortcut_platform = ShortcutPlatform::current();
     macro_rules! action_item {
-        ($msg:expr, $method:ident, $action:expr) => {
+        (@build $msg:expr, $method:ident, $action:expr, $shortcut:expr) => {
             menu_action_button(
                 t(language, $msg),
+                $shortcut,
                 palette,
                 cx.listener(move |app, _: &MouseUpEvent, window, cx| {
                     app.$method(&$action, window, cx);
                 }),
             )
         };
+        ($msg:expr, $method:ident, $action:expr, $shortcut:expr) => {
+            action_item!(
+                @build $msg,
+                $method,
+                $action,
+                Some($shortcut.label(shortcut_platform))
+            )
+        };
+        ($msg:expr, $method:ident, $action:expr) => {
+            action_item!(@build $msg, $method, $action, None)
+        };
     }
 
     match menu {
         AppMenu::File => panel
-            .child(action_item!(Msg::ItemNew, new_document, NewDocument))
-            .child(action_item!(Msg::ItemOpen, open_document, OpenDocument))
+            .child(action_item!(
+                Msg::ItemNew,
+                new_document,
+                NewDocument,
+                menu_shortcuts::NEW_DOCUMENT
+            ))
+            .child(action_item!(
+                Msg::ItemOpen,
+                open_document,
+                OpenDocument,
+                menu_shortcuts::OPEN_DOCUMENT
+            ))
             .child(action_item!(Msg::ItemOpenFolder, open_folder, OpenFolder))
-            .child(action_item!(Msg::ItemSave, save_document, SaveDocument))
+            .child(action_item!(
+                Msg::ItemSave,
+                save_document,
+                SaveDocument,
+                menu_shortcuts::SAVE_DOCUMENT
+            ))
             .child(action_item!(
                 Msg::ItemSaveAs,
                 save_document_as,
-                SaveDocumentAs
+                SaveDocumentAs,
+                menu_shortcuts::SAVE_DOCUMENT_AS
             ))
             .child(menu_separator(palette))
             .child(action_item!(Msg::ItemNewTab, new_tab, NewTab))
             .child(action_item!(
                 Msg::ItemOpenInNewTab,
                 open_in_new_tab_action,
-                OpenInNewTab
+                OpenInNewTab,
+                menu_shortcuts::OPEN_IN_NEW_TAB
             ))
-            .child(action_item!(Msg::ItemCloseTab, close_tab, CloseTab))
-            .child(action_item!(Msg::ItemNextTab, next_tab, NextTab))
-            .child(action_item!(Msg::ItemPrevTab, prev_tab, PrevTab))
+            .child(action_item!(
+                Msg::ItemCloseTab,
+                close_tab,
+                CloseTab,
+                menu_shortcuts::CLOSE_TAB
+            ))
+            .child(action_item!(
+                Msg::ItemNextTab,
+                next_tab,
+                NextTab,
+                menu_shortcuts::NEXT_TAB
+            ))
+            .child(action_item!(
+                Msg::ItemPrevTab,
+                prev_tab,
+                PrevTab,
+                menu_shortcuts::PREV_TAB
+            ))
             .child(menu_separator(palette))
             .child(action_item!(
                 Msg::ItemPreferences,
                 show_preferences,
-                ShowPreferences
+                ShowPreferences,
+                menu_shortcuts::SHOW_PREFERENCES
             ))
             .child(action_item!(
                 Msg::ItemResetPreferences,
@@ -2028,92 +2085,217 @@ pub(super) fn active_menu_dropdown(
                 ResetPreferences
             ))
             .child(menu_separator(palette))
-            .child(action_item!(Msg::ItemExit, quit, Quit)),
+            .child(action_item!(
+                Msg::ItemExit,
+                quit,
+                Quit,
+                menu_shortcuts::QUIT
+            )),
         AppMenu::Edit => panel
-            .child(action_item!(Msg::ItemUndo, undo, Undo))
-            .child(action_item!(Msg::ItemRedo, redo, Redo))
+            .child(action_item!(
+                Msg::ItemUndo,
+                undo,
+                Undo,
+                menu_shortcuts::UNDO
+            ))
+            .child(action_item!(
+                Msg::ItemRedo,
+                redo,
+                Redo,
+                menu_shortcuts::REDO
+            ))
             .child(menu_separator(palette))
-            .child(action_item!(Msg::ItemCopy, copy, Copy))
-            .child(action_item!(Msg::ItemCut, cut, Cut))
-            .child(action_item!(Msg::ItemPaste, paste, Paste))
+            .child(action_item!(
+                Msg::ItemCopy,
+                copy,
+                Copy,
+                menu_shortcuts::COPY
+            ))
+            .child(action_item!(Msg::ItemCut, cut, Cut, menu_shortcuts::CUT))
+            .child(action_item!(
+                Msg::ItemPaste,
+                paste,
+                Paste,
+                menu_shortcuts::PASTE
+            ))
             .child(menu_separator(palette))
-            .child(action_item!(Msg::ItemSelectAll, select_all, SelectAll)),
+            .child(action_item!(
+                Msg::ItemSelectAll,
+                select_all,
+                SelectAll,
+                menu_shortcuts::SELECT_ALL
+            )),
         AppMenu::View => panel
             .child(action_item!(
                 Msg::ItemToggleView,
                 toggle_view_mode,
-                ToggleViewMode
+                ToggleViewMode,
+                menu_shortcuts::TOGGLE_VIEW_MODE
             ))
-            .child(action_item!(Msg::ItemEditMode, set_edit_mode, SetEditMode))
+            .child(action_item!(
+                Msg::ItemEditMode,
+                set_edit_mode,
+                SetEditMode,
+                menu_shortcuts::SET_EDIT_MODE
+            ))
             .child(action_item!(
                 Msg::ItemVisualEditMode,
                 set_visual_edit_mode,
-                SetVisualEditMode
+                SetVisualEditMode,
+                menu_shortcuts::SET_VISUAL_EDIT_MODE
             ))
             .child(action_item!(
                 Msg::ItemSplitPreviewMode,
                 set_split_preview_mode,
-                SetSplitPreviewMode
+                SetSplitPreviewMode,
+                menu_shortcuts::SET_SPLIT_PREVIEW_MODE
             ))
-            .child(action_item!(Msg::ItemReadMode, set_read_mode, SetReadMode))
+            .child(action_item!(
+                Msg::ItemReadMode,
+                set_read_mode,
+                SetReadMode,
+                menu_shortcuts::SET_READ_MODE
+            ))
             .child(menu_separator(palette))
             .child(action_item!(
                 Msg::ItemToggleSidebar,
                 toggle_sidebar,
-                ToggleSidebar
+                ToggleSidebar,
+                menu_shortcuts::TOGGLE_SIDEBAR
             ))
             .child(action_item!(
                 Msg::ItemFiles,
                 toggle_file_tree,
-                ToggleFileTree
+                ToggleFileTree,
+                menu_shortcuts::TOGGLE_FILE_TREE
             ))
             .child(action_item!(
                 Msg::ItemOutline,
                 toggle_outline,
-                ToggleOutline
+                ToggleOutline,
+                menu_shortcuts::TOGGLE_OUTLINE
             ))
             .child(action_item!(
                 Msg::ItemFocusMode,
                 toggle_focus_mode,
-                ToggleFocusMode
+                ToggleFocusMode,
+                menu_shortcuts::TOGGLE_FOCUS_MODE
             ))
             .child(action_item!(
                 Msg::ItemTypewriterMode,
                 toggle_typewriter_mode,
-                ToggleTypewriterMode
+                ToggleTypewriterMode,
+                menu_shortcuts::TOGGLE_TYPEWRITER_MODE
             ))
             .child(action_item!(
                 Msg::ItemCodeLineNumbers,
                 toggle_code_line_numbers,
-                ToggleCodeLineNumbers
+                ToggleCodeLineNumbers,
+                menu_shortcuts::TOGGLE_CODE_LINE_NUMBERS
             ))
             .child(menu_separator(palette))
-            .child(action_item!(Msg::ItemFind, show_find, ShowFind))
-            .child(action_item!(Msg::ItemReplace, show_replace, ShowReplace))
-            .child(action_item!(Msg::ItemFindNext, find_next, FindNext))
+            .child(action_item!(
+                Msg::ItemFind,
+                show_find,
+                ShowFind,
+                menu_shortcuts::SHOW_FIND
+            ))
+            .child(action_item!(
+                Msg::ItemReplace,
+                show_replace,
+                ShowReplace,
+                menu_shortcuts::SHOW_REPLACE
+            ))
+            .child(action_item!(
+                Msg::ItemFindNext,
+                find_next,
+                FindNext,
+                menu_shortcuts::FIND_NEXT
+            ))
             .child(action_item!(
                 Msg::ItemFindPrevious,
                 find_previous,
-                FindPrevious
+                FindPrevious,
+                menu_shortcuts::FIND_PREVIOUS
             ))
             .child(menu_separator(palette))
-            .child(action_item!(Msg::ItemCycleTheme, cycle_theme, CycleTheme)),
+            .child(action_item!(
+                Msg::ItemCycleTheme,
+                cycle_theme,
+                CycleTheme,
+                menu_shortcuts::CYCLE_THEME
+            )),
         AppMenu::Format => {
             let with_core_headings = panel
-                .child(action_item!(Msg::ItemBold, bold, Bold))
-                .child(action_item!(Msg::ItemItalic, italic, Italic))
-                .child(action_item!(Msg::ItemInlineCode, inline_code, InlineCode))
-                .child(action_item!(Msg::ItemLink, insert_link, InsertLink))
-                .child(action_item!(Msg::ItemImage, insert_image, InsertImage))
+                .child(action_item!(
+                    Msg::ItemBold,
+                    bold,
+                    Bold,
+                    menu_shortcuts::BOLD
+                ))
+                .child(action_item!(
+                    Msg::ItemItalic,
+                    italic,
+                    Italic,
+                    menu_shortcuts::ITALIC
+                ))
+                .child(action_item!(
+                    Msg::ItemInlineCode,
+                    inline_code,
+                    InlineCode,
+                    menu_shortcuts::INLINE_CODE
+                ))
+                .child(action_item!(
+                    Msg::ItemLink,
+                    insert_link,
+                    InsertLink,
+                    menu_shortcuts::INSERT_LINK
+                ))
+                .child(action_item!(
+                    Msg::ItemImage,
+                    insert_image,
+                    InsertImage,
+                    menu_shortcuts::INSERT_IMAGE
+                ))
                 .child(menu_separator(palette))
-                .child(action_item!(Msg::ItemH1, heading1, Heading1))
-                .child(action_item!(Msg::ItemH2, heading2, Heading2))
-                .child(action_item!(Msg::ItemH3, heading3, Heading3));
+                .child(action_item!(
+                    Msg::ItemH1,
+                    heading1,
+                    Heading1,
+                    menu_shortcuts::HEADING_1
+                ))
+                .child(action_item!(
+                    Msg::ItemH2,
+                    heading2,
+                    Heading2,
+                    menu_shortcuts::HEADING_2
+                ))
+                .child(action_item!(
+                    Msg::ItemH3,
+                    heading3,
+                    Heading3,
+                    menu_shortcuts::HEADING_3
+                ));
             let with_headings = with_core_headings
-                .child(action_item!(Msg::ItemH4, heading4, Heading4))
-                .child(action_item!(Msg::ItemH5, heading5, Heading5));
+                .child(action_item!(
+                    Msg::ItemH4,
+                    heading4,
+                    Heading4,
+                    menu_shortcuts::HEADING_4
+                ))
+                .child(action_item!(
+                    Msg::ItemH5,
+                    heading5,
+                    Heading5,
+                    menu_shortcuts::HEADING_5
+                ));
             let with_headings = if heading_menu_max_level >= EXTENDED_HEADING_MENU_MAX_LEVEL {
-                with_headings.child(action_item!(Msg::ItemH6, heading6, Heading6))
+                with_headings.child(action_item!(
+                    Msg::ItemH6,
+                    heading6,
+                    Heading6,
+                    menu_shortcuts::HEADING_6
+                ))
             } else {
                 with_headings
             };
@@ -2132,60 +2314,95 @@ pub(super) fn active_menu_dropdown(
                 .child(action_item!(
                     Msg::ItemFormatTable,
                     format_table,
-                    FormatTable
+                    FormatTable,
+                    menu_shortcuts::FORMAT_TABLE
                 ))
                 .child(action_item!(
                     Msg::ItemAddTableRow,
                     table_add_row,
-                    TableAddRow
+                    TableAddRow,
+                    menu_shortcuts::TABLE_ADD_ROW
                 ))
                 .child(action_item!(
                     Msg::ItemDeleteTableRow,
                     table_delete_row,
-                    TableDeleteRow
+                    TableDeleteRow,
+                    menu_shortcuts::TABLE_DELETE_ROW
                 ))
                 .child(action_item!(
                     Msg::ItemMoveRowUp,
                     table_move_row_up,
-                    TableMoveRowUp
+                    TableMoveRowUp,
+                    menu_shortcuts::TABLE_MOVE_ROW_UP
                 ))
                 .child(action_item!(
                     Msg::ItemMoveRowDown,
                     table_move_row_down,
-                    TableMoveRowDown
+                    TableMoveRowDown,
+                    menu_shortcuts::TABLE_MOVE_ROW_DOWN
                 ))
                 .child(action_item!(
                     Msg::ItemAddTableColumn,
                     table_add_column,
-                    TableAddColumn
+                    TableAddColumn,
+                    menu_shortcuts::TABLE_ADD_COLUMN
                 ))
                 .child(action_item!(
                     Msg::ItemDeleteTableColumn,
                     table_delete_column,
-                    TableDeleteColumn
+                    TableDeleteColumn,
+                    menu_shortcuts::TABLE_DELETE_COLUMN
                 ))
         }
         AppMenu::Export => panel
-            .child(action_item!(Msg::ItemExportHtml, export_html, ExportHtml))
+            .child(action_item!(
+                Msg::ItemExportHtml,
+                export_html,
+                ExportHtml,
+                menu_shortcuts::EXPORT_HTML
+            ))
             .child(action_item!(
                 Msg::ItemExportPlainHtml,
                 export_plain_html,
-                ExportPlainHtml
+                ExportPlainHtml,
+                menu_shortcuts::EXPORT_PLAIN_HTML
             ))
-            .child(action_item!(Msg::ItemExportPdf, export_pdf, ExportPdf))
+            .child(action_item!(
+                Msg::ItemExportPdf,
+                export_pdf,
+                ExportPdf,
+                menu_shortcuts::EXPORT_PDF
+            ))
             .child(action_item!(
                 Msg::ItemExportLatex,
                 export_latex,
-                ExportLatex
+                ExportLatex,
+                menu_shortcuts::EXPORT_LATEX
             ))
-            .child(action_item!(Msg::ItemExportDocx, export_docx, ExportDocx))
-            .child(action_item!(Msg::ItemExportPng, export_png, ExportPng))
-            .child(action_item!(Msg::ItemExportJpeg, export_jpeg, ExportJpeg)),
+            .child(action_item!(
+                Msg::ItemExportDocx,
+                export_docx,
+                ExportDocx,
+                menu_shortcuts::EXPORT_DOCX
+            ))
+            .child(action_item!(
+                Msg::ItemExportPng,
+                export_png,
+                ExportPng,
+                menu_shortcuts::EXPORT_PNG
+            ))
+            .child(action_item!(
+                Msg::ItemExportJpeg,
+                export_jpeg,
+                ExportJpeg,
+                menu_shortcuts::EXPORT_JPEG
+            )),
         AppMenu::Help => panel
             .child(action_item!(
                 Msg::ItemKeyboardShortcuts,
                 show_shortcuts,
-                ShowShortcuts
+                ShowShortcuts,
+                menu_shortcuts::SHOW_SHORTCUTS
             ))
             .child(action_item!(Msg::ItemAboutMarkion, about, AboutMarkion)),
     }
