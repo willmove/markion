@@ -1168,13 +1168,21 @@ impl MarkdownDocument {
                 Event::End(TagEnd::Paragraph) => {
                     if list_item.is_none() && quote_depth == 0 && table.is_none() {
                         if let Some((spans, paragraph_range)) = paragraph.take() {
-                            push_nonempty_block(
-                                &mut blocks,
-                                PreviewBlock::Paragraph {
-                                    text: finish_rich_text(spans),
-                                    source_range: paragraph_range,
-                                },
-                            );
+                            if html_only_paragraph_source(&text[paragraph_range.clone()]) {
+                                push_html_block(
+                                    &mut blocks,
+                                    text[paragraph_range.clone()].to_string(),
+                                    paragraph_range,
+                                );
+                            } else {
+                                push_nonempty_block(
+                                    &mut blocks,
+                                    PreviewBlock::Paragraph {
+                                        text: finish_rich_text(spans),
+                                        source_range: paragraph_range,
+                                    },
+                                );
+                            }
                         }
                     } else {
                         paragraph.take();
@@ -1416,10 +1424,7 @@ impl MarkdownDocument {
                         && code.is_none()
                         && table.is_none();
                     if standalone_html {
-                        blocks.push(PreviewBlock::Html {
-                            html: text.to_string(),
-                            source_range,
-                        });
+                        push_html_block(&mut blocks, text.to_string(), source_range);
                     } else {
                         let text = html_preview_plain_text(&text);
                         if !text.is_empty() {
@@ -1934,6 +1939,131 @@ fn clamp_range_to_char_boundaries(
 
 fn offset_with_delta(offset: usize, delta: isize) -> usize {
     crate::text_util::offset_with_delta(offset, delta)
+}
+
+fn push_html_block(blocks: &mut Vec<PreviewBlock>, html: String, source_range: Range<usize>) {
+    if html.is_empty() {
+        return;
+    }
+    if let Some(PreviewBlock::Html {
+        html: existing_html,
+        source_range: existing_range,
+    }) = blocks.last_mut()
+    {
+        if existing_range.end == source_range.start {
+            existing_html.push_str(&html);
+            existing_range.end = source_range.end;
+            return;
+        }
+    }
+
+    blocks.push(PreviewBlock::Html { html, source_range });
+}
+
+fn html_only_paragraph_source(source: &str) -> bool {
+    let mut index = 0;
+    let mut depth = 0usize;
+    let mut saw_tag = false;
+
+    while index < source.len() {
+        if source[index..].starts_with('<') {
+            let Some(tag_end) = html_tag_end(source, index) else {
+                return false;
+            };
+            let tag = &source[index..tag_end];
+            let Some(parsed) = HtmlOnlyTag::parse(tag) else {
+                return false;
+            };
+            saw_tag = true;
+            if parsed.closing {
+                depth = depth.saturating_sub(1);
+            } else if !parsed.self_closing {
+                depth += 1;
+            }
+            index = tag_end;
+            continue;
+        }
+
+        let next_tag = source[index..]
+            .find('<')
+            .map_or(source.len(), |relative| index + relative);
+        if depth == 0 && !source[index..next_tag].trim().is_empty() {
+            return false;
+        }
+        index = next_tag;
+    }
+
+    saw_tag
+}
+
+fn html_tag_end(source: &str, start: usize) -> Option<usize> {
+    let mut quote = None;
+    for (relative, ch) in source[start..].char_indices() {
+        match (quote, ch) {
+            (Some(active), current) if current == active => quote = None,
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, '>') => return Some(start + relative + ch.len_utf8()),
+            _ => {}
+        }
+    }
+    None
+}
+
+struct HtmlOnlyTag {
+    closing: bool,
+    self_closing: bool,
+}
+
+impl HtmlOnlyTag {
+    fn parse(tag: &str) -> Option<Self> {
+        let inner = tag.strip_prefix('<')?.strip_suffix('>')?.trim();
+        if inner.starts_with('!') || inner.starts_with('?') {
+            return Some(Self {
+                closing: false,
+                self_closing: true,
+            });
+        }
+
+        let closing = inner.starts_with('/');
+        let body = inner.trim_start_matches('/').trim_start();
+        let name = body
+            .split(|ch: char| ch.is_whitespace() || ch == '/')
+            .next()?
+            .to_ascii_lowercase();
+        if name.is_empty()
+            || !name
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic())
+        {
+            return None;
+        }
+
+        Some(Self {
+            closing,
+            self_closing: body.trim_end().ends_with('/') || html_void_tag(&name),
+        })
+    }
+}
+
+fn html_void_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
 }
 
 pub fn title_from_path(path: Option<&Path>) -> CowStr<'static> {

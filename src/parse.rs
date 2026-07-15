@@ -438,6 +438,7 @@ struct HtmlPreviewBuilder<'a> {
     parts: Vec<HtmlPreviewPart>,
     spans: Vec<InlineSpan>,
     style: InlineStyle,
+    pending_space: Option<HtmlPendingSpace>,
     bold_depth: usize,
     italic_depth: usize,
     code_depth: usize,
@@ -445,6 +446,12 @@ struct HtmlPreviewBuilder<'a> {
     links: Vec<String>,
     centered_depth: usize,
     text_centered: bool,
+}
+
+struct HtmlPendingSpace {
+    style: InlineStyle,
+    link: Option<String>,
+    centered: bool,
 }
 
 impl<'a> HtmlPreviewBuilder<'a> {
@@ -455,6 +462,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
             parts: Vec::new(),
             spans: Vec::new(),
             style: InlineStyle::default(),
+            pending_space: None,
             bold_depth: 0,
             italic_depth: 0,
             code_depth: 0,
@@ -504,6 +512,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
             "br" => self.push_line_break(),
             "p" | "div" | "section" | "article" | "header" | "footer" | "li" | "tr" | "table"
             | "blockquote" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                self.pending_space = None;
                 if parsed.closing {
                     if self.centered_depth > 0 {
                         self.centered_depth -= 1;
@@ -559,6 +568,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
             }
             "img" if !parsed.closing => {
                 if let Some(url) = parsed.attr("src") {
+                    self.pending_space = None;
                     self.flush_text();
                     self.parts.push(HtmlPreviewPart::Image {
                         alt: parsed.attr("alt").unwrap_or_default(),
@@ -581,22 +591,23 @@ impl<'a> HtmlPreviewBuilder<'a> {
 
     fn push_text(&mut self, text: &str) {
         let decoded = decode_html_entities(text);
-        let mut pending_space = false;
         for ch in decoded.chars() {
             if ch.is_whitespace() {
-                pending_space = true;
+                self.pending_space = Some(HtmlPendingSpace {
+                    style: self.style,
+                    link: self.links.last().cloned(),
+                    centered: self.centered_depth > 0,
+                });
                 continue;
             }
-            if pending_space && self.needs_space_before_text() {
-                self.push_visible(" ");
-            }
-            pending_space = false;
+            self.push_pending_space();
             let mut buf = [0u8; 4];
             self.push_visible(ch.encode_utf8(&mut buf));
         }
     }
 
     fn push_line_break(&mut self) {
+        self.pending_space = None;
         if self.has_text() && !self.ends_with_line_break() {
             self.text_centered |= self.centered_depth > 0;
             append_span(
@@ -605,6 +616,16 @@ impl<'a> HtmlPreviewBuilder<'a> {
                 InlineStyle::default(),
                 self.links.last().map(String::as_str),
             );
+        }
+    }
+
+    fn push_pending_space(&mut self) {
+        let Some(pending) = self.pending_space.take() else {
+            return;
+        };
+        if self.needs_space_before_text() {
+            self.text_centered |= pending.centered;
+            append_span(&mut self.spans, " ", pending.style, pending.link.as_deref());
         }
     }
 
@@ -619,6 +640,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
     }
 
     fn flush_text(&mut self) {
+        self.pending_space = None;
         let text = finish_rich_text(std::mem::take(&mut self.spans));
         if !text.is_empty() {
             self.parts.push(HtmlPreviewPart::Text {
