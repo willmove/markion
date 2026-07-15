@@ -197,6 +197,10 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
     std::thread::spawn(markion::warm_highlighter);
 
     Application::new().run(move |cx: &mut App| {
+        if let Err(error) = network::install_http_client(cx) {
+            tracing::error!(%error, "failed to initialize HTTP client; remote images are disabled");
+        }
+
         cx.bind_keys([
             KeyBinding::new("backspace", Backspace, None),
             KeyBinding::new("delete", Delete, None),
@@ -249,9 +253,9 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
             KeyBinding::new("secondary-alt-4", SetVisualEditMode, None),
             KeyBinding::new("secondary-alt-2", SetSplitPreviewMode, None),
             KeyBinding::new("secondary-alt-3", SetReadMode, None),
-            // NB: no `secondary-b` for the sidebar — that collides with Bold
-            // (the documented Ctrl+B). The sidebar toggle lives in the View menu.
-            KeyBinding::new("secondary-alt-b", ToggleSidebar, None),
+            // NB: no `secondary-b` for the sidebar — that collides with Bold.
+            // Use Ctrl/Cmd+Shift+B instead.
+            KeyBinding::new("secondary-shift-b", ToggleSidebar, None),
             KeyBinding::new("secondary-shift-f", ToggleFileTree, None),
             KeyBinding::new("secondary-alt-f", FocusFileTreeSearch, None),
             KeyBinding::new("escape", ClearFileTreeSearch, None),

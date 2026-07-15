@@ -83,6 +83,41 @@ fn startup_path_resolution_preserves_absolute_paths() {
 }
 
 #[test]
+fn remote_image_request_url_strips_fragment_and_preserves_query() {
+    let authored =
+        "https://mmbiz.qpic.cn/sz_mmbiz_png/example/640?wx_fmt=png&from=appmsg#imgIndex=0";
+
+    assert_eq!(
+        remote_image_request_url(authored),
+        "https://mmbiz.qpic.cn/sz_mmbiz_png/example/640?wx_fmt=png&from=appmsg"
+    );
+}
+
+#[test]
+fn remote_image_request_url_preserves_valid_http_urls_and_encoded_hashes() {
+    assert_eq!(
+        remote_image_request_url("https://example.com/image%23detail.png?key=value"),
+        "https://example.com/image%23detail.png?key=value"
+    );
+    assert_eq!(
+        remote_image_request_url("HTTP://example.com/image.png#thumbnail"),
+        "HTTP://example.com/image.png"
+    );
+}
+
+#[test]
+fn remote_image_request_url_leaves_non_http_sources_unchanged() {
+    assert_eq!(
+        remote_image_request_url("images/chart#1.png"),
+        "images/chart#1.png"
+    );
+    assert_eq!(
+        remote_image_request_url("data:image/png;base64,abc#fragment"),
+        "data:image/png;base64,abc#fragment"
+    );
+}
+
+#[test]
 fn startup_application_flow_reuses_existing_open_behaviour() {
     let bootstrap_source = include_str!("bootstrap.rs");
     let application_source = include_str!("application.rs");
@@ -113,6 +148,17 @@ fn startup_application_flow_reuses_existing_open_behaviour() {
     assert!(apply_fn.contains("Msg::StatusOpened"));
     assert!(apply_fn.contains("Msg::StatusOpenFailed"));
     assert!(!apply_fn.contains("Msg::StatusStartup"));
+}
+
+#[test]
+fn startup_installs_http_client_before_building_ui() {
+    let bootstrap_source = include_str!("bootstrap.rs");
+    let install = bootstrap_source
+        .find("network::install_http_client(cx)")
+        .expect("HTTP client installation");
+    let bind_keys = bootstrap_source.find("cx.bind_keys").expect("key bindings");
+
+    assert!(install < bind_keys);
 }
 
 #[test]
@@ -273,6 +319,31 @@ fn preview_table_cells_remain_selectable_without_editing_toolbar() {
         preview_run_plain_text(&block, PreviewTextRunId::TableCell { row: 1, col: 0 }).as_deref(),
         Some("alpha")
     );
+}
+
+#[test]
+fn preview_images_do_not_expose_redundant_metadata_runs() {
+    let preview_source = include_str!("preview.rs");
+    let url = "https://example.com/image.png#detail".to_string();
+    let block = PreviewBlock::Image {
+        alt: "diagram".to_string(),
+        url: url.clone(),
+        title: Some("architecture".to_string()),
+        source_range: 0..42,
+    };
+
+    assert!(preview_block_runs(&block).is_empty());
+    assert!(!preview_source.contains("preview-image-caption"));
+    assert!(!preview_source.contains("preview-image-meta"));
+    assert!(matches!(
+        block,
+        PreviewBlock::Image {
+            alt,
+            url: stored_url,
+            title: Some(title),
+            ..
+        } if alt == "diagram" && stored_url == url && title == "architecture"
+    ));
 }
 
 #[test]
@@ -842,15 +913,18 @@ fn builtin_theme_table_exposes_popular_themes_with_unique_names() {
 fn shortcut_reference_lists_core_workflows() {
     let reference = shortcut_reference_text();
 
-    assert!(reference.contains("Save: Secondary-S"));
-    assert!(reference.contains("Cycle View Mode: Secondary-Shift-V"));
-    assert!(reference.contains("Edit Mode: Secondary-Alt-1"));
-    assert!(reference.contains("Visual Edit Mode: Secondary-Alt-4"));
-    assert!(reference.contains("Split Preview Mode: Secondary-Alt-2"));
-    assert!(reference.contains("Read Mode: Secondary-Alt-3"));
-    assert!(reference.contains("Preferences: Secondary-Comma"));
-    assert!(reference.contains("Find: Secondary-F"));
-    assert!(reference.contains("DOCX: Secondary-Shift-D"));
+    assert!(reference.contains("| Action | Windows/Linux | macOS |"));
+    assert!(reference.contains("| Save | Ctrl+S | Cmd+S |"));
+    assert!(reference.contains("| Cycle View Mode | Ctrl+Shift+V | Cmd+Shift+V |"));
+    assert!(reference.contains("| Edit Mode | Ctrl+Alt+1 | Cmd+Option+1 |"));
+    assert!(reference.contains("| Visual Edit Mode | Ctrl+Alt+4 | Cmd+Option+4 |"));
+    assert!(reference.contains("| Split Preview Mode | Ctrl+Alt+2 | Cmd+Option+2 |"));
+    assert!(reference.contains("| Read Mode | Ctrl+Alt+3 | Cmd+Option+3 |"));
+    assert!(reference.contains("| Sidebar | Ctrl+Shift+B | Cmd+Shift+B |"));
+    assert!(reference.contains("| Preferences | Ctrl+, | Cmd+, |"));
+    assert!(reference.contains("| Find | Ctrl+F | Cmd+F |"));
+    assert!(reference.contains("| DOCX | Ctrl+Shift+D | Cmd+Shift+D |"));
+    assert!(!reference.contains("Secondary-"));
 }
 
 #[test]

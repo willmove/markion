@@ -46,7 +46,7 @@ The editor SHALL provide a focus mode that dims text outside the current paragra
 - **THEN** the choice is applied and persists across launches
 
 ### Requirement: Find and replace
-The editor SHALL provide a find/replace workflow supporting case-sensitive and regular-expression search, next/previous match navigation, current-match and total counts, replace current, and replace all.
+The editor SHALL provide a find/replace workflow supporting case-sensitive and regular-expression search, next/previous match navigation, current-match and total counts, replace current, and replace all. The Find / Replace controls SHALL render as a compact floating overlay near the upper-right of the editor workspace, above the editor/preview panes, without consuming layout height or shifting the main workspace. The overlay SHALL provide an explicit close control that hides the overlay, clears active match highlighting and search focus, and preserves the current query and replacement text for a later reopen. The overlay, fields, buttons, borders, hover states, and summary text SHALL use the active theme palette rather than hard-coded light colors.
 
 #### Scenario: Search with options
 - **WHEN** the user enters a query and toggles case-sensitive or regex
@@ -56,11 +56,32 @@ The editor SHALL provide a find/replace workflow supporting case-sensitive and r
 - **WHEN** the user steps to next/previous, replaces the current match, or replaces all
 - **THEN** the editor navigates/replaces accordingly and updates the match state
 
+#### Scenario: Find overlay does not shift workspace layout
+- **WHEN** the user opens Find or Replace
+- **THEN** the controls appear as a compact upper-right floating overlay above the editor/preview workspace
+- **AND** the tab bar, editor pane, preview pane, and status bar keep their existing layout positions
+
+#### Scenario: Closing the overlay clears active highlights
+- **WHEN** the Find / Replace overlay is visible and the user activates its close control
+- **THEN** the overlay is hidden
+- **AND** active search focus is cleared
+- **AND** active match highlighting is cleared
+- **AND** the current find query and replacement text are preserved for the next time Find or Replace opens
+
+#### Scenario: Find overlay follows active theme
+- **WHEN** the active theme changes
+- **THEN** the Find / Replace overlay surface, input fields, buttons, borders, hover states, and summary text render using the active theme palette
+- **AND** the overlay does not use hard-coded light-only chrome colors
+
+#### Scenario: Existing Find and Replace behavior is preserved
+- **WHEN** the user invokes existing Find / Replace shortcuts or actions
+- **THEN** query editing, regex and case-sensitive toggles, next/previous navigation, match counts, replace current, and replace all continue to behave as before
+
 ### Requirement: Narrow-scope preferences with persistence and reset
-The editor SHALL provide a Preferences panel and a persisted preferences file covering: theme (and custom theme selection), focus mode, typewriter mode, code-line-numbers, sidebar visibility, and sidebar tab. The preferences file SHALL be TOML (`config.toml` in the Markion config directory) with every field optional and defaulted, and SHALL additionally carry an `[auto_save]` section (`enabled`, `delay_secs`) that is configurable only via the file, not the panel. On startup, if `config.toml` does not exist but a legacy `preferences.conf` (the retired `key=value` format) does, the editor SHALL migrate it to `config.toml` once and thereafter ignore the legacy file. The editor SHALL also offer a preference reset action and a preferences summary in the Help menu. Font family/size, code-highlight theme, extension-syntax toggles, and image-uploader credentials are **not** configurable.
+The editor SHALL provide a Preferences panel and a persisted preferences file covering: theme (and custom theme selection), focus mode, typewriter mode, code-line-numbers, sidebar visibility, sidebar tab, and Heading menu depth (H1–H5 default, optional H1–H6). The preferences file SHALL be TOML (`config.toml` in the Markion config directory) with every field optional and defaulted, and SHALL additionally carry an `[auto_save]` section (`enabled`, `delay_secs`) that is configurable only via the file, not the panel. On startup, if `config.toml` does not exist but a legacy `preferences.conf` (the retired `key=value` format) does, the editor SHALL migrate it to `config.toml` once and thereafter ignore the legacy file. The editor SHALL also offer a preference reset action and a preferences summary in the Help menu. Font family/size, code-highlight theme, extension-syntax toggles, and image-uploader credentials are **not** configurable.
 
 #### Scenario: Supported preferences persist and restore
-- **WHEN** the user changes a supported preference (theme, focus mode, typewriter mode, code line numbers, sidebar visibility, sidebar tab)
+- **WHEN** the user changes a supported preference (theme, focus mode, typewriter mode, code line numbers, sidebar visibility, sidebar tab, Heading menu depth)
 - **THEN** the change is written to `config.toml` and restored on the next launch
 
 #### Scenario: Legacy preferences file is migrated once
@@ -170,3 +191,65 @@ The application chrome SHALL provide visible, right-side vertical scrollbars for
 #### Scenario: Single-pane modes remain full-width
 - **WHEN** the active view mode is Edit or Read
 - **THEN** the visible editor or preview pane fills the remaining main workspace instead of retaining split-mode width
+
+### Requirement: Sync scroll preference
+The editor SHALL provide a persisted "Sync scroll" preference, disabled by default, that when enabled and the active view mode is Split Preview SHALL couple the source editor and rendered preview scroll positions proportionally: scrolling either pane (mouse wheel, trackpad, or dragging that pane's scrollbar) SHALL move the other pane to the same fraction of its scrollable range, clamped to its bounds. The preference SHALL have no effect in Edit or Read mode, where only one pane is visible. The proportional coupling SHALL be based on each pane's scroll offset divided by its maximum scrollable offset, and SHALL be a no-op for a direction whose pane has no scrollable range. The coupling SHALL NOT force a Markdown reparse, reset the preview list, or disturb the per-version derived-state caches.
+
+#### Scenario: Sync scroll defaults to off
+- **WHEN** the editor starts with no `sync_scroll` value in the preferences file
+- **THEN** Sync scroll is disabled and the source editor and preview panes scroll independently as before
+
+#### Scenario: Scrolling the editor moves the preview proportionally
+- **WHEN** Sync scroll is enabled, the active view mode is Split Preview, and the user scrolls the source editor pane
+- **THEN** the rendered preview pane scrolls to the same fraction of its scrollable range as the source editor's current fraction
+
+#### Scenario: Scrolling the preview moves the editor proportionally
+- **WHEN** Sync scroll is enabled, the active view mode is Split Preview, and the user scrolls the rendered preview pane
+- **THEN** the source editor pane scrolls to the same fraction of its scrollable range as the preview's current fraction
+
+#### Scenario: Sync scroll is inactive outside Split Preview
+- **WHEN** Sync scroll is enabled but the active view mode is Edit or Read
+- **THEN** scrolling the visible pane does not affect any other pane and the preference persists without error
+
+#### Scenario: A pane with no scrollable range does not drive the other
+- **WHEN** Sync scroll is enabled, the view mode is Split Preview, and one pane's content fits within its viewport (no scrollable range)
+- **THEN** scrolling that pane does not move the other pane, and the other pane may still scroll independently
+
+### Requirement: Sync scroll preference persistence
+The editor SHALL persist the Sync scroll preference in the existing preferences file as an optional boolean that defaults to disabled when missing or invalid. The preference SHALL be included in preferences reset behavior, restored on launch, and migrated from a legacy `preferences.conf` file that contains a `sync_scroll` line.
+
+#### Scenario: Missing preference falls back to disabled
+- **WHEN** the preferences file omits the `sync_scroll` setting
+- **THEN** the editor starts with Sync scroll disabled
+
+#### Scenario: Invalid value falls back to disabled
+- **WHEN** the preferences file contains a `sync_scroll` value that is not a valid boolean
+- **THEN** the editor starts with Sync scroll disabled rather than failing
+
+#### Scenario: Preference round-trips
+- **WHEN** the user enables Sync scroll and restarts the editor
+- **THEN** Sync scroll remains enabled
+
+#### Scenario: Reset restores disabled default
+- **WHEN** the user resets preferences
+- **THEN** Sync scroll is disabled
+
+#### Scenario: Legacy preferences file migrates the setting
+- **WHEN** the editor starts with a legacy `preferences.conf` containing `sync_scroll=true` and no `config.toml`
+- **THEN** the value is migrated into `config.toml` and Sync scroll starts enabled
+
+### Requirement: In-window menus SHALL follow the active theme
+The in-window menu bar and dropdown menus SHALL derive their backgrounds, text colors, borders, separators, and active states from the active theme palette so both light and dark themes remain readable and visually consistent with the editor chrome.
+
+#### Scenario: Menu bar adapts to a dark theme
+- **WHEN** the active theme is a dark theme such as One Dark or GitHub Dark
+- **THEN** the in-window menu bar and dropdown menus render with dark-compatible backgrounds and readable text
+
+#### Scenario: Menu bar adapts to a light theme
+- **WHEN** the active theme is a light theme such as Paper or GitHub Light
+- **THEN** the in-window menu bar and dropdown menus render with light-compatible backgrounds and readable text
+
+#### Scenario: Changing theme updates menus
+- **WHEN** the user selects a different theme from Preferences
+- **THEN** the in-window menu bar and any subsequently opened dropdown use the newly active theme palette
+

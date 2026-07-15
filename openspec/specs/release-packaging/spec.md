@@ -19,7 +19,7 @@ The project SHALL provide a GitHub Actions workflow that builds a release binary
 - **THEN** the cargo registry, git dependencies, and `target/` are restored from cache so the build skips already-compiled crates
 
 ### Requirement: Each release build SHALL be packaged into a native installer
-After a successful per-platform build, the workflow SHALL run `cargo-packager` (driven by `Packager.toml`) to wrap the release binary into the platform-appropriate distributable format(s): a Windows NSIS `.exe` installer (current-user install mode), a macOS `.app` bundle plus `.dmg` disk image, and a Linux `.deb` package plus `.AppImage`. The packager config SHALL specify the product name (`Markion`), bundle identifier (`dev.markion.app`), version, category, and the per-platform icon files.
+After a successful per-platform build, the workflow SHALL run `cargo-packager` (driven by `Packager.toml`) to wrap the release binary into the platform-appropriate distributable format(s): a Windows NSIS `.exe` installer (current-user install mode), a macOS `.app` bundle plus `.dmg` disk image, and a Linux `.deb` package plus `.AppImage`. The packager config SHALL specify the product name (`Markion`), bundle identifier (`dev.markion.app`), version, category, and generated platform icon files (`assets/markion.ico`, `assets/markion.icns`, and `assets/markion.png`).
 
 #### Scenario: Windows job produces an NSIS installer
 - **WHEN** the Windows build job packages its binary
@@ -27,11 +27,11 @@ After a successful per-platform build, the workflow SHALL run `cargo-packager` (
 
 #### Scenario: macOS job produces an app bundle and disk image
 - **WHEN** the macOS build job packages its binary
-- **THEN** it emits a `.app` bundle and a `.dmg` disk image, both arm64 (Apple Silicon); the app icon is `markion.icns`
+- **THEN** it emits a `.app` bundle and a `.dmg` disk image, both arm64 (Apple Silicon); the app icon is `assets/markion.icns`
 
 #### Scenario: Linux job produces a deb and an AppImage
 - **WHEN** the Linux build job packages its binary
-- **THEN** it emits a `.deb` package (amd64) and a portable `.AppImage`, both using the `markion.png` icon and the `dev.markion.app` desktop entry identifier
+- **THEN** it emits a `.deb` package (amd64) and a portable `.AppImage`, both using the generated `assets/markion.png` icon and the `dev.markion.app` desktop entry identifier
 
 ### Requirement: Version tags SHALL publish a GitHub Release with all installers
 The workflow SHALL include a release job that runs only when a `v*` tag is pushed, downloads all per-platform packaging artifacts, and attaches them to a GitHub Release with auto-generated release notes. Builds on non-tag refs (branch pushes, pull requests) SHALL produce downloadable CI artifacts but SHALL NOT publish a release.
@@ -54,3 +54,4 @@ The release pipeline SHALL NOT code-sign the macOS or Windows installers (no pai
 #### Scenario: Unsigned Windows build warns the user
 - **WHEN** a user runs the distributed NSIS installer on Windows for the first time
 - **THEN** SmartScreen shows a "Windows protected your PC" warning, and the user must choose "More info → Run anyway" — this is documented behavior, not a defect
+

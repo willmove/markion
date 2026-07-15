@@ -40,6 +40,15 @@ blockquote {
 table {
   border-collapse: collapse;
 }
+.markion-diagram {
+  overflow: auto;
+  margin: 1em 0;
+}
+.markion-diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
 th, td {
   border: 1px solid #d0d7de;
   padding: 6px 10px;

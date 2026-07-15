@@ -84,6 +84,7 @@ impl MarkionApp {
             export_preferences: preferences.export.clone(),
             recovery_dir: default_recovery_dir(),
             highlight_cache: RefCell::new(HashMap::new()),
+            diagram_cache: DiagramCache::new(DIAGRAM_CACHE_CAPACITY),
         }
     }
 

@@ -28,6 +28,7 @@ impl Render for MarkionApp {
                 self.active_tab_mut().sync_preview_list(&blocks);
                 blocks
             };
+        self.ensure_diagram_renders(&preview_blocks, cx);
         let visual_blocks: std::sync::Arc<Vec<VisualBlock>> =
             if matches!(self.view_mode, ViewMode::VisualEdit) {
                 let blocks = self.active_tab().document.visual_blocks_shared();
@@ -290,7 +291,6 @@ impl Render for MarkionApp {
                                             .bg(palette.surface_bg)
                                             .border_1()
                                             .border_color(palette.border)
-                                            .rounded_md()
                                             .line_height(px(EDITOR_LINE_HEIGHT))
                                             .text_size(px(15.))
                                             .cursor(CursorStyle::IBeam)
@@ -356,7 +356,6 @@ impl Render for MarkionApp {
                                             .bg(palette.surface_bg)
                                             .border_1()
                                             .border_color(palette.border)
-                                            .rounded_md()
                                             .on_mouse_up(
                                                 MouseButton::Right,
                                                 cx.listener(|app, event: &MouseUpEvent, _, cx| {
@@ -482,7 +481,6 @@ pub(super) fn visual_edit_surface_view(
             .bg(palette.surface_bg)
             .border_1()
             .border_color(palette.border)
-            .rounded_md()
             .cursor(CursorStyle::IBeam)
             .when(is_empty, |surface| {
                 surface.child(

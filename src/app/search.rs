@@ -258,13 +258,11 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let shortcuts = shortcut_reference(self.language, self.heading_menu_max_level);
         let _ = window.prompt(
             PromptLevel::Info,
             self.tr(Msg::DialogShortcutsTitle),
-            Some(shortcut_reference(
-                self.language,
-                self.heading_menu_max_level,
-            )),
+            Some(&shortcuts),
             &[PromptButton::ok(self.tr(Msg::DialogButtonOk))],
             cx,
         );

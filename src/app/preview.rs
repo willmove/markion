@@ -101,21 +101,6 @@ pub(super) fn preview_run_plain_text(
         (PreviewBlock::Html { html, .. }, PreviewTextRunId::HtmlText) => {
             Some(html_preview_plain_text(html))
         }
-        (PreviewBlock::Image { alt, url, .. }, PreviewTextRunId::ImageCaption) => {
-            let caption = if alt.is_empty() {
-                url.as_str()
-            } else {
-                alt.as_str()
-            };
-            Some(format!("Image: {caption}"))
-        }
-        (PreviewBlock::Image { url, title, .. }, PreviewTextRunId::ImageMeta) => {
-            Some(if title.as_deref().unwrap_or("").is_empty() {
-                url.clone()
-            } else {
-                format!("{url} - {}", title.as_deref().unwrap_or(""))
-            })
-        }
         (PreviewBlock::Table { rows, .. }, PreviewTextRunId::TableCell { row, col }) => {
             rows.get(row).and_then(|r| r.get(col)).cloned()
         }
@@ -138,9 +123,7 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
             .then_some(PreviewTextRunId::HtmlText)
             .into_iter()
             .collect(),
-        PreviewBlock::Image { .. } => {
-            vec![PreviewTextRunId::ImageCaption, PreviewTextRunId::ImageMeta]
-        }
+        PreviewBlock::Image { .. } => Vec::new(),
         PreviewBlock::Table { rows, .. } => rows
             .iter()
             .enumerate()
@@ -1281,13 +1264,8 @@ pub(super) fn visual_block_view(
             .text_color(rgb(0x475569))
             .line_height(px(23.))
             .child(visual_text_element(block, block_index, app, cx)),
-        VisualBlockKind::Image { alt, url, title } => {
+        VisualBlockKind::Image { url, .. } => {
             let offset = block.source_range.start;
-            let caption = if alt.is_empty() {
-                url.as_str()
-            } else {
-                alt.as_str()
-            };
             div()
                 .mb_3()
                 .p_3()
@@ -1307,20 +1285,6 @@ pub(super) fn visual_block_view(
                         .bg(rgb(0xffffff))
                         .child(img(preview_image_source(url, document_dir)).max_w_full()),
                 )
-                .child(
-                    div()
-                        .mt_2()
-                        .text_size(px(12.))
-                        .text_color(rgb(0x475569))
-                        .child(format!("Image: {caption}")),
-                )
-                .children(title.as_ref().map(|title| {
-                    div()
-                        .mt_1()
-                        .text_size(px(11.))
-                        .text_color(rgb(0x64748b))
-                        .child(title.clone())
-                }))
         }
         VisualBlockKind::Rule => {
             let offset = block.source_range.start;
@@ -1475,6 +1439,72 @@ fn html_preview_block_view(
         }))
 }
 
+fn code_block_view(
+    app: &MarkionApp,
+    language: &Option<String>,
+    code: &str,
+    block_index: usize,
+    show_code_line_numbers: bool,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let highlighted = app.highlighted_code(language.as_deref(), code);
+    let body = div()
+        .mb_3()
+        .p_3()
+        .rounded_md()
+        .bg(rgb(0x0f172a))
+        .text_color(rgb(0xe2e8f0))
+        .font_family("JetBrains Mono")
+        .text_size(px(12.))
+        .line_height(px(19.))
+        .children(language.as_ref().map(|language| {
+            div()
+                .mb_2()
+                .text_size(px(11.))
+                .text_color(rgb(0x93c5fd))
+                .child(language.clone())
+        }));
+    if show_code_line_numbers {
+        body.children(highlighted.iter().enumerate().map(|(line_index, line)| {
+            let (styled, plain) = code_line_text(line);
+            div()
+                .flex()
+                .items_start()
+                .child(
+                    div()
+                        .w(px(36.))
+                        .flex_none()
+                        .pr_2()
+                        .text_color(rgb(0x64748b))
+                        .child(format!("{:>3}", line_index + 1)),
+                )
+                .child(div().flex_1().min_w_0().child(selectable_plain_text(
+                    app,
+                    ElementId::from((
+                        "preview-code-line",
+                        ((block_index as u64) << 32) | (line_index as u64),
+                    )),
+                    styled,
+                    plain,
+                    block_index,
+                    PreviewTextRunId::CodeLine(line_index),
+                    cx,
+                )))
+        }))
+    } else {
+        let (styled, plain) = code_block_text(&highlighted);
+        body.child(selectable_plain_text(
+            app,
+            ElementId::from(("preview-code", block_index)),
+            styled,
+            plain,
+            block_index,
+            PreviewTextRunId::CodeBody,
+            cx,
+        ))
+    }
+}
+
 pub(super) fn preview_block_view(
     app: &MarkionApp,
     block: &PreviewBlock,
@@ -1580,61 +1610,61 @@ pub(super) fn preview_block_view(
                 cx,
             )),
         PreviewBlock::CodeBlock { language, code, .. } => {
-            let highlighted = app.highlighted_code(language.as_deref(), code);
-            let body = div()
-                .mb_3()
-                .p_3()
-                .rounded_md()
-                .bg(rgb(0x0f172a))
-                .text_color(rgb(0xe2e8f0))
-                .font_family("JetBrains Mono")
-                .text_size(px(12.))
-                .line_height(px(19.))
-                .children(language.as_ref().map(|language| {
-                    div()
-                        .mb_2()
-                        .text_size(px(11.))
-                        .text_color(rgb(0x93c5fd))
-                        .child(language.clone())
-                }));
-            if show_code_line_numbers {
-                body.children(highlighted.iter().enumerate().map(|(line_index, line)| {
-                    let (styled, plain) = code_line_text(line);
-                    div()
-                        .flex()
-                        .items_start()
-                        .child(
-                            div()
-                                .w(px(36.))
-                                .flex_none()
-                                .pr_2()
-                                .text_color(rgb(0x64748b))
-                                .child(format!("{:>3}", line_index + 1)),
-                        )
-                        .child(div().flex_1().min_w_0().child(selectable_plain_text(
-                            app,
-                            ElementId::from((
-                                "preview-code-line",
-                                ((block_index as u64) << 32) | (line_index as u64),
-                            )),
-                            styled,
-                            plain,
-                            block_index,
-                            PreviewTextRunId::CodeLine(line_index),
-                            cx,
-                        )))
-                }))
-            } else {
-                let (styled, plain) = code_block_text(&highlighted);
-                body.child(selectable_plain_text(
-                    app,
-                    ElementId::from(("preview-code", block_index)),
-                    styled,
-                    plain,
-                    block_index,
-                    PreviewTextRunId::CodeBody,
-                    cx,
-                ))
+            match app.diagram_entry(language.as_deref(), code) {
+                Some(DiagramCacheEntry::Ready(image)) => div()
+                    .mb_3()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0xcbd5e1))
+                    .bg(rgb(0xffffff))
+                    .overflow_hidden()
+                    .child(img(image).max_w_full()),
+                Some(DiagramCacheEntry::Pending) => div()
+                    .mb_3()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0xbfdbfe))
+                    .bg(rgb(0xeff6ff))
+                    .child(
+                        div()
+                            .mb_2()
+                            .text_color(rgb(0x1d4ed8))
+                            .child(t(app.language, Msg::DiagramLoading)),
+                    )
+                    .child(code_block_view(
+                        app,
+                        language,
+                        code,
+                        block_index,
+                        show_code_line_numbers,
+                        cx,
+                    )),
+                Some(DiagramCacheEntry::Error(error)) => div()
+                    .mb_3()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(0xfca5a5))
+                    .bg(rgb(0xfef2f2))
+                    .child(
+                        div()
+                            .mb_2()
+                            .text_color(rgb(0xb91c1c))
+                            .child(app.diagram_error_message(&error)),
+                    )
+                    .child(code_block_view(
+                        app,
+                        language,
+                        code,
+                        block_index,
+                        show_code_line_numbers,
+                        cx,
+                    )),
+                None => {
+                    code_block_view(app, language, code, block_index, show_code_line_numbers, cx)
+                }
             }
         }
         PreviewBlock::MathBlock { latex, error, .. } => {
@@ -1698,65 +1728,20 @@ pub(super) fn preview_block_view(
         PreviewBlock::Html { html, .. } => {
             html_preview_block_view(app, html, block_index, document_dir, cx)
         }
-        PreviewBlock::Image {
-            alt, url, title, ..
-        } => {
-            let caption = if alt.is_empty() {
-                url.as_str()
-            } else {
-                alt.as_str()
-            };
-            let caption_label = format!("Image: {caption}");
-            let meta = if title.as_deref().unwrap_or("").is_empty() {
-                url.clone()
-            } else {
-                format!("{url} - {}", title.as_deref().unwrap_or(""))
-            };
-            div()
-                .mb_3()
-                .p_3()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(0xcbd5e1))
-                .bg(rgb(0xf8fafc))
-                .child(
-                    div()
-                        .rounded_md()
-                        .overflow_hidden()
-                        .bg(rgb(0xffffff))
-                        .child(img(preview_image_source(url, document_dir)).max_w_full()),
-                )
-                .child(
-                    div()
-                        .mt_2()
-                        .text_size(px(12.))
-                        .text_color(rgb(0x475569))
-                        .child(selectable_plain_text(
-                            app,
-                            ElementId::from(("preview-image-caption", block_index)),
-                            StyledText::new(SharedString::from(caption_label.clone())),
-                            caption_label,
-                            block_index,
-                            PreviewTextRunId::ImageCaption,
-                            cx,
-                        )),
-                )
-                .child(
-                    div()
-                        .mt_1()
-                        .text_size(px(11.))
-                        .text_color(rgb(0x64748b))
-                        .child(selectable_plain_text(
-                            app,
-                            ElementId::from(("preview-image-meta", block_index)),
-                            StyledText::new(SharedString::from(meta.clone())),
-                            meta,
-                            block_index,
-                            PreviewTextRunId::ImageMeta,
-                            cx,
-                        )),
-                )
-        }
+        PreviewBlock::Image { url, .. } => div()
+            .mb_3()
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(0xcbd5e1))
+            .bg(rgb(0xf8fafc))
+            .child(
+                div()
+                    .rounded_md()
+                    .overflow_hidden()
+                    .bg(rgb(0xffffff))
+                    .child(img(preview_image_source(url, document_dir)).max_w_full()),
+            ),
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
         PreviewBlock::Table { rows, .. } => {
             // Split Preview and Read mode share this branch. Table mutation
@@ -1847,7 +1832,7 @@ pub(super) fn preview_table_button(
 
 pub(super) fn preview_image_source(url: &str, document_dir: Option<&Path>) -> ImageSource {
     if is_remote_resource(url) {
-        return url.to_string().into();
+        return remote_image_request_url(url).to_string().into();
     }
 
     let path = PathBuf::from(url);
@@ -1863,6 +1848,26 @@ pub(super) fn preview_image_source(url: &str, document_dir: Option<&Path>) -> Im
 
 pub(super) fn is_remote_resource(url: &str) -> bool {
     url.contains("://") || url.starts_with("data:")
+}
+
+/// Returns the request URL for a remote image without its client-side fragment.
+/// HTTP request targets cannot contain URI fragments; GPUI otherwise treats such
+/// sources as embedded assets rather than loading them over the network.
+pub(super) fn remote_image_request_url(url: &str) -> &str {
+    if is_http_resource(url) {
+        url.split_once('#')
+            .map_or(url, |(request_url, _fragment)| request_url)
+    } else {
+        url
+    }
+}
+
+fn is_http_resource(url: &str) -> bool {
+    url.get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+        || url
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
 }
 
 pub(super) fn highlight_color(kind: HighlightKind) -> Rgba {

@@ -530,6 +530,15 @@ pub enum Msg {
     PrefPanelHeadingMenuSix,
     /// Close (×) button tooltip/aria-style label for the panel.
     PrefPanelClose,
+
+    // --- Diagram preview ---
+    DiagramLoading,
+    DiagramUnsupported,
+    DiagramInputTooLarge,
+    DiagramInvalidSource,
+    DiagramUnsafeOutput,
+    DiagramRenderFailed,
+
     /// "Modified" save-state token in the title bar.
     TitleModified,
     /// "Saved" save-state token in the title bar.
@@ -556,19 +565,667 @@ pub fn tf(lang: Language, msg: Msg, args: &[&str]) -> String {
     substitute(template, args)
 }
 
-pub fn shortcut_reference(lang: Language, heading_menu_max_level: u8) -> &'static str {
+pub fn shortcut_reference(lang: Language, heading_menu_max_level: u8) -> String {
     let extended = heading_menu_max_level >= crate::model::EXTENDED_HEADING_MENU_MAX_LEVEL;
-    match (lang, extended) {
-        (Language::En, false) => SHORTCUTS_EN,
-        (Language::En, true) => SHORTCUTS_EN_EXTENDED,
-        (Language::ZhHans, false) => SHORTCUTS_ZH,
-        (Language::ZhHans, true) => SHORTCUTS_ZH_EXTENDED,
-        (Language::ZhHant, false) => SHORTCUTS_ZH_HANT,
-        (Language::ZhHant, true) => SHORTCUTS_ZH_HANT_EXTENDED,
-        (Language::Ja, _) => SHORTCUTS_JA,
-        (Language::Fr, _) => SHORTCUTS_FR,
-        (Language::De, _) => SHORTCUTS_DE,
-        (Language::Es, _) => SHORTCUTS_ES,
+    build_shortcut_reference(shortcut_labels(lang), extended)
+}
+
+#[derive(Clone, Copy)]
+struct ShortcutKeys {
+    win: &'static str,
+    mac: &'static str,
+}
+
+struct ShortcutLabels {
+    action: &'static str,
+    sections: [&'static str; 7],
+    files: [&'static str; 5],
+    tabs: [&'static str; 3],
+    editing: [&'static str; 7],
+    view: [&'static str; 14],
+    search: [&'static str; 3],
+    tables: [&'static str; 4],
+    export: [&'static str; 7],
+}
+
+const FILE_KEYS: [ShortcutKeys; 5] = [
+    ShortcutKeys {
+        win: "Ctrl+N",
+        mac: "Cmd+N",
+    },
+    ShortcutKeys {
+        win: "Ctrl+O",
+        mac: "Cmd+O",
+    },
+    ShortcutKeys {
+        win: "Ctrl+S",
+        mac: "Cmd+S",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+S",
+        mac: "Cmd+Shift+S",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Q",
+        mac: "Cmd+Q",
+    },
+];
+
+const TAB_KEYS: [ShortcutKeys; 3] = [
+    ShortcutKeys {
+        win: "Ctrl+T",
+        mac: "Cmd+T",
+    },
+    ShortcutKeys {
+        win: "Ctrl+W",
+        mac: "Cmd+W",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Tab / Ctrl+Shift+Tab",
+        mac: "Ctrl+Tab / Ctrl+Shift+Tab",
+    },
+];
+
+const EDITING_KEYS: [ShortcutKeys; 7] = [
+    ShortcutKeys {
+        win: "Ctrl+B",
+        mac: "Cmd+B",
+    },
+    ShortcutKeys {
+        win: "Ctrl+I",
+        mac: "Cmd+I",
+    },
+    ShortcutKeys {
+        win: "Ctrl+E",
+        mac: "Cmd+E",
+    },
+    ShortcutKeys {
+        win: "Ctrl+K",
+        mac: "Cmd+K",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+I",
+        mac: "Cmd+Shift+I",
+    },
+    ShortcutKeys {
+        win: "Ctrl+1/2/3/4/5",
+        mac: "Cmd+1/2/3/4/5",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Z / Ctrl+Shift+Z",
+        mac: "Cmd+Z / Cmd+Shift+Z",
+    },
+];
+
+const EDITING_KEYS_EXTENDED: [ShortcutKeys; 7] = [
+    ShortcutKeys {
+        win: "Ctrl+B",
+        mac: "Cmd+B",
+    },
+    ShortcutKeys {
+        win: "Ctrl+I",
+        mac: "Cmd+I",
+    },
+    ShortcutKeys {
+        win: "Ctrl+E",
+        mac: "Cmd+E",
+    },
+    ShortcutKeys {
+        win: "Ctrl+K",
+        mac: "Cmd+K",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+I",
+        mac: "Cmd+Shift+I",
+    },
+    ShortcutKeys {
+        win: "Ctrl+1/2/3/4/5/6",
+        mac: "Cmd+1/2/3/4/5/6",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Z / Ctrl+Shift+Z",
+        mac: "Cmd+Z / Cmd+Shift+Z",
+    },
+];
+
+const VIEW_KEYS: [ShortcutKeys; 14] = [
+    ShortcutKeys {
+        win: "Ctrl+Shift+V",
+        mac: "Cmd+Shift+V",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+1",
+        mac: "Cmd+Option+1",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+4",
+        mac: "Cmd+Option+4",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+2",
+        mac: "Cmd+Option+2",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+3",
+        mac: "Cmd+Option+3",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+B",
+        mac: "Cmd+Shift+B",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+F",
+        mac: "Cmd+Shift+F",
+    },
+    ShortcutKeys {
+        win: "F6",
+        mac: "F6",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+F",
+        mac: "Cmd+Option+F",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+T",
+        mac: "Cmd+Shift+T",
+    },
+    ShortcutKeys {
+        win: "F7",
+        mac: "F7",
+    },
+    ShortcutKeys {
+        win: "F8",
+        mac: "F8",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+4",
+        mac: "Cmd+Shift+4",
+    },
+    ShortcutKeys {
+        win: "Ctrl+,",
+        mac: "Cmd+,",
+    },
+];
+
+const SEARCH_KEYS: [ShortcutKeys; 3] = [
+    ShortcutKeys {
+        win: "Ctrl+F",
+        mac: "Cmd+F",
+    },
+    ShortcutKeys {
+        win: "Ctrl+H",
+        mac: "Cmd+H",
+    },
+    ShortcutKeys {
+        win: "F3 / Shift+F3",
+        mac: "F3 / Shift+F3",
+    },
+];
+
+const TABLE_KEYS: [ShortcutKeys; 4] = [
+    ShortcutKeys {
+        win: "Ctrl+Shift+M",
+        mac: "Cmd+Shift+M",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+Enter / Ctrl+Alt+Backspace",
+        mac: "Cmd+Option+Enter / Cmd+Option+Backspace",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+Up / Ctrl+Alt+Down",
+        mac: "Cmd+Option+Up / Cmd+Option+Down",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+Right / Ctrl+Alt+Left",
+        mac: "Cmd+Option+Right / Cmd+Option+Left",
+    },
+];
+
+const EXPORT_KEYS: [ShortcutKeys; 7] = [
+    ShortcutKeys {
+        win: "Ctrl+Shift+H",
+        mac: "Cmd+Shift+H",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+Shift+H",
+        mac: "Cmd+Option+Shift+H",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+P",
+        mac: "Cmd+Shift+P",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+L",
+        mac: "Cmd+Shift+L",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+D",
+        mac: "Cmd+Shift+D",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Shift+G",
+        mac: "Cmd+Shift+G",
+    },
+    ShortcutKeys {
+        win: "Ctrl+Alt+Shift+G",
+        mac: "Cmd+Option+Shift+G",
+    },
+];
+
+fn build_shortcut_reference(labels: ShortcutLabels, extended: bool) -> String {
+    let mut out = String::new();
+    append_shortcut_section(
+        &mut out,
+        labels.sections[0],
+        labels.action,
+        &labels.files,
+        &FILE_KEYS,
+    );
+    append_shortcut_section(
+        &mut out,
+        labels.sections[1],
+        labels.action,
+        &labels.tabs,
+        &TAB_KEYS,
+    );
+    append_shortcut_section(
+        &mut out,
+        labels.sections[2],
+        labels.action,
+        &labels.editing,
+        if extended {
+            &EDITING_KEYS_EXTENDED
+        } else {
+            &EDITING_KEYS
+        },
+    );
+    append_shortcut_section(
+        &mut out,
+        labels.sections[3],
+        labels.action,
+        &labels.view,
+        &VIEW_KEYS,
+    );
+    append_shortcut_section(
+        &mut out,
+        labels.sections[4],
+        labels.action,
+        &labels.search,
+        &SEARCH_KEYS,
+    );
+    append_shortcut_section(
+        &mut out,
+        labels.sections[5],
+        labels.action,
+        &labels.tables,
+        &TABLE_KEYS,
+    );
+    append_shortcut_section(
+        &mut out,
+        labels.sections[6],
+        labels.action,
+        &labels.export,
+        &EXPORT_KEYS,
+    );
+    out
+}
+
+fn append_shortcut_section(
+    out: &mut String,
+    title: &str,
+    action_header: &str,
+    actions: &[&str],
+    keys: &[ShortcutKeys],
+) {
+    debug_assert_eq!(actions.len(), keys.len());
+    if !out.is_empty() {
+        out.push('\n');
+        out.push('\n');
+    }
+    out.push_str(title);
+    out.push('\n');
+    out.push_str("| ");
+    out.push_str(action_header);
+    out.push_str(" | Windows/Linux | macOS |\n");
+    out.push_str("|---|---|---|\n");
+    for (action, key) in actions.iter().zip(keys.iter()) {
+        out.push_str("| ");
+        out.push_str(action);
+        out.push_str(" | ");
+        out.push_str(key.win);
+        out.push_str(" | ");
+        out.push_str(key.mac);
+        out.push_str(" |\n");
+    }
+    out.pop();
+}
+
+fn shortcut_labels(lang: Language) -> ShortcutLabels {
+    match lang {
+        Language::En => ShortcutLabels {
+            action: "Action",
+            sections: [
+                "Files", "Tabs", "Editing", "View", "Search", "Tables", "Export",
+            ],
+            files: ["New", "Open", "Save", "Save As", "Exit"],
+            tabs: ["Open in New Tab", "Close Tab", "Next/Previous Tab"],
+            editing: [
+                "Bold",
+                "Italic",
+                "Inline Code",
+                "Link",
+                "Image",
+                "Headings",
+                "Undo/Redo",
+            ],
+            view: [
+                "Cycle View Mode",
+                "Edit Mode",
+                "Visual Edit Mode",
+                "Split Preview Mode",
+                "Read Mode",
+                "Sidebar",
+                "Files",
+                "Outline",
+                "Filter Files",
+                "Theme",
+                "Focus Mode",
+                "Typewriter Mode",
+                "Code Line Numbers",
+                "Preferences",
+            ],
+            search: ["Find", "Replace", "Next/Previous Match"],
+            tables: [
+                "Format Table",
+                "Add/Delete Row",
+                "Move Row",
+                "Add/Delete Column",
+            ],
+            export: ["HTML", "Plain HTML", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
+        },
+        Language::ZhHans => ShortcutLabels {
+            action: "操作",
+            sections: ["文件", "标签页", "编辑", "视图", "搜索", "表格", "导出"],
+            files: ["新建", "打开", "保存", "另存为", "退出"],
+            tabs: ["在新标签页中打开", "关闭标签页", "下一个/上一个标签页"],
+            editing: [
+                "粗体",
+                "斜体",
+                "行内代码",
+                "链接",
+                "图片",
+                "标题",
+                "撤销/重做",
+            ],
+            view: [
+                "切换视图模式",
+                "编辑模式",
+                "可视化编辑模式",
+                "分栏预览模式",
+                "阅读模式",
+                "侧边栏",
+                "文件",
+                "大纲",
+                "筛选文件",
+                "主题",
+                "专注模式",
+                "打字机模式",
+                "代码行号",
+                "首选项",
+            ],
+            search: ["查找", "替换", "下一个/上一个匹配"],
+            tables: ["格式化表格", "添加/删除行", "移动行", "添加/删除列"],
+            export: ["HTML", "纯 HTML", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
+        },
+        Language::ZhHant => ShortcutLabels {
+            action: "操作",
+            sections: ["檔案", "分頁", "編輯", "檢視", "搜尋", "表格", "匯出"],
+            files: ["新增", "開啟", "儲存", "另存新檔", "結束"],
+            tabs: ["在新分頁中開啟", "關閉分頁", "下一個/上一個分頁"],
+            editing: [
+                "粗體",
+                "斜體",
+                "行內程式碼",
+                "連結",
+                "圖片",
+                "標題",
+                "復原/重做",
+            ],
+            view: [
+                "切換檢視模式",
+                "編輯模式",
+                "視覺化編輯模式",
+                "分割預覽模式",
+                "閱讀模式",
+                "側邊欄",
+                "檔案",
+                "大綱",
+                "篩選檔案",
+                "主題",
+                "專注模式",
+                "打字機模式",
+                "程式碼行號",
+                "偏好設定",
+            ],
+            search: ["尋找", "取代", "下一個/上一個符合項目"],
+            tables: ["格式化表格", "新增/刪除列", "移動列", "新增/刪除欄"],
+            export: ["HTML", "純 HTML", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
+        },
+        Language::Ja => ShortcutLabels {
+            action: "操作",
+            sections: [
+                "ファイル",
+                "タブ",
+                "編集",
+                "表示",
+                "検索",
+                "表",
+                "エクスポート",
+            ],
+            files: ["新規作成", "開く", "保存", "名前を付けて保存", "終了"],
+            tabs: ["新しいタブで開く", "タブを閉じる", "次/前のタブ"],
+            editing: [
+                "太字",
+                "斜体",
+                "インラインコード",
+                "リンク",
+                "画像",
+                "見出し",
+                "元に戻す/やり直す",
+            ],
+            view: [
+                "表示モード切替",
+                "編集モード",
+                "ビジュアル編集モード",
+                "分割プレビューモード",
+                "閲覧モード",
+                "サイドバー",
+                "ファイル",
+                "アウトライン",
+                "ファイル絞り込み",
+                "テーマ",
+                "集中モード",
+                "タイプライターモード",
+                "コード行番号",
+                "設定",
+            ],
+            search: ["検索", "置換", "次/前の一致"],
+            tables: ["表の整形", "行の追加/削除", "行の移動", "列の追加/削除"],
+            export: [
+                "HTML",
+                "プレーンHTML",
+                "PDF",
+                "LaTeX",
+                "DOCX",
+                "PNG",
+                "JPEG",
+            ],
+        },
+        Language::Fr => ShortcutLabels {
+            action: "Action",
+            sections: [
+                "Fichiers",
+                "Onglets",
+                "Edition",
+                "Affichage",
+                "Recherche",
+                "Tableaux",
+                "Exportation",
+            ],
+            files: [
+                "Nouveau",
+                "Ouvrir",
+                "Enregistrer",
+                "Enregistrer sous",
+                "Quitter",
+            ],
+            tabs: [
+                "Ouvrir dans un nouvel onglet",
+                "Fermer l'onglet",
+                "Onglet suivant/precedent",
+            ],
+            editing: [
+                "Gras",
+                "Italique",
+                "Code en ligne",
+                "Lien",
+                "Image",
+                "Titres",
+                "Annuler/Retablir",
+            ],
+            view: [
+                "Changer le mode",
+                "Mode edition",
+                "Mode edition visuelle",
+                "Mode apercu fractionne",
+                "Mode lecture",
+                "Barre laterale",
+                "Fichiers",
+                "Plan",
+                "Filtrer les fichiers",
+                "Theme",
+                "Mode concentre",
+                "Mode machine a ecrire",
+                "Numeros de ligne",
+                "Preferences",
+            ],
+            search: [
+                "Rechercher",
+                "Remplacer",
+                "Correspondance suivante/precedente",
+            ],
+            tables: [
+                "Formater le tableau",
+                "Ajouter/Supprimer une ligne",
+                "Deplacer la ligne",
+                "Ajouter/Supprimer une colonne",
+            ],
+            export: ["HTML", "HTML simple", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
+        },
+        Language::De => ShortcutLabels {
+            action: "Aktion",
+            sections: [
+                "Dateien",
+                "Tabs",
+                "Bearbeitung",
+                "Ansicht",
+                "Suche",
+                "Tabellen",
+                "Export",
+            ],
+            files: ["Neu", "Oeffnen", "Speichern", "Speichern unter", "Beenden"],
+            tabs: [
+                "In neuem Tab oeffnen",
+                "Tab schliessen",
+                "Naechster/Vorheriger Tab",
+            ],
+            editing: [
+                "Fett",
+                "Kursiv",
+                "Inline-Code",
+                "Link",
+                "Bild",
+                "Ueberschriften",
+                "Rueckgaengig/Wiederholen",
+            ],
+            view: [
+                "Ansichtsmodus wechseln",
+                "Bearbeitungsmodus",
+                "Visueller Bearbeitungsmodus",
+                "Geteilter Vorschaumodus",
+                "Lesemodus",
+                "Seitenleiste",
+                "Dateien",
+                "Gliederung",
+                "Dateien filtern",
+                "Design",
+                "Fokusmodus",
+                "Schreibmaschinenmodus",
+                "Zeilennummern",
+                "Einstellungen",
+            ],
+            search: ["Suchen", "Ersetzen", "Naechster/Vorheriger Treffer"],
+            tables: [
+                "Tabelle formatieren",
+                "Zeile hinzufuegen/loeschen",
+                "Zeile verschieben",
+                "Spalte hinzufuegen/loeschen",
+            ],
+            export: [
+                "HTML",
+                "Einfaches HTML",
+                "PDF",
+                "LaTeX",
+                "DOCX",
+                "PNG",
+                "JPEG",
+            ],
+        },
+        Language::Es => ShortcutLabels {
+            action: "Accion",
+            sections: [
+                "Archivos", "Pestanas", "Edicion", "Ver", "Busqueda", "Tablas", "Exportar",
+            ],
+            files: ["Nuevo", "Abrir", "Guardar", "Guardar como", "Salir"],
+            tabs: [
+                "Abrir en nueva pestana",
+                "Cerrar pestana",
+                "Pestana siguiente/anterior",
+            ],
+            editing: [
+                "Negrita",
+                "Cursiva",
+                "Codigo en linea",
+                "Enlace",
+                "Imagen",
+                "Encabezados",
+                "Deshacer/Rehacer",
+            ],
+            view: [
+                "Cambiar modo de vista",
+                "Modo edicion",
+                "Modo edicion visual",
+                "Modo vista previa dividida",
+                "Modo lectura",
+                "Barra lateral",
+                "Archivos",
+                "Esquema",
+                "Filtrar archivos",
+                "Tema",
+                "Modo concentracion",
+                "Modo maquina de escribir",
+                "Numeros de linea",
+                "Preferencias",
+            ],
+            search: ["Buscar", "Reemplazar", "Coincidencia siguiente/anterior"],
+            tables: [
+                "Formatear tabla",
+                "Agregar/Eliminar fila",
+                "Mover fila",
+                "Agregar/Eliminar columna",
+            ],
+            export: ["HTML", "HTML simple", "PDF", "LaTeX", "DOCX", "PNG", "JPEG"],
+        },
     }
 }
 
@@ -920,6 +1577,12 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Close",
+        Msg::DiagramLoading => "Rendering diagram…",
+        Msg::DiagramUnsupported => "This diagram format is not supported.",
+        Msg::DiagramInputTooLarge => "The diagram source exceeds the size limit.",
+        Msg::DiagramInvalidSource => "The diagram source is invalid.",
+        Msg::DiagramUnsafeOutput => "The diagram output was blocked for safety.",
+        Msg::DiagramRenderFailed => "Diagram rendering failed.",
         Msg::TitleModified => "Modified",
         Msg::TitleSaved => "Saved",
     }
@@ -930,118 +1593,6 @@ fn en(msg: Msg) -> &'static str {
 //   {4}=preview adaptive width {5}=sidebar {6}=prefs path
 //   {7}=themes dir {8}=custom theme count
 const PREFERENCES_DETAIL_EN: &str = "Theme: {0}\nFocus mode: {1}\nTypewriter mode: {2}\nCode line numbers: {3}\nPreview adaptive width: {4}\nSidebar: {5}\n\nPreferences: {6}\nCustom themes: {7}\nInstalled custom themes: {8}";
-
-const SHORTCUTS_EN: &str = "Files
-New: Secondary-N
-Open: Secondary-O
-Save: Secondary-S
-Save As: Secondary-Shift-S
-Exit: Secondary-Q
-
-Tabs
-Open in New Tab: Secondary-T
-Close Tab: Secondary-W
-Next/Previous Tab: Ctrl-Tab / Ctrl-Shift-Tab
-
-Editing
-Bold: Secondary-B
-Italic: Secondary-I
-Inline Code: Secondary-E
-Link: Secondary-K
-Image: Secondary-Shift-I
-Headings: Secondary-1/2/3/4/5
-Undo/Redo: Secondary-Z / Secondary-Shift-Z
-
-View
-Cycle View Mode: Secondary-Shift-V
-Edit Mode: Secondary-Alt-1
-Visual Edit Mode: Secondary-Alt-4
-Split Preview Mode: Secondary-Alt-2
-Read Mode: Secondary-Alt-3
-Sidebar: Secondary-Alt-B
-Files: Secondary-Shift-F
-Outline: F6
-Filter Files: Secondary-Alt-F
-Theme: Secondary-Shift-T
-Focus Mode: F7
-Typewriter Mode: F8
-Code Line Numbers: Secondary-Shift-4
-Preferences: Secondary-Comma
-
-Search
-Find: Secondary-F
-Replace: Secondary-H
-Next/Previous Match: F3 / Shift-F3
-
-Tables
-Format Table: Secondary-Shift-M
-Add/Delete Row: Secondary-Alt-Enter / Secondary-Alt-Backspace
-Move Row: Secondary-Alt-Up / Secondary-Alt-Down
-Add/Delete Column: Secondary-Alt-Right / Secondary-Alt-Left
-
-Export
-HTML: Secondary-Shift-H
-Plain HTML: Secondary-Alt-Shift-H
-PDF: Secondary-Shift-P
-LaTeX: Secondary-Shift-L
-DOCX: Secondary-Shift-D
-PNG/JPEG: Secondary-Shift-G / Secondary-Alt-Shift-G";
-
-const SHORTCUTS_EN_EXTENDED: &str = "Files
-New: Secondary-N
-Open: Secondary-O
-Save: Secondary-S
-Save As: Secondary-Shift-S
-Exit: Secondary-Q
-
-Tabs
-Open in New Tab: Secondary-T
-Close Tab: Secondary-W
-Next/Previous Tab: Ctrl-Tab / Ctrl-Shift-Tab
-
-Editing
-Bold: Secondary-B
-Italic: Secondary-I
-Inline Code: Secondary-E
-Link: Secondary-K
-Image: Secondary-Shift-I
-Headings: Secondary-1/2/3/4/5/6
-Undo/Redo: Secondary-Z / Secondary-Shift-Z
-
-View
-Cycle View Mode: Secondary-Shift-V
-Edit Mode: Secondary-Alt-1
-Visual Edit Mode: Secondary-Alt-4
-Split Preview Mode: Secondary-Alt-2
-Read Mode: Secondary-Alt-3
-Sidebar: Secondary-Alt-B
-Files: Secondary-Shift-F
-Outline: F6
-Filter Files: Secondary-Alt-F
-Theme: Secondary-Shift-T
-Focus Mode: F7
-Typewriter Mode: F8
-Code Line Numbers: Secondary-Shift-4
-Preferences: Secondary-Comma
-
-Search
-Find: Secondary-F
-Replace: Secondary-H
-Next/Previous Match: F3 / Shift-F3
-
-Tables
-Format Table: Secondary-Shift-M
-Add/Delete Row: Secondary-Alt-Enter / Secondary-Alt-Backspace
-Move Row: Secondary-Alt-Up / Secondary-Alt-Down
-Add/Delete Column: Secondary-Alt-Right / Secondary-Alt-Left
-
-Export
-HTML: Secondary-Shift-H
-Plain HTML: Secondary-Alt-Shift-H
-PDF: Secondary-Shift-P
-LaTeX: Secondary-Shift-L
-DOCX: Secondary-Shift-D
-PNG/JPEG: Secondary-Shift-G / Secondary-Alt-Shift-G";
 
 // ---------------------------------------------------------------------------
 // Japanese
@@ -1372,14 +1923,18 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "閉じる",
+        Msg::DiagramLoading => "図を描画しています…",
+        Msg::DiagramUnsupported => "この図形式はサポートされていません。",
+        Msg::DiagramInputTooLarge => "図のソースがサイズ上限を超えています。",
+        Msg::DiagramInvalidSource => "図のソースが無効です。",
+        Msg::DiagramUnsafeOutput => "安全上の理由で図の出力をブロックしました。",
+        Msg::DiagramRenderFailed => "図の描画に失敗しました。",
         Msg::TitleModified => "変更あり",
         Msg::TitleSaved => "保存済み",
     }
 }
 
 const PREFERENCES_DETAIL_JA: &str = "テーマ: {0}\n集中モード: {1}\nタイプライターモード: {2}\nコード行番号: {3}\nプレビュー幅自動調整: {4}\nサイドバー: {5}\n\n設定ファイル: {6}\nカスタムテーマ: {7}\nインストール済みカスタムテーマ: {8}";
-
-const SHORTCUTS_JA: &str = "ファイル\n新規作成: Secondary-N\n開く: Secondary-O\n保存: Secondary-S\n名前を付けて保存: Secondary-Shift-S\n終了: Secondary-Q\n\nタブ\n新しいタブで開く: Secondary-T\nタブを閉じる: Secondary-W\n次の/前のタブ: Ctrl-Tab / Ctrl-Shift-Tab\n\n編集\n太字: Secondary-B\n斜体: Secondary-I\nインラインコード: Secondary-E\nリンク: Secondary-K\n画像: Secondary-Shift-I\n見出し: Secondary-1/2/3/4/5\n元に戻す/やり直す: Secondary-Z / Secondary-Shift-Z\n\n表示\n表示モード切替: Secondary-Shift-V\n編集モード: Secondary-Alt-1\nビジュアル編集モード: Secondary-Alt-4\n分割プレビューモード: Secondary-Alt-2\n閲覧モード: Secondary-Alt-3\nサイドバー: Secondary-Alt-B\nファイル: Secondary-Shift-F\nアウトライン: F6\nファイル絞り込み: Secondary-Alt-F\nテーマ: Secondary-Shift-T\n集中モード: F7\nタイプライターモード: F8\nコード行番号: Secondary-Shift-4\n設定: Secondary-Comma\n\n検索\n検索: Secondary-F\n置換: Secondary-H\n次/前の一致: F3 / Shift-F3\n\n表\n表の整形: Secondary-Shift-M\n行の追加/削除: Secondary-Alt-Enter / Secondary-Alt-Backspace\n行の移動: Secondary-Alt-Up / Secondary-Alt-Down\n列の追加/削除: Secondary-Alt-Right / Secondary-Alt-Left\n\nエクスポート\nHTML: Secondary-Shift-H\nプレーンHTML: Secondary-Alt-Shift-H\nPDF: Secondary-Shift-P\nLaTeX: Secondary-Shift-L\nDOCX: Secondary-Shift-D\nPNG/JPEG: Secondary-Shift-G / Secondary-Alt-Shift-G";
 
 // ---------------------------------------------------------------------------
 // French
@@ -1703,14 +2258,18 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Fermer",
+        Msg::DiagramLoading => "Rendu du diagramme…",
+        Msg::DiagramUnsupported => "Ce format de diagramme n’est pas pris en charge.",
+        Msg::DiagramInputTooLarge => "La source du diagramme dépasse la taille autorisée.",
+        Msg::DiagramInvalidSource => "La source du diagramme est invalide.",
+        Msg::DiagramUnsafeOutput => "La sortie du diagramme a été bloquée par sécurité.",
+        Msg::DiagramRenderFailed => "Le rendu du diagramme a échoué.",
         Msg::TitleModified => "Modifié",
         Msg::TitleSaved => "Enregistré",
     }
 }
 
 const PREFERENCES_DETAIL_FR: &str = "Thème : {0}\nMode concentré : {1}\nMode machine à écrire : {2}\nNuméros de ligne : {3}\nLargeur adaptative : {4}\nBarre latérale : {5}\n\nPréférences : {6}\nThèmes personnalisés : {7}\nThèmes installés : {8}";
-
-const SHORTCUTS_FR: &str = "Fichiers\nNouveau : Secondary-N\nOuvrir : Secondary-O\nEnregistrer : Secondary-S\nEnregistrer sous : Secondary-Shift-S\nQuitter : Secondary-Q\n\nOnglets\nOuvrir dans un nouvel onglet : Secondary-T\nFermer l'onglet : Secondary-W\nOnglet suivant/précédent : Ctrl-Tab / Ctrl-Shift-Tab\n\nÉdition\nGras : Secondary-B\nItalique : Secondary-I\nCode en ligne : Secondary-E\nLien : Secondary-K\nImage : Secondary-Shift-I\nTitres : Secondary-1/2/3/4/5\nAnnuler/Rétablir : Secondary-Z / Secondary-Shift-Z\n\nAffichage\nChanger le mode : Secondary-Shift-V\nMode édition : Secondary-Alt-1\nMode édition visuelle : Secondary-Alt-4\nMode aperçu fractionné : Secondary-Alt-2\nMode lecture : Secondary-Alt-3\nBarre latérale : Secondary-Alt-B\nFichiers : Secondary-Shift-F\nPlan : F6\nFiltrer les fichiers : Secondary-Alt-F\nThème : Secondary-Shift-T\nMode concentré : F7\nMode machine à écrire : F8\nNuméros de ligne : Secondary-Shift-4\nPréférences : Secondary-Comma\n\nRecherche\nRechercher : Secondary-F\nRemplacer : Secondary-H\nCorrespondance suivante/précédente : F3 / Shift-F3\n\nTableaux\nFormater le tableau : Secondary-Shift-M\nAjouter/Supprimer une ligne : Secondary-Alt-Enter / Secondary-Alt-Backspace\nDéplacer la ligne : Secondary-Alt-Up / Secondary-Alt-Down\nAjouter/Supprimer une colonne : Secondary-Alt-Right / Secondary-Alt-Left\n\nExportation\nHTML : Secondary-Shift-H\nHTML simple : Secondary-Alt-Shift-H\nPDF : Secondary-Shift-P\nLaTeX : Secondary-Shift-L\nDOCX : Secondary-Shift-D\nPNG/JPEG : Secondary-Shift-G / Secondary-Alt-Shift-G";
 
 // ---------------------------------------------------------------------------
 // German
@@ -2030,14 +2589,18 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Schließen",
+        Msg::DiagramLoading => "Diagramm wird gerendert…",
+        Msg::DiagramUnsupported => "Dieses Diagrammformat wird nicht unterstützt.",
+        Msg::DiagramInputTooLarge => "Der Diagrammquelltext überschreitet die Größenbegrenzung.",
+        Msg::DiagramInvalidSource => "Der Diagrammquelltext ist ungültig.",
+        Msg::DiagramUnsafeOutput => "Die Diagrammausgabe wurde aus Sicherheitsgründen blockiert.",
+        Msg::DiagramRenderFailed => "Das Rendern des Diagramms ist fehlgeschlagen.",
         Msg::TitleModified => "Geändert",
         Msg::TitleSaved => "Gespeichert",
     }
 }
 
 const PREFERENCES_DETAIL_DE: &str = "Design: {0}\nFokusmodus: {1}\nSchreibmaschinenmodus: {2}\nZeilennummern: {3}\nAdaptive Vorschaubreite: {4}\nSeitenleiste: {5}\n\nEinstellungen: {6}\nBenutzerdefinierte Designs: {7}\nInstallierte Designs: {8}";
-
-const SHORTCUTS_DE: &str = "Dateien\nNeu: Secondary-N\nÖffnen: Secondary-O\nSpeichern: Secondary-S\nSpeichern unter: Secondary-Shift-S\nBeenden: Secondary-Q\n\nTabs\nIn neuem Tab öffnen: Secondary-T\nTab schließen: Secondary-W\nNächster/Vorheriger Tab: Ctrl-Tab / Ctrl-Shift-Tab\n\nBearbeitung\nFett: Secondary-B\nKursiv: Secondary-I\nInline-Code: Secondary-E\nLink: Secondary-K\nBild: Secondary-Shift-I\nÜberschriften: Secondary-1/2/3/4/5\nRückgängig/Wiederholen: Secondary-Z / Secondary-Shift-Z\n\nAnsicht\nAnsichtsmodus wechseln: Secondary-Shift-V\nBearbeitungsmodus: Secondary-Alt-1\nVisueller Bearbeitungsmodus: Secondary-Alt-4\nGeteilter Vorschaumodus: Secondary-Alt-2\nLesemodus: Secondary-Alt-3\nSeitenleiste: Secondary-Alt-B\nDateien: Secondary-Shift-F\nGliederung: F6\nDateien filtern: Secondary-Alt-F\nDesign: Secondary-Shift-T\nFokusmodus: F7\nSchreibmaschinenmodus: F8\nZeilennummern: Secondary-Shift-4\nEinstellungen: Secondary-Comma\n\nSuche\nSuchen: Secondary-F\nErsetzen: Secondary-H\nNächster/Vorheriger Treffer: F3 / Shift-F3\n\nTabellen\nTabelle formatieren: Secondary-Shift-M\nZeile hinzufügen/löschen: Secondary-Alt-Enter / Secondary-Alt-Backspace\nZeile verschieben: Secondary-Alt-Up / Secondary-Alt-Down\nSpalte hinzufügen/löschen: Secondary-Alt-Right / Secondary-Alt-Left\n\nExport\nHTML: Secondary-Shift-H\nEinfaches HTML: Secondary-Alt-Shift-H\nPDF: Secondary-Shift-P\nLaTeX: Secondary-Shift-L\nDOCX: Secondary-Shift-D\nPNG/JPEG: Secondary-Shift-G / Secondary-Alt-Shift-G";
 
 // ---------------------------------------------------------------------------
 // Spanish
@@ -2351,14 +2914,18 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Cerrar",
+        Msg::DiagramLoading => "Renderizando diagrama…",
+        Msg::DiagramUnsupported => "Este formato de diagrama no es compatible.",
+        Msg::DiagramInputTooLarge => "El código del diagrama supera el límite de tamaño.",
+        Msg::DiagramInvalidSource => "El código del diagrama no es válido.",
+        Msg::DiagramUnsafeOutput => "La salida del diagrama se bloqueó por seguridad.",
+        Msg::DiagramRenderFailed => "No se pudo renderizar el diagrama.",
         Msg::TitleModified => "Modificado",
         Msg::TitleSaved => "Guardado",
     }
 }
 
 const PREFERENCES_DETAIL_ES: &str = "Tema: {0}\nModo concentración: {1}\nModo máquina de escribir: {2}\nNúmeros de línea: {3}\nAncho adaptativo: {4}\nBarra lateral: {5}\n\nPreferencias: {6}\nTemas personalizados: {7}\nTemas instalados: {8}";
-
-const SHORTCUTS_ES: &str = "Archivos\nNuevo: Secondary-N\nAbrir: Secondary-O\nGuardar: Secondary-S\nGuardar como: Secondary-Shift-S\nSalir: Secondary-Q\n\nPestañas\nAbrir en nueva pestaña: Secondary-T\nCerrar pestaña: Secondary-W\nPestaña siguiente/anterior: Ctrl-Tab / Ctrl-Shift-Tab\n\nEdición\nNegrita: Secondary-B\nCursiva: Secondary-I\nCódigo en línea: Secondary-E\nEnlace: Secondary-K\nImagen: Secondary-Shift-I\nEncabezados: Secondary-1/2/3/4/5\nDeshacer/Rehacer: Secondary-Z / Secondary-Shift-Z\n\nVer\nCambiar modo de vista: Secondary-Shift-V\nModo edición: Secondary-Alt-1\nModo edición visual: Secondary-Alt-4\nModo vista previa dividida: Secondary-Alt-2\nModo lectura: Secondary-Alt-3\nBarra lateral: Secondary-Alt-B\nArchivos: Secondary-Shift-F\nEsquema: F6\nFiltrar archivos: Secondary-Alt-F\nTema: Secondary-Shift-T\nModo concentración: F7\nModo máquina de escribir: F8\nNúmeros de línea: Secondary-Shift-4\nPreferencias: Secondary-Comma\n\nBúsqueda\nBuscar: Secondary-F\nReemplazar: Secondary-H\nCoincidencia siguiente/anterior: F3 / Shift-F3\n\nTablas\nFormatear tabla: Secondary-Shift-M\nAgregar/Eliminar fila: Secondary-Alt-Enter / Secondary-Alt-Backspace\nMover fila: Secondary-Alt-Up / Secondary-Alt-Down\nAgregar/Eliminar columna: Secondary-Alt-Right / Secondary-Alt-Left\n\nExportar\nHTML: Secondary-Shift-H\nHTML simple: Secondary-Alt-Shift-H\nPDF: Secondary-Shift-P\nLaTeX: Secondary-Shift-L\nDOCX: Secondary-Shift-D\nPNG/JPEG: Secondary-Shift-G / Secondary-Alt-Shift-G";
 
 // ---------------------------------------------------------------------------
 // Chinese (Simplified)
@@ -2683,124 +3250,18 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "关闭",
+        Msg::DiagramLoading => "正在渲染图表…",
+        Msg::DiagramUnsupported => "不支持此图表格式。",
+        Msg::DiagramInputTooLarge => "图表源代码超过大小限制。",
+        Msg::DiagramInvalidSource => "图表源代码无效。",
+        Msg::DiagramUnsafeOutput => "出于安全原因，图表输出已被拦截。",
+        Msg::DiagramRenderFailed => "图表渲染失败。",
         Msg::TitleModified => "已修改",
         Msg::TitleSaved => "已保存",
     }
 }
 
 const PREFERENCES_DETAIL_ZH: &str = "主题：{0}\n专注模式：{1}\n打字机模式：{2}\n代码行号：{3}\n预览自适应宽度：{4}\n侧边栏：{5}\n\n首选项：{6}\n主题目录：{7}\n已安装自定义主题：{8}";
-
-const SHORTCUTS_ZH: &str = "文件
-新建：Secondary-N
-打开：Secondary-O
-保存：Secondary-S
-另存为：Secondary-Shift-S
-退出：Secondary-Q
-
-标签页
-在新标签页打开：Secondary-T
-关闭标签页：Secondary-W
-下一个/上一个标签页：Ctrl-Tab / Ctrl-Shift-Tab
-
-编辑
-加粗：Secondary-B
-斜体：Secondary-I
-行内代码：Secondary-E
-链接：Secondary-K
-图片：Secondary-Shift-I
-标题：Secondary-1/2/3/4/5
-撤销/重做：Secondary-Z / Secondary-Shift-Z
-
-视图
-循环切换视图模式：Secondary-Shift-V
-编辑模式：Secondary-Alt-1
-可视化编辑模式：Secondary-Alt-4
-分栏预览模式：Secondary-Alt-2
-阅读模式：Secondary-Alt-3
-侧边栏：Secondary-Alt-B
-文件：Secondary-Shift-F
-大纲：F6
-筛选文件：Secondary-Alt-F
-主题：Secondary-Shift-T
-专注模式：F7
-打字机模式：F8
-代码行号：Secondary-Shift-4
-首选项：Secondary-Comma
-
-搜索
-查找：Secondary-F
-替换：Secondary-H
-上一个/下一个匹配：F3 / Shift-F3
-
-表格
-格式化表格：Secondary-Shift-M
-添加/删除行：Secondary-Alt-Enter / Secondary-Alt-Backspace
-移动行：Secondary-Alt-Up / Secondary-Alt-Down
-添加/删除列：Secondary-Alt-Right / Secondary-Alt-Left
-
-导出
-HTML：Secondary-Shift-H
-纯 HTML：Secondary-Alt-Shift-H
-PDF：Secondary-Shift-P
-LaTeX：Secondary-Shift-L
-DOCX：Secondary-Shift-D
-PNG/JPEG：Secondary-Shift-G / Secondary-Alt-Shift-G";
-
-const SHORTCUTS_ZH_EXTENDED: &str = "文件
-新建：Secondary-N
-打开：Secondary-O
-保存：Secondary-S
-另存为：Secondary-Shift-S
-退出：Secondary-Q
-
-标签页
-在新标签页打开：Secondary-T
-关闭标签页：Secondary-W
-下一个/上一个标签页：Ctrl-Tab / Ctrl-Shift-Tab
-
-编辑
-加粗：Secondary-B
-斜体：Secondary-I
-行内代码：Secondary-E
-链接：Secondary-K
-图片：Secondary-Shift-I
-标题：Secondary-1/2/3/4/5/6
-撤销/重做：Secondary-Z / Secondary-Shift-Z
-
-视图
-切换视图模式：Secondary-Shift-V
-编辑模式：Secondary-Alt-1
-可视化编辑模式：Secondary-Alt-4
-分栏预览模式：Secondary-Alt-2
-阅读模式：Secondary-Alt-3
-侧边栏：Secondary-Alt-B
-文件：Secondary-Shift-F
-大纲：F6
-筛选文件：Secondary-Alt-F
-主题：Secondary-Shift-T
-专注模式：F7
-打字机模式：F8
-代码行号：Secondary-Shift-4
-首选项：Secondary-Comma
-
-搜索
-查找：Secondary-F
-替换：Secondary-H
-上一个/下一个匹配：F3 / Shift-F3
-
-表格
-格式化表格：Secondary-Shift-M
-添加/删除行：Secondary-Alt-Enter / Secondary-Alt-Backspace
-移动行：Secondary-Alt-Up / Secondary-Alt-Down
-添加/删除列：Secondary-Alt-Right / Secondary-Alt-Left
-
-导出
-HTML：Secondary-Shift-H
-纯 HTML：Secondary-Alt-Shift-H
-PDF：Secondary-Shift-P
-LaTeX：Secondary-Shift-L
-DOCX：Secondary-Shift-D
-PNG/JPEG：Secondary-Shift-G / Secondary-Alt-Shift-G";
 
 // ---------------------------------------------------------------------------
 // Traditional Chinese (Taiwan regional terminology)
@@ -3127,124 +3588,18 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "關閉",
+        Msg::DiagramLoading => "正在算繪圖表…",
+        Msg::DiagramUnsupported => "不支援此圖表格式。",
+        Msg::DiagramInputTooLarge => "圖表原始碼超過大小限制。",
+        Msg::DiagramInvalidSource => "圖表原始碼無效。",
+        Msg::DiagramUnsafeOutput => "基於安全考量，圖表輸出已被封鎖。",
+        Msg::DiagramRenderFailed => "圖表算繪失敗。",
         Msg::TitleModified => "已修改",
         Msg::TitleSaved => "已儲存",
     }
 }
 
 const PREFERENCES_DETAIL_ZH_HANT: &str = "佈景主題：{0}\n專注模式：{1}\n打字機模式：{2}\n程式碼行號：{3}\n預覽自適應寬度：{4}\n側邊欄：{5}\n\n偏好設定：{6}\n佈景主題目錄：{7}\n已安裝自訂佈景主題：{8}";
-
-const SHORTCUTS_ZH_HANT: &str = "檔案
-新增：Secondary-N
-開啟：Secondary-O
-儲存：Secondary-S
-另存新檔：Secondary-Shift-S
-結束：Secondary-Q
-
-分頁
-在新分頁開啟：Secondary-T
-關閉分頁：Secondary-W
-下一個/上一個分頁：Ctrl-Tab / Ctrl-Shift-Tab
-
-編輯
-粗體：Secondary-B
-斜體：Secondary-I
-行內程式碼：Secondary-E
-連結：Secondary-K
-圖片：Secondary-Shift-I
-標題：Secondary-1/2/3/4/5
-復原/取消復原：Secondary-Z / Secondary-Shift-Z
-
-檢視
-循環切換檢視模式：Secondary-Shift-V
-編輯模式：Secondary-Alt-1
-視覺化編輯模式：Secondary-Alt-4
-分割預覽模式：Secondary-Alt-2
-閱讀模式：Secondary-Alt-3
-側邊欄：Secondary-Alt-B
-檔案：Secondary-Shift-F
-大綱：F6
-篩選檔案：Secondary-Alt-F
-佈景主題：Secondary-Shift-T
-專注模式：F7
-打字機模式：F8
-程式碼行號：Secondary-Shift-4
-偏好設定：Secondary-Comma
-
-搜尋
-尋找：Secondary-F
-取代：Secondary-H
-上一個/下一個符合項目：F3 / Shift-F3
-
-表格
-格式化表格：Secondary-Shift-M
-新增/刪除列：Secondary-Alt-Enter / Secondary-Alt-Backspace
-移動列：Secondary-Alt-Up / Secondary-Alt-Down
-新增/刪除欄：Secondary-Alt-Right / Secondary-Alt-Left
-
-匯出
-HTML：Secondary-Shift-H
-純 HTML：Secondary-Alt-Shift-H
-PDF：Secondary-Shift-P
-LaTeX：Secondary-Shift-L
-DOCX：Secondary-Shift-D
-PNG/JPEG：Secondary-Shift-G / Secondary-Alt-Shift-G";
-
-const SHORTCUTS_ZH_HANT_EXTENDED: &str = "檔案
-新增：Secondary-N
-開啟：Secondary-O
-儲存：Secondary-S
-另存新檔：Secondary-Shift-S
-結束：Secondary-Q
-
-分頁
-在新分頁開啟：Secondary-T
-關閉分頁：Secondary-W
-下一個/上一個分頁：Ctrl-Tab / Ctrl-Shift-Tab
-
-編輯
-粗體：Secondary-B
-斜體：Secondary-I
-行內程式碼：Secondary-E
-連結：Secondary-K
-圖片：Secondary-Shift-I
-標題：Secondary-1/2/3/4/5/6
-復原/取消復原：Secondary-Z / Secondary-Shift-Z
-
-檢視
-切換檢視模式：Secondary-Shift-V
-編輯模式：Secondary-Alt-1
-視覺化編輯模式：Secondary-Alt-4
-分割預覽模式：Secondary-Alt-2
-閱讀模式：Secondary-Alt-3
-側邊欄：Secondary-Alt-B
-檔案：Secondary-Shift-F
-大綱：F6
-篩選檔案：Secondary-Alt-F
-佈景主題：Secondary-Shift-T
-專注模式：F7
-打字機模式：F8
-程式碼行號：Secondary-Shift-4
-偏好設定：Secondary-Comma
-
-搜尋
-尋找：Secondary-F
-取代：Secondary-H
-上一個/下一個符合項目：F3 / Shift-F3
-
-表格
-格式化表格：Secondary-Shift-M
-新增/刪除列：Secondary-Alt-Enter / Secondary-Alt-Backspace
-移動列：Secondary-Alt-Up / Secondary-Alt-Down
-新增/刪除欄：Secondary-Alt-Right / Secondary-Alt-Left
-
-匯出
-HTML：Secondary-Shift-H
-純 HTML：Secondary-Alt-Shift-H
-PDF：Secondary-Shift-P
-LaTeX：Secondary-Shift-L
-DOCX：Secondary-Shift-D
-PNG/JPEG：Secondary-Shift-G / Secondary-Alt-Shift-G";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -3337,94 +3692,90 @@ mod tests {
         assert_eq!(Language::from_code("klingon"), Language::En);
     }
 
+    fn assert_platform_shortcut_table(
+        reference: &str,
+        action_header: &str,
+        save_label: &str,
+        edit_mode_label: &str,
+        prefs_label: &str,
+    ) {
+        assert!(reference.contains(&format!("| {action_header} | Windows/Linux | macOS |")));
+        assert!(reference.contains(&format!("| {save_label} | Ctrl+S | Cmd+S |")));
+        assert!(reference.contains(&format!(
+            "| {edit_mode_label} | Ctrl+Alt+1 | Cmd+Option+1 |"
+        )));
+        assert!(
+            reference.contains("| Sidebar | Ctrl+Shift+B | Cmd+Shift+B |")
+                || reference.contains("| 侧边栏 | Ctrl+Shift+B | Cmd+Shift+B |")
+                || reference.contains("| 側邊欄 | Ctrl+Shift+B | Cmd+Shift+B |")
+                || reference.contains("| サイドバー | Ctrl+Shift+B | Cmd+Shift+B |")
+                || reference.contains("| Barre laterale | Ctrl+Shift+B | Cmd+Shift+B |")
+                || reference.contains("| Seitenleiste | Ctrl+Shift+B | Cmd+Shift+B |")
+                || reference.contains("| Barra lateral | Ctrl+Shift+B | Cmd+Shift+B |")
+        );
+        assert!(reference.contains(&format!("| {prefs_label} | Ctrl+, | Cmd+, |")));
+        assert!(!reference.contains("Secondary-"));
+    }
+
     #[test]
-    fn english_shortcut_reference_is_unchanged() {
-        // Existing app tests assert specific English substrings; make sure the
-        // i18n version still produces the same text for English.
+    fn english_shortcut_reference_is_platform_table() {
         let reference = shortcut_reference(Language::En, 3);
-        assert!(reference.contains("Save: Secondary-S"));
-        assert!(reference.contains("Cycle View Mode: Secondary-Shift-V"));
-        assert!(reference.contains("Edit Mode: Secondary-Alt-1"));
-        assert!(reference.contains("Visual Edit Mode: Secondary-Alt-4"));
-        assert!(reference.contains("Split Preview Mode: Secondary-Alt-2"));
-        assert!(reference.contains("Read Mode: Secondary-Alt-3"));
-        assert!(reference.contains("Preferences: Secondary-Comma"));
-        assert!(reference.contains("Find: Secondary-F"));
-        assert!(reference.contains("DOCX: Secondary-Shift-D"));
+        assert_platform_shortcut_table(&reference, "Action", "Save", "Edit Mode", "Preferences");
+        assert!(reference.contains("| DOCX | Ctrl+Shift+D | Cmd+Shift+D |"));
     }
 
     #[test]
     fn chinese_shortcut_reference_is_translated() {
         let reference = shortcut_reference(Language::ZhHans, 3);
-        assert!(reference.contains("保存：Secondary-S"));
-        assert!(reference.contains("编辑模式：Secondary-Alt-1"));
-        assert!(reference.contains("可视化编辑模式：Secondary-Alt-4"));
-        assert!(reference.contains("分栏预览模式：Secondary-Alt-2"));
-        assert!(reference.contains("阅读模式：Secondary-Alt-3"));
-        assert!(reference.contains("首选项：Secondary-Comma"));
-        // The key bindings themselves stay in English (they are key names).
-        assert!(reference.contains("Secondary-S"));
+        assert_platform_shortcut_table(&reference, "操作", "保存", "编辑模式", "首选项");
     }
 
     #[test]
     fn traditional_chinese_shortcut_reference_is_translated() {
         let reference = shortcut_reference(Language::ZhHant, 3);
-        assert!(reference.contains("儲存：Secondary-S"));
-        assert!(reference.contains("編輯模式：Secondary-Alt-1"));
-        assert!(reference.contains("視覺化編輯模式：Secondary-Alt-4"));
-        assert!(reference.contains("分割預覽模式：Secondary-Alt-2"));
-        assert!(reference.contains("閱讀模式：Secondary-Alt-3"));
-        assert!(reference.contains("偏好設定：Secondary-Comma"));
-        // The key bindings themselves stay in English (they are key names).
-        assert!(reference.contains("Secondary-S"));
+        assert_platform_shortcut_table(&reference, "操作", "儲存", "編輯模式", "偏好設定");
     }
 
     #[test]
     fn japanese_shortcut_reference_is_translated() {
         let reference = shortcut_reference(Language::Ja, 3);
-        assert!(reference.contains("保存: Secondary-S"));
-        assert!(reference.contains("編集モード: Secondary-Alt-1"));
-        assert!(reference.contains("ビジュアル編集モード: Secondary-Alt-4"));
-        assert!(reference.contains("分割プレビューモード: Secondary-Alt-2"));
-        assert!(reference.contains("閲覧モード: Secondary-Alt-3"));
-        assert!(reference.contains("設定: Secondary-Comma"));
-        assert!(reference.contains("Secondary-S"));
+        assert_platform_shortcut_table(&reference, "操作", "保存", "編集モード", "設定");
     }
 
     #[test]
     fn french_shortcut_reference_is_translated() {
         let reference = shortcut_reference(Language::Fr, 3);
-        assert!(reference.contains("Enregistrer : Secondary-S"));
-        assert!(reference.contains("Mode édition : Secondary-Alt-1"));
-        assert!(reference.contains("Mode édition visuelle : Secondary-Alt-4"));
-        assert!(reference.contains("Mode aperçu fractionné : Secondary-Alt-2"));
-        assert!(reference.contains("Mode lecture : Secondary-Alt-3"));
-        assert!(reference.contains("Préférences : Secondary-Comma"));
-        assert!(reference.contains("Secondary-S"));
+        assert_platform_shortcut_table(
+            &reference,
+            "Action",
+            "Enregistrer",
+            "Mode edition",
+            "Preferences",
+        );
     }
 
     #[test]
     fn german_shortcut_reference_is_translated() {
         let reference = shortcut_reference(Language::De, 3);
-        assert!(reference.contains("Speichern: Secondary-S"));
-        assert!(reference.contains("Bearbeitungsmodus: Secondary-Alt-1"));
-        assert!(reference.contains("Visueller Bearbeitungsmodus: Secondary-Alt-4"));
-        assert!(reference.contains("Geteilter Vorschaumodus: Secondary-Alt-2"));
-        assert!(reference.contains("Lesemodus: Secondary-Alt-3"));
-        assert!(reference.contains("Einstellungen: Secondary-Comma"));
-        assert!(reference.contains("Secondary-S"));
+        assert_platform_shortcut_table(
+            &reference,
+            "Aktion",
+            "Speichern",
+            "Bearbeitungsmodus",
+            "Einstellungen",
+        );
     }
 
     #[test]
     fn spanish_shortcut_reference_is_translated() {
         let reference = shortcut_reference(Language::Es, 3);
-        assert!(reference.contains("Guardar: Secondary-S"));
-        assert!(reference.contains("Modo edición: Secondary-Alt-1"));
-        assert!(reference.contains("Modo edición visual: Secondary-Alt-4"));
-        assert!(reference.contains("Modo vista previa dividida: Secondary-Alt-2"));
-        assert!(reference.contains("Modo lectura: Secondary-Alt-3"));
-        assert!(reference.contains("Preferencias: Secondary-Comma"));
-        assert!(reference.contains("Secondary-S"));
+        assert_platform_shortcut_table(
+            &reference,
+            "Accion",
+            "Guardar",
+            "Modo edicion",
+            "Preferencias",
+        );
     }
 
     #[test]
@@ -3776,8 +4127,14 @@ mod tests {
         ];
         for &msg in all.iter() {
             assert!(!t(Language::En, msg).is_empty(), "empty En for {msg:?}");
-            assert!(!t(Language::ZhHans, msg).is_empty(), "empty ZhHans for {msg:?}");
-            assert!(!t(Language::ZhHant, msg).is_empty(), "empty ZhHant for {msg:?}");
+            assert!(
+                !t(Language::ZhHans, msg).is_empty(),
+                "empty ZhHans for {msg:?}"
+            );
+            assert!(
+                !t(Language::ZhHant, msg).is_empty(),
+                "empty ZhHant for {msg:?}"
+            );
             assert!(!t(Language::Ja, msg).is_empty(), "empty Ja for {msg:?}");
             assert!(!t(Language::Fr, msg).is_empty(), "empty Fr for {msg:?}");
             assert!(!t(Language::De, msg).is_empty(), "empty De for {msg:?}");

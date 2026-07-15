@@ -49,6 +49,8 @@ repository = "https://github.com/willmove/markion"
 [dependencies]
 anyhow = "1.0"
 gpui = "0.2.2"
+reqwest = { package = "zed-reqwest", version = "0.12.15-zed", default-features = false, features = ["rustls-tls-native-roots"] }
+tokio.workspace = true
 font8x8 = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 pulldown-cmark.workspace = true
@@ -64,6 +66,7 @@ unicode-segmentation = "1.12"
 # parsing for later integration phases).
 typune-markdown = { package = "markdown", path = "crates/markdown" }
 typune-export = { package = "export", path = "crates/export" }
+markion-diagram = { path = "crates/diagram", features = ["mermaid"] }
 # Drives syntect scope parsing directly in src/highlight.rs (colors keep coming
 # from Markion's theme-mapped token classes, not syntect themes). two-face
 # supplies the extended grammar set the registry is built from.
@@ -115,6 +118,9 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.export]
+opt-level = 2
+
+[profile.dev.package.markion-diagram]
 opt-level = 2
 
 # Our own crate runs markdown parsing, preview collection, and syntax

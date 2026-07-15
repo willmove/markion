@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     env,
     ffi::OsString,
     fs, io,
@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -16,13 +17,13 @@ use gpui::{
     App, Application, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle, DefiniteLength,
     DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler, Empty, Entity,
     EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle, FontWeight,
-    GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageSource, KeyBinding, LayoutId,
-    ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, Rgba,
-    ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText, TextLayout,
-    TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window, WindowBounds,
-    WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, img, list, point, px, rgb,
-    rgba, size,
+    GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, Image, ImageFormat, ImageSource,
+    KeyBinding, LayoutId, ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton,
+    PromptLevel, Rgba, ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText,
+    TextLayout, TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window,
+    WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, img, list,
+    point, px, rgb, rgba, size,
 };
 use markion::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,
@@ -30,12 +31,12 @@ use markion::{
     FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, Language,
     MarkdownDocument, MarkdownFormat, Msg, PreviewBlock, RichText, SearchMatchRange, SearchOptions,
     SidebarTab, TableEdit, ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind,
-    VisualInlineRun, VisualSourceIslandKind, builtin_theme_definitions, default_preferences_path,
-    default_recovery_dir, default_themes_dir, delete_recovery_file, highlight_code,
-    html_preview_parts, html_preview_plain_text, is_markdown_path, list_recovery_files,
-    list_theme_definitions, load_app_preferences, load_recovery_file,
-    normalize_heading_menu_max_level, render_math, save_app_preferences, save_theme_definition,
-    shortcut_reference, sidebar_tab_label, t, tf, title_from_path,
+    VisualInlineRun, VisualSourceIslandKind, builtin_diagram_registry, builtin_theme_definitions,
+    default_preferences_path, default_recovery_dir, default_themes_dir, delete_recovery_file,
+    diagram_backend_id, highlight_code, html_preview_parts, html_preview_plain_text,
+    is_markdown_path, list_recovery_files, list_theme_definitions, load_app_preferences,
+    load_recovery_file, normalize_heading_menu_max_level, render_math, save_app_preferences,
+    save_theme_definition, shortcut_reference, sidebar_tab_label, t, tf, title_from_path,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -146,7 +147,7 @@ const MAX_HISTORY_LEN: usize = 200;
 const GITHUB_REPO_URL: &str = "https://github.com/willmove/markion";
 
 #[cfg(test)]
-fn shortcut_reference_text() -> &'static str {
+fn shortcut_reference_text() -> String {
     // Kept as an English-only entry point for the existing unit test; the live
     // UI uses `shortcut_reference(self.language)` via the i18n module.
     shortcut_reference(Language::En, DEFAULT_HEADING_MENU_MAX_LEVEL)
@@ -493,8 +494,6 @@ enum PreviewTextRunId {
     MathLatex,
     MathRendered,
     HtmlText,
-    ImageCaption,
-    ImageMeta,
     TableCell { row: usize, col: usize },
 }
 
@@ -508,9 +507,7 @@ impl PreviewTextRunId {
             Self::MathRendered => (3, 0, 0),
             Self::MathLatex => (4, 0, 0),
             Self::HtmlText => (5, 0, 0),
-            Self::ImageCaption => (6, 0, 0),
-            Self::ImageMeta => (7, 0, 0),
-            Self::TableCell { row, col } => (8, row, col),
+            Self::TableCell { row, col } => (6, row, col),
         }
     }
 }
@@ -584,9 +581,11 @@ struct PaneScrollbarDrag {
 mod appearance;
 mod application;
 mod bootstrap;
+mod diagram;
 mod documents;
 mod editing;
 mod editor_element;
+mod network;
 mod preview;
 mod root_view;
 mod search;
@@ -597,6 +596,7 @@ mod workspace;
 mod tests;
 
 use bootstrap::install_menus;
+use diagram::*;
 use editor_element::EditorElement;
 use preview::*;
 use root_view::*;
@@ -684,6 +684,8 @@ struct MarkionApp {
     /// change while typing prose, so their token spans are reused across
     /// edits instead of being re-lexed on every keystroke.
     highlight_cache: RefCell<HashMap<(Option<String>, String), Rc<Vec<Vec<HighlightedSpan>>>>>,
+    /// Shared across tabs and frames; pending entries are never evicted.
+    diagram_cache: DiagramCache,
     /// Active interface language. Persisted via `AppPreferences::language`.
     language: Language,
 }

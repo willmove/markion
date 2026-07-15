@@ -8,6 +8,7 @@ use std::{
 use pulldown_cmark::{Alignment, CodeBlockKind, CowStr, Event, Parser, Tag, TagEnd, html};
 use regex::RegexBuilder;
 
+mod diagram;
 mod editing;
 mod escape;
 mod export;
@@ -35,6 +36,7 @@ pub use model::{
     builtin_theme_definitions, normalize_heading_menu_max_level,
 };
 
+pub use diagram::{builtin_diagram_registry, diagram_backend_id};
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
 pub use i18n::{Language, Msg, shortcut_reference, sidebar_tab_label, t, tf};
 pub use math::{render_math, validate_latex};
@@ -59,6 +61,7 @@ use parse::{
     push_preview_rich, render_extended_html_text_nodes, slugify,
 };
 
+use diagram::collect_html_diagrams;
 use render::{
     DEFAULT_CSS, annotate_math_html, escape_latex, escape_latex_path, latex_listing_language,
     push_latex_list_item, render_latex_rich_text, render_latex_table,
@@ -807,9 +810,14 @@ impl MarkdownDocument {
 
     pub fn render_html_fragment(&self) -> String {
         let parser = Parser::new_ext(self.body_text(), markdown_options());
+        let (events, diagrams) = collect_html_diagrams(parser);
         let mut output = String::new();
-        html::push_html(&mut output, parser);
-        annotate_math_html(&render_extended_html_text_nodes(&output))
+        html::push_html(&mut output, events.into_iter());
+        output = annotate_math_html(&render_extended_html_text_nodes(&output));
+        for diagram in diagrams {
+            diagram.apply(&mut output);
+        }
+        output
     }
 
     pub fn render_html_document(&self) -> String {
@@ -2403,6 +2411,19 @@ mod tests {
     }
 
     #[test]
+    fn preview_preserves_fragment_bearing_remote_image_destination() {
+        let authored =
+            "https://mmbiz.qpic.cn/sz_mmbiz_png/example/640?wx_fmt=png&from=appmsg#imgIndex=0";
+        let doc = MarkdownDocument::from_text(format!("![Image]({authored})"));
+
+        let blocks = doc.preview_blocks();
+        assert!(matches!(
+            blocks.as_slice(),
+            [PreviewBlock::Image { url, .. }] if url == authored
+        ));
+    }
+
+    #[test]
     fn preview_renders_extended_inline_markdown_as_readable_text() {
         let doc = MarkdownDocument::from_text(
             "Water H~2~O, ==marked text==, x^2^, :smile:, and https://example.com/docs.",
@@ -3947,6 +3968,84 @@ mod tests {
         let second = doc.outline();
         assert_eq!(first, second);
         assert_eq!(doc.stats(), doc.stats());
+    }
+
+    // ── Diagram rendering ──
+
+    #[test]
+    fn mermaid_html_export_embeds_sanitized_static_svg_in_both_html_modes() {
+        let doc = MarkdownDocument::from_text("```mermaid\nflowchart LR\nA[Start] --> B[End]\n```");
+        let fragment = doc.render_html_fragment();
+        assert!(fragment.contains("<div class=\"markion-diagram\""));
+        assert!(fragment.contains("data-diagram-backend=\"mermaid\""));
+        assert!(fragment.contains("<svg"));
+        assert!(!fragment.contains("markion-diagram-placeholder"));
+        assert!(!fragment.contains("<script"));
+        assert!(!fragment.contains("onload="));
+
+        let styled = doc.render_html_document();
+        let plain = doc.render_plain_html_document();
+        assert!(styled.contains(".markion-diagram svg"));
+        assert!(plain.contains("<div class=\"markion-diagram\""));
+        assert!(!plain.contains("<style>"));
+    }
+
+    #[test]
+    fn mermaid_html_export_handles_multiple_diagrams_after_markdown_transforms() {
+        let doc = MarkdownDocument::from_text(
+            "```mermaid\nflowchart LR\nA[~~literal~~ ^label^] --> B\n```\n\nText ~~strike~~.\n\n```MERMAID extra\nsequenceDiagram\nAlice->>Bob: Hello\n```",
+        );
+        let html = doc.render_html_fragment();
+        assert_eq!(html.matches("class=\"markion-diagram\"").count(), 2);
+        assert!(html.contains("<del>strike</del>"));
+        assert!(!html.contains("markion-diagram-placeholder"));
+    }
+
+    #[test]
+    fn invalid_mermaid_html_falls_back_to_exact_escaped_source() {
+        let source = "flowchart LR\nsubgraph MissingEnd\nA[\"<unsafe> & exact\"] --> B\n";
+        let doc = MarkdownDocument::from_text(format!("```mermaid\n{source}```"));
+        let html = doc.render_html_fragment();
+        assert!(html.contains("<pre><code class=\"language-mermaid\">"));
+        assert!(html.contains("A[\"&lt;unsafe&gt; &amp; exact\"] --&gt; B\n"));
+        assert!(!html.contains("<svg"));
+    }
+
+    #[test]
+    fn mermaid_keeps_code_block_ranges_copy_text_and_visual_source_island() {
+        let markdown = "before\n\n```MerMaid linenos\nA --> B\n```\n\nafter";
+        let doc = MarkdownDocument::from_text(markdown);
+        let block = doc
+            .preview_blocks()
+            .into_iter()
+            .find(|block| matches!(block, PreviewBlock::CodeBlock { .. }))
+            .expect("code block");
+        let PreviewBlock::CodeBlock {
+            language,
+            code,
+            source_range,
+        } = block
+        else {
+            unreachable!()
+        };
+        assert_eq!(language.as_deref(), Some("MerMaid"));
+        assert_eq!(code, "A --> B");
+        assert_eq!(&markdown[source_range], "```MerMaid linenos\nA --> B\n```");
+        assert!(doc.plain_text_preview().contains("A --> B"));
+        assert!(
+            doc.visual_blocks()
+                .iter()
+                .any(|block| block.source_island == Some(VisualSourceIslandKind::Code))
+        );
+    }
+
+    #[test]
+    fn mermaid_does_not_change_non_html_export_paths() {
+        let doc = MarkdownDocument::from_text("```mermaid\nflowchart LR\nA --> B\n```");
+        assert_eq!(doc.plain_text_preview(), "flowchart LR\nA --> B");
+        let latex = doc.render_latex_document();
+        assert!(latex.contains("flowchart LR"));
+        assert!(!latex.contains("<svg"));
     }
 
     // ── replace_current_match edge case ──

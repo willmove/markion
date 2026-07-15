@@ -1,0 +1,15 @@
+[package]
+name = "markion-diagram"
+version.workspace = true
+edition = "2024"
+
+[features]
+default = []
+mermaid = ["dep:mermaid-rs-renderer"]
+
+[dependencies]
+svg-hush = "0.9.6"
+mermaid-rs-renderer = { version = "0.3.1", default-features = false, optional = true }
+
+[dev-dependencies]
+usvg = "0.45.1"
