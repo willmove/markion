@@ -18,6 +18,14 @@
 /.idea/
 /.codex/
 *.iml
+
+# --- AI assistant / agent tooling ---
+/.claude/
+/.cursor/
+/.omp/
+/.opencode/
+/.pi/
+/.qoder/
 *.swp
 *.swo
 *~
