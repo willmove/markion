@@ -743,6 +743,7 @@ mod editor_element;
 mod network;
 mod preview;
 mod root_view;
+mod save_dialog;
 mod search;
 mod state;
 mod workspace;
@@ -755,6 +756,7 @@ use diagram::*;
 use editor_element::EditorElement;
 use preview::*;
 use root_view::*;
+use save_dialog::*;
 use state::*;
 
 pub(super) fn run() {

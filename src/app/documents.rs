@@ -313,9 +313,10 @@ impl MarkionApp {
     pub(super) fn save_document_as(
         &mut self,
         _: &SaveDocumentAs,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let target = SaveTarget::Markdown;
         let directory = self.suggested_directory();
         let suggested_name = self
             .active_tab()
@@ -325,7 +326,8 @@ impl MarkionApp {
             .and_then(|name| name.to_str())
             .unwrap_or("Untitled.md")
             .to_string();
-        let receiver = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+        let save_future =
+            prompt_for_save_path(window, &directory, &suggested_name, self.language, target);
 
         self.active_menu = None;
         self.status = t(self.language, Msg::StatusChoosingSaveLocation).into();
@@ -333,8 +335,8 @@ impl MarkionApp {
 
         let language = self.language;
         cx.spawn(async move |this, cx| {
-            let status = match receiver.await {
-                Ok(Ok(Some(path))) => {
+            let status = match save_future.await {
+                Some(path) => {
                     let display_path = path.display().to_string();
                     let _ = this.update(cx, |app, cx| {
                         let tab = app.active_tab_mut();
@@ -351,9 +353,7 @@ impl MarkionApp {
                     });
                     return;
                 }
-                Ok(Ok(None)) => t(language, Msg::StatusSaveCanceled).to_string(),
-                Ok(Err(err)) => tf(language, Msg::StatusSaveFailed, &[&err.to_string()]),
-                Err(_) => t(language, Msg::StatusSaveCanceled).to_string(),
+                None => t(language, Msg::StatusSaveCanceled).to_string(),
             };
 
             let _ = this.update(cx, |app, cx| {
@@ -368,84 +368,90 @@ impl MarkionApp {
     pub(super) fn export_html(
         &mut self,
         _: &ExportHtml,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_with_prompt(ExportFormat::Html, "html", cx);
+        self.export_with_prompt(ExportFormat::Html, window, cx);
     }
 
     pub(super) fn export_plain_html(
         &mut self,
         _: &ExportPlainHtml,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_with_prompt(ExportFormat::PlainHtml, "plain.html", cx);
+        self.export_with_prompt(ExportFormat::PlainHtml, window, cx);
     }
 
     pub(super) fn export_pdf(
         &mut self,
         _: &ExportPdf,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_with_prompt(ExportFormat::Pdf, "pdf", cx);
+        self.export_with_prompt(ExportFormat::Pdf, window, cx);
     }
 
     pub(super) fn export_latex(
         &mut self,
         _: &ExportLatex,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_with_prompt(ExportFormat::Latex, "tex", cx);
+        self.export_with_prompt(ExportFormat::Latex, window, cx);
     }
 
     pub(super) fn export_docx(
         &mut self,
         _: &ExportDocx,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_with_prompt(ExportFormat::Docx, "docx", cx);
+        self.export_with_prompt(ExportFormat::Docx, window, cx);
     }
 
     pub(super) fn export_png(
         &mut self,
         _: &ExportPng,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_with_prompt(ExportFormat::Png, "png", cx);
+        self.export_with_prompt(ExportFormat::Png, window, cx);
     }
 
     pub(super) fn export_jpeg(
         &mut self,
         _: &ExportJpeg,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.export_with_prompt(ExportFormat::Jpeg, "jpg", cx);
+        self.export_with_prompt(ExportFormat::Jpeg, window, cx);
     }
 
     pub(super) fn export_with_prompt(
         &mut self,
         format: ExportFormat,
-        extension: &str,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let target = SaveTarget::Export(format);
+        let profile = target.profile();
         let directory = self.suggested_directory();
-        let suggested_name = self.suggested_export_name(extension);
-        let receiver = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+        let suggested_name = self.suggested_export_name(target);
+        let save_future =
+            prompt_for_save_path(window, &directory, &suggested_name, self.language, target);
 
         self.active_menu = None;
-        self.status = self.trf(Msg::StatusChoosingExportLocation, &[extension]);
+        self.status = self.trf(
+            Msg::StatusChoosingExportLocation,
+            &[profile.suggested_suffix],
+        );
         cx.notify();
 
         let language = self.language;
         cx.spawn(async move |this, cx| {
-            let status = match receiver.await {
-                Ok(Ok(Some(path))) => {
+            let status = match save_future.await {
+                Some(path) => {
                     let display_path = path.display().to_string();
                     let _ = this.update(cx, |app, cx| {
                         let export_preferences = app.export_preferences.clone();
@@ -477,9 +483,7 @@ impl MarkionApp {
                     });
                     return;
                 }
-                Ok(Ok(None)) => t(language, Msg::StatusExportCanceled).to_string(),
-                Ok(Err(err)) => tf(language, Msg::StatusExportFailed, &[&err.to_string()]),
-                Err(_) => t(language, Msg::StatusExportCanceled).to_string(),
+                None => t(language, Msg::StatusExportCanceled).to_string(),
             };
 
             let _ = this.update(cx, |app, cx| {
@@ -501,16 +505,15 @@ impl MarkionApp {
             .unwrap_or_else(|| PathBuf::from("."))
     }
 
-    pub(super) fn suggested_export_name(&self, extension: &str) -> String {
-        self.active_tab()
+    pub(super) fn suggested_export_name(&self, target: SaveTarget) -> String {
+        let stem = self
+            .active_tab()
             .document
             .path()
             .and_then(Path::file_stem)
             .and_then(|stem| stem.to_str())
             .filter(|stem| !stem.is_empty())
-            .unwrap_or("Untitled")
-            .to_string()
-            + "."
-            + extension
+            .unwrap_or("Untitled");
+        target.suggested_name(stem)
     }
 }

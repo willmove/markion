@@ -49,6 +49,8 @@ repository = "https://github.com/willmove/markion"
 [dependencies]
 anyhow = "1.0"
 gpui = "0.2.2"
+rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
+raw-window-handle = "0.6"
 reqwest = { package = "zed-reqwest", version = "0.12.15-zed", default-features = false, features = ["rustls-tls-native-roots"] }
 tokio.workspace = true
 font8x8 = "0.3"
@@ -74,9 +76,9 @@ syntect.workspace = true
 two-face.workspace = true
 
 # TOML preferences (config.toml) and diagnostic file logging — designs adopted
-# from Typune's filesystem crate without copying it (its rfd/GTK dependency
-# would break the Linux release build; see the toml-config-logging-autosave
-# OpenSpec change).
+# from Typune's filesystem crate without copying it (its older rfd/GTK setup
+# would break the Linux release build; Markion's own save-dialog adapter uses
+# rfd's GTK-free XDG Portal/Wayland backend instead).
 serde.workspace = true
 toml.workspace = true
 tracing.workspace = true
