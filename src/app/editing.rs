@@ -416,6 +416,14 @@ impl MarkionApp {
         cx.notify();
     }
 
+    pub(super) fn hover_menu(&mut self, menu: AppMenu, cx: &mut Context<Self>) {
+        let next_menu = menu_after_hover(self.active_menu, menu);
+        if next_menu != self.active_menu {
+            self.active_menu = next_menu;
+            cx.notify();
+        }
+    }
+
     pub(super) fn close_menu(
         &mut self,
         _: &MouseDownEvent,

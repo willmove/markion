@@ -195,36 +195,54 @@ impl Render for MarkionApp {
                             self.active_menu == Some(AppMenu::File),
                             palette,
                             cx.listener(Self::toggle_file_menu),
+                            cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                                app.hover_menu(AppMenu::File, cx);
+                            }),
                         ))
                         .child(menu_title_button(
                             self.tr(Msg::MenuEdit),
                             self.active_menu == Some(AppMenu::Edit),
                             palette,
                             cx.listener(Self::toggle_edit_menu),
+                            cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                                app.hover_menu(AppMenu::Edit, cx);
+                            }),
                         ))
                         .child(menu_title_button(
                             self.tr(Msg::MenuView),
                             self.active_menu == Some(AppMenu::View),
                             palette,
                             cx.listener(Self::toggle_view_menu),
+                            cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                                app.hover_menu(AppMenu::View, cx);
+                            }),
                         ))
                         .child(menu_title_button(
                             self.tr(Msg::MenuFormat),
                             self.active_menu == Some(AppMenu::Format),
                             palette,
                             cx.listener(Self::toggle_format_menu),
+                            cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                                app.hover_menu(AppMenu::Format, cx);
+                            }),
                         ))
                         .child(menu_title_button(
                             self.tr(Msg::MenuExport),
                             self.active_menu == Some(AppMenu::Export),
                             palette,
                             cx.listener(Self::toggle_export_menu),
+                            cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                                app.hover_menu(AppMenu::Export, cx);
+                            }),
                         ))
                         .child(menu_title_button(
                             self.tr(Msg::MenuHelp),
                             self.active_menu == Some(AppMenu::Help),
                             palette,
                             cx.listener(Self::toggle_help_menu),
+                            cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                                app.hover_menu(AppMenu::Help, cx);
+                            }),
                         )),
                 ),
             )
@@ -1863,7 +1881,8 @@ pub(super) fn menu_title_button(
     label: &'static str,
     active: bool,
     palette: ThemePalette,
-    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+    click_listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+    hover_listener: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let background = if active {
         palette.active_bg
@@ -1890,7 +1909,8 @@ pub(super) fn menu_title_button(
         .text_color(foreground)
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg))
-        .on_mouse_up(MouseButton::Left, listener)
+        .on_mouse_up(MouseButton::Left, click_listener)
+        .on_mouse_move(hover_listener)
         .child(label)
 }
 

@@ -220,7 +220,6 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
             KeyBinding::new(menu_shortcuts::CUT.binding, Cut, None),
             KeyBinding::new(menu_shortcuts::UNDO.binding, Undo, None),
             KeyBinding::new(menu_shortcuts::REDO.binding, Redo, None),
-            KeyBinding::new(menu_shortcuts::REDO.aliases[0], Redo, None),
             KeyBinding::new(menu_shortcuts::BOLD.binding, Bold, None),
             KeyBinding::new(menu_shortcuts::ITALIC.binding, Italic, None),
             KeyBinding::new(menu_shortcuts::INLINE_CODE.binding, InlineCode, None),

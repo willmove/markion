@@ -745,8 +745,8 @@ const EDITING_KEYS: [ShortcutKeys; 7] = [
         macos: &["Cmd+1", "Cmd+2", "Cmd+3", "Cmd+4", "Cmd+5"],
     },
     ShortcutKeys {
-        windows_linux: &["Ctrl+Z", "Ctrl+Shift+Z"],
-        macos: &["Cmd+Z", "Cmd+Shift+Z"],
+        windows_linux: &["Ctrl+Z", "Ctrl+Y"],
+        macos: &["Cmd+Z", "Cmd+Y"],
     },
 ];
 
@@ -776,8 +776,8 @@ const EDITING_KEYS_EXTENDED: [ShortcutKeys; 7] = [
         macos: &["Cmd+1", "Cmd+2", "Cmd+3", "Cmd+4", "Cmd+5", "Cmd+6"],
     },
     ShortcutKeys {
-        windows_linux: &["Ctrl+Z", "Ctrl+Shift+Z"],
-        macos: &["Cmd+Z", "Cmd+Shift+Z"],
+        windows_linux: &["Ctrl+Z", "Ctrl+Y"],
+        macos: &["Cmd+Z", "Cmd+Y"],
     },
 ];
 
@@ -3879,6 +3879,29 @@ mod tests {
                         }));
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn shortcut_catalog_documents_only_ctrl_or_cmd_y_for_redo() {
+        for &language in Language::all() {
+            for heading_depth in [5, 6] {
+                let catalog = shortcut_catalog(language, heading_depth);
+                let undo_redo = catalog
+                    .section(ShortcutCategory::Editing)
+                    .expect("editing shortcut category")
+                    .actions
+                    .last()
+                    .expect("undo/redo shortcut row");
+                assert_eq!(
+                    undo_redo.combinations(ShortcutPlatform::WindowsLinux),
+                    &["Ctrl+Z", "Ctrl+Y"]
+                );
+                assert_eq!(
+                    undo_redo.combinations(ShortcutPlatform::MacOS),
+                    &["Cmd+Z", "Cmd+Y"]
+                );
             }
         }
     }

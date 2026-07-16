@@ -157,13 +157,16 @@ enum AppMenu {
     Help,
 }
 
+fn menu_after_hover(active: Option<AppMenu>, hovered: AppMenu) -> Option<AppMenu> {
+    active.map(|_| hovered)
+}
+
 /// One source of truth for a keyboard binding and the text shown beside its
 /// in-window menu item. Explicit platform labels keep GPUI's internal
 /// `secondary` modifier out of user-facing chrome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MenuShortcut {
     binding: &'static str,
-    aliases: &'static [&'static str],
     windows_linux: &'static str,
     macos: &'static str,
 }
@@ -172,21 +175,6 @@ impl MenuShortcut {
     const fn new(binding: &'static str, windows_linux: &'static str, macos: &'static str) -> Self {
         Self {
             binding,
-            aliases: &[],
-            windows_linux,
-            macos,
-        }
-    }
-
-    const fn with_aliases(
-        binding: &'static str,
-        aliases: &'static [&'static str],
-        windows_linux: &'static str,
-        macos: &'static str,
-    ) -> Self {
-        Self {
-            binding,
-            aliases,
             windows_linux,
             macos,
         }
@@ -197,11 +185,6 @@ impl MenuShortcut {
             ShortcutPlatform::WindowsLinux => self.windows_linux,
             ShortcutPlatform::MacOS => self.macos,
         }
-    }
-
-    #[cfg(test)]
-    fn bindings(self) -> impl Iterator<Item = &'static str> {
-        std::iter::once(self.binding).chain(self.aliases.iter().copied())
     }
 }
 
@@ -225,12 +208,7 @@ mod menu_shortcuts {
     pub const QUIT: MenuShortcut = MenuShortcut::new("secondary-q", "Ctrl+Q", "Cmd+Q");
 
     pub const UNDO: MenuShortcut = MenuShortcut::new("secondary-z", "Ctrl+Z", "Cmd+Z");
-    pub const REDO: MenuShortcut = MenuShortcut::with_aliases(
-        "secondary-shift-z",
-        &["secondary-y"],
-        "Ctrl+Shift+Z / Ctrl+Y",
-        "Cmd+Shift+Z / Cmd+Y",
-    );
+    pub const REDO: MenuShortcut = MenuShortcut::new("secondary-y", "Ctrl+Y", "Cmd+Y");
     pub const COPY: MenuShortcut = MenuShortcut::new("secondary-c", "Ctrl+C", "Cmd+C");
     pub const CUT: MenuShortcut = MenuShortcut::new("secondary-x", "Ctrl+X", "Cmd+X");
     pub const PASTE: MenuShortcut = MenuShortcut::new("secondary-v", "Ctrl+V", "Cmd+V");

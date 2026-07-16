@@ -36,20 +36,29 @@ fn menu_shortcut_labels_follow_platform_conventions() {
 }
 
 #[test]
-fn menu_shortcut_metadata_preserves_bindings_and_aliases() {
+fn menu_shortcut_metadata_has_one_redo_binding() {
     assert_eq!(menu_shortcuts::SAVE_DOCUMENT.binding, "secondary-s");
     assert_eq!(
         menu_shortcuts::EXPORT_PLAIN_HTML.label(ShortcutPlatform::MacOS),
         "Cmd+Option+Shift+H"
     );
-    assert_eq!(
-        menu_shortcuts::REDO.bindings().collect::<Vec<_>>(),
-        vec!["secondary-shift-z", "secondary-y"]
-    );
+    assert_eq!(menu_shortcuts::REDO.binding, "secondary-y");
     assert_eq!(
         menu_shortcuts::REDO.label(ShortcutPlatform::WindowsLinux),
-        "Ctrl+Shift+Z / Ctrl+Y"
+        "Ctrl+Y"
     );
+    assert_eq!(menu_shortcuts::REDO.label(ShortcutPlatform::MacOS), "Cmd+Y");
+
+    let bootstrap = include_str!("bootstrap.rs");
+    assert_eq!(
+        bootstrap
+            .matches("KeyBinding::new(menu_shortcuts::REDO.binding, Redo, None)")
+            .count(),
+        1,
+        "Redo must be installed exactly once"
+    );
+    assert!(!bootstrap.contains("REDO.aliases"));
+    assert!(!bootstrap.contains("secondary-shift-z"));
 }
 
 #[test]
@@ -150,7 +159,55 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
         );
     }
 
-    assert_eq!(menu_shortcuts::REDO.aliases, &["secondary-y"]);
+    assert_eq!(
+        menu_shortcuts::REDO.label(ShortcutPlatform::WindowsLinux),
+        "Ctrl+Y"
+    );
+}
+
+#[test]
+fn menu_hover_switches_only_during_an_open_menu_session() {
+    assert_eq!(menu_after_hover(None, AppMenu::View), None);
+    assert_eq!(
+        menu_after_hover(Some(AppMenu::Format), AppMenu::View),
+        Some(AppMenu::View)
+    );
+    assert_eq!(
+        menu_after_hover(Some(AppMenu::View), AppMenu::View),
+        Some(AppMenu::View)
+    );
+
+    let dismissed = None;
+    assert_eq!(menu_after_hover(dismissed, AppMenu::Help), None);
+}
+
+#[test]
+fn every_menu_title_wires_click_and_hover_behavior() {
+    let source = include_str!("root_view.rs");
+    for menu in ["File", "Edit", "View", "Format", "Export", "Help"] {
+        assert!(
+            source.contains(&format!("app.hover_menu(AppMenu::{menu}, cx);")),
+            "{menu} title must switch an open menu session on hover"
+        );
+        assert!(
+            source.contains(&format!(
+                "cx.listener(Self::toggle_{}_menu)",
+                menu.to_lowercase()
+            )),
+            "{menu} title must retain its click toggle"
+        );
+    }
+
+    let title_button = source
+        .split_once("pub(super) fn menu_title_button")
+        .and_then(|(_, rest)| {
+            rest.split_once("pub(super) fn menu_action_button")
+                .map(|(button, _)| button)
+        })
+        .expect("menu title button helper");
+    assert!(title_button.contains(".on_mouse_up(MouseButton::Left, click_listener)"));
+    assert!(title_button.contains(".on_mouse_move(hover_listener)"));
+    assert!(source.contains("cx.listener(Self::close_menu)"));
 }
 
 #[test]
