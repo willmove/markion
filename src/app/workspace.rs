@@ -3,6 +3,11 @@ use super::*;
 impl MarkionApp {
     pub(super) fn set_view_mode(&mut self, view_mode: ViewMode, cx: &mut Context<Self>) {
         assign_view_mode(&mut self.view_mode, view_mode);
+        if matches!(view_mode, ViewMode::VisualEdit) {
+            let tab = self.active_tab_mut();
+            tab.visual_cursor_reveal_pending = true;
+            tab.visual_caret_bounds = None;
+        }
         self.status = self.view_mode_status().into();
         self.active_menu = None;
         cx.notify();

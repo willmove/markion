@@ -475,7 +475,12 @@ pub struct VisualBlock {
     pub kind: VisualBlockKind,
     pub source_range: Range<usize>,
     pub editable_runs: Vec<VisualInlineRun>,
+    /// Byte-exact inline constructs that may be temporarily emitted as source
+    /// while the rest of the block remains rendered.
+    pub reveal_groups: Vec<VisualRevealGroup>,
     pub marker_ranges: Vec<Range<usize>>,
+    /// Exact structural prefix for supported line-oriented blocks.
+    pub block_prefix: Option<VisualBlockPrefix>,
     pub source_island: Option<VisualSourceIslandKind>,
 }
 
@@ -506,6 +511,10 @@ pub enum VisualBlockKind {
         rows: Vec<Vec<String>>,
         alignments: Vec<TableAlignment>,
     },
+    /// Whitespace-only source not owned by a parsed preview block. Visual Edit
+    /// keeps it as a compact row so blank lines and trailing whitespace remain
+    /// valid caret positions without showing raw source until focused.
+    Whitespace,
     Unsupported,
 }
 
@@ -520,6 +529,74 @@ pub struct VisualInlineRun {
     pub link_target_range: Option<Range<usize>>,
     /// True when the parser's visible text does not map byte-for-byte to source.
     pub conservative_fallback: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualRevealKind {
+    Strong,
+    Emphasis,
+    Strikethrough,
+    InlineCode,
+    Link,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualRevealGroup {
+    pub kind: VisualRevealKind,
+    /// Complete source syntax, including opening/closing markers and, for a
+    /// link, its destination and optional title.
+    pub source_range: Range<usize>,
+    /// Exact rendered-content ranges contained by this syntax group.
+    pub content_ranges: Vec<Range<usize>>,
+    pub link_target_range: Option<Range<usize>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualProjectionSegment {
+    pub display_range: Range<usize>,
+    pub source_range: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualProjectionSpan {
+    pub display_range: Range<usize>,
+    pub style: InlineStyle,
+    pub link: bool,
+    pub source: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualProjection {
+    pub text: String,
+    pub segments: Vec<VisualProjectionSegment>,
+    pub spans: Vec<VisualProjectionSpan>,
+    pub revealed_source_ranges: Vec<Range<usize>>,
+    pub source_anchor: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualBlockPrefixKind {
+    Heading { level: u8 },
+    BlockQuote { depth: usize },
+    UnorderedList { level: usize },
+    OrderedList { level: usize, index: u64 },
+    TaskList { level: usize, checked: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualBlockPrefix {
+    pub kind: VisualBlockPrefixKind,
+    /// Indentation only. Empty for a top-level block.
+    pub indentation_range: Range<usize>,
+    /// Indentation plus the complete structural marker and following spacing.
+    pub source_range: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualStructuralEdit {
+    pub range: Range<usize>,
+    pub replacement: String,
+    pub selection_after: Range<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

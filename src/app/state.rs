@@ -132,6 +132,19 @@ pub(super) struct EditorTab {
     pub(super) preview_list: ListState,
     pub(super) visual_list: ListState,
     pub(super) visual_list_blocks: std::sync::Arc<Vec<VisualBlock>>,
+    /// One-shot request consumed by the next Visual Edit render. Keeping this
+    /// separate from list state avoids snapping manual scroll back to the caret
+    /// on every unrelated frame.
+    pub(super) visual_cursor_reveal_pending: bool,
+    /// Ephemeral screen-space geometry produced by the focused visual row.
+    pub(super) visual_caret_bounds: Option<Bounds<Pixels>>,
+    /// Bounds of the Visual Edit input bridge, used as an IME fallback before
+    /// the focused virtual row has painted.
+    pub(super) visual_input_bounds: Option<Bounds<Pixels>>,
+    #[cfg(test)]
+    pub(super) visual_last_projection: Option<(String, Vec<Range<usize>>)>,
+    #[cfg(test)]
+    pub(super) visual_projection_paint_count: usize,
     /// Snapshot of the block slice `preview_list` currently reflects. Each frame
     /// we diff the freshly-parsed blocks against this and `splice` only the
     /// changed range into `preview_list`, which preserves scroll position (a
@@ -209,6 +222,13 @@ impl EditorTab {
             preview_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list_blocks: std::sync::Arc::new(Vec::new()),
+            visual_cursor_reveal_pending: false,
+            visual_caret_bounds: None,
+            visual_input_bounds: None,
+            #[cfg(test)]
+            visual_last_projection: None,
+            #[cfg(test)]
+            visual_projection_paint_count: 0,
             preview_list_blocks: std::sync::Arc::new(Vec::new()),
             // Seen = current version so the first render is not mistaken for an
             // edit; reflects = None so that same render parses immediately.
@@ -274,6 +294,16 @@ impl EditorTab {
         self.visual_list_blocks = blocks.clone();
     }
 
+    pub(super) fn take_visual_cursor_reveal_index(
+        &mut self,
+        blocks: &[VisualBlock],
+    ) -> Option<usize> {
+        if !std::mem::take(&mut self.visual_cursor_reveal_pending) {
+            return None;
+        }
+        visual_block_index_for_offset(blocks, self.cursor_offset(), self.document.text().len())
+    }
+
     /// Drop the preview list back to an empty, top-scrolled state. Used when the
     /// document is wholesale replaced (open/new/reload) so the next render
     /// rebuilds the list from scratch and starts at the top rather than
@@ -294,6 +324,14 @@ impl EditorTab {
         self.preview_parse_inflight = None;
         self.visual_list.reset(0);
         self.visual_list_blocks = std::sync::Arc::new(Vec::new());
+        self.visual_cursor_reveal_pending = true;
+        self.visual_caret_bounds = None;
+        self.visual_input_bounds = None;
+        #[cfg(test)]
+        {
+            self.visual_last_projection = None;
+            self.visual_projection_paint_count = 0;
+        }
         // The replacement document's scroll ranges differ, so the cached sync
         // fractions are stale; let the next Split frame re-derive them.
         self.sync_scroll_editor_fraction = None;

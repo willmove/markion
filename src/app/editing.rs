@@ -830,13 +830,22 @@ impl MarkionApp {
         }
         let cursor = self.active_tab().selected_range.start;
         let selected = self.active_tab().selected_range.clone();
+        let structural_edit = (matches!(self.view_mode, ViewMode::VisualEdit)
+            && selected.is_empty())
+        .then(|| self.active_tab().document.visual_enter_edit(cursor))
+        .flatten();
         self.push_undo_snapshot();
         let tab = self.active_tab_mut();
-        if !selected.is_empty() {
-            tab.document.replace_range(selected, "");
+        if let Some(edit) = structural_edit {
+            tab.document.replace_range(edit.range, &edit.replacement);
+            tab.selected_range = edit.selection_after;
+        } else {
+            if !selected.is_empty() {
+                tab.document.replace_range(selected, "");
+            }
+            let new_cursor = tab.document.insert_markdown_newline(cursor);
+            tab.selected_range = new_cursor..new_cursor;
         }
-        let new_cursor = tab.document.insert_markdown_newline(cursor);
-        tab.selected_range = new_cursor..new_cursor;
         tab.selection_reversed = false;
         tab.marked_range = None;
         self.status = t(self.language, Msg::StatusEditing).into();
@@ -901,6 +910,25 @@ impl MarkionApp {
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.pop_text_input(cx) {
+            return;
+        }
+
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && self.active_tab().selected_range.is_empty()
+            && let Some(edit) = self
+                .active_tab()
+                .document
+                .visual_backspace_edit(self.cursor_offset())
+        {
+            self.push_undo_snapshot();
+            let tab = self.active_tab_mut();
+            tab.document.replace_range(edit.range, &edit.replacement);
+            tab.selected_range = edit.selection_after;
+            tab.selection_reversed = false;
+            tab.marked_range = None;
+            self.status = t(self.language, Msg::StatusEditing).into();
+            self.after_document_changed(cx);
+            cx.notify();
             return;
         }
 
@@ -1143,6 +1171,8 @@ impl MarkionApp {
         let tab = self.active_tab_mut();
         tab.selected_range = offset..offset;
         tab.selection_reversed = false;
+        tab.visual_cursor_reveal_pending = true;
+        tab.visual_caret_bounds = None;
         self.center_cursor_if_typewriter();
         cx.notify();
     }
@@ -1158,6 +1188,8 @@ impl MarkionApp {
             tab.selection_reversed = !tab.selection_reversed;
             tab.selected_range = tab.selected_range.end..tab.selected_range.start;
         }
+        tab.visual_cursor_reveal_pending = true;
+        tab.visual_caret_bounds = None;
         self.center_cursor_if_typewriter();
         cx.notify();
     }

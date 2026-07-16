@@ -335,6 +335,9 @@ impl MarkionApp {
     }
 
     pub(super) fn after_document_changed(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.visual_cursor_reveal_pending = true;
+        tab.visual_caret_bounds = None;
         self.refresh_search_matches();
         self.center_cursor_if_typewriter();
         self.schedule_autosave(cx);
@@ -736,6 +739,8 @@ impl MarkionApp {
             tab.selected_range = found.range.clone();
             tab.selection_reversed = false;
             tab.marked_range = None;
+            tab.visual_cursor_reveal_pending = true;
+            tab.visual_caret_bounds = None;
             self.scroll_editor_to_offset(found.range.start);
             self.status = self.trf(
                 Msg::StatusMatchPosition,
@@ -756,6 +761,8 @@ impl MarkionApp {
         tab.selected_range = offset..offset;
         tab.selection_reversed = false;
         tab.marked_range = None;
+        tab.visual_cursor_reveal_pending = true;
+        tab.visual_caret_bounds = None;
         self.scroll_editor_to_offset(offset);
         self.status = t(self.language, Msg::StatusJumpedToHeading).into();
         cx.notify();

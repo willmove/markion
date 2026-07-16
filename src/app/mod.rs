@@ -28,16 +28,16 @@ use gpui::{
 use markion::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,
     EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences, FileTree,
-    FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, Language,
-    MarkdownDocument, MarkdownFormat, Msg, PreviewBlock, RichText, SearchMatchRange, SearchOptions,
-    ShortcutCategory, ShortcutPlatform, SidebarTab, TableEdit, ThemeColors, ThemeDefinition,
-    ViewMode, VisualBlock, VisualBlockKind, VisualInlineRun, VisualSourceIslandKind,
-    builtin_diagram_registry, builtin_theme_definitions, default_preferences_path,
-    default_recovery_dir, default_themes_dir, delete_recovery_file, diagram_backend_id,
-    highlight_code, html_preview_parts, html_preview_plain_text, is_markdown_path,
-    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
-    normalize_heading_menu_max_level, render_math, save_app_preferences, save_theme_definition,
-    shortcut_catalog, sidebar_tab_label, t, tf, title_from_path,
+    FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, InlineStyle,
+    Language, MarkdownDocument, MarkdownFormat, Msg, PreviewBlock, RichText, SearchMatchRange,
+    SearchOptions, ShortcutCategory, ShortcutPlatform, SidebarTab, TableEdit, ThemeColors,
+    ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind, VisualSourceIslandKind,
+    build_visual_projection, builtin_diagram_registry, builtin_theme_definitions,
+    default_preferences_path, default_recovery_dir, default_themes_dir, delete_recovery_file,
+    diagram_backend_id, highlight_code, html_preview_parts, html_preview_plain_text,
+    is_markdown_path, list_recovery_files, list_theme_definitions, load_app_preferences,
+    load_recovery_file, normalize_heading_menu_max_level, render_math, save_app_preferences,
+    save_theme_definition, shortcut_catalog, sidebar_tab_label, t, tf, title_from_path,
 };
 use unicode_segmentation::UnicodeSegmentation;
 

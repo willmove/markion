@@ -33,6 +33,12 @@ impl Render for MarkionApp {
             if matches!(self.view_mode, ViewMode::VisualEdit) {
                 let blocks = self.active_tab().document.visual_blocks_shared();
                 self.active_tab_mut().sync_visual_list(&blocks);
+                if let Some(index) = self
+                    .active_tab_mut()
+                    .take_visual_cursor_reveal_index(&blocks)
+                {
+                    self.active_tab().visual_list.scroll_to_reveal_item(index);
+                }
                 blocks
             } else {
                 std::sync::Arc::new(Vec::new())
@@ -494,55 +500,69 @@ pub(super) fn visual_edit_surface_view(
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let is_empty = items.is_empty();
-    div().relative().flex_1().min_h_0().child(
-        div()
-            .size_full()
-            .pl(px(PANE_INNER_PADDING))
-            .pr(px(PREVIEW_SCROLLBAR_SAFE_RIGHT_PADDING))
-            .bg(palette.surface_bg)
-            .border_1()
-            .border_color(palette.border)
-            .cursor(CursorStyle::IBeam)
-            .when(is_empty, |surface| {
-                surface.child(
-                    div()
-                        .p(px(PANE_INNER_PADDING))
-                        .text_size(px(15.))
-                        .text_color(palette.muted)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|app, _, window, cx| {
-                                window.focus(&app.focus_handle(cx));
-                                app.move_to(0, cx);
+    let input_bridge = VisualInputElement { app: cx.entity() };
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .child(
+            div()
+                .size_full()
+                .pl(px(PANE_INNER_PADDING))
+                .pr(px(PREVIEW_SCROLLBAR_SAFE_RIGHT_PADDING))
+                .bg(palette.surface_bg)
+                .border_1()
+                .border_color(palette.border)
+                .cursor(CursorStyle::IBeam)
+                .when(is_empty, |surface| {
+                    surface.child(
+                        div()
+                            .p(px(PANE_INNER_PADDING))
+                            .text_size(px(15.))
+                            .text_color(palette.muted)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|app, _, window, cx| {
+                                    window.focus(&app.focus_handle(cx));
+                                    app.move_to(0, cx);
+                                }),
+                            )
+                            .child("Type Markdown here..."),
+                    )
+                })
+                .when(!is_empty, move |surface| {
+                    surface.child(
+                        list(
+                            list_state,
+                            cx.processor(move |app, ix: usize, _window, cx| {
+                                div()
+                                    .w_full()
+                                    .line_height(px(PREVIEW_LINE_HEIGHT))
+                                    .child(visual_block_view(
+                                        app,
+                                        &items[ix],
+                                        ix,
+                                        document_dir.as_deref(),
+                                        cx,
+                                    ))
+                                    .into_any_element()
                             }),
                         )
-                        .child("Type Markdown here..."),
-                )
-            })
-            .when(!is_empty, move |surface| {
-                surface.child(
-                    list(
-                        list_state,
-                        cx.processor(move |app, ix: usize, _window, cx| {
-                            div()
-                                .w_full()
-                                .line_height(px(PREVIEW_LINE_HEIGHT))
-                                .child(visual_block_view(
-                                    app,
-                                    &items[ix],
-                                    ix,
-                                    document_dir.as_deref(),
-                                    cx,
-                                ))
-                                .into_any_element()
-                        }),
+                        .size_full()
+                        .pt(px(PANE_INNER_PADDING))
+                        .pb(px(PANE_INNER_PADDING)),
                     )
-                    .size_full()
-                    .pt(px(PANE_INNER_PADDING))
-                    .pb(px(PANE_INNER_PADDING)),
-                )
-            }),
-    )
+                }),
+        )
+        .child(
+            div()
+                .absolute()
+                .top(px(0.))
+                .right(px(0.))
+                .bottom(px(0.))
+                .left(px(0.))
+                .child(input_bridge),
+        )
 }
 
 pub(super) fn search_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {

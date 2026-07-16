@@ -1,5 +1,22 @@
 use super::*;
 
+pub(super) fn visual_ime_bounds(
+    caret: Option<Bounds<Pixels>>,
+    surface: Option<Bounds<Pixels>>,
+) -> Option<Bounds<Pixels>> {
+    caret.or_else(|| {
+        surface.map(|surface| {
+            Bounds::new(
+                point(
+                    surface.left() + px(PANE_INNER_PADDING),
+                    surface.top() + px(PANE_INNER_PADDING),
+                ),
+                size(px(2.), px(PREVIEW_LINE_HEIGHT)),
+            )
+        })
+    })
+}
+
 impl EntityInputHandler for MarkionApp {
     fn text_for_range(
         &mut self,
@@ -131,6 +148,9 @@ impl EntityInputHandler for MarkionApp {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let tab = self.active_tab();
+        if matches!(self.view_mode, ViewMode::VisualEdit) {
+            return visual_ime_bounds(tab.visual_caret_bounds, tab.visual_input_bounds);
+        }
         if tab.last_lines.is_empty() {
             return None;
         }

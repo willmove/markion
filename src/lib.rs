@@ -106,9 +106,12 @@ pub use model::{
     MarkdownFormat, MathExpression, PreviewBlock, RecoveryDocument, RenderedMath, ReplaceResult,
     RichText, SearchError, SearchMatch, SearchMatchRange, SearchOptions, SidebarTab,
     TableAlignment, TableEdit, TableEditResult, ThemeColors, ThemeDefinition, ViewMode,
-    VisualBlock, VisualBlockKind, VisualInlineRun, VisualSourceIslandKind, YamlFrontMatter,
+    VisualBlock, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind, VisualInlineRun,
+    VisualProjection, VisualProjectionSegment, VisualProjectionSpan, VisualRevealGroup,
+    VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit, YamlFrontMatter,
     builtin_theme_definitions, normalize_heading_menu_max_level,
 };
+pub use visual::build_visual_projection;
 
 pub use diagram::{builtin_diagram_registry, diagram_backend_id};
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
@@ -883,6 +886,119 @@ impl MarkdownDocument {
         self.text.insert_str(cursor, &insertion);
         self.invalidate_derived();
         cursor + insertion.len()
+    }
+
+    /// Compute a single source edit for a Visual Edit structural Enter.
+    /// Returning an edit rather than mutating here lets the application take
+    /// exactly one undo snapshot and perform exactly one document replacement.
+    pub fn visual_enter_edit(&self, byte_index: usize) -> Option<VisualStructuralEdit> {
+        let cursor = clamp_to_char_boundary(&self.text, byte_index);
+        let prefix = visual::structural_prefix_at(&self.text, cursor)?;
+        let line_start = self.line_start_at(cursor);
+        let line_end = self.line_end_at(cursor);
+        if prefix.source_range.start != line_start || cursor < prefix.source_range.end {
+            return None;
+        }
+        let content_is_empty = self.text[prefix.source_range.end..line_end]
+            .trim()
+            .is_empty();
+        let exits_when_empty = matches!(
+            prefix.kind,
+            VisualBlockPrefixKind::BlockQuote { .. }
+                | VisualBlockPrefixKind::UnorderedList { .. }
+                | VisualBlockPrefixKind::OrderedList { .. }
+                | VisualBlockPrefixKind::TaskList { .. }
+        );
+        let empty_structure_exit = content_is_empty && exits_when_empty;
+
+        let blocks = self.visual_blocks_shared();
+        let active_block = blocks.iter().find(|block| {
+            block.source_range.contains(&cursor)
+                || (cursor == self.text.len() && cursor == block.source_range.end)
+        })?;
+        let supported_block = matches!(
+            active_block.kind,
+            VisualBlockKind::Heading { .. }
+                | VisualBlockKind::BlockQuote
+                | VisualBlockKind::ListItem { .. }
+        );
+        // pulldown-cmark does not emit preview content for an empty blockquote
+        // or ordinary list item, so the visual model conservatively represents
+        // a line such as `> ` or `- ` as an unsupported gap. Permit only the
+        // exact empty-structure exit in that gap; explicit code, HTML, math,
+        // front-matter, image, and table source islands remain excluded.
+        let orphaned_empty_structure = empty_structure_exit
+            && matches!(active_block.kind, VisualBlockKind::Unsupported)
+            && active_block.source_island == Some(VisualSourceIslandKind::Unsupported)
+            && active_block.source_range.start <= line_start
+            && active_block.source_range.end >= line_end;
+        if !supported_block && !orphaned_empty_structure {
+            return None;
+        }
+        if empty_structure_exit {
+            return Some(VisualStructuralEdit {
+                range: prefix.source_range,
+                replacement: String::new(),
+                selection_after: line_start..line_start,
+            });
+        }
+
+        let continuation = markdown_continuation(&self.text[line_start..cursor]);
+        let replacement = format!("\n{continuation}");
+        let next = cursor + replacement.len();
+        Some(VisualStructuralEdit {
+            range: cursor..cursor,
+            replacement,
+            selection_after: next..next,
+        })
+    }
+
+    /// Compute a single source edit for Backspace at the first visible content
+    /// position of a supported Visual Edit block.
+    pub fn visual_backspace_edit(&self, byte_index: usize) -> Option<VisualStructuralEdit> {
+        let cursor = clamp_to_char_boundary(&self.text, byte_index);
+        let blocks = self.visual_blocks_shared();
+        let active_block = blocks.iter().find(|block| {
+            block.source_range.contains(&cursor)
+                || (cursor == self.text.len() && cursor == block.source_range.end)
+        })?;
+        if !matches!(
+            active_block.kind,
+            VisualBlockKind::Heading { .. }
+                | VisualBlockKind::BlockQuote
+                | VisualBlockKind::ListItem { .. }
+        ) {
+            return None;
+        }
+        let prefix = visual::structural_prefix_at(&self.text, cursor)?;
+        if cursor != prefix.source_range.end {
+            return None;
+        }
+        let nested_list = matches!(
+            prefix.kind,
+            VisualBlockPrefixKind::UnorderedList { .. }
+                | VisualBlockPrefixKind::OrderedList { .. }
+                | VisualBlockPrefixKind::TaskList { .. }
+        ) && !prefix.indentation_range.is_empty();
+        if nested_list {
+            let remove_len = line_outdent_len(&self.text, prefix.indentation_range.start)
+                .min(prefix.indentation_range.len());
+            if remove_len == 0 {
+                return None;
+            }
+            let next = cursor - remove_len;
+            return Some(VisualStructuralEdit {
+                range: prefix.indentation_range.start..prefix.indentation_range.start + remove_len,
+                replacement: String::new(),
+                selection_after: next..next,
+            });
+        }
+        let next = prefix.source_range.start;
+        Some(VisualStructuralEdit {
+            range: prefix.source_range,
+            replacement: String::new(),
+            selection_after: next..next,
+        })
     }
 
     pub fn render_html_fragment(&self) -> String {
@@ -2472,6 +2588,103 @@ mod tests {
 
         assert_eq!(doc.text(), "");
         assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn visual_enter_edits_cover_supported_block_transitions() {
+        let cases = [
+            ("# 标题", "# 标题\n"),
+            ("> 引用", "> 引用\n> "),
+            ("- item", "- item\n- "),
+            ("3. item", "3. item\n4. "),
+            ("- [x] done", "- [x] done\n- [ ] "),
+        ];
+        for (source, expected) in cases {
+            let mut doc = MarkdownDocument::from_text(source);
+            let version = doc.version();
+            let edit = doc
+                .visual_enter_edit(source.len())
+                .unwrap_or_else(|| panic!("missing structural Enter for {source:?}"));
+            doc.replace_range(edit.range, &edit.replacement);
+            assert_eq!(doc.text(), expected, "source: {source:?}");
+            assert_eq!(edit.selection_after, expected.len()..expected.len());
+            assert!(doc.version() > version);
+            assert!(doc.is_dirty());
+        }
+
+        for source in ["> ", "- ", "- [ ] ", "1. "] {
+            let mut doc = MarkdownDocument::from_text(source);
+            let edit = doc
+                .visual_enter_edit(source.len())
+                .unwrap_or_else(|| panic!("missing empty-structure exit for {source:?}"));
+            doc.replace_range(edit.range, &edit.replacement);
+            assert_eq!(doc.text(), "", "source: {source:?}");
+            assert_eq!(edit.selection_after, 0..0);
+        }
+
+        let mut middle = MarkdownDocument::from_text("before\n> \nafter");
+        let cursor = middle.text().find("> ").unwrap() + 2;
+        let edit = middle
+            .visual_enter_edit(cursor)
+            .expect("empty blockquote in the middle of a document should exit");
+        middle.replace_range(edit.range, &edit.replacement);
+        assert_eq!(middle.text(), "before\n\nafter");
+        assert_eq!(edit.selection_after, 7..7);
+
+        let code = MarkdownDocument::from_text("```text\n> \n- \n1. \n- [ ] \n```\n");
+        for source in ["> ", "- ", "1. ", "- [ ] "] {
+            let cursor = code.text().find(source).unwrap() + source.len();
+            assert!(
+                code.visual_enter_edit(cursor).is_none(),
+                "source-island prefix must remain literal: {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn visual_backspace_demotes_top_level_blocks_and_outdents_nested_lists() {
+        let cases = [
+            ("# 标题", 2, "标题"),
+            ("> quote", 2, "quote"),
+            ("- item", 2, "item"),
+            ("4. item", 3, "item"),
+            ("- [x] done", 6, "done"),
+        ];
+        for (source, cursor, expected) in cases {
+            let mut doc = MarkdownDocument::from_text(source);
+            let edit = doc
+                .visual_backspace_edit(cursor)
+                .unwrap_or_else(|| panic!("missing structural Backspace for {source:?}"));
+            doc.replace_range(edit.range, &edit.replacement);
+            assert_eq!(doc.text(), expected, "source: {source:?}");
+            assert_eq!(edit.selection_after, 0..0);
+        }
+
+        let mut nested = MarkdownDocument::from_text("  - 项目");
+        let edit = nested.visual_backspace_edit(4).unwrap();
+        nested.replace_range(edit.range, &edit.replacement);
+        assert_eq!(nested.text(), "- 项目");
+        assert_eq!(edit.selection_after, 2..2);
+        assert!(nested.visual_backspace_edit(nested.text().len()).is_none());
+    }
+
+    #[test]
+    fn visual_structural_helpers_are_non_mutating_until_applied() {
+        let doc = MarkdownDocument::from_text("- item");
+        let version = doc.version();
+        let blocks = doc.visual_blocks_shared();
+        assert!(doc.visual_enter_edit(doc.text().len()).is_some());
+        assert!(doc.visual_backspace_edit(2).is_some());
+        assert_eq!(doc.version(), version);
+        assert!(std::sync::Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+
+        let code = MarkdownDocument::from_text("```text\n- item\n> quote\n```\n");
+        let list_cursor = code.text().find("item").unwrap();
+        let quote_cursor = code.text().find("quote").unwrap();
+        assert!(code.visual_enter_edit(list_cursor).is_none());
+        assert!(code.visual_backspace_edit(list_cursor).is_none());
+        assert!(code.visual_enter_edit(quote_cursor).is_none());
+        assert!(code.visual_backspace_edit(quote_cursor).is_none());
     }
 
     #[test]
