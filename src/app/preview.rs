@@ -1620,7 +1620,7 @@ pub(super) fn preview_block_view(
             )),
         PreviewBlock::CodeBlock { language, code, .. } => {
             match app.diagram_entry(language.as_deref(), code) {
-                Some(DiagramCacheEntry::Ready(image)) => div()
+                Some(DiagramCacheEntry::Ready(image, size)) => div()
                     .mb_3()
                     .p_3()
                     .rounded_md()
@@ -1628,7 +1628,13 @@ pub(super) fn preview_block_view(
                     .border_color(rgb(0xcbd5e1))
                     .bg(rgb(0xffffff))
                     .overflow_hidden()
-                    .child(img(image).max_w_full()),
+                    // The raster is supersampled, and `RenderImage::scale_factor`
+                    // can't say so, so an auto-sized element would resolve to the
+                    // raw pixel count and draw at double size. Pinning the
+                    // intrinsic width and leaving height auto cancels the factor
+                    // out. A wider-than-column diagram still reserves its
+                    // intrinsic height; see the change's design.md.
+                    .child(img(ImageSource::Render(image)).w(size.width).max_w_full()),
                 Some(DiagramCacheEntry::Pending) => div()
                     .mb_3()
                     .p_3()

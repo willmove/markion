@@ -56,6 +56,14 @@ tokio.workspace = true
 font8x8 = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 pulldown-cmark.workspace = true
+# Diagram SVG is rasterized in-crate (src/app/diagram.rs) rather than through
+# `Image::from_bytes(ImageFormat::Svg, ..)`: gpui 0.2.2 uploads that path's
+# premultiplied-RGBA pixmap as BGRA without swapping channels and rasterizes it
+# at 1x, and it exports no way to configure or reuse its own SvgRenderer. These
+# versions must stay unified with gpui's own resvg/usvg so the `image::Frame` we
+# hand to `RenderImage::new` is the same type gpui expects.
+resvg = "0.45.1"
+usvg = "0.45.1"
 regex = "1.11"
 serde_yaml = "0.9"
 unicode-segmentation = "1.12"
