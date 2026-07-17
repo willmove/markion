@@ -325,6 +325,62 @@ enum ExtendedInlineSegment {
     AutoLink(String),
 }
 
+/// Delimited extended syntax shared by Preview and the source-ranged Visual
+/// Edit model. Ranges returned by [`extended_inline_matches`] are relative to
+/// the input slice and always land on UTF-8 boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExtendedInlineKind {
+    Highlight,
+    Superscript,
+    Subscript,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExtendedInlineMatch {
+    pub kind: ExtendedInlineKind,
+    pub source_range: Range<usize>,
+    pub content_range: Range<usize>,
+}
+
+/// Finds every valid delimited extended-inline construct, including constructs
+/// nested inside another construct. The grammar is intentionally the same one
+/// used by Preview's recursive segment parser below.
+pub(crate) fn extended_inline_matches(text: &str) -> Vec<ExtendedInlineMatch> {
+    fn collect(text: &str, base: usize, matches: &mut Vec<ExtendedInlineMatch>) {
+        let mut index = 0usize;
+        while index < text.len() {
+            let rest = &text[index..];
+            if rest.starts_with("~~") {
+                index += 2;
+                continue;
+            }
+            if let Some(found) = consume_extended_inline_delimiter(rest) {
+                let inner = &rest[found.content_range.clone()];
+                let content_start = base + index + found.content_range.start;
+                matches.push(ExtendedInlineMatch {
+                    kind: found.kind,
+                    source_range: base + index + found.source_range.start
+                        ..base + index + found.source_range.end,
+                    content_range: content_start..base + index + found.content_range.end,
+                });
+                collect(inner, content_start, matches);
+                index += found.source_range.end;
+                continue;
+            }
+
+            index += rest
+                .chars()
+                .next()
+                .expect("non-empty extended-inline remainder")
+                .len_utf8();
+        }
+    }
+
+    let mut matches = Vec::new();
+    collect(text, 0, &mut matches);
+    matches
+}
+
 pub(crate) fn render_extended_inline_plain(text: &str) -> String {
     let mut output = String::new();
     for segment in parse_extended_inline_segments(text) {
@@ -938,44 +994,21 @@ fn parse_extended_inline_segments(text: &str) -> Vec<ExtendedInlineSegment> {
     while index < text.len() {
         let rest = &text[index..];
 
-        if let Some(stripped) = rest.strip_prefix("==")
-            && let Some(end) = stripped.find("==")
-        {
-            let inner = &stripped[..end];
-            if !inner.trim().is_empty() {
-                segments.push(ExtendedInlineSegment::Highlight(
-                    parse_extended_inline_segments(inner),
-                ));
-                index += end + 4;
-                continue;
-            }
+        if rest.starts_with("~~") {
+            push_extended_text(&mut segments, "~~");
+            index += 2;
+            continue;
         }
-
-        if let Some(stripped) = rest.strip_prefix('^')
-            && let Some(end) = stripped.find('^')
-        {
-            let inner = &stripped[..end];
-            if is_valid_short_inline_extent(inner) {
-                segments.push(ExtendedInlineSegment::Superscript(
-                    parse_extended_inline_segments(inner),
-                ));
-                index += end + 2;
-                continue;
-            }
-        }
-
-        if !rest.starts_with("~~")
-            && let Some(stripped) = rest.strip_prefix('~')
-            && let Some(end) = stripped.find('~')
-        {
-            let inner = &stripped[..end];
-            if is_valid_short_inline_extent(inner) {
-                segments.push(ExtendedInlineSegment::Subscript(
-                    parse_extended_inline_segments(inner),
-                ));
-                index += end + 2;
-                continue;
-            }
+        if let Some(found) = consume_extended_inline_delimiter(rest) {
+            let inner = &rest[found.content_range.clone()];
+            let children = parse_extended_inline_segments(inner);
+            segments.push(match found.kind {
+                ExtendedInlineKind::Highlight => ExtendedInlineSegment::Highlight(children),
+                ExtendedInlineKind::Superscript => ExtendedInlineSegment::Superscript(children),
+                ExtendedInlineKind::Subscript => ExtendedInlineSegment::Subscript(children),
+            });
+            index += found.source_range.end;
+            continue;
         }
 
         if let Some(stripped) = rest.strip_prefix(':')
@@ -1001,6 +1034,50 @@ fn parse_extended_inline_segments(text: &str) -> Vec<ExtendedInlineSegment> {
     }
 
     segments
+}
+
+fn consume_extended_inline_delimiter(text: &str) -> Option<ExtendedInlineMatch> {
+    if let Some(stripped) = text.strip_prefix("==")
+        && let Some(end) = stripped.find("==")
+    {
+        let inner = &stripped[..end];
+        if !inner.trim().is_empty() {
+            return Some(ExtendedInlineMatch {
+                kind: ExtendedInlineKind::Highlight,
+                source_range: 0..end + 4,
+                content_range: 2..end + 2,
+            });
+        }
+    }
+
+    if let Some(stripped) = text.strip_prefix('^')
+        && let Some(end) = stripped.find('^')
+    {
+        let inner = &stripped[..end];
+        if is_valid_short_inline_extent(inner) {
+            return Some(ExtendedInlineMatch {
+                kind: ExtendedInlineKind::Superscript,
+                source_range: 0..end + 2,
+                content_range: 1..end + 1,
+            });
+        }
+    }
+
+    if !text.starts_with("~~")
+        && let Some(stripped) = text.strip_prefix('~')
+        && let Some(end) = stripped.find('~')
+    {
+        let inner = &stripped[..end];
+        if is_valid_short_inline_extent(inner) {
+            return Some(ExtendedInlineMatch {
+                kind: ExtendedInlineKind::Subscript,
+                source_range: 0..end + 2,
+                content_range: 1..end + 1,
+            });
+        }
+    }
+
+    None
 }
 
 fn push_extended_text(segments: &mut Vec<ExtendedInlineSegment>, text: &str) {
@@ -1126,4 +1203,82 @@ pub(crate) fn slugify(input: &str) -> String {
     }
 
     slug.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod extended_inline_range_tests {
+    use super::{ExtendedInlineKind, extended_inline_matches, render_extended_inline_plain};
+
+    #[test]
+    fn matches_nested_utf8_extended_inline_ranges() {
+        let source = "==高^2^亮== and H~2~O";
+        let matches = extended_inline_matches(source);
+        let found = matches
+            .iter()
+            .map(|item| {
+                (
+                    item.kind,
+                    &source[item.source_range.clone()],
+                    &source[item.content_range.clone()],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            found,
+            vec![
+                (ExtendedInlineKind::Highlight, "==高^2^亮==", "高^2^亮"),
+                (ExtendedInlineKind::Superscript, "^2^", "2"),
+                (ExtendedInlineKind::Subscript, "~2~", "2"),
+            ]
+        );
+        assert!(matches.iter().all(|item| {
+            source.is_char_boundary(item.source_range.start)
+                && source.is_char_boundary(item.source_range.end)
+                && source.is_char_boundary(item.content_range.start)
+                && source.is_char_boundary(item.content_range.end)
+        }));
+        assert_eq!(render_extended_inline_plain(source), "高2亮 and H2O");
+    }
+
+    #[test]
+    fn rejects_invalid_and_strikethrough_extended_delimiters() {
+        for source in [
+            "== ==",
+            "^ ^",
+            "~ ~",
+            "^line\nbreak^",
+            "~~strikethrough~~",
+            "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        ] {
+            assert!(
+                extended_inline_matches(source).is_empty(),
+                "unexpected match for {source:?}"
+            );
+        }
+        assert_eq!(
+            render_extended_inline_plain("~~strikethrough~~"),
+            "~~strikethrough~~"
+        );
+    }
+
+    #[test]
+    fn preserves_adjacent_subscript_constructs() {
+        let source = "~a~~b~";
+        let matches = extended_inline_matches(source);
+        assert_eq!(matches.len(), 2);
+        assert!(
+            matches
+                .iter()
+                .all(|item| item.kind == ExtendedInlineKind::Subscript)
+        );
+        assert_eq!(
+            matches
+                .iter()
+                .map(|item| &source[item.source_range.clone()])
+                .collect::<Vec<_>>(),
+            vec!["~a~", "~b~"]
+        );
+        assert_eq!(render_extended_inline_plain(source), "ab");
+    }
 }

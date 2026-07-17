@@ -99,8 +99,25 @@ pub fn build_visual_projection(
     {
         revealed_source_ranges.push(prefix.source_range.clone());
     }
-    revealed_source_ranges.sort_by_key(|range| (range.start, range.end));
-    revealed_source_ranges.dedup();
+    // A caret inside nested syntax activates every containing reveal group.
+    // Keep only the outermost range so source is emitted exactly once and the
+    // display/source mapping stays monotonic.
+    revealed_source_ranges.sort_by(|left, right| {
+        left.start
+            .cmp(&right.start)
+            .then_with(|| right.end.cmp(&left.end))
+    });
+    let mut normalized_ranges: Vec<Range<usize>> = Vec::new();
+    for range in revealed_source_ranges {
+        if normalized_ranges
+            .iter()
+            .any(|outer| outer.start <= range.start && outer.end >= range.end)
+        {
+            continue;
+        }
+        normalized_ranges.push(range);
+    }
+    let revealed_source_ranges = normalized_ranges;
 
     let mut pieces = revealed_source_ranges
         .iter()
@@ -163,7 +180,7 @@ pub fn build_visual_projection(
     }
     projection
 }
-use crate::parse::markdown_options;
+use crate::parse::{ExtendedInlineKind, extended_inline_matches, markdown_options};
 
 pub(crate) fn build_visual_blocks(text: &str, preview: &[PreviewBlock]) -> Vec<VisualBlock> {
     let mut blocks = Vec::with_capacity(preview.len() + 1);
@@ -416,7 +433,6 @@ fn inline_runs(
     let mut candidates = Vec::new();
     let mut style = InlineStyle::default();
     let mut link_targets: Vec<Option<Range<usize>>> = Vec::new();
-    let mut inline_depth = 0usize;
     let mut contains_html = false;
 
     for (event, relative_range) in Parser::new_ext(source, markdown_options()).into_offset_iter() {
@@ -430,11 +446,9 @@ fn inline_runs(
                     link_target_range: None,
                 });
                 style.bold = true;
-                inline_depth += 1;
             }
             Event::End(TagEnd::Strong) => {
                 style.bold = false;
-                inline_depth = inline_depth.saturating_sub(1);
             }
             Event::Start(Tag::Emphasis) => {
                 candidates.push(RevealCandidate {
@@ -443,11 +457,9 @@ fn inline_runs(
                     link_target_range: None,
                 });
                 style.italic = true;
-                inline_depth += 1;
             }
             Event::End(TagEnd::Emphasis) => {
                 style.italic = false;
-                inline_depth = inline_depth.saturating_sub(1);
             }
             Event::Start(Tag::Strikethrough) => {
                 candidates.push(RevealCandidate {
@@ -456,11 +468,9 @@ fn inline_runs(
                     link_target_range: None,
                 });
                 style.strikethrough = true;
-                inline_depth += 1;
             }
             Event::End(TagEnd::Strikethrough) => {
                 style.strikethrough = false;
-                inline_depth = inline_depth.saturating_sub(1);
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 candidates.push(RevealCandidate {
@@ -468,21 +478,19 @@ fn inline_runs(
                     source_range: event_range.clone(),
                     link_target_range: find_link_target(text, &event_range, &dest_url),
                 });
-                inline_depth += 1;
                 link_targets.push(find_link_target(text, &event_range, &dest_url));
             }
             Event::End(TagEnd::Link) => {
                 link_targets.pop();
-                inline_depth = inline_depth.saturating_sub(1);
             }
-            Event::Text(visible) => push_run(
+            Event::Text(visible) => push_text_runs(
                 &mut runs,
+                &mut candidates,
                 text,
                 visible.as_ref(),
                 event_range,
                 style,
                 link_targets.last().cloned().flatten(),
-                inline_depth > 1,
             ),
             Event::Code(visible) => {
                 candidates.push(RevealCandidate {
@@ -499,7 +507,7 @@ fn inline_runs(
                     event_range,
                     code_style,
                     link_targets.last().cloned().flatten(),
-                    inline_depth > 1,
+                    false,
                 );
             }
             Event::SoftBreak | Event::HardBreak => push_run(
@@ -509,7 +517,7 @@ fn inline_runs(
                 event_range,
                 style,
                 link_targets.last().cloned().flatten(),
-                inline_depth > 1,
+                false,
             ),
             Event::FootnoteReference(visible) => {
                 let mut footnote_style = style;
@@ -521,7 +529,7 @@ fn inline_runs(
                     event_range,
                     footnote_style,
                     link_targets.last().cloned().flatten(),
-                    inline_depth > 1,
+                    false,
                 );
             }
             Event::InlineMath(visible) | Event::DisplayMath(visible) => push_run(
@@ -531,7 +539,7 @@ fn inline_runs(
                 event_range,
                 style,
                 link_targets.last().cloned().flatten(),
-                inline_depth > 1,
+                false,
             ),
             Event::Html(_) | Event::InlineHtml(_) => contains_html = true,
             _ => {}
@@ -545,6 +553,104 @@ fn inline_runs(
         reveal_groups.clear();
     }
     (runs, reveal_groups, contains_html)
+}
+
+fn push_text_runs(
+    runs: &mut Vec<VisualInlineRun>,
+    candidates: &mut Vec<RevealCandidate>,
+    source: &str,
+    visible: &str,
+    event_range: Range<usize>,
+    base_style: InlineStyle,
+    link_target_range: Option<Range<usize>>,
+) {
+    let event_source = &source[event_range.clone()];
+    if event_source != visible {
+        push_run(
+            runs,
+            source,
+            visible,
+            event_range,
+            base_style,
+            link_target_range,
+            true,
+        );
+        return;
+    }
+
+    let extended = extended_inline_matches(event_source);
+    if extended.is_empty() {
+        push_run(
+            runs,
+            source,
+            visible,
+            event_range,
+            base_style,
+            link_target_range,
+            false,
+        );
+        return;
+    }
+
+    let mut boundaries = vec![0, event_source.len()];
+    let mut marker_ranges = Vec::with_capacity(extended.len() * 2);
+    for item in &extended {
+        boundaries.extend([
+            item.source_range.start,
+            item.content_range.start,
+            item.content_range.end,
+            item.source_range.end,
+        ]);
+        marker_ranges.push(item.source_range.start..item.content_range.start);
+        marker_ranges.push(item.content_range.end..item.source_range.end);
+        candidates.push(RevealCandidate {
+            kind: match item.kind {
+                ExtendedInlineKind::Highlight => VisualRevealKind::Highlight,
+                ExtendedInlineKind::Superscript => VisualRevealKind::Superscript,
+                ExtendedInlineKind::Subscript => VisualRevealKind::Subscript,
+            },
+            source_range: event_range.start + item.source_range.start
+                ..event_range.start + item.source_range.end,
+            link_target_range: None,
+        });
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    for pair in boundaries.windows(2) {
+        let local_range = pair[0]..pair[1];
+        if local_range.is_empty()
+            || marker_ranges
+                .iter()
+                .any(|marker| marker.start <= local_range.start && marker.end >= local_range.end)
+        {
+            continue;
+        }
+
+        let mut style = base_style;
+        for item in &extended {
+            if item.content_range.start <= local_range.start
+                && item.content_range.end >= local_range.end
+            {
+                match item.kind {
+                    ExtendedInlineKind::Highlight => style.highlight = true,
+                    ExtendedInlineKind::Superscript => style.superscript = true,
+                    ExtendedInlineKind::Subscript => style.subscript = true,
+                }
+            }
+        }
+        let global_range =
+            event_range.start + local_range.start..event_range.start + local_range.end;
+        push_run(
+            runs,
+            source,
+            &event_source[local_range],
+            global_range,
+            style,
+            link_target_range.clone(),
+            false,
+        );
+    }
 }
 
 fn contains_markdown_escape(source: &str) -> bool {
@@ -591,16 +697,21 @@ fn build_reveal_groups(
 ) -> Vec<VisualRevealGroup> {
     candidates.sort_by_key(|candidate| (candidate.source_range.start, candidate.source_range.end));
 
-    let overlaps = candidates.iter().enumerate().any(|(index, candidate)| {
+    let ambiguous_overlap = candidates.iter().enumerate().any(|(index, candidate)| {
         candidates[index + 1..].iter().any(|other| {
-            candidate.source_range.start < other.source_range.end
-                && other.source_range.start < candidate.source_range.end
+            let overlaps = candidate.source_range.start < other.source_range.end
+                && other.source_range.start < candidate.source_range.end;
+            let candidate_contains_other = candidate.source_range.start <= other.source_range.start
+                && candidate.source_range.end >= other.source_range.end;
+            let other_contains_candidate = other.source_range.start <= candidate.source_range.start
+                && other.source_range.end >= candidate.source_range.end;
+            overlaps && !candidate_contains_other && !other_contains_candidate
         })
     });
-    let mut invalid = overlaps;
+    let mut invalid = ambiguous_overlap;
     let mut groups = Vec::new();
 
-    if !overlaps {
+    if !ambiguous_overlap {
         for candidate in candidates {
             if !reveal_candidate_is_exact(text, block_range, &candidate) {
                 invalid = true;
@@ -681,6 +792,17 @@ fn reveal_candidate_is_exact(
                         && text.is_char_boundary(target.end)
                 })
         }
+        VisualRevealKind::Highlight
+        | VisualRevealKind::Superscript
+        | VisualRevealKind::Subscript => extended_inline_matches(source).iter().any(|item| {
+            let expected_kind = match candidate.kind {
+                VisualRevealKind::Highlight => ExtendedInlineKind::Highlight,
+                VisualRevealKind::Superscript => ExtendedInlineKind::Superscript,
+                VisualRevealKind::Subscript => ExtendedInlineKind::Subscript,
+                _ => unreachable!("matched extended reveal kind"),
+            };
+            item.kind == expected_kind && item.source_range == (0..source.len())
+        }),
     }
 }
 
@@ -1078,19 +1200,116 @@ mod tests {
     }
 
     #[test]
-    fn escaped_and_nested_inline_syntax_use_conservative_fallback() {
-        for source in [r"escaped \*marker\*", "***nested***"] {
-            let doc = MarkdownDocument::from_text(source);
-            let blocks = doc.visual_blocks();
-            assert!(blocks[0].reveal_groups.is_empty(), "source: {source:?}");
-            assert!(
-                blocks[0]
-                    .editable_runs
-                    .iter()
-                    .any(|run| run.conservative_fallback),
-                "source: {source:?}"
-            );
+    fn escaped_inline_syntax_uses_conservative_fallback() {
+        let source = r"escaped \*marker\*";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        assert!(blocks[0].reveal_groups.is_empty());
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.conservative_fallback)
+        );
+    }
+
+    #[test]
+    fn nested_and_extended_inline_runs_stay_visual() {
+        let source =
+            "plain *italic* **bold** ***both*** ~~gone~~ `code` [link](url) ==mark== H~2~O x^2^";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
+        assert_eq!(
+            block
+                .editable_runs
+                .iter()
+                .map(|run| run.visible_text.as_str())
+                .collect::<String>(),
+            "plain italic bold both gone code link mark H2O x2"
+        );
+
+        let both = block
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text == "both")
+            .unwrap();
+        assert!(both.style.bold && both.style.italic);
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .find(|run| run.visible_text == "mark")
+                .unwrap()
+                .style
+                .highlight
+        );
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .find(|run| run.visible_text == "2" && run.style.subscript)
+                .is_some()
+        );
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .find(|run| run.visible_text == "2" && run.style.superscript)
+                .is_some()
+        );
+
+        let group_sources = block
+            .reveal_groups
+            .iter()
+            .map(|group| (group.kind, &source[group.source_range.clone()]))
+            .collect::<Vec<_>>();
+        assert!(group_sources.contains(&(VisualRevealKind::Highlight, "==mark==")));
+        assert!(group_sources.contains(&(VisualRevealKind::Subscript, "~2~")));
+        assert!(group_sources.contains(&(VisualRevealKind::Superscript, "^2^")));
+    }
+
+    #[test]
+    fn nested_projection_reveals_one_outermost_group_and_reuses_cache() {
+        let source = "before ***世界*** after ==高亮==";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let version = doc.version();
+        let block = &blocks[0];
+        let plain_cursor = source.find("before").unwrap();
+        let plain =
+            build_visual_projection(source, block, plain_cursor..plain_cursor, plain_cursor);
+        assert_eq!(plain.text, "before 世界 after 高亮");
+        assert!(plain.revealed_source_ranges.is_empty());
+
+        let nested_cursor = source.find("世界").unwrap();
+        let nested =
+            build_visual_projection(source, block, nested_cursor..nested_cursor, nested_cursor);
+        let nested_range = source.find("***").unwrap()..source.find("***").unwrap() + 12;
+        assert_eq!(nested.revealed_source_ranges, vec![nested_range.clone()]);
+        assert_eq!(nested.text, "before ***世界*** after 高亮");
+        for source_offset in nested_range {
+            let display = nested.display_for_source(source_offset).unwrap();
+            assert_eq!(nested.source_for_display(display), source_offset);
         }
+
+        let highlight_cursor = source.find("高亮").unwrap();
+        let highlight = build_visual_projection(
+            source,
+            block,
+            highlight_cursor..highlight_cursor,
+            highlight_cursor,
+        );
+        assert_eq!(highlight.text, "before 世界 after ==高亮==");
+        assert_eq!(doc.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
     }
 
     #[test]
@@ -1285,7 +1504,7 @@ mod tests {
 
     #[test]
     fn uses_conservative_fallback_when_visible_text_is_not_byte_exact() {
-        let doc = MarkdownDocument::from_text("***nested***");
+        let doc = MarkdownDocument::from_text("A &amp; B");
         let blocks = doc.visual_blocks();
         assert!(
             blocks[0]
@@ -1437,6 +1656,42 @@ mod tests {
                 .iter()
                 .any(|run| run.visible_text.contains("starter document"))
         }));
+        let inline_formatting = editable_blocks
+            .iter()
+            .find(|block| {
+                block
+                    .editable_runs
+                    .iter()
+                    .any(|run| run.visible_text.contains("Write with"))
+            })
+            .expect("welcome inline-formatting paragraph stays visual");
+        assert!(
+            inline_formatting
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
+        assert!(inline_formatting.editable_runs.iter().any(|run| {
+            run.visible_text == "bold italic" && run.style.bold && run.style.italic
+        }));
+        assert!(
+            inline_formatting
+                .editable_runs
+                .iter()
+                .any(|run| run.style.highlight)
+        );
+        assert!(
+            inline_formatting
+                .editable_runs
+                .iter()
+                .any(|run| run.style.subscript)
+        );
+        assert!(
+            inline_formatting
+                .editable_runs
+                .iter()
+                .any(|run| run.style.superscript)
+        );
         assert!(
             blocks.iter().any(|block| {
                 matches!(block.source_island, Some(VisualSourceIslandKind::Image))

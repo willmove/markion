@@ -144,6 +144,8 @@ pub(super) struct EditorTab {
     #[cfg(test)]
     pub(super) visual_last_projection: Option<(String, Vec<Range<usize>>)>,
     #[cfg(test)]
+    pub(super) visual_last_projection_styles: Option<Vec<InlineStyle>>,
+    #[cfg(test)]
     pub(super) visual_projection_paint_count: usize,
     #[cfg(test)]
     pub(super) visual_caret_paint_count: usize,
@@ -229,6 +231,8 @@ impl EditorTab {
             visual_input_bounds: None,
             #[cfg(test)]
             visual_last_projection: None,
+            #[cfg(test)]
+            visual_last_projection_styles: None,
             #[cfg(test)]
             visual_projection_paint_count: 0,
             #[cfg(test)]
@@ -334,6 +338,7 @@ impl EditorTab {
         #[cfg(test)]
         {
             self.visual_last_projection = None;
+            self.visual_last_projection_styles = None;
             self.visual_projection_paint_count = 0;
             self.visual_caret_paint_count = 0;
         }

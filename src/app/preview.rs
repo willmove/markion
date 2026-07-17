@@ -477,6 +477,8 @@ struct VisualEditableText {
     entity: Entity<MarkionApp>,
     #[cfg(test)]
     test_projection: Option<(String, Vec<Range<usize>>)>,
+    #[cfg(test)]
+    test_projection_styles: Option<Vec<InlineStyle>>,
 }
 
 pub(super) fn visual_source_for_visible(
@@ -618,9 +620,11 @@ impl Element for VisualEditableText {
         }
         #[cfg(test)]
         if let Some(projection) = self.test_projection.clone() {
-            self.entity.update(cx, |app, _| {
+            let styles = self.test_projection_styles.clone();
+            self.entity.update(cx, move |app, _| {
                 let tab = app.active_tab_mut();
                 tab.visual_last_projection = Some(projection);
+                tab.visual_last_projection_styles = styles;
                 tab.visual_projection_paint_count += 1;
             });
         }
@@ -1222,6 +1226,14 @@ pub(super) fn visual_highlight_style(
         style.color = Some(rgb(PREVIEW_INLINE_CODE_COLOR).into());
         styled = true;
     }
+    if inline_style.highlight {
+        style.background_color = Some(rgba(PREVIEW_HIGHLIGHT_BG).into());
+        styled = true;
+    }
+    if inline_style.superscript || inline_style.subscript {
+        style.color = Some(rgb(PREVIEW_SUPER_SUB_COLOR).into());
+        styled = true;
+    }
     if link {
         style.color = Some(rgb(PREVIEW_LINK_COLOR).into());
         style.underline = Some(UnderlineStyle {
@@ -1277,6 +1289,15 @@ pub(super) fn visual_text_element(
         projection.text.clone(),
         projection.revealed_source_ranges.clone(),
     ));
+    #[cfg(test)]
+    let test_projection_styles = visual_block_is_focused(app, block).then(|| {
+        projection
+            .spans
+            .iter()
+            .filter(|span| !span.source)
+            .map(|span| span.style)
+            .collect()
+    });
     VisualEditableText {
         element_id: ElementId::from(("visual-text", block_index)),
         text: StyledText::new(SharedString::from(projection.text)).with_highlights(highlights),
@@ -1288,6 +1309,8 @@ pub(super) fn visual_text_element(
         entity: cx.entity(),
         #[cfg(test)]
         test_projection,
+        #[cfg(test)]
+        test_projection_styles,
     }
     .into_any_element()
 }
@@ -1324,6 +1347,8 @@ pub(super) fn visual_source_island_view(
             entity: cx.entity(),
             #[cfg(test)]
             test_projection: None,
+            #[cfg(test)]
+            test_projection_styles: None,
         })
 }
 
@@ -1340,6 +1365,7 @@ pub(super) fn visual_block_owns_caret(app: &MarkionApp, block_index: usize) -> b
     ) == Some(block_index)
 }
 
+#[cfg(test)]
 pub(super) fn visual_block_is_focused(app: &MarkionApp, block: &VisualBlock) -> bool {
     let cursor = app.active_tab().cursor_offset();
     visual_source_range_is_focused(
@@ -1374,7 +1400,7 @@ pub(super) fn visual_block_view(
     document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
-    let focused = visual_block_is_focused(app, block);
+    let owns_caret = visual_block_owns_caret(app, block_index);
     let always_source = matches!(
         block.source_island,
         Some(
@@ -1389,7 +1415,7 @@ pub(super) fn visual_block_view(
         .iter()
         .any(|run| run.conservative_fallback);
     let focused_conservative =
-        focused && (block.source_island.is_some() || block.editable_runs.is_empty());
+        owns_caret && (block.source_island.is_some() || block.editable_runs.is_empty());
     if focused_conservative || always_source {
         return visual_source_island_view(app, block, block_index, cx);
     }
@@ -1510,50 +1536,20 @@ pub(super) fn visual_block_view(
         VisualBlockKind::Whitespace => {
             let text = app.active_tab().document.text();
             let source_range = block.source_range.clone();
-            // Land the caret on the final blank line of the gap instead of at
-            // `source_range.end`, which is the first byte of the *next* block
-            // and would focus that block's row instead of this one.
-            let offset = match text[source_range.clone()].rfind('\n') {
-                Some(last_newline) => {
-                    let mut offset = source_range.start + last_newline;
-                    if offset > source_range.start && text.as_bytes()[offset - 1] == b'\r' {
-                        offset -= 1;
-                    }
-                    offset
-                }
-                None => source_range.end,
-            };
             let line_count = text[source_range.clone()]
                 .bytes()
                 .filter(|byte| *byte == b'\n')
                 .count()
                 .max(1);
             let row_height = (line_count as f32 * 12.).clamp(12., 72.);
-            let caret_top = visual_block_owns_caret(app, block_index).then(|| {
-                let local = app
-                    .active_tab()
-                    .cursor_offset()
-                    .clamp(source_range.start, source_range.end)
-                    - source_range.start;
-                let line = text[source_range.start..source_range.start + local]
-                    .bytes()
-                    .filter(|byte| *byte == b'\n')
-                    .count();
-                (line as f32 * 12.).min(row_height - 12.)
-            });
+
+            // Whitespace that owns the caret is rendered above as a source
+            // island. This arm is therefore passive layout: keeping the row
+            // preserves exact source coverage without turning block spacing
+            // into a pointer-created editing surface.
             div()
                 .h(px(row_height))
-                .cursor(CursorStyle::IBeam)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |app, _, window, cx| {
-                        window.focus(&app.focus_handle(cx));
-                        app.move_to(offset, cx);
-                    }),
-                )
-                .when_some(caret_top, |row, caret_top| {
-                    row.child(div().mt(px(caret_top)).w(px(2.)).h(px(12.)).bg(rgb(0x2563eb)))
-                })
+                .debug_selector(|| "visual-whitespace-gap".to_string())
         }
         VisualBlockKind::CodeBlock { .. }
         | VisualBlockKind::MathBlock

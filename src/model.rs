@@ -538,6 +538,9 @@ pub enum VisualRevealKind {
     Strikethrough,
     InlineCode,
     Link,
+    Highlight,
+    Superscript,
+    Subscript,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

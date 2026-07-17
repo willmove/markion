@@ -1,5 +1,5 @@
 use super::*;
-use gpui::TestAppContext;
+use gpui::{Modifiers, TestAppContext};
 
 #[test]
 fn menu_shortcut_labels_follow_platform_conventions() {
@@ -1621,6 +1621,37 @@ fn visual_ime_bounds_prefer_the_painted_caret_and_have_a_surface_fallback() {
     assert_eq!(editor_element::visual_ime_bounds(None, None), None);
 }
 
+#[test]
+fn visual_extended_inline_styles_map_to_gpui_highlights() {
+    let highlight = visual_highlight_style(
+        InlineStyle {
+            highlight: true,
+            ..InlineStyle::default()
+        },
+        false,
+    )
+    .expect("highlight style");
+    assert!(highlight.background_color.is_some());
+
+    for inline_style in [
+        InlineStyle {
+            superscript: true,
+            ..InlineStyle::default()
+        },
+        InlineStyle {
+            subscript: true,
+            ..InlineStyle::default()
+        },
+    ] {
+        assert!(
+            visual_highlight_style(inline_style, false)
+                .expect("super/sub style")
+                .color
+                .is_some()
+        );
+    }
+}
+
 #[gpui::test]
 fn visual_edit_platform_input_replaces_selection_and_supports_ime(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
@@ -1745,6 +1776,102 @@ fn visual_edit_renders_local_live_preview_projection_and_edits_source(cx: &mut T
         let (text, revealed) = app.active_tab().visual_last_projection.as_ref().unwrap();
         assert_eq!(text, "plain bold and [sXite](url) tail");
         assert_eq!(revealed.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn visual_edit_renders_default_inline_formatting_and_locally_reveals_markers(
+    cx: &mut TestAppContext,
+) {
+    let source = markion::DEFAULT_WELCOME_MARKDOWN;
+    let plain_cursor = source.find("Write with").unwrap() + 1;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = plain_cursor..plain_cursor;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (version, blocks) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let (text, revealed) = tab
+            .visual_last_projection
+            .as_ref()
+            .expect("default inline paragraph should paint a visual projection");
+        assert!(revealed.is_empty());
+        for hidden_marker in [
+            "*italic*",
+            "**bold**",
+            "***bold italic***",
+            "==highlighted text==",
+        ] {
+            assert!(
+                !text.contains(hidden_marker),
+                "marker remained visible: {hidden_marker}"
+            );
+        }
+        for rendered in [
+            "italic",
+            "bold italic",
+            "strikethrough",
+            "inline code",
+            "highlighted text",
+            "H2O",
+            "x2",
+            "Markion project page",
+        ] {
+            assert!(
+                text.contains(rendered),
+                "missing rendered content: {rendered}"
+            );
+        }
+
+        let styles = tab
+            .visual_last_projection_styles
+            .as_ref()
+            .expect("projection styles should reach the rendered text element");
+        assert!(styles.iter().any(|style| style.bold && style.italic));
+        assert!(styles.iter().any(|style| style.strikethrough));
+        assert!(styles.iter().any(|style| style.code));
+        assert!(styles.iter().any(|style| style.highlight));
+        assert!(styles.iter().any(|style| style.superscript));
+        assert!(styles.iter().any(|style| style.subscript));
+        (tab.document.version(), tab.document.visual_blocks_shared())
+    });
+
+    let nested_cursor = source.find("bold italic").unwrap() + 1;
+    app.update(cx, |app, cx| app.move_to(nested_cursor, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let (text, revealed) = tab.visual_last_projection.as_ref().unwrap();
+        assert!(text.contains("***bold italic***"));
+        assert_eq!(revealed.len(), 1);
+        assert_eq!(&source[revealed[0].clone()], "***bold italic***");
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+    });
+
+    let highlight_cursor = source.find("highlighted text").unwrap() + 1;
+    app.update(cx, |app, cx| app.move_to(highlight_cursor, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let (text, revealed) = tab.visual_last_projection.as_ref().unwrap();
+        assert!(text.contains("==highlighted text=="));
+        assert_eq!(revealed.len(), 1);
+        assert_eq!(&source[revealed[0].clone()], "==highlighted text==");
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+        assert!(!tab.document.is_dirty());
+        assert!(tab.undo_stack.is_empty());
     });
 }
 
@@ -1943,6 +2070,105 @@ fn visual_edit_structural_enter_continues_list_with_one_history_entry(cx: &mut T
         assert_eq!(tab.selected_range, 9..9);
         assert_eq!(tab.undo_stack.len(), 1);
         assert_eq!(tab.autosave_generation, 1);
+    });
+}
+
+fn assert_visual_edit_gap_click_is_passive(cx: &mut TestAppContext, source: &'static str) {
+    let cursor = source.find('H').expect("heading text") + 1;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (selection, text, version, blocks) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.selected_range.clone(),
+            tab.document.text().to_string(),
+            tab.document.version(),
+            tab.document.visual_blocks_shared(),
+        )
+    });
+    let gap = cx
+        .debug_bounds("visual-whitespace-gap")
+        .expect("the passive whitespace row should be rendered");
+
+    cx.simulate_click(gap.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.selected_range, selection);
+        assert_eq!(tab.document.text(), text);
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+        assert!(!tab.document.is_dirty());
+        assert!(tab.undo_stack.is_empty());
+    });
+}
+
+#[gpui::test]
+fn visual_edit_heading_to_heading_gap_click_is_passive(cx: &mut TestAppContext) {
+    assert_visual_edit_gap_click_is_passive(cx, "## H2\n\n### H3");
+}
+
+#[gpui::test]
+fn visual_edit_heading_to_paragraph_gap_click_is_passive(cx: &mut TestAppContext) {
+    assert_visual_edit_gap_click_is_passive(cx, "## Heading\n\nBody");
+}
+
+#[gpui::test]
+fn visual_edit_heading_enter_activates_insertion_line_for_typing(cx: &mut TestAppContext) {
+    let source = "## Heading";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "## Heading\n");
+        assert_eq!(tab.selected_range, source.len() + 1..source.len() + 1);
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("the new insertion line should own a visual row");
+        assert_eq!(
+            blocks[block_index].source_range.end,
+            tab.document.text().len()
+        );
+        assert!(tab.visual_caret_bounds.is_some());
+        assert!(tab.visual_input_bounds.is_some());
+    });
+
+    cx.simulate_input("Body");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "## Heading\nBody");
+        assert_eq!(tab.selected_range, source.len() + 5..source.len() + 5);
+        assert!(tab.undo_stack.len() >= 2);
+        assert!(tab.autosave_generation >= 2);
+        assert!(tab.document.is_dirty());
     });
 }
 
