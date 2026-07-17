@@ -39,7 +39,9 @@ pub fn validate_latex(latex: &str) -> Result<(), String> {
         return Err("mismatched LaTeX environment delimiters".to_string());
     }
 
-    Ok(())
+    typune_markdown::MathRenderer::new()
+        .validate_syntax(latex)
+        .map_err(|error| error.to_string())
 }
 
 fn math_preview_text(latex: &str) -> String {

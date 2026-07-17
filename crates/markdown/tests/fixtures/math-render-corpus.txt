@@ -1,0 +1,17 @@
+# style|outcome|LaTeX payload
+inline|valid|x^2+y^2=r^2
+inline|valid|\frac{a}{b}+\sqrt{x}
+inline|valid|\sum_{i=1}^{n} i
+inline|valid|\left(\frac{a}{b}\right)
+inline|valid|\mathbb{R}\to\mathcal{F}
+inline|valid|\hat{x}+\vec{v}
+inline|valid|\text{speed } v
+inline|valid|\text{速度 } v
+display|valid|\int_0^\infty e^{-x^2}\,dx
+display|valid|\begin{matrix}a&b\\c&d\end{matrix}
+display|valid|\begin{cases}x^2&x>0\\0&x\le 0\end{cases}
+display|valid|\begin{aligned}a&=b+c\\d&=e+f\end{aligned}
+display|valid|\left\langle\frac{x}{y}\right\rangle
+inline|invalid|\frac{a}{b
+display|invalid|\begin{matrix}a&b
+inline|invalid|\notacommand{x}

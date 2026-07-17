@@ -6,9 +6,10 @@ use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 use crate::frontmatter::split_front_matter;
 use crate::model::{
-    InlineStyle, PreviewBlock, VisualBlock, VisualBlockKind, VisualBlockPrefix,
-    VisualBlockPrefixKind, VisualInlineRun, VisualProjection, VisualProjectionSegment,
-    VisualProjectionSpan, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
+    InlineStyle, MathDelimiter, MathLayoutStyle, MathSource, PreviewBlock, VisualBlock,
+    VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind, VisualInlineRun, VisualProjection,
+    VisualProjectionSegment, VisualProjectionSpan, VisualRevealGroup, VisualRevealKind,
+    VisualSourceIslandKind,
 };
 
 impl VisualProjection {
@@ -82,20 +83,29 @@ pub fn build_visual_projection(
     source_selection: Range<usize>,
     source_cursor: usize,
 ) -> VisualProjection {
-    let endpoint_is_active = |range: &Range<usize>| {
+    let endpoint_is_active = |range: &Range<usize>, include_end: bool| {
         range.contains(&source_cursor)
+            || (include_end && source_cursor == range.end)
             || (!source_selection.is_empty()
                 && (range.contains(&source_selection.start)
-                    || range.contains(&source_selection.end)))
+                    || range.contains(&source_selection.end)
+                    || (include_end
+                        && (source_selection.start == range.end
+                            || source_selection.end == range.end))))
     };
     let mut revealed_source_ranges = block
         .reveal_groups
         .iter()
-        .filter(|group| endpoint_is_active(&group.source_range))
+        .filter(|group| {
+            endpoint_is_active(
+                &group.source_range,
+                matches!(group.kind, VisualRevealKind::Math),
+            )
+        })
         .map(|group| group.source_range.clone())
         .collect::<Vec<_>>();
     if let Some(prefix) = &block.block_prefix
-        && endpoint_is_active(&prefix.source_range)
+        && endpoint_is_active(&prefix.source_range, false)
     {
         revealed_source_ranges.push(prefix.source_range.clone());
     }
@@ -297,8 +307,17 @@ fn visual_block_from_preview(
             },
             Some(VisualSourceIslandKind::Code),
         ),
-        PreviewBlock::MathBlock { .. } => (
-            VisualBlockKind::MathBlock,
+        PreviewBlock::MathBlock {
+            latex,
+            authored,
+            delimiter,
+            ..
+        } => (
+            VisualBlockKind::MathBlock {
+                latex: latex.clone(),
+                authored: authored.clone(),
+                delimiter: *delimiter,
+            },
             Some(VisualSourceIslandKind::Math),
         ),
         PreviewBlock::Html { .. } => (
@@ -393,6 +412,7 @@ fn append_trailing_horizontal_whitespace_run(
         content_range: range,
         style: InlineStyle::default(),
         link_target_range: None,
+        math: None,
         conservative_fallback: false,
     });
     runs.sort_by_key(|run| (run.content_range.start, run.content_range.end));
@@ -532,15 +552,39 @@ fn inline_runs(
                     false,
                 );
             }
-            Event::InlineMath(visible) | Event::DisplayMath(visible) => push_run(
-                &mut runs,
-                text,
-                visible.as_ref(),
-                event_range,
-                style,
-                link_targets.last().cloned().flatten(),
-                false,
-            ),
+            Event::InlineMath(visible) | Event::DisplayMath(visible) => {
+                let delimiter = if text[event_range.clone()].starts_with("$$") {
+                    MathDelimiter::DisplayDollar
+                } else {
+                    MathDelimiter::InlineDollar
+                };
+                let math_style = if delimiter == MathDelimiter::InlineDollar {
+                    MathLayoutStyle::Text
+                } else {
+                    MathLayoutStyle::Display
+                };
+                let authored = text[event_range.clone()].to_string();
+                candidates.push(RevealCandidate {
+                    kind: VisualRevealKind::Math,
+                    source_range: event_range.clone(),
+                    link_target_range: None,
+                });
+                runs.push(VisualInlineRun {
+                    visible_text: authored.clone(),
+                    source_range: event_range.clone(),
+                    content_range: event_range.clone(),
+                    style,
+                    link_target_range: link_targets.last().cloned().flatten(),
+                    math: Some(MathSource {
+                        latex: visible.to_string(),
+                        authored,
+                        style: math_style,
+                        delimiter,
+                        source_range: event_range,
+                    }),
+                    conservative_fallback: false,
+                });
+            }
             Event::Html(_) | Event::InlineHtml(_) => contains_html = true,
             _ => {}
         }
@@ -685,6 +729,7 @@ fn push_run(
         content_range,
         style,
         link_target_range,
+        math: None,
         conservative_fallback,
     });
 }
@@ -781,6 +826,10 @@ fn reveal_candidate_is_exact(
             source.starts_with("~~") && source.ends_with("~~") && source.len() >= 4
         }
         VisualRevealKind::InlineCode => source.starts_with('`') && source.ends_with('`'),
+        VisualRevealKind::Math => {
+            (source.starts_with("$$") && source.ends_with("$$") && source.len() >= 4)
+                || (source.starts_with('$') && source.ends_with('$') && source.len() >= 2)
+        }
         VisualRevealKind::Link => {
             source.starts_with('[')
                 && source.ends_with(')')
@@ -1503,6 +1552,37 @@ mod tests {
     }
 
     #[test]
+    fn math_projection_reveals_only_the_focused_complete_delimiter_group() {
+        let source = "before $E=mc^2$ middle $a+b$ after";
+        let doc = MarkdownDocument::from_text(source);
+        let version = doc.version();
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        let first_start = source.find("$E=mc^2$").unwrap();
+        let first_end = first_start + "$E=mc^2$".len();
+        let second = source.find("$a+b$").unwrap();
+
+        let focused = build_visual_projection(source, block, first_start..first_start, first_start);
+        assert!(focused.text.contains("$E=mc^2$"));
+        assert!(
+            focused
+                .revealed_source_ranges
+                .contains(&(first_start..first_end))
+        );
+        assert!(
+            !focused
+                .revealed_source_ranges
+                .iter()
+                .any(|range| range.start == second)
+        );
+
+        let trailing = build_visual_projection(source, block, first_end..first_end, first_end);
+        assert!(trailing.text.contains("$E=mc^2$"));
+        assert_eq!(doc.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+    }
+
+    #[test]
     fn uses_conservative_fallback_when_visible_text_is_not_byte_exact() {
         let doc = MarkdownDocument::from_text("A &amp; B");
         let blocks = doc.visual_blocks();
@@ -1534,6 +1614,26 @@ mod tests {
                 .iter()
                 .any(|block| block.source_island == Some(VisualSourceIslandKind::Table))
         );
+    }
+
+    #[test]
+    fn inline_math_run_keeps_exact_source_and_reveal_group() {
+        let source = "前 $\\frac{a}{b}$ 后";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let run = blocks[0]
+            .editable_runs
+            .iter()
+            .find(|run| run.math.is_some())
+            .expect("semantic math run");
+        let math = run.math.as_ref().unwrap();
+        assert_eq!(math.latex, "\\frac{a}{b}");
+        assert_eq!(math.authored, "$\\frac{a}{b}$");
+        assert_eq!(&source[math.source_range.clone()], math.authored);
+        assert!(blocks[0].reveal_groups.iter().any(|group| {
+            group.kind == VisualRevealKind::Math
+                && &source[group.source_range.clone()] == "$\\frac{a}{b}$"
+        }));
     }
 
     #[test]

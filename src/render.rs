@@ -4,9 +4,11 @@
 //! on `MarkdownDocument`; this module holds the format-specific free functions
 //! and the shared stylesheet string they emit into.
 
-use crate::escape::{decode_basic_html_entities, escape_html_attribute, escape_html_text};
-use crate::math::render_math;
+use crate::escape::decode_basic_html_entities;
 use crate::model::{RichText, TableAlignment};
+use pulldown_cmark::{CodeBlockKind, CowStr, Event, Tag, TagEnd};
+use std::ops::Range;
+use typune_markdown::{MathStyle, serialize_math_html};
 
 /// Default stylesheet embedded in the styled HTML export.
 pub(crate) const DEFAULT_CSS: &str = r#"
@@ -48,6 +50,24 @@ table {
   display: block;
   max-width: 100%;
   height: auto;
+}
+.markion-math {
+  color: inherit;
+}
+.markion-math-inline svg {
+  display: inline-block;
+}
+.markion-math-display {
+  margin: 1em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.markion-math-display svg {
+  display: inline-block;
+}
+.math-source-fallback {
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  white-space: pre-wrap;
 }
 th, td {
   border: 1px solid #d0d7de;
@@ -92,34 +112,123 @@ pub(crate) fn annotate_math_html(html: &str) -> String {
 
         let escaped_latex = &html[tag_end..content_end];
         let latex = decode_basic_html_entities(escaped_latex);
-        let rendered = render_math(latex.trim(), display);
-        let tag = if display { "div" } else { "span" };
-        let class = if rendered.error.is_some() {
-            if display {
-                "math math-display math-error"
-            } else {
-                "math math-inline math-error"
-            }
-        } else if display {
-            "math math-display"
+        let style = if display {
+            MathStyle::Display
         } else {
-            "math math-inline"
+            MathStyle::Inline
         };
-        let title = rendered
-            .error
-            .as_ref()
-            .map(|error| format!(" title=\"{}\"", escape_html_attribute(error)))
-            .unwrap_or_default();
-        output.push_str(&format!(
-            "<{tag} class=\"{class}\" data-latex=\"{}\" data-valid=\"{}\"{title}>{}</{tag}>",
-            escape_html_attribute(rendered.latex.trim()),
-            rendered.error.is_none(),
-            escape_html_text(&rendered.text)
-        ));
+        let authored = if display {
+            format!("$${latex}$$")
+        } else {
+            format!("${latex}$")
+        };
+        output.push_str(&serialize_math_html(&latex, &authored, style));
         index = content_end + close.len();
     }
 
     output
+}
+
+pub(crate) struct HtmlMathReplacement {
+    marker: String,
+    html: String,
+}
+
+impl HtmlMathReplacement {
+    pub(crate) fn apply(self, html: &mut String) {
+        *html = html.replace(&self.marker, &self.html);
+    }
+}
+
+struct PendingFencedMath {
+    latex: String,
+    authored_start: usize,
+}
+
+/// Isolate formulas as opaque markers before extended-inline HTML rewriting,
+/// retaining the exact authored range for accessible labels and error
+/// fallback. Static SVG is inserted only after all text-node transforms.
+pub(crate) fn collect_html_math<'a>(
+    events: impl IntoIterator<Item = (Event<'a>, Range<usize>)>,
+    source: &'a str,
+) -> (Vec<Event<'a>>, Vec<HtmlMathReplacement>) {
+    let mut output = Vec::new();
+    let mut replacements = Vec::new();
+    let mut fenced: Option<PendingFencedMath> = None;
+
+    for (event, source_range) in events {
+        if let Some(active) = fenced.as_mut() {
+            match event {
+                Event::Text(text) | Event::Code(text) => active.latex.push_str(&text),
+                Event::SoftBreak | Event::HardBreak => active.latex.push('\n'),
+                Event::End(TagEnd::CodeBlock) => {
+                    let active = fenced.take().expect("fenced math state is present");
+                    let authored_range = active.authored_start..source_range.end.min(source.len());
+                    let authored = source.get(authored_range).unwrap_or(active.latex.as_str());
+                    let latex = active.latex.trim_end_matches(['\r', '\n']);
+                    push_html_math_replacement(
+                        &mut output,
+                        &mut replacements,
+                        latex,
+                        authored,
+                        MathStyle::Display,
+                    );
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        match event {
+            Event::InlineMath(latex) => {
+                let authored = source.get(source_range).unwrap_or(latex.as_ref());
+                push_html_math_replacement(
+                    &mut output,
+                    &mut replacements,
+                    latex.as_ref(),
+                    authored,
+                    MathStyle::Inline,
+                );
+            }
+            Event::DisplayMath(latex) => {
+                let authored = source.get(source_range).unwrap_or(latex.as_ref());
+                push_html_math_replacement(
+                    &mut output,
+                    &mut replacements,
+                    latex.as_ref(),
+                    authored,
+                    MathStyle::Display,
+                );
+            }
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
+                if info
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|token| token.eq_ignore_ascii_case("math")) =>
+            {
+                fenced = Some(PendingFencedMath {
+                    latex: String::new(),
+                    authored_start: source_range.start,
+                });
+            }
+            event => output.push(event),
+        }
+    }
+
+    (output, replacements)
+}
+
+fn push_html_math_replacement<'a>(
+    output: &mut Vec<Event<'a>>,
+    replacements: &mut Vec<HtmlMathReplacement>,
+    latex: &str,
+    authored: &str,
+    style: MathStyle,
+) {
+    let marker = format!("<!--markion-math-placeholder:{}-->", replacements.len());
+    let html = serialize_math_html(latex, authored, style);
+    output.push(Event::Html(CowStr::Boxed(marker.clone().into_boxed_str())));
+    replacements.push(HtmlMathReplacement { marker, html });
 }
 
 fn math_tag_kind(tag: &str) -> Option<(bool, &'static str)> {

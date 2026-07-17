@@ -11,7 +11,7 @@ use std::ops::Range;
 use pulldown_cmark::{HeadingLevel, Options};
 
 use crate::escape::escape_html_attribute;
-use crate::model::{InlineSpan, InlineStyle, PreviewBlock, RichText};
+use crate::model::{InlineSpan, InlineStyle, MathSource, PreviewBlock, RichText};
 use crate::table::TableDraft;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +139,53 @@ pub(crate) fn push_preview_rich(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_preview_math(
+    heading: &mut Option<(u8, Vec<InlineSpan>, Range<usize>)>,
+    paragraph: &mut Option<(Vec<InlineSpan>, Range<usize>)>,
+    quote: &mut Vec<InlineSpan>,
+    quote_depth: usize,
+    list_item: &mut Option<ListItemDraft>,
+    image: &mut Option<ImageDraft>,
+    code: &mut Option<(Option<String>, String, Range<usize>)>,
+    table: &mut Option<TableDraft>,
+    math: MathSource,
+    style: InlineStyle,
+    link: Option<&str>,
+) {
+    if let Some(image) = image.as_mut() {
+        image.alt.push_str(&math.authored);
+        return;
+    }
+    if let Some((_, code, _)) = code.as_mut() {
+        code.push_str(&math.authored);
+        return;
+    }
+    if let Some(table) = table.as_mut() {
+        table.current_cell.push_str(&math.authored);
+        return;
+    }
+
+    let spans = if let Some((_, spans, _)) = heading.as_mut() {
+        spans
+    } else if let Some(item) = list_item.as_mut() {
+        &mut item.spans
+    } else if quote_depth > 0 {
+        quote
+    } else if let Some((paragraph, _)) = paragraph.as_mut() {
+        paragraph
+    } else {
+        return;
+    };
+
+    spans.push(InlineSpan {
+        text: math.authored.clone(),
+        style,
+        link: link.map(str::to_string),
+        math: Some(math),
+    });
+}
+
 /// Appends text to the span list, merging with the previous span when the
 /// style and link target match.
 pub(crate) fn append_span(
@@ -153,6 +200,7 @@ pub(crate) fn append_span(
     if let Some(last) = spans.last_mut()
         && last.style == style
         && last.link.as_deref() == link
+        && last.math.is_none()
     {
         last.text.push_str(text);
         return;
@@ -161,6 +209,7 @@ pub(crate) fn append_span(
         text: text.to_string(),
         style,
         link: link.map(str::to_string),
+        math: None,
     });
 }
 
@@ -238,6 +287,9 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
                         text: part.to_string(),
                         style: span.style,
                         link: span.link.clone(),
+                        math: (!span.text.contains('\n') && part == span.text)
+                            .then(|| span.math.clone())
+                            .flatten(),
                     });
             }
         }
@@ -276,7 +328,11 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
         }
         emitted_line = true;
         for span in line {
-            append_span(&mut merged, &span.text, span.style, span.link.as_deref());
+            if span.math.is_some() {
+                merged.push(span);
+            } else {
+                append_span(&mut merged, &span.text, span.style, span.link.as_deref());
+            }
         }
     }
 

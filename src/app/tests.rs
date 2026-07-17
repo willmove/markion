@@ -774,6 +774,54 @@ fn preview_selection_markdown_joins_covered_block_sources() {
     assert!(html.to_lowercase().contains("hello"));
 }
 
+#[test]
+fn math_atom_hit_testing_and_copy_preserve_complete_authored_source() {
+    let document = "速度 $E=mc^2$ end.\n\n$$\n\\frac{1}{2}\n$$\n";
+    let doc = MarkdownDocument::from_text(document);
+    let blocks = doc.preview_blocks();
+    let PreviewBlock::Paragraph { text, .. } = &blocks[0] else {
+        panic!("expected inline-math paragraph");
+    };
+    let math = text
+        .spans
+        .iter()
+        .find_map(|span| span.math.as_ref())
+        .expect("inline math span");
+    let local_start = text.text.find(&math.authored).unwrap();
+    let authored_range = local_start..local_start + math.authored.len();
+    assert_eq!(math_atom_boundary(&authored_range, false), local_start);
+    assert_eq!(
+        math_atom_boundary(&authored_range, true),
+        local_start + "$E=mc^2$".len()
+    );
+    assert!(text.text.is_char_boundary(authored_range.start));
+    assert!(text.text.is_char_boundary(authored_range.end));
+
+    let PreviewBlock::MathBlock { authored, .. } = &blocks[1] else {
+        panic!("expected display math block");
+    };
+    let selection = PreviewSelection {
+        anchor: PreviewCaret {
+            block_index: 0,
+            run_id: PreviewTextRunId::Body,
+            offset: local_start,
+        },
+        head: PreviewCaret {
+            block_index: 1,
+            run_id: PreviewTextRunId::MathLatex,
+            offset: authored.len(),
+        },
+    };
+    let plain = preview_selection_plain_text(&selection, &blocks).unwrap();
+    assert!(plain.starts_with("$E=mc^2$"));
+    assert!(plain.contains("$$\n\\frac{1}{2}\n$$"));
+    let markdown = preview_selection_markdown(&selection, &blocks, document).unwrap();
+    assert!(markdown.contains("$E=mc^2$"));
+    assert!(markdown.contains("$$\n\\frac{1}{2}\n$$"));
+    let html = MarkdownDocument::from_text(&markdown).render_html_fragment();
+    assert_eq!(html.matches("<svg aria-hidden=\"true\"").count(), 2);
+}
+
 /// A distinguishable `PreviewBlock` for splice-diff tests. Distinct `tag`s
 /// compare unequal; the concrete variant is irrelevant to the diff.
 fn blk(tag: &str) -> PreviewBlock {

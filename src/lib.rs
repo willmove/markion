@@ -103,13 +103,14 @@ pub use model::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,
     DocumentStats, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences,
     Footnote, FrontMatterError, Heading, HighlightKind, HighlightedSpan, InlineSpan, InlineStyle,
-    MarkdownFormat, MathExpression, PreviewBlock, RecoveryDocument, RenderedMath, ReplaceResult,
-    RichText, SearchError, SearchMatch, SearchMatchRange, SearchOptions, SidebarTab,
-    TableAlignment, TableEdit, TableEditResult, ThemeColors, ThemeDefinition, ViewMode,
-    VisualBlock, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind, VisualInlineRun,
-    VisualProjection, VisualProjectionSegment, VisualProjectionSpan, VisualRevealGroup,
-    VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit, YamlFrontMatter,
-    builtin_theme_definitions, normalize_heading_menu_max_level,
+    MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle, MathSource, PreviewBlock,
+    RecoveryDocument, RenderedMath, ReplaceResult, RichText, SearchError, SearchMatch,
+    SearchMatchRange, SearchOptions, SidebarTab, TableAlignment, TableEdit, TableEditResult,
+    ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind, VisualBlockPrefix,
+    VisualBlockPrefixKind, VisualInlineRun, VisualProjection, VisualProjectionSegment,
+    VisualProjectionSpan, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
+    VisualStructuralEdit, YamlFrontMatter, builtin_theme_definitions,
+    normalize_heading_menu_max_level,
 };
 pub use visual::build_visual_projection;
 
@@ -138,13 +139,13 @@ use table::{
 use parse::{
     ImageDraft, InlineStateDraft, ListItemDraft, ListLevelDraft, append_span, clean_preview_text,
     finish_rich_text, flush_list_item, heading_level_to_u8, markdown_options, push_nonempty_block,
-    push_preview_rich, render_extended_html_text_nodes, slugify,
+    push_preview_math, push_preview_rich, render_extended_html_text_nodes, slugify,
 };
 
 use diagram::collect_html_diagrams;
 use render::{
-    DEFAULT_CSS, annotate_math_html, escape_latex, escape_latex_path, latex_listing_language,
-    push_latex_list_item, render_latex_rich_text, render_latex_table,
+    DEFAULT_CSS, annotate_math_html, collect_html_math, escape_latex, escape_latex_path,
+    latex_listing_language, push_latex_list_item, render_latex_rich_text, render_latex_table,
 };
 
 use export::{write_docx, write_image_snapshot, write_pdf};
@@ -1002,11 +1003,16 @@ impl MarkdownDocument {
     }
 
     pub fn render_html_fragment(&self) -> String {
-        let parser = Parser::new_ext(self.body_text(), markdown_options());
-        let (events, diagrams) = collect_html_diagrams(parser);
+        let body = self.body_text();
+        let parser = Parser::new_ext(body, markdown_options());
+        let (events, formulas) = collect_html_math(parser.into_offset_iter(), body);
+        let (events, diagrams) = collect_html_diagrams(events);
         let mut output = String::new();
         html::push_html(&mut output, events.into_iter());
         output = annotate_math_html(&render_extended_html_text_nodes(&output));
+        for formula in formulas {
+            formula.apply(&mut output);
+        }
         for diagram in diagrams {
             diagram.apply(&mut output);
         }
@@ -1502,11 +1508,28 @@ impl MarkdownDocument {
                 }
                 Event::End(TagEnd::CodeBlock) => {
                     if let Some((language, code, code_range)) = code.take() {
-                        blocks.push(PreviewBlock::CodeBlock {
-                            language,
-                            code: code.trim_end_matches('\n').to_string(),
-                            source_range: code_range,
-                        });
+                        let code = code.trim_end_matches('\n').to_string();
+                        if language
+                            .as_deref()
+                            .is_some_and(|language| language.eq_ignore_ascii_case("math"))
+                        {
+                            let authored = text
+                                .get(code_range.clone())
+                                .map_or_else(|| code.clone(), str::to_string);
+                            blocks.push(PreviewBlock::MathBlock {
+                                error: validate_latex(&code).err(),
+                                latex: code,
+                                authored,
+                                delimiter: MathDelimiter::Fenced,
+                                source_range: code_range,
+                            });
+                        } else {
+                            blocks.push(PreviewBlock::CodeBlock {
+                                language,
+                                code,
+                                source_range: code_range,
+                            });
+                        }
                     }
                 }
                 Event::Rule => blocks.push(PreviewBlock::Rule { source_range }),
@@ -1660,8 +1683,11 @@ impl MarkdownDocument {
                         false,
                     );
                 }
-                Event::InlineMath(text) => {
-                    push_preview_rich(
+                Event::InlineMath(latex) => {
+                    let authored = text
+                        .get(source_range.clone())
+                        .map_or_else(|| format!("${latex}$"), str::to_string);
+                    push_preview_math(
                         &mut heading,
                         &mut paragraph,
                         &mut quote,
@@ -1670,13 +1696,18 @@ impl MarkdownDocument {
                         &mut image,
                         &mut code,
                         &mut table,
-                        &format!("${text}$"),
+                        MathSource {
+                            latex: latex.to_string(),
+                            authored,
+                            style: MathLayoutStyle::Text,
+                            delimiter: MathDelimiter::InlineDollar,
+                            source_range,
+                        },
                         inline.style(),
                         inline.link(),
-                        false,
                     );
                 }
-                Event::DisplayMath(text) => {
+                Event::DisplayMath(latex) => {
                     let standalone = heading.is_none()
                         && list_item.is_none()
                         && image.is_none()
@@ -1688,13 +1719,21 @@ impl MarkdownDocument {
                         });
                     if standalone {
                         paragraph.take();
+                        let authored = text
+                            .get(source_range.clone())
+                            .map_or_else(|| format!("$${latex}$$"), str::to_string);
                         blocks.push(PreviewBlock::MathBlock {
-                            latex: text.to_string(),
-                            error: validate_latex(&text).err(),
+                            latex: latex.to_string(),
+                            authored,
+                            delimiter: MathDelimiter::DisplayDollar,
+                            error: validate_latex(&latex).err(),
                             source_range,
                         });
                     } else {
-                        push_preview_rich(
+                        let authored = text
+                            .get(source_range.clone())
+                            .map_or_else(|| format!("$${latex}$$"), str::to_string);
+                        push_preview_math(
                             &mut heading,
                             &mut paragraph,
                             &mut quote,
@@ -1703,10 +1742,15 @@ impl MarkdownDocument {
                             &mut image,
                             &mut code,
                             &mut table,
-                            &format!("$${text}$$"),
+                            MathSource {
+                                latex: latex.to_string(),
+                                authored,
+                                style: MathLayoutStyle::Display,
+                                delimiter: MathDelimiter::DisplayDollar,
+                                source_range,
+                            },
                             inline.style(),
                             inline.link(),
-                            false,
                         );
                     }
                 }
@@ -2494,6 +2538,7 @@ mod tests {
                             ..InlineStyle::default()
                         },
                         link: None,
+                        math: None,
                     },
                     InlineSpan {
                         text: " text.".into(),
@@ -3900,8 +3945,10 @@ mod tests {
         assert!(html.contains("math math-inline"));
         assert!(html.contains("math math-display"));
         assert!(html.contains("data-latex=\"a+b\""));
+        assert!(html.contains("data-style=\"text\""));
         assert!(html.contains("data-valid=\"true\""));
-        assert!(html.contains("1⁄2"));
+        assert_eq!(html.matches("<svg aria-hidden=\"true\"").count(), 2);
+        assert!(!html.contains("<text"));
     }
 
     #[test]
@@ -3920,7 +3967,152 @@ mod tests {
         let html = doc.render_html_fragment();
         assert!(html.contains("math-error"));
         assert!(html.contains("data-valid=\"false\""));
-        assert!(html.contains("mismatched LaTeX environment delimiters"));
+        assert!(html.contains("\\begin{matrix} x"));
+        assert!(!html.contains("<svg"));
+    }
+
+    #[test]
+    fn html_math_export_is_static_safe_source_faithful_and_shared_by_both_modes() {
+        let source = "Inline $a^2+b^2=c^2$ and x^2^ outside.\n\n```MaTh linenos\n\\begin{matrix}a&b\\\\c&d\\end{matrix}\n```";
+        let doc = MarkdownDocument::from_text(source);
+        let fragment = doc.render_html_fragment();
+        let styled = doc.render_html_document();
+        let plain = doc.render_plain_html_document();
+
+        for html in [&fragment, &styled, &plain] {
+            assert!(html.contains("data-latex=\"a^2+b^2=c^2\""));
+            assert!(html.contains("data-style=\"text\" data-valid=\"true\""));
+            assert!(html.contains("data-style=\"display\" data-valid=\"true\""));
+            assert!(html.contains("aria-label=\"$a^2+b^2=c^2$\""));
+            assert!(html.contains("```MaTh linenos"));
+            assert!(html.contains("<svg aria-hidden=\"true\""));
+            let lower = html.to_ascii_lowercase();
+            assert!(!lower.contains("<script"));
+            assert!(!lower.contains("javascript:"));
+            assert!(!lower.contains(" onload="));
+            assert!(!lower.contains("https://cdn"));
+        }
+        assert!(fragment.contains("x<sup>2</sup>"));
+        assert!(styled.contains("<style>"));
+        assert!(!plain.contains("<style>"));
+    }
+
+    #[test]
+    fn formula_heavy_semantic_derivation_stays_cached_and_renderer_free() {
+        use std::time::Instant;
+
+        let source = (0..500)
+            .map(|index| format!("row {index}: $x_{index}^2+y_{index}^2$\n\n"))
+            .collect::<String>();
+        let doc = MarkdownDocument::from_text(source);
+        let version = doc.version();
+        let started = Instant::now();
+        let preview = doc.preview_blocks_shared();
+        let visual = doc.visual_blocks_shared();
+        let cold = started.elapsed();
+        let preview_again = doc.preview_blocks_shared();
+        let visual_again = doc.visual_blocks_shared();
+
+        assert_eq!(doc.version(), version);
+        assert!(std::sync::Arc::ptr_eq(&preview, &preview_again));
+        assert!(std::sync::Arc::ptr_eq(&visual, &visual_again));
+        assert_eq!(preview.len(), 500);
+        assert!(preview.iter().all(|block| matches!(
+            block,
+            PreviewBlock::Paragraph { text, .. }
+                if text.spans.iter().any(|span| span.math.is_some())
+        )));
+        assert!(
+            cold.as_secs_f32() < 5.0,
+            "semantic derivation took {cold:?}"
+        );
+        eprintln!(
+            "500-formula semantic derivation: {cold:?}; cached preview/visual reads reuse Arc"
+        );
+    }
+
+    #[test]
+    fn inline_math_retains_semantic_style_delimiter_and_utf8_source_range() {
+        let source = "速度 $E=mc^2$ 和 **$\\frac{a}{b}$**.";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks_shared();
+        let PreviewBlock::Paragraph { text, .. } = &blocks[0] else {
+            panic!("expected paragraph");
+        };
+        let math = text
+            .spans
+            .iter()
+            .filter_map(|span| span.math.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(math.len(), 2);
+        assert_eq!(math[0].latex, "E=mc^2");
+        assert_eq!(math[0].style, MathLayoutStyle::Text);
+        assert_eq!(math[0].delimiter, MathDelimiter::InlineDollar);
+        assert_eq!(&source[math[0].source_range.clone()], math[0].authored);
+        assert_eq!(math[1].latex, "\\frac{a}{b}");
+        assert_eq!(&source[math[1].source_range.clone()], math[1].authored);
+        assert!(std::sync::Arc::ptr_eq(
+            &blocks,
+            &doc.preview_blocks_shared()
+        ));
+    }
+
+    #[test]
+    fn display_math_inside_prose_remains_a_display_style_atom() {
+        let source = "before $$\\sum_i x_i$$ after";
+        let doc = MarkdownDocument::from_text(source);
+        let PreviewBlock::Paragraph { text, .. } = &doc.preview_blocks()[0] else {
+            panic!("expected paragraph");
+        };
+        let math = text
+            .spans
+            .iter()
+            .find_map(|span| span.math.as_ref())
+            .expect("display math atom");
+        assert_eq!(math.style, MathLayoutStyle::Display);
+        assert_eq!(math.delimiter, MathDelimiter::DisplayDollar);
+        assert_eq!(&source[math.source_range.clone()], "$$\\sum_i x_i$$");
+    }
+
+    #[test]
+    fn fenced_math_dispatches_without_losing_the_authored_fence() {
+        let source = "```MaTh linenos\n\\begin{matrix}a&b\\\\c&d\\end{matrix}\n```";
+        let doc = MarkdownDocument::from_text(source);
+        let block = doc
+            .preview_blocks()
+            .into_iter()
+            .find(|block| matches!(block, PreviewBlock::MathBlock { .. }))
+            .expect("fenced math block");
+        let PreviewBlock::MathBlock {
+            latex,
+            delimiter,
+            source_range,
+            error,
+            ..
+        } = block
+        else {
+            unreachable!()
+        };
+        assert_eq!(delimiter, MathDelimiter::Fenced);
+        assert!(latex.contains("\\begin{matrix}"));
+        assert!(error.is_none(), "{error:?}");
+        assert_eq!(&source[source_range], source);
+        assert!(
+            doc.visual_blocks()
+                .iter()
+                .any(|block| { block.source_island == Some(VisualSourceIslandKind::Math) })
+        );
+    }
+
+    #[test]
+    fn malformed_dollar_source_stays_conservative_plain_text() {
+        let source = "before $\\frac{a}{b after";
+        let doc = MarkdownDocument::from_text(source);
+        let PreviewBlock::Paragraph { text, .. } = &doc.preview_blocks()[0] else {
+            panic!("expected paragraph");
+        };
+        assert!(text.spans.iter().all(|span| span.math.is_none()));
+        assert!(text.text.contains("$\\frac{a}{b"));
     }
 
     #[test]

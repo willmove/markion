@@ -456,6 +456,29 @@ pub struct InlineSpan {
     pub text: String,
     pub style: InlineStyle,
     pub link: Option<String>,
+    pub math: Option<MathSource>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MathLayoutStyle {
+    Text,
+    Display,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MathDelimiter {
+    InlineDollar,
+    DisplayDollar,
+    Fenced,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MathSource {
+    pub latex: String,
+    pub authored: String,
+    pub style: MathLayoutStyle,
+    pub delimiter: MathDelimiter,
+    pub source_range: Range<usize>,
 }
 
 /// Block-level preview text with resolved inline styling. `text` is always the
@@ -500,7 +523,11 @@ pub enum VisualBlockKind {
     CodeBlock {
         language: Option<String>,
     },
-    MathBlock,
+    MathBlock {
+        latex: String,
+        authored: String,
+        delimiter: MathDelimiter,
+    },
     Image {
         alt: String,
         url: String,
@@ -527,6 +554,7 @@ pub struct VisualInlineRun {
     pub content_range: Range<usize>,
     pub style: InlineStyle,
     pub link_target_range: Option<Range<usize>>,
+    pub math: Option<MathSource>,
     /// True when the parser's visible text does not map byte-for-byte to source.
     pub conservative_fallback: bool,
 }
@@ -541,6 +569,7 @@ pub enum VisualRevealKind {
     Highlight,
     Superscript,
     Subscript,
+    Math,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -624,6 +653,7 @@ impl RichText {
                 text: text.clone(),
                 style: InlineStyle::default(),
                 link: None,
+                math: None,
             }],
             text,
         }
@@ -684,6 +714,9 @@ pub enum PreviewBlock {
     },
     MathBlock {
         latex: String,
+        /// Byte-identical authored syntax, including delimiters or fence.
+        authored: String,
+        delimiter: MathDelimiter,
         error: Option<String>,
         source_range: Range<usize>,
     },

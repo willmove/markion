@@ -542,6 +542,13 @@ pub enum Msg {
     DiagramUnsafeOutput,
     DiagramRenderFailed,
 
+    // --- Math preview ---
+    MathRendering,
+    MathInvalid,
+    MathTooLarge,
+    MathUnsupported,
+    MathRenderFailed,
+
     /// "Modified" save-state token in the title bar.
     TitleModified,
     /// "Saved" save-state token in the title bar.
@@ -1664,6 +1671,11 @@ fn en(msg: Msg) -> &'static str {
         Msg::DiagramInvalidSource => "The diagram source is invalid.",
         Msg::DiagramUnsafeOutput => "The diagram output was blocked for safety.",
         Msg::DiagramRenderFailed => "Diagram rendering failed.",
+        Msg::MathRendering => "Rendering formula…",
+        Msg::MathInvalid => "The formula is invalid.",
+        Msg::MathTooLarge => "The formula exceeds the rendering size limit.",
+        Msg::MathUnsupported => "The formula uses unsupported notation or glyphs.",
+        Msg::MathRenderFailed => "Formula rendering failed.",
         Msg::TitleModified => "Modified",
         Msg::TitleSaved => "Saved",
     }
@@ -2018,6 +2030,11 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DiagramInvalidSource => "図のソースが無効です。",
         Msg::DiagramUnsafeOutput => "安全上の理由で図の出力をブロックしました。",
         Msg::DiagramRenderFailed => "図の描画に失敗しました。",
+        Msg::MathRendering => "数式を描画しています…",
+        Msg::MathInvalid => "数式が無効です。",
+        Msg::MathTooLarge => "数式が描画サイズの上限を超えています。",
+        Msg::MathUnsupported => "数式に未対応の記法または文字が含まれています。",
+        Msg::MathRenderFailed => "数式の描画に失敗しました。",
         Msg::TitleModified => "変更あり",
         Msg::TitleSaved => "保存済み",
     }
@@ -2361,6 +2378,13 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DiagramInvalidSource => "La source du diagramme est invalide.",
         Msg::DiagramUnsafeOutput => "La sortie du diagramme a été bloquée par sécurité.",
         Msg::DiagramRenderFailed => "Le rendu du diagramme a échoué.",
+        Msg::MathRendering => "Rendu de la formule…",
+        Msg::MathInvalid => "La formule est invalide.",
+        Msg::MathTooLarge => "La formule dépasse la limite de rendu.",
+        Msg::MathUnsupported => {
+            "La formule utilise une notation ou des glyphes non pris en charge."
+        }
+        Msg::MathRenderFailed => "Le rendu de la formule a échoué.",
         Msg::TitleModified => "Modifié",
         Msg::TitleSaved => "Enregistré",
     }
@@ -2700,6 +2724,13 @@ fn de(msg: Msg) -> &'static str {
         Msg::DiagramInvalidSource => "Der Diagrammquelltext ist ungültig.",
         Msg::DiagramUnsafeOutput => "Die Diagrammausgabe wurde aus Sicherheitsgründen blockiert.",
         Msg::DiagramRenderFailed => "Das Rendern des Diagramms ist fehlgeschlagen.",
+        Msg::MathRendering => "Formel wird gerendert…",
+        Msg::MathInvalid => "Die Formel ist ungültig.",
+        Msg::MathTooLarge => "Die Formel überschreitet die Rendergrößenbegrenzung.",
+        Msg::MathUnsupported => {
+            "Die Formel verwendet eine nicht unterstützte Notation oder Glyphe."
+        }
+        Msg::MathRenderFailed => "Das Rendern der Formel ist fehlgeschlagen.",
         Msg::TitleModified => "Geändert",
         Msg::TitleSaved => "Gespeichert",
     }
@@ -3033,6 +3064,11 @@ fn es(msg: Msg) -> &'static str {
         Msg::DiagramInvalidSource => "El código del diagrama no es válido.",
         Msg::DiagramUnsafeOutput => "La salida del diagrama se bloqueó por seguridad.",
         Msg::DiagramRenderFailed => "No se pudo renderizar el diagrama.",
+        Msg::MathRendering => "Renderizando fórmula…",
+        Msg::MathInvalid => "La fórmula no es válida.",
+        Msg::MathTooLarge => "La fórmula supera el límite de tamaño de renderizado.",
+        Msg::MathUnsupported => "La fórmula usa notación o glifos no compatibles.",
+        Msg::MathRenderFailed => "No se pudo renderizar la fórmula.",
         Msg::TitleModified => "Modificado",
         Msg::TitleSaved => "Guardado",
     }
@@ -3377,6 +3413,11 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DiagramInvalidSource => "图表源代码无效。",
         Msg::DiagramUnsafeOutput => "出于安全原因，图表输出已被拦截。",
         Msg::DiagramRenderFailed => "图表渲染失败。",
+        Msg::MathRendering => "正在渲染公式…",
+        Msg::MathInvalid => "公式无效。",
+        Msg::MathTooLarge => "公式超过渲染大小限制。",
+        Msg::MathUnsupported => "公式包含不支持的记法或字形。",
+        Msg::MathRenderFailed => "公式渲染失败。",
         Msg::TitleModified => "已修改",
         Msg::TitleSaved => "已保存",
     }
@@ -3723,6 +3764,11 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DiagramInvalidSource => "圖表原始碼無效。",
         Msg::DiagramUnsafeOutput => "基於安全考量，圖表輸出已被封鎖。",
         Msg::DiagramRenderFailed => "圖表算繪失敗。",
+        Msg::MathRendering => "正在算繪公式…",
+        Msg::MathInvalid => "公式無效。",
+        Msg::MathTooLarge => "公式超過算繪大小限制。",
+        Msg::MathUnsupported => "公式包含不支援的記法或字形。",
+        Msg::MathRenderFailed => "公式算繪失敗。",
         Msg::TitleModified => "已修改",
         Msg::TitleSaved => "已儲存",
     }

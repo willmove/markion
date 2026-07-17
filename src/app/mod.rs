@@ -28,16 +28,17 @@ use gpui::{
 use markion::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,
     EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences, FileTree,
-    FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, InlineStyle,
-    Language, MarkdownDocument, MarkdownFormat, Msg, PreviewBlock, RichText, SearchMatchRange,
-    SearchOptions, ShortcutCategory, ShortcutPlatform, SidebarTab, TableEdit, ThemeColors,
-    ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind, VisualSourceIslandKind,
-    build_visual_projection, builtin_diagram_registry, builtin_theme_definitions,
-    default_preferences_path, default_recovery_dir, default_themes_dir, delete_recovery_file,
-    diagram_backend_id, highlight_code, html_preview_parts, html_preview_plain_text,
-    is_markdown_path, list_recovery_files, list_theme_definitions, load_app_preferences,
-    load_recovery_file, normalize_heading_menu_max_level, render_math, save_app_preferences,
-    save_theme_definition, shortcut_catalog, sidebar_tab_label, t, tf, title_from_path,
+    FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, InlineSpan,
+    InlineStyle, Language, MarkdownDocument, MarkdownFormat, MathLayoutStyle, Msg, PreviewBlock,
+    RichText, SearchMatchRange, SearchOptions, ShortcutCategory, ShortcutPlatform, SidebarTab,
+    TableEdit, ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind,
+    VisualSourceIslandKind, build_visual_projection, builtin_diagram_registry,
+    builtin_theme_definitions, default_preferences_path, default_recovery_dir, default_themes_dir,
+    delete_recovery_file, diagram_backend_id, highlight_code, html_preview_parts,
+    html_preview_plain_text, is_markdown_path, list_recovery_files, list_theme_definitions,
+    load_app_preferences, load_recovery_file, normalize_heading_menu_max_level,
+    save_app_preferences, save_theme_definition, shortcut_catalog, sidebar_tab_label, t, tf,
+    title_from_path,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -625,7 +626,6 @@ enum PreviewTextRunId {
     CodeBody,
     CodeLine(usize),
     MathLatex,
-    MathRendered,
     HtmlText,
     TableCell { row: usize, col: usize },
 }
@@ -637,10 +637,9 @@ impl PreviewTextRunId {
             Self::Body => (0, 0, 0),
             Self::CodeBody => (1, 0, 0),
             Self::CodeLine(i) => (2, i, 0),
-            Self::MathRendered => (3, 0, 0),
-            Self::MathLatex => (4, 0, 0),
-            Self::HtmlText => (5, 0, 0),
-            Self::TableCell { row, col } => (6, row, col),
+            Self::MathLatex => (3, 0, 0),
+            Self::HtmlText => (4, 0, 0),
+            Self::TableCell { row, col } => (5, row, col),
         }
     }
 }
@@ -718,6 +717,7 @@ mod diagram;
 mod documents;
 mod editing;
 mod editor_element;
+mod math_render;
 mod network;
 mod preview;
 mod root_view;
@@ -732,6 +732,7 @@ mod tests;
 use bootstrap::install_menus;
 use diagram::*;
 use editor_element::EditorElement;
+use math_render::*;
 use preview::*;
 use root_view::*;
 use save_dialog::*;
@@ -832,6 +833,8 @@ struct MarkionApp {
     highlight_cache: HighlightCache,
     /// Shared across tabs and frames; pending entries are never evicted.
     diagram_cache: DiagramCache,
+    /// Presentation-only formula results shared across tabs and document versions.
+    math_cache: MathCache,
     /// Active interface language. Persisted via `AppPreferences::language`.
     language: Language,
 }

@@ -48,7 +48,7 @@ icons = [
     "assets/markion.png",
 ]
 # Non-binary files bundled alongside the app (logo, icons for reuse).
-resources = ["assets"]
+resources = ["assets", "THIRD_PARTY_NOTICES.md"]
 
 # The freshly built binary lives in target/release/markion (crate name = `markion`).
 # `binaries` tells the packager which file(s) to wrap and which is the main

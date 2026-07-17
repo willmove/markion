@@ -94,9 +94,8 @@ pub(super) fn preview_run_plain_text(
         (PreviewBlock::CodeBlock { code, .. }, PreviewTextRunId::CodeLine(line_index)) => {
             code.lines().nth(line_index).map(|line| line.to_string())
         }
-        (PreviewBlock::MathBlock { latex, .. }, PreviewTextRunId::MathLatex) => Some(latex.clone()),
-        (PreviewBlock::MathBlock { latex, .. }, PreviewTextRunId::MathRendered) => {
-            Some(render_math(latex, true).text)
+        (PreviewBlock::MathBlock { authored, .. }, PreviewTextRunId::MathLatex) => {
+            Some(authored.clone())
         }
         (PreviewBlock::Html { html, .. }, PreviewTextRunId::HtmlText) => {
             Some(html_preview_plain_text(html))
@@ -116,9 +115,7 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
         | PreviewBlock::ListItem { .. }
         | PreviewBlock::BlockQuote { .. } => vec![PreviewTextRunId::Body],
         PreviewBlock::CodeBlock { .. } => vec![PreviewTextRunId::CodeBody],
-        PreviewBlock::MathBlock { .. } => {
-            vec![PreviewTextRunId::MathRendered, PreviewTextRunId::MathLatex]
-        }
+        PreviewBlock::MathBlock { .. } => vec![PreviewTextRunId::MathLatex],
         PreviewBlock::Html { html, .. } => (!html_preview_plain_text(html).is_empty())
             .then_some(PreviewTextRunId::HtmlText)
             .into_iter()
@@ -710,6 +707,8 @@ struct SelectablePreviewText {
     block_index: usize,
     run_id: PreviewTextRunId,
     run_text: SharedString,
+    /// Byte offset of this shaped fragment inside `run_text`.
+    run_offset: usize,
     selection_range: Option<Range<usize>>,
     link_ranges: Vec<Range<usize>>,
     link_urls: Vec<String>,
@@ -732,6 +731,7 @@ impl SelectablePreviewText {
             block_index,
             run_id,
             run_text: run_text.into(),
+            run_offset: 0,
             selection_range,
             link_ranges: Vec::new(),
             link_urls: Vec::new(),
@@ -742,6 +742,11 @@ impl SelectablePreviewText {
     fn with_links(mut self, ranges: Vec<Range<usize>>, urls: Vec<String>) -> Self {
         self.link_ranges = ranges;
         self.link_urls = urls;
+        self
+    }
+
+    fn with_run_offset(mut self, offset: usize) -> Self {
+        self.run_offset = offset;
         self
     }
 }
@@ -803,6 +808,7 @@ impl Element for SelectablePreviewText {
         let block_index = self.block_index;
         let run_id = self.run_id;
         let run_text = self.run_text.clone();
+        let run_offset = self.run_offset;
         let link_ranges = self.link_ranges.clone();
         let link_urls = self.link_urls.clone();
 
@@ -828,7 +834,8 @@ impl Element for SelectablePreviewText {
                     if phase != DispatchPhase::Bubble {
                         return;
                     }
-                    let up_index = preview_index_for_position(&text_layout, event.position);
+                    let up_index =
+                        run_offset + preview_index_for_position(&text_layout, event.position);
                     entity.update(cx, |app, cx| {
                         if app.active_tab().preview_is_selecting && hitbox.is_hovered(window) {
                             app.update_preview_selection_head(
@@ -875,7 +882,7 @@ impl Element for SelectablePreviewText {
                 {
                     return;
                 }
-                let index = preview_index_for_position(&text_layout, event.position);
+                let index = run_offset + preview_index_for_position(&text_layout, event.position);
                 entity.update(cx, |app, cx| {
                     app.begin_preview_selection(block_index, run_id, index, run_text.clone(), cx);
                 });
@@ -899,7 +906,7 @@ impl Element for SelectablePreviewText {
                 if !hitbox.is_hovered(window) {
                     return;
                 }
-                let index = preview_index_for_position(&text_layout, event.position);
+                let index = run_offset + preview_index_for_position(&text_layout, event.position);
                 entity.update(cx, |app, cx| {
                     app.update_preview_selection_head(
                         block_index,
@@ -915,6 +922,7 @@ impl Element for SelectablePreviewText {
         if !link_ranges.is_empty() {
             let mouse_position = window.mouse_position();
             if let Ok(ix) = text_layout.index_for_position(mouse_position)
+                && let ix = run_offset + ix
                 && link_ranges.iter().any(|range| range.contains(&ix))
             {
                 window.set_cursor_style(CursorStyle::PointingHand, hitbox);
@@ -935,7 +943,7 @@ impl Element for SelectablePreviewText {
                 {
                     return;
                 }
-                let index = preview_index_for_position(&text_layout, event.position);
+                let index = run_offset + preview_index_for_position(&text_layout, event.position);
                 let mut link_url = None;
                 for (range, url) in link_ranges.iter().zip(link_urls.iter()) {
                     if range.contains(&index) {
@@ -1058,6 +1066,313 @@ pub(super) fn rich_text_element(
     )
     .with_links(link_ranges, link_urls)
     .into_any_element()
+}
+
+fn preview_fragment_selection(
+    selection: Option<&Range<usize>>,
+    fragment: Range<usize>,
+) -> Option<Range<usize>> {
+    let selection = selection?;
+    let start = selection.start.max(fragment.start);
+    let end = selection.end.min(fragment.end);
+    (start < end).then(|| start - fragment.start..end - fragment.start)
+}
+
+fn preview_span_highlight(span: &InlineSpan) -> Option<HighlightStyle> {
+    let mut style = HighlightStyle::default();
+    let mut styled = false;
+    if span.style.bold {
+        style.font_weight = Some(FontWeight::BOLD);
+        styled = true;
+    }
+    if span.style.italic {
+        style.font_style = Some(FontStyle::Italic);
+        styled = true;
+    }
+    if span.style.strikethrough {
+        style.strikethrough = Some(StrikethroughStyle {
+            thickness: px(1.),
+            color: None,
+        });
+        styled = true;
+    }
+    if span.style.code {
+        style.background_color = Some(rgba(PREVIEW_INLINE_CODE_BG).into());
+        style.color = Some(rgb(PREVIEW_INLINE_CODE_COLOR).into());
+        styled = true;
+    }
+    if span.style.highlight {
+        style.background_color = Some(rgba(PREVIEW_HIGHLIGHT_BG).into());
+        styled = true;
+    }
+    if span.style.superscript || span.style.subscript {
+        style.color = Some(rgb(PREVIEW_SUPER_SUB_COLOR).into());
+        styled = true;
+    }
+    if span.link.is_some() {
+        style.color = Some(rgb(PREVIEW_LINK_COLOR).into());
+        style.underline = Some(UnderlineStyle {
+            thickness: px(1.),
+            color: None,
+            wavy: false,
+        });
+        styled = true;
+    }
+    styled.then_some(style)
+}
+
+fn preview_math_hit_target(
+    block_index: usize,
+    run_id: PreviewTextRunId,
+    boundary: usize,
+    run_text: SharedString,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let down_text = run_text.clone();
+    let move_text = run_text.clone();
+    let up_text = run_text;
+    div()
+        .flex_1()
+        .h_full()
+        .cursor(CursorStyle::IBeam)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseDownEvent, _, cx| {
+                app.begin_preview_selection(block_index, run_id, boundary, down_text.clone(), cx);
+            }),
+        )
+        .on_mouse_move(cx.listener(move |app, event: &MouseMoveEvent, _, cx| {
+            if event.dragging() {
+                app.update_preview_selection_head(
+                    block_index,
+                    run_id,
+                    boundary,
+                    move_text.clone(),
+                    cx,
+                );
+            }
+        }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                app.update_preview_selection_head(
+                    block_index,
+                    run_id,
+                    boundary,
+                    up_text.clone(),
+                    cx,
+                );
+                app.end_preview_selection(cx);
+            }),
+        )
+}
+
+pub(super) fn math_atom_boundary(authored_range: &Range<usize>, trailing_half: bool) -> usize {
+    if trailing_half {
+        authored_range.end
+    } else {
+        authored_range.start
+    }
+}
+
+/// Rendered formula with two atomic hit targets. Pointer positions resolve to
+/// the complete authored span's leading or trailing boundary; glyph internals
+/// are never exposed as selectable offsets.
+fn preview_math_atom(
+    app: &MarkionApp,
+    image: Arc<MathImage>,
+    block_index: usize,
+    run_id: PreviewTextRunId,
+    authored_range: Range<usize>,
+    run_text: SharedString,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let selected = active_preview_run_selection(app, block_index, run_id, run_text.as_ref())
+        .is_some_and(|range| range.start < authored_range.end && range.end > authored_range.start);
+    let start = math_atom_boundary(&authored_range, false);
+    let end = math_atom_boundary(&authored_range, true);
+    let metric_height = image.ascent + image.descent;
+    div()
+        .relative()
+        .flex_none()
+        .w(image.size.width)
+        .h(metric_height)
+        .mb(image.descent)
+        .when(selected, |atom| atom.bg(rgba(PREVIEW_SELECTION_COLOR)))
+        .child(
+            img(ImageSource::Render(image.image.clone()))
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(image.size.width)
+                .h(image.size.height),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .left_0()
+                .flex()
+                .child(preview_math_hit_target(
+                    block_index,
+                    run_id,
+                    start,
+                    run_text.clone(),
+                    cx,
+                ))
+                .child(preview_math_hit_target(
+                    block_index,
+                    run_id,
+                    end,
+                    run_text,
+                    cx,
+                )),
+        )
+        .into_any_element()
+}
+
+/// Mixed prose/math preview path. Text fragments retain their offsets in the
+/// single source-backed run, while ready formulas become baseline-aligned,
+/// indivisible image atoms. Pending and failed formulas remain exact source.
+pub(super) fn rich_text_with_math_element(
+    app: &MarkionApp,
+    id_prefix: &'static str,
+    rich: &RichText,
+    block_index: usize,
+    run_id: PreviewTextRunId,
+    display_scale: f32,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    if !rich.spans.iter().any(|span| span.math.is_some()) {
+        return rich_text_element(
+            app,
+            ElementId::from((id_prefix, block_index)),
+            rich,
+            block_index,
+            run_id,
+            cx,
+        );
+    }
+
+    let full_selection = active_preview_run_selection(app, block_index, run_id, &rich.text);
+    let run_text = SharedString::from(rich.text.clone());
+    let mut children = Vec::new();
+    let mut offset = 0usize;
+    let mut fragment_index = 0usize;
+    for span in &rich.spans {
+        let span_range = offset..offset + span.text.len();
+        offset = span_range.end;
+        if let Some(math) = &span.math {
+            match app.math_entry(
+                &math.latex,
+                math.style,
+                math_font_size(math.style),
+                1.0,
+                display_scale,
+                app.palette().text,
+            ) {
+                MathCacheEntry::Ready(image) => children.push(preview_math_atom(
+                    app,
+                    image,
+                    block_index,
+                    run_id,
+                    span_range,
+                    run_text.clone(),
+                    cx,
+                )),
+                MathCacheEntry::Pending | MathCacheEntry::Error(_) => {
+                    let local_len = span.text.len();
+                    let mut style = HighlightStyle {
+                        color: Some(rgb(PREVIEW_INLINE_CODE_COLOR).into()),
+                        background_color: Some(rgba(PREVIEW_INLINE_CODE_BG).into()),
+                        ..Default::default()
+                    };
+                    if matches!(
+                        app.math_entry(
+                            &math.latex,
+                            math.style,
+                            math_font_size(math.style),
+                            1.0,
+                            display_scale,
+                            app.palette().text,
+                        ),
+                        MathCacheEntry::Error(_)
+                    ) {
+                        style.color = Some(rgb(0xb91c1c).into());
+                    }
+                    let selection =
+                        preview_fragment_selection(full_selection.as_ref(), span_range.clone());
+                    children.push(
+                        SelectablePreviewText::new(
+                            ElementId::from(SharedString::from(format!(
+                                "{id_prefix}-{block_index}-{fragment_index}"
+                            ))),
+                            StyledText::new(SharedString::from(span.text.clone()))
+                                .with_highlights(vec![(0..local_len, style)]),
+                            block_index,
+                            run_id,
+                            run_text.clone(),
+                            selection,
+                            cx.entity(),
+                        )
+                        .with_run_offset(span_range.start)
+                        .into_any_element(),
+                    );
+                    fragment_index += 1;
+                }
+            }
+            continue;
+        }
+
+        let mut fragment_start = span_range.start;
+        for fragment in span.text.split_inclusive(char::is_whitespace) {
+            if fragment.is_empty() {
+                continue;
+            }
+            let fragment_range = fragment_start..fragment_start + fragment.len();
+            let local_range = 0..fragment.len();
+            let mut highlights = Vec::new();
+            if let Some(style) = preview_span_highlight(span) {
+                highlights.push((local_range, style));
+            }
+            let links = span
+                .link
+                .as_ref()
+                .map_or_else(Vec::new, |_| vec![fragment_range.clone()]);
+            let urls = span.link.clone().into_iter().collect();
+            let selection =
+                preview_fragment_selection(full_selection.as_ref(), fragment_range.clone());
+            children.push(
+                SelectablePreviewText::new(
+                    ElementId::from(SharedString::from(format!(
+                        "{id_prefix}-{block_index}-{fragment_index}"
+                    ))),
+                    StyledText::new(SharedString::from(fragment.to_string()))
+                        .with_highlights(highlights),
+                    block_index,
+                    run_id,
+                    run_text.clone(),
+                    selection,
+                    cx.entity(),
+                )
+                .with_run_offset(fragment_range.start)
+                .with_links(links, urls)
+                .into_any_element(),
+            );
+            fragment_index += 1;
+            fragment_start = fragment_range.end;
+        }
+    }
+
+    div()
+        .w_full()
+        .flex()
+        .flex_wrap()
+        .items_end()
+        .children(children)
+        .into_any_element()
 }
 
 /// Selectable plain / highlighted preview text (code, captions, table cells).
@@ -1315,6 +1630,218 @@ pub(super) fn visual_text_element(
     .into_any_element()
 }
 
+fn visual_math_hit_target(boundary: usize, cx: &mut Context<MarkionApp>) -> Div {
+    div()
+        .flex_1()
+        .h_full()
+        .cursor(CursorStyle::IBeam)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |app, event: &MouseDownEvent, window, cx| {
+                let focus_handle = app.focus_handle.clone();
+                window.focus(&focus_handle);
+                app.file_tree_query_focused = false;
+                app.search_focus = None;
+                app.input_marked_len = 0;
+                app.active_tab_mut().clear_preview_selection();
+                app.active_tab_mut().is_selecting = true;
+                if event.modifiers.shift {
+                    app.select_to(boundary, cx);
+                } else {
+                    app.move_to(boundary, cx);
+                }
+            }),
+        )
+        .on_mouse_move(cx.listener(move |app, event: &MouseMoveEvent, _, cx| {
+            if event.dragging() && app.active_tab().is_selecting {
+                app.select_to(boundary, cx);
+            }
+        }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseUpEvent, _, _| {
+                app.active_tab_mut().is_selecting = false;
+            }),
+        )
+}
+
+fn visual_math_atom(
+    app: &MarkionApp,
+    image: Arc<MathImage>,
+    source_range: Range<usize>,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let selected = {
+        let selection = &app.active_tab().selected_range;
+        !selection.is_empty()
+            && selection.start < source_range.end
+            && selection.end > source_range.start
+    };
+    let metric_height = image.ascent + image.descent;
+    div()
+        .relative()
+        .flex_none()
+        .w(image.size.width)
+        .h(metric_height)
+        .mb(image.descent)
+        .when(selected, |atom| atom.bg(rgba(PREVIEW_SELECTION_COLOR)))
+        .child(
+            img(ImageSource::Render(image.image.clone()))
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(image.size.width)
+                .h(image.size.height),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .left_0()
+                .flex()
+                .child(visual_math_hit_target(source_range.start, cx))
+                .child(visual_math_hit_target(source_range.end, cx)),
+        )
+        .into_any_element()
+}
+
+fn visual_projection_fragment(
+    block_index: usize,
+    fragment_index: usize,
+    visible: String,
+    source_range: Range<usize>,
+    style: Option<HighlightStyle>,
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let visible_len = visible.len();
+    let highlights = style
+        .map(|style| vec![(0..visible_len, style)])
+        .unwrap_or_default();
+    VisualEditableText {
+        element_id: ElementId::from(SharedString::from(format!(
+            "visual-mixed-{block_index}-{fragment_index}"
+        ))),
+        text: StyledText::new(SharedString::from(visible)).with_highlights(highlights),
+        segments: vec![VisualTextSegment {
+            visible_range: 0..visible_len,
+            source_range: source_range.clone(),
+        }],
+        source_selection: app.active_tab().selected_range.clone(),
+        source_cursor: app.active_tab().cursor_offset(),
+        caret_active: visual_block_owns_caret(app, block_index)
+            && (source_range.contains(&app.active_tab().cursor_offset())
+                || app.active_tab().cursor_offset() == source_range.end),
+        source_anchor: source_range.start,
+        entity: cx.entity(),
+        #[cfg(test)]
+        test_projection: None,
+        #[cfg(test)]
+        test_projection_styles: None,
+    }
+    .into_any_element()
+}
+
+/// Source-backed mixed layout for Visual Edit. A focused formula is already a
+/// source piece in `build_visual_projection`; other formulas remain image
+/// atoms while adjacent prose keeps exact visible-to-source segments.
+pub(super) fn visual_text_with_math_element(
+    block: &VisualBlock,
+    block_index: usize,
+    app: &MarkionApp,
+    display_scale: f32,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    if !block.editable_runs.iter().any(|run| run.math.is_some()) {
+        return visual_text_element(block, block_index, app, cx);
+    }
+
+    let projection = build_visual_projection(
+        app.active_tab().document.text(),
+        block,
+        app.active_tab().selected_range.clone(),
+        app.active_tab().cursor_offset(),
+    );
+    let mut children = Vec::new();
+    let mut fragment_index = 0usize;
+    for (segment, projected_span) in projection.segments.iter().zip(&projection.spans) {
+        let math = (!projected_span.source).then(|| {
+            block
+                .editable_runs
+                .iter()
+                .find(|run| run.math.is_some() && run.content_range == segment.source_range)
+        });
+        if let Some(Some(run)) = math
+            && let Some(math) = &run.math
+            && let MathCacheEntry::Ready(image) = app.math_entry(
+                &math.latex,
+                math.style,
+                math_font_size(math.style),
+                1.0,
+                display_scale,
+                app.palette().text,
+            )
+        {
+            children.push(visual_math_atom(app, image, math.source_range.clone(), cx));
+            continue;
+        }
+
+        let visible = &projection.text[segment.display_range.clone()];
+        let style = if projected_span.source {
+            Some(HighlightStyle {
+                color: Some(rgb(PREVIEW_INLINE_CODE_COLOR).into()),
+                background_color: Some(rgba(PREVIEW_INLINE_CODE_BG).into()),
+                ..Default::default()
+            })
+        } else {
+            visual_highlight_style(projected_span.style, projected_span.link)
+        };
+        let can_split = visible.len() == segment.source_range.len();
+        if can_split {
+            let mut local_start = 0usize;
+            for fragment in visible.split_inclusive(char::is_whitespace) {
+                if fragment.is_empty() {
+                    continue;
+                }
+                let source_start = segment.source_range.start + local_start;
+                let source_range = source_start..source_start + fragment.len();
+                children.push(visual_projection_fragment(
+                    block_index,
+                    fragment_index,
+                    fragment.to_string(),
+                    source_range,
+                    style.clone(),
+                    app,
+                    cx,
+                ));
+                fragment_index += 1;
+                local_start += fragment.len();
+            }
+        } else {
+            children.push(visual_projection_fragment(
+                block_index,
+                fragment_index,
+                visible.to_string(),
+                segment.source_range.clone(),
+                style,
+                app,
+                cx,
+            ));
+            fragment_index += 1;
+        }
+    }
+
+    div()
+        .w_full()
+        .flex()
+        .flex_wrap()
+        .items_end()
+        .children(children)
+        .into_any_element()
+}
+
 pub(super) fn visual_source_island_view(
     app: &MarkionApp,
     block: &VisualBlock,
@@ -1388,9 +1915,11 @@ pub(super) fn visual_block_index_for_offset(
     cursor: usize,
     document_len: usize,
 ) -> Option<usize> {
-    blocks
-        .iter()
-        .position(|block| visual_source_range_is_focused(&block.source_range, cursor, document_len))
+    blocks.iter().position(|block| {
+        visual_source_range_is_focused(&block.source_range, cursor, document_len)
+            || (matches!(block.kind, VisualBlockKind::MathBlock { .. })
+                && cursor == block.source_range.end)
+    })
 }
 
 pub(super) fn visual_block_view(
@@ -1398,6 +1927,7 @@ pub(super) fn visual_block_view(
     block: &VisualBlock,
     block_index: usize,
     document_dir: Option<&Path>,
+    display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let owns_caret = visual_block_owns_caret(app, block_index);
@@ -1406,7 +1936,6 @@ pub(super) fn visual_block_view(
         Some(
             VisualSourceIslandKind::FrontMatter
                 | VisualSourceIslandKind::Code
-                | VisualSourceIslandKind::Math
                 | VisualSourceIslandKind::Html
                 | VisualSourceIslandKind::Unsupported
         )
@@ -1433,13 +1962,17 @@ pub(super) fn visual_block_view(
                 .mb_2()
                 .text_size(size)
                 .font_weight(FontWeight::BOLD)
-                .child(visual_text_element(block, block_index, app, cx))
+                .child(visual_text_with_math_element(
+                    block,
+                    block_index,
+                    app,
+                    display_scale,
+                    cx,
+                ))
         }
-        VisualBlockKind::Paragraph => div()
-            .mb_3()
-            .line_height(px(24.))
-            .text_size(px(14.))
-            .child(visual_text_element(block, block_index, app, cx)),
+        VisualBlockKind::Paragraph => div().mb_3().line_height(px(24.)).text_size(px(14.)).child(
+            visual_text_with_math_element(block, block_index, app, display_scale, cx),
+        ),
         VisualBlockKind::ListItem {
             level,
             ordered,
@@ -1481,12 +2014,18 @@ pub(super) fn visual_block_view(
                         .text_color(rgb(0x64748b))
                         .child(marker),
                 )
-                .child(div().flex_1().min_w_0().child(visual_text_element(
-                    block,
-                    block_index,
-                    app,
-                    cx,
-                )))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(visual_text_with_math_element(
+                            block,
+                            block_index,
+                            app,
+                            display_scale,
+                            cx,
+                        )),
+                )
         }
         VisualBlockKind::BlockQuote => div()
             .mb_3()
@@ -1495,7 +2034,13 @@ pub(super) fn visual_block_view(
             .border_color(rgb(0x94a3b8))
             .text_color(rgb(0x475569))
             .line_height(px(23.))
-            .child(visual_text_element(block, block_index, app, cx)),
+            .child(visual_text_with_math_element(
+                block,
+                block_index,
+                app,
+                display_scale,
+                cx,
+            )),
         VisualBlockKind::Image { url, .. } => {
             let offset = block.source_range.start;
             div()
@@ -1551,9 +2096,47 @@ pub(super) fn visual_block_view(
                 .h(px(row_height))
                 .debug_selector(|| "visual-whitespace-gap".to_string())
         }
-        VisualBlockKind::CodeBlock { .. }
-        | VisualBlockKind::MathBlock
-        | VisualBlockKind::Unsupported => visual_source_island_view(app, block, block_index, cx),
+        VisualBlockKind::MathBlock { latex, .. } => {
+            match app.math_entry(
+                latex,
+                MathLayoutStyle::Display,
+                MATH_DISPLAY_FONT_SIZE,
+                1.0,
+                display_scale,
+                app.palette().text,
+            ) {
+                MathCacheEntry::Ready(image) => {
+                    let width = image.size.width;
+                    div().child(
+                        div()
+                            .id(ElementId::from(("visual-math-scroll", block_index)))
+                            .mb_3()
+                            .w_full()
+                            .overflow_x_scroll()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w(width)
+                                    .py_2()
+                                    .flex()
+                                    .justify_center()
+                                    .child(visual_math_atom(
+                                        app,
+                                        image,
+                                        block.source_range.clone(),
+                                        cx,
+                                    )),
+                            ),
+                    )
+                }
+                MathCacheEntry::Pending | MathCacheEntry::Error(_) => {
+                    visual_source_island_view(app, block, block_index, cx)
+                }
+            }
+        }
+        VisualBlockKind::CodeBlock { .. } | VisualBlockKind::Unsupported => {
+            visual_source_island_view(app, block, block_index, cx)
+        }
     }
 }
 
@@ -1761,6 +2344,7 @@ pub(super) fn preview_block_view(
     block_index: usize,
     document_dir: Option<&Path>,
     show_code_line_numbers: bool,
+    display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     match block {
@@ -1776,12 +2360,13 @@ pub(super) fn preview_block_view(
                 .mb_2()
                 .text_size(size)
                 .font_weight(gpui::FontWeight::BOLD)
-                .child(rich_text_element(
+                .child(rich_text_with_math_element(
                     app,
-                    ElementId::from(("preview-heading", block_index)),
+                    "preview-heading",
                     text,
                     block_index,
                     PreviewTextRunId::Body,
+                    display_scale,
                     cx,
                 ))
         }
@@ -1789,12 +2374,13 @@ pub(super) fn preview_block_view(
             .mb_3()
             .line_height(px(24.))
             .text_size(px(14.))
-            .child(rich_text_element(
+            .child(rich_text_with_math_element(
                 app,
-                ElementId::from(("preview-paragraph", block_index)),
+                "preview-paragraph",
                 text,
                 block_index,
                 PreviewTextRunId::Body,
+                display_scale,
                 cx,
             )),
         PreviewBlock::ListItem {
@@ -1835,12 +2421,13 @@ pub(super) fn preview_block_view(
                         .text_color(marker_color)
                         .child(marker),
                 )
-                .child(div().flex_1().min_w_0().child(rich_text_element(
+                .child(div().flex_1().min_w_0().child(rich_text_with_math_element(
                     app,
-                    ElementId::from(("preview-list-item", block_index)),
+                    "preview-list-item",
                     text,
                     block_index,
                     PreviewTextRunId::Body,
+                    display_scale,
                     cx,
                 )))
         }
@@ -1851,12 +2438,13 @@ pub(super) fn preview_block_view(
             .border_color(rgb(0x94a3b8))
             .text_color(rgb(0x475569))
             .line_height(px(23.))
-            .child(rich_text_element(
+            .child(rich_text_with_math_element(
                 app,
-                ElementId::from(("preview-quote", block_index)),
+                "preview-quote",
                 text,
                 block_index,
                 PreviewTextRunId::Body,
+                display_scale,
                 cx,
             )),
         PreviewBlock::CodeBlock { language, code, .. } => {
@@ -1923,62 +2511,99 @@ pub(super) fn preview_block_view(
                 }
             }
         }
-        PreviewBlock::MathBlock { latex, error, .. } => {
-            let rendered = render_math(latex, true);
-            let rendered_plain = rendered.text.clone();
-            let panel = div()
-                .mb_3()
-                .p_3()
-                .rounded_md()
-                .border_1()
-                .border_color(if error.is_some() {
-                    rgb(0xfca5a5)
-                } else {
-                    rgb(0xbfdbfe)
-                })
-                .bg(if error.is_some() {
-                    rgb(0xfef2f2)
-                } else {
-                    rgb(0xeff6ff)
-                })
-                .font_family("Cambria Math")
-                .text_size(px(16.))
-                .line_height(px(24.))
-                .child(selectable_plain_text(
-                    app,
-                    ElementId::from(("preview-math-rendered", block_index)),
-                    StyledText::new(SharedString::from(rendered_plain.clone())),
-                    rendered_plain,
-                    block_index,
-                    PreviewTextRunId::MathRendered,
-                    cx,
-                ))
-                .child(
+        PreviewBlock::MathBlock {
+            latex,
+            authored,
+            error,
+            ..
+        } => {
+            let entry = app.math_entry(
+                latex,
+                MathLayoutStyle::Display,
+                MATH_DISPLAY_FONT_SIZE,
+                1.0,
+                display_scale,
+                app.palette().text,
+            );
+            if error.is_none()
+                && let MathCacheEntry::Ready(image) = &entry
+            {
+                let image = image.clone();
+                let width = image.size.width;
+                div().child(
                     div()
-                        .mt_2()
-                        .text_size(px(11.))
-                        .text_color(rgb(0x64748b))
+                        .id(ElementId::from(("preview-math-scroll", block_index)))
+                        .mb_3()
+                        .w_full()
+                        .overflow_x_scroll()
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w(width)
+                                .py_2()
+                                .flex()
+                                .justify_center()
+                                .child(preview_math_atom(
+                                    app,
+                                    image,
+                                    block_index,
+                                    PreviewTextRunId::MathLatex,
+                                    0..authored.len(),
+                                    SharedString::from(authored.clone()),
+                                    cx,
+                                )),
+                        ),
+                )
+            } else {
+                let (label, detail) = match entry {
+                    MathCacheEntry::Pending if error.is_none() => {
+                        (t(app.language, Msg::MathRendering), None)
+                    }
+                    MathCacheEntry::Error(renderer_error) => (
+                        app.math_error_message(&renderer_error),
+                        Some(renderer_error.to_string()),
+                    ),
+                    _ => (t(app.language, Msg::MathInvalid), error.clone()),
+                };
+                div().child(
+                    div()
+                        .id(ElementId::from(("preview-math-fallback", block_index)))
+                        .mb_3()
+                        .p_3()
+                        .max_h(px(240.))
+                        .overflow_y_scroll()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(if error.is_some() {
+                            rgb(0xfca5a5)
+                        } else {
+                            rgb(0xcbd5e1)
+                        })
+                        .bg(if error.is_some() {
+                            rgb(0xfef2f2)
+                        } else {
+                            rgb(0xf8fafc)
+                        })
+                        .child(div().mb_2().text_size(px(12.)).child(label))
+                        .when_some(detail, |panel, detail| {
+                            panel.child(
+                                div()
+                                    .mb_2()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(0xb91c1c))
+                                    .child(detail),
+                            )
+                        })
                         .child(selectable_plain_text(
                             app,
-                            ElementId::from(("preview-math-latex", block_index)),
-                            StyledText::new(SharedString::from(latex.clone())),
-                            latex.clone(),
+                            ElementId::from(("preview-math-source", block_index)),
+                            StyledText::new(SharedString::from(authored.clone())),
+                            authored.clone(),
                             block_index,
                             PreviewTextRunId::MathLatex,
                             cx,
                         )),
-                );
-
-            if let Some(error) = error {
-                panel.child(
-                    div()
-                        .mt_2()
-                        .text_size(px(12.))
-                        .text_color(rgb(0xb91c1c))
-                        .child(format!("Math error: {error}")),
                 )
-            } else {
-                panel
             }
         }
         PreviewBlock::Html { html, .. } => {

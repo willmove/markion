@@ -88,6 +88,7 @@ impl MarkionApp {
             recovery_dir: default_recovery_dir(),
             highlight_cache: RefCell::new(HashMap::new()),
             diagram_cache: DiagramCache::new(DIAGRAM_CACHE_CAPACITY),
+            math_cache: MathCache::new(MATH_CACHE_CAPACITY),
         }
     }
 

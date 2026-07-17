@@ -7,7 +7,8 @@ impl Focusable for MarkionApp {
 }
 
 impl Render for MarkionApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = self.palette();
         // The preview pane is hidden in Edit mode, so skip the full-document
         // parse that produces its blocks. That parse is invalidated on every
         // keystroke and, on large documents, is the dominant per-key cost
@@ -43,6 +44,14 @@ impl Render for MarkionApp {
             } else {
                 std::sync::Arc::new(Vec::new())
             };
+        self.ensure_math_renders(
+            &preview_blocks,
+            &visual_blocks,
+            1.0,
+            window.scale_factor(),
+            palette.text,
+            cx,
+        );
         // Proportional scroll coupling for Split Preview + Sync scroll. Runs
         // each frame *after* the preview list is in sync with the current
         // blocks (so max_offset reflects the real content height) and *before*
@@ -51,7 +60,6 @@ impl Render for MarkionApp {
         // the non-driving pane, converging in one frame without a feedback loop.
         self.reconcile_sync_scroll();
         let title = title_from_path(self.active_tab().document.path());
-        let palette = self.palette();
         let document_dir = self
             .active_tab()
             .document
@@ -77,6 +85,7 @@ impl Render for MarkionApp {
         let preview_items = preview_blocks.clone();
         let preview_items_doc_dir = document_dir.clone();
         let preview_code_line_numbers = self.code_line_numbers;
+        let preview_display_scale = window.scale_factor();
         let preview_list_state = self.active_tab().preview_list.clone();
         let visual_items = visual_blocks.clone();
         let visual_items_doc_dir = document_dir.clone();
@@ -301,6 +310,7 @@ impl Render for MarkionApp {
                                     visual_items_doc_dir,
                                     visual_list_state,
                                     palette,
+                                    window.scale_factor(),
                                     cx,
                                 )
                             } else {
@@ -418,6 +428,7 @@ impl Render for MarkionApp {
                                                                     preview_items_doc_dir
                                                                         .as_deref(),
                                                                     preview_code_line_numbers,
+                                                                    preview_display_scale,
                                                                     cx,
                                                                 ));
                                                             if constrain_read_preview {
@@ -497,6 +508,7 @@ pub(super) fn visual_edit_surface_view(
     document_dir: Option<PathBuf>,
     list_state: ListState,
     palette: ThemePalette,
+    display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let is_empty = items.is_empty();
@@ -543,6 +555,7 @@ pub(super) fn visual_edit_surface_view(
                                         &items[ix],
                                         ix,
                                         document_dir.as_deref(),
+                                        display_scale,
                                         cx,
                                     ))
                                     .into_any_element()
