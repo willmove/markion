@@ -9,7 +9,7 @@ members = ["crates/*"]
 # these via `version.workspace = true` / `edition.workspace = true`). The root
 # markion package declares its own values explicitly and does not inherit.
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 
 # Dependencies referenced by member crates via `.workspace = true`. Versions
@@ -39,7 +39,7 @@ two-face = "0.5"
 
 [package]
 name = "markion"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 description = "A Rust + GPUI Markdown editor."
 license = "MIT"
