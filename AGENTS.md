@@ -13,6 +13,17 @@ Markion is a Rust + GPUI Markdown editor application.
 - **Workspace invariants:** member crates under `crates/*` must not depend on `gpui` (types implementing gpui traits stay in the root crate — orphan rule); `[profile.dev.package."*"]` does not cover workspace members, so compute-heavy member crates on the typing path need an explicit `[profile.dev.package.<name>]` override in the root `Cargo.toml`.
 - **Architecture notes:** derived Markdown state (preview blocks, outline, stats) is cached per document version and shared via `Arc`; syntax highlighting is memoized; the editor reuses a cached text handle per version. Preserve these invariants when editing — don't recompute derived state on every keystroke.
 
+## GitHub release workflow
+
+The canonical release procedure is [`docs/release-process.md`](docs/release-process.md). Follow it from preflight through final GitHub verification whenever publishing a version.
+
+- If the user requests a new release without specifying a version, increment PATCH from the highest stable `vMAJOR.MINOR.PATCH` tag. Major, minor, and prerelease versions require explicit direction.
+- Keep the workspace package, root package, packager, and lockfile versions synchronized; run `cargo test --workspace` before tagging.
+- Use a dedicated `Release Markion vX.Y.Z` commit and an annotated `vX.Y.Z` tag, then monitor the tag-triggered GitHub Actions run until every native build and the publish job succeed.
+- Generated GitHub notes are not final. Unless the user requests another language, publish detailed Simplified Chinese notes covering user-visible changes, fixes, compatibility or migration status, downloads, verification, and the full comparison link.
+- Do not report completion until the Windows NSIS installer, macOS Apple Silicon DMG, Linux amd64 DEB, and Linux x86_64 AppImage are attached and the final Release metadata has been verified.
+- Never delete, force-move, or recreate a public release tag without explicit user authorization.
+
 ## OpenSpec workflow — how to work in this repo
 
 The OpenSpec CLI is installed globally (`openspec`, v1.5+). The spec root is `openspec/`. Structure:
