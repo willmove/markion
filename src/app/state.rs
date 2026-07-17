@@ -145,6 +145,8 @@ pub(super) struct EditorTab {
     pub(super) visual_last_projection: Option<(String, Vec<Range<usize>>)>,
     #[cfg(test)]
     pub(super) visual_projection_paint_count: usize,
+    #[cfg(test)]
+    pub(super) visual_caret_paint_count: usize,
     /// Snapshot of the block slice `preview_list` currently reflects. Each frame
     /// we diff the freshly-parsed blocks against this and `splice` only the
     /// changed range into `preview_list`, which preserves scroll position (a
@@ -229,6 +231,8 @@ impl EditorTab {
             visual_last_projection: None,
             #[cfg(test)]
             visual_projection_paint_count: 0,
+            #[cfg(test)]
+            visual_caret_paint_count: 0,
             preview_list_blocks: std::sync::Arc::new(Vec::new()),
             // Seen = current version so the first render is not mistaken for an
             // edit; reflects = None so that same render parses immediately.
@@ -331,6 +335,7 @@ impl EditorTab {
         {
             self.visual_last_projection = None;
             self.visual_projection_paint_count = 0;
+            self.visual_caret_paint_count = 0;
         }
         // The replacement document's scroll ranges differ, so the cached sync
         // fractions are stale; let the next Split frame re-derive them.

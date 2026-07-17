@@ -1541,14 +1541,19 @@ fn visual_text_positions_map_to_source_content_ranges() {
             source_range: 11..15,
         },
     ];
-    assert_eq!(visual_source_for_visible(&segments, 0), 2);
-    assert_eq!(visual_source_for_visible(&segments, 4), 6);
-    assert_eq!(visual_source_for_visible(&segments, 6), 12);
+    assert_eq!(visual_source_for_visible(&segments, 0, 0), 2);
+    assert_eq!(visual_source_for_visible(&segments, 0, 4), 6);
+    assert_eq!(visual_source_for_visible(&segments, 0, 6), 12);
     assert_eq!(visual_visible_for_source(&segments, 13), Some(7));
     assert_eq!(
         visual_visible_for_source(&segments, 9),
         Some(5),
         "hidden source gaps use the nearest stable display boundary"
+    );
+    assert_eq!(
+        visual_source_for_visible(&[], 42, 3),
+        42,
+        "clicks on empty rows must land at the row's own source anchor, not offset 0"
     );
 }
 
@@ -1778,6 +1783,47 @@ fn visual_edit_paints_trailing_space_before_the_next_character(cx: &mut TestAppC
         assert_eq!(app.active_tab().document.text(), "## heading x");
         let (text, _) = app.active_tab().visual_last_projection.as_ref().unwrap();
         assert_eq!(text, "heading x");
+    });
+}
+
+#[gpui::test]
+fn visual_edit_paints_exactly_one_caret_in_the_focused_block(cx: &mut TestAppContext) {
+    let source = "first paragraph\n\n## second heading\n\nthird **bold** tail\n";
+    let cursor = source.find("third").unwrap() + 2;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(tab.visual_projection_paint_count > 0);
+        assert_eq!(
+            tab.visual_caret_paint_count, tab.visual_projection_paint_count,
+            "every paint pass must draw the caret exactly once, in the focused block"
+        );
+        assert!(tab.visual_caret_bounds.is_some());
+    });
+
+    // Moving the caret to another block keeps the one-caret-per-frame
+    // invariant: unfocused rows must not paint clamped carets of their own.
+    let heading_cursor = source.find("second").unwrap();
+    app.update(cx, |app, cx| app.move_to(heading_cursor, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(
+            tab.visual_caret_paint_count, tab.visual_projection_paint_count,
+            "caret must follow focus, one caret per frame"
+        );
     });
 }
 

@@ -466,14 +466,26 @@ struct VisualEditableText {
     segments: Vec<VisualTextSegment>,
     source_selection: Range<usize>,
     source_cursor: usize,
+    /// Whether this row is the single owner of the document caret. Every
+    /// visible row paints per frame, and the visible→source mapping clamps to
+    /// its own segments, so an unfocused row would otherwise paint a stray
+    /// caret at its nearest boundary.
+    caret_active: bool,
+    /// Source position clicks resolve to when this row has no segments
+    /// (an empty block still needs to place the caret inside itself).
+    source_anchor: usize,
     entity: Entity<MarkionApp>,
     #[cfg(test)]
     test_projection: Option<(String, Vec<Range<usize>>)>,
 }
 
-pub(super) fn visual_source_for_visible(segments: &[VisualTextSegment], visible: usize) -> usize {
+pub(super) fn visual_source_for_visible(
+    segments: &[VisualTextSegment],
+    source_anchor: usize,
+    visible: usize,
+) -> usize {
     let Some(first) = segments.first() else {
-        return 0;
+        return source_anchor;
     };
     for segment in segments {
         if visible <= segment.visible_range.end {
@@ -567,12 +579,21 @@ impl Element for VisualEditableText {
         cx: &mut App,
     ) {
         let layout = self.text.layout().clone();
-        let caret_bounds = visual_visible_for_source(&self.segments, self.source_cursor)
+        let caret_bounds = self
+            .caret_active
+            .then(|| visual_visible_for_source(&self.segments, self.source_cursor))
+            .flatten()
             .and_then(|index| layout.position_for_index(index))
-            .map(|position| Bounds::new(position, size(px(2.), px(22.))));
+            .map(|position| Bounds::new(position, size(px(2.), layout.line_height())));
         if self.source_selection.is_empty() {
             if let Some(caret_bounds) = caret_bounds {
-                window.paint_quad(fill(caret_bounds, rgb(0x2563eb)));
+                #[cfg(test)]
+                self.entity.update(cx, |app, _| {
+                    app.active_tab_mut().visual_caret_paint_count += 1;
+                });
+                if self.entity.read(cx).focus_handle.is_focused(window) {
+                    window.paint_quad(fill(caret_bounds, rgb(0x2563eb)));
+                }
             }
         } else {
             for segment in &self.segments {
@@ -606,6 +627,7 @@ impl Element for VisualEditableText {
 
         let entity = self.entity.clone();
         let segments = self.segments.clone();
+        let source_anchor = self.source_anchor;
         let text_layout = layout.clone();
         let hitbox_for_down = hitbox.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
@@ -616,7 +638,7 @@ impl Element for VisualEditableText {
                 return;
             }
             let visible = preview_index_for_position(&text_layout, event.position);
-            let source = visual_source_for_visible(&segments, visible);
+            let source = visual_source_for_visible(&segments, source_anchor, visible);
             let focus_handle = entity.read(cx).focus_handle.clone();
             window.focus(&focus_handle);
             entity.update(cx, |app, cx| {
@@ -636,6 +658,7 @@ impl Element for VisualEditableText {
 
         let entity = self.entity.clone();
         let segments = self.segments.clone();
+        let source_anchor = self.source_anchor;
         let text_layout = layout.clone();
         let hitbox_for_move = hitbox.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
@@ -647,7 +670,7 @@ impl Element for VisualEditableText {
                 return;
             }
             let visible = preview_index_for_position(&text_layout, event.position);
-            let source = visual_source_for_visible(&segments, visible);
+            let source = visual_source_for_visible(&segments, source_anchor, visible);
             entity.update(cx, |app, cx| app.select_to(source, cx));
         });
 
@@ -1260,6 +1283,8 @@ pub(super) fn visual_text_element(
         segments,
         source_selection,
         source_cursor,
+        caret_active: visual_block_owns_caret(app, block_index),
+        source_anchor: projection.source_anchor,
         entity: cx.entity(),
         #[cfg(test)]
         test_projection,
@@ -1294,10 +1319,25 @@ pub(super) fn visual_source_island_view(
             }],
             source_selection: app.active_tab().selected_range.clone(),
             source_cursor: app.active_tab().cursor_offset(),
+            caret_active: visual_block_owns_caret(app, block_index),
+            source_anchor: block.source_range.start,
             entity: cx.entity(),
             #[cfg(test)]
             test_projection: None,
         })
+}
+
+/// True when `block_index` is the single visual row that should paint the
+/// document caret. Block source ranges can touch (and, for recovered parser
+/// overlaps, even intersect), so ownership is resolved through the same
+/// first-match lookup that drives caret reveal scrolling.
+pub(super) fn visual_block_owns_caret(app: &MarkionApp, block_index: usize) -> bool {
+    let tab = app.active_tab();
+    visual_block_index_for_offset(
+        &tab.visual_list_blocks,
+        tab.cursor_offset(),
+        tab.document.text().len(),
+    ) == Some(block_index)
 }
 
 pub(super) fn visual_block_is_focused(app: &MarkionApp, block: &VisualBlock) -> bool {
@@ -1468,14 +1508,41 @@ pub(super) fn visual_block_view(
             visual_table_view(app, rows, block.source_range.start, cx)
         }
         VisualBlockKind::Whitespace => {
-            let offset = block.source_range.end;
-            let line_count = app.active_tab().document.text()[block.source_range.clone()]
+            let text = app.active_tab().document.text();
+            let source_range = block.source_range.clone();
+            // Land the caret on the final blank line of the gap instead of at
+            // `source_range.end`, which is the first byte of the *next* block
+            // and would focus that block's row instead of this one.
+            let offset = match text[source_range.clone()].rfind('\n') {
+                Some(last_newline) => {
+                    let mut offset = source_range.start + last_newline;
+                    if offset > source_range.start && text.as_bytes()[offset - 1] == b'\r' {
+                        offset -= 1;
+                    }
+                    offset
+                }
+                None => source_range.end,
+            };
+            let line_count = text[source_range.clone()]
                 .bytes()
                 .filter(|byte| *byte == b'\n')
                 .count()
                 .max(1);
+            let row_height = (line_count as f32 * 12.).clamp(12., 72.);
+            let caret_top = visual_block_owns_caret(app, block_index).then(|| {
+                let local = app
+                    .active_tab()
+                    .cursor_offset()
+                    .clamp(source_range.start, source_range.end)
+                    - source_range.start;
+                let line = text[source_range.start..source_range.start + local]
+                    .bytes()
+                    .filter(|byte| *byte == b'\n')
+                    .count();
+                (line as f32 * 12.).min(row_height - 12.)
+            });
             div()
-                .h(px((line_count as f32 * 12.).clamp(12., 72.)))
+                .h(px(row_height))
                 .cursor(CursorStyle::IBeam)
                 .on_mouse_down(
                     MouseButton::Left,
@@ -1484,6 +1551,9 @@ pub(super) fn visual_block_view(
                         app.move_to(offset, cx);
                     }),
                 )
+                .when_some(caret_top, |row, caret_top| {
+                    row.child(div().mt(px(caret_top)).w(px(2.)).h(px(12.)).bg(rgb(0x2563eb)))
+                })
         }
         VisualBlockKind::CodeBlock { .. }
         | VisualBlockKind::MathBlock
