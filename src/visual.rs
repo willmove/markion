@@ -7,25 +7,66 @@ use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use crate::frontmatter::split_front_matter;
 use crate::model::{
     InlineStyle, MathDelimiter, MathLayoutStyle, MathSource, PreviewBlock, VisualBlock,
-    VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind, VisualInlineRun, VisualProjection,
-    VisualProjectionSegment, VisualProjectionSpan, VisualRevealGroup, VisualRevealKind,
-    VisualSourceIslandKind,
+    VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
+    VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualInlineRun, VisualProjection, VisualProjectionSegment, VisualProjectionSpan,
+    VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualTableCell,
 };
+use crate::table::table_cell_source_ranges;
 
 impl VisualProjection {
-    pub fn source_for_display(&self, display: usize) -> usize {
+    pub fn boundary_candidates(&self, display: usize) -> VisualBoundaryCandidates {
+        let display = clamp_to_char_boundary(&self.text, display);
         let Some(first) = self.segments.first() else {
-            return self.source_anchor;
+            return VisualBoundaryCandidates {
+                display_offset: display,
+                upstream_source: self.source_anchor,
+                downstream_source: self.source_anchor,
+            };
         };
+
         for segment in &self.segments {
-            if display <= segment.display_range.end {
-                let local = display.saturating_sub(segment.display_range.start);
-                return segment.source_range.start + local.min(segment.source_range.len());
+            if display > segment.display_range.start && display < segment.display_range.end {
+                let exact = segment.source_range.start + display - segment.display_range.start;
+                return VisualBoundaryCandidates {
+                    display_offset: display,
+                    upstream_source: exact,
+                    downstream_source: exact,
+                };
             }
         }
-        self.segments
-            .last()
-            .map_or(first.source_range.start, |segment| segment.source_range.end)
+
+        let upstream = self
+            .segments
+            .iter()
+            .rev()
+            .find(|segment| segment.display_range.end <= display)
+            .map(|segment| segment.source_range.end)
+            .unwrap_or(first.source_range.start);
+        let downstream = self
+            .segments
+            .iter()
+            .find(|segment| segment.display_range.start >= display)
+            .map(|segment| segment.source_range.start)
+            .or_else(|| self.segments.last().map(|segment| segment.source_range.end))
+            .unwrap_or(upstream);
+        VisualBoundaryCandidates {
+            display_offset: display,
+            upstream_source: upstream,
+            downstream_source: downstream,
+        }
+    }
+
+    pub fn source_for_display_with_affinity(
+        &self,
+        display: usize,
+        affinity: VisualCaretAffinity,
+    ) -> usize {
+        self.boundary_candidates(display).resolve(affinity)
+    }
+
+    pub fn source_for_display(&self, display: usize) -> usize {
+        self.source_for_display_with_affinity(display, VisualCaretAffinity::Upstream)
     }
 
     pub fn display_for_source(&self, source: usize) -> Option<usize> {
@@ -60,6 +101,43 @@ impl VisualProjection {
             .last()
             .map(|segment| segment.display_range.end)
     }
+
+    pub fn affinity_for_source(&self, source: usize) -> Option<VisualCaretAffinity> {
+        let display = self.display_for_source(source)?;
+        let candidates = self.boundary_candidates(display);
+        if !candidates.is_ambiguous() {
+            return None;
+        }
+        if source == candidates.upstream_source {
+            Some(VisualCaretAffinity::Upstream)
+        } else if source == candidates.downstream_source {
+            Some(VisualCaretAffinity::Downstream)
+        } else {
+            None
+        }
+    }
+
+    pub fn source_is_exactly_projected(&self, source: usize) -> bool {
+        self.segments.iter().any(|segment| {
+            source >= segment.source_range.start && source <= segment.source_range.end
+        })
+    }
+
+    pub fn display_range_for_source_range(&self, source: Range<usize>) -> Option<Range<usize>> {
+        let start = self.display_for_source(source.start)?;
+        let end = self.display_for_source(source.end)?;
+        (self.source_is_exactly_projected(source.start)
+            && self.source_is_exactly_projected(source.end))
+        .then_some(start.min(end)..start.max(end))
+    }
+}
+
+fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
 }
 
 #[derive(Debug)]
@@ -83,6 +161,16 @@ pub fn build_visual_projection(
     source_selection: Range<usize>,
     source_cursor: usize,
 ) -> VisualProjection {
+    build_visual_projection_with_marked_range(source, block, source_selection, source_cursor, None)
+}
+
+pub fn build_visual_projection_with_marked_range(
+    source: &str,
+    block: &VisualBlock,
+    source_selection: Range<usize>,
+    source_cursor: usize,
+    marked_range: Option<Range<usize>>,
+) -> VisualProjection {
     let endpoint_is_active = |range: &Range<usize>, include_end: bool| {
         range.contains(&source_cursor)
             || (include_end && source_cursor == range.end)
@@ -92,6 +180,9 @@ pub fn build_visual_projection(
                     || (include_end
                         && (source_selection.start == range.end
                             || source_selection.end == range.end))))
+            || marked_range.as_ref().is_some_and(|marked| {
+                !marked.is_empty() && marked.start < range.end && marked.end > range.start
+            })
     };
     let mut revealed_source_ranges = block
         .reveal_groups
@@ -192,7 +283,11 @@ pub fn build_visual_projection(
 }
 use crate::parse::{ExtendedInlineKind, extended_inline_matches, markdown_options};
 
-pub(crate) fn build_visual_blocks(text: &str, preview: &[PreviewBlock]) -> Vec<VisualBlock> {
+pub(crate) fn build_visual_blocks(
+    text: &str,
+    preview: &[PreviewBlock],
+    mut allocate_id: impl FnMut() -> VisualBlockId,
+) -> Vec<VisualBlock> {
     let mut blocks = Vec::with_capacity(preview.len() + 1);
     if let Some((_, body_start)) = split_front_matter(text)
         && body_start > 0
@@ -200,6 +295,7 @@ pub(crate) fn build_visual_blocks(text: &str, preview: &[PreviewBlock]) -> Vec<V
         blocks.push(source_island(
             0..body_start,
             VisualSourceIslandKind::FrontMatter,
+            &mut allocate_id,
         ));
     }
 
@@ -232,10 +328,15 @@ pub(crate) fn build_visual_blocks(text: &str, preview: &[PreviewBlock]) -> Vec<V
     let mut covered_until = blocks.last().map_or(0, |block| block.source_range.end);
     for (preview_block, range) in preview.iter().zip(source_ranges) {
         if range.start > covered_until {
-            blocks.push(gap_block(text, covered_until..range.start));
+            blocks.push(gap_block(
+                text,
+                covered_until..range.start,
+                &mut allocate_id,
+            ));
         }
 
-        let mut block = visual_block_from_preview(text, preview_block, range.clone());
+        let mut block =
+            visual_block_from_preview(text, preview_block, range.clone(), &mut allocate_id);
         if block.source_range.start < covered_until {
             block.source_island = Some(VisualSourceIslandKind::Unsupported);
         }
@@ -244,14 +345,19 @@ pub(crate) fn build_visual_blocks(text: &str, preview: &[PreviewBlock]) -> Vec<V
     }
 
     if covered_until < text.len() {
-        blocks.push(gap_block(text, covered_until..text.len()));
+        blocks.push(gap_block(text, covered_until..text.len(), &mut allocate_id));
     }
     blocks
 }
 
-fn gap_block(text: &str, range: Range<usize>) -> VisualBlock {
+fn gap_block(
+    text: &str,
+    range: Range<usize>,
+    allocate_id: &mut impl FnMut() -> VisualBlockId,
+) -> VisualBlock {
     if text[range.clone()].trim().is_empty() {
         VisualBlock {
+            id: allocate_id(),
             kind: VisualBlockKind::Whitespace,
             source_range: range,
             editable_runs: Vec::new(),
@@ -259,14 +365,20 @@ fn gap_block(text: &str, range: Range<usize>) -> VisualBlock {
             marker_ranges: Vec::new(),
             block_prefix: None,
             source_island: None,
+            editor: None,
         }
     } else {
-        source_island(range, VisualSourceIslandKind::Unsupported)
+        source_island(range, VisualSourceIslandKind::Unsupported, allocate_id)
     }
 }
 
-fn source_island(range: Range<usize>, kind: VisualSourceIslandKind) -> VisualBlock {
+fn source_island(
+    range: Range<usize>,
+    kind: VisualSourceIslandKind,
+    allocate_id: &mut impl FnMut() -> VisualBlockId,
+) -> VisualBlock {
     VisualBlock {
+        id: allocate_id(),
         kind: VisualBlockKind::Unsupported,
         source_range: range,
         editable_runs: Vec::new(),
@@ -274,6 +386,7 @@ fn source_island(range: Range<usize>, kind: VisualSourceIslandKind) -> VisualBlo
         marker_ranges: Vec::new(),
         block_prefix: None,
         source_island: Some(kind),
+        editor: None,
     }
 }
 
@@ -281,8 +394,9 @@ fn visual_block_from_preview(
     text: &str,
     block: &PreviewBlock,
     source_range: Range<usize>,
+    allocate_id: &mut impl FnMut() -> VisualBlockId,
 ) -> VisualBlock {
-    let (kind, source_island) = match block {
+    let (kind, mut source_island) = match block {
         PreviewBlock::Heading { level, .. } => (VisualBlockKind::Heading { level: *level }, None),
         PreviewBlock::Paragraph { .. } => (VisualBlockKind::Paragraph, None),
         PreviewBlock::ListItem {
@@ -364,7 +478,12 @@ fn visual_block_from_preview(
         &mut editable_runs,
     );
     let marker_ranges = marker_ranges(source_range.clone(), &editable_runs);
+    let editor = visual_block_editor(text, block, source_range.clone());
+    if editor.is_some() {
+        source_island = None;
+    }
     VisualBlock {
+        id: allocate_id(),
         kind,
         source_range,
         editable_runs,
@@ -372,7 +491,288 @@ fn visual_block_from_preview(
         marker_ranges,
         block_prefix,
         source_island: source_island.or(contains_html.then_some(VisualSourceIslandKind::Html)),
+        editor,
     }
+}
+
+fn visual_block_editor(
+    text: &str,
+    block: &PreviewBlock,
+    source_range: Range<usize>,
+) -> Option<VisualBlockEditor> {
+    match block {
+        PreviewBlock::CodeBlock { language, .. } => {
+            let (payload_range, info_range, opening_fence, closing_fence) =
+                fenced_payload_ranges(text, source_range, '`', '~')?;
+            if crate::diagram_backend_id(language.as_deref()).is_some() {
+                return None;
+            }
+            Some(VisualBlockEditor::Code {
+                opening_fence,
+                payload: VisualEditorField {
+                    kind: VisualEditorFieldKind::CodePayload,
+                    source_range: payload_range,
+                },
+                info_range,
+                closing_fence,
+            })
+        }
+        PreviewBlock::MathBlock { delimiter, .. } => {
+            let (payload_range, opening_delimiter, closing_delimiter) = match delimiter {
+                MathDelimiter::DisplayDollar => dollar_math_payload_ranges(text, source_range)?,
+                MathDelimiter::Fenced => {
+                    let (payload, _, opening, closing) =
+                        fenced_payload_ranges(text, source_range, '`', '~')?;
+                    (payload, opening, closing)
+                }
+                MathDelimiter::InlineDollar => return None,
+            };
+            Some(VisualBlockEditor::Math {
+                opening_delimiter,
+                payload: VisualEditorField {
+                    kind: VisualEditorFieldKind::MathPayload,
+                    source_range: payload_range,
+                },
+                closing_delimiter,
+            })
+        }
+        PreviewBlock::Image { .. } => {
+            let (alt, destination, title) = image_field_ranges(text, source_range)?;
+            Some(VisualBlockEditor::Image {
+                alt: VisualEditorField {
+                    kind: VisualEditorFieldKind::ImageAlt,
+                    source_range: alt,
+                },
+                destination: VisualEditorField {
+                    kind: VisualEditorFieldKind::ImageDestination,
+                    source_range: destination,
+                },
+                title: title.map(|source_range| VisualEditorField {
+                    kind: VisualEditorFieldKind::ImageTitle,
+                    source_range,
+                }),
+            })
+        }
+        PreviewBlock::Table { rows, .. } => {
+            let source = text.get(source_range.clone())?;
+            let cell_ranges = table_cell_source_ranges(source)?;
+            if cell_ranges.len() != rows.iter().map(Vec::len).sum::<usize>() {
+                return None;
+            }
+            Some(VisualBlockEditor::Table {
+                cells: cell_ranges
+                    .into_iter()
+                    .map(|cell| {
+                        let source_range = source_range.start + cell.source_range.start
+                            ..source_range.start + cell.source_range.end;
+                        VisualTableCell {
+                            row: cell.row,
+                            column: cell.column,
+                            field: VisualEditorField {
+                                kind: VisualEditorFieldKind::TableCell {
+                                    row: cell.row,
+                                    column: cell.column,
+                                },
+                                source_range,
+                            },
+                        }
+                    })
+                    .collect(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn fenced_payload_ranges(
+    text: &str,
+    source_range: Range<usize>,
+    first_marker: char,
+    second_marker: char,
+) -> Option<(
+    Range<usize>,
+    Option<Range<usize>>,
+    Range<usize>,
+    Range<usize>,
+)> {
+    let source = text.get(source_range.clone())?;
+    let opening_end = source.find('\n').map_or(source.len(), |offset| offset + 1);
+    let opening = source[..opening_end].trim_end_matches(['\r', '\n']);
+    let indentation = opening.len() - opening.trim_start_matches(' ').len();
+    if indentation > 3 {
+        return None;
+    }
+    let opening_trimmed = &opening[indentation..];
+    let marker = opening_trimmed.chars().next()?;
+    if marker != first_marker && marker != second_marker {
+        return None;
+    }
+    let marker_len = opening_trimmed
+        .chars()
+        .take_while(|ch| *ch == marker)
+        .count();
+    if marker_len < 3 {
+        return None;
+    }
+    let info_local_start = indentation + marker_len;
+    let info = &opening[info_local_start..];
+    let leading = info.len() - info.trim_start().len();
+    let trailing = info.len() - info.trim_end().len();
+    let info_range = (leading + trailing < info.len()).then(|| {
+        source_range.start + info_local_start + leading
+            ..source_range.start + opening.len() - trailing
+    });
+
+    let opening_fence =
+        source_range.start + indentation..source_range.start + indentation + marker_len;
+    let mut closing = None;
+    let mut offset = opening_end;
+    for line_with_newline in source[opening_end..].split_inclusive('\n') {
+        let line = line_with_newline.trim_end_matches(['\r', '\n']);
+        let trimmed = line.trim_start_matches(' ');
+        let indent = line.len() - trimmed.len();
+        let run = trimmed.chars().take_while(|ch| *ch == marker).count();
+        if indent <= 3 && run >= marker_len && trimmed[run..].trim().is_empty() {
+            closing = Some((offset, indent, run));
+        }
+        offset += line_with_newline.len();
+    }
+    let (closing_start, closing_indent, closing_len) = closing?;
+    let closing_fence = source_range.start + closing_start + closing_indent
+        ..source_range.start + closing_start + closing_indent + closing_len;
+    Some((
+        source_range.start + opening_end..source_range.start + closing_start,
+        info_range,
+        opening_fence,
+        closing_fence,
+    ))
+}
+
+fn dollar_math_payload_ranges(
+    text: &str,
+    source_range: Range<usize>,
+) -> Option<(Range<usize>, Range<usize>, Range<usize>)> {
+    let source = text.get(source_range.clone())?;
+    let trimmed_end = source.trim_end_matches(['\r', '\n']);
+    if !source.starts_with("$$") || !trimmed_end.ends_with("$$") || trimmed_end.len() < 4 {
+        return None;
+    }
+    let closing_start = trimmed_end.len() - 2;
+    let payload_start = if source[2..].starts_with("\r\n") {
+        4
+    } else if source[2..].starts_with('\n') {
+        3
+    } else {
+        2
+    };
+    if payload_start > closing_start {
+        return None;
+    }
+    Some((
+        source_range.start + payload_start..source_range.start + closing_start,
+        source_range.start..source_range.start + 2,
+        source_range.start + closing_start..source_range.start + closing_start + 2,
+    ))
+}
+
+fn image_field_ranges(
+    text: &str,
+    source_range: Range<usize>,
+) -> Option<(Range<usize>, Range<usize>, Option<Range<usize>>)> {
+    let source = text
+        .get(source_range.clone())?
+        .trim_end_matches(['\r', '\n']);
+    if !source.starts_with("![") || source.contains('\n') || source.contains('\r') {
+        return None;
+    }
+    let alt_end = find_unescaped(source, 2, ']')?;
+    if source.as_bytes().get(alt_end + 1) != Some(&b'(') {
+        return None;
+    }
+    let close = find_matching_paren(source, alt_end + 1)?;
+    if close + 1 != source.len() {
+        return None;
+    }
+    let inside_start = alt_end + 2;
+    let inside_end = close;
+    let inside = &source[inside_start..inside_end];
+    if inside.starts_with('<') {
+        return None;
+    }
+    let destination_len = inside
+        .char_indices()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map_or(inside.len(), |(offset, _)| offset);
+    if destination_len == 0 {
+        return None;
+    }
+    let destination = inside_start..inside_start + destination_len;
+    let rest = &inside[destination_len..];
+    let title = if rest.trim().is_empty() {
+        None
+    } else {
+        let leading = rest.len() - rest.trim_start().len();
+        let title_source = rest.trim();
+        let quote = title_source.chars().next()?;
+        let closing = match quote {
+            '"' => '"',
+            '\'' => '\'',
+            '(' => ')',
+            _ => return None,
+        };
+        let closing_offset = find_unescaped(title_source, quote.len_utf8(), closing)?;
+        if closing_offset + closing.len_utf8() != title_source.len() {
+            return None;
+        }
+        let start = inside_start + destination_len + leading + quote.len_utf8();
+        Some(start..inside_start + destination_len + leading + closing_offset)
+    };
+    Some((
+        source_range.start + 2..source_range.start + alt_end,
+        source_range.start + destination.start..source_range.start + destination.end,
+        title.map(|range| source_range.start + range.start..source_range.start + range.end),
+    ))
+}
+
+fn find_unescaped(source: &str, start: usize, needle: char) -> Option<usize> {
+    let mut escaped = false;
+    for (relative, ch) in source.get(start..)?.char_indices() {
+        if ch == '\\' {
+            escaped = !escaped;
+            continue;
+        }
+        if ch == needle && !escaped {
+            return Some(start + relative);
+        }
+        escaped = false;
+    }
+    None
+}
+
+fn find_matching_paren(source: &str, opening: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for (relative, ch) in source.get(opening..)?.char_indices() {
+        if ch == '\\' {
+            escaped = !escaped;
+            continue;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(opening + relative);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn append_trailing_horizontal_whitespace_run(
@@ -1104,10 +1504,11 @@ fn marker_ranges(block_range: Range<usize>, runs: &[VisualInlineRun]) -> Vec<Ran
 mod tests {
     use std::sync::Arc;
 
-    use super::build_visual_projection;
+    use super::{build_visual_projection, build_visual_projection_with_marked_range};
     use crate::{
-        MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockKind, VisualBlockPrefixKind,
-        VisualRevealKind, VisualSourceIslandKind,
+        MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockEditor, VisualBlockKind,
+        VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind, VisualRevealKind,
+        VisualSourceIslandKind,
     };
 
     #[test]
@@ -1344,7 +1745,7 @@ mod tests {
         let nested_range = source.find("***").unwrap()..source.find("***").unwrap() + 12;
         assert_eq!(nested.revealed_source_ranges, vec![nested_range.clone()]);
         assert_eq!(nested.text, "before ***世界*** after 高亮");
-        for source_offset in nested_range {
+        for source_offset in nested_range.filter(|offset| source.is_char_boundary(*offset)) {
             let display = nested.display_for_source(source_offset).unwrap();
             assert_eq!(nested.source_for_display(display), source_offset);
         }
@@ -1359,6 +1760,56 @@ mod tests {
         assert_eq!(highlight.text, "before 世界 after ==高亮==");
         assert_eq!(doc.version(), version);
         assert!(Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+    }
+
+    #[test]
+    fn collapsed_marker_boundaries_expose_both_source_sides() {
+        let source = "plain **世界** tail";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let version = doc.version();
+        let block = &blocks[0];
+        let cursor = source.find("plain").unwrap();
+        let projection = build_visual_projection(source, block, cursor..cursor, cursor);
+        let bold_display_start = projection.text.find("世界").unwrap();
+        let candidates = projection.boundary_candidates(bold_display_start);
+
+        assert!(candidates.is_ambiguous());
+        assert_eq!(
+            candidates.resolve(VisualCaretAffinity::Upstream),
+            source.find("**").unwrap()
+        );
+        assert_eq!(
+            candidates.resolve(VisualCaretAffinity::Downstream),
+            source.find("世界").unwrap()
+        );
+        assert!(source.is_char_boundary(candidates.upstream_source));
+        assert!(source.is_char_boundary(candidates.downstream_source));
+        assert_eq!(doc.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+    }
+
+    #[test]
+    fn marked_range_reveals_and_identity_maps_its_exact_syntax_group() {
+        let source = "plain **世界** tail";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let marked_start = source.find("世界").unwrap();
+        let marked = marked_start..marked_start + "世界".len();
+        let projection = build_visual_projection_with_marked_range(
+            source,
+            &blocks[0],
+            0..0,
+            0,
+            Some(marked.clone()),
+        );
+
+        assert_eq!(projection.text, source);
+        assert_eq!(
+            projection.display_range_for_source_range(marked.clone()),
+            Some(marked)
+        );
+        assert_eq!(projection.revealed_source_ranges.len(), 1);
     }
 
     #[test]
@@ -1595,7 +2046,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_complex_constructs_as_source_islands() {
+    fn complex_constructs_use_direct_editors_only_when_ranges_are_exact() {
         let doc = MarkdownDocument::from_text(
             "---\ntitle: Demo\n---\n\n```rust\nfn main() {}\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n",
         );
@@ -1607,12 +2058,12 @@ mod tests {
         assert!(
             blocks
                 .iter()
-                .any(|block| block.source_island == Some(VisualSourceIslandKind::Code))
+                .any(|block| matches!(block.editor, Some(VisualBlockEditor::Code { .. })))
         );
         assert!(
             blocks
                 .iter()
-                .any(|block| block.source_island == Some(VisualSourceIslandKind::Table))
+                .any(|block| matches!(block.editor, Some(VisualBlockEditor::Table { .. })))
         );
     }
 
@@ -1710,6 +2161,130 @@ mod tests {
     }
 
     #[test]
+    fn direct_code_metadata_preserves_exact_fence_info_and_payload_ranges() {
+        let source = "~~~   rust extra\r\n  let 名称 = 1;\r\n\r\n~~~~\r\n";
+        let doc = MarkdownDocument::from_text(source);
+        let block = doc
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("code block");
+        let Some(VisualBlockEditor::Code {
+            opening_fence,
+            payload,
+            info_range,
+            closing_fence,
+        }) = block.editor
+        else {
+            panic!("ordinary closed fence should have direct metadata");
+        };
+        assert_eq!(&source[opening_fence], "~~~");
+        assert_eq!(&source[payload.source_range], "  let 名称 = 1;\r\n\r\n");
+        assert_eq!(&source[info_range.expect("info range")], "rust extra");
+        assert_eq!(&source[closing_fence], "~~~~");
+        assert!(block.source_island.is_none());
+    }
+
+    #[test]
+    fn unclosed_and_diagram_fences_remain_complete_source_islands() {
+        for source in [
+            "```rust\nfn main() {}\n",
+            "```mermaid\nflowchart LR\nA --> B\n```",
+        ] {
+            let block = MarkdownDocument::from_text(source)
+                .visual_blocks()
+                .into_iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+                .expect("code block");
+            assert!(block.editor.is_none(), "unexpected editor for {source:?}");
+            assert_eq!(block.source_island, Some(VisualSourceIslandKind::Code));
+        }
+    }
+
+    #[test]
+    fn direct_math_metadata_preserves_display_and_fenced_delimiters() {
+        for (source, expected_payload) in [
+            ("$$\n\\alpha + β\n$$", "\\alpha + β\n"),
+            ("```math extra\n\\frac{甲}{2}\n```", "\\frac{甲}{2}\n"),
+        ] {
+            let block = MarkdownDocument::from_text(source)
+                .visual_blocks()
+                .into_iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::MathBlock { .. }))
+                .expect("math block");
+            let Some(VisualBlockEditor::Math {
+                opening_delimiter,
+                payload,
+                closing_delimiter,
+            }) = block.editor
+            else {
+                panic!("exact block math should have direct metadata: {source:?}");
+            };
+            assert!(matches!(&source[opening_delimiter], "$$" | "```"));
+            assert_eq!(&source[payload.source_range], expected_payload);
+            assert!(matches!(&source[closing_delimiter], "$$" | "```"));
+            assert_eq!(payload.kind, VisualEditorFieldKind::MathPayload);
+            assert!(block.source_island.is_none());
+        }
+    }
+
+    #[test]
+    fn direct_image_metadata_is_exact_and_ambiguous_forms_fall_back() {
+        let source = "![替代\\]文本](images/a\\)b.png '标题')";
+        let block = MarkdownDocument::from_text(source)
+            .visual_blocks()
+            .remove(0);
+        let Some(VisualBlockEditor::Image {
+            alt,
+            destination,
+            title,
+        }) = block.editor
+        else {
+            panic!("inline image should have direct metadata");
+        };
+        assert_eq!(&source[alt.source_range], "替代\\]文本");
+        assert_eq!(&source[destination.source_range], "images/a\\)b.png");
+        assert_eq!(&source[title.expect("title").source_range], "标题");
+
+        for ambiguous in [
+            "![alt][asset]\n\n[asset]: image.png",
+            "![alt](<image with spaces.png>)",
+            "![alt](image.png\n \"title\")",
+        ] {
+            let image = MarkdownDocument::from_text(ambiguous)
+                .visual_blocks()
+                .into_iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+                .expect("image block");
+            assert!(
+                image.editor.is_none(),
+                "unexpected editor for {ambiguous:?}"
+            );
+            assert_eq!(image.source_island, Some(VisualSourceIslandKind::Image));
+        }
+    }
+
+    #[test]
+    fn direct_table_metadata_covers_every_header_and_body_cell() {
+        let source = "| 名称 | 值\\|文本 |\n| :--- | ---: |\n| 甲 | 2 |";
+        let block = MarkdownDocument::from_text(source)
+            .visual_blocks()
+            .remove(0);
+        let Some(VisualBlockEditor::Table { cells }) = block.editor else {
+            panic!("exact GFM table should have direct metadata");
+        };
+        assert_eq!(cells.len(), 4);
+        assert_eq!(&source[cells[1].field.source_range.clone()], "值\\|文本");
+        assert!(cells.iter().all(|cell| {
+            cell.field.kind
+                == (VisualEditorFieldKind::TableCell {
+                    row: cell.row,
+                    column: cell.column,
+                })
+        }));
+    }
+
+    #[test]
     fn visual_run_formatting_mutates_markdown_source() {
         let mut doc = MarkdownDocument::from_text("hello world");
         let run = doc.visual_blocks()[0].editable_runs[0].clone();
@@ -1792,26 +2367,18 @@ mod tests {
                 .iter()
                 .any(|run| run.style.superscript)
         );
-        assert!(
-            blocks.iter().any(|block| {
-                matches!(block.source_island, Some(VisualSourceIslandKind::Image))
-            })
-        );
-        assert!(
-            blocks
-                .iter()
-                .any(|block| { matches!(block.source_island, Some(VisualSourceIslandKind::Code)) })
-        );
-        assert!(
-            blocks
-                .iter()
-                .any(|block| { matches!(block.source_island, Some(VisualSourceIslandKind::Math)) })
-        );
-        assert!(
-            blocks.iter().any(|block| {
-                matches!(block.source_island, Some(VisualSourceIslandKind::Table))
-            })
-        );
+        for editor in ["image", "code", "math", "table"] {
+            assert!(
+                blocks.iter().any(|block| match (editor, &block.editor) {
+                    ("image", Some(VisualBlockEditor::Image { .. }))
+                    | ("code", Some(VisualBlockEditor::Code { .. }))
+                    | ("math", Some(VisualBlockEditor::Math { .. }))
+                    | ("table", Some(VisualBlockEditor::Table { .. })) => true,
+                    _ => false,
+                }),
+                "welcome document is missing direct {editor} metadata"
+            );
+        }
 
         assert!(editable_blocks.iter().any(|block| {
             matches!(block.kind, VisualBlockKind::ListItem { .. })

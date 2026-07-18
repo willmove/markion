@@ -2,14 +2,24 @@
 
 ## Purpose
 
-Covers the core source-text editing surface, Markdown parsing, the formatting actions, keyboard shortcuts, and the extended Markdown syntax set. This is the source/split editing model — the editor pane shows raw Markdown text and the preview pane renders it. Single-surface WYSIWYG editing (markers hiding around the cursor) is **not** part of this capability; it is a future candidate.
+Covers canonical Markdown source editing, parsing and formatting together with the source-backed, WYSIWYG-oriented Visual Edit surface. Edit and Split modes retain complete raw-source access; Visual Edit keeps exactly mapped constructs rendered or directly editable, progressively reveals only necessary syntax, and preserves complete source islands whenever a lossless mutation cannot be proven.
 ## Requirements
 ### Requirement: Markdown parsing via CommonMark + GFM
-The parser SHALL parse Markdown using `pulldown-cmark` configured for CommonMark conformance plus the GitHub Flavored Markdown extensions in use (tables, task lists, strikethrough, footnotes, superscript/subscript, highlight, autolinks). Parsing SHALL produce structured data consumed by the preview, outline, stats, and search subsystems.
+The parser SHALL parse Markdown using `pulldown-cmark` configured for CommonMark conformance plus the GitHub Flavored Markdown extensions in use (tables, task lists, strikethrough, footnotes, superscript/subscript, highlight, autolinks). Parsing SHALL produce structured data consumed by the preview, Visual Edit, outline, stats, and search subsystems. Source-mapped Visual Edit derivation SHALL incrementally reuse independently parseable top-level regions after a localized source edit and SHALL fall back to a full-document parse whenever global Markdown context, region boundaries, or exact source ranges are uncertain. Incremental and fallback output SHALL be semantically and byte-range equivalent to a full parse of the current canonical source.
 
-#### Scenario: Full reparse per edit yields structured blocks
-- **WHEN** the document text changes
-- **THEN** the parser runs over the full document text and produces the structured preview blocks, outline, stats, and line count consumed downstream
+#### Scenario: Local edit reparses affected safe regions
+- **WHEN** a source edit is confined to an independently parseable top-level region
+- **THEN** source-mapped derivation reparses that region and bounded boundary context
+- **AND** text-identical unaffected regions are reused without reparsing
+
+#### Scenario: Globally scoped syntax uses full fallback
+- **WHEN** an edit can affect reference definitions, footnotes, front matter, an unclosed fence, HTML block boundaries, or another cross-region parse dependency
+- **THEN** the editor derives the source-mapped model through the full-document parser
+- **AND** it does not publish a speculative incremental mapping
+
+#### Scenario: Incremental output equals full parse
+- **WHEN** incremental derivation accepts an edit sequence containing insertions, deletions, replacements, UTF-8 text, block splits, or block merges
+- **THEN** its block variants, content, ordering, outline, and every source range equal a full parse of the same canonical source after each edit
 
 #### Scenario: Extended inline syntax is recognized
 - **WHEN** the document contains `==highlight==`, `^superscript^`, `~subscript~`, task list items, or footnote references
@@ -144,29 +154,69 @@ The editor SHALL provide keyboard shortcuts for switching to each view mode dire
 - **THEN** the view mode shortcuts use the same `secondary` modifier convention as other application shortcuts
 
 ### Requirement: Source-backed Visual Edit mode
-The editor SHALL provide a Visual Edit mode that presents common Markdown constructs in a rendered, editable form while preserving `MarkdownDocument.text` as the single canonical document representation. Visual Edit mutations SHALL update the Markdown source text through the same dirty-state, undo/redo, autosave, recovery, and per-tab isolation paths as source editing.
+The editor SHALL provide a WYSIWYG-oriented Visual Edit mode that keeps supported Markdown content as close to its rendered result as can be edited through an exact, lossless source mutation, while preserving `MarkdownDocument.text` as the single canonical document representation. Visual Edit SHALL prefer direct rendered editing, including dedicated field or payload editors for exactly ranged complex blocks, SHALL reveal only the smallest complete source syntax needed for the active operation, and SHALL use a source-backed edit island only when an exact visual mutation or mapping cannot be proven. Visual Edit SHALL register a platform text-input target whenever its surface is active, including for an empty document, and Visual Edit mutations SHALL update the Markdown source text through the same dirty-state, undo/redo, autosave, recovery, and per-tab isolation paths as source editing. Every valid source caret position in a non-empty document, including whitespace-only gaps and trailing whitespace, SHALL have a source-backed visual editing affordance. Cursor-only interaction state, visual-list following, direct-widget focus, caret geometry, composition geometry, and navigation layout SHALL remain independent from document-version-derived caches.
 
 #### Scenario: Visual prose editing updates Markdown source
 - **WHEN** the user edits visible prose inside a paragraph, heading, blockquote, or list item in Visual Edit mode
 - **THEN** the corresponding Markdown source text is updated
 - **AND** the document dirty flag and undo history are updated through the existing document mutation path
 
+#### Scenario: Exact constructs prefer rendered editing
+- **WHEN** a Markdown construct has an exact source/display mapping and a lossless direct visual edit path
+- **THEN** Visual Edit keeps the construct rendered during ordinary editing
+- **AND** it does not replace the whole block with raw source solely because the construct is focused
+
+#### Scenario: Exact complex blocks use dedicated editors
+- **WHEN** an ordinary fenced code block, block-math construct, inline Markdown image, or GFM table has proven exact field or payload ranges
+- **THEN** Visual Edit presents its rendered block together with the dedicated direct editing controls defined for that construct
+- **AND** each control mutates only validated canonical source ranges through the shared application edit path
+
+#### Scenario: Platform text input reaches a non-empty visual document
+- **WHEN** Visual Edit is active, the app editing focus is active, and the user enters normal platform text
+- **THEN** the text replaces the current source selection or inserts at the current source caret
+- **AND** the canonical Markdown text, dirty state, undo history, autosave, and recovery behavior follow the existing source-editing mutation path
+
+#### Scenario: Empty visual document accepts first input
+- **WHEN** Visual Edit is active for an empty document and the user enters platform text
+- **THEN** the text is inserted into `MarkdownDocument.text`
+- **AND** the new visual block is rendered without switching to source Edit mode
+
+#### Scenario: Visual Edit supports IME composition
+- **WHEN** the platform begins, updates, or commits an IME composition in Visual Edit
+- **THEN** the existing marked-text range and source-backed replacement path are used
+- **AND** GPUI receives visual range geometry for candidate-window placement when the active row has been laid out
+
 #### Scenario: Visual formatting actions remain source-backed
 - **WHEN** the user applies bold, italic, inline code, link, image, heading, list, task list, blockquote, or fenced-code formatting in Visual Edit mode
 - **THEN** the editor updates the underlying Markdown markers in `MarkdownDocument.text`
 - **AND** switching to Edit mode shows Markdown source that represents the visual result
 
-#### Scenario: Focused syntax can be exposed for editing
+#### Scenario: Focused syntax is exposed minimally
 - **WHEN** the cursor enters visually formatted inline content whose hidden Markdown syntax is needed for precise editing
-- **THEN** the editor SHALL expose the relevant source syntax or a source-backed edit island for that focused content
+- **THEN** the editor SHALL expose the smallest complete source syntax group or source-backed edit island required for that focused content
+- **AND** unrelated exact content in the same block remains rendered
 
-#### Scenario: Complex constructs use conservative edit islands
-- **WHEN** the user focuses a fenced code block, math block, HTML/front matter region, image, or other construct not supported by direct visual editing in v1
+#### Scenario: Complex or ambiguous constructs use conservative edit islands
+- **WHEN** the user focuses an HTML/front-matter region, registered diagram fence, malformed image/table, unclosed fence, or another construct without an exact direct visual edit path
 - **THEN** the editor SHALL provide a source-backed editing affordance or preserve the existing source editing workflow
 - **AND** the construct SHALL NOT be mutated through an ambiguous rendered-tree edit
 
+#### Scenario: Whitespace caret positions remain editable
+- **WHEN** the source caret moves into an empty line, a whitespace-only gap between rendered blocks, or trailing document whitespace in Visual Edit
+- **THEN** the active whitespace range provides a visible source-backed caret or edit island
+- **AND** inserting or deleting text at that position mutates the exact underlying Markdown range
+
+#### Scenario: Cursor navigation reveals the active visual block
+- **WHEN** keyboard navigation, text mutation, mode entry, search navigation, or an outline jump moves the source caret to a visual block outside the current viewport
+- **THEN** the Visual Edit list scrolls enough to reveal that active block
+- **AND** subsequent manual scrolling is not forced back to the caret unless another cursor-moving operation occurs
+
+#### Scenario: Read mode remains non-editable
+- **WHEN** Read mode is active and the user enters platform text or starts an IME composition
+- **THEN** no Visual Edit input target mutates the document
+
 #### Scenario: Visual-only interaction does not reparse unnecessarily
-- **WHEN** the user moves the cursor, changes selection, hovers text, or focuses a visual edit island without changing document text
+- **WHEN** the user moves the cursor, changes selection, scrolls the visual list, hovers text, focuses a visual edit island or direct block field, updates visual caret/composition geometry, or records navigation layout without changing document text
 - **THEN** the document version SHALL remain unchanged
 - **AND** derived Markdown caches SHALL NOT be invalidated
 
@@ -360,4 +410,242 @@ The system SHALL keep source-backed whitespace ranges available for exact caret 
 #### Scenario: Intentional source caret movement preserves whitespace editing
 - **WHEN** keyboard navigation or reveal logic moves the source caret into an existing whitespace-only range
 - **THEN** the owning whitespace row provides the source-backed editing affordance without recomputing the document's cached Markdown-derived state
+
+### Requirement: Progressive Markdown marker reveal in Visual Edit
+Visual Edit SHALL keep supported paragraph, heading, list-item, and blockquote content visually rendered while it is focused. When precise editing requires Markdown syntax, the editor SHALL reveal only the smallest complete inline syntax group whose source mapping is proven exact, while `MarkdownDocument.text` remains the canonical representation. Display-to-source and source-to-display mappings SHALL remain UTF-8-safe and monotonic for pointer placement, selection, keyboard navigation, platform text input, and IME caret geometry. Syntax whose mapping is nested, overlapping, byte-inexact, or otherwise ambiguous MUST use a conservative source-backed edit island.
+
+#### Scenario: Focusing plain prose preserves visual rendering
+- **WHEN** the user places the caret in plain text inside a supported visual paragraph, heading, list item, or blockquote
+- **THEN** the block remains in its rendered visual style
+- **AND** the entire block is not replaced by raw Markdown source
+
+#### Scenario: Active inline syntax is revealed locally
+- **WHEN** the caret enters exactly mapped strong, emphasis, strikethrough, or inline-code content in a supported visual block
+- **THEN** the complete markers for that active inline construct are revealed together with its content
+- **AND** other supported content in the same block remains visually rendered
+
+#### Scenario: Active link exposes its destination
+- **WHEN** the caret enters an exactly mapped inline link label or its hidden source syntax
+- **THEN** the local link syntax, including its destination and optional title, becomes visible and editable
+- **AND** editing it mutates the corresponding canonical Markdown source range
+
+#### Scenario: Leaving a reveal group hides its markers without mutation
+- **WHEN** the caret or selection endpoints leave a locally revealed syntax group without editing document text
+- **THEN** that group returns to its rendered representation
+- **AND** the document version, dirty state, undo history, and derived Markdown caches remain unchanged
+
+#### Scenario: Selection remains source-accurate across hidden markers
+- **WHEN** a Visual Edit selection crosses rendered runs separated by hidden Markdown markers
+- **THEN** the visual highlight represents the selected canonical source content across projected segments
+- **AND** replacement, copy, cut, and formatting actions operate on the exact source selection
+
+#### Scenario: Keyboard navigation into a hidden marker reveals it
+- **WHEN** source-based keyboard navigation moves the caret into a currently hidden marker range
+- **THEN** the next Visual Edit render reveals the owning syntax group
+- **AND** subsequent caret geometry and input use an identity-mapped visible source position
+
+#### Scenario: Ambiguous inline syntax remains conservative
+- **WHEN** an inline construct is nested, overlapping, escaped, transformed, or otherwise lacks a proven byte-exact mapping
+- **THEN** Visual Edit uses a source-backed edit island for the affected block or construct
+- **AND** it does not guess a rendered-tree mutation
+
+### Requirement: Structure-aware block editing in Visual Edit
+When Visual Edit is active, Enter and Backspace SHALL apply Markdown-aware structural transitions for supported headings, blockquotes, ordered and unordered lists, and task lists. Each transition SHALL be one canonical source edit integrated with the existing selection, dirty-state, undo/redo, autosave, recovery, cache invalidation, and per-tab isolation paths. Edit, Split Preview, and Read mode behavior SHALL remain unchanged except where they already share the same source helper.
+
+#### Scenario: Enter after heading content starts a paragraph
+- **WHEN** the Visual Edit caret is in a heading and the user presses Enter
+- **THEN** the source is split at the caret without copying the heading prefix to the new line
+- **AND** the following line renders as a paragraph unless its source explicitly contains another block marker
+
+#### Scenario: Enter continues a non-empty list item
+- **WHEN** the caret is in a non-empty ordered, unordered, or task-list item and the user presses Enter
+- **THEN** the new source line receives the appropriate list prefix
+- **AND** ordered numbering advances while a new task-list item starts unchecked
+
+#### Scenario: Enter continues or exits a blockquote
+- **WHEN** the caret is in a non-empty blockquote line and the user presses Enter
+- **THEN** the new source line continues the blockquote prefix
+- **AND WHEN** the current blockquote line contains only its prefix and the user presses Enter
+- **THEN** the empty prefix is removed and the caret exits the blockquote
+
+#### Scenario: Enter on an empty list item exits the list
+- **WHEN** a list or task-list line contains only its structural prefix and the user presses Enter
+- **THEN** the empty prefix is removed instead of creating another empty item
+- **AND** subsequent input produces a plain paragraph at that position
+
+#### Scenario: Backspace at visible content start demotes the block
+- **WHEN** the caret is collapsed at the first visible content position of a top-level heading, blockquote, list item, or task-list item and the user presses Backspace
+- **THEN** the complete structural prefix is removed in one edit
+- **AND** the remaining content becomes the corresponding less-structured or plain block without partial marker corruption
+
+#### Scenario: Backspace at nested list start outdents first
+- **WHEN** the caret is collapsed at the first visible content position of a nested list or task-list item and the user presses Backspace
+- **THEN** one indentation level is removed while preserving the item prefix
+- **AND** another Backspace at the resulting top-level boundary can remove the prefix
+
+#### Scenario: Structural edit is one undoable mutation
+- **WHEN** Visual Edit performs a structural Enter or Backspace transition
+- **THEN** one Undo restores the prior Markdown source and selection
+- **AND** Redo reapplies the same transition through the existing history path
+
+### Requirement: Affinity-aware Visual Edit caret
+Visual Edit SHALL preserve which canonical source side owns a collapsed caret when hidden Markdown syntax maps multiple source positions to one display boundary. Pointer placement, Left/Right navigation, local marker reveal, and subsequent text input SHALL resolve that boundary consistently without corrupting or silently crossing inline formatting.
+
+#### Scenario: Pointer placement at a hidden marker boundary is deterministic
+- **WHEN** the user clicks a display boundary shared by formatted content and hidden opening or closing syntax
+- **THEN** Visual Edit records a deterministic upstream or downstream caret affinity together with the canonical source offset
+- **AND** repainting the unchanged projection preserves the same visual caret side
+
+#### Scenario: Arrow navigation traverses a revealed delimiter
+- **WHEN** local Markdown delimiters are revealed and the user presses Left or Right across an opening or closing delimiter
+- **THEN** the caret advances through the corresponding UTF-8-safe source boundaries in the requested direction
+- **AND** the caret does not stall or jump to an unrelated inline run
+
+#### Scenario: Typing at a formatted-span boundary respects affinity
+- **WHEN** the caret is visually collapsed at the start or end boundary of formatted content and the user types
+- **THEN** the insertion occurs at the canonical source side represented by the current affinity
+- **AND** text is not unintentionally included in or excluded from the formatted span
+
+#### Scenario: Unambiguous movement clears stale affinity
+- **WHEN** the caret moves to a source/display position with one exact mapping or the document version changes
+- **THEN** stale boundary affinity is cleared or revalidated against the new projection
+- **AND** source offsets remain clamped to valid UTF-8 boundaries
+
+### Requirement: Layout-aware Visual Edit navigation
+When Visual Edit is active, vertical and line-boundary navigation SHALL follow the painted visual layout rather than only logical Markdown source lines. Up/Down and their selection variants SHALL retain a preferred horizontal coordinate across wrapped lines and adjacent visual blocks, while Home/End SHALL target the active painted line in rendered content.
+
+#### Scenario: Up and Down traverse wrapped visual lines
+- **WHEN** a rendered paragraph or other editable visual block wraps onto multiple painted lines
+- **AND** the user presses Up or Down
+- **THEN** the caret moves to the closest valid source-backed position on the adjacent painted line
+- **AND** it does not skip directly to the previous or next logical Markdown line
+
+#### Scenario: Vertical navigation retains preferred horizontal position
+- **WHEN** the user presses Up or Down repeatedly across painted lines with different lengths
+- **THEN** Visual Edit retains the initial preferred horizontal coordinate
+- **AND** each target is the closest valid caret position on that line
+
+#### Scenario: Vertical navigation crosses visual blocks
+- **WHEN** Up or Down moves past the first or last painted line of the active visual block
+- **THEN** the caret moves to the closest source-backed position in the adjacent visual block
+- **AND** a virtualized target row is revealed before the pending movement is completed
+
+#### Scenario: Selection navigation uses visual targets
+- **WHEN** the user invokes Select Up or Select Down in Visual Edit
+- **THEN** the selection head uses the same layout-aware target as ordinary vertical movement
+- **AND** the canonical source selection remains normalized and UTF-8 safe
+
+#### Scenario: Home and End use the painted line in rendered content
+- **WHEN** the Visual Edit caret is in a wrapped rendered line and the user presses Home or End
+- **THEN** the caret moves to the first or last valid source-backed position of that painted line
+- **AND** explicit source islands retain source-line Home/End behavior
+
+### Requirement: Visual Edit IME composition fidelity
+Visual Edit SHALL treat the active IME marked range as first-class projection and rendering state. The marked source SHALL remain visibly identified, precisely mapped, and correctly positioned for the platform candidate window throughout composition, including UTF-16 input containing CJK text, emoji, or combining characters.
+
+#### Scenario: Marked text is visible in the mixed projection
+- **WHEN** an IME composition creates or updates a non-empty marked range inside rendered inline content
+- **THEN** Visual Edit reveals any exact containing syntax needed to identity-map the marked source
+- **AND** the painted marked range uses the platform composition underline without losing its inline content
+
+#### Scenario: Candidate geometry follows the active marked range
+- **WHEN** GPUI requests bounds for the active composition after the owning visual row has been laid out
+- **THEN** Visual Edit returns geometry derived from the requested projected range
+- **AND** the surface-level fallback is used only while exact row geometry is unavailable
+
+#### Scenario: One IME composition is one undoable action
+- **WHEN** an IME session produces multiple intermediate marked-text replacements and then commits
+- **THEN** one Undo restores the source and selection from before that composition began
+- **AND** one Redo reapplies the committed composition result
+
+#### Scenario: UTF-16 composition remains UTF-8 safe
+- **WHEN** IME replacement or selection ranges include CJK text, emoji, or combining characters
+- **THEN** boundary conversion, projection, and marked-range painting resolve to valid canonical UTF-8 boundaries
+- **AND** no partial code point is inserted, selected, or underlined
+
+### Requirement: Semantic text-input undo grouping
+The editor SHALL group compatible contiguous text input into semantic undo entries while preserving atomic boundaries for composition, selection replacement, paste, formatting, structural commands, table commands, mode/tab changes, and explicit undo/redo. Grouping SHALL remain isolated per document tab and SHALL preserve exact source and selection restoration.
+
+#### Scenario: Contiguous typing coalesces within the capture window
+- **WHEN** consecutive ordinary text insertions occur within the configured coalescing window at the preceding collapsed caret with no intervening boundary
+- **THEN** one Undo removes the compatible typing group
+- **AND** one Redo restores the complete group and its resulting selection
+
+#### Scenario: Atomic command terminates a typing group
+- **WHEN** paste, formatting, structural Enter/Backspace, a table command, selection replacement, mode/tab change, or another atomic command follows ordinary typing
+- **THEN** the atomic command and preceding typing are separate undo entries
+
+#### Scenario: Caret discontinuity terminates a typing group
+- **WHEN** the caret or selection moves so the next insertion is not contiguous with the preceding text input
+- **THEN** the next input starts a new undo group
+- **AND** Undo restores each location independently
+
+#### Scenario: Undo grouping is isolated per tab
+- **WHEN** the user types in one document tab, switches tabs, and edits another document
+- **THEN** each tab retains its own pending group and undo/redo history
+- **AND** switching tabs cannot merge entries or restore source in the wrong document
+
+### Requirement: Stable source-mapped visual block identity
+Every derived Visual Edit block SHALL carry an opaque, non-persisted identity that remains stable across document versions only when the block is proven to descend unchanged from the same source block. Identity SHALL be independent from the block's current byte range and SHALL NOT replace canonical source ranges for editing.
+
+#### Scenario: Prefix edit preserves shifted suffix identity
+- **WHEN** a localized edit changes one block and shifts later unchanged blocks by a byte delta
+- **THEN** each proven unchanged suffix block retains its prior visual block identity
+- **AND** its source ranges are shifted to the exact current canonical offsets
+
+#### Scenario: Changed block receives new identity
+- **WHEN** an edit changes, splits, merges, or ambiguously reparses a visual block
+- **THEN** every affected resulting block receives a new identity
+- **AND** stale row layout, navigation, or widget state is not attached to it
+
+#### Scenario: Repeated equal blocks remain occurrence-safe
+- **WHEN** a document contains multiple textually equal blocks and an edit affects only one occurrence
+- **THEN** identity reuse follows source-edit lineage and occurrence order
+- **AND** an unchanged occurrence is not confused with the edited occurrence solely because their text hashes match
+
+#### Scenario: Local edit invalidates only affected visual rows
+- **WHEN** stable identities prove that visual rows outside an edited region are unchanged
+- **THEN** the virtualized Visual Edit list splices only the affected middle rows
+- **AND** unchanged row height and scroll anchoring state remain reusable
+
+#### Scenario: Identity and incremental cache remain ephemeral
+- **WHEN** a document is saved, reopened, recovered, cloned for undo, or replaced wholesale
+- **THEN** visual identities and incremental region caches are rebuilt rather than persisted
+- **AND** Markdown file contents and undo snapshot formats remain unchanged
+
+### Requirement: Direct Markdown image editing in Visual Edit
+Visual Edit SHALL present an exactly ranged inline Markdown image as its image preview together with direct text controls for alt text, destination, and optional title. Each control SHALL edit only its validated authored field range, preserve unrelated delimiters and escaping, and use the canonical source selection, platform input, IME, history, dirty-state, and multi-tab paths. Reference-style images, multiline or malformed syntax, and field forms whose exact boundaries cannot be proven MUST retain the complete source-backed image island.
+
+#### Scenario: Image preview exposes editable authored fields
+- **WHEN** an exactly ranged inline Markdown image is shown in Visual Edit
+- **THEN** the image preview is accompanied by editable alt text and destination controls
+- **AND** an authored title is editable without exposing the complete Markdown source
+
+#### Scenario: Destination edit updates image presentation
+- **WHEN** the user edits the destination field and commits platform text input
+- **THEN** one exact canonical source replacement updates the destination
+- **AND** the preview requests the new local or remote image without persisting preview state into the document
+
+#### Scenario: Broken image remains editable
+- **WHEN** the destination cannot be loaded or decoded
+- **THEN** Visual Edit shows a bounded unavailable-image presentation while keeping all proven image fields editable
+- **AND** the load failure does not mutate source, history, or document version
+
+#### Scenario: Ambiguous image syntax remains source-backed
+- **WHEN** an image uses reference syntax, malformed delimiters, unsupported multiline syntax, or another form without proven field ranges
+- **THEN** Visual Edit presents the complete authored image source island
+- **AND** it does not guess alt, destination, or title mutations
+
+### Requirement: Maintained Visual Edit support classification
+The repository SHALL maintain a current Visual Edit support matrix that classifies every user-visible Markdown construct as rendered direct editing, rendered editing with progressive source reveal, a dedicated field/payload editor, a passive exact source position, or a complete conservative source island. The matrix SHALL identify the canonical editable range, uncertainty trigger, and required verification evidence for each classification, and SHALL agree with the stable requirements and implemented `VisualBlock`/`VisualBlockEditor` behavior.
+
+#### Scenario: Contributor evaluates current WYSIWYG coverage
+- **WHEN** a contributor reads the Visual Edit support matrix
+- **THEN** it distinguishes directly editable prose, inline source reveal, code/math/image/table editors, whitespace/passive positions, and HTML/front-matter/diagram/ambiguous fallbacks
+- **AND** it explains that canonical Markdown remains the single persisted representation
+
+#### Scenario: A new visual block behavior is proposed
+- **WHEN** a proposal changes how a Markdown construct is presented or edited in Visual Edit
+- **THEN** the proposal selects one support classification and names its exact fallback trigger
+- **AND** implementation and documentation cannot be considered complete until the matrix and invariant evidence are updated
 

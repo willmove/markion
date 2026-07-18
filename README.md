@@ -27,7 +27,7 @@ Releases are currently unsigned. Windows SmartScreen may require **More info →
 Markion has four view modes. Split Preview is the default.
 
 - **Edit** — a focused raw Markdown source editor.
-- **Visual Edit** — a single, source-backed live-preview surface for headings, paragraphs, emphasis, links, images, blockquotes, lists, task lists, rules, and tables. Focused syntax can be exposed for precise editing; code, math, HTML, front matter, and ambiguous constructs use conservative source islands. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
+- **Visual Edit** — a WYSIWYG-oriented, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, inline image fields, and GFM table cells have exact direct editors. HTML, YAML front matter, registered diagrams, malformed syntax, and other ambiguous constructs keep a complete conservative source island. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
 - **Split Preview** — source and rendered preview side by side, with an optional proportional Sync scroll setting.
 - **Read** — a rendered, non-editing view centered at a readable 860 px maximum width by default; Preview adaptive width can use the full pane.
 
@@ -49,7 +49,7 @@ Switching modes preserves the active document, cursor and selection, undo histor
 - Formatting commands cover bold, italic, inline code, links, images, headings, lists, task lists, blockquotes, fenced code blocks, and source Markdown tables.
 - Heading commands expose H1–H5 by default, with an H1–H6 option in Preferences.
 - Find and replace supports case sensitivity, regular expressions, next/previous navigation, replace current, and replace all.
-- Source table commands can format tables and add, delete, or move rows and columns. Visual Edit tables expose the same source-backed row/column operations; ordinary preview tables remain read-only, and direct visual cell editing is not yet supported.
+- Source table commands can format tables and add, delete, or move rows and columns. Visual Edit tables additionally provide direct source-backed cell editing, Tab traversal, deterministic width reflow, and the same row/column operations; ordinary preview tables remain read-only.
 - YAML front matter is parsed and hidden from preview; `title`, `author`, and `date` feed export metadata.
 - Auto-save defaults to a five-second inactivity delay and writes recovery copies for unsaved documents.
 
@@ -113,15 +113,15 @@ PDF and DOCX try the absorbed Typune/pandoc export engine first. If pandoc or th
 - Undo snapshots skip derived caches, while the editor reuses a cached text handle per version.
 - Preview/Visual Edit lists update changed ranges, the file tree renders a bounded row set, and wrapped source lines measure their actual rendered height.
 
-Markion still performs full Markdown reparses when document text changes; it does not yet use a rope buffer or a fully incremental parser.
+Source-mapped Visual Edit incrementally reuses independently parseable regions after localized edits and falls back to a full derivation whenever Markdown context or byte ranges are uncertain. Split/Read preview derivation remains debounced and cached. Markion still uses a `String` buffer rather than a rope, and some semantic reads intentionally require a full parse.
 
 ## Current limitations
 
-- Visual Edit is an Obsidian-style source-backed surface, not full Typora-style WYSIWYG; complex or ambiguous constructs may expose Markdown source.
+- Visual Edit is WYSIWYG-oriented while retaining canonical Markdown; unsupported, malformed, or byte-ambiguous constructs intentionally expose exact source rather than accepting a guessed rich-tree mutation.
 - Math uses a readable fallback rather than KaTeX/MathJax-quality typesetting.
-- Direct cell-level Visual Edit table editing and inline styling inside preview table cells are not implemented; HTML export preserves table-cell fidelity.
+- Visual Edit table cells support direct plain-text editing, but do not yet provide rich inline-formatting controls inside cells. Reference/multiline images, registered diagrams, HTML, and YAML front matter retain source-backed editing paths.
 - Drag-and-drop file-tree moves and a full custom-theme installation UI are not implemented.
-- Image export is a basic text snapshot, and very large documents do not yet use fully virtualized/incremental parsing.
+- Image export is a basic text snapshot, and very large documents do not yet use a rope or fully incremental parsing across every derived subsystem.
 
 ## Development
 
@@ -129,9 +129,11 @@ Rust stable is required. From the repository root:
 
 ```powershell
 cargo run
-cargo test
 cargo build
+pwsh ./scripts/check-quality.ps1
 ```
+
+The quality command checks Rust formatting, the full Cargo workspace test suite, and every OpenSpec artifact in strict mode. See the [Visual Edit support and engineering contract](docs/visual-editing-quality.md) for the current support/fallback matrix, source-range invariants, parser ownership, and required evidence.
 
 The root package is the `markion` application crate. Typune-derived, GPUI-free library crates live under `crates/*`:
 

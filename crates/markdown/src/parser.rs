@@ -101,13 +101,6 @@ impl Parser {
         Self { options }
     }
 
-    /// Returns a new [`Parser`] with the same options as this one.
-    pub(crate) fn clone_config(&self) -> Parser {
-        Parser {
-            options: self.options.clone(),
-        }
-    }
-
     /// Parse a Markdown string into a [`Document`].
     ///
     /// YAML front matter (a `---`-delimited block at the start) is extracted
@@ -140,15 +133,10 @@ impl Parser {
     /// Parse a Markdown *body* fragment (with no YAML front matter handling)
     /// into a list of top-level [`Block`]s.
     ///
-    /// This is the shared core used by both [`Parser::parse`] and the
-    /// incremental parser. It intentionally does **not** strip front matter,
-    /// so that body fragments beginning with `---` are treated as thematic
-    /// breaks / headings rather than metadata.
-    ///
-    /// NodeIds are assigned starting from `0`; callers that combine fragments
-    /// are responsible for renumbering ids to keep them unique across the
-    /// whole document (see [`crate::incremental`]).
-    pub(crate) fn parse_body(&self, body: &str) -> MarkdownResult<Vec<Block>> {
+    /// This core intentionally does **not** strip front matter, so body
+    /// fragments beginning with `---` are treated as thematic breaks or
+    /// headings rather than metadata.
+    fn parse_body(&self, body: &str) -> MarkdownResult<Vec<Block>> {
         let opts = self.options.to_pd_options();
         let events: Vec<Event<'_>> = PdParser::new_ext(body, opts).collect();
 
@@ -159,27 +147,6 @@ impl Parser {
         post_process_url_detection_in_blocks(&mut blocks);
 
         Ok(blocks)
-    }
-
-    /// Incrementally re-parse a document after a set of [`TextChange`]s.
-    ///
-    /// `old_source` is the Markdown text that produced `old_ast`, and `changes`
-    /// describes edits applied to that text. The method re-parses only the
-    /// affected block regions and reuses the unchanged surrounding blocks.
-    ///
-    /// If incremental parsing cannot be performed safely (for example the
-    /// change offsets are out of range, or the front matter boundary shifts),
-    /// this transparently falls back to a full [`Parser::parse`] of the updated
-    /// source. The returned [`Document`] is always equivalent to a full parse.
-    ///
-    /// [`TextChange`]: crate::incremental::TextChange
-    pub fn parse_incremental(
-        &self,
-        old_ast: &Document,
-        old_source: &str,
-        changes: &[crate::incremental::TextChange],
-    ) -> MarkdownResult<Document> {
-        crate::incremental::parse_incremental(self, old_ast, old_source, changes)
     }
 }
 

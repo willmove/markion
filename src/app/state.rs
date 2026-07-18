@@ -1,6 +1,7 @@
 use super::*;
 
 const BOUNDARY_SCAN_WINDOW: usize = 1024;
+pub(super) const SEMANTIC_UNDO_TIMEOUT: Duration = Duration::from_millis(900);
 
 /// Where a grapheme scan for the cluster around `offset` may safely start:
 /// the current line start (segmentation restarts after every hard break), or
@@ -25,6 +26,115 @@ pub(super) struct MeasuredHeightKey {
     pub(super) wrap_width: Pixels,
     pub(super) font_size: Pixels,
     pub(super) line_height: Pixels,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct VisualNavigationCaret {
+    pub(super) source_offset: usize,
+    pub(super) x: Pixels,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct VisualNavigationLine {
+    pub(super) y: Pixels,
+    pub(super) carets: Vec<VisualNavigationCaret>,
+}
+
+impl VisualNavigationLine {
+    pub(super) fn closest_source(&self, preferred_x: Pixels) -> Option<usize> {
+        self.carets
+            .iter()
+            .min_by(|left, right| {
+                (left.x - preferred_x)
+                    .abs()
+                    .to_f64()
+                    .total_cmp(&(right.x - preferred_x).abs().to_f64())
+            })
+            .map(|caret| caret.source_offset)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct VisualNavigationSnapshot {
+    pub(super) document_version: u64,
+    pub(super) block_index: usize,
+    pub(super) source_selection: Range<usize>,
+    pub(super) marked_range: Option<Range<usize>>,
+    pub(super) source_island: bool,
+    pub(super) lines: Vec<VisualNavigationLine>,
+}
+
+impl VisualNavigationSnapshot {
+    pub(super) fn line_index_for_source(&self, source: usize) -> Option<usize> {
+        self.lines
+            .iter()
+            .position(|line| {
+                line.carets
+                    .iter()
+                    .any(|caret| caret.source_offset == source)
+            })
+            .or_else(|| {
+                self.lines
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, line)| {
+                        let distance = line
+                            .carets
+                            .iter()
+                            .map(|caret| caret.source_offset.abs_diff(source))
+                            .min()?;
+                        Some((index, distance))
+                    })
+                    .min_by_key(|(_, distance)| *distance)
+                    .map(|(index, _)| index)
+            })
+    }
+
+    pub(super) fn caret_x_for_source(&self, source: usize) -> Option<Pixels> {
+        let line = self.lines.get(self.line_index_for_source(source)?)?;
+        line.carets
+            .iter()
+            .min_by_key(|caret| caret.source_offset.abs_diff(source))
+            .map(|caret| caret.x)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum VisualNavigationDirection {
+    Up,
+    Down,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PendingVisualNavigation {
+    pub(super) document_version: u64,
+    pub(super) target_block: usize,
+    pub(super) direction: VisualNavigationDirection,
+    pub(super) extend_selection: bool,
+    pub(super) preferred_x: Pixels,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct VisualNavigationPosition {
+    pub(super) document_version: u64,
+    pub(super) block_index: usize,
+    pub(super) line_index: usize,
+    pub(super) source_offset: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UndoCaptureKind {
+    Insert,
+    Delete,
+    Ime,
+    Atomic,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct UndoCapture {
+    pub(super) kind: UndoCaptureKind,
+    pub(super) last_edit_at: Instant,
+    pub(super) next_cursor: usize,
 }
 
 #[derive(Clone)]
@@ -125,6 +235,8 @@ pub(super) struct EditorTab {
     pub(super) document: MarkdownDocument,
     pub(super) undo_stack: Vec<UndoEntry>,
     pub(super) redo_stack: Vec<UndoEntry>,
+    pub(super) undo_capture: Option<UndoCapture>,
+    pub(super) pending_text_edit_intent: Option<UndoCaptureKind>,
     pub(super) editor_scroll: ScrollHandle,
     /// Virtualized preview: GPUI's `list` renders only the blocks intersecting
     /// the viewport (+overdraw), so preview cost is O(visible blocks) instead of
@@ -138,6 +250,16 @@ pub(super) struct EditorTab {
     pub(super) visual_cursor_reveal_pending: bool,
     /// Ephemeral screen-space geometry produced by the focused visual row.
     pub(super) visual_caret_bounds: Option<Bounds<Pixels>>,
+    pub(super) visual_marked_range_bounds: Option<(Range<usize>, Bounds<Pixels>)>,
+    /// Disambiguates a caret at a display boundary shared by the two source
+    /// sides of hidden Markdown syntax. This is interaction state only.
+    pub(super) visual_caret_affinity: Option<VisualCaretAffinity>,
+    pub(super) visual_caret_affinity_version: Option<u64>,
+    pub(super) visual_navigation_snapshots: HashMap<usize, VisualNavigationSnapshot>,
+    pub(super) visual_navigation_snapshot_ids: HashMap<usize, VisualBlockId>,
+    pub(super) visual_preferred_x: Option<Pixels>,
+    pub(super) visual_navigation_position: Option<VisualNavigationPosition>,
+    pub(super) pending_visual_navigation: Option<PendingVisualNavigation>,
     /// Bounds of the Visual Edit input bridge, used as an IME fallback before
     /// the focused virtual row has painted.
     pub(super) visual_input_bounds: Option<Bounds<Pixels>>,
@@ -222,12 +344,22 @@ impl EditorTab {
             document,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            undo_capture: None,
+            pending_text_edit_intent: None,
             editor_scroll: ScrollHandle::new(),
             preview_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list_blocks: std::sync::Arc::new(Vec::new()),
             visual_cursor_reveal_pending: false,
             visual_caret_bounds: None,
+            visual_marked_range_bounds: None,
+            visual_caret_affinity: None,
+            visual_caret_affinity_version: None,
+            visual_navigation_snapshots: HashMap::new(),
+            visual_navigation_snapshot_ids: HashMap::new(),
+            visual_preferred_x: None,
+            visual_navigation_position: None,
+            pending_visual_navigation: None,
             visual_input_bounds: None,
             #[cfg(test)]
             visual_last_projection: None,
@@ -295,11 +427,18 @@ impl EditorTab {
         if std::sync::Arc::ptr_eq(&self.visual_list_blocks, blocks) {
             return;
         }
-        let (range, count) = block_splice(&self.visual_list_blocks, blocks);
+        let (range, count) = visual_block_splice(&self.visual_list_blocks, blocks);
         if !range.is_empty() || count != 0 {
             self.visual_list.splice(range, count);
         }
         self.visual_list_blocks = blocks.clone();
+        self.visual_navigation_snapshots.retain(|index, snapshot| {
+            snapshot.document_version == self.document.version()
+                && self.visual_navigation_snapshot_ids.get(index)
+                    == blocks.get(*index).map(|block| &block.id)
+        });
+        self.visual_navigation_snapshot_ids
+            .retain(|index, id| blocks.get(*index).is_some_and(|block| block.id == *id));
     }
 
     pub(super) fn take_visual_cursor_reveal_index(
@@ -334,6 +473,11 @@ impl EditorTab {
         self.visual_list_blocks = std::sync::Arc::new(Vec::new());
         self.visual_cursor_reveal_pending = true;
         self.visual_caret_bounds = None;
+        self.visual_marked_range_bounds = None;
+        self.clear_visual_caret_affinity();
+        self.clear_visual_navigation_intent();
+        self.visual_navigation_snapshots.clear();
+        self.visual_navigation_snapshot_ids.clear();
         self.visual_input_bounds = None;
         #[cfg(test)]
         {
@@ -395,6 +539,80 @@ impl EditorTab {
         }
     }
 
+    pub(super) fn clear_visual_caret_affinity(&mut self) {
+        self.visual_caret_affinity = None;
+        self.visual_caret_affinity_version = None;
+    }
+
+    pub(super) fn set_visual_caret_affinity(&mut self, affinity: Option<VisualCaretAffinity>) {
+        self.visual_caret_affinity = affinity;
+        self.visual_caret_affinity_version = affinity.map(|_| self.document.version());
+    }
+
+    pub(super) fn current_visual_caret_affinity(&self) -> Option<VisualCaretAffinity> {
+        (self.visual_caret_affinity_version == Some(self.document.version()))
+            .then_some(self.visual_caret_affinity)
+            .flatten()
+    }
+
+    pub(super) fn clear_visual_navigation_intent(&mut self) {
+        self.visual_preferred_x = None;
+        self.visual_navigation_position = None;
+        self.pending_visual_navigation = None;
+    }
+
+    pub(super) fn register_visual_navigation_snapshot(
+        &mut self,
+        mut snapshot: VisualNavigationSnapshot,
+    ) {
+        let Some(block_id) = self
+            .visual_list_blocks
+            .get(snapshot.block_index)
+            .map(|block| block.id)
+        else {
+            return;
+        };
+        self.visual_navigation_snapshots
+            .retain(|_, existing| existing.document_version == snapshot.document_version);
+        self.visual_navigation_snapshot_ids.retain(|index, id| {
+            self.visual_list_blocks
+                .get(*index)
+                .is_some_and(|block| block.id == *id)
+        });
+        if let Some(existing) = self
+            .visual_navigation_snapshots
+            .get_mut(&snapshot.block_index)
+            && existing.document_version == snapshot.document_version
+            && self
+                .visual_navigation_snapshot_ids
+                .get(&snapshot.block_index)
+                == Some(&block_id)
+            && existing.source_selection == snapshot.source_selection
+            && existing.marked_range == snapshot.marked_range
+            && existing.source_island == snapshot.source_island
+        {
+            for line in snapshot.lines.drain(..) {
+                if let Some(current) = existing.lines.iter_mut().find(|item| item.y == line.y) {
+                    current.carets.extend(line.carets);
+                    current
+                        .carets
+                        .sort_by(|left, right| left.x.to_f64().total_cmp(&right.x.to_f64()));
+                    current.carets.dedup();
+                } else {
+                    existing.lines.push(line);
+                }
+            }
+            existing
+                .lines
+                .sort_by(|left, right| left.y.to_f64().total_cmp(&right.y.to_f64()));
+            return;
+        }
+        self.visual_navigation_snapshot_ids
+            .insert(snapshot.block_index, block_id);
+        self.visual_navigation_snapshots
+            .insert(snapshot.block_index, snapshot);
+    }
+
     pub(super) fn scroll_editor_to_offset(&self, offset: usize) {
         let offset = clamp_to_text_boundary(self.document.text(), offset);
         let line = self.document.text()[..offset]
@@ -425,12 +643,62 @@ impl EditorTab {
     }
 
     pub(super) fn push_undo_snapshot(&mut self) {
-        self.commit_undo_snapshot(self.snapshot());
+        self.finish_undo_capture();
+        let snapshot = self.snapshot();
+        push_history_entry(&mut self.undo_stack, UndoEntry::Full(snapshot));
+        self.redo_stack.clear();
     }
 
     pub(super) fn commit_undo_snapshot(&mut self, snapshot: EditorSnapshot) {
+        self.finish_undo_capture();
         push_history_entry(&mut self.undo_stack, UndoEntry::Full(snapshot));
         self.redo_stack.clear();
+    }
+
+    pub(super) fn finish_undo_capture(&mut self) {
+        self.undo_capture = None;
+        self.pending_text_edit_intent = None;
+    }
+
+    pub(super) fn prepare_undo_capture(
+        &mut self,
+        kind: UndoCaptureKind,
+        range: &Range<usize>,
+        replacement: &str,
+        now: Instant,
+    ) {
+        let compatible = self.undo_capture.is_some_and(|capture| {
+            capture.kind == kind
+                && !matches!(kind, UndoCaptureKind::Atomic)
+                && now.saturating_duration_since(capture.last_edit_at) <= SEMANTIC_UNDO_TIMEOUT
+                && match kind {
+                    UndoCaptureKind::Insert => {
+                        range.is_empty() && range.start == capture.next_cursor
+                    }
+                    UndoCaptureKind::Delete => {
+                        replacement.is_empty()
+                            && (range.start == capture.next_cursor
+                                || range.end == capture.next_cursor)
+                    }
+                    UndoCaptureKind::Ime => true,
+                    UndoCaptureKind::Atomic => false,
+                }
+        });
+        if !compatible {
+            self.finish_undo_capture();
+            let snapshot = self.snapshot();
+            push_history_entry(&mut self.undo_stack, UndoEntry::Full(snapshot));
+            self.redo_stack.clear();
+        }
+        if matches!(kind, UndoCaptureKind::Atomic) {
+            self.undo_capture = None;
+        } else {
+            self.undo_capture = Some(UndoCapture {
+                kind,
+                last_edit_at: now,
+                next_cursor: range.start + replacement.len(),
+            });
+        }
     }
 
     /// Restore a full snapshot's document and selection.
@@ -462,6 +730,7 @@ impl EditorTab {
     /// Pop and apply the newest undo entry, pushing its inverse onto the redo
     /// stack. Returns false when there is nothing to undo.
     pub(super) fn apply_undo(&mut self) -> bool {
+        self.finish_undo_capture();
         let Some(entry) = self.undo_stack.pop() else {
             return false;
         };
@@ -483,6 +752,7 @@ impl EditorTab {
     /// stack (without clearing redo). Returns false when there is nothing to
     /// redo.
     pub(super) fn apply_redo(&mut self) -> bool {
+        self.finish_undo_capture();
         let Some(entry) = self.redo_stack.pop() else {
             return false;
         };

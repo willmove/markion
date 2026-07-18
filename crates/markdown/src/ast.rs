@@ -2,27 +2,15 @@
 //!
 //! Supports CommonMark block-level elements, GFM extensions, and inline elements.
 //!
-//! ## Performance: Arc-based sharing
-//!
-//! The AST uses `Arc` to enable cheap cloning of immutable sub-trees. When the
-//! incremental parser reuses unchanged regions, their blocks are shared via
-//! `Arc` rather than deep-copied, significantly reducing allocation pressure
-//! for large documents with localised edits.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // NodeId
 // ---------------------------------------------------------------------------
 
-/// Unique identifier for an AST node. Used for incremental updates and navigation.
+/// Unique identifier for an AST node, used for navigation and references.
 pub type NodeId = usize;
-
-/// A shared, reference-counted list of blocks. Used by the incremental parser
-/// to share unchanged regions between document versions without deep copying.
-pub type SharedBlocks = Arc<Vec<Block>>;
 
 // ---------------------------------------------------------------------------
 // Document
@@ -40,11 +28,6 @@ pub struct Document {
     pub version: u64,
     /// Map of footnote labels to their definition block IDs.
     pub footnote_map: HashMap<String, NodeId>,
-    /// Arc-shared block regions from the incremental parser. These enable
-    /// cheap sharing of unchanged sub-trees between document versions.
-    /// Each entry corresponds to one parsed region; concatenating all inner
-    /// vecs produces `blocks` (after renumbering).
-    pub shared_regions: Vec<SharedBlocks>,
 }
 
 impl Document {
@@ -55,7 +38,6 @@ impl Document {
             metadata: None,
             version: 0,
             footnote_map: HashMap::new(),
-            shared_regions: Vec::new(),
         }
     }
 
@@ -66,18 +48,6 @@ impl Document {
             metadata: Some(metadata),
             version: 0,
             footnote_map: HashMap::new(),
-            shared_regions: Vec::new(),
-        }
-    }
-
-    /// Creates a document with pre-shared region blocks (used by incremental parser).
-    pub fn with_shared_regions(blocks: Vec<Block>, shared_regions: Vec<SharedBlocks>) -> Self {
-        Self {
-            blocks,
-            metadata: None,
-            version: 0,
-            footnote_map: HashMap::new(),
-            shared_regions,
         }
     }
 }

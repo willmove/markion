@@ -374,12 +374,6 @@ pub(super) fn preview_index_for_position(layout: &TextLayout, position: Point<Pi
     }
 }
 
-#[derive(Clone)]
-pub(super) struct VisualTextSegment {
-    pub(super) visible_range: Range<usize>,
-    pub(super) source_range: Range<usize>,
-}
-
 /// Registers the existing source-backed input handler exactly once for the
 /// Visual Edit surface. It deliberately creates no hitbox; visual rows keep
 /// owning pointer-to-source mapping.
@@ -459,76 +453,28 @@ impl Element for VisualInputElement {
 /// source editor's mutation path.
 struct VisualEditableText {
     element_id: ElementId,
+    block_index: usize,
+    source_island: bool,
     text: StyledText,
-    segments: Vec<VisualTextSegment>,
+    projection: VisualProjection,
     source_selection: Range<usize>,
     source_cursor: usize,
+    marked_range: Option<Range<usize>>,
     /// Whether this row is the single owner of the document caret. Every
     /// visible row paints per frame, and the visible→source mapping clamps to
     /// its own segments, so an unfocused row would otherwise paint a stray
     /// caret at its nearest boundary.
     caret_active: bool,
+    /// Focused multi-field blocks register geometry only for their active
+    /// field, so sibling cells cannot overwrite the navigation snapshot.
+    navigation_active: bool,
     /// Source position clicks resolve to when this row has no segments
     /// (an empty block still needs to place the caret inside itself).
-    source_anchor: usize,
     entity: Entity<MarkionApp>,
     #[cfg(test)]
     test_projection: Option<(String, Vec<Range<usize>>)>,
     #[cfg(test)]
     test_projection_styles: Option<Vec<InlineStyle>>,
-}
-
-pub(super) fn visual_source_for_visible(
-    segments: &[VisualTextSegment],
-    source_anchor: usize,
-    visible: usize,
-) -> usize {
-    let Some(first) = segments.first() else {
-        return source_anchor;
-    };
-    for segment in segments {
-        if visible <= segment.visible_range.end {
-            let local = visible.saturating_sub(segment.visible_range.start);
-            return segment.source_range.start + local.min(segment.source_range.len());
-        }
-    }
-    segments
-        .last()
-        .map_or(first.source_range.start, |segment| segment.source_range.end)
-}
-
-pub(super) fn visual_visible_for_source(
-    segments: &[VisualTextSegment],
-    source: usize,
-) -> Option<usize> {
-    let first = segments.first()?;
-    for segment in segments {
-        if source >= segment.source_range.start && source <= segment.source_range.end {
-            return Some(
-                segment.visible_range.start
-                    + source
-                        .saturating_sub(segment.source_range.start)
-                        .min(segment.visible_range.len()),
-            );
-        }
-    }
-    if source < first.source_range.start {
-        return Some(first.visible_range.start);
-    }
-    for pair in segments.windows(2) {
-        let previous = &pair[0];
-        let next = &pair[1];
-        if source > previous.source_range.end && source < next.source_range.start {
-            let distance_to_previous = source - previous.source_range.end;
-            let distance_to_next = next.source_range.start - source;
-            return Some(if distance_to_previous <= distance_to_next {
-                previous.visible_range.end
-            } else {
-                next.visible_range.start
-            });
-        }
-    }
-    segments.last().map(|segment| segment.visible_range.end)
 }
 
 impl Element for VisualEditableText {
@@ -578,9 +524,25 @@ impl Element for VisualEditableText {
         cx: &mut App,
     ) {
         let layout = self.text.layout().clone();
+        let affinity = self
+            .entity
+            .read(cx)
+            .active_tab()
+            .current_visual_caret_affinity();
         let caret_bounds = self
             .caret_active
-            .then(|| visual_visible_for_source(&self.segments, self.source_cursor))
+            .then(|| {
+                let display = self.projection.display_for_source(self.source_cursor)?;
+                if let Some(affinity) = affinity {
+                    let candidates = self.projection.boundary_candidates(display);
+                    if candidates.is_ambiguous()
+                        && candidates.resolve(affinity) != self.source_cursor
+                    {
+                        return self.projection.display_for_source(self.source_cursor);
+                    }
+                }
+                Some(display)
+            })
             .flatten()
             .and_then(|index| layout.position_for_index(index))
             .map(|position| Bounds::new(position, size(px(2.), layout.line_height())));
@@ -595,14 +557,18 @@ impl Element for VisualEditableText {
                 }
             }
         } else {
-            for segment in &self.segments {
+            for segment in &self.projection.segments {
                 let start = self.source_selection.start.max(segment.source_range.start);
                 let end = self.source_selection.end.min(segment.source_range.end);
                 if start < end {
-                    let visible_start = segment.visible_range.start
-                        + start.saturating_sub(segment.source_range.start);
-                    let visible_end = segment.visible_range.start
-                        + end.saturating_sub(segment.source_range.start);
+                    let visible_start = segment.display_range.start
+                        + start
+                            .saturating_sub(segment.source_range.start)
+                            .min(segment.display_range.len());
+                    let visible_end = segment.display_range.start
+                        + end
+                            .saturating_sub(segment.source_range.start)
+                            .min(segment.display_range.len());
                     for quad in preview_selection_paint_quads(&layout, visible_start..visible_end) {
                         window.paint_quad(quad);
                     }
@@ -613,6 +579,49 @@ impl Element for VisualEditableText {
         if let Some(caret_bounds) = caret_bounds {
             self.entity.update(cx, |app, _| {
                 app.active_tab_mut().visual_caret_bounds = Some(caret_bounds);
+            });
+        }
+        if let Some(marked_range) = self.marked_range.clone() {
+            let mut marked_bounds: Option<Bounds<Pixels>> = None;
+            for segment in &self.projection.segments {
+                let start = marked_range.start.max(segment.source_range.start);
+                let end = marked_range.end.min(segment.source_range.end);
+                if start >= end {
+                    continue;
+                }
+                let display_start = segment.display_range.start
+                    + (start - segment.source_range.start).min(segment.display_range.len());
+                let display_end = segment.display_range.start
+                    + (end - segment.source_range.start).min(segment.display_range.len());
+                for quad in preview_selection_paint_quads(&layout, display_start..display_end) {
+                    marked_bounds = Some(
+                        marked_bounds.map_or(quad.bounds, |bounds| bounds.union(&quad.bounds)),
+                    );
+                }
+            }
+            if let Some(marked_bounds) = marked_bounds {
+                self.entity.update(cx, |app, _| {
+                    app.active_tab_mut().visual_marked_range_bounds =
+                        Some((marked_range, marked_bounds));
+                });
+            }
+        }
+        let document_version = self.entity.read(cx).active_tab().document.version();
+        let marked_range = self.entity.read(cx).active_tab().marked_range.clone();
+        if self.navigation_active {
+            let navigation_snapshot = visual_navigation_snapshot(
+                document_version,
+                self.block_index,
+                self.source_selection.clone(),
+                marked_range,
+                self.source_island,
+                &self.projection,
+                &layout,
+            );
+            self.entity.update(cx, |app, cx| {
+                app.active_tab_mut()
+                    .register_visual_navigation_snapshot(navigation_snapshot);
+                app.complete_pending_visual_navigation(cx);
             });
         }
         #[cfg(test)]
@@ -627,8 +636,7 @@ impl Element for VisualEditableText {
         }
 
         let entity = self.entity.clone();
-        let segments = self.segments.clone();
-        let source_anchor = self.source_anchor;
+        let projection = self.projection.clone();
         let text_layout = layout.clone();
         let hitbox_for_down = hitbox.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
@@ -639,7 +647,19 @@ impl Element for VisualEditableText {
                 return;
             }
             let visible = preview_index_for_position(&text_layout, event.position);
-            let source = visual_source_for_visible(&segments, source_anchor, visible);
+            let candidates = projection.boundary_candidates(visible);
+            let boundary_x = text_layout
+                .position_for_index(candidates.display_offset)
+                .map(|position| position.x)
+                .unwrap_or(event.position.x);
+            let affinity = if candidates.is_ambiguous() && event.position.x < boundary_x {
+                Some(VisualCaretAffinity::Upstream)
+            } else if candidates.is_ambiguous() {
+                Some(VisualCaretAffinity::Downstream)
+            } else {
+                None
+            };
+            let source = candidates.resolve(affinity.unwrap_or(VisualCaretAffinity::Downstream));
             let focus_handle = entity.read(cx).focus_handle.clone();
             window.focus(&focus_handle);
             entity.update(cx, |app, cx| {
@@ -653,13 +673,13 @@ impl Element for VisualEditableText {
                 } else {
                     app.move_to(source, cx);
                 }
+                app.active_tab_mut().set_visual_caret_affinity(affinity);
             });
             window.refresh();
         });
 
         let entity = self.entity.clone();
-        let segments = self.segments.clone();
-        let source_anchor = self.source_anchor;
+        let projection = self.projection.clone();
         let text_layout = layout.clone();
         let hitbox_for_move = hitbox.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
@@ -671,8 +691,12 @@ impl Element for VisualEditableText {
                 return;
             }
             let visible = preview_index_for_position(&text_layout, event.position);
-            let source = visual_source_for_visible(&segments, source_anchor, visible);
-            entity.update(cx, |app, cx| app.select_to(source, cx));
+            let candidates = projection.boundary_candidates(visible);
+            let source = candidates.resolve(VisualCaretAffinity::Downstream);
+            entity.update(cx, |app, cx| {
+                app.select_to(source, cx);
+                app.active_tab_mut().set_visual_caret_affinity(None);
+            });
         });
 
         let entity = self.entity.clone();
@@ -695,6 +719,93 @@ impl IntoElement for VisualEditableText {
 
     fn into_element(self) -> Self::Element {
         self
+    }
+}
+
+fn visual_navigation_snapshot(
+    document_version: u64,
+    block_index: usize,
+    source_selection: Range<usize>,
+    marked_range: Option<Range<usize>>,
+    source_island: bool,
+    projection: &VisualProjection,
+    layout: &TextLayout,
+) -> VisualNavigationSnapshot {
+    let bounds = layout.bounds();
+    let line_height = layout.line_height();
+    let mut line_ys = projection
+        .text
+        .grapheme_indices(true)
+        .map(|(display, _)| display)
+        .chain(std::iter::once(projection.text.len()))
+        .filter_map(|display| layout.position_for_index(display).map(|point| point.y))
+        .collect::<Vec<_>>();
+    if line_ys.is_empty() {
+        line_ys.push(bounds.top());
+    }
+    line_ys.sort_by(|left, right| left.to_f64().total_cmp(&right.to_f64()));
+    line_ys.dedup();
+
+    let display_boundaries = projection
+        .text
+        .grapheme_indices(true)
+        .map(|(display, _)| display)
+        .chain(std::iter::once(projection.text.len()))
+        .collect::<Vec<_>>();
+    let mut lines = Vec::with_capacity(line_ys.len());
+    for y in line_ys {
+        let sample_y = y + line_height * 0.5;
+        let display_start = preview_index_for_position(layout, point(bounds.left(), sample_y));
+        let display_end = preview_index_for_position(layout, point(bounds.right(), sample_y));
+        let mut carets = Vec::new();
+        for display in display_boundaries
+            .iter()
+            .copied()
+            .filter(|display| *display >= display_start && *display <= display_end)
+        {
+            let position = layout.position_for_index(display);
+            let x = if display == display_start {
+                bounds.left()
+            } else if let Some(position) = position.filter(|position| position.y == y) {
+                position.x
+            } else {
+                continue;
+            };
+            let candidates = projection.boundary_candidates(display);
+            carets.push(VisualNavigationCaret {
+                source_offset: candidates.upstream_source,
+                x,
+            });
+            if candidates.is_ambiguous() {
+                carets.push(VisualNavigationCaret {
+                    source_offset: candidates.downstream_source,
+                    x,
+                });
+            }
+        }
+        if carets.is_empty() {
+            carets.push(VisualNavigationCaret {
+                source_offset: projection.source_anchor,
+                x: bounds.left(),
+            });
+        }
+        carets.sort_by(|left, right| {
+            left.x
+                .to_f64()
+                .total_cmp(&right.x.to_f64())
+                .then_with(|| left.source_offset.cmp(&right.source_offset))
+        });
+        carets.dedup();
+        lines.push(VisualNavigationLine { y, carets });
+    }
+
+    VisualNavigationSnapshot {
+        document_version,
+        block_index,
+        source_selection,
+        marked_range,
+        source_island,
+        lines,
     }
 }
 
@@ -1471,6 +1582,18 @@ pub(super) fn preview_block_splice(
     block_splice(old, new)
 }
 
+/// Visual rows reconcile by stable source lineage rather than byte ranges.
+/// The row builder still reads the fresh block slice after the splice, so
+/// preserved rows receive current offsets without losing cached heights.
+pub(super) fn visual_block_splice(
+    old: &[VisualBlock],
+    new: &[VisualBlock],
+) -> (std::ops::Range<usize>, usize) {
+    let old_ids = old.iter().map(|block| block.id).collect::<Vec<_>>();
+    let new_ids = new.iter().map(|block| block.id).collect::<Vec<_>>();
+    block_splice(&old_ids, &new_ids)
+}
+
 pub(super) fn block_splice<T: PartialEq>(old: &[T], new: &[T]) -> (std::ops::Range<usize>, usize) {
     let max_prefix = old.len().min(new.len());
     let mut prefix = 0;
@@ -1569,13 +1692,15 @@ pub(super) fn visual_text_element(
 ) -> gpui::AnyElement {
     let source_selection = app.active_tab().selected_range.clone();
     let source_cursor = app.active_tab().cursor_offset();
-    let projection = build_visual_projection(
+    let marked_range = app.active_tab().marked_range.clone();
+    let projection = build_visual_projection_with_marked_range(
         app.active_tab().document.text(),
         block,
         source_selection.clone(),
         source_cursor,
+        marked_range.clone(),
     );
-    let highlights = projection
+    let mut highlights = projection
         .spans
         .iter()
         .filter_map(|span| {
@@ -1591,14 +1716,23 @@ pub(super) fn visual_text_element(
             Some((span.display_range.clone(), style))
         })
         .collect::<Vec<_>>();
-    let segments = projection
-        .segments
-        .iter()
-        .map(|segment| VisualTextSegment {
-            visible_range: segment.display_range.clone(),
-            source_range: segment.source_range.clone(),
-        })
-        .collect();
+    if let Some(display_range) = marked_range
+        .as_ref()
+        .and_then(|range| projection.display_range_for_source_range(range.clone()))
+        .filter(|range| !range.is_empty())
+    {
+        highlights.push((
+            display_range,
+            HighlightStyle {
+                underline: Some(UnderlineStyle {
+                    color: Some(rgb(0x2563eb).into()),
+                    thickness: px(1.),
+                    wavy: false,
+                }),
+                ..Default::default()
+            },
+        ));
+    }
     #[cfg(test)]
     let test_projection = visual_block_is_focused(app, block).then_some((
         projection.text.clone(),
@@ -1615,12 +1749,16 @@ pub(super) fn visual_text_element(
     });
     VisualEditableText {
         element_id: ElementId::from(("visual-text", block_index)),
-        text: StyledText::new(SharedString::from(projection.text)).with_highlights(highlights),
-        segments,
+        block_index,
+        source_island: false,
+        text: StyledText::new(SharedString::from(projection.text.clone()))
+            .with_highlights(highlights),
+        projection,
         source_selection,
         source_cursor,
+        marked_range,
         caret_active: visual_block_owns_caret(app, block_index),
-        source_anchor: projection.source_anchor,
+        navigation_active: true,
         entity: cx.entity(),
         #[cfg(test)]
         test_projection,
@@ -1724,17 +1862,28 @@ fn visual_projection_fragment(
         element_id: ElementId::from(SharedString::from(format!(
             "visual-mixed-{block_index}-{fragment_index}"
         ))),
-        text: StyledText::new(SharedString::from(visible)).with_highlights(highlights),
-        segments: vec![VisualTextSegment {
-            visible_range: 0..visible_len,
-            source_range: source_range.clone(),
-        }],
+        block_index,
+        source_island: false,
+        text: StyledText::new(SharedString::from(visible.clone())).with_highlights(highlights),
+        projection: VisualProjection {
+            text: visible,
+            segments: vec![markion::VisualProjectionSegment {
+                display_range: 0..visible_len,
+                source_range: source_range.clone(),
+            }],
+            spans: Vec::new(),
+            revealed_source_ranges: Vec::new(),
+            source_anchor: source_range.start,
+        },
         source_selection: app.active_tab().selected_range.clone(),
         source_cursor: app.active_tab().cursor_offset(),
+        marked_range: app.active_tab().marked_range.clone(),
         caret_active: visual_block_owns_caret(app, block_index)
             && (source_range.contains(&app.active_tab().cursor_offset())
                 || app.active_tab().cursor_offset() == source_range.end),
-        source_anchor: source_range.start,
+        navigation_active: !visual_block_owns_caret(app, block_index)
+            || (source_range.contains(&app.active_tab().cursor_offset())
+                || app.active_tab().cursor_offset() == source_range.end),
         entity: cx.entity(),
         #[cfg(test)]
         test_projection: None,
@@ -1758,11 +1907,12 @@ pub(super) fn visual_text_with_math_element(
         return visual_text_element(block, block_index, app, cx);
     }
 
-    let projection = build_visual_projection(
+    let projection = build_visual_projection_with_marked_range(
         app.active_tab().document.text(),
         block,
         app.active_tab().selected_range.clone(),
         app.active_tab().cursor_offset(),
+        app.active_tab().marked_range.clone(),
     );
     let mut children = Vec::new();
     let mut fragment_index = 0usize;
@@ -1862,15 +2012,24 @@ pub(super) fn visual_source_island_view(
         .line_height(px(21.))
         .child(VisualEditableText {
             element_id: ElementId::from(("visual-source-island", block_index)),
-            text: StyledText::new(SharedString::from(source)),
-            segments: vec![VisualTextSegment {
-                visible_range: 0..source_len,
-                source_range: block.source_range.clone(),
-            }],
+            block_index,
+            source_island: true,
+            text: StyledText::new(SharedString::from(source.clone())),
+            projection: VisualProjection {
+                text: source.clone(),
+                segments: vec![markion::VisualProjectionSegment {
+                    display_range: 0..source_len,
+                    source_range: block.source_range.clone(),
+                }],
+                spans: Vec::new(),
+                revealed_source_ranges: vec![block.source_range.clone()],
+                source_anchor: block.source_range.start,
+            },
             source_selection: app.active_tab().selected_range.clone(),
             source_cursor: app.active_tab().cursor_offset(),
+            marked_range: app.active_tab().marked_range.clone(),
             caret_active: visual_block_owns_caret(app, block_index),
-            source_anchor: block.source_range.start,
+            navigation_active: true,
             entity: cx.entity(),
             #[cfg(test)]
             test_projection: None,
@@ -1939,12 +2098,14 @@ pub(super) fn visual_block_view(
                 | VisualSourceIslandKind::Html
                 | VisualSourceIslandKind::Unsupported
         )
-    ) || block
-        .editable_runs
-        .iter()
-        .any(|run| run.conservative_fallback);
-    let focused_conservative =
-        owns_caret && (block.source_island.is_some() || block.editable_runs.is_empty());
+    ) || (block.editor.is_none()
+        && block
+            .editable_runs
+            .iter()
+            .any(|run| run.conservative_fallback));
+    let focused_conservative = owns_caret
+        && block.editor.is_none()
+        && (block.source_island.is_some() || block.editable_runs.is_empty());
     if focused_conservative || always_source {
         return visual_source_island_view(app, block, block_index, cx);
     }
@@ -2041,7 +2202,30 @@ pub(super) fn visual_block_view(
                 display_scale,
                 cx,
             )),
-        VisualBlockKind::Image { url, .. } => {
+        VisualBlockKind::Image {
+            alt: image_alt,
+            url,
+            ..
+        } => {
+            if let Some(VisualBlockEditor::Image {
+                alt,
+                destination,
+                title,
+            }) = block.editor.as_ref()
+            {
+                return visual_image_editor(
+                    app,
+                    block_index,
+                    block.id,
+                    url,
+                    image_alt,
+                    document_dir,
+                    alt,
+                    destination,
+                    title.as_ref(),
+                    cx,
+                );
+            }
             let offset = block.source_range.start;
             div()
                 .mb_3()
@@ -2075,9 +2259,7 @@ pub(super) fn visual_block_view(
                 )
                 .child(div().mt(px(5.)).h(px(1.)).bg(rgb(0xcbd5e1)))
         }
-        VisualBlockKind::Table { rows, .. } => {
-            visual_table_view(app, rows, block.source_range.start, cx)
-        }
+        VisualBlockKind::Table { rows, .. } => visual_table_view(app, block, block_index, rows, cx),
         VisualBlockKind::Whitespace => {
             let text = app.active_tab().document.text();
             let source_range = block.source_range.clone();
@@ -2097,6 +2279,17 @@ pub(super) fn visual_block_view(
                 .debug_selector(|| "visual-whitespace-gap".to_string())
         }
         VisualBlockKind::MathBlock { latex, .. } => {
+            if let Some(VisualBlockEditor::Math { payload, .. }) = block.editor.as_ref() {
+                return visual_math_editor(
+                    app,
+                    block,
+                    block_index,
+                    latex,
+                    payload,
+                    display_scale,
+                    cx,
+                );
+            }
             match app.math_entry(
                 latex,
                 MathLayoutStyle::Display,
@@ -2134,10 +2327,327 @@ pub(super) fn visual_block_view(
                 }
             }
         }
-        VisualBlockKind::CodeBlock { .. } | VisualBlockKind::Unsupported => {
-            visual_source_island_view(app, block, block_index, cx)
+        VisualBlockKind::CodeBlock { language } => {
+            if let Some(VisualBlockEditor::Code { payload, .. }) = block.editor.as_ref() {
+                visual_code_editor(app, block.id, block_index, language.as_deref(), payload, cx)
+            } else {
+                visual_source_island_view(app, block, block_index, cx)
+            }
         }
+        VisualBlockKind::Unsupported => visual_source_island_view(app, block, block_index, cx),
     }
+}
+
+fn visual_editor_field_element(
+    app: &MarkionApp,
+    block_index: usize,
+    field: &VisualEditorField,
+    element_id: ElementId,
+    styled_text: Option<StyledText>,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let source = app.active_tab().document.text();
+    let projection = visual_editor_field_projection(source, field);
+    let text = projection.text.clone();
+    let source_cursor = app.active_tab().cursor_offset();
+    let block_owns_caret = visual_block_owns_caret(app, block_index);
+    let caret_active = block_owns_caret
+        && source_cursor >= field.source_range.start
+        && source_cursor <= field.source_range.end;
+    let marked_range = app.active_tab().marked_range.clone().filter(|marked| {
+        marked.start >= field.source_range.start && marked.end <= field.source_range.end
+    });
+    #[cfg(test)]
+    let test_projection = caret_active.then_some((text.clone(), Vec::new()));
+    VisualEditableText {
+        element_id,
+        block_index,
+        source_island: false,
+        text: styled_text.unwrap_or_else(|| StyledText::new(SharedString::from(text))),
+        projection,
+        source_selection: app.active_tab().selected_range.clone(),
+        source_cursor,
+        marked_range,
+        caret_active,
+        navigation_active: caret_active || !block_owns_caret,
+        entity: cx.entity(),
+        #[cfg(test)]
+        test_projection,
+        #[cfg(test)]
+        test_projection_styles: None,
+    }
+    .into_any_element()
+}
+
+pub(super) fn visual_editor_field_projection(
+    source: &str,
+    field: &VisualEditorField,
+) -> VisualProjection {
+    let authored = &source[field.source_range.clone()];
+    let terminator = match field.kind {
+        VisualEditorFieldKind::ImageAlt => Some(']'),
+        VisualEditorFieldKind::ImageDestination => Some(')'),
+        VisualEditorFieldKind::ImageTitle => field
+            .source_range
+            .start
+            .checked_sub(1)
+            .and_then(|offset| source[offset..].chars().next())
+            .map(|delimiter| if delimiter == '(' { ')' } else { delimiter }),
+        VisualEditorFieldKind::TableCell { .. } => Some('|'),
+        VisualEditorFieldKind::CodePayload | VisualEditorFieldKind::MathPayload => None,
+    };
+    let Some(terminator) = terminator else {
+        return VisualProjection {
+            text: authored.to_string(),
+            segments: (!authored.is_empty())
+                .then_some(markion::VisualProjectionSegment {
+                    display_range: 0..authored.len(),
+                    source_range: field.source_range.clone(),
+                })
+                .into_iter()
+                .collect(),
+            spans: Vec::new(),
+            revealed_source_ranges: Vec::new(),
+            source_anchor: field.source_range.start,
+        };
+    };
+
+    let mut text = String::with_capacity(authored.len());
+    let mut segments = Vec::new();
+    let mut chars = authored.char_indices().peekable();
+    while let Some((offset, ch)) = chars.next() {
+        let source_start = field.source_range.start + offset;
+        if ch == '\\'
+            && let Some(&(next_offset, next)) = chars.peek()
+            && next == terminator
+        {
+            chars.next();
+            let display_start = text.len();
+            text.push(next);
+            segments.push(markion::VisualProjectionSegment {
+                display_range: display_start..text.len(),
+                source_range: source_start
+                    ..field.source_range.start + next_offset + next.len_utf8(),
+            });
+            continue;
+        }
+        let display_start = text.len();
+        text.push(ch);
+        segments.push(markion::VisualProjectionSegment {
+            display_range: display_start..text.len(),
+            source_range: source_start..source_start + ch.len_utf8(),
+        });
+    }
+    VisualProjection {
+        text,
+        segments,
+        spans: Vec::new(),
+        revealed_source_ranges: Vec::new(),
+        source_anchor: field.source_range.start,
+    }
+}
+
+fn visual_code_editor(
+    app: &MarkionApp,
+    block_id: VisualBlockId,
+    block_index: usize,
+    language: Option<&str>,
+    payload: &VisualEditorField,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let code = &app.active_tab().document.text()[payload.source_range.clone()];
+    let highlighted = app.highlighted_code(language, code);
+    let (styled, _) = code_block_text(&highlighted);
+    div()
+        .mb_3()
+        .p_3()
+        .rounded_md()
+        .bg(rgb(0x0f172a))
+        .text_color(rgb(0xe2e8f0))
+        .font_family("JetBrains Mono")
+        .text_size(px(12.))
+        .line_height(px(19.))
+        .children(language.map(|language| {
+            div()
+                .mb_2()
+                .text_size(px(11.))
+                .text_color(rgb(0x93c5fd))
+                .child(language.to_string())
+        }))
+        .child(visual_editor_field_element(
+            app,
+            block_index,
+            payload,
+            ElementId::from(("visual-code-payload", block_id.as_u64())),
+            Some(styled),
+            cx,
+        ))
+}
+
+fn visual_math_editor(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    latex: &str,
+    payload: &VisualEditorField,
+    display_scale: f32,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let presentation = match app.math_entry(
+        latex,
+        MathLayoutStyle::Display,
+        MATH_DISPLAY_FONT_SIZE,
+        1.0,
+        display_scale,
+        app.palette().text,
+    ) {
+        MathCacheEntry::Ready(image) => div()
+            .w_full()
+            .py_2()
+            .flex()
+            .justify_center()
+            .child(visual_math_atom(app, image, block.source_range.clone(), cx)),
+        MathCacheEntry::Pending => div()
+            .py_2()
+            .text_color(app.palette().muted)
+            .child(app.tr(Msg::MathRendering)),
+        MathCacheEntry::Error(error) => div()
+            .py_2()
+            .text_color(rgb(0xb91c1c))
+            .child(app.math_error_message(&error)),
+    };
+    div()
+        .mb_3()
+        .border_1()
+        .border_color(rgb(0xcbd5e1))
+        .rounded_md()
+        .overflow_hidden()
+        .child(presentation)
+        .child(
+            div()
+                .border_t_1()
+                .border_color(rgb(0xe2e8f0))
+                .bg(rgb(0xf8fafc))
+                .p_2()
+                .font_family("JetBrains Mono")
+                .text_size(px(12.))
+                .line_height(px(19.))
+                .child(visual_editor_field_element(
+                    app,
+                    block_index,
+                    payload,
+                    ElementId::from(("visual-math-payload", block.id.as_u64())),
+                    None,
+                    cx,
+                )),
+        )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visual_image_editor(
+    app: &MarkionApp,
+    block_index: usize,
+    block_id: VisualBlockId,
+    url: &str,
+    image_alt: &str,
+    document_dir: Option<&Path>,
+    alt: &VisualEditorField,
+    destination: &VisualEditorField,
+    title: Option<&VisualEditorField>,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let fields = [
+        (app.tr(Msg::LabelImageAlt), alt),
+        (app.tr(Msg::LabelImageDestination), destination),
+    ];
+    div()
+        .mb_3()
+        .border_1()
+        .border_color(rgb(0xcbd5e1))
+        .rounded_md()
+        .overflow_hidden()
+        .child(
+            div()
+                .bg(rgb(0xf8fafc))
+                .p_2()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .min_h(px(96.))
+                .child(img(preview_image_source(url, document_dir)).max_w_full())
+                .children((!image_alt.is_empty()).then(|| {
+                    div()
+                        .mt_1()
+                        .text_size(px(11.))
+                        .text_color(rgb(0x64748b))
+                        .child(image_alt.to_string())
+                })),
+        )
+        .children(
+            fields
+                .into_iter()
+                .enumerate()
+                .map(|(index, (label, field))| {
+                    visual_image_field_row(app, block_id, block_index, index, label, field, cx)
+                }),
+        )
+        .children(title.map(|field| {
+            visual_image_field_row(
+                app,
+                block_id,
+                block_index,
+                2,
+                app.tr(Msg::LabelImageTitle),
+                field,
+                cx,
+            )
+        }))
+}
+
+fn visual_image_field_row(
+    app: &MarkionApp,
+    block_id: VisualBlockId,
+    block_index: usize,
+    field_index: usize,
+    label: &'static str,
+    field: &VisualEditorField,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    div()
+        .border_t_1()
+        .border_color(rgb(0xe2e8f0))
+        .px_2()
+        .py_1()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .w(px(72.))
+                .flex_none()
+                .text_size(px(11.))
+                .text_color(rgb(0x64748b))
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .font_family("JetBrains Mono")
+                .text_size(px(12.))
+                .child(visual_editor_field_element(
+                    app,
+                    block_index,
+                    field,
+                    ElementId::from((
+                        "visual-image-field",
+                        block_id.as_u64().wrapping_mul(8) | field_index as u64,
+                    )),
+                    None,
+                    cx,
+                )),
+        )
 }
 
 type TableToolbarAction = (&'static str, TableEdit, Msg);
@@ -2163,10 +2673,16 @@ pub(super) fn table_toolbar_actions_for_view_mode(
 
 pub(super) fn visual_table_view(
     app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
     rows: &[Vec<String>],
-    table_offset: usize,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let table_offset = block.source_range.start;
+    let cells = match block.editor.as_ref() {
+        Some(VisualBlockEditor::Table { cells }) => Some(cells),
+        _ => None,
+    };
     div()
         .mb_3()
         .border_1()
@@ -2214,6 +2730,12 @@ pub(super) fn visual_table_view(
                 .children(row.iter().enumerate().map(|(cell_index, cell)| {
                     let is_last_cell = cell_index + 1 == row.len();
                     let offset = table_offset;
+                    let field = cells.and_then(|cells| {
+                        cells
+                            .iter()
+                            .find(|cell| cell.row == row_index && cell.column == cell_index)
+                            .map(|cell| &cell.field)
+                    });
                     div()
                         .flex_1()
                         .min_w_0()
@@ -2223,11 +2745,30 @@ pub(super) fn visual_table_view(
                         })
                         .text_size(px(12.))
                         .cursor(CursorStyle::IBeam)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |app, _, _, cx| app.move_to(offset, cx)),
-                        )
-                        .child(cell.clone())
+                        .when(field.is_none(), |view| {
+                            view.on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |app, _, _, cx| app.move_to(offset, cx)),
+                            )
+                        })
+                        .child(field.map_or_else(
+                            || cell.clone().into_any_element(),
+                            |field| {
+                                visual_editor_field_element(
+                                    app,
+                                    block_index,
+                                    field,
+                                    ElementId::from((
+                                        "visual-table-cell",
+                                        (block.id.as_u64() << 24)
+                                            | ((row_index as u64) << 12)
+                                            | cell_index as u64,
+                                    )),
+                                    None,
+                                    cx,
+                                )
+                            },
+                        ))
                 }))
         }))
 }

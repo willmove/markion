@@ -20,6 +20,7 @@ pub mod model;
 mod parse;
 mod paths;
 mod render;
+mod source_mapped;
 mod storage;
 mod table;
 mod text_util;
@@ -106,13 +107,14 @@ pub use model::{
     MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle, MathSource, PreviewBlock,
     RecoveryDocument, RenderedMath, ReplaceResult, RichText, SearchError, SearchMatch,
     SearchMatchRange, SearchOptions, SidebarTab, TableAlignment, TableEdit, TableEditResult,
-    ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind, VisualBlockPrefix,
-    VisualBlockPrefixKind, VisualInlineRun, VisualProjection, VisualProjectionSegment,
-    VisualProjectionSpan, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
-    VisualStructuralEdit, YamlFrontMatter, builtin_theme_definitions,
-    normalize_heading_menu_max_level,
+    ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockEdit, VisualBlockEditor,
+    VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
+    VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualInlineRun, VisualProjection, VisualProjectionSegment, VisualProjectionSpan,
+    VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit,
+    VisualTableCell, YamlFrontMatter, builtin_theme_definitions, normalize_heading_menu_max_level,
 };
-pub use visual::build_visual_projection;
+pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
 pub use diagram::{builtin_diagram_registry, diagram_backend_id};
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
@@ -133,7 +135,8 @@ pub use storage::{
 
 use table::{
     TableDraft, format_markdown_table, formatted_table_cell_range, parse_markdown_table,
-    table_position_at, table_range_at as table_range_at_fn, table_ranges as table_ranges_fn,
+    table_cell_source_ranges, table_position_at, table_range_at as table_range_at_fn,
+    table_ranges as table_ranges_fn,
 };
 
 use parse::{
@@ -179,6 +182,8 @@ pub struct MarkdownDocument {
     cached_outline: std::cell::RefCell<Option<Cached<Vec<Heading>>>>,
     cached_stats: std::cell::RefCell<Option<Cached<DocumentStats>>>,
     cached_line_count: std::cell::Cell<Option<(u64, usize)>>,
+    source_mapped_cache: std::cell::RefCell<Option<source_mapped::SourceMappedCache>>,
+    pending_source_edits: std::cell::RefCell<source_mapped::PendingSourceEdits>,
 }
 
 /// Cloning a document (undo/redo snapshots take one per edit) must stay cheap:
@@ -196,6 +201,8 @@ impl Clone for MarkdownDocument {
             cached_outline: std::cell::RefCell::new(None),
             cached_stats: std::cell::RefCell::new(None),
             cached_line_count: std::cell::Cell::new(None),
+            source_mapped_cache: std::cell::RefCell::new(None),
+            pending_source_edits: std::cell::RefCell::new(source_mapped::PendingSourceEdits::Full),
         }
     }
 }
@@ -240,6 +247,8 @@ impl MarkdownDocument {
             cached_outline: std::cell::RefCell::new(None),
             cached_stats: std::cell::RefCell::new(None),
             cached_line_count: std::cell::Cell::new(None),
+            source_mapped_cache: std::cell::RefCell::new(None),
+            pending_source_edits: std::cell::RefCell::new(source_mapped::PendingSourceEdits::Full),
         }
     }
 
@@ -398,15 +407,37 @@ impl MarkdownDocument {
 
     pub fn insert(&mut self, byte_index: usize, text: &str) {
         let index = clamp_to_char_boundary(&self.text, byte_index);
-        self.text.insert_str(index, text);
-        self.invalidate_derived();
+        self.replace_source_range(index..index, text);
     }
 
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, text: &str) {
         let start = clamp_to_char_boundary(&self.text, range.start);
         let end = clamp_to_char_boundary(&self.text, range.end).max(start);
-        self.text.replace_range(start..end, text);
-        self.invalidate_derived();
+        self.replace_source_range(start..end, text);
+    }
+
+    fn replace_source_range(&mut self, range: Range<usize>, replacement: &str) {
+        let old_version = self.text_version;
+        let new_version = old_version.wrapping_add(1);
+        let edit = source_mapped::SourceEdit::new(
+            &self.text,
+            range.clone(),
+            replacement.len(),
+            old_version,
+            new_version,
+        );
+        self.text.replace_range(range, replacement);
+        self.dirty = true;
+        self.text_version = new_version;
+        *self.cached_preview_blocks.borrow_mut() = None;
+        *self.cached_outline.borrow_mut() = None;
+        *self.cached_stats.borrow_mut() = None;
+        self.cached_line_count.set(None);
+        if let Some(edit) = edit {
+            self.pending_source_edits.borrow_mut().record(edit);
+        } else {
+            *self.pending_source_edits.borrow_mut() = source_mapped::PendingSourceEdits::Full;
+        }
     }
 
     /// Marks the document as modified and discards any cached derived state.
@@ -420,6 +451,8 @@ impl MarkdownDocument {
         *self.cached_outline.borrow_mut() = None;
         *self.cached_stats.borrow_mut() = None;
         self.cached_line_count.set(None);
+        *self.source_mapped_cache.borrow_mut() = None;
+        *self.pending_source_edits.borrow_mut() = source_mapped::PendingSourceEdits::Full;
     }
 
     /// Monotonically increasing counter bumped by every text mutation. Callers
@@ -642,8 +675,7 @@ impl MarkdownDocument {
             ..table_range.start + selection_in_table.end;
 
         if replacement != table_source {
-            self.text.replace_range(table_range.clone(), &replacement);
-            self.invalidate_derived();
+            self.replace_source_range(table_range.clone(), &replacement);
         }
 
         Some(TableEditResult {
@@ -668,11 +700,11 @@ impl MarkdownDocument {
             && &self.text[range.start - prefix.len()..range.start] == prefix
             && &self.text[range.end..range.end + suffix.len()] == suffix
         {
-            self.text
-                .replace_range(range.end..range.end + suffix.len(), "");
-            self.text
-                .replace_range(range.start - prefix.len()..range.start, "");
-            self.invalidate_derived();
+            let replacement = self.text[range.clone()].to_string();
+            self.replace_source_range(
+                range.start - prefix.len()..range.end + suffix.len(),
+                &replacement,
+            );
             return range.start - prefix.len()..range.end - prefix.len();
         }
 
@@ -680,11 +712,9 @@ impl MarkdownDocument {
             && self.text[range.clone()].starts_with(prefix)
             && self.text[range.clone()].ends_with(suffix)
         {
-            self.text
-                .replace_range(range.end - suffix.len()..range.end, "");
-            self.text
-                .replace_range(range.start..range.start + prefix.len(), "");
-            self.invalidate_derived();
+            let replacement =
+                self.text[range.start + prefix.len()..range.end - suffix.len()].to_string();
+            self.replace_source_range(range.clone(), &replacement);
             return range.start..range.end - prefix.len() - suffix.len();
         }
 
@@ -697,8 +727,7 @@ impl MarkdownDocument {
         let replacement = format!("{prefix}{inner}{suffix}");
         let inner_start = range.start + prefix.len();
         let inner_end = inner_start + inner.len();
-        self.text.replace_range(range, &replacement);
-        self.invalidate_derived();
+        self.replace_source_range(range, &replacement);
         inner_start..inner_end
     }
 
@@ -719,8 +748,7 @@ impl MarkdownDocument {
         let url_start = label_end + "](".len();
         let url_end = url_start + url_placeholder.len();
 
-        self.text.replace_range(range, &replacement);
-        self.invalidate_derived();
+        self.replace_source_range(range, &replacement);
 
         if selected_is_empty {
             label_start..label_end
@@ -739,8 +767,7 @@ impl MarkdownDocument {
         let replacement = format!("```\n{inner}\n```");
         let inner_start = range.start + "```\n".len();
         let inner_end = inner_start + inner.len();
-        self.text.replace_range(range, &replacement);
-        self.invalidate_derived();
+        self.replace_source_range(range, &replacement);
         inner_start..inner_end
     }
 
@@ -752,8 +779,7 @@ impl MarkdownDocument {
         let line_starts = selected_line_starts(&self.text, range.clone());
         if line_starts.is_empty() {
             let prefix = prefix_for_line(0, "");
-            self.text.insert_str(range.start, &prefix);
-            self.invalidate_derived();
+            self.replace_source_range(range.start..range.start, &prefix);
             return range.start + prefix.len()..range.start + prefix.len();
         }
 
@@ -785,8 +811,7 @@ impl MarkdownDocument {
         let line_starts = selected_line_starts(&self.text, range.clone());
         if line_starts.is_empty() {
             let prefix = format!("{} ", "#".repeat(level as usize));
-            self.text.insert_str(range.start, &prefix);
-            self.invalidate_derived();
+            self.replace_source_range(range.start..range.start, &prefix);
             return range.start + prefix.len()..range.start + prefix.len();
         }
 
@@ -877,15 +902,13 @@ impl MarkdownDocument {
         let after_cursor = &self.text[cursor..line_end];
 
         if after_cursor.trim().is_empty() && is_empty_list_marker(before_cursor) {
-            self.text.replace_range(line_start..cursor, "");
-            self.invalidate_derived();
+            self.replace_source_range(line_start..cursor, "");
             return line_start;
         }
 
         let continuation = markdown_continuation(before_cursor);
         let insertion = format!("\n{continuation}");
-        self.text.insert_str(cursor, &insertion);
-        self.invalidate_derived();
+        self.replace_source_range(cursor..cursor, &insertion);
         cursor + insertion.len()
     }
 
@@ -1273,13 +1296,295 @@ impl MarkdownDocument {
         {
             return cached.value.clone();
         }
-        let preview = self.preview_blocks_shared();
-        let blocks = std::sync::Arc::new(visual::build_visual_blocks(&self.text, &preview));
+        let previous_cache = self.source_mapped_cache.borrow_mut().take();
+        let pending = self.pending_source_edits.borrow().clone();
+        let current_cached_full = self
+            .cached_preview_blocks
+            .borrow()
+            .as_ref()
+            .filter(|cached| cached.version == self.text_version)
+            .and_then(|preview| {
+                self.cached_outline
+                    .borrow()
+                    .as_ref()
+                    .filter(|cached| cached.version == self.text_version)
+                    .map(|outline| (preview.value.clone(), outline.value.clone()))
+            });
+        let cache = match (previous_cache.as_ref(), pending.edits()) {
+            (Some(previous), Some(edits)) if !edits.is_empty() => {
+                source_mapped::SourceMappedCache::update(
+                    previous,
+                    &self.text,
+                    self.text_version,
+                    edits,
+                )
+            }
+            (Some(previous), Some(_))
+                if previous.version == self.text_version
+                    && previous.source.as_ref() == self.text =>
+            {
+                previous.clone()
+            }
+            _ => current_cached_full.map_or_else(
+                || source_mapped::SourceMappedCache::derive_full(&self.text, self.text_version),
+                |(blocks, headings)| {
+                    source_mapped::SourceMappedCache::from_cached_full(
+                        &self.text,
+                        self.text_version,
+                        blocks,
+                        headings,
+                    )
+                },
+            ),
+        };
+
+        let mut blocks =
+            visual::build_visual_blocks(&self.text, &cache.blocks, VisualBlockId::fresh);
+        if let (Some(previous), Some(edits)) = (previous_cache.as_ref(), pending.edits())
+            && !edits.is_empty()
+            && let Some(old_visual) = self.cached_visual_blocks.borrow().as_ref()
+            && old_visual.version == previous.version
+        {
+            source_mapped::reconcile_visual_block_ids(
+                previous.source.as_ref(),
+                &self.text,
+                &old_visual.value,
+                &mut blocks,
+                edits,
+            );
+        }
+        let blocks = std::sync::Arc::new(blocks);
+        *self.cached_preview_blocks.borrow_mut() = Some(Cached {
+            version: self.text_version,
+            value: cache.blocks.clone(),
+        });
+        *self.cached_outline.borrow_mut() = Some(Cached {
+            version: self.text_version,
+            value: cache.headings.clone(),
+        });
+        *self.source_mapped_cache.borrow_mut() = Some(cache);
+        self.pending_source_edits.borrow_mut().reset_incremental();
         *self.cached_visual_blocks.borrow_mut() = Some(Cached {
             version: self.text_version,
             value: blocks.clone(),
         });
         blocks
+    }
+
+    /// Build one validated replacement for a dedicated Visual Edit block
+    /// field. Prose and complete source islands intentionally return `None`
+    /// and keep using the ordinary source-selection path.
+    pub fn direct_visual_block_edit(
+        &self,
+        range: Range<usize>,
+        replacement: &str,
+    ) -> Option<VisualBlockEdit> {
+        if range.start > range.end
+            || range.end > self.text.len()
+            || !self.text.is_char_boundary(range.start)
+            || !self.text.is_char_boundary(range.end)
+        {
+            return None;
+        }
+        let blocks = self.visual_blocks_shared();
+        let (block, field) = blocks.iter().find_map(|block| {
+            block
+                .editor
+                .as_ref()?
+                .field_containing(&range)
+                .map(|field| (block, field))
+        })?;
+        let replacement = sanitize_visual_field_replacement(
+            &self.text,
+            field.kind,
+            &field.source_range,
+            replacement,
+        );
+        if let VisualEditorFieldKind::TableCell { row, column } = field.kind {
+            let table_source = self.text.get(block.source_range.clone())?;
+            let authored_cells = table_cell_source_ranges(table_source)?;
+            let authored_cell = authored_cells
+                .iter()
+                .find(|cell| cell.row == row && cell.column == column)?;
+            let authored_range = block.source_range.start + authored_cell.source_range.start
+                ..block.source_range.start + authored_cell.source_range.end;
+            if authored_range != field.source_range {
+                return None;
+            }
+            let relative =
+                range.start - field.source_range.start..range.end - field.source_range.start;
+            let mut value = self.text[field.source_range.clone()].to_string();
+            value.replace_range(relative.clone(), &replacement);
+            let mut table = parse_markdown_table(table_source)?;
+            if table.rows.get(row)?.get(column)? != &self.text[field.source_range.clone()] {
+                return None;
+            }
+            table.rows.get_mut(row)?.get_mut(column)?.clone_from(&value);
+            let formatted = format_markdown_table(&table);
+            let new_cell = formatted_table_cell_range(&table, row, column)?;
+            let inserted_start = block.source_range.start + new_cell.start + relative.start;
+            let inserted_end = inserted_start + replacement.len();
+            return Some(VisualBlockEdit {
+                document_version: self.text_version,
+                block_id: block.id,
+                field: field.clone(),
+                range: block.source_range.clone(),
+                replacement: formatted,
+                inserted_range_after: inserted_start..inserted_end,
+                selection_after: inserted_end..inserted_end,
+            });
+        }
+        let inserted_start = range.start;
+        let inserted_end = inserted_start + replacement.len();
+        Some(VisualBlockEdit {
+            document_version: self.text_version,
+            block_id: block.id,
+            field: field.clone(),
+            range,
+            replacement,
+            inserted_range_after: inserted_start..inserted_end,
+            selection_after: inserted_end..inserted_end,
+        })
+    }
+
+    pub fn validate_visual_block_edit(&self, edit: &VisualBlockEdit) -> bool {
+        edit.document_version == self.text_version
+            && self.visual_blocks_shared().iter().any(|block| {
+                if block.id != edit.block_id {
+                    return false;
+                }
+                let Some(editor) = block.editor.as_ref() else {
+                    return false;
+                };
+                if !editor
+                    .fields()
+                    .into_iter()
+                    .any(|field| field == &edit.field)
+                {
+                    return false;
+                }
+                match edit.field.kind {
+                    VisualEditorFieldKind::TableCell { .. } => edit.range == block.source_range,
+                    _ => {
+                        edit.range.start >= edit.field.source_range.start
+                            && edit.range.end <= edit.field.source_range.end
+                    }
+                }
+            })
+    }
+
+    /// Return the dedicated field that owns the complete canonical selection.
+    pub fn visual_editor_field_at(&self, range: &Range<usize>) -> Option<VisualEditorField> {
+        self.visual_blocks_shared()
+            .iter()
+            .find_map(|block| block.editor.as_ref()?.field_containing(range).cloned())
+    }
+
+    /// Resolve Tab traversal for multi-field visual editors. Code and math
+    /// retain ordinary indentation behavior because each owns one payload.
+    pub fn visual_editor_tab_target(
+        &self,
+        range: &Range<usize>,
+        forward: bool,
+    ) -> Option<Range<usize>> {
+        let blocks = self.visual_blocks_shared();
+        let (block_index, editor, field_index) =
+            blocks.iter().enumerate().find_map(|(block_index, block)| {
+                let editor = block.editor.as_ref()?;
+                if !matches!(
+                    editor,
+                    VisualBlockEditor::Image { .. } | VisualBlockEditor::Table { .. }
+                ) {
+                    return None;
+                }
+                let fields = editor.fields();
+                let field_index = fields.iter().position(|field| {
+                    range.start >= field.source_range.start && range.end <= field.source_range.end
+                })?;
+                Some((block_index, editor, field_index))
+            })?;
+        let fields = editor.fields();
+        if forward {
+            if let Some(field) = fields.get(field_index + 1) {
+                return Some(field.source_range.clone());
+            }
+            let boundary = blocks
+                .get(block_index + 1)
+                .map_or(fields[field_index].source_range.end, |block| {
+                    block.source_range.start
+                });
+            Some(boundary..boundary)
+        } else {
+            if field_index > 0 {
+                return Some(fields[field_index - 1].source_range.clone());
+            }
+            let boundary = block_index
+                .checked_sub(1)
+                .and_then(|previous| blocks.get(previous))
+                .map_or(fields[field_index].source_range.start, |block| {
+                    block.source_range.end
+                });
+            Some(boundary..boundary)
+        }
+    }
+
+    /// Keep arrow/deletion movement out of hidden block delimiters. A field
+    /// edge hands off to its sibling field or the adjacent visual block.
+    pub fn visual_editor_edge_target(&self, offset: usize, forward: bool) -> Option<usize> {
+        let range = offset..offset;
+        let blocks = self.visual_blocks_shared();
+        let (block_index, editor, field_index) =
+            blocks.iter().enumerate().find_map(|(block_index, block)| {
+                let editor = block.editor.as_ref()?;
+                let fields = editor.fields();
+                let field_index = fields.iter().position(|field| {
+                    range.start >= field.source_range.start && range.end <= field.source_range.end
+                })?;
+                Some((block_index, editor, field_index))
+            })?;
+        let fields = editor.fields();
+        let field = fields[field_index];
+        if forward {
+            if offset != field.source_range.end {
+                return None;
+            }
+            Some(
+                fields
+                    .get(field_index + 1)
+                    .map(|next| next.source_range.start)
+                    .or_else(|| {
+                        blocks
+                            .get(block_index + 1)
+                            .map(|block| block.source_range.start)
+                    })
+                    .unwrap_or(offset),
+            )
+        } else {
+            if offset != field.source_range.start {
+                return None;
+            }
+            Some(
+                field_index
+                    .checked_sub(1)
+                    .map(|previous| fields[previous].source_range.end)
+                    .or_else(|| {
+                        block_index
+                            .checked_sub(1)
+                            .and_then(|previous| blocks.get(previous))
+                            .map(|block| block.source_range.end)
+                    })
+                    .unwrap_or(offset),
+            )
+        }
+    }
+
+    #[cfg(test)]
+    fn source_mapped_derivation_counters(&self) -> source_mapped::DerivationCounters {
+        self.source_mapped_cache
+            .borrow()
+            .as_ref()
+            .map(|cache| cache.counters)
+            .unwrap_or_default()
     }
 
     /// Fold derived state computed elsewhere (a background thread running
@@ -2016,8 +2321,7 @@ impl MarkdownDocument {
             replacement.to_string()
         };
         let selected_range = range.start..range.start + replacement_text.len();
-        self.text.replace_range(range, &replacement_text);
-        self.invalidate_derived();
+        self.replace_source_range(range, &replacement_text);
 
         Ok(ReplaceResult {
             replacements: 1,
@@ -2056,14 +2360,14 @@ impl MarkdownDocument {
             });
         }
 
-        self.text = if options.regex {
+        let text = if options.regex {
             regex.replace_all(&self.text, replacement).to_string()
         } else {
             regex
                 .replace_all(&self.text, regex::NoExpand(replacement))
                 .to_string()
         };
-        self.invalidate_derived();
+        self.set_text(text);
 
         Ok(ReplaceResult {
             replacements,
@@ -2133,6 +2437,72 @@ impl MarkdownDocument {
         });
         stats
     }
+}
+
+fn sanitize_visual_field_replacement(
+    source: &str,
+    kind: VisualEditorFieldKind,
+    field_range: &Range<usize>,
+    replacement: &str,
+) -> String {
+    match kind {
+        VisualEditorFieldKind::CodePayload | VisualEditorFieldKind::MathPayload => {
+            replacement.to_string()
+        }
+        VisualEditorFieldKind::ImageAlt => {
+            escape_unescaped_visual_terminators(&replacement.replace(['\r', '\n'], " "), |ch| {
+                ch == ']'
+            })
+        }
+        VisualEditorFieldKind::ImageDestination => {
+            let normalized = replacement
+                .chars()
+                .filter_map(|ch| match ch {
+                    '\r' | '\n' => None,
+                    ch if ch.is_whitespace() => Some("%20".to_string()),
+                    ch => Some(ch.to_string()),
+                })
+                .collect::<String>();
+            escape_unescaped_visual_terminators(&normalized, |ch| ch == ')')
+        }
+        VisualEditorFieldKind::ImageTitle => {
+            let delimiter = field_range
+                .start
+                .checked_sub(1)
+                .and_then(|offset| source.as_bytes().get(offset))
+                .copied()
+                .unwrap_or(b'"') as char;
+            escape_unescaped_visual_terminators(&replacement.replace(['\r', '\n'], " "), |ch| {
+                ch == delimiter
+            })
+        }
+        VisualEditorFieldKind::TableCell { .. } => {
+            escape_unescaped_visual_terminators(&replacement.replace(['\r', '\n'], " "), |ch| {
+                ch == '|'
+            })
+        }
+    }
+}
+
+fn escape_unescaped_visual_terminators(
+    input: &str,
+    mut is_terminator: impl FnMut(char) -> bool,
+) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut preceding_backslashes = 0usize;
+    for ch in input.chars() {
+        if ch == '\\' {
+            output.push(ch);
+            preceding_backslashes += 1;
+            continue;
+        }
+        if is_terminator(ch) && preceding_backslashes.is_multiple_of(2) {
+            output.push('\\');
+        }
+        output.push(ch);
+        preceding_backslashes = 0;
+    }
+    output
 }
 
 pub fn default_recovery_dir() -> PathBuf {
@@ -4100,7 +4470,7 @@ mod tests {
         assert!(
             doc.visual_blocks()
                 .iter()
-                .any(|block| { block.source_island == Some(VisualSourceIslandKind::Math) })
+                .any(|block| matches!(block.editor, Some(VisualBlockEditor::Math { .. })))
         );
     }
 
@@ -4585,6 +4955,159 @@ mod tests {
         assert_eq!(doc.stats(), doc.stats());
     }
 
+    #[test]
+    fn direct_code_edit_is_utf8_exact_and_preserves_authored_fences() {
+        let mut doc = MarkdownDocument::from_text("~~~~  rust extra\nlet 名称 = 1;\n~~~~");
+        let block = doc
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.editor, Some(VisualBlockEditor::Code { .. })))
+            .expect("direct code block");
+        let VisualBlockEditor::Code { payload, .. } = block.editor.unwrap() else {
+            unreachable!()
+        };
+        let name_start = doc.text()[payload.source_range.clone()]
+            .find("名称")
+            .unwrap()
+            + payload.source_range.start;
+        let edit = doc
+            .direct_visual_block_edit(name_start..name_start + "名称".len(), "emoji_😀")
+            .expect("validated direct edit");
+        assert!(doc.validate_visual_block_edit(&edit));
+        assert_eq!(edit.range, name_start..name_start + "名称".len());
+        assert_eq!(
+            edit.inserted_range_after,
+            name_start..name_start + "emoji_😀".len()
+        );
+        doc.replace_range(edit.range, &edit.replacement);
+        assert_eq!(doc.text(), "~~~~  rust extra\nlet emoji_😀 = 1;\n~~~~");
+    }
+
+    #[test]
+    fn direct_image_edit_escapes_only_unescaped_field_terminators_and_rejects_stale_events() {
+        let mut doc = MarkdownDocument::from_text("![alt](old.png \"title\")");
+        let block = doc.visual_blocks().remove(0);
+        let VisualBlockEditor::Image {
+            alt,
+            destination,
+            title,
+        } = block.editor.expect("direct image")
+        else {
+            unreachable!()
+        };
+
+        let alt_edit = doc
+            .direct_visual_block_edit(alt.source_range.clone(), "a] b\\] c")
+            .expect("alt edit");
+        assert_eq!(alt_edit.replacement, "a\\] b\\] c");
+        let destination_edit = doc
+            .direct_visual_block_edit(destination.source_range.clone(), "new path).png")
+            .expect("destination edit");
+        assert_eq!(destination_edit.replacement, "new%20path\\).png");
+        let title = title.expect("title field");
+        let title_edit = doc
+            .direct_visual_block_edit(title.source_range.clone(), "new \"title\"")
+            .expect("title edit");
+        assert_eq!(title_edit.replacement, "new \\\"title\\\"");
+
+        assert!(doc.validate_visual_block_edit(&destination_edit));
+        doc.replace_range(
+            destination_edit.range.clone(),
+            &destination_edit.replacement,
+        );
+        assert!(!doc.validate_visual_block_edit(&destination_edit));
+        assert_eq!(doc.text(), "![alt](new%20path\\).png \"title\")");
+    }
+
+    #[test]
+    fn direct_table_edit_reflows_once_preserves_alignment_and_restores_logical_cell() {
+        let source = "before\n\n| A | B |\n| :--- | ---: |\n| x | y |\n\nafter";
+        let mut doc = MarkdownDocument::from_text(source);
+        let block = doc
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.editor, Some(VisualBlockEditor::Table { .. })))
+            .expect("direct table");
+        let VisualBlockEditor::Table { cells } = block.editor.unwrap() else {
+            unreachable!()
+        };
+        let cell = cells
+            .iter()
+            .find(|cell| cell.row == 1 && cell.column == 0)
+            .unwrap();
+        let edit = doc
+            .direct_visual_block_edit(cell.field.source_range.clone(), "宽字符|值")
+            .expect("table edit");
+        assert_eq!(edit.range, block.source_range);
+        assert_eq!(edit.replacement.matches('\n').count(), 2);
+        assert!(edit.replacement.contains("宽字符\\|值"));
+        assert!(edit.replacement.lines().nth(1).unwrap().contains(':'));
+        assert!(doc.validate_visual_block_edit(&edit));
+
+        doc.replace_range(edit.range, &edit.replacement);
+        let field = doc
+            .visual_editor_field_at(&edit.selection_after)
+            .expect("selection remains in a direct field");
+        assert_eq!(
+            field.kind,
+            VisualEditorFieldKind::TableCell { row: 1, column: 0 }
+        );
+        let table = doc
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+            .unwrap();
+        let VisualBlockKind::Table { alignments, .. } = table.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            alignments,
+            vec![TableAlignment::Left, TableAlignment::Right]
+        );
+        assert!(doc.text().starts_with("before\n\n"));
+        assert!(doc.text().ends_with("\n\nafter"));
+    }
+
+    #[test]
+    fn direct_image_and_table_tab_targets_follow_fields_then_handoff() {
+        let source =
+            "before\n\n![alt](image.png \"title\")\n\n| A | B |\n| --- | --- |\n| x | y |\n\nafter";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let image = blocks
+            .iter()
+            .find(|block| matches!(block.editor, Some(VisualBlockEditor::Image { .. })))
+            .unwrap();
+        let fields = image.editor.as_ref().unwrap().fields();
+        assert_eq!(
+            doc.visual_editor_tab_target(&fields[0].source_range, true),
+            Some(fields[1].source_range.clone())
+        );
+        assert_eq!(
+            doc.visual_editor_tab_target(&fields[1].source_range, false),
+            Some(fields[0].source_range.clone())
+        );
+        let table = blocks
+            .iter()
+            .find(|block| matches!(block.editor, Some(VisualBlockEditor::Table { .. })))
+            .unwrap();
+        let table_fields = table.editor.as_ref().unwrap().fields();
+        assert_eq!(
+            doc.visual_editor_tab_target(&table_fields[0].source_range, true),
+            Some(table_fields[1].source_range.clone())
+        );
+        let last = table_fields.last().unwrap();
+        let after = blocks
+            .iter()
+            .skip_while(|block| block.id != table.id)
+            .nth(1)
+            .unwrap();
+        assert_eq!(
+            doc.visual_editor_tab_target(&last.source_range, true),
+            Some(after.source_range.start..after.source_range.start)
+        );
+    }
+
     // ── Diagram rendering ──
 
     #[test]
@@ -4673,5 +5196,49 @@ mod tests {
         let result = doc.replace_current_match(100..105, &opts, "hi").unwrap();
         assert_eq!(result.replacements, 0);
         assert_eq!(doc.text(), "hello world"); // unchanged
+    }
+
+    #[test]
+    fn visual_edit_documentation_contract_tracks_current_strategies() {
+        let guide = include_str!("../docs/visual-editing-quality.md");
+        for required in [
+            "VisualBlockEditor::Code",
+            "VisualBlockEditor::Math",
+            "VisualBlockEditor::Image",
+            "VisualBlockEditor::Table",
+            "progressive source reveal",
+            "YAML front matter",
+            "Mermaid/registered diagrams",
+            "pulldown-cmark",
+            "SourceEdit",
+            "VisualBlockId",
+            "cargo test --workspace",
+        ] {
+            assert!(
+                guide.contains(required),
+                "missing contract marker: {required}"
+            );
+        }
+
+        let english = include_str!("../README.md");
+        let chinese = include_str!("../README.zh-CN.md");
+        assert!(english.contains("docs/visual-editing-quality.md"));
+        assert!(chinese.contains("docs/visual-editing-quality.md"));
+        assert!(!english.contains("direct visual cell editing is not yet supported"));
+        assert!(!english.contains("Direct cell-level Visual Edit table editing"));
+        assert!(!chinese.contains("暂不支持直接可视化编辑单元格"));
+        assert!(!chinese.contains("尚未实现直接可视化编辑表格单元格"));
+
+        let context = include_str!("../openspec/config.yaml");
+        assert!(context.contains("Root-package Cargo workspace"));
+        assert!(!context.contains("Single crate, no workspace"));
+
+        let editing_spec = include_str!("../openspec/specs/markdown-editing/spec.md");
+        assert!(editing_spec.contains("WYSIWYG-oriented Visual Edit surface"));
+        assert!(!editing_spec.contains("it is a future candidate"));
+
+        let quality_spec = include_str!("../openspec/specs/engineering-quality/spec.md");
+        assert!(quality_spec.contains("Visual Edit invariant evidence"));
+        assert!(!quality_spec.contains("TBD - created by archiving change"));
     }
 }

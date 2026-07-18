@@ -56,7 +56,9 @@ impl EntityInputHandler for MarkionApp {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.active_tab_mut().marked_range = None;
+        let tab = self.active_tab_mut();
+        tab.marked_range = None;
+        tab.finish_undo_capture();
         self.input_marked_len = 0;
     }
 
@@ -72,20 +74,68 @@ impl EntityInputHandler for MarkionApp {
             return;
         }
 
+        let visual_edit = matches!(self.view_mode, ViewMode::VisualEdit);
         let tab = self.active_tab_mut();
+        let active_marked_range = tab.marked_range.clone();
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| tab.range_from_utf16(range_utf16))
-            .or(tab.marked_range.clone())
+            .or(active_marked_range.clone())
             .unwrap_or(tab.selected_range.clone());
 
-        let changed = &tab.document.text()[range.clone()] != new_text;
+        let direct_edit = visual_edit
+            .then(|| {
+                tab.document
+                    .direct_visual_block_edit(range.clone(), new_text)
+            })
+            .flatten()
+            .filter(|edit| tab.document.validate_visual_block_edit(edit));
+        let edit_range = direct_edit
+            .as_ref()
+            .map_or_else(|| range.clone(), |edit| edit.range.clone());
+        let replacement = direct_edit
+            .as_ref()
+            .map_or_else(|| new_text.to_string(), |edit| edit.replacement.clone());
+
+        let changed = tab.document.text()[edit_range.clone()] != replacement;
+        let committing_ime = active_marked_range.is_some()
+            && tab
+                .undo_capture
+                .is_some_and(|capture| capture.kind == UndoCaptureKind::Ime);
         if changed {
-            tab.push_undo_snapshot();
-            tab.document.replace_range(range.clone(), new_text);
+            let intent = if committing_ime {
+                UndoCaptureKind::Ime
+            } else {
+                tab.pending_text_edit_intent.take().unwrap_or_else(|| {
+                    if range.is_empty() && !new_text.is_empty() {
+                        UndoCaptureKind::Insert
+                    } else {
+                        UndoCaptureKind::Atomic
+                    }
+                })
+            };
+            let history_range = direct_edit
+                .as_ref()
+                .map_or_else(|| edit_range.clone(), |_| range.clone());
+            let history_replacement = if direct_edit.is_some() {
+                new_text
+            } else {
+                &replacement
+            };
+            tab.prepare_undo_capture(intent, &history_range, history_replacement, Instant::now());
+            if let (Some(edit), Some(capture)) = (direct_edit.as_ref(), tab.undo_capture.as_mut()) {
+                capture.next_cursor = edit.selection_after.end;
+            }
+            tab.document.replace_range(edit_range.clone(), &replacement);
         }
-        tab.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        tab.selected_range = direct_edit.as_ref().map_or_else(
+            || range.start + replacement.len()..range.start + replacement.len(),
+            |edit| edit.selection_after.clone(),
+        );
         tab.marked_range.take();
+        if committing_ime {
+            tab.finish_undo_capture();
+        }
         self.status = t(
             self.language,
             if changed {
@@ -114,6 +164,7 @@ impl EntityInputHandler for MarkionApp {
             return;
         }
 
+        let visual_edit = matches!(self.view_mode, ViewMode::VisualEdit);
         let tab = self.active_tab_mut();
         let range = range_utf16
             .as_ref()
@@ -121,18 +172,59 @@ impl EntityInputHandler for MarkionApp {
             .or(tab.marked_range.clone())
             .unwrap_or(tab.selected_range.clone());
 
-        let changed = &tab.document.text()[range.clone()] != new_text;
-        if changed {
-            tab.push_undo_snapshot();
-            tab.document.replace_range(range.clone(), new_text);
-        }
-        tab.marked_range =
-            (!new_text.is_empty()).then_some(range.start..range.start + new_text.len());
-        tab.selected_range = new_selected_range_utf16
+        let direct_edit = visual_edit
+            .then(|| {
+                tab.document
+                    .direct_visual_block_edit(range.clone(), new_text)
+            })
+            .flatten()
+            .filter(|edit| tab.document.validate_visual_block_edit(edit));
+        let edit_range = direct_edit
             .as_ref()
-            .map(|range_utf16| EditorTab::relative_range_from_utf16(new_text, range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.start)
-            .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+            .map_or_else(|| range.clone(), |edit| edit.range.clone());
+        let replacement = direct_edit
+            .as_ref()
+            .map_or_else(|| new_text.to_string(), |edit| edit.replacement.clone());
+
+        let changed = tab.document.text()[edit_range.clone()] != replacement;
+        if changed {
+            let history_range = direct_edit
+                .as_ref()
+                .map_or_else(|| edit_range.clone(), |_| range.clone());
+            let history_replacement = if direct_edit.is_some() {
+                new_text
+            } else {
+                &replacement
+            };
+            tab.prepare_undo_capture(
+                UndoCaptureKind::Ime,
+                &history_range,
+                history_replacement,
+                Instant::now(),
+            );
+            if let (Some(edit), Some(capture)) = (direct_edit.as_ref(), tab.undo_capture.as_mut()) {
+                capture.next_cursor = edit.selection_after.end;
+            }
+            tab.document.replace_range(edit_range.clone(), &replacement);
+        }
+        tab.marked_range = direct_edit.as_ref().map_or_else(
+            || {
+                (!replacement.is_empty())
+                    .then_some(edit_range.start..edit_range.start + replacement.len())
+            },
+            |edit| {
+                (!edit.inserted_range_after.is_empty()).then_some(edit.inserted_range_after.clone())
+            },
+        );
+        tab.selected_range = if let Some(edit) = direct_edit.as_ref() {
+            edit.selection_after.clone()
+        } else {
+            new_selected_range_utf16
+                .as_ref()
+                .map(|range_utf16| EditorTab::relative_range_from_utf16(new_text, range_utf16))
+                .map(|new_range| new_range.start + range.start..new_range.end + range.start)
+                .unwrap_or_else(|| range.start + replacement.len()..range.start + replacement.len())
+        };
         self.status = t(self.language, Msg::StatusComposing).into();
         if changed {
             self.after_document_changed(cx);
@@ -149,6 +241,13 @@ impl EntityInputHandler for MarkionApp {
     ) -> Option<Bounds<Pixels>> {
         let tab = self.active_tab();
         if matches!(self.view_mode, ViewMode::VisualEdit) {
+            let source_range = tab.range_from_utf16(&range_utf16);
+            if let Some((marked_range, marked_bounds)) = &tab.visual_marked_range_bounds
+                && source_range.start <= marked_range.end
+                && source_range.end >= marked_range.start
+            {
+                return Some(*marked_bounds);
+            }
             return visual_ime_bounds(tab.visual_caret_bounds, tab.visual_input_bounds);
         }
         if tab.last_lines.is_empty() {

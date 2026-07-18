@@ -112,7 +112,6 @@ fn arb_markdown() -> impl Strategy<Value = Document> {
         metadata: None,
         version: 0,
         footnote_map: std::collections::HashMap::new(),
-        shared_regions: Vec::new(),
     })
 }
 

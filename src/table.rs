@@ -41,6 +41,13 @@ pub(crate) struct TablePosition {
     pub column: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TableCellSourceRange {
+    pub row: usize,
+    pub column: usize,
+    pub source_range: Range<usize>,
+}
+
 pub(crate) fn table_range_at(text: &str, byte_index: usize) -> Option<Range<usize>> {
     if text.is_empty() {
         return None;
@@ -172,6 +179,47 @@ pub(crate) fn parse_markdown_table(source: &str) -> Option<MarkdownTable> {
     Some(table)
 }
 
+pub(crate) fn table_cell_source_ranges(source: &str) -> Option<Vec<TableCellSourceRange>> {
+    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    if lines.len() < 2 {
+        return None;
+    }
+    let separator_index = lines
+        .iter()
+        .position(|line| is_markdown_table_separator_line(line.trim_end_matches(['\r', '\n'])))?;
+    if separator_index == 0 {
+        return None;
+    }
+    let expected_columns =
+        markdown_table_cell_ranges(lines[separator_index].trim_end_matches(['\r', '\n'])).len();
+    if expected_columns < 2 {
+        return None;
+    }
+
+    let mut result = Vec::new();
+    let mut source_offset = 0usize;
+    let mut logical_row = 0usize;
+    for (line_index, line_with_newline) in lines.iter().enumerate() {
+        let line = line_with_newline.trim_end_matches(['\r', '\n']);
+        let ranges = markdown_table_cell_ranges(line);
+        if ranges.len() != expected_columns {
+            return None;
+        }
+        if line_index != separator_index {
+            for (column, range) in ranges.into_iter().enumerate() {
+                result.push(TableCellSourceRange {
+                    row: logical_row,
+                    column,
+                    source_range: source_offset + range.start..source_offset + range.end,
+                });
+            }
+            logical_row += 1;
+        }
+        source_offset += line_with_newline.len();
+    }
+    Some(result)
+}
+
 pub(crate) fn format_markdown_table(table: &MarkdownTable) -> String {
     let columns = table.column_count();
     let mut rows = table.rows.clone();
@@ -257,68 +305,11 @@ pub(crate) fn formatted_table_cell_range(
     if table.rows.is_empty() {
         return None;
     }
-
     let formatted = format_markdown_table(table);
-    let line_index = if row_index == 0 { 0 } else { row_index + 1 };
-    let line_start = nth_line_start(&formatted, line_index)?;
-    let line_end = formatted[line_start..]
-        .find('\n')
-        .map_or(formatted.len(), |index| line_start + index);
-    let line = &formatted[line_start..line_end];
-    let columns = table.column_count();
-    let column_index = column_index.min(columns.saturating_sub(1));
-    let mut content_start = 0usize;
-    let mut content_end = 0usize;
-    let mut current_column = 0usize;
-    let mut in_cell = false;
-    let mut seen_space_after_pipe = false;
-
-    for (index, ch) in line.char_indices() {
-        if ch == '|' {
-            if in_cell {
-                if current_column == column_index {
-                    content_end = index.saturating_sub(1).max(content_start);
-                    break;
-                }
-                current_column += 1;
-            }
-            in_cell = true;
-            seen_space_after_pipe = false;
-            continue;
-        }
-
-        if in_cell && !seen_space_after_pipe {
-            seen_space_after_pipe = true;
-            content_start = index + ch.len_utf8();
-            if current_column == column_index && ch != ' ' {
-                content_start = index;
-            }
-        }
-    }
-
-    if current_column == column_index && content_end == 0 {
-        content_end = line.len().saturating_sub(1).max(content_start);
-    }
-
-    Some(line_start + content_start..line_start + content_end)
-}
-
-fn nth_line_start(text: &str, line_index: usize) -> Option<usize> {
-    if line_index == 0 {
-        return Some(0);
-    }
-
-    let mut current_line = 0usize;
-    for (index, byte) in text.bytes().enumerate() {
-        if byte == b'\n' {
-            current_line += 1;
-            if current_line == line_index {
-                return Some(index + 1);
-            }
-        }
-    }
-
-    None
+    table_cell_source_ranges(&formatted)?
+        .into_iter()
+        .find(|cell| cell.row == row_index && cell.column == column_index)
+        .map(|cell| cell.source_range)
 }
 
 fn line_bounds_for_table_lookup(text: &str, byte_index: usize) -> Option<(usize, usize)> {
@@ -373,20 +364,158 @@ pub(crate) fn is_markdown_table_separator_line(line: &str) -> bool {
 }
 
 fn split_markdown_table_row(line: &str) -> Vec<String> {
-    line.trim()
-        .trim_matches('|')
-        .split('|')
-        .map(|cell| cell.trim().to_string())
+    markdown_table_cell_ranges(line)
+        .into_iter()
+        .map(|range| line[range].to_string())
+        .collect()
+}
+
+fn markdown_table_cell_ranges(line: &str) -> Vec<Range<usize>> {
+    let content_start = line.len() - line.trim_start().len();
+    let content_end = line.trim_end().len();
+    if content_start >= content_end {
+        return Vec::new();
+    }
+    let content = &line[content_start..content_end];
+    let mut delimiters = Vec::new();
+    let mut escaped = false;
+    for (offset, ch) in content.char_indices() {
+        if ch == '\\' {
+            escaped = !escaped;
+            continue;
+        }
+        if ch == '|' && !escaped {
+            delimiters.push(content_start + offset);
+        }
+        escaped = false;
+    }
+
+    let leading_pipe = delimiters.first() == Some(&content_start);
+    let trailing_pipe = delimiters.last() == Some(&(content_end - 1));
+    let mut ranges = Vec::new();
+    let mut cell_start = if leading_pipe {
+        content_start + 1
+    } else {
+        content_start
+    };
+    for delimiter in delimiters {
+        if delimiter < cell_start {
+            continue;
+        }
+        ranges.push(cell_start..delimiter);
+        cell_start = delimiter + 1;
+    }
+    if !trailing_pipe {
+        ranges.push(cell_start..content_end);
+    }
+
+    ranges
+        .into_iter()
+        .map(|Range { mut start, mut end }| {
+            while start < end && line.as_bytes()[start].is_ascii_whitespace() {
+                start += 1;
+            }
+            while end > start && line.as_bytes()[end - 1].is_ascii_whitespace() {
+                end -= 1;
+            }
+            start..end
+        })
         .collect()
 }
 
 fn table_column_at_line(line: &str, byte_column: usize) -> usize {
     let byte_column = clamp_to_char_boundary(line, byte_column.min(line.len()));
     let before_cursor = &line[..byte_column];
-    let pipe_count = before_cursor.chars().filter(|ch| *ch == '|').count();
+    let pipe_count = unescaped_pipe_count(before_cursor);
     if line.trim_start().starts_with('|') {
         pipe_count.saturating_sub(1)
     } else {
         pipe_count
+    }
+}
+
+fn unescaped_pipe_count(text: &str) -> usize {
+    let mut escaped = false;
+    let mut count = 0usize;
+    for ch in text.chars() {
+        if ch == '\\' {
+            escaped = !escaped;
+            continue;
+        }
+        if ch == '|' && !escaped {
+            count += 1;
+        }
+        escaped = false;
+    }
+    count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_cell_ranges_skip_padding_and_separator_with_utf8_and_escaped_pipes() {
+        let source = "| 名称 | a\\|b |\r\n| :--- | ---: |\r\n| 甲 | 2 |";
+        let cells = table_cell_source_ranges(source).expect("exact table cell ranges");
+        let values = cells
+            .iter()
+            .map(|cell| {
+                (
+                    cell.row,
+                    cell.column,
+                    source[cell.source_range.clone()].to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec![
+                (0, 0, "名称".into()),
+                (0, 1, "a\\|b".into()),
+                (1, 0, "甲".into()),
+                (1, 1, "2".into()),
+            ]
+        );
+        let parsed = parse_markdown_table(source).expect("parsed table");
+        assert_eq!(
+            parsed.alignments,
+            vec![TableAlignment::Left, TableAlignment::Right]
+        );
+    }
+
+    #[test]
+    fn cell_ranges_accept_authored_rows_without_outer_pipes() {
+        let source = "A | B\n--- | ---\none | two";
+        let cells = table_cell_source_ranges(source).expect("exact table cell ranges");
+        assert_eq!(cells.len(), 4);
+        assert_eq!(&source[cells[0].source_range.clone()], "A");
+        assert_eq!(&source[cells[3].source_range.clone()], "two");
+    }
+
+    #[test]
+    fn formatted_cell_range_tracks_semantic_content_after_width_reflow() {
+        let mut table =
+            parse_markdown_table("| A | B |\n| --- | --- |\n| x | y |").expect("parsed table");
+        table.rows[1][0] = "宽字符 and longer".into();
+        let formatted = format_markdown_table(&table);
+        let range = formatted_table_cell_range(&table, 1, 0).expect("formatted cell");
+        assert_eq!(&formatted[range], "宽字符 and longer");
+        assert_eq!(parse_markdown_table(&formatted).expect("round trip"), table);
+    }
+
+    #[test]
+    fn table_position_ignores_escaped_pipe_delimiters() {
+        let source = "| A | B |\n| --- | --- |\n| a\\|b | c |";
+        let escaped_pipe = source.find("\\|").unwrap() + 1;
+        let second_cell = source.rfind(" c ").unwrap() + 1;
+        assert_eq!(
+            table_position_at(source, escaped_pipe),
+            Some(TablePosition { row: 1, column: 0 })
+        );
+        assert_eq!(
+            table_position_at(source, second_cell),
+            Some(TablePosition { row: 1, column: 1 })
+        );
     }
 }

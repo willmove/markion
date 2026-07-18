@@ -25,7 +25,6 @@ fn debug_inline_math_in_link() {
         metadata: None,
         version: 0,
         footnote_map: std::collections::HashMap::new(),
-        shared_regions: Vec::new(),
     };
 
     let parser = Parser::new(ParserOptions::default());

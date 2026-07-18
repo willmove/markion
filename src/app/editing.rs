@@ -41,6 +41,7 @@ impl MarkionApp {
         status: SharedString,
         cx: &mut Context<Self>,
     ) {
+        self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         let tab = self.active_tab_mut();
         let new_range = tab
@@ -78,6 +79,7 @@ impl MarkionApp {
         status: SharedString,
         cx: &mut Context<Self>,
     ) {
+        self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         let tab = self.active_tab_mut();
         let result = tab.document.edit_table_at(offset, edit);
@@ -728,7 +730,18 @@ impl MarkionApp {
             (tab.selected_range.is_empty(), tab.selected_range.start)
         };
         if is_empty {
-            let boundary = self.previous_boundary(self.cursor_offset());
+            if matches!(self.view_mode, ViewMode::VisualEdit)
+                && let Some(target) = self
+                    .active_tab()
+                    .document
+                    .visual_editor_edge_target(start, false)
+            {
+                self.move_to(target, cx);
+                return;
+            }
+            let boundary = self
+                .visual_affinity_horizontal_target(VisualCaretAffinity::Upstream)
+                .unwrap_or_else(|| self.previous_boundary(self.cursor_offset()));
             self.move_to(boundary, cx);
         } else {
             self.move_to(start, cx);
@@ -741,7 +754,18 @@ impl MarkionApp {
             (tab.selected_range.is_empty(), tab.selected_range.end)
         };
         if is_empty {
-            let boundary = self.next_boundary(end);
+            if matches!(self.view_mode, ViewMode::VisualEdit)
+                && let Some(target) = self
+                    .active_tab()
+                    .document
+                    .visual_editor_edge_target(end, true)
+            {
+                self.move_to(target, cx);
+                return;
+            }
+            let boundary = self
+                .visual_affinity_horizontal_target(VisualCaretAffinity::Downstream)
+                .unwrap_or_else(|| self.next_boundary(end));
             self.move_to(boundary, cx);
         } else {
             self.move_to(end, cx);
@@ -749,16 +773,37 @@ impl MarkionApp {
     }
 
     pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && let Some(target) = self
+                .active_tab()
+                .document
+                .visual_editor_edge_target(self.cursor_offset(), false)
+        {
+            self.move_to(target, cx);
+            return;
+        }
         let boundary = self.previous_boundary(self.cursor_offset());
         self.select_to(boundary, cx);
     }
 
     pub(super) fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && let Some(target) = self
+                .active_tab()
+                .document
+                .visual_editor_edge_target(self.cursor_offset(), true)
+        {
+            self.move_to(target, cx);
+            return;
+        }
         let boundary = self.next_boundary(self.cursor_offset());
         self.select_to(boundary, cx);
     }
 
     pub(super) fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_visual_vertical(VisualNavigationDirection::Up, false, cx) {
+            return;
+        }
         let (is_empty, boundary_start, cursor) = {
             let tab = self.active_tab();
             (
@@ -773,6 +818,9 @@ impl MarkionApp {
     }
 
     pub(super) fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_visual_vertical(VisualNavigationDirection::Down, false, cx) {
+            return;
+        }
         let (is_empty, boundary_end, cursor) = {
             let tab = self.active_tab();
             (
@@ -787,12 +835,18 @@ impl MarkionApp {
     }
 
     pub(super) fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_visual_vertical(VisualNavigationDirection::Up, true, cx) {
+            return;
+        }
         let cursor = self.cursor_offset();
         let target = self.active_tab().document.previous_line_offset(cursor);
         self.select_to(target, cx);
     }
 
     pub(super) fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_visual_vertical(VisualNavigationDirection::Down, true, cx) {
+            return;
+        }
         let cursor = self.cursor_offset();
         let target = self.active_tab().document.next_line_offset(cursor);
         self.select_to(target, cx);
@@ -805,12 +859,20 @@ impl MarkionApp {
     }
 
     pub(super) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(target) = self.visual_painted_line_boundary(false) {
+            self.move_to(target, cx);
+            return;
+        }
         let cursor = self.cursor_offset();
         let target = self.active_tab().document.line_start_at(cursor);
         self.move_to(target, cx);
     }
 
     pub(super) fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(target) = self.visual_painted_line_boundary(true) {
+            self.move_to(target, cx);
+            return;
+        }
         let cursor = self.cursor_offset();
         let target = self.active_tab().document.line_end_at(cursor);
         self.move_to(target, cx);
@@ -828,8 +890,33 @@ impl MarkionApp {
             self.confirm_pending_name(&ConfirmPendingName, _window, cx);
             return;
         }
-        let cursor = self.active_tab().selected_range.start;
         let selected = self.active_tab().selected_range.clone();
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && let Some(field) = self.active_tab().document.visual_editor_field_at(&selected)
+        {
+            match field.kind {
+                VisualEditorFieldKind::ImageAlt
+                | VisualEditorFieldKind::ImageDestination
+                | VisualEditorFieldKind::ImageTitle
+                | VisualEditorFieldKind::TableCell { .. } => {
+                    if let Some(target) = self
+                        .active_tab()
+                        .document
+                        .visual_editor_tab_target(&selected, true)
+                    {
+                        self.move_to_visual_editor_target(target, cx);
+                    }
+                    return;
+                }
+                VisualEditorFieldKind::CodePayload | VisualEditorFieldKind::MathPayload => {
+                    self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
+                    self.replace_text_in_range(None, "\n", _window, cx);
+                    self.active_tab_mut().finish_undo_capture();
+                    return;
+                }
+            }
+        }
+        let cursor = self.active_tab().selected_range.start;
         let structural_edit = (matches!(self.view_mode, ViewMode::VisualEdit)
             && selected.is_empty())
         .then(|| self.active_tab().document.visual_enter_edit(cursor))
@@ -854,6 +941,16 @@ impl MarkionApp {
     }
 
     pub(super) fn indent(&mut self, _: &Indent, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.active_tab().selected_range.clone();
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && let Some(target) = self
+                .active_tab()
+                .document
+                .visual_editor_tab_target(&selected, true)
+        {
+            self.move_to_visual_editor_target(target, cx);
+            return;
+        }
         if self.has_text_input_focus() {
             self.push_text_input("    ", cx);
             return;
@@ -882,6 +979,16 @@ impl MarkionApp {
     }
 
     pub(super) fn outdent(&mut self, _: &Outdent, _: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.active_tab().selected_range.clone();
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && let Some(target) = self
+                .active_tab()
+                .document
+                .visual_editor_tab_target(&selected, false)
+        {
+            self.move_to_visual_editor_target(target, cx);
+            return;
+        }
         let snapshot = self.snapshot();
         let selected = self.active_tab().selected_range.clone();
         let tab = self.active_tab_mut();
@@ -915,6 +1022,17 @@ impl MarkionApp {
 
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && self.active_tab().selected_range.is_empty()
+            && let Some(target) = self
+                .active_tab()
+                .document
+                .visual_editor_edge_target(self.cursor_offset(), false)
+        {
+            self.move_to(target, cx);
+            return;
+        }
+
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && self.active_tab().selected_range.is_empty()
             && let Some(edit) = self
                 .active_tab()
                 .document
@@ -935,6 +1053,7 @@ impl MarkionApp {
         if self.active_tab().selected_range.is_empty() {
             let boundary = self.previous_boundary(self.cursor_offset());
             self.select_to(boundary, cx);
+            self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Delete);
         }
         self.replace_text_in_range(None, "", window, cx);
     }
@@ -944,9 +1063,21 @@ impl MarkionApp {
             return;
         }
 
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && self.active_tab().selected_range.is_empty()
+            && let Some(target) = self
+                .active_tab()
+                .document
+                .visual_editor_edge_target(self.cursor_offset(), true)
+        {
+            self.move_to(target, cx);
+            return;
+        }
+
         if self.active_tab().selected_range.is_empty() {
             let boundary = self.next_boundary(self.cursor_offset());
             self.select_to(boundary, cx);
+            self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Delete);
         }
         self.replace_text_in_range(None, "", window, cx);
     }
@@ -957,7 +1088,9 @@ impl MarkionApp {
                 self.push_text_input(&text, cx);
                 return;
             }
+            self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
             self.replace_text_in_range(None, &text, window, cx);
+            self.active_tab_mut().finish_undo_capture();
         } else {
             self.status = t(self.language, Msg::StatusClipboardEmpty).into();
             cx.notify();
@@ -1167,10 +1300,259 @@ impl MarkionApp {
         self.active_tab().cursor_offset()
     }
 
+    fn current_visual_navigation_snapshot(&self) -> Option<(usize, VisualNavigationSnapshot)> {
+        if !matches!(self.view_mode, ViewMode::VisualEdit) {
+            return None;
+        }
+        let tab = self.active_tab();
+        let cursor = tab.cursor_offset();
+        let block_index = visual_block_index_for_offset(
+            &tab.visual_list_blocks,
+            cursor,
+            tab.document.text().len(),
+        )?;
+        let snapshot = tab.visual_navigation_snapshots.get(&block_index)?;
+        if snapshot.document_version != tab.document.version()
+            || snapshot.source_island
+            || tab.visual_navigation_snapshot_ids.get(&block_index)
+                != tab
+                    .visual_list_blocks
+                    .get(block_index)
+                    .map(|block| &block.id)
+        {
+            return None;
+        }
+        Some((block_index, snapshot.clone()))
+    }
+
+    fn move_visual_vertical(
+        &mut self,
+        direction: VisualNavigationDirection,
+        extend_selection: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((block_index, snapshot)) = self.current_visual_navigation_snapshot() else {
+            return false;
+        };
+        let cursor = self.cursor_offset();
+        let line_index = self
+            .active_tab()
+            .visual_navigation_position
+            .filter(|position| {
+                position.document_version == snapshot.document_version
+                    && position.block_index == block_index
+                    && position.source_offset == cursor
+                    && position.line_index < snapshot.lines.len()
+            })
+            .map(|position| position.line_index)
+            .or_else(|| snapshot.line_index_for_source(cursor));
+        let Some(line_index) = line_index else {
+            return false;
+        };
+        let preferred_x = self
+            .active_tab()
+            .visual_preferred_x
+            .or_else(|| snapshot.caret_x_for_source(cursor))
+            .unwrap_or(Pixels::ZERO);
+        let adjacent_line = match direction {
+            VisualNavigationDirection::Up => line_index.checked_sub(1),
+            VisualNavigationDirection::Down => {
+                (line_index + 1 < snapshot.lines.len()).then_some(line_index + 1)
+            }
+        };
+        if let Some(line_index) = adjacent_line
+            && let Some(target) = snapshot.lines[line_index].closest_source(preferred_x)
+        {
+            if extend_selection {
+                self.select_to(target, cx);
+            } else {
+                self.move_to(target, cx);
+            }
+            let tab = self.active_tab_mut();
+            tab.visual_preferred_x = Some(preferred_x);
+            tab.visual_navigation_position = Some(VisualNavigationPosition {
+                document_version: snapshot.document_version,
+                block_index,
+                line_index,
+                source_offset: target,
+            });
+            return true;
+        }
+
+        let target_block = match direction {
+            VisualNavigationDirection::Up => block_index.checked_sub(1),
+            VisualNavigationDirection::Down => (block_index + 1
+                < self.active_tab().visual_list_blocks.len())
+            .then_some(block_index + 1),
+        };
+        let Some(target_block) = target_block else {
+            return true;
+        };
+        if let Some(block) = self.active_tab().visual_list_blocks.get(target_block)
+            && matches!(block.kind, VisualBlockKind::Whitespace)
+        {
+            let target = match direction {
+                VisualNavigationDirection::Up => block.source_range.end,
+                VisualNavigationDirection::Down => block.source_range.start,
+            };
+            if extend_selection {
+                self.select_to(target, cx);
+            } else {
+                self.move_to(target, cx);
+            }
+            self.active_tab_mut().visual_preferred_x = Some(preferred_x);
+            return true;
+        }
+        let version = self.active_tab().document.version();
+        let pending = PendingVisualNavigation {
+            document_version: version,
+            target_block,
+            direction,
+            extend_selection,
+            preferred_x,
+        };
+        let tab = self.active_tab_mut();
+        tab.visual_preferred_x = Some(preferred_x);
+        tab.pending_visual_navigation = Some(pending);
+        tab.visual_list.scroll_to_reveal_item(target_block);
+        cx.notify();
+        true
+    }
+
+    fn visual_painted_line_boundary(&self, end: bool) -> Option<usize> {
+        let (_, snapshot) = self.current_visual_navigation_snapshot()?;
+        let line = snapshot
+            .lines
+            .get(snapshot.line_index_for_source(self.cursor_offset())?)?;
+        if end {
+            line.carets
+                .iter()
+                .max_by(|left, right| {
+                    left.x
+                        .to_f64()
+                        .total_cmp(&right.x.to_f64())
+                        .then_with(|| left.source_offset.cmp(&right.source_offset))
+                })
+                .map(|caret| caret.source_offset)
+        } else {
+            line.carets
+                .iter()
+                .min_by(|left, right| {
+                    left.x
+                        .to_f64()
+                        .total_cmp(&right.x.to_f64())
+                        .then_with(|| left.source_offset.cmp(&right.source_offset))
+                })
+                .map(|caret| caret.source_offset)
+        }
+    }
+
+    pub(super) fn complete_pending_visual_navigation(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.active_tab().pending_visual_navigation else {
+            return;
+        };
+        if pending.document_version != self.active_tab().document.version() {
+            self.active_tab_mut().clear_visual_navigation_intent();
+            return;
+        }
+        let Some(snapshot) = self
+            .active_tab()
+            .visual_navigation_snapshots
+            .get(&pending.target_block)
+            .filter(|snapshot| snapshot.document_version == pending.document_version)
+            .filter(|_| {
+                self.active_tab()
+                    .visual_list_blocks
+                    .get(pending.target_block)
+                    .is_some_and(|block| {
+                        self.active_tab()
+                            .visual_navigation_snapshot_ids
+                            .get(&pending.target_block)
+                            == Some(&block.id)
+                    })
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let line = match pending.direction {
+            VisualNavigationDirection::Up => snapshot.lines.last(),
+            VisualNavigationDirection::Down => snapshot.lines.first(),
+        };
+        let Some(target) = line.and_then(|line| line.closest_source(pending.preferred_x)) else {
+            return;
+        };
+        self.active_tab_mut().pending_visual_navigation = None;
+        if pending.extend_selection {
+            self.select_to(target, cx);
+        } else {
+            self.move_to(target, cx);
+        }
+        let target_line = match pending.direction {
+            VisualNavigationDirection::Up => snapshot.lines.len().saturating_sub(1),
+            VisualNavigationDirection::Down => 0,
+        };
+        let tab = self.active_tab_mut();
+        tab.visual_preferred_x = Some(pending.preferred_x);
+        tab.visual_navigation_position = Some(VisualNavigationPosition {
+            document_version: pending.document_version,
+            block_index: pending.target_block,
+            line_index: target_line,
+            source_offset: target,
+        });
+    }
+
+    fn visual_affinity_horizontal_target(&self, direction: VisualCaretAffinity) -> Option<usize> {
+        if !matches!(self.view_mode, ViewMode::VisualEdit) {
+            return None;
+        }
+        let tab = self.active_tab();
+        let affinity = tab.current_visual_caret_affinity()?;
+        if affinity == direction {
+            return None;
+        }
+        let cursor = tab.cursor_offset();
+        let block_index = visual_block_index_for_offset(
+            &tab.visual_list_blocks,
+            cursor,
+            tab.document.text().len(),
+        )?;
+        let block = tab.visual_list_blocks.get(block_index)?;
+        let projection = build_visual_projection(
+            tab.document.text(),
+            block,
+            tab.selected_range.clone(),
+            cursor,
+        );
+        let display = projection.display_for_source(cursor)?;
+        let candidates = projection.boundary_candidates(display);
+        candidates
+            .is_ambiguous()
+            .then(|| candidates.resolve(direction))
+    }
+
     pub(super) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         let tab = self.active_tab_mut();
         tab.selected_range = offset..offset;
         tab.selection_reversed = false;
+        tab.clear_visual_caret_affinity();
+        tab.clear_visual_navigation_intent();
+        tab.finish_undo_capture();
+        tab.marked_range = None;
+        tab.visual_cursor_reveal_pending = true;
+        tab.visual_caret_bounds = None;
+        self.center_cursor_if_typewriter();
+        cx.notify();
+    }
+
+    fn move_to_visual_editor_target(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.selected_range = range;
+        tab.selection_reversed = false;
+        tab.clear_visual_caret_affinity();
+        tab.clear_visual_navigation_intent();
+        tab.finish_undo_capture();
+        tab.marked_range = None;
         tab.visual_cursor_reveal_pending = true;
         tab.visual_caret_bounds = None;
         self.center_cursor_if_typewriter();
@@ -1179,6 +1561,10 @@ impl MarkionApp {
 
     pub(super) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         let tab = self.active_tab_mut();
+        tab.clear_visual_caret_affinity();
+        tab.clear_visual_navigation_intent();
+        tab.finish_undo_capture();
+        tab.marked_range = None;
         if tab.selection_reversed {
             tab.selected_range.start = offset;
         } else {

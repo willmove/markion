@@ -31,14 +31,15 @@ use markion::{
     FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, InlineSpan,
     InlineStyle, Language, MarkdownDocument, MarkdownFormat, MathLayoutStyle, Msg, PreviewBlock,
     RichText, SearchMatchRange, SearchOptions, ShortcutCategory, ShortcutPlatform, SidebarTab,
-    TableEdit, ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockKind,
-    VisualSourceIslandKind, build_visual_projection, builtin_diagram_registry,
-    builtin_theme_definitions, default_preferences_path, default_recovery_dir, default_themes_dir,
-    delete_recovery_file, diagram_backend_id, highlight_code, html_preview_parts,
-    html_preview_plain_text, is_markdown_path, list_recovery_files, list_theme_definitions,
-    load_app_preferences, load_recovery_file, normalize_heading_menu_max_level,
-    save_app_preferences, save_theme_definition, shortcut_catalog, sidebar_tab_label, t, tf,
-    title_from_path,
+    TableEdit, ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockEditor,
+    VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualProjection, VisualSourceIslandKind, build_visual_projection,
+    build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
+    default_preferences_path, default_recovery_dir, default_themes_dir, delete_recovery_file,
+    diagram_backend_id, highlight_code, html_preview_parts, html_preview_plain_text,
+    is_markdown_path, list_recovery_files, list_theme_definitions, load_app_preferences,
+    load_recovery_file, normalize_heading_menu_max_level, save_app_preferences,
+    save_theme_definition, shortcut_catalog, sidebar_tab_label, t, tf, title_from_path,
 };
 use unicode_segmentation::UnicodeSegmentation;
 

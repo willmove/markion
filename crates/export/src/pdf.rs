@@ -116,7 +116,6 @@ impl PdfExporter {
                 metadata: None,
                 version: document.version,
                 footnote_map: document.footnote_map.clone(),
-                shared_regions: Vec::new(),
             };
 
             let mut md = render_to_markdown(&doc_no_meta);

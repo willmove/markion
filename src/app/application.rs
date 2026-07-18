@@ -137,6 +137,9 @@ impl MarkionApp {
         // on the previous tab; clear the drag flag on all tabs for safety.
         for tab in &mut self.tabs {
             tab.preview_is_selecting = false;
+            tab.clear_visual_caret_affinity();
+            tab.finish_undo_capture();
+            tab.marked_range = None;
         }
         self.refresh_search_matches();
         cx.notify();
@@ -337,8 +340,18 @@ impl MarkionApp {
 
     pub(super) fn after_document_changed(&mut self, cx: &mut Context<Self>) {
         let tab = self.active_tab_mut();
+        tab.clear_visual_caret_affinity();
+        tab.clear_visual_navigation_intent();
+        tab.visual_navigation_snapshots.clear();
+        tab.visual_navigation_snapshot_ids.clear();
         tab.visual_cursor_reveal_pending = true;
         tab.visual_caret_bounds = None;
+        tab.visual_marked_range_bounds = None;
+        #[cfg(test)]
+        {
+            tab.visual_last_projection = None;
+            tab.visual_last_projection_styles = None;
+        }
         self.refresh_search_matches();
         self.center_cursor_if_typewriter();
         self.schedule_autosave(cx);

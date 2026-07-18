@@ -1,11 +1,10 @@
-//! Ad-hoc benchmark: per-keystroke cost of Markion's markdown derive pipeline on
-//! large documents.
+//! Informational benchmark: per-keystroke cost of Markion's Markdown derive
+//! paths on large documents.
 //!
-//! This measures the CPU work that a single keystroke forces the render path to
-//! redo: the three memoized derived values (`preview_blocks_shared`, `outline`,
-//! `stats`) all get invalidated by any text mutation and recomputed the next
-//! time they are read. That recompute is a *full-document* pulldown-cmark parse
-//! today, and it is exactly the cost an incremental parser could reduce.
+//! The first section measures the source-mapped Visual Edit model, which reuses
+//! independently parseable unchanged regions and falls back to a full derivation
+//! when safety cannot be proven. Later sections isolate cached full semantic
+//! reads and the mutation-only Edit-mode path.
 //!
 //! What this does NOT measure: GPUI's re-render of the preview element tree
 //! (element construction + layout + paint). That happens on the UI thread and
@@ -62,9 +61,8 @@ fn compute_{n}(x: i64) -> i64 {
     out
 }
 
-/// Time N simulated keystrokes: each inserts one char near the middle of the
-/// document, then reads the three derived values (as a render would), forcing a
-/// full recompute. Returns per-keystroke durations in microseconds.
+/// Time N simulated keystrokes while reading the three general derived values
+/// used by preview/sidebar rendering. Returns durations in microseconds.
 fn bench_keystrokes(base: &str, strokes: usize) -> Vec<f64> {
     let mut doc = MarkdownDocument::from_text(base);
     // Warm the caches once so the first measured stroke is not paying for the
@@ -84,12 +82,32 @@ fn bench_keystrokes(base: &str, strokes: usize) -> Vec<f64> {
 
         let start = Instant::now();
         doc.insert(mid, ch); // bumps text_version, invalidates all derived caches
-        let _ = doc.preview_blocks_shared(); // full parse #1 (the heavy one)
-        let _ = doc.outline(); // full parse #2
-        let _ = doc.stats(); // full parse #3
+        let _ = doc.preview_blocks_shared();
+        let _ = doc.outline();
+        let _ = doc.stats();
         let elapsed = start.elapsed();
 
         samples.push(elapsed.as_secs_f64() * 1_000_000.0);
+    }
+    samples
+}
+
+/// Time localized source edits followed by the source-mapped Visual Edit read.
+fn bench_visual_edits(base: &str, strokes: usize) -> Vec<f64> {
+    let mut doc = MarkdownDocument::from_text(base);
+    let _ = doc.visual_blocks_shared();
+
+    let mut samples = Vec::with_capacity(strokes);
+    for i in 0..strokes {
+        let mut mid = doc.text().len() / 2;
+        while !doc.text().is_char_boundary(mid) {
+            mid += 1;
+        }
+
+        let start = Instant::now();
+        doc.insert(mid, if i % 10 == 0 { "x" } else { "a" });
+        let _ = doc.visual_blocks_shared();
+        samples.push(start.elapsed().as_secs_f64() * 1_000_000.0);
     }
     samples
 }
@@ -112,8 +130,17 @@ fn report(label: &str, bytes: usize, samples: &mut [f64]) {
 
 fn main() {
     println!("Markion large-document keystroke benchmark (release build recommended)\n");
-    println!("Measures per-keystroke recompute of preview_blocks + outline + stats");
-    println!("(the full-document parse an incremental parser could shrink).\n");
+    println!("Diagnostic timing only; CI uses deterministic reuse/work counters instead.\n");
+
+    println!("Source-mapped Visual Edit (localized edit + visual block read):");
+    for target in [100 * 1024, 300 * 1024, 600 * 1024, 1024 * 1024] {
+        let doc = make_doc(target);
+        let bytes = doc.len();
+        let mut samples = bench_visual_edits(&doc, 100);
+        report("source-mapped visual", bytes, &mut samples);
+    }
+
+    println!("\nPreview + outline + stats (cached full semantic reads):");
 
     for target in [100 * 1024, 300 * 1024, 600 * 1024, 1024 * 1024] {
         let doc = make_doc(target);
@@ -122,11 +149,9 @@ fn main() {
         report("mixed markdown", bytes, &mut samples);
     }
 
-    // Phase 0 result: in Edit mode the app no longer reads preview_blocks, and a
-    // collapsed sidebar no longer reads the outline. Model that mode by editing
-    // WITHOUT reading any derived value — this is the per-keystroke markdown-
-    // pipeline cost after Phase 0 for an Edit-mode / collapsed-sidebar user.
-    println!("\nPhase 0 (Edit mode / sidebar collapsed — no derived reads):");
+    // Edit mode does not read preview blocks, and a collapsed sidebar does not
+    // read the outline. Model that path without any derived-state read.
+    println!("\nEdit mode / sidebar collapsed (no derived reads):");
     for target in [300 * 1024, 600 * 1024, 1024 * 1024] {
         let doc = make_doc(target);
         let bytes = doc.len();
@@ -141,7 +166,7 @@ fn main() {
             d.insert(mid, if i % 10 == 0 { "x" } else { "a" });
             samples.push(start.elapsed().as_secs_f64() * 1_000_000.0);
         }
-        report("edit-mode (phase 0)", bytes, &mut samples);
+        report("edit-mode mutation", bytes, &mut samples);
     }
 
     // Isolate the single heaviest derived value (preview blocks) so we can see

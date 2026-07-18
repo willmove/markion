@@ -495,6 +495,9 @@ pub struct RichText {
 /// canonical Markdown text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisualBlock {
+    /// Ephemeral identity used to retain row-local UI state across source
+    /// versions when this block is proven to be unchanged.
+    pub id: VisualBlockId,
     pub kind: VisualBlockKind,
     pub source_range: Range<usize>,
     pub editable_runs: Vec<VisualInlineRun>,
@@ -505,6 +508,9 @@ pub struct VisualBlock {
     /// Exact structural prefix for supported line-oriented blocks.
     pub block_prefix: Option<VisualBlockPrefix>,
     pub source_island: Option<VisualSourceIslandKind>,
+    /// Exact editable fields for a dedicated complex-block editor. Absent
+    /// when the authored syntax cannot be mapped losslessly.
+    pub editor: Option<VisualBlockEditor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -572,6 +578,107 @@ pub enum VisualRevealKind {
     Math,
 }
 
+/// Opaque, non-persisted identity of a source-backed Visual Edit block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VisualBlockId(pub(crate) u64);
+
+impl VisualBlockId {
+    pub(crate) fn fresh() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Stable widget key for this process-local derived block identity.
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VisualBlockEditor {
+    Code {
+        opening_fence: Range<usize>,
+        payload: VisualEditorField,
+        info_range: Option<Range<usize>>,
+        closing_fence: Range<usize>,
+    },
+    Math {
+        opening_delimiter: Range<usize>,
+        payload: VisualEditorField,
+        closing_delimiter: Range<usize>,
+    },
+    Image {
+        alt: VisualEditorField,
+        destination: VisualEditorField,
+        title: Option<VisualEditorField>,
+    },
+    Table {
+        cells: Vec<VisualTableCell>,
+    },
+}
+
+impl VisualBlockEditor {
+    pub fn fields(&self) -> Vec<&VisualEditorField> {
+        match self {
+            Self::Code { payload, .. } | Self::Math { payload, .. } => vec![payload],
+            Self::Image {
+                alt,
+                destination,
+                title,
+            } => [Some(alt), Some(destination), title.as_ref()]
+                .into_iter()
+                .flatten()
+                .collect(),
+            Self::Table { cells } => cells.iter().map(|cell| &cell.field).collect(),
+        }
+    }
+
+    pub fn field_containing(&self, range: &Range<usize>) -> Option<&VisualEditorField> {
+        self.fields().into_iter().find(|field| {
+            range.start >= field.source_range.start && range.end <= field.source_range.end
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VisualEditorFieldKind {
+    CodePayload,
+    MathPayload,
+    ImageAlt,
+    ImageDestination,
+    ImageTitle,
+    TableCell { row: usize, column: usize },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualEditorField {
+    pub kind: VisualEditorFieldKind,
+    pub source_range: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualTableCell {
+    pub row: usize,
+    pub column: usize,
+    pub field: VisualEditorField,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualBlockEdit {
+    pub document_version: u64,
+    pub block_id: VisualBlockId,
+    /// The exact current-version field that originated this edit. This is
+    /// revalidated immediately before mutation, including for table edits
+    /// whose canonical replacement range is the complete table block.
+    pub field: VisualEditorField,
+    pub range: Range<usize>,
+    pub replacement: String,
+    /// Exact inserted/composing bytes after applying `replacement`.
+    pub inserted_range_after: Range<usize>,
+    pub selection_after: Range<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisualRevealGroup {
     pub kind: VisualRevealKind,
@@ -595,6 +702,32 @@ pub struct VisualProjectionSpan {
     pub style: InlineStyle,
     pub link: bool,
     pub source: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualCaretAffinity {
+    Upstream,
+    Downstream,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisualBoundaryCandidates {
+    pub display_offset: usize,
+    pub upstream_source: usize,
+    pub downstream_source: usize,
+}
+
+impl VisualBoundaryCandidates {
+    pub fn is_ambiguous(self) -> bool {
+        self.upstream_source != self.downstream_source
+    }
+
+    pub fn resolve(self, affinity: VisualCaretAffinity) -> usize {
+        match affinity {
+            VisualCaretAffinity::Upstream => self.upstream_source,
+            VisualCaretAffinity::Downstream => self.downstream_source,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
