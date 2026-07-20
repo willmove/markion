@@ -7,7 +7,7 @@ This runbook is the canonical procedure for publishing a stable Markion release 
 - Publish from `main` with a clean worktree and a local branch synchronized with `origin/main`.
 - Use the version explicitly requested by the maintainer. If no version is supplied, increment PATCH from the highest stable `vMAJOR.MINOR.PATCH` tag. Do not infer a major, minor, or prerelease version.
 - Publish a stable, non-draft Release unless the maintainer explicitly requests a prerelease or draft.
-- Write final release notes in Simplified Chinese unless another language is requested.
+- Write final release notes in English unless another language is requested.
 - Preserve public tags. Never delete, force-move, or recreate a published tag without explicit authorization.
 - Required tools: stable Rust and Cargo, Git, GitHub CLI (`gh`), OpenSpec CLI, and an authenticated GitHub account with permission to push and publish Releases.
 
@@ -138,33 +138,33 @@ Use this structure unless the release content calls for a small adjustment:
 
 One-sentence summary of the release.
 
-## 主要更新
+## Highlights
 
 ### Feature or improvement area
 
 - User-visible change and its practical effect.
 
-### 修复
+### Fixes
 
 - Important reliability or behavior fix.
 
-## 兼容性
+## Compatibility
 
 - State whether Markdown files, preferences, or workspace data require migration.
 - State relevant platform limitations. Markion's unsigned Windows and macOS installers normally require SmartScreen or Gatekeeper bypass steps.
 
-## 下载
+## Downloads
 
 - Windows x64: NSIS installer.
 - macOS Apple Silicon: DMG.
 - Linux x86_64: DEB and AppImage.
 
-## 验证
+## Verification
 
 - Local workspace test result.
 - Windows, macOS, and Linux native CI result.
 
-**完整变更对比**: https://github.com/willmove/markion/compare/<previous-tag>...vX.Y.Z
+**Full comparison**: https://github.com/willmove/markion/compare/<previous-tag>...vX.Y.Z
 ```
 
 Release-note rules:
