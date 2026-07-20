@@ -78,10 +78,10 @@ The editor SHALL provide a find/replace workflow supporting case-sensitive and r
 - **THEN** query editing, regex and case-sensitive toggles, next/previous navigation, match counts, replace current, and replace all continue to behave as before
 
 ### Requirement: Narrow-scope preferences with persistence and reset
-The editor SHALL provide a Preferences panel and a persisted preferences file covering: theme (and custom theme selection), focus mode, typewriter mode, code-line-numbers, sidebar visibility, sidebar tab, and Heading menu depth (H1–H5 default, optional H1–H6). The preferences file SHALL be TOML (`config.toml` in the Markion config directory) with every field optional and defaulted, and SHALL additionally carry an `[auto_save]` section (`enabled`, `delay_secs`) that is configurable only via the file, not the panel. On startup, if `config.toml` does not exist but a legacy `preferences.conf` (the retired `key=value` format) does, the editor SHALL migrate it to `config.toml` once and thereafter ignore the legacy file. The editor SHALL also offer a preference reset action and a preferences summary in the Help menu. Font family/size, code-highlight theme, extension-syntax toggles, and image-uploader credentials are **not** configurable.
+The editor SHALL provide a Preferences panel and a persisted preferences file covering: theme (and custom theme selection), focus mode, typewriter mode, code-line-numbers, sidebar visibility, sidebar tab, Heading menu depth (H1–H5 default, optional H1–H6), source-editor font size, rendered-document font size, and rendered paragraph spacing. The preferences file SHALL be TOML (`config.toml` in the Markion config directory) with every field optional and defaulted, and SHALL additionally carry an `[auto_save]` section (`enabled`, `delay_secs`) that is configurable only via the file, not the panel. On startup, if `config.toml` does not exist but a legacy `preferences.conf` (the retired `key=value` format) does, the editor SHALL migrate it to `config.toml` once and thereafter ignore the legacy file. The editor SHALL also offer a preference reset action and a preferences summary in the Help menu. Font family, code-highlight theme, extension-syntax toggles, and image-uploader credentials are **not** configurable.
 
 #### Scenario: Supported preferences persist and restore
-- **WHEN** the user changes a supported preference (theme, focus mode, typewriter mode, code line numbers, sidebar visibility, sidebar tab, Heading menu depth)
+- **WHEN** the user changes a supported preference (theme, focus mode, typewriter mode, code line numbers, sidebar visibility, sidebar tab, Heading menu depth, source-editor font size, rendered-document font size, or rendered paragraph spacing)
 - **THEN** the change is written to `config.toml` and restored on the next launch
 
 #### Scenario: Legacy preferences file is migrated once
@@ -94,7 +94,7 @@ The editor SHALL provide a Preferences panel and a persisted preferences file co
 
 #### Scenario: Preferences summary and reset
 - **WHEN** the user opens the Help → preferences summary or triggers the reset action
-- **THEN** a summary is shown, or all preferences are reset to their defaults
+- **THEN** a summary including supported typography values is shown, or all preferences including typography are reset to their defaults
 
 ### Requirement: Cross-platform desktop application
 The editor SHALL run as a GPUI desktop application and SHALL build and run on Windows (the primary developed platform); the same source targets macOS and Linux via GPUI. On Windows the binary is built as a GUI-subsystem executable.
@@ -252,4 +252,23 @@ The in-window menu bar and dropdown menus SHALL derive their backgrounds, text c
 #### Scenario: Changing theme updates menus
 - **WHEN** the user selects a different theme from Preferences
 - **THEN** the in-window menu bar and any subsequently opened dropdown use the newly active theme palette
+
+### Requirement: Square-corner primary document surfaces
+The application chrome SHALL render the primary source editor, visual editor, and rendered preview surfaces as square-corner rectangles with zero corner radius in every view mode where those surfaces appear. The surfaces SHALL retain their active-theme background fill, border, padding, scrollbar behavior, and existing input interactions. Rounded styling on secondary controls and content elements is outside this requirement.
+
+#### Scenario: Source editor uses square corners
+- **WHEN** the active view mode is Edit or Split Preview
+- **THEN** the source editor surface is rendered with square, zero-radius corners
+
+#### Scenario: Visual editor uses square corners
+- **WHEN** the active view mode is Visual Edit
+- **THEN** the visual editor surface is rendered with square, zero-radius corners
+
+#### Scenario: Preview uses square corners
+- **WHEN** the active view mode is Split Preview or Read
+- **THEN** the rendered preview surface is rendered with square, zero-radius corners
+
+#### Scenario: Existing surface chrome and behavior are preserved
+- **WHEN** a square-corner primary document surface is rendered
+- **THEN** its active-theme background fill, border, padding, scrolling, resizing, drag-and-drop handling, and mode-specific visibility behave as before
 

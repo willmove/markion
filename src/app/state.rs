@@ -619,8 +619,9 @@ impl EditorTab {
             .bytes()
             .filter(|byte| *byte == b'\n')
             .count();
+        let line_height = f32::from(self.line_height);
         self.editor_scroll
-            .set_offset(point(px(0.), -px(line as f32 * EDITOR_LINE_HEIGHT)));
+            .set_offset(point(px(0.), -px(line as f32 * line_height)));
     }
 
     pub(super) fn scroll_editor_typewriter_to_offset(&self, offset: usize) {
@@ -630,7 +631,8 @@ impl EditorTab {
             .filter(|byte| *byte == b'\n')
             .count();
         // Keep the caret ~10 lines below the viewport top ("typewriter" band).
-        let y = (line as f32 * EDITOR_LINE_HEIGHT - 10. * EDITOR_LINE_HEIGHT).max(0.);
+        let line_height = f32::from(self.line_height);
+        let y = (line as f32 * line_height - 10. * line_height).max(0.);
         self.editor_scroll.set_offset(point(px(0.), -px(y)));
     }
 

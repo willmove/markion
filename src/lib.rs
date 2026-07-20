@@ -101,18 +101,22 @@ Reference-style links work too: [Markion repository][markion-repo].
 "#;
 
 pub use model::{
-    AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,
+    AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_EDITOR_FONT_SIZE,
+    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE,
     DocumentStats, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences,
     Footnote, FrontMatterError, Heading, HighlightKind, HighlightedSpan, InlineSpan, InlineStyle,
-    MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle, MathSource, PreviewBlock,
-    RecoveryDocument, RenderedMath, ReplaceResult, RichText, SearchError, SearchMatch,
-    SearchMatchRange, SearchOptions, SidebarTab, TableAlignment, TableEdit, TableEditResult,
-    ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockEdit, VisualBlockEditor,
-    VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
-    VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualInlineRun, VisualProjection, VisualProjectionSegment, VisualProjectionSpan,
-    VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit,
-    VisualTableCell, YamlFrontMatter, builtin_theme_definitions, normalize_heading_menu_max_level,
+    MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
+    MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownFormat, MathDelimiter, MathExpression,
+    MathLayoutStyle, MathSource, PreviewBlock, RecoveryDocument, RenderedMath, ReplaceResult,
+    RichText, SearchError, SearchMatch, SearchMatchRange, SearchOptions, SidebarTab,
+    TableAlignment, TableEdit, TableEditResult, ThemeColors, ThemeDefinition, ViewMode,
+    VisualBlock, VisualBlockEdit, VisualBlockEditor, VisualBlockId, VisualBlockKind,
+    VisualBlockPrefix, VisualBlockPrefixKind, VisualBoundaryCandidates, VisualCaretAffinity,
+    VisualEditorField, VisualEditorFieldKind, VisualInlineRun, VisualProjection,
+    VisualProjectionSegment, VisualProjectionSpan, VisualRevealGroup, VisualRevealKind,
+    VisualSourceIslandKind, VisualStructuralEdit, VisualTableCell, YamlFrontMatter,
+    builtin_theme_definitions, normalize_editor_font_size, normalize_heading_menu_max_level,
+    normalize_paragraph_spacing, normalize_rendered_font_size,
 };
 pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
@@ -3899,6 +3903,9 @@ mod tests {
             typewriter_mode: true,
             code_line_numbers: false,
             preview_adaptive_width: true,
+            editor_font_size: 18,
+            rendered_font_size: 20,
+            paragraph_spacing: 16,
             heading_menu_max_level: EXTENDED_HEADING_MENU_MAX_LEVEL,
             sync_scroll: true,
             sidebar_visible: false,
@@ -3920,6 +3927,9 @@ mod tests {
         let written = fs::read_to_string(&path).unwrap();
         assert!(written.contains("theme = \"Ink\""));
         assert!(written.contains("preview_adaptive_width = true"));
+        assert!(written.contains("editor_font_size = 18"));
+        assert!(written.contains("rendered_font_size = 20"));
+        assert!(written.contains("paragraph_spacing = 16"));
         assert!(written.contains("heading_menu_max_level = 6"));
         assert!(written.contains("sync_scroll = true"));
         assert!(written.contains("[auto_save]"));
@@ -3934,6 +3944,9 @@ mod tests {
         assert_eq!(parsed.custom_theme, None);
         assert_eq!(parsed.language, "en");
         assert!(!parsed.preview_adaptive_width);
+        assert_eq!(parsed.editor_font_size, DEFAULT_EDITOR_FONT_SIZE);
+        assert_eq!(parsed.rendered_font_size, DEFAULT_RENDERED_FONT_SIZE);
+        assert_eq!(parsed.paragraph_spacing, DEFAULT_PARAGRAPH_SPACING);
         assert!(parsed.auto_save.enabled);
         assert_eq!(parsed.auto_save.delay_secs, 9);
 

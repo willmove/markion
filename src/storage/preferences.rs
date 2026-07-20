@@ -12,8 +12,9 @@ use std::{fs, io, path::Path};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AppPreferences, AutoSavePreferences, ExportPreferences, SidebarTab,
-    normalize_heading_menu_max_level,
+    AppPreferences, AutoSavePreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_PARAGRAPH_SPACING,
+    DEFAULT_RENDERED_FONT_SIZE, ExportPreferences, SidebarTab, normalize_editor_font_size,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
 };
 
 /// File name of the retired `key=value` preferences format, looked for next
@@ -35,6 +36,12 @@ struct PreferencesFile {
     code_line_numbers: bool,
     #[serde(deserialize_with = "deserialize_bool_or_false")]
     preview_adaptive_width: bool,
+    #[serde(deserialize_with = "deserialize_editor_font_size")]
+    editor_font_size: u16,
+    #[serde(deserialize_with = "deserialize_rendered_font_size")]
+    rendered_font_size: u16,
+    #[serde(deserialize_with = "deserialize_paragraph_spacing")]
+    paragraph_spacing: u16,
     #[serde(default = "default_heading_menu_max_level")]
     heading_menu_max_level: u8,
     #[serde(deserialize_with = "deserialize_bool_or_false")]
@@ -94,6 +101,9 @@ impl From<&AppPreferences> for PreferencesFile {
             typewriter_mode: preferences.typewriter_mode,
             code_line_numbers: preferences.code_line_numbers,
             preview_adaptive_width: preferences.preview_adaptive_width,
+            editor_font_size: normalize_editor_font_size(preferences.editor_font_size as i64),
+            rendered_font_size: normalize_rendered_font_size(preferences.rendered_font_size as i64),
+            paragraph_spacing: normalize_paragraph_spacing(preferences.paragraph_spacing as i64),
             heading_menu_max_level: preferences.heading_menu_max_level,
             sync_scroll: preferences.sync_scroll,
             sidebar_visible: preferences.sidebar_visible,
@@ -122,6 +132,9 @@ impl From<PreferencesFile> for AppPreferences {
             typewriter_mode: file.typewriter_mode,
             code_line_numbers: file.code_line_numbers,
             preview_adaptive_width: file.preview_adaptive_width,
+            editor_font_size: normalize_editor_font_size(file.editor_font_size as i64),
+            rendered_font_size: normalize_rendered_font_size(file.rendered_font_size as i64),
+            paragraph_spacing: normalize_paragraph_spacing(file.paragraph_spacing as i64),
             heading_menu_max_level: normalize_heading_menu_max_level(file.heading_menu_max_level),
             sync_scroll: file.sync_scroll,
             sidebar_visible: file.sidebar_visible,
@@ -278,9 +291,117 @@ where
     Ok(value.as_bool().unwrap_or(false))
 }
 
+fn deserialize_editor_font_size<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(normalize_editor_font_size(deserialize_integer_or(
+        deserializer,
+        DEFAULT_EDITOR_FONT_SIZE as i64,
+    )?))
+}
+
+fn deserialize_rendered_font_size<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(normalize_rendered_font_size(deserialize_integer_or(
+        deserializer,
+        DEFAULT_RENDERED_FONT_SIZE as i64,
+    )?))
+}
+
+fn deserialize_paragraph_spacing<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(normalize_paragraph_spacing(deserialize_integer_or(
+        deserializer,
+        DEFAULT_PARAGRAPH_SPACING as i64,
+    )?))
+}
+
+fn deserialize_integer_or<'de, D>(deserializer: D, default: i64) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value.as_integer().unwrap_or(default))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typography_preferences_round_trip_and_default_when_missing() {
+        let preferences = AppPreferences {
+            editor_font_size: 18,
+            rendered_font_size: 20,
+            paragraph_spacing: 16,
+            ..AppPreferences::default()
+        };
+        let rendered = render_app_preferences(&preferences);
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(parsed.editor_font_size, 18);
+        assert_eq!(parsed.rendered_font_size, 20);
+        assert_eq!(parsed.paragraph_spacing, 16);
+
+        let missing = parse_app_preferences("theme = \"Paper\"\n").unwrap();
+        assert_eq!(missing.editor_font_size, DEFAULT_EDITOR_FONT_SIZE);
+        assert_eq!(missing.rendered_font_size, DEFAULT_RENDERED_FONT_SIZE);
+        assert_eq!(missing.paragraph_spacing, DEFAULT_PARAGRAPH_SPACING);
+    }
+
+    #[test]
+    fn typography_preferences_default_invalid_types_and_clamp_numbers() {
+        let invalid = parse_app_preferences(
+            "editor_font_size = \"large\"\nrendered_font_size = false\nparagraph_spacing = []\n",
+        )
+        .unwrap();
+        assert_eq!(invalid.editor_font_size, DEFAULT_EDITOR_FONT_SIZE);
+        assert_eq!(invalid.rendered_font_size, DEFAULT_RENDERED_FONT_SIZE);
+        assert_eq!(invalid.paragraph_spacing, DEFAULT_PARAGRAPH_SPACING);
+
+        let bounded = parse_app_preferences(
+            "editor_font_size = -5\nrendered_font_size = 1000\nparagraph_spacing = 1000\n",
+        )
+        .unwrap();
+        assert_eq!(bounded.editor_font_size, crate::model::MIN_EDITOR_FONT_SIZE);
+        assert_eq!(
+            bounded.rendered_font_size,
+            crate::model::MAX_RENDERED_FONT_SIZE
+        );
+        assert_eq!(
+            bounded.paragraph_spacing,
+            crate::model::MAX_PARAGRAPH_SPACING
+        );
+    }
+
+    #[test]
+    fn typography_normalizers_apply_documented_bounds() {
+        assert_eq!(
+            normalize_editor_font_size(i64::MIN),
+            crate::model::MIN_EDITOR_FONT_SIZE
+        );
+        assert_eq!(
+            normalize_editor_font_size(i64::MAX),
+            crate::model::MAX_EDITOR_FONT_SIZE
+        );
+        assert_eq!(
+            normalize_rendered_font_size(i64::MIN),
+            crate::model::MIN_RENDERED_FONT_SIZE
+        );
+        assert_eq!(
+            normalize_rendered_font_size(i64::MAX),
+            crate::model::MAX_RENDERED_FONT_SIZE
+        );
+        assert_eq!(normalize_paragraph_spacing(i64::MIN), 0);
+        assert_eq!(
+            normalize_paragraph_spacing(i64::MAX),
+            crate::model::MAX_PARAGRAPH_SPACING
+        );
+    }
 
     #[test]
     fn sync_scroll_defaults_to_false() {

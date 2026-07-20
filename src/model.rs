@@ -78,6 +78,27 @@ pub const DEFAULT_HEADING_MENU_MAX_LEVEL: u8 = 5;
 /// Extended Format-menu heading depth (H1–H6).
 pub const EXTENDED_HEADING_MENU_MAX_LEVEL: u8 = 6;
 
+/// Default source-editor font size in logical pixels.
+pub const DEFAULT_EDITOR_FONT_SIZE: u16 = 15;
+/// Smallest supported source-editor font size in logical pixels.
+pub const MIN_EDITOR_FONT_SIZE: u16 = 10;
+/// Largest supported source-editor font size in logical pixels.
+pub const MAX_EDITOR_FONT_SIZE: u16 = 32;
+
+/// Default rendered-document body font size in logical pixels.
+pub const DEFAULT_RENDERED_FONT_SIZE: u16 = 14;
+/// Smallest supported rendered-document body font size in logical pixels.
+pub const MIN_RENDERED_FONT_SIZE: u16 = 10;
+/// Largest supported rendered-document body font size in logical pixels.
+pub const MAX_RENDERED_FONT_SIZE: u16 = 32;
+
+/// Default gap after a rendered paragraph in logical pixels.
+pub const DEFAULT_PARAGRAPH_SPACING: u16 = 12;
+/// Smallest supported rendered paragraph gap in logical pixels.
+pub const MIN_PARAGRAPH_SPACING: u16 = 0;
+/// Largest supported rendered paragraph gap in logical pixels.
+pub const MAX_PARAGRAPH_SPACING: u16 = 32;
+
 /// Normalizes a persisted heading-menu depth to the supported values `5` or `6`.
 pub fn normalize_heading_menu_max_level(level: u8) -> u8 {
     if level >= EXTENDED_HEADING_MENU_MAX_LEVEL {
@@ -85,6 +106,21 @@ pub fn normalize_heading_menu_max_level(level: u8) -> u8 {
     } else {
         DEFAULT_HEADING_MENU_MAX_LEVEL
     }
+}
+
+/// Clamps a source-editor font size read from UI or persisted configuration.
+pub fn normalize_editor_font_size(value: i64) -> u16 {
+    value.clamp(MIN_EDITOR_FONT_SIZE as i64, MAX_EDITOR_FONT_SIZE as i64) as u16
+}
+
+/// Clamps a rendered-document body font size read from UI or configuration.
+pub fn normalize_rendered_font_size(value: i64) -> u16 {
+    value.clamp(MIN_RENDERED_FONT_SIZE as i64, MAX_RENDERED_FONT_SIZE as i64) as u16
+}
+
+/// Clamps a rendered paragraph gap read from UI or persisted configuration.
+pub fn normalize_paragraph_spacing(value: i64) -> u16 {
+    value.clamp(MIN_PARAGRAPH_SPACING as i64, MAX_PARAGRAPH_SPACING as i64) as u16
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +131,12 @@ pub struct AppPreferences {
     pub typewriter_mode: bool,
     pub code_line_numbers: bool,
     pub preview_adaptive_width: bool,
+    /// Source-editor font size in logical pixels.
+    pub editor_font_size: u16,
+    /// Visual Edit and preview/read body font size in logical pixels.
+    pub rendered_font_size: u16,
+    /// Bottom gap after rendered paragraph blocks in logical pixels.
+    pub paragraph_spacing: u16,
     /// Maximum ATX heading level exposed in the Format menu and shortcut
     /// reference. Allowed values are `5` (default) and `6`.
     pub heading_menu_max_level: u8,
@@ -125,6 +167,9 @@ impl Default for AppPreferences {
             typewriter_mode: false,
             code_line_numbers: true,
             preview_adaptive_width: false,
+            editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
+            rendered_font_size: DEFAULT_RENDERED_FONT_SIZE,
+            paragraph_spacing: DEFAULT_PARAGRAPH_SPACING,
             heading_menu_max_level: DEFAULT_HEADING_MENU_MAX_LEVEL,
             sync_scroll: false,
             sidebar_visible: true,

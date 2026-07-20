@@ -14,13 +14,6 @@ const MATH_SUPERSAMPLE: f32 = 2.0;
 const MAX_RASTER_EDGE: u32 = 8_192;
 const MAX_RASTER_PIXELS: u64 = 32 * 1024 * 1024;
 
-pub(super) const fn math_font_size(style: MathLayoutStyle) -> f32 {
-    match style {
-        MathLayoutStyle::Text => MATH_INLINE_FONT_SIZE,
-        MathLayoutStyle::Display => MATH_DISPLAY_FONT_SIZE,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct MathCacheKey {
     pub(super) latex: String,
@@ -289,6 +282,7 @@ impl MarkionApp {
         foreground: Rgba,
         cx: &mut Context<Self>,
     ) {
+        let typography = self.typography_metrics();
         let mut requested = HashSet::new();
         for block in preview {
             match block {
@@ -301,7 +295,7 @@ impl MarkionApp {
                             requested.insert(self.math_key(
                                 &math.latex,
                                 math.style,
-                                math_font_size(math.style),
+                                typography.math_font_size(math.style),
                                 zoom,
                                 display_scale,
                                 foreground,
@@ -313,7 +307,7 @@ impl MarkionApp {
                     requested.insert(self.math_key(
                         latex,
                         MathLayoutStyle::Display,
-                        MATH_DISPLAY_FONT_SIZE,
+                        typography.display_math_font_size,
                         zoom,
                         display_scale,
                         foreground,
@@ -327,7 +321,7 @@ impl MarkionApp {
                 requested.insert(self.math_key(
                     latex,
                     MathLayoutStyle::Display,
-                    MATH_DISPLAY_FONT_SIZE,
+                    typography.display_math_font_size,
                     zoom,
                     display_scale,
                     foreground,
@@ -338,7 +332,7 @@ impl MarkionApp {
                     requested.insert(self.math_key(
                         &math.latex,
                         math.style,
-                        math_font_size(math.style),
+                        typography.math_font_size(math.style),
                         zoom,
                         display_scale,
                         foreground,

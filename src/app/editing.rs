@@ -1187,113 +1187,144 @@ impl MarkionApp {
     /// the existing `menu_title_button` idiom (GPUI 0.2.2 has no native tab bar).
     pub(super) fn tab_bar_view(&self, cx: &mut Context<Self>) -> Div {
         let palette = self.palette();
-        if self.tabs.len() <= 1 {
+        if !document_tab_band_visible(self.tabs.len()) {
             // Single-tab case: render nothing (tab bar hidden).
             return div();
         }
         let active = self.active_tab;
-        let bar = div()
-            .h(px(30.))
+        let leading_width = document_tab_band_leading_width(
+            self.tabs.len(),
+            self.sidebar_visible,
+            self.sidebar_width,
+        );
+        let document_bar = div()
+            .h_full()
+            .flex_1()
+            .min_w_0()
             .px_2()
+            .flex()
+            .items_end()
+            .gap_1();
+        let document_bar = document_bar
+            .children(self.tabs.iter().enumerate().map(|(index, tab)| {
+                let is_active = index == active;
+                let name = title_from_path(tab.document.path()).to_string();
+                let dirty = tab.document.is_dirty();
+                let label: SharedString = if dirty {
+                    format!("{name} *").into()
+                } else {
+                    name.into()
+                };
+                // Theme-driven so tabs stay legible on dark palettes (the previous
+                // hard-coded light hexes rendered white tabs with light text).
+                let bg = if is_active {
+                    palette.surface_bg
+                } else {
+                    palette.panel_bg
+                };
+                let text_color = if is_active {
+                    palette.active_text
+                } else {
+                    palette.muted
+                };
+                let border = if is_active {
+                    palette.active_text
+                } else {
+                    palette.border
+                };
+                let hover_bg = if is_active {
+                    palette.surface_bg
+                } else {
+                    palette.active_bg
+                };
+                div()
+                    .px_2()
+                    .py_1()
+                    .rounded_t_md()
+                    .border_1()
+                    .when(is_active, |style| {
+                        style.border_t_2().border_b_0().mb(px(-1.))
+                    })
+                    .border_color(border)
+                    .bg(bg)
+                    .text_color(text_color)
+                    .text_size(px(12.))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(hover_bg))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                            // The captured `index` is fixed at render time; a tab
+                            // close/open since then may have shifted positions, so
+                            // guard against a stale out-of-range index.
+                            if index < app.tabs.len() {
+                                app.switch_active_tab(index, cx);
+                            }
+                        }),
+                    )
+                    .child(label)
+                    .child(
+                        div()
+                            .ml_1()
+                            .px_1()
+                            .text_size(px(11.))
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(border))
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                                    // Same staleness guard as the tab click above.
+                                    if index < app.tabs.len() {
+                                        app.switch_active_tab(index, cx);
+                                        app.close_tab(&CloseTab, window, cx);
+                                    }
+                                }),
+                            )
+                            .child("×"),
+                    )
+            }))
+            .child(
+                // Trailing "+" opens a fresh empty tab (mirrors File → New Tab).
+                div()
+                    .id("new-tab-button")
+                    .ml_1()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_size(px(15.))
+                    .text_color(palette.muted)
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(palette.active_bg))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                            app.new_tab(&NewTab, window, cx);
+                        }),
+                    )
+                    .child("+"),
+            );
+
+        div()
+            .h(px(document_tab_band_height(self.tabs.len())))
             .border_b_1()
             .border_color(palette.border)
             .bg(palette.panel_bg)
             .flex()
-            .items_center()
-            .gap_1();
-        bar.children(self.tabs.iter().enumerate().map(|(index, tab)| {
-            let is_active = index == active;
-            let name = title_from_path(tab.document.path()).to_string();
-            let dirty = tab.document.is_dirty();
-            let label: SharedString = if dirty {
-                format!("{name} *").into()
-            } else {
-                name.into()
-            };
-            // Theme-driven so tabs stay legible on dark palettes (the previous
-            // hard-coded light hexes rendered white tabs with light text).
-            let bg = if is_active {
-                palette.active_bg
-            } else {
-                palette.surface_bg
-            };
-            let text_color = if is_active {
-                palette.active_text
-            } else {
-                palette.muted
-            };
-            let border = if is_active {
-                palette.active_text
-            } else {
-                palette.border
-            };
-            let hover_bg = palette.active_bg;
-            div()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .border_b_2()
-                .border_color(border)
-                .bg(bg)
-                .text_color(text_color)
-                .text_size(px(12.))
-                .cursor_pointer()
-                .hover(move |style| style.bg(hover_bg))
-                .flex()
-                .items_center()
-                .gap_1()
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
-                        // The captured `index` is fixed at render time; a tab
-                        // close/open since then may have shifted positions, so
-                        // guard against a stale out-of-range index.
-                        if index < app.tabs.len() {
-                            app.switch_active_tab(index, cx);
-                        }
-                    }),
-                )
-                .child(label)
-                .child(
+            .when(leading_width > 0., |band| {
+                band.child(
                     div()
-                        .ml_1()
-                        .px_1()
-                        .text_size(px(11.))
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(border))
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
-                                // Same staleness guard as the tab click above.
-                                if index < app.tabs.len() {
-                                    app.switch_active_tab(index, cx);
-                                    app.close_tab(&CloseTab, window, cx);
-                                }
-                            }),
-                        )
-                        .child("×"),
+                        .h_full()
+                        .w(px(leading_width))
+                        .flex_none()
+                        .border_r_1()
+                        .border_color(palette.border)
+                        .bg(palette.panel_bg),
                 )
-        }))
-        .child(
-            // Trailing "+" opens a fresh empty tab (mirrors File → New Tab).
-            div()
-                .id("new-tab-button")
-                .ml_1()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .text_size(px(15.))
-                .text_color(palette.muted)
-                .cursor_pointer()
-                .hover(move |style| style.bg(palette.active_bg))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(move |app, _: &MouseUpEvent, window, cx| {
-                        app.new_tab(&NewTab, window, cx);
-                    }),
-                )
-                .child("+"),
-        )
+            })
+            .child(document_bar)
     }
 
     pub(super) fn cursor_offset(&self) -> usize {

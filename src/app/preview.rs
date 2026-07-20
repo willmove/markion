@@ -1356,6 +1356,7 @@ pub(super) fn rich_text_with_math_element(
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
+    let typography = app.typography_metrics();
     if !rich.spans.iter().any(|span| span.math.is_some()) {
         return rich_text_element(
             app,
@@ -1379,7 +1380,7 @@ pub(super) fn rich_text_with_math_element(
             match app.math_entry(
                 &math.latex,
                 math.style,
-                math_font_size(math.style),
+                typography.math_font_size(math.style),
                 1.0,
                 display_scale,
                 app.palette().text,
@@ -1404,7 +1405,7 @@ pub(super) fn rich_text_with_math_element(
                         app.math_entry(
                             &math.latex,
                             math.style,
-                            math_font_size(math.style),
+                            typography.math_font_size(math.style),
                             1.0,
                             display_scale,
                             app.palette().text,
@@ -1903,6 +1904,7 @@ pub(super) fn visual_text_with_math_element(
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
+    let typography = app.typography_metrics();
     if !block.editable_runs.iter().any(|run| run.math.is_some()) {
         return visual_text_element(block, block_index, app, cx);
     }
@@ -1928,7 +1930,7 @@ pub(super) fn visual_text_with_math_element(
             && let MathCacheEntry::Ready(image) = app.math_entry(
                 &math.latex,
                 math.style,
-                math_font_size(math.style),
+                typography.math_font_size(math.style),
                 1.0,
                 display_scale,
                 app.palette().text,
@@ -1998,6 +2000,7 @@ pub(super) fn visual_source_island_view(
     block_index: usize,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let typography = app.typography_metrics();
     let source = app.active_tab().document.text()[block.source_range.clone()].to_string();
     let source_len = source.len();
     div()
@@ -2008,8 +2011,8 @@ pub(super) fn visual_source_island_view(
         .border_color(rgb(0xcbd5e1))
         .bg(rgb(0xf8fafc))
         .font_family("JetBrains Mono")
-        .text_size(px(13.))
-        .line_height(px(21.))
+        .text_size(px(typography.source_island_font_size))
+        .line_height(px(typography.source_island_line_height))
         .child(VisualEditableText {
             element_id: ElementId::from(("visual-source-island", block_index)),
             block_index,
@@ -2089,6 +2092,7 @@ pub(super) fn visual_block_view(
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let typography = app.typography_metrics();
     let owns_caret = visual_block_owns_caret(app, block_index);
     let always_source = matches!(
         block.source_island,
@@ -2112,12 +2116,7 @@ pub(super) fn visual_block_view(
 
     match &block.kind {
         VisualBlockKind::Heading { level } => {
-            let size = match level {
-                1 => px(24.),
-                2 => px(20.),
-                3 => px(18.),
-                _ => px(16.),
-            };
+            let size = px(typography.heading_font_size((*level).into()));
             div()
                 .mt_2()
                 .mb_2()
@@ -2131,9 +2130,17 @@ pub(super) fn visual_block_view(
                     cx,
                 ))
         }
-        VisualBlockKind::Paragraph => div().mb_3().line_height(px(24.)).text_size(px(14.)).child(
-            visual_text_with_math_element(block, block_index, app, display_scale, cx),
-        ),
+        VisualBlockKind::Paragraph => div()
+            .mb(px(typography.paragraph_spacing))
+            .line_height(px(typography.paragraph_line_height))
+            .text_size(px(typography.rendered_font_size))
+            .child(visual_text_with_math_element(
+                block,
+                block_index,
+                app,
+                display_scale,
+                cx,
+            )),
         VisualBlockKind::ListItem {
             level,
             ordered,
@@ -2163,8 +2170,8 @@ pub(super) fn visual_block_view(
             div()
                 .mb_1()
                 .ml(px((visual_level as f32 - 1.).max(0.) * 18.))
-                .text_size(px(14.))
-                .line_height(px(22.))
+                .text_size(px(typography.rendered_font_size))
+                .line_height(px(typography.list_line_height))
                 .flex()
                 .items_start()
                 .child(
@@ -2194,7 +2201,8 @@ pub(super) fn visual_block_view(
             .border_l_1()
             .border_color(rgb(0x94a3b8))
             .text_color(rgb(0x475569))
-            .line_height(px(23.))
+            .text_size(px(typography.quote_font_size))
+            .line_height(px(typography.quote_line_height))
             .child(visual_text_with_math_element(
                 block,
                 block_index,
@@ -2293,7 +2301,7 @@ pub(super) fn visual_block_view(
             match app.math_entry(
                 latex,
                 MathLayoutStyle::Display,
-                MATH_DISPLAY_FONT_SIZE,
+                typography.display_math_font_size,
                 1.0,
                 display_scale,
                 app.palette().text,
@@ -2455,6 +2463,7 @@ fn visual_code_editor(
     payload: &VisualEditorField,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let typography = app.typography_metrics();
     let code = &app.active_tab().document.text()[payload.source_range.clone()];
     let highlighted = app.highlighted_code(language, code);
     let (styled, _) = code_block_text(&highlighted);
@@ -2465,12 +2474,12 @@ fn visual_code_editor(
         .bg(rgb(0x0f172a))
         .text_color(rgb(0xe2e8f0))
         .font_family("JetBrains Mono")
-        .text_size(px(12.))
-        .line_height(px(19.))
+        .text_size(px(typography.code_font_size))
+        .line_height(px(typography.code_line_height))
         .children(language.map(|language| {
             div()
                 .mb_2()
-                .text_size(px(11.))
+                .text_size(px(typography.small_font_size))
                 .text_color(rgb(0x93c5fd))
                 .child(language.to_string())
         }))
@@ -2493,10 +2502,11 @@ fn visual_math_editor(
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let typography = app.typography_metrics();
     let presentation = match app.math_entry(
         latex,
         MathLayoutStyle::Display,
-        MATH_DISPLAY_FONT_SIZE,
+        typography.display_math_font_size,
         1.0,
         display_scale,
         app.palette().text,
@@ -2530,8 +2540,8 @@ fn visual_math_editor(
                 .bg(rgb(0xf8fafc))
                 .p_2()
                 .font_family("JetBrains Mono")
-                .text_size(px(12.))
-                .line_height(px(19.))
+                .text_size(px(typography.code_font_size))
+                .line_height(px(typography.code_line_height))
                 .child(visual_editor_field_element(
                     app,
                     block_index,
@@ -2678,6 +2688,7 @@ pub(super) fn visual_table_view(
     rows: &[Vec<String>],
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let typography = app.typography_metrics();
     let table_offset = block.source_range.start;
     let cells = match block.editor.as_ref() {
         Some(VisualBlockEditor::Table { cells }) => Some(cells),
@@ -2743,7 +2754,7 @@ pub(super) fn visual_table_view(
                         .when(!is_last_cell, |style| {
                             style.border_r_1().border_color(rgb(0xe2e8f0))
                         })
-                        .text_size(px(12.))
+                        .text_size(px(typography.table_font_size))
                         .cursor(CursorStyle::IBeam)
                         .when(field.is_none(), |view| {
                             view.on_mouse_down(
@@ -2780,6 +2791,7 @@ fn html_preview_block_view(
     document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let typography = app.typography_metrics();
     let parts = html_preview_parts(html);
     if parts.is_empty() {
         return div();
@@ -2791,8 +2803,8 @@ fn html_preview_block_view(
             match part {
                 HtmlPreviewPart::Text { text, centered } => div()
                     .mb_2()
-                    .line_height(px(24.))
-                    .text_size(px(14.))
+                    .line_height(px(typography.paragraph_line_height))
+                    .text_size(px(typography.rendered_font_size))
                     .when(centered, |style| style.text_center())
                     .child(rich_text_element(
                         app,
@@ -2821,6 +2833,7 @@ fn code_block_view(
     show_code_line_numbers: bool,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let typography = app.typography_metrics();
     let highlighted = app.highlighted_code(language.as_deref(), code);
     let body = div()
         .mb_3()
@@ -2829,12 +2842,12 @@ fn code_block_view(
         .bg(rgb(0x0f172a))
         .text_color(rgb(0xe2e8f0))
         .font_family("JetBrains Mono")
-        .text_size(px(12.))
-        .line_height(px(19.))
+        .text_size(px(typography.code_font_size))
+        .line_height(px(typography.code_line_height))
         .children(language.as_ref().map(|language| {
             div()
                 .mb_2()
-                .text_size(px(11.))
+                .text_size(px(typography.small_font_size))
                 .text_color(rgb(0x93c5fd))
                 .child(language.clone())
         }));
@@ -2888,14 +2901,10 @@ pub(super) fn preview_block_view(
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let typography = app.typography_metrics();
     match block {
         PreviewBlock::Heading { level, text, .. } => {
-            let size = match level {
-                1 => px(24.),
-                2 => px(20.),
-                3 => px(18.),
-                _ => px(16.),
-            };
+            let size = px(typography.heading_font_size((*level).into()));
             div()
                 .mt_2()
                 .mb_2()
@@ -2912,9 +2921,9 @@ pub(super) fn preview_block_view(
                 ))
         }
         PreviewBlock::Paragraph { text, .. } => div()
-            .mb_3()
-            .line_height(px(24.))
-            .text_size(px(14.))
+            .mb(px(typography.paragraph_spacing))
+            .line_height(px(typography.paragraph_line_height))
+            .text_size(px(typography.rendered_font_size))
             .child(rich_text_with_math_element(
                 app,
                 "preview-paragraph",
@@ -2950,8 +2959,8 @@ pub(super) fn preview_block_view(
             div()
                 .mb_1()
                 .ml(px((*level as f32 - 1.).max(0.) * 18.))
-                .text_size(px(14.))
-                .line_height(px(22.))
+                .text_size(px(typography.rendered_font_size))
+                .line_height(px(typography.list_line_height))
                 .flex()
                 .items_start()
                 .child(
@@ -2978,7 +2987,8 @@ pub(super) fn preview_block_view(
             .border_l_1()
             .border_color(rgb(0x94a3b8))
             .text_color(rgb(0x475569))
-            .line_height(px(23.))
+            .text_size(px(typography.quote_font_size))
+            .line_height(px(typography.quote_line_height))
             .child(rich_text_with_math_element(
                 app,
                 "preview-quote",
@@ -3061,7 +3071,7 @@ pub(super) fn preview_block_view(
             let entry = app.math_entry(
                 latex,
                 MathLayoutStyle::Display,
-                MATH_DISPLAY_FONT_SIZE,
+                typography.display_math_font_size,
                 1.0,
                 display_scale,
                 app.palette().text,
@@ -3198,7 +3208,7 @@ pub(super) fn preview_block_view(
                                 .when(!is_last_cell, |style| {
                                     style.border_r_1().border_color(rgb(0xe2e8f0))
                                 })
-                                .text_size(px(12.))
+                                .text_size(px(typography.table_font_size))
                                 .child(selectable_plain_text(
                                     app,
                                     ElementId::from((

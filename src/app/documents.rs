@@ -247,7 +247,7 @@ impl MarkionApp {
         }
         if self.tabs.len() <= 1 {
             // Closing the last tab leaves a fresh untitled document.
-            self.tabs[0] = EditorTab::new(MarkdownDocument::new());
+            self.tabs[0] = self.editor_tab_for_document(MarkdownDocument::new());
             self.active_tab = 0;
         } else {
             self.tabs.remove(self.active_tab);

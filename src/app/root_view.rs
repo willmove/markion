@@ -9,6 +9,7 @@ impl Focusable for MarkionApp {
 impl Render for MarkionApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = self.palette();
+        let typography = self.typography_metrics();
         // The preview pane is hidden in Edit mode, so skip the full-document
         // parse that produces its blocks. That parse is invalidated on every
         // keystroke and, on large documents, is the dominant per-key cost
@@ -311,6 +312,8 @@ impl Render for MarkionApp {
                                     visual_list_state,
                                     palette,
                                     window.scale_factor(),
+                                    typography,
+                                    document_tab_band_visible(self.tabs.len()),
                                     cx,
                                 )
                             } else {
@@ -324,9 +327,13 @@ impl Render for MarkionApp {
                                             .p(px(PANE_INNER_PADDING))
                                             .bg(palette.surface_bg)
                                             .border_1()
+                                            .when(
+                                                document_tab_band_visible(self.tabs.len()),
+                                                |style| style.border_t_0(),
+                                            )
                                             .border_color(palette.border)
-                                            .line_height(px(EDITOR_LINE_HEIGHT))
-                                            .text_size(px(15.))
+                                            .line_height(px(typography.editor_line_height))
+                                            .text_size(px(typography.editor_font_size))
                                             .cursor(CursorStyle::IBeam)
                                             .id("editor-scroll")
                                             .overflow_y_scroll()
@@ -389,6 +396,10 @@ impl Render for MarkionApp {
                                             .pr(px(PREVIEW_SCROLLBAR_SAFE_RIGHT_PADDING))
                                             .bg(palette.surface_bg)
                                             .border_1()
+                                            .when(
+                                                document_tab_band_visible(self.tabs.len()),
+                                                |style| style.border_t_0(),
+                                            )
                                             .border_color(palette.border)
                                             .on_mouse_up(
                                                 MouseButton::Right,
@@ -418,9 +429,8 @@ impl Render for MarkionApp {
                                                             let block = &preview_items[ix];
                                                             let row = div()
                                                                 .w_full()
-                                                                .line_height(px(
-                                                                    PREVIEW_LINE_HEIGHT,
-                                                                ))
+                                                                .line_height(px(typography
+                                                                    .preview_row_line_height))
                                                                 .child(preview_block_view(
                                                                     app,
                                                                     block,
@@ -509,6 +519,8 @@ pub(super) fn visual_edit_surface_view(
     list_state: ListState,
     palette: ThemePalette,
     display_scale: f32,
+    typography: DocumentTypographyMetrics,
+    connected_to_tab_band: bool,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let is_empty = items.is_empty();
@@ -524,13 +536,14 @@ pub(super) fn visual_edit_surface_view(
                 .pr(px(PREVIEW_SCROLLBAR_SAFE_RIGHT_PADDING))
                 .bg(palette.surface_bg)
                 .border_1()
+                .when(connected_to_tab_band, |surface| surface.border_t_0())
                 .border_color(palette.border)
                 .cursor(CursorStyle::IBeam)
                 .when(is_empty, |surface| {
                     surface.child(
                         div()
                             .p(px(PANE_INNER_PADDING))
-                            .text_size(px(15.))
+                            .text_size(px(typography.rendered_font_size))
                             .text_color(palette.muted)
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -549,7 +562,7 @@ pub(super) fn visual_edit_surface_view(
                             cx.processor(move |app, ix: usize, _window, cx| {
                                 div()
                                     .w_full()
-                                    .line_height(px(PREVIEW_LINE_HEIGHT))
+                                    .line_height(px(typography.preview_row_line_height))
                                     .child(visual_block_view(
                                         app,
                                         &items[ix],
@@ -587,7 +600,7 @@ pub(super) fn search_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) 
     } else {
         format!("{current}/{total}")
     };
-    let top = if app.tabs.len() > 1 { px(66.) } else { px(36.) };
+    let top = px(36. + document_tab_band_height(app.tabs.len()));
     let max_width = if app.replace_visible {
         px(720.)
     } else {
@@ -1703,7 +1716,7 @@ pub(super) fn editor_split_handle_view(
         .relative()
         .h_full()
         .flex_shrink_0()
-        .w(px(1.))
+        .w(px(SIDEBAR_DIVIDER_WIDTH))
         .bg(border_color)
         .child(
             div()
@@ -2964,6 +2977,101 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                     }),
                                 )),
                         )
+                        // Document typography.
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(palette.muted)
+                                        .child(app.tr(Msg::PrefPanelTypographySection)),
+                                )
+                                .child(preference_numeric_row(
+                                    app.tr(Msg::PrefPanelEditorFontSize),
+                                    app.editor_font_size,
+                                    MIN_EDITOR_FONT_SIZE,
+                                    MAX_EDITOR_FONT_SIZE,
+                                    palette,
+                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                        if let Some(value) = preference_step_value(
+                                            app.editor_font_size,
+                                            MIN_EDITOR_FONT_SIZE,
+                                            MAX_EDITOR_FONT_SIZE,
+                                            -1,
+                                        ) {
+                                            app.set_editor_font_size(value as i64, cx);
+                                        }
+                                    }),
+                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                        if let Some(value) = preference_step_value(
+                                            app.editor_font_size,
+                                            MIN_EDITOR_FONT_SIZE,
+                                            MAX_EDITOR_FONT_SIZE,
+                                            1,
+                                        ) {
+                                            app.set_editor_font_size(value as i64, cx);
+                                        }
+                                    }),
+                                ))
+                                .child(preference_numeric_row(
+                                    app.tr(Msg::PrefPanelRenderedFontSize),
+                                    app.rendered_font_size,
+                                    MIN_RENDERED_FONT_SIZE,
+                                    MAX_RENDERED_FONT_SIZE,
+                                    palette,
+                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                        if let Some(value) = preference_step_value(
+                                            app.rendered_font_size,
+                                            MIN_RENDERED_FONT_SIZE,
+                                            MAX_RENDERED_FONT_SIZE,
+                                            -1,
+                                        ) {
+                                            app.set_rendered_font_size(value as i64, cx);
+                                        }
+                                    }),
+                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                        if let Some(value) = preference_step_value(
+                                            app.rendered_font_size,
+                                            MIN_RENDERED_FONT_SIZE,
+                                            MAX_RENDERED_FONT_SIZE,
+                                            1,
+                                        ) {
+                                            app.set_rendered_font_size(value as i64, cx);
+                                        }
+                                    }),
+                                ))
+                                .child(preference_numeric_row(
+                                    app.tr(Msg::PrefPanelParagraphSpacing),
+                                    app.paragraph_spacing,
+                                    MIN_PARAGRAPH_SPACING,
+                                    MAX_PARAGRAPH_SPACING,
+                                    palette,
+                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                        if let Some(value) = preference_step_value(
+                                            app.paragraph_spacing,
+                                            MIN_PARAGRAPH_SPACING,
+                                            MAX_PARAGRAPH_SPACING,
+                                            -1,
+                                        ) {
+                                            app.set_paragraph_spacing(value as i64, cx);
+                                        }
+                                    }),
+                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                        if let Some(value) = preference_step_value(
+                                            app.paragraph_spacing,
+                                            MIN_PARAGRAPH_SPACING,
+                                            MAX_PARAGRAPH_SPACING,
+                                            1,
+                                        ) {
+                                            app.set_paragraph_spacing(value as i64, cx);
+                                        }
+                                    }),
+                                )),
+                        )
                         // Other settings.
                         .child(
                             div()
@@ -3035,6 +3143,96 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                         ),
                 ),
         )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn preference_numeric_row(
+    label: &'static str,
+    value: u16,
+    min: u16,
+    max: u16,
+    palette: ThemePalette,
+    decrement: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+    increment: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_between()
+        .text_size(px(12.))
+        .px_1()
+        .py_1()
+        .gap_3()
+        .child(div().text_color(palette.muted).child(label))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(preference_numeric_button(
+                    "−",
+                    value > min,
+                    palette,
+                    decrement,
+                ))
+                .child(
+                    div()
+                        .min_w(px(54.))
+                        .h(px(26.))
+                        .px_2()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(palette.border)
+                        .bg(palette.surface_bg)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(palette.text)
+                        .child(format!("{value} px")),
+                )
+                .child(preference_numeric_button(
+                    "+",
+                    value < max,
+                    palette,
+                    increment,
+                )),
+        )
+}
+
+pub(super) fn preference_step_value(value: u16, min: u16, max: u16, delta: i8) -> Option<u16> {
+    let stepped = (value as i64 + delta as i64).clamp(min as i64, max as i64) as u16;
+    (stepped != value).then_some(stepped)
+}
+
+pub(super) fn preference_numeric_button(
+    label: &'static str,
+    enabled: bool,
+    palette: ThemePalette,
+    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .w(px(28.))
+        .h(px(26.))
+        .rounded_sm()
+        .border_1()
+        .border_color(palette.border)
+        .bg(if enabled {
+            palette.surface_bg
+        } else {
+            palette.panel_bg
+        })
+        .text_color(if enabled { palette.text } else { palette.muted })
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(label)
+        .when(enabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(move |style| style.bg(palette.active_bg))
+                .on_mouse_up(MouseButton::Left, listener)
+        })
 }
 
 pub(super) fn preference_boolean_row(

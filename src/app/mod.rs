@@ -26,20 +26,24 @@ use gpui::{
     rgba, size,
 };
 use markion::{
-    AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_HEADING_MENU_MAX_LEVEL,
-    EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences, FileTree,
-    FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, InlineSpan,
-    InlineStyle, Language, MarkdownDocument, MarkdownFormat, MathLayoutStyle, Msg, PreviewBlock,
-    RichText, SearchMatchRange, SearchOptions, ShortcutCategory, ShortcutPlatform, SidebarTab,
-    TableEdit, ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockEditor,
-    VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualProjection, VisualSourceIslandKind, build_visual_projection,
-    build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
-    default_preferences_path, default_recovery_dir, default_themes_dir, delete_recovery_file,
-    diagram_backend_id, highlight_code, html_preview_parts, html_preview_plain_text,
-    is_markdown_path, list_recovery_files, list_theme_definitions, load_app_preferences,
-    load_recovery_file, normalize_heading_menu_max_level, save_app_preferences,
-    save_theme_definition, shortcut_catalog, sidebar_tab_label, t, tf, title_from_path,
+    AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_EDITOR_FONT_SIZE,
+    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE, EXTENDED_HEADING_MENU_MAX_LEVEL,
+    ExportBackend, ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind,
+    HighlightKind, HighlightedSpan, HtmlPreviewPart, InlineSpan, InlineStyle, Language,
+    MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
+    MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat,
+    MathLayoutStyle, Msg, PreviewBlock, RichText, SearchMatchRange, SearchOptions,
+    ShortcutCategory, ShortcutPlatform, SidebarTab, TableEdit, ThemeColors, ThemeDefinition,
+    ViewMode, VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity,
+    VisualEditorField, VisualEditorFieldKind, VisualProjection, VisualSourceIslandKind,
+    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
+    builtin_theme_definitions, default_preferences_path, default_recovery_dir, default_themes_dir,
+    delete_recovery_file, diagram_backend_id, highlight_code, html_preview_parts,
+    html_preview_plain_text, is_markdown_path, list_recovery_files, list_theme_definitions,
+    load_app_preferences, load_recovery_file, normalize_editor_font_size,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    save_app_preferences, save_theme_definition, shortcut_catalog, sidebar_tab_label, t, tf,
+    title_from_path,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -582,6 +586,91 @@ const EDITOR_LINE_HEIGHT: f32 = 24.;
 /// Line height (px) of the preview pane. Independent of the editor: the preview
 /// scrolls natively via its `ListState`, not by line-index math.
 const PREVIEW_LINE_HEIGHT: f32 = 23.;
+
+/// Resolved presentation metrics for one render. Preferences store only the
+/// three user-facing values; every dependent metric is derived here so shaping,
+/// painting, hit-testing, math rendering, and virtual-list measurement stay in
+/// lockstep.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct DocumentTypographyMetrics {
+    pub(super) editor_font_size: f32,
+    pub(super) editor_line_height: f32,
+    pub(super) rendered_font_size: f32,
+    pub(super) preview_row_line_height: f32,
+    pub(super) paragraph_line_height: f32,
+    pub(super) paragraph_spacing: f32,
+    pub(super) list_line_height: f32,
+    pub(super) quote_font_size: f32,
+    pub(super) quote_line_height: f32,
+    pub(super) source_island_font_size: f32,
+    pub(super) source_island_line_height: f32,
+    pub(super) code_font_size: f32,
+    pub(super) code_line_height: f32,
+    pub(super) small_font_size: f32,
+    pub(super) table_font_size: f32,
+    pub(super) inline_math_font_size: f32,
+    pub(super) display_math_font_size: f32,
+}
+
+impl DocumentTypographyMetrics {
+    pub(super) fn new(
+        editor_font_size: u16,
+        rendered_font_size: u16,
+        paragraph_spacing: u16,
+    ) -> Self {
+        let editor_font_size = normalize_editor_font_size(editor_font_size as i64) as f32;
+        let rendered_font_size = normalize_rendered_font_size(rendered_font_size as i64) as f32;
+        let paragraph_spacing = normalize_paragraph_spacing(paragraph_spacing as i64) as f32;
+        let rendered_scale = rendered_font_size / DEFAULT_RENDERED_FONT_SIZE as f32;
+        Self {
+            editor_font_size,
+            editor_line_height: editor_font_size
+                * (EDITOR_LINE_HEIGHT / DEFAULT_EDITOR_FONT_SIZE as f32),
+            rendered_font_size,
+            preview_row_line_height: PREVIEW_LINE_HEIGHT * rendered_scale,
+            paragraph_line_height: 24. * rendered_scale,
+            paragraph_spacing,
+            list_line_height: 22. * rendered_scale,
+            quote_font_size: 16. * rendered_scale,
+            quote_line_height: 23. * rendered_scale,
+            source_island_font_size: 13. * rendered_scale,
+            source_island_line_height: 21. * rendered_scale,
+            code_font_size: 12. * rendered_scale,
+            code_line_height: 19. * rendered_scale,
+            small_font_size: 11. * rendered_scale,
+            table_font_size: 12. * rendered_scale,
+            inline_math_font_size: MATH_INLINE_FONT_SIZE * rendered_scale,
+            display_math_font_size: MATH_DISPLAY_FONT_SIZE * rendered_scale,
+        }
+    }
+
+    pub(super) fn heading_font_size(self, level: u32) -> f32 {
+        let default = match level {
+            1 => 24.,
+            2 => 20.,
+            3 => 18.,
+            _ => 16.,
+        };
+        default * (self.rendered_font_size / DEFAULT_RENDERED_FONT_SIZE as f32)
+    }
+
+    pub(super) fn math_font_size(self, style: MathLayoutStyle) -> f32 {
+        match style {
+            MathLayoutStyle::Text => self.inline_math_font_size,
+            MathLayoutStyle::Display => self.display_math_font_size,
+        }
+    }
+}
+
+impl MarkionApp {
+    pub(super) fn typography_metrics(&self) -> DocumentTypographyMetrics {
+        DocumentTypographyMetrics::new(
+            self.editor_font_size,
+            self.rendered_font_size,
+            self.paragraph_spacing,
+        )
+    }
+}
 /// Extra vertical margin (px) the preview `list` renders beyond the visible
 /// viewport so a fast scroll or drag does not flash blank rows before the
 /// newly-revealed blocks are measured. Larger = smoother scroll, more per-frame
@@ -603,6 +692,32 @@ const EDITOR_SPLIT_RATIO_MAX: f32 = 0.85;
 const DEFAULT_SIDEBAR_WIDTH: f32 = 230.;
 const SIDEBAR_MIN_WIDTH: f32 = 150.;
 const SIDEBAR_MAX_WIDTH: f32 = 480.;
+const SIDEBAR_DIVIDER_WIDTH: f32 = 1.;
+const DOCUMENT_TAB_BAND_HEIGHT: f32 = 30.;
+
+fn document_tab_band_visible(tab_count: usize) -> bool {
+    tab_count > 1
+}
+
+fn document_tab_band_height(tab_count: usize) -> f32 {
+    if document_tab_band_visible(tab_count) {
+        DOCUMENT_TAB_BAND_HEIGHT
+    } else {
+        0.
+    }
+}
+
+fn document_tab_band_leading_width(
+    tab_count: usize,
+    sidebar_visible: bool,
+    sidebar_width: f32,
+) -> f32 {
+    if document_tab_band_visible(tab_count) && sidebar_visible {
+        sidebar_width + SIDEBAR_DIVIDER_WIDTH
+    } else {
+        0.
+    }
+}
 
 /// Drag value types used only to key `on_drag` / `on_drag_move` / `on_drop` —
 /// they carry no data, they just let each divider's drag be tracked
@@ -774,6 +889,9 @@ struct MarkionApp {
     typewriter_mode: bool,
     code_line_numbers: bool,
     preview_adaptive_width: bool,
+    editor_font_size: u16,
+    rendered_font_size: u16,
+    paragraph_spacing: u16,
     heading_menu_max_level: u8,
     /// When enabled and the view mode is Split, the editor and preview panes
     /// scroll together proportionally. Persisted; disabled by default.

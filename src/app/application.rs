@@ -11,6 +11,13 @@ impl MarkionApp {
         let file_tree = None;
         let preferences_path = default_preferences_path();
         let preferences = load_app_preferences(&preferences_path).unwrap_or_default();
+        let typography = DocumentTypographyMetrics::new(
+            preferences.editor_font_size,
+            preferences.rendered_font_size,
+            preferences.paragraph_spacing,
+        );
+        let mut initial_tab = EditorTab::new(document);
+        initial_tab.line_height = px(typography.editor_line_height);
         let themes_dir = default_themes_dir();
         let custom_themes = list_theme_definitions(&themes_dir).unwrap_or_default();
         let custom_theme = preferences
@@ -30,7 +37,7 @@ impl MarkionApp {
             })
             .unwrap_or_else(|| "Paper".to_string());
         Self {
-            tabs: vec![EditorTab::new(document)],
+            tabs: vec![initial_tab],
             active_tab: 0,
             focus_handle: cx.focus_handle(),
             active_menu: None,
@@ -52,6 +59,9 @@ impl MarkionApp {
             typewriter_mode: preferences.typewriter_mode,
             code_line_numbers: preferences.code_line_numbers,
             preview_adaptive_width: preferences.preview_adaptive_width,
+            editor_font_size: preferences.editor_font_size,
+            rendered_font_size: preferences.rendered_font_size,
+            paragraph_spacing: preferences.paragraph_spacing,
             heading_menu_max_level: preferences.heading_menu_max_level,
             sync_scroll: preferences.sync_scroll,
             syncing_scroll: false,
@@ -463,10 +473,17 @@ impl MarkionApp {
     /// untitled tabs and crash-recovery restore; filesystem-backed opens should
     /// go through the path helpers so already-open files can reuse their tab.
     pub(super) fn open_in_new_tab(&mut self, document: MarkdownDocument, cx: &mut Context<Self>) {
-        self.tabs.push(EditorTab::new(document));
+        let tab = self.editor_tab_for_document(document);
+        self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
         self.refresh_search_matches();
         cx.notify();
+    }
+
+    pub(super) fn editor_tab_for_document(&self, document: MarkdownDocument) -> EditorTab {
+        let mut tab = EditorTab::new(document);
+        tab.line_height = px(self.typography_metrics().editor_line_height);
+        tab
     }
 
     /// Replace the active tab's document in place: discard its recovery file,
@@ -817,6 +834,9 @@ impl MarkionApp {
             typewriter_mode: self.typewriter_mode,
             code_line_numbers: self.code_line_numbers,
             preview_adaptive_width: self.preview_adaptive_width,
+            editor_font_size: self.editor_font_size,
+            rendered_font_size: self.rendered_font_size,
+            paragraph_spacing: self.paragraph_spacing,
             heading_menu_max_level: self.heading_menu_max_level,
             sync_scroll: self.sync_scroll,
             sidebar_visible: self.sidebar_visible,

@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn visual_ime_bounds(
     caret: Option<Bounds<Pixels>>,
     surface: Option<Bounds<Pixels>>,
+    line_height: Pixels,
 ) -> Option<Bounds<Pixels>> {
     caret.or_else(|| {
         surface.map(|surface| {
@@ -11,7 +12,7 @@ pub(super) fn visual_ime_bounds(
                     surface.left() + px(PANE_INNER_PADDING),
                     surface.top() + px(PANE_INNER_PADDING),
                 ),
-                size(px(2.), px(PREVIEW_LINE_HEIGHT)),
+                size(px(2.), line_height),
             )
         })
     })
@@ -248,7 +249,11 @@ impl EntityInputHandler for MarkionApp {
             {
                 return Some(*marked_bounds);
             }
-            return visual_ime_bounds(tab.visual_caret_bounds, tab.visual_input_bounds);
+            return visual_ime_bounds(
+                tab.visual_caret_bounds,
+                tab.visual_input_bounds,
+                px(self.typography_metrics().preview_row_line_height),
+            );
         }
         if tab.last_lines.is_empty() {
             return None;

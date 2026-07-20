@@ -106,6 +106,10 @@ impl MarkionApp {
                     app.typewriter_mode = preferences.typewriter_mode;
                     app.code_line_numbers = preferences.code_line_numbers;
                     app.preview_adaptive_width = preferences.preview_adaptive_width;
+                    app.editor_font_size = preferences.editor_font_size;
+                    app.rendered_font_size = preferences.rendered_font_size;
+                    app.paragraph_spacing = preferences.paragraph_spacing;
+                    app.refresh_typography_measurements(true, true);
                     app.heading_menu_max_level = preferences.heading_menu_max_level;
                     app.sync_scroll = preferences.sync_scroll;
                     app.sidebar_visible = preferences.sidebar_visible;
@@ -201,6 +205,74 @@ impl MarkionApp {
         .into();
         self.persist_preferences();
         cx.notify();
+    }
+
+    pub(super) fn set_editor_font_size(&mut self, value: i64, cx: &mut Context<Self>) {
+        let value = normalize_editor_font_size(value);
+        if self.editor_font_size == value {
+            return;
+        }
+        self.editor_font_size = value;
+        self.refresh_typography_measurements(true, false);
+        self.center_cursor_if_typewriter();
+        self.status = self.trf(Msg::StatusEditorFontSize, &[&format!("{value}px")]);
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn set_rendered_font_size(&mut self, value: i64, cx: &mut Context<Self>) {
+        let value = normalize_rendered_font_size(value);
+        if self.rendered_font_size == value {
+            return;
+        }
+        self.rendered_font_size = value;
+        self.refresh_typography_measurements(false, true);
+        self.status = self.trf(Msg::StatusRenderedFontSize, &[&format!("{value}px")]);
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn set_paragraph_spacing(&mut self, value: i64, cx: &mut Context<Self>) {
+        let value = normalize_paragraph_spacing(value);
+        if self.paragraph_spacing == value {
+            return;
+        }
+        self.paragraph_spacing = value;
+        self.refresh_typography_measurements(false, true);
+        self.status = self.trf(Msg::StatusParagraphSpacing, &[&format!("{value}px")]);
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    /// Invalidates only presentation measurements affected by typography.
+    /// Document versions, derived Markdown caches, highlights, shared text,
+    /// selection/history, and the list block `Arc`s remain untouched.
+    pub(super) fn refresh_typography_measurements(
+        &mut self,
+        editor_changed: bool,
+        rendered_changed: bool,
+    ) {
+        let metrics = self.typography_metrics();
+        for tab in &mut self.tabs {
+            if editor_changed {
+                tab.last_lines.clear();
+                tab.line_heights.clear();
+                tab.last_bounds = None;
+                tab.line_height = px(metrics.editor_line_height);
+                *tab.measured_height_cache.borrow_mut() = None;
+                tab.sync_scroll_editor_fraction = None;
+            }
+            if rendered_changed {
+                invalidate_list_measurements_around_scroll_anchor(&tab.preview_list);
+                invalidate_list_measurements_around_scroll_anchor(&tab.visual_list);
+                tab.visual_caret_bounds = None;
+                tab.visual_marked_range_bounds = None;
+                tab.visual_input_bounds = None;
+                tab.visual_navigation_snapshots.clear();
+                tab.visual_navigation_snapshot_ids.clear();
+                tab.sync_scroll_preview_fraction = None;
+            }
+        }
     }
 
     pub(super) fn toggle_sync_scroll(&mut self, cx: &mut Context<Self>) {
@@ -311,4 +383,28 @@ impl MarkionApp {
         }
         self.syncing_scroll = false;
     }
+}
+
+/// Marks every virtual-list item unmeasured while keeping the current logical
+/// item as the scroll anchor. Replacing the whole `0..count` range at once
+/// makes GPUI move an anchor inside that range to item zero; splitting around
+/// the anchor preserves the user's document position across typography reflow.
+pub(super) fn invalidate_list_measurements_around_scroll_anchor(list: &ListState) {
+    let count = list.item_count();
+    if count == 0 {
+        return;
+    }
+    let scroll_top = list.logical_scroll_top();
+    let anchor = scroll_top.item_ix.min(count - 1);
+    if anchor + 1 < count {
+        list.splice(anchor + 1..count, count - anchor - 1);
+    }
+    if anchor > 0 {
+        list.splice(0..anchor, anchor);
+    }
+    list.splice(anchor..anchor + 1, 1);
+    list.scroll_to(gpui::ListOffset {
+        item_ix: anchor,
+        offset_in_item: scroll_top.offset_in_item,
+    });
 }

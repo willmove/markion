@@ -326,6 +326,12 @@ pub enum Msg {
     StatusSyncScrollOn,
     /// Status: Sync scroll disabled.
     StatusSyncScrollOff,
+    /// {0}=logical pixel value — source-editor font size changed.
+    StatusEditorFontSize,
+    /// {0}=logical pixel value — rendered-document font size changed.
+    StatusRenderedFontSize,
+    /// {0}=logical pixel value — rendered paragraph spacing changed.
+    StatusParagraphSpacing,
     StatusPreferenceResetCanceled,
     StatusLanguageSet,
 
@@ -420,7 +426,7 @@ pub enum Msg {
     DialogShortcutsTitle,
     /// Preferences dialog title.
     DialogPreferencesTitle,
-    /// Preferences summary body. {0..8}=values, see preferences_detail().
+    /// Preferences summary body. {0..11}=values, see preferences_detail().
     DialogPreferencesDetail,
     /// Restore-unsaved-document prompt title.
     DialogRestoreTitle,
@@ -516,6 +522,14 @@ pub enum Msg {
     PrefPanelLanguageSection,
     /// Section header for the other-settings summary.
     PrefPanelOtherSection,
+    /// Section header for document typography controls.
+    PrefPanelTypographySection,
+    /// Source-editor font-size row label.
+    PrefPanelEditorFontSize,
+    /// Rendered-document font-size row label.
+    PrefPanelRenderedFontSize,
+    /// Rendered paragraph-spacing row label.
+    PrefPanelParagraphSpacing,
     /// "Focus mode" row label in the other-settings summary.
     PrefPanelFocusMode,
     /// "Typewriter mode" row label.
@@ -1545,6 +1559,9 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusPreviewAdaptiveWidthOff => "Preview adaptive width off",
         Msg::StatusSyncScrollOn => "Sync scroll on",
         Msg::StatusSyncScrollOff => "Sync scroll off",
+        Msg::StatusEditorFontSize => "Source font size: {0}",
+        Msg::StatusRenderedFontSize => "Reading font size: {0}",
+        Msg::StatusParagraphSpacing => "Paragraph spacing: {0}",
         Msg::StatusPreferenceResetCanceled => "Preference reset canceled",
         Msg::StatusLanguageSet => "Language set",
 
@@ -1661,6 +1678,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelThemeSection => "Theme",
         Msg::PrefPanelLanguageSection => "Language",
         Msg::PrefPanelOtherSection => "Other",
+        Msg::PrefPanelTypographySection => "Document typography",
+        Msg::PrefPanelEditorFontSize => "Source font size",
+        Msg::PrefPanelRenderedFontSize => "Reading font size",
+        Msg::PrefPanelParagraphSpacing => "Paragraph spacing",
         Msg::PrefPanelFocusMode => "Focus mode",
         Msg::PrefPanelTypewriterMode => "Typewriter mode",
         Msg::PrefPanelCodeLineNumbers => "Code line numbers",
@@ -1689,9 +1710,10 @@ fn en(msg: Msg) -> &'static str {
 
 // Preferences summary body. Placeholders:
 //   {0}=theme {1}=focus {2}=typewriter {3}=line numbers
-//   {4}=preview adaptive width {5}=sidebar {6}=prefs path
-//   {7}=themes dir {8}=custom theme count
-const PREFERENCES_DETAIL_EN: &str = "Theme: {0}\nFocus mode: {1}\nTypewriter mode: {2}\nCode line numbers: {3}\nPreview adaptive width: {4}\nSidebar: {5}\n\nPreferences: {6}\nCustom themes: {7}\nInstalled custom themes: {8}";
+//   {4}=preview adaptive width {5}=sidebar {6}=source font size
+//   {7}=reading font size {8}=paragraph spacing {9}=prefs path
+//   {10}=themes dir {11}=custom theme count
+const PREFERENCES_DETAIL_EN: &str = "Theme: {0}\nFocus mode: {1}\nTypewriter mode: {2}\nCode line numbers: {3}\nPreview adaptive width: {4}\nSidebar: {5}\nSource font size: {6}\nReading font size: {7}\nParagraph spacing: {8}\n\nPreferences: {9}\nCustom themes: {10}\nInstalled custom themes: {11}";
 
 // ---------------------------------------------------------------------------
 // Japanese
@@ -1905,6 +1927,9 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusPreviewAdaptiveWidthOff => "プレビュー幅自動調整 オフ",
         Msg::StatusSyncScrollOn => "同期スクロール オン",
         Msg::StatusSyncScrollOff => "同期スクロール オフ",
+        Msg::StatusEditorFontSize => "ソースのフォントサイズ: {0}",
+        Msg::StatusRenderedFontSize => "閲覧フォントサイズ: {0}",
+        Msg::StatusParagraphSpacing => "段落間隔: {0}",
         Msg::StatusPreferenceResetCanceled => "設定リセットをキャンセルしました",
         Msg::StatusLanguageSet => "言語を設定しました",
 
@@ -2023,6 +2048,10 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelThemeSection => "テーマ",
         Msg::PrefPanelLanguageSection => "言語",
         Msg::PrefPanelOtherSection => "その他",
+        Msg::PrefPanelTypographySection => "文書の文字設定",
+        Msg::PrefPanelEditorFontSize => "ソースのフォントサイズ",
+        Msg::PrefPanelRenderedFontSize => "閲覧フォントサイズ",
+        Msg::PrefPanelParagraphSpacing => "段落間隔",
         Msg::PrefPanelFocusMode => "集中モード",
         Msg::PrefPanelTypewriterMode => "タイプライターモード",
         Msg::PrefPanelCodeLineNumbers => "コード行番号",
@@ -2049,7 +2078,7 @@ fn ja(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_JA: &str = "テーマ: {0}\n集中モード: {1}\nタイプライターモード: {2}\nコード行番号: {3}\nプレビュー幅自動調整: {4}\nサイドバー: {5}\n\n設定ファイル: {6}\nカスタムテーマ: {7}\nインストール済みカスタムテーマ: {8}";
+const PREFERENCES_DETAIL_JA: &str = "テーマ: {0}\n集中モード: {1}\nタイプライターモード: {2}\nコード行番号: {3}\nプレビュー幅自動調整: {4}\nサイドバー: {5}\nソースのフォントサイズ: {6}\n閲覧フォントサイズ: {7}\n段落間隔: {8}\n\n設定ファイル: {9}\nカスタムテーマ: {10}\nインストール済みカスタムテーマ: {11}";
 
 // ---------------------------------------------------------------------------
 // French
@@ -2255,6 +2284,9 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusPreviewAdaptiveWidthOff => "Largeur adaptative de l'aperçu désactivée",
         Msg::StatusSyncScrollOn => "Défilement synchronisé activé",
         Msg::StatusSyncScrollOff => "Défilement synchronisé désactivé",
+        Msg::StatusEditorFontSize => "Taille de la source : {0}",
+        Msg::StatusRenderedFontSize => "Taille de lecture : {0}",
+        Msg::StatusParagraphSpacing => "Espacement des paragraphes : {0}",
         Msg::StatusPreferenceResetCanceled => "Réinitialisation des préférences annulée",
         Msg::StatusLanguageSet => "Langue définie",
         Msg::StatusRecoveryFailed => "Échec de la récupération : {0}",
@@ -2374,6 +2406,10 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelThemeSection => "Thème",
         Msg::PrefPanelLanguageSection => "Langue",
         Msg::PrefPanelOtherSection => "Autre",
+        Msg::PrefPanelTypographySection => "Typographie du document",
+        Msg::PrefPanelEditorFontSize => "Taille de la source",
+        Msg::PrefPanelRenderedFontSize => "Taille de lecture",
+        Msg::PrefPanelParagraphSpacing => "Espacement des paragraphes",
         Msg::PrefPanelFocusMode => "Mode concentré",
         Msg::PrefPanelTypewriterMode => "Mode machine à écrire",
         Msg::PrefPanelCodeLineNumbers => "Numéros de ligne de code",
@@ -2402,7 +2438,7 @@ fn fr(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_FR: &str = "Thème : {0}\nMode concentré : {1}\nMode machine à écrire : {2}\nNuméros de ligne : {3}\nLargeur adaptative : {4}\nBarre latérale : {5}\n\nPréférences : {6}\nThèmes personnalisés : {7}\nThèmes installés : {8}";
+const PREFERENCES_DETAIL_FR: &str = "Thème : {0}\nMode concentré : {1}\nMode machine à écrire : {2}\nNuméros de ligne : {3}\nLargeur adaptative : {4}\nBarre latérale : {5}\nTaille de la source : {6}\nTaille de lecture : {7}\nEspacement des paragraphes : {8}\n\nPréférences : {9}\nThèmes personnalisés : {10}\nThèmes installés : {11}";
 
 // ---------------------------------------------------------------------------
 // German
@@ -2606,6 +2642,9 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusPreviewAdaptiveWidthOff => "Adaptive Vorschaubreite aus",
         Msg::StatusSyncScrollOn => "Synchrones Scrollen ein",
         Msg::StatusSyncScrollOff => "Synchrones Scrollen aus",
+        Msg::StatusEditorFontSize => "Quelltext-Schriftgröße: {0}",
+        Msg::StatusRenderedFontSize => "Leseschriftgröße: {0}",
+        Msg::StatusParagraphSpacing => "Absatzabstand: {0}",
         Msg::StatusPreferenceResetCanceled => "Zurücksetzen der Einstellungen abgebrochen",
         Msg::StatusLanguageSet => "Sprache gesetzt",
         Msg::StatusRecoveryFailed => "Wiederherstellung fehlgeschlagen: {0}",
@@ -2723,6 +2762,10 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelThemeSection => "Design",
         Msg::PrefPanelLanguageSection => "Sprache",
         Msg::PrefPanelOtherSection => "Sonstiges",
+        Msg::PrefPanelTypographySection => "Dokumenttypografie",
+        Msg::PrefPanelEditorFontSize => "Quelltext-Schriftgröße",
+        Msg::PrefPanelRenderedFontSize => "Leseschriftgröße",
+        Msg::PrefPanelParagraphSpacing => "Absatzabstand",
         Msg::PrefPanelFocusMode => "Fokusmodus",
         Msg::PrefPanelTypewriterMode => "Schreibmaschinenmodus",
         Msg::PrefPanelCodeLineNumbers => "Code-Zeilennummern",
@@ -2751,7 +2794,7 @@ fn de(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_DE: &str = "Design: {0}\nFokusmodus: {1}\nSchreibmaschinenmodus: {2}\nZeilennummern: {3}\nAdaptive Vorschaubreite: {4}\nSeitenleiste: {5}\n\nEinstellungen: {6}\nBenutzerdefinierte Designs: {7}\nInstallierte Designs: {8}";
+const PREFERENCES_DETAIL_DE: &str = "Design: {0}\nFokusmodus: {1}\nSchreibmaschinenmodus: {2}\nZeilennummern: {3}\nAdaptive Vorschaubreite: {4}\nSeitenleiste: {5}\nQuelltext-Schriftgröße: {6}\nLeseschriftgröße: {7}\nAbsatzabstand: {8}\n\nEinstellungen: {9}\nBenutzerdefinierte Designs: {10}\nInstallierte Designs: {11}";
 
 // ---------------------------------------------------------------------------
 // Spanish
@@ -2955,6 +2998,9 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusPreviewAdaptiveWidthOff => "Ancho adaptativo de vista previa desactivado",
         Msg::StatusSyncScrollOn => "Desplazamiento sincronizado activado",
         Msg::StatusSyncScrollOff => "Desplazamiento sincronizado desactivado",
+        Msg::StatusEditorFontSize => "Tamaño de fuente del código: {0}",
+        Msg::StatusRenderedFontSize => "Tamaño de lectura: {0}",
+        Msg::StatusParagraphSpacing => "Espacio entre párrafos: {0}",
         Msg::StatusPreferenceResetCanceled => "Restablecimiento de preferencias cancelado",
         Msg::StatusLanguageSet => "Idioma establecido",
         Msg::StatusRecoveryFailed => "Error de recuperación: {0}",
@@ -3066,6 +3112,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelThemeSection => "Tema",
         Msg::PrefPanelLanguageSection => "Idioma",
         Msg::PrefPanelOtherSection => "Otro",
+        Msg::PrefPanelTypographySection => "Tipografía del documento",
+        Msg::PrefPanelEditorFontSize => "Tamaño de fuente del código",
+        Msg::PrefPanelRenderedFontSize => "Tamaño de lectura",
+        Msg::PrefPanelParagraphSpacing => "Espacio entre párrafos",
         Msg::PrefPanelFocusMode => "Modo concentración",
         Msg::PrefPanelTypewriterMode => "Modo máquina de escribir",
         Msg::PrefPanelCodeLineNumbers => "Números de línea de código",
@@ -3092,7 +3142,7 @@ fn es(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_ES: &str = "Tema: {0}\nModo concentración: {1}\nModo máquina de escribir: {2}\nNúmeros de línea: {3}\nAncho adaptativo: {4}\nBarra lateral: {5}\n\nPreferencias: {6}\nTemas personalizados: {7}\nTemas instalados: {8}";
+const PREFERENCES_DETAIL_ES: &str = "Tema: {0}\nModo concentración: {1}\nModo máquina de escribir: {2}\nNúmeros de línea: {3}\nAncho adaptativo: {4}\nBarra lateral: {5}\nTamaño de fuente del código: {6}\nTamaño de lectura: {7}\nEspacio entre párrafos: {8}\n\nPreferencias: {9}\nTemas personalizados: {10}\nTemas instalados: {11}";
 
 // ---------------------------------------------------------------------------
 // Chinese (Simplified)
@@ -3306,6 +3356,9 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusPreviewAdaptiveWidthOff => "预览自适应宽度已关闭",
         Msg::StatusSyncScrollOn => "同步滚动已开启",
         Msg::StatusSyncScrollOff => "同步滚动已关闭",
+        Msg::StatusEditorFontSize => "源码字号：{0}",
+        Msg::StatusRenderedFontSize => "阅读字号：{0}",
+        Msg::StatusParagraphSpacing => "段落间距：{0}",
         Msg::StatusPreferenceResetCanceled => "已取消重置首选项",
         Msg::StatusLanguageSet => "已设置语言",
 
@@ -3418,6 +3471,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelThemeSection => "主题",
         Msg::PrefPanelLanguageSection => "语言",
         Msg::PrefPanelOtherSection => "其他",
+        Msg::PrefPanelTypographySection => "文档排版",
+        Msg::PrefPanelEditorFontSize => "源码字号",
+        Msg::PrefPanelRenderedFontSize => "阅读字号",
+        Msg::PrefPanelParagraphSpacing => "段落间距",
         Msg::PrefPanelFocusMode => "专注模式",
         Msg::PrefPanelTypewriterMode => "打字机模式",
         Msg::PrefPanelCodeLineNumbers => "代码行号",
@@ -3444,7 +3501,7 @@ fn zh(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_ZH: &str = "主题：{0}\n专注模式：{1}\n打字机模式：{2}\n代码行号：{3}\n预览自适应宽度：{4}\n侧边栏：{5}\n\n首选项：{6}\n主题目录：{7}\n已安装自定义主题：{8}";
+const PREFERENCES_DETAIL_ZH: &str = "主题：{0}\n专注模式：{1}\n打字机模式：{2}\n代码行号：{3}\n预览自适应宽度：{4}\n侧边栏：{5}\n源码字号：{6}\n阅读字号：{7}\n段落间距：{8}\n\n首选项：{9}\n主题目录：{10}\n已安装自定义主题：{11}";
 
 // ---------------------------------------------------------------------------
 // Traditional Chinese (Taiwan regional terminology)
@@ -3658,6 +3715,9 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusPreviewAdaptiveWidthOff => "預覽自適應寬度已關閉",
         Msg::StatusSyncScrollOn => "同步捲動已開啟",
         Msg::StatusSyncScrollOff => "同步捲動已關閉",
+        Msg::StatusEditorFontSize => "原始碼字號：{0}",
+        Msg::StatusRenderedFontSize => "閱讀字號：{0}",
+        Msg::StatusParagraphSpacing => "段落間距：{0}",
         Msg::StatusPreferenceResetCanceled => "已取消重設偏好設定",
         Msg::StatusLanguageSet => "已設定語言",
 
@@ -3772,6 +3832,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelThemeSection => "佈景主題",
         Msg::PrefPanelLanguageSection => "語言",
         Msg::PrefPanelOtherSection => "其他",
+        Msg::PrefPanelTypographySection => "文件排版",
+        Msg::PrefPanelEditorFontSize => "原始碼字號",
+        Msg::PrefPanelRenderedFontSize => "閱讀字號",
+        Msg::PrefPanelParagraphSpacing => "段落間距",
         Msg::PrefPanelFocusMode => "專注模式",
         Msg::PrefPanelTypewriterMode => "打字機模式",
         Msg::PrefPanelCodeLineNumbers => "程式碼行號",
@@ -3798,7 +3862,7 @@ fn zh_hant(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_ZH_HANT: &str = "佈景主題：{0}\n專注模式：{1}\n打字機模式：{2}\n程式碼行號：{3}\n預覽自適應寬度：{4}\n側邊欄：{5}\n\n偏好設定：{6}\n佈景主題目錄：{7}\n已安裝自訂佈景主題：{8}";
+const PREFERENCES_DETAIL_ZH_HANT: &str = "佈景主題：{0}\n專注模式：{1}\n打字機模式：{2}\n程式碼行號：{3}\n預覽自適應寬度：{4}\n側邊欄：{5}\n原始碼字號：{6}\n閱讀字號：{7}\n段落間距：{8}\n\n偏好設定：{9}\n佈景主題目錄：{10}\n已安裝自訂佈景主題：{11}";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -4312,6 +4376,9 @@ mod tests {
             Msg::StatusPreviewAdaptiveWidthOff,
             Msg::StatusSyncScrollOn,
             Msg::StatusSyncScrollOff,
+            Msg::StatusEditorFontSize,
+            Msg::StatusRenderedFontSize,
+            Msg::StatusParagraphSpacing,
             Msg::StatusPreferenceResetCanceled,
             Msg::StatusLanguageSet,
             Msg::StatusRecoveryFailed,
@@ -4411,6 +4478,10 @@ mod tests {
             Msg::PrefPanelThemeSection,
             Msg::PrefPanelLanguageSection,
             Msg::PrefPanelOtherSection,
+            Msg::PrefPanelTypographySection,
+            Msg::PrefPanelEditorFontSize,
+            Msg::PrefPanelRenderedFontSize,
+            Msg::PrefPanelParagraphSpacing,
             Msg::PrefPanelFocusMode,
             Msg::PrefPanelTypewriterMode,
             Msg::PrefPanelCodeLineNumbers,

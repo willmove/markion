@@ -1777,7 +1777,7 @@ fn visual_block_lookup_covers_source_and_reveal_requests_are_one_shot() {
 #[test]
 fn visual_ime_bounds_prefer_the_painted_caret_and_have_a_surface_fallback() {
     let surface = Bounds::new(point(px(10.), px(20.)), size(px(300.), px(200.)));
-    let fallback = editor_element::visual_ime_bounds(None, Some(surface))
+    let fallback = editor_element::visual_ime_bounds(None, Some(surface), px(PREVIEW_LINE_HEIGHT))
         .expect("visual surface should provide a pre-paint IME location");
     assert_eq!(
         fallback,
@@ -1789,10 +1789,13 @@ fn visual_ime_bounds_prefer_the_painted_caret_and_have_a_surface_fallback() {
 
     let caret = Bounds::new(point(px(42.), px(84.)), size(px(2.), px(21.)));
     assert_eq!(
-        editor_element::visual_ime_bounds(Some(caret), Some(surface)),
+        editor_element::visual_ime_bounds(Some(caret), Some(surface), px(PREVIEW_LINE_HEIGHT)),
         Some(caret)
     );
-    assert_eq!(editor_element::visual_ime_bounds(None, None), None);
+    assert_eq!(
+        editor_element::visual_ime_bounds(None, None, px(PREVIEW_LINE_HEIGHT)),
+        None
+    );
 }
 
 #[test]
@@ -3553,6 +3556,225 @@ fn active_tab_accessors_clamp_a_stale_index() {
         (index_from_closure >= app_tabs.len()),
         "tab-bar closure must skip a stale index instead of assigning it"
     );
+}
+
+#[test]
+fn document_tab_band_geometry_tracks_visibility_and_sidebar_width() {
+    assert!(!document_tab_band_visible(0));
+    assert!(!document_tab_band_visible(1));
+    assert!(document_tab_band_visible(2));
+
+    assert_eq!(document_tab_band_height(1), 0.);
+    assert_eq!(document_tab_band_height(2), DOCUMENT_TAB_BAND_HEIGHT);
+
+    assert_eq!(document_tab_band_leading_width(1, true, 230.), 0.);
+    assert_eq!(document_tab_band_leading_width(2, false, 230.), 0.);
+    assert_eq!(
+        document_tab_band_leading_width(2, true, 230.),
+        230. + SIDEBAR_DIVIDER_WIDTH
+    );
+    assert_eq!(
+        document_tab_band_leading_width(3, true, 318.),
+        318. + SIDEBAR_DIVIDER_WIDTH,
+        "the tab controls must follow the same live sidebar width as the pane boundary"
+    );
+}
+
+#[test]
+fn document_typography_metrics_preserve_defaults_and_scale_boundaries() {
+    let defaults = DocumentTypographyMetrics::new(
+        markion::DEFAULT_EDITOR_FONT_SIZE,
+        markion::DEFAULT_RENDERED_FONT_SIZE,
+        markion::DEFAULT_PARAGRAPH_SPACING,
+    );
+    assert_eq!(defaults.editor_font_size, 15.);
+    assert_eq!(defaults.editor_line_height, 24.);
+    assert_eq!(defaults.rendered_font_size, 14.);
+    assert_eq!(defaults.preview_row_line_height, 23.);
+    assert_eq!(defaults.paragraph_line_height, 24.);
+    assert_eq!(defaults.paragraph_spacing, 12.);
+    assert_eq!(defaults.heading_font_size(1), 24.);
+    assert_eq!(defaults.code_font_size, 12.);
+    assert_eq!(defaults.inline_math_font_size, 16.);
+    assert_eq!(defaults.display_math_font_size, 20.);
+
+    let bounded = DocumentTypographyMetrics::new(0, u16::MAX, u16::MAX);
+    assert_eq!(bounded.editor_font_size, MIN_EDITOR_FONT_SIZE as f32);
+    assert_eq!(bounded.rendered_font_size, MAX_RENDERED_FONT_SIZE as f32);
+    assert_eq!(bounded.paragraph_spacing, MAX_PARAGRAPH_SPACING as f32);
+    assert!(bounded.heading_font_size(1) > defaults.heading_font_size(1));
+    assert!(bounded.code_line_height > defaults.code_line_height);
+}
+
+#[test]
+fn typography_preference_steps_stop_at_bounds() {
+    assert_eq!(
+        preference_step_value(15, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, 1),
+        Some(16)
+    );
+    assert_eq!(
+        preference_step_value(15, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, -1),
+        Some(14)
+    );
+    assert_eq!(
+        preference_step_value(
+            MIN_EDITOR_FONT_SIZE,
+            MIN_EDITOR_FONT_SIZE,
+            MAX_EDITOR_FONT_SIZE,
+            -1
+        ),
+        None
+    );
+    assert_eq!(
+        preference_step_value(
+            MAX_PARAGRAPH_SPACING,
+            MIN_PARAGRAPH_SPACING,
+            MAX_PARAGRAPH_SPACING,
+            1
+        ),
+        None
+    );
+}
+
+#[gpui::test]
+fn typography_changes_preserve_document_caches_and_list_positions(cx: &mut TestAppContext) {
+    let config_dir = tempfile::tempdir().unwrap();
+    let preferences_path = config_dir.path().join("config.toml");
+    let source = (0..120)
+        .map(|index| format!("paragraph {index} with enough text for a stable list row"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = preferences_path;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Read;
+        app.active_tab_mut().selected_range = 3..7;
+        app.active_tab_mut().push_undo_snapshot();
+        let preview = app.active_tab().document.preview_blocks_shared();
+        app.active_tab_mut().sync_preview_list(&preview);
+        let visual = app.active_tab().document.visual_blocks_shared();
+        app.active_tab_mut().sync_visual_list(&visual);
+        let version = app.active_tab().document.version();
+        *app.active_tab().measured_height_cache.borrow_mut() = Some((
+            MeasuredHeightKey {
+                version,
+                wrap_width: px(400.),
+                font_size: px(15.),
+                line_height: px(24.),
+            },
+            px(240.),
+        ));
+        let _ = app.active_tab().shared_document_text();
+        let _ = app.highlighted_code(Some("rust"), "let x = 1;");
+        app
+    });
+
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        app.active_tab().preview_list.scroll_to(gpui::ListOffset {
+            item_ix: 40,
+            offset_in_item: px(3.),
+        });
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 40,
+            offset_in_item: px(4.),
+        });
+    });
+    let preview_max_before = app.update(cx, |app, _| {
+        app.active_tab()
+            .preview_list
+            .max_offset_for_scrollbar()
+            .height
+    });
+
+    let (version, preview_cache, highlight_count, undo_len, selection) =
+        app.update(cx, |app, _| {
+            (
+                app.active_tab().document.version(),
+                app.active_tab().document.preview_blocks_shared(),
+                app.highlight_cache.borrow().len(),
+                app.active_tab().undo_stack.len(),
+                app.active_tab().selected_range.clone(),
+            )
+        });
+
+    app.update(cx, |app, cx| {
+        app.set_rendered_font_size(20, cx);
+        app.set_paragraph_spacing(18, cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(
+            &tab.document.preview_blocks_shared(),
+            &preview_cache
+        ));
+        assert_eq!(app.highlight_cache.borrow().len(), highlight_count);
+        assert_eq!(tab.undo_stack.len(), undo_len);
+        assert_eq!(tab.selected_range, selection);
+        assert!(tab.display_text_cache.borrow().is_some());
+        assert!(tab.measured_height_cache.borrow().is_some());
+        let preview_top = tab.preview_list.logical_scroll_top();
+        assert_eq!(preview_top.item_ix, 40);
+        assert_eq!(preview_top.offset_in_item, px(3.));
+        let visual_top = tab.visual_list.logical_scroll_top();
+        assert_eq!(visual_top.item_ix, 40);
+        assert_eq!(visual_top.offset_in_item, px(4.));
+        assert!(
+            tab.preview_list.max_offset_for_scrollbar().height > preview_max_before,
+            "larger rendered text and paragraph spacing must increase preview extent"
+        );
+    });
+
+    app.update(cx, |app, cx| app.set_editor_font_size(24, cx));
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.selected_range, selection);
+        if let Some((key, _)) = *tab.measured_height_cache.borrow() {
+            assert_eq!(key.version, version);
+            assert_eq!(key.font_size, px(24.));
+        }
+        assert!((f32::from(tab.line_height) - 38.4).abs() <= 1.0);
+        assert!(tab.display_text_cache.borrow().is_some());
+        assert_eq!(app.current_preferences().editor_font_size, 24);
+        assert_eq!(app.current_preferences().rendered_font_size, 20);
+        assert_eq!(app.current_preferences().paragraph_spacing, 18);
+    });
+}
+
+#[gpui::test]
+fn non_default_editor_font_reflows_wrapped_text_and_caret_geometry(cx: &mut TestAppContext) {
+    let config_dir = tempfile::tempdir().unwrap();
+    let preferences_path = config_dir.path().join("config.toml");
+    let source = "wrap this source line ".repeat(80);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = preferences_path;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.run_until_parked();
+    let default_height = app.update(cx, |app, _| {
+        app.active_tab()
+            .line_heights
+            .first()
+            .copied()
+            .unwrap_or_default()
+    });
+
+    app.update(cx, |app, cx| app.set_editor_font_size(32, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!((f32::from(tab.line_height) - 51.2).abs() <= 1.0);
+        assert!(tab.line_heights.first().copied().unwrap_or_default() > default_height);
+        assert!(tab.last_bounds.is_some());
+        assert!(!tab.last_lines.is_empty());
+    });
 }
 
 #[test]
