@@ -2041,6 +2041,50 @@ pub(super) fn visual_source_island_view(
         })
 }
 
+/// Paints a thin insertion caret on a `Whitespace` row that owns the document
+/// caret, without wrapping the row in a source-island box. The caret itself
+/// is drawn by `VisualEditableText` against an empty projection whose single
+/// segment maps the row's source start to display index 0, so the caret lands
+/// at the row's origin. Clicks hit the same element and place the caret at
+/// `block.source_range.start`. IME bounds are still resolved via the
+/// `visual_input_bounds` surface fallback.
+pub(super) fn visual_whitespace_caret_element(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let anchor = block.source_range.start;
+    let projection = VisualProjection {
+        text: String::new(),
+        segments: vec![markion::VisualProjectionSegment {
+            display_range: 0..0,
+            source_range: anchor..anchor,
+        }],
+        spans: Vec::new(),
+        revealed_source_ranges: Vec::new(),
+        source_anchor: anchor,
+    };
+    VisualEditableText {
+        element_id: ElementId::from(("visual-whitespace-caret", block_index)),
+        block_index,
+        source_island: false,
+        text: StyledText::new(SharedString::from("")),
+        projection,
+        source_selection: app.active_tab().selected_range.clone(),
+        source_cursor: app.active_tab().cursor_offset(),
+        marked_range: app.active_tab().marked_range.clone(),
+        caret_active: visual_block_owns_caret(app, block_index),
+        navigation_active: true,
+        entity: cx.entity(),
+        #[cfg(test)]
+        test_projection: None,
+        #[cfg(test)]
+        test_projection_styles: None,
+    }
+    .into_any_element()
+}
+
 /// True when `block_index` is the single visual row that should paint the
 /// document caret. Block source ranges can touch (and, for recovered parser
 /// overlaps, even intersect), so ownership is resolved through the same
@@ -2094,6 +2138,7 @@ pub(super) fn visual_block_view(
 ) -> Div {
     let typography = app.typography_metrics();
     let owns_caret = visual_block_owns_caret(app, block_index);
+    let is_whitespace = matches!(block.kind, VisualBlockKind::Whitespace);
     let always_source = matches!(
         block.source_island,
         Some(
@@ -2107,7 +2152,14 @@ pub(super) fn visual_block_view(
             .editable_runs
             .iter()
             .any(|run| run.conservative_fallback));
+    // A Whitespace row that owns the caret is ordinary inter-paragraph
+    // spacing, not a code-like block. Promoting it to a source-island box
+    // (border + padding + monospace + gray background) makes a normal blank
+    // line look like a source island — see change
+    // `fix-visual-edit-whitespace-caret-box`. Whitespace owning the caret
+    // is painted as a thin caret line in the `Whitespace` arm below.
     let focused_conservative = owns_caret
+        && !is_whitespace
         && block.editor.is_none()
         && (block.source_island.is_some() || block.editable_runs.is_empty());
     if focused_conservative || always_source {
@@ -2278,13 +2330,23 @@ pub(super) fn visual_block_view(
                 .max(1);
             let row_height = (line_count as f32 * 12.).clamp(12., 72.);
 
-            // Whitespace that owns the caret is rendered above as a source
-            // island. This arm is therefore passive layout: keeping the row
-            // preserves exact source coverage without turning block spacing
-            // into a pointer-created editing surface.
-            div()
-                .h(px(row_height))
-                .debug_selector(|| "visual-whitespace-gap".to_string())
+            if owns_caret {
+                // Whitespace owning the caret is painted as the same
+                // passive-height row it uses when unfocused, plus a thin
+                // caret line (no border, padding, monospace, or background).
+                // The caret itself is drawn by `VisualEditableText` against
+                // an empty projection, and clicks land the caret at the
+                // row's source start.
+                div()
+                    .h(px(row_height))
+                    .cursor(CursorStyle::IBeam)
+                    .child(visual_whitespace_caret_element(app, block, block_index, cx))
+            } else {
+                // Passive layout when the row does not own the caret.
+                div()
+                    .h(px(row_height))
+                    .debug_selector(|| "visual-whitespace-gap".to_string())
+            }
         }
         VisualBlockKind::MathBlock { latex, .. } => {
             if let Some(VisualBlockEditor::Math { payload, .. }) = block.editor.as_ref() {
@@ -2337,7 +2399,22 @@ pub(super) fn visual_block_view(
         }
         VisualBlockKind::CodeBlock { language } => {
             if let Some(VisualBlockEditor::Code { payload, .. }) = block.editor.as_ref() {
-                visual_code_editor(app, block.id, block_index, language.as_deref(), payload, cx)
+                // Diagram fences (e.g. `mermaid`) layer a rendered image on
+                // top of the same source-backed payload editor used by ordinary
+                // code blocks. Non-diagram CodeBlocks keep the highlighted
+                // code editor.
+                if diagram_backend_id(language.as_deref()).is_some() {
+                    visual_diagram_editor(
+                        app,
+                        block,
+                        block_index,
+                        language.as_deref(),
+                        payload,
+                        cx,
+                    )
+                } else {
+                    visual_code_editor(app, block.id, block_index, language.as_deref(), payload, cx)
+                }
             } else {
                 visual_source_island_view(app, block, block_index, cx)
             }
@@ -2541,6 +2618,87 @@ fn visual_math_editor(
                     block_index,
                     payload,
                     ElementId::from(("visual-math-payload", block.id.as_u64())),
+                    None,
+                    cx,
+                )),
+        )
+}
+
+/// Renders a diagram fence in Visual Edit by layering the rasterized diagram
+/// on top of the editable source payload — the same "presentation above,
+/// source-backed editor below" shape as `visual_math_editor`.
+///
+/// The payload editor is the only editing path: it mutates the canonical
+/// Markdown source via the normal visual-editor projection. The diagram image
+/// is presentation-only; its completion or theme switch cannot rewrite the
+/// fence (enforced by the diagram cache key scoping).
+#[allow(clippy::too_many_arguments)]
+fn visual_diagram_editor(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    language: Option<&str>,
+    payload: &VisualEditorField,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let typography = app.typography_metrics();
+    // Read the authored source through the same document slice the cache key
+    // uses, so the visual-blocks render and the Split Preview render share one
+    // cache entry for the same fence.
+    let code = app.active_tab().document.text()[payload.source_range.clone()].to_string();
+    let presentation = match app.diagram_entry(language, &code) {
+        Some(DiagramCacheEntry::Ready(image, size)) => {
+            // Match Split Preview: pin intrinsic width so the supersampled
+            // raster is presented at 1x, and let wide diagrams scroll
+            // horizontally instead of being cropped or stretched. The scroll
+            // wrapper needs an interactive id, matching the preview-math-scroll
+            // pattern at `preview_block_view`.
+            div().w_full().py_2().flex().justify_center().child(
+                div()
+                    .id(ElementId::from(("visual-diagram-scroll", block.id.as_u64())))
+                    .w_full()
+                    .overflow_x_scroll()
+                    .child(div().min_w(size.width).flex().justify_center().child(
+                        img(ImageSource::Render(image)).w(size.width).max_w_full(),
+                    )),
+            )
+        }
+        Some(DiagramCacheEntry::Pending) => div()
+            .w_full()
+            .py_2()
+            .text_color(app.palette().muted)
+            .child(t(app.language, Msg::DiagramLoading)),
+        Some(DiagramCacheEntry::Error(error)) => div()
+            .w_full()
+            .py_2()
+            .text_color(rgb(0xb91c1c))
+            .child(app.diagram_error_message(&error)),
+        None => div().w_full().py_2().text_color(app.palette().muted).child(
+            t(app.language, Msg::DiagramLoading),
+        ),
+    };
+    div()
+        .mb_3()
+        .border_1()
+        .border_color(rgb(0xcbd5e1))
+        .rounded_md()
+        .overflow_hidden()
+        .child(presentation)
+        .child(
+            div()
+                .border_t_1()
+                .border_color(rgb(0xe2e8f0))
+                .bg(rgb(0xf8fafc))
+                .p_2()
+                .font_family("JetBrains Mono")
+                .text_size(px(typography.code_font_size))
+                .line_height(px(typography.code_line_height))
+                .child(code_block_header(app, language, code, cx))
+                .child(visual_editor_field_element(
+                    app,
+                    block_index,
+                    payload,
+                    ElementId::from(("visual-diagram-payload", block.id.as_u64())),
                     None,
                     cx,
                 )),

@@ -2076,6 +2076,65 @@ fn visual_direct_code_editor_hides_fences_highlights_and_edits_only_payload(
 }
 
 #[gpui::test]
+fn visual_edit_warms_diagram_cache_for_mermaid_fence(cx: &mut TestAppContext) {
+    // Visual Edit no longer parses preview blocks, so diagram cache warming
+    // must walk the visual blocks. A `mermaid` fence should produce one
+    // pending cache entry keyed identically to Split Preview's entry, and
+    // re-rendering the same document must not spawn a second render (dedupe
+    // via `reserve_pending`).
+    let source = "```mermaid\nflowchart LR\nA --> B\n```";
+    let document = MarkdownDocument::from_text(source);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // The render thread is detached; park until it lands in the cache.
+    app.update(cx, |app, _| {
+        let theme = app.diagram_theme();
+        let expected_key = DiagramCacheKey {
+            backend_id: "mermaid".into(),
+            source: "flowchart LR\nA --> B\n".into(),
+            theme,
+        };
+        // Visual Edit warms via the visual blocks path on the first render.
+        let entry = app
+            .diagram_cache
+            .get(&expected_key)
+            .expect("visual edit should have warmed the mermaid cache entry");
+        assert!(
+            matches!(
+                entry,
+                DiagramCacheEntry::Pending
+                    | DiagramCacheEntry::Ready(_, _)
+                    | DiagramCacheEntry::Error(_)
+            ),
+            "cache entry should exist after Visual Edit render"
+        );
+    });
+
+    // A second render pass must not re-reserve the same key.
+    app.update(cx, |app, cx| {
+        let visual = app.active_tab().document.visual_blocks_shared();
+        let preview: Vec<PreviewBlock> = Vec::new();
+        let before = app.diagram_cache.len();
+        app.ensure_diagram_renders(&preview, &visual, cx);
+        let after = app.diagram_cache.len();
+        assert_eq!(
+            before, after,
+            "re-rendering the same Visual Edit diagram must not spawn a second render"
+        );
+    });
+}
+
+#[gpui::test]
 fn visual_direct_math_editor_keeps_invalid_payload_ime_and_one_undo(cx: &mut TestAppContext) {
     let source = "$$\n\\frac{1}{2}\n$$";
     let document = MarkdownDocument::from_text(source);
@@ -2982,6 +3041,117 @@ fn visual_edit_heading_enter_activates_insertion_line_for_typing(cx: &mut TestAp
         assert_eq!(tab.selected_range, source.len() + 5..source.len() + 5);
         assert!(tab.undo_stack.len() >= 2);
         assert!(tab.autosave_generation >= 2);
+        assert!(tab.document.is_dirty());
+    });
+}
+
+#[gpui::test]
+fn visual_edit_paragraph_enter_shows_caret_not_source_island(cx: &mut TestAppContext) {
+    // Regression for `fix-visual-edit-whitespace-caret-box`: pressing Enter
+    // twice at the end of a paragraph creates a real blank line between the
+    // paragraph and end-of-document. Pressing Down onto that blank line drops
+    // the caret onto a Whitespace row, which must render as passive height +
+    // a thin caret line (NOT a bordered source-island box) and must still
+    // accept typed text.
+    let source = "Body";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // First Enter: "Body" -> "Body\n". Second Enter: "Body\n" -> "Body\n\n".
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "Body\n\n");
+        // After two Enters the caret is at end-of-document (offset 6) and the
+        // trailing blank line owns it as a Whitespace row.
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index = visual_block_index_for_offset(
+            &blocks,
+            tab.cursor_offset(),
+            tab.document.text().len(),
+        )
+        .expect("the blank line should own a visual row");
+        assert!(
+            matches!(blocks[block_index].kind, VisualBlockKind::Whitespace),
+            "Enter twice after a paragraph should land the caret on a Whitespace row"
+        );
+        assert!(tab.visual_caret_bounds.is_some());
+        assert!(tab.visual_input_bounds.is_some());
+    });
+
+    // The thin-caret path must still accept typed text at the caret.
+    cx.simulate_input("More");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "Body\n\nMore");
+        assert!(tab.document.is_dirty());
+        assert!(!tab.undo_stack.is_empty());
+    });
+}
+
+#[gpui::test]
+fn visual_edit_down_arrow_into_blank_line_shows_caret_not_source_island(cx: &mut TestAppContext) {
+    // Down arrow across a blank line also drops the caret onto a Whitespace
+    // row (`move_visual_vertical`). The row must show a thin caret and accept
+    // input — same regression as the paragraph-Enter path.
+    let source = "Para 1\n\nPara 2";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        // Caret inside "Para 1".
+        app.active_tab_mut().selected_range = 3..3;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_action(Down);
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index = visual_block_index_for_offset(
+            &blocks,
+            tab.cursor_offset(),
+            tab.document.text().len(),
+        )
+        .expect("Down should land on a visual row");
+        assert!(
+            matches!(blocks[block_index].kind, VisualBlockKind::Whitespace),
+            "Down from Para 1 should land the caret on the blank line"
+        );
+        assert!(tab.visual_caret_bounds.is_some());
+        assert!(tab.visual_input_bounds.is_some());
+    });
+
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        // The blank line (offset 7..7 between the two `\n`s) receives the "x".
+        assert_eq!(tab.document.text(), "Para 1\nx\nPara 2");
         assert!(tab.document.is_dirty());
     });
 }

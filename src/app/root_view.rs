@@ -30,7 +30,6 @@ impl Render for MarkionApp {
                 self.active_tab_mut().sync_preview_list(&blocks);
                 blocks
             };
-        self.ensure_diagram_renders(&preview_blocks, cx);
         let visual_blocks: std::sync::Arc<Vec<VisualBlock>> =
             if matches!(self.view_mode, ViewMode::VisualEdit) {
                 let blocks = self.active_tab().document.visual_blocks_shared();
@@ -45,6 +44,10 @@ impl Render for MarkionApp {
             } else {
                 std::sync::Arc::new(Vec::new())
             };
+        // Diagram cache warming needs both the preview blocks (Split/Read) and
+        // the visual blocks (Visual Edit) because Visual Edit no longer parses
+        // preview blocks — its diagram fences live only in `visual_blocks`.
+        self.ensure_diagram_renders(&preview_blocks, &visual_blocks, cx);
         self.ensure_math_renders(
             &preview_blocks,
             &visual_blocks,

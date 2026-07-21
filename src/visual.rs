@@ -504,9 +504,14 @@ fn visual_block_editor(
         PreviewBlock::CodeBlock { language, .. } => {
             let (payload_range, info_range, opening_fence, closing_fence) =
                 fenced_payload_ranges(text, source_range, '`', '~')?;
-            if crate::diagram_backend_id(language.as_deref()).is_some() {
-                return None;
-            }
+            // Diagram fences (e.g. `mermaid`) used to bail out here and fall
+            // back to a complete source island, because Visual Edit had no way
+            // to present a rendered diagram. The view layer now routes diagram
+            // fences through `visual_diagram_editor`, which layers a rendered
+            // image on top of this same payload editor — so the source-backed
+            // editing contract is preserved while the diagram becomes visible.
+            // Keep the editor's source ranges identical to a normal fence.
+            let _ = language;
             Some(VisualBlockEditor::Code {
                 opening_fence,
                 payload: VisualEditorField {
@@ -2186,19 +2191,54 @@ mod tests {
     }
 
     #[test]
-    fn unclosed_and_diagram_fences_remain_complete_source_islands() {
-        for source in [
-            "```rust\nfn main() {}\n",
-            "```mermaid\nflowchart LR\nA --> B\n```",
-        ] {
-            let block = MarkdownDocument::from_text(source)
-                .visual_blocks()
-                .into_iter()
-                .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
-                .expect("code block");
-            assert!(block.editor.is_none(), "unexpected editor for {source:?}");
-            assert_eq!(block.source_island, Some(VisualSourceIslandKind::Code));
-        }
+    fn unclosed_fences_remain_complete_source_islands() {
+        // Unclosed fences cannot yield a payload range, so they fall back to
+        // the complete source island regardless of language.
+        let source = "```rust\nfn main() {}\n";
+        let block = MarkdownDocument::from_text(source)
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("code block");
+        assert!(block.editor.is_none(), "unexpected editor for {source:?}");
+        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Code));
+    }
+
+    #[test]
+    fn diagram_fence_carries_source_backed_payload_editor() {
+        // A closed diagram fence now carries a `Code` payload editor (the same
+        // source-backed affordance as any other fenced code block) so the view
+        // layer can layer a rendered diagram on top. Source ranges stay exact.
+        let source = "```mermaid\nflowchart LR\nA --> B\n```";
+        let block = MarkdownDocument::from_text(source)
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("code block");
+        let VisualBlockEditor::Code {
+            opening_fence,
+            payload,
+            info_range,
+            closing_fence,
+        } = block.editor.expect("diagram fence should have a payload editor")
+        else {
+            panic!("expected Code editor for diagram fence");
+        };
+        assert_eq!(&source[opening_fence], "```");
+        assert_eq!(
+            &source[payload.source_range.clone()],
+            "flowchart LR\nA --> B\n"
+        );
+        assert_eq!(&source[info_range.expect("info range")], "mermaid");
+        assert_eq!(&source[closing_fence], "```");
+        // Payload lies strictly inside the block's source range, and the block
+        // range fully covers the authored fence.
+        assert!(block.source_range.start <= payload.source_range.start);
+        assert!(payload.source_range.end <= block.source_range.end);
+        assert_eq!(&source[block.source_range.clone()], source);
+        // Editor-driven blocks drop the conservative source-island kind: the
+        // payload editor is the source-backed path, matching math blocks.
+        assert!(block.source_island.is_none());
     }
 
     #[test]

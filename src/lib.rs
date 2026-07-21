@@ -5163,7 +5163,7 @@ mod tests {
     }
 
     #[test]
-    fn mermaid_keeps_code_block_ranges_copy_text_and_visual_source_island() {
+    fn mermaid_keeps_code_block_ranges_copy_text_and_source_backed_payload_editor() {
         let markdown = "before\n\n```MerMaid linenos\nA --> B\n```\n\nafter";
         let doc = MarkdownDocument::from_text(markdown);
         let block = doc
@@ -5183,11 +5183,26 @@ mod tests {
         assert_eq!(code, "A --> B");
         assert_eq!(&markdown[source_range], "```MerMaid linenos\nA --> B\n```");
         assert!(doc.plain_text_preview().contains("A --> B"));
-        assert!(
-            doc.visual_blocks()
-                .iter()
-                .any(|block| block.source_island == Some(VisualSourceIslandKind::Code))
-        );
+        // A closed diagram fence is now source-backed through a Code payload
+        // editor (so Visual Edit can layer the rendered diagram on top),
+        // matching display-math blocks: `editor = Some(Code)`, no conservative
+        // source island. The block's source range still fully covers the fence.
+        let visual = doc
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("visual code block");
+        let VisualBlockEditor::Code { payload, .. } =
+            visual.editor.expect("diagram fence carries a Code editor")
+        else {
+            unreachable!()
+        };
+        let payload_range = payload.source_range.clone();
+        assert_eq!(&markdown[payload_range.clone()], "A --> B\n");
+        assert!(visual.source_range.start <= payload_range.start);
+        assert!(payload_range.end <= visual.source_range.end);
+        assert_eq!(&markdown[visual.source_range.clone()], "```MerMaid linenos\nA --> B\n```");
+        assert!(visual.source_island.is_none());
     }
 
     #[test]
