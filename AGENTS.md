@@ -20,7 +20,7 @@ The canonical release procedure is [`docs/release-process.md`](docs/release-proc
 - If the user requests a new release without specifying a version, increment PATCH from the highest stable `vMAJOR.MINOR.PATCH` tag. Major, minor, and prerelease versions require explicit direction.
 - Keep the workspace package, root package, packager, and lockfile versions synchronized; run `cargo test --workspace` before tagging.
 - Use a dedicated `Release Markion vX.Y.Z` commit and an annotated `vX.Y.Z` tag, then monitor the tag-triggered GitHub Actions run until every native build and the publish job succeed.
-- Generated GitHub notes are not final. Unless the user requests another language, publish detailed English notes covering user-visible changes, fixes, compatibility or migration status, downloads, verification, and the full comparison link.
+- Generated GitHub notes are not final. Unless the user requests another language arrangement, publish detailed bilingual notes — English first, followed by the corresponding Simplified Chinese version — covering user-visible changes, fixes, compatibility or migration status, downloads, verification, and the full comparison link.
 - Do not report completion until the Windows NSIS installer, macOS Apple Silicon DMG, Linux amd64 DEB, and Linux x86_64 AppImage are attached and the final Release metadata has been verified.
 - Never delete, force-move, or recreate a public release tag without explicit user authorization.
 

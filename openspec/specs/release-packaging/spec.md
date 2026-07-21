@@ -82,7 +82,7 @@ The project SHALL document and follow a canonical GitHub release procedure that 
 - **THEN** the operator reports the failed stage and preserves the public tag unless explicit authorization is given for a destructive correction
 
 ### Requirement: Published releases SHALL contain curated release information
-The final GitHub Release description SHALL expand or replace auto-generated notes with a structured summary derived from the commits, diff, and completed OpenSpec changes since the previous tag. Unless the requester specifies another language, the summary SHALL be written in English and SHALL cover user-visible highlights and fixes, compatibility or migration information, available platform downloads, verification results, and a full comparison link. The final Release SHALL be a non-draft stable release unless a prerelease was explicitly requested.
+The final GitHub Release description SHALL expand or replace auto-generated notes with a structured summary derived from the commits, diff, and completed OpenSpec changes since the previous tag. Unless the requester specifies another language arrangement, the summary SHALL be bilingual: the English summary first, followed by the corresponding Simplified Chinese version, and SHALL cover user-visible highlights and fixes, compatibility or migration information, available platform downloads, verification results, and a full comparison link. The final Release SHALL be a non-draft stable release unless a prerelease was explicitly requested.
 
 #### Scenario: Generated notes omit direct commits
 - **WHEN** GitHub's generated notes mention only merged pull requests or otherwise omit user-visible work
