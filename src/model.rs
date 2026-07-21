@@ -432,7 +432,7 @@ pub enum SidebarTab {
 
 impl ViewMode {
     pub fn default_mode() -> Self {
-        Self::Split
+        Self::VisualEdit
     }
 
     pub fn next(self) -> Self {

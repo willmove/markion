@@ -3698,8 +3698,8 @@ mod tests {
 
     #[test]
     fn view_mode_cycles_through_all_modes() {
-        assert_eq!(ViewMode::default_mode(), ViewMode::Split);
-        assert_eq!(ViewMode::default(), ViewMode::Split);
+        assert_eq!(ViewMode::default_mode(), ViewMode::VisualEdit);
+        assert_eq!(ViewMode::default(), ViewMode::VisualEdit);
         assert_eq!(ViewMode::Edit.next(), ViewMode::VisualEdit);
         assert_eq!(ViewMode::VisualEdit.next(), ViewMode::Split);
         assert_eq!(ViewMode::Split.next(), ViewMode::Read);

@@ -2476,13 +2476,7 @@ fn visual_code_editor(
         .font_family("JetBrains Mono")
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
-        .children(language.map(|language| {
-            div()
-                .mb_2()
-                .text_size(px(typography.small_font_size))
-                .text_color(rgb(0x93c5fd))
-                .child(language.to_string())
-        }))
+        .child(code_block_header(app, language, code.to_string(), cx))
         .child(visual_editor_field_element(
             app,
             block_index,
@@ -2825,6 +2819,55 @@ fn html_preview_block_view(
         }))
 }
 
+/// Small "Copy" button rendered in the header of every code block. Clicking it
+/// writes the block's raw text to the clipboard in one step, so users no longer
+/// have to select the code manually. Works in preview, split, read, and Visual
+/// Edit modes.
+fn code_copy_button(app: &MarkionApp, code: String, cx: &mut Context<MarkionApp>) -> Div {
+    let typography = app.typography_metrics();
+    div()
+        .flex_none()
+        .px_2()
+        .py_1()
+        .rounded_sm()
+        .bg(rgb(0x1e293b))
+        .text_color(rgb(0x93c5fd))
+        .text_size(px(typography.small_font_size))
+        .cursor_pointer()
+        .child(t(app.language, Msg::ItemCopyCode))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
+                app.status = t(app.language, Msg::StatusCodeCopied).into();
+                cx.notify();
+            }),
+        )
+}
+
+/// Header row for a code block: the optional language label on the left and the
+/// one-click copy button on the right.
+fn code_block_header(
+    app: &MarkionApp,
+    language: Option<&str>,
+    code: String,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let typography = app.typography_metrics();
+    div()
+        .mb_2()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_size(px(typography.small_font_size))
+                .text_color(rgb(0x93c5fd))
+                .child(language.unwrap_or_default().to_string()),
+        )
+        .child(code_copy_button(app, code, cx))
+}
+
 fn code_block_view(
     app: &MarkionApp,
     language: &Option<String>,
@@ -2844,13 +2887,12 @@ fn code_block_view(
         .font_family("JetBrains Mono")
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
-        .children(language.as_ref().map(|language| {
-            div()
-                .mb_2()
-                .text_size(px(typography.small_font_size))
-                .text_color(rgb(0x93c5fd))
-                .child(language.clone())
-        }));
+        .child(code_block_header(
+            app,
+            language.as_deref(),
+            code.to_string(),
+            cx,
+        ));
     if show_code_line_numbers {
         body.children(highlighted.iter().enumerate().map(|(line_index, line)| {
             let (styled, plain) = code_line_text(line);

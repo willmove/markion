@@ -1421,7 +1421,7 @@ fn shortcut_catalog_lists_core_workflows() {
     ));
     assert!(has_action(
         ShortcutCategory::View,
-        "Edit Mode",
+        "Source Mode",
         "Ctrl+Alt+1",
         "Cmd+Option+1"
     ));
