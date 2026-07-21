@@ -3106,10 +3106,13 @@ fn visual_edit_paragraph_enter_shows_caret_not_source_island(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn visual_edit_down_arrow_into_blank_line_shows_caret_not_source_island(cx: &mut TestAppContext) {
-    // Down arrow across a blank line also drops the caret onto a Whitespace
-    // row (`move_visual_vertical`). The row must show a thin caret and accept
-    // input — same regression as the paragraph-Enter path.
+fn visual_edit_down_arrow_skips_blank_line_gap_to_next_block(cx: &mut TestAppContext) {
+    // Down arrow moves directly between rendered content blocks: the blank-line
+    // `Whitespace` gap row separating the two paragraphs is pure inter-block
+    // spacing and must NOT capture the caret as a dead navigation stop (that
+    // felt like "Down did nothing" and forced an extra keypress). The blank
+    // line stays reachable via Enter/click, covered by
+    // `visual_edit_paragraph_enter_shows_caret_not_source_island`.
     let source = "Para 1\n\nPara 2";
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -3139,41 +3142,40 @@ fn visual_edit_down_arrow_into_blank_line_shows_caret_not_source_island(cx: &mut
         )
         .expect("Down should land on a visual row");
         assert!(
-            matches!(blocks[block_index].kind, VisualBlockKind::Whitespace),
-            "Down from Para 1 should land the caret on the blank line"
+            matches!(blocks[block_index].kind, VisualBlockKind::Paragraph),
+            "single Down from Para 1 should skip the blank-line gap and land in \
+             Para 2, got kind={:?} cursor={}",
+            blocks[block_index].kind,
+            tab.cursor_offset(),
         );
-        assert!(tab.visual_caret_bounds.is_some());
-        assert!(tab.visual_input_bounds.is_some());
-    });
-
-    cx.simulate_input("x");
-    cx.run_until_parked();
-    app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        // The blank line (offset 7..7 between the two `\n`s) receives the "x".
-        assert_eq!(tab.document.text(), "Para 1\nx\nPara 2");
-        assert!(tab.document.is_dirty());
+        // "Para 2" begins at offset 8; the caret must be inside it, not on the
+        // gap row (offset 7).
+        assert!(
+            tab.cursor_offset() >= 8,
+            "caret must be inside Para 2, got {}",
+            tab.cursor_offset()
+        );
     });
 }
 
 #[gpui::test]
-fn visual_edit_up_arrow_into_blank_line_then_heading(cx: &mut TestAppContext) {
-    // Regression for the bug where pressing Up from a paragraph whose line
-    // above is a heading either failed to move (caret at paragraph start) or
-    // jumped to the start of the current line (caret mid-paragraph). The fix
-    // makes Up symmetric with Down across a blank-line gap row:
+fn visual_edit_up_arrow_skips_blank_line_gap_to_heading(cx: &mut TestAppContext) {
+    // Up moves directly from a paragraph into the heading above it in a SINGLE
+    // press, skipping the blank-line `Whitespace` gap row that separates them.
+    // The gap is pure inter-block spacing; parking the caret there looked like
+    // "Up did nothing" and forced a second press to reach the heading. The
+    // preferred horizontal coordinate is retained across the crossing. The
+    // blank line stays reachable via Enter/click, covered by
+    // `visual_edit_paragraph_enter_shows_caret_not_source_island`.
     //
-    //   1. First Up must land on the blank-line gap row (Whitespace block) so
-    //      the user can type into the blank line, mirroring
-    //      `visual_edit_down_arrow_into_blank_line_shows_caret_not_source_island`.
-    //   2. Typing after Up must insert text at the blank line.
-    //   3. A second Up from the gap row must continue into the heading above,
-    //      preserving the visual column via `preferred_x`.
+    // Blocks for "### heading\n\nparagraph":
+    //   Heading(0..12), Whitespace(12..13), Paragraph(13..22).
     let source = "### heading\n\nparagraph";
+
+    // (A) Caret in the middle of the paragraph: one Up lands in the heading.
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
-        // Caret in the middle of the paragraph (Bug 3 scenario).
         app.active_tab_mut().selected_range = 16..16;
         app.active_tab_mut().visual_cursor_reveal_pending = true;
         app.view_mode = ViewMode::VisualEdit;
@@ -3185,10 +3187,9 @@ fn visual_edit_up_arrow_into_blank_line_then_heading(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
-    // (1) First Up lands on the blank-line gap row, NOT the paragraph start.
     cx.dispatch_action(Up);
     cx.run_until_parked();
-    let gap_offset = app.update(cx, |app, _| {
+    app.update(cx, |app, _| {
         let tab = app.active_tab();
         let blocks = tab.document.visual_blocks_shared();
         let block_index = visual_block_index_for_offset(
@@ -3197,75 +3198,18 @@ fn visual_edit_up_arrow_into_blank_line_then_heading(cx: &mut TestAppContext) {
             tab.document.text().len(),
         )
         .expect("Up should land on a visual row");
-        assert_eq!(
-            tab.cursor_offset(),
-            12,
-            "Up from paragraph should land at the blank-line gap row's source offset"
-        );
-        assert!(
-            matches!(blocks[block_index].kind, VisualBlockKind::Whitespace),
-            "first Up from paragraph should land on the blank-line gap row, \
-             got block_index={} kind={:?}",
-            block_index,
-            blocks[block_index].kind,
-        );
-        assert!(
-            tab.visual_input_bounds.is_some(),
-            "blank-line gap row must accept input after Up"
-        );
-        tab.cursor_offset()
-    });
-
-    // (2) Typing after Up inserts text at the blank line.
-    cx.simulate_input("x");
-    cx.run_until_parked();
-    app.update(cx, |app, _| {
-        assert_eq!(
-            app.active_tab().document.text(),
-            "### heading\nx\nparagraph",
-            "typing after Up into the blank line must insert the character there"
-        );
-    });
-
-    // Reset to the original document and verify the second-Up path.
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
-        app.active_tab_mut().selected_range = 16..16;
-        app.active_tab_mut().visual_cursor_reveal_pending = true;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
-    cx.dispatch_action(Up);
-    cx.run_until_parked();
-    // (3) Second Up from the gap row continues into the heading, preserving
-    //     the visual column via `preferred_x`.
-    cx.dispatch_action(Up);
-    cx.run_until_parked();
-    app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        let blocks = tab.document.visual_blocks_shared();
-        let block_index = visual_block_index_for_offset(
-            &blocks,
-            tab.cursor_offset(),
-            tab.document.text().len(),
-        )
-        .expect("second Up should land on the heading row");
         assert!(
             matches!(blocks[block_index].kind, VisualBlockKind::Heading { .. }),
-            "second Up should land inside the heading, got kind={:?} cursor={}",
+            "single Up from the paragraph should skip the gap and land in the \
+             heading, got kind={:?} cursor={}",
             blocks[block_index].kind,
             tab.cursor_offset(),
         );
-        assert_ne!(
-            tab.cursor_offset(),
-            gap_offset,
-            "second Up must move past the gap row"
+        assert!(
+            tab.cursor_offset() < 12,
+            "caret must be inside the heading (0..12), not on the gap row \
+             (offset 12), got {}",
+            tab.cursor_offset()
         );
         assert!(
             tab.visual_preferred_x.is_some(),
@@ -3273,8 +3217,8 @@ fn visual_edit_up_arrow_into_blank_line_then_heading(cx: &mut TestAppContext) {
         );
     });
 
-    // Sanity-check Bug 2 (caret at paragraph start, above is heading): Up
-    // still lands on the blank-line gap row rather than staying put.
+    // (B) Caret at the paragraph start: one Up still skips the gap into the
+    //     heading rather than staying put or parking on the blank line.
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
@@ -3292,10 +3236,24 @@ fn visual_edit_up_arrow_into_blank_line_then_heading(cx: &mut TestAppContext) {
     cx.run_until_parked();
     app.update(cx, |app, _| {
         let tab = app.active_tab();
-        assert_eq!(
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index = visual_block_index_for_offset(
+            &blocks,
             tab.cursor_offset(),
-            12,
-            "Up from paragraph start (above is heading) must move into the blank-line gap row"
+            tab.document.text().len(),
+        )
+        .expect("Up should land on a visual row");
+        assert!(
+            matches!(blocks[block_index].kind, VisualBlockKind::Heading { .. }),
+            "Up from paragraph start must skip the gap into the heading, \
+             got kind={:?} cursor={}",
+            blocks[block_index].kind,
+            tab.cursor_offset(),
+        );
+        assert!(
+            tab.cursor_offset() < 12,
+            "caret must be inside the heading, got {}",
+            tab.cursor_offset()
         );
     });
 }

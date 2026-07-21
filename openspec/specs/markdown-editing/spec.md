@@ -496,7 +496,7 @@ Visual Edit SHALL preserve which canonical source side owns a collapsed caret wh
 - **AND** source offsets remain clamped to valid UTF-8 boundaries
 
 ### Requirement: Layout-aware Visual Edit navigation
-When Visual Edit is active, vertical and line-boundary navigation SHALL follow the painted visual layout rather than only logical Markdown source lines. Up/Down and their selection variants SHALL retain a preferred horizontal coordinate across wrapped lines and adjacent visual blocks, while Home/End SHALL target the active painted line in rendered content. Vertical navigation SHALL be symmetric across blank-line (`Whitespace`) gap rows: moving Up from the lower rendered block and moving Down from the upper rendered block SHALL both land on the gap row's source offset so the user can type into an existing blank line from either direction, then a subsequent vertical move SHALL continue into the rendered block on the far side while preserving the preferred horizontal coordinate.
+When Visual Edit is active, vertical and line-boundary navigation SHALL follow the painted visual layout rather than only logical Markdown source lines. Up/Down and their selection variants SHALL retain a preferred horizontal coordinate across wrapped lines and adjacent visual blocks, while Home/End SHALL target the active painted line in rendered content. Vertical navigation SHALL move directly between rendered content blocks: a blank-line (`Whitespace`) gap row is pure inter-block spacing and SHALL NOT capture the caret as a navigation stop. A single Up (or Down) SHALL skip past any consecutive gap rows and land in the next rendered block on the far side, preserving the preferred horizontal coordinate, so the caret never parks on an empty gap row where the move would look like it did nothing. A blank line remains reachable for editing by clicking it or by pressing Enter — not by arrow navigation. Only when nothing but whitespace remains before the document edge SHALL a vertical move land on the gap row itself, so the arrow key still reaches a leading/trailing blank line instead of becoming a dead no-op.
 
 #### Scenario: Up and Down traverse wrapped visual lines
 - **WHEN** a rendered paragraph or other editable visual block wraps onto multiple painted lines
@@ -514,23 +514,26 @@ When Visual Edit is active, vertical and line-boundary navigation SHALL follow t
 - **THEN** the caret moves to the closest source-backed position in the adjacent visual block
 - **AND** a virtualized target row is revealed before the pending movement is completed
 
-#### Scenario: Vertical navigation is symmetric across a blank-line gap row
+#### Scenario: Vertical navigation skips a blank-line gap row between content blocks
 - **WHEN** the user presses Up from a paragraph whose rendered block above is separated by a blank-line `Whitespace` gap row (for example a heading above, paragraph below)
 - **OR** the user presses Down from a heading whose rendered block below is separated by a blank-line gap row
-- **THEN** the caret lands on the gap row's source offset (`Whitespace.source_range.start`), which is the same source offset the gap row's `VisualProjection` anchors at
-- **AND** the gap row becomes the caret-owning row and accepts subsequent typed text at that source position through the standard source-backed input path
-- **AND** the resolved target does not land on the start offset of the lower rendered block, which would otherwise look like the caret did not move
-
-#### Scenario: A second vertical move continues past the gap row
-- **WHEN** the caret already owns a blank-line gap row and the user presses Up (or Down) again
-- **THEN** the caret moves into the rendered block on the far side of the gap
+- **THEN** a single move skips the gap row and lands the caret in the rendered block on the far side of the gap, not on the gap row
 - **AND** the preferred horizontal coordinate is retained across the gap-row crossing
+- **AND** the caret never parks on the empty gap row, where the move would look like it did nothing
 
 #### Scenario: Up from the start of a paragraph whose line above is a heading
 - **WHEN** the caret is at the first source offset of a paragraph (paragraph start) and the user presses Up
-- **AND** the block immediately above is a blank-line gap row
-- **THEN** the caret moves onto the gap row instead of staying at the paragraph start
-- **AND** subsequent typed text inserts at the gap row's source position
+- **AND** the block immediately above is a blank-line gap row followed by a heading
+- **THEN** the caret moves directly into the heading in a single press rather than staying at the paragraph start or parking on the gap row
+
+#### Scenario: A blank line remains reachable for editing without arrows
+- **WHEN** the user wants to type into an existing blank line between two rendered blocks
+- **THEN** the caret reaches the blank-line gap row by clicking it or by pressing Enter, and the gap row becomes the caret-owning row that accepts typed text at its source position
+- **AND** arrow navigation is not required to reach the blank line and does not park on it
+
+#### Scenario: A vertical move reaches a leading or trailing blank line at the document edge
+- **WHEN** the only rows beyond the active block in the move direction are blank-line gap rows up to the start or end of the document
+- **THEN** the move lands on the gap row's source offset (`Whitespace.source_range.start`) instead of becoming a dead no-op
 
 #### Scenario: Selection navigation uses visual targets
 - **WHEN** the user invokes Select Up or Select Down in Visual Edit

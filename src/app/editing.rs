@@ -1410,29 +1410,52 @@ impl MarkionApp {
             return true;
         }
 
-        let target_block = match direction {
+        let Some(first_target) = (match direction {
             VisualNavigationDirection::Up => block_index.checked_sub(1),
             VisualNavigationDirection::Down => (block_index + 1
                 < self.active_tab().visual_list_blocks.len())
             .then_some(block_index + 1),
-        };
-        let Some(target_block) = target_block else {
+        }) else {
             return true;
         };
-        if let Some(block) = self.active_tab().visual_list_blocks.get(target_block)
-            && matches!(block.kind, VisualBlockKind::Whitespace)
+
+        // Up/Down move directly between rendered content blocks. A blank-line
+        // `Whitespace` gap row is pure inter-block spacing, not a navigation
+        // stop: parking the caret on it looked like "Up/Down did nothing"
+        // because the row paints as an empty strip, and it forced an extra
+        // keypress to cross each blank line between two visible blocks. Skip
+        // past consecutive gap rows to the next rendered block and hand off
+        // through `pending_visual_navigation`, preserving `preferred_x`. Blank
+        // lines stay reachable by clicking them or pressing Enter. Only when
+        // nothing but whitespace remains before the document edge do we land on
+        // the gap row itself, so the caret can still reach a leading/trailing
+        // blank line instead of the arrow key becoming a dead no-op.
+        let mut target_block = first_target;
+        let mut edge_gap_offset = None;
+        while self
+            .active_tab()
+            .visual_list_blocks
+            .get(target_block)
+            .is_some_and(|block| matches!(block.kind, VisualBlockKind::Whitespace))
         {
-            // Land on the blank-line row itself. Whitespace gap rows are
-            // legitimate caret destinations (see
-            // `visual_edit_down_arrow_into_blank_line_shows_caret_not_source_island`),
-            // and their projection anchors at `source_range.start`. Using
-            // `.end` for Up used to jump *past* the gap and land on the lower
-            // block's first offset, which looked like "Up did nothing" when
-            // the lower block was a paragraph and looked like "Up moved to
-            // the current line's start" when the caret started mid-paragraph.
-            // Both directions now resolve to the gap row's start so Up/Down
-            // are symmetric across a blank line.
-            let target = block.source_range.start;
+            let gap_start = self.active_tab().visual_list_blocks[target_block]
+                .source_range
+                .start;
+            let next = match direction {
+                VisualNavigationDirection::Up => target_block.checked_sub(1),
+                VisualNavigationDirection::Down => (target_block + 1
+                    < self.active_tab().visual_list_blocks.len())
+                .then_some(target_block + 1),
+            };
+            match next {
+                Some(next) => target_block = next,
+                None => {
+                    edge_gap_offset = Some(gap_start);
+                    break;
+                }
+            }
+        }
+        if let Some(target) = edge_gap_offset {
             if extend_selection {
                 self.select_to(target, cx);
             } else {
