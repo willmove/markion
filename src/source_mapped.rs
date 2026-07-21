@@ -451,7 +451,7 @@ fn split_regions(source: &str) -> Vec<(usize, &str)> {
         .collect()
 }
 
-fn opening_fence(trimmed: &str) -> Option<(char, usize)> {
+pub(crate) fn opening_fence(trimmed: &str) -> Option<(char, usize)> {
     let marker = trimmed.chars().next()?;
     if !matches!(marker, '`' | '~') {
         return None;
@@ -460,7 +460,7 @@ fn opening_fence(trimmed: &str) -> Option<(char, usize)> {
     (count >= 3).then_some((marker, count))
 }
 
-fn is_closing_fence(trimmed: &str, marker: char, minimum: usize) -> bool {
+pub(crate) fn is_closing_fence(trimmed: &str, marker: char, minimum: usize) -> bool {
     let count = trimmed.chars().take_while(|ch| *ch == marker).count();
     count >= minimum && trimmed[count..].trim().is_empty()
 }
@@ -517,7 +517,7 @@ fn requires_full_parse(source: &str) -> bool {
     fence.is_some()
 }
 
-fn is_reference_definition(line: &str) -> bool {
+pub(crate) fn is_reference_definition(line: &str) -> bool {
     line.strip_prefix('[')
         .and_then(|rest| rest.find("]:").map(|close| close))
         .is_some_and(|close| close > 0)
