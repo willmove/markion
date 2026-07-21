@@ -154,69 +154,44 @@ The editor SHALL provide keyboard shortcuts for switching to each view mode dire
 - **THEN** the view mode shortcuts use the same `secondary` modifier convention as other application shortcuts
 
 ### Requirement: Source-backed Visual Edit mode
-The editor SHALL provide a WYSIWYG-oriented Visual Edit mode that keeps supported Markdown content as close to its rendered result as can be edited through an exact, lossless source mutation, while preserving `MarkdownDocument.text` as the single canonical document representation. Visual Edit SHALL prefer direct rendered editing, including dedicated field or payload editors for exactly ranged complex blocks, SHALL reveal only the smallest complete source syntax needed for the active operation, and SHALL use a source-backed edit island only when an exact visual mutation or mapping cannot be proven. Visual Edit SHALL register a platform text-input target whenever its surface is active, including for an empty document, and Visual Edit mutations SHALL update the Markdown source text through the same dirty-state, undo/redo, autosave, recovery, and per-tab isolation paths as source editing. Every valid source caret position in a non-empty document, including whitespace-only gaps and trailing whitespace, SHALL have a source-backed visual editing affordance. Cursor-only interaction state, visual-list following, direct-widget focus, caret geometry, composition geometry, and navigation layout SHALL remain independent from document-version-derived caches.
+The editor SHALL provide a Visual Edit mode that presents common Markdown constructs, including valid inline and display math, in a rendered, editable form while preserving `MarkdownDocument.text` as the single canonical document representation. Visual Edit mutations SHALL update the Markdown source text through the same dirty-state, undo/redo, autosave, recovery, and per-tab isolation paths as source editing. Math SHALL be rendered while unfocused and SHALL reveal its complete authored delimiter group or a source-backed edit island when focused; it SHALL NOT be mutated through an inferred rendered formula tree.
 
 #### Scenario: Visual prose editing updates Markdown source
 - **WHEN** the user edits visible prose inside a paragraph, heading, blockquote, or list item in Visual Edit mode
 - **THEN** the corresponding Markdown source text is updated
 - **AND** the document dirty flag and undo history are updated through the existing document mutation path
 
-#### Scenario: Exact constructs prefer rendered editing
-- **WHEN** a Markdown construct has an exact source/display mapping and a lossless direct visual edit path
-- **THEN** Visual Edit keeps the construct rendered during ordinary editing
-- **AND** it does not replace the whole block with raw source solely because the construct is focused
-
-#### Scenario: Exact complex blocks use dedicated editors
-- **WHEN** an ordinary fenced code block, block-math construct, inline Markdown image, or GFM table has proven exact field or payload ranges
-- **THEN** Visual Edit presents its rendered block together with the dedicated direct editing controls defined for that construct
-- **AND** each control mutates only validated canonical source ranges through the shared application edit path
-
-#### Scenario: Platform text input reaches a non-empty visual document
-- **WHEN** Visual Edit is active, the app editing focus is active, and the user enters normal platform text
-- **THEN** the text replaces the current source selection or inserts at the current source caret
-- **AND** the canonical Markdown text, dirty state, undo history, autosave, and recovery behavior follow the existing source-editing mutation path
-
-#### Scenario: Empty visual document accepts first input
-- **WHEN** Visual Edit is active for an empty document and the user enters platform text
-- **THEN** the text is inserted into `MarkdownDocument.text`
-- **AND** the new visual block is rendered without switching to source Edit mode
-
-#### Scenario: Visual Edit supports IME composition
-- **WHEN** the platform begins, updates, or commits an IME composition in Visual Edit
-- **THEN** the existing marked-text range and source-backed replacement path are used
-- **AND** GPUI receives visual range geometry for candidate-window placement when the active row has been laid out
-
 #### Scenario: Visual formatting actions remain source-backed
 - **WHEN** the user applies bold, italic, inline code, link, image, heading, list, task list, blockquote, or fenced-code formatting in Visual Edit mode
 - **THEN** the editor updates the underlying Markdown markers in `MarkdownDocument.text`
 - **AND** switching to Edit mode shows Markdown source that represents the visual result
 
-#### Scenario: Focused syntax is exposed minimally
+#### Scenario: Focused syntax can be exposed for editing
 - **WHEN** the cursor enters visually formatted inline content whose hidden Markdown syntax is needed for precise editing
-- **THEN** the editor SHALL expose the smallest complete source syntax group or source-backed edit island required for that focused content
-- **AND** unrelated exact content in the same block remains rendered
+- **THEN** the editor SHALL expose the relevant source syntax or a source-backed edit island for that focused content
 
-#### Scenario: Complex or ambiguous constructs use conservative edit islands
-- **WHEN** the user focuses an HTML/front-matter region, registered diagram fence, malformed image/table, unclosed fence, or another construct without an exact direct visual edit path
+#### Scenario: Unfocused math is rendered in Visual Edit
+- **WHEN** valid inline, display, or fenced math is visible in Visual Edit and neither its source range nor delimiter group is focused
+- **THEN** inline math appears as a baseline-aligned formula atom and display math appears as a typeset block
+- **AND** the authored Markdown remains the canonical content
+
+#### Scenario: Focused inline math reveals one complete source group
+- **WHEN** the caret or a selection endpoint enters an inline math source range in Visual Edit
+- **THEN** the complete byte-exact delimiter group is revealed as one source-backed editable range
+- **AND** unrelated prose in the same block remains rendered
+
+#### Scenario: Focused display math uses a source edit island
+- **WHEN** the user focuses `$$...$$` or fenced `math` content in Visual Edit
+- **THEN** that formula presents a source-backed edit island containing its exact authored syntax
+- **AND** moving focus away restores formula rendering without changing the document version
+
+#### Scenario: Complex constructs use conservative edit islands
+- **WHEN** the user focuses a fenced code block, HTML/front matter region, image, malformed math, or other construct not supported by direct visual editing
 - **THEN** the editor SHALL provide a source-backed editing affordance or preserve the existing source editing workflow
 - **AND** the construct SHALL NOT be mutated through an ambiguous rendered-tree edit
 
-#### Scenario: Whitespace caret positions remain editable
-- **WHEN** the source caret moves into an empty line, a whitespace-only gap between rendered blocks, or trailing document whitespace in Visual Edit
-- **THEN** the active whitespace range provides a visible source-backed caret or edit island
-- **AND** inserting or deleting text at that position mutates the exact underlying Markdown range
-
-#### Scenario: Cursor navigation reveals the active visual block
-- **WHEN** keyboard navigation, text mutation, mode entry, search navigation, or an outline jump moves the source caret to a visual block outside the current viewport
-- **THEN** the Visual Edit list scrolls enough to reveal that active block
-- **AND** subsequent manual scrolling is not forced back to the caret unless another cursor-moving operation occurs
-
-#### Scenario: Read mode remains non-editable
-- **WHEN** Read mode is active and the user enters platform text or starts an IME composition
-- **THEN** no Visual Edit input target mutates the document
-
 #### Scenario: Visual-only interaction does not reparse unnecessarily
-- **WHEN** the user moves the cursor, changes selection, scrolls the visual list, hovers text, focuses a visual edit island or direct block field, updates visual caret/composition geometry, or records navigation layout without changing document text
+- **WHEN** the user moves the cursor, changes selection, hovers text, or focuses a visual edit island without changing document text
 - **THEN** the document version SHALL remain unchanged
 - **AND** derived Markdown caches SHALL NOT be invalidated
 
@@ -393,7 +368,7 @@ Visual Edit SHALL render byte-exact supported inline formatting in prose blocks 
 - **AND** the editor does not guess a rendered-tree mutation for that construct
 
 ### Requirement: Visual Edit whitespace activation
-The system SHALL keep source-backed whitespace ranges available for exact caret mapping while treating whitespace between rendered blocks as passive layout until the source caret intentionally enters that range.
+The system SHALL keep source-backed whitespace ranges available for exact caret mapping while treating whitespace between rendered blocks as passive layout until the source caret intentionally enters that range. When the source caret owns a whitespace row — whether because the user pressed Enter at the end of a paragraph (whose source range excludes the trailing newline) or because keyboard navigation moved the caret into a whitespace-only range — Visual Edit SHALL present the row as the same passive-height layout it uses when unfocused, plus a thin insertion caret line visually consistent with the caret in a paragraph or heading, and SHALL accept subsequent typed text at the exact source caret position. Visual Edit SHALL NOT wrap a whitespace row that owns the caret in a source-island box (border, padding, monospace styling, or differentiated background), because such chrome misrepresents ordinary inter-paragraph spacing as a code-like block. Source islands SHALL remain reserved for blocks whose source has no rendered visual form (frontmatter, code, HTML, unsupported constructs) or for inline runs whose source/display mapping is ambiguous and therefore requires a conservative source-editing fallback.
 
 #### Scenario: Clicking a passive gap between headings does not activate editing
 - **WHEN** the Visual Edit caret belongs to a rendered heading and the user clicks the whitespace gap between that heading and another heading
@@ -410,6 +385,15 @@ The system SHALL keep source-backed whitespace ranges available for exact caret 
 #### Scenario: Intentional source caret movement preserves whitespace editing
 - **WHEN** keyboard navigation or reveal logic moves the source caret into an existing whitespace-only range
 - **THEN** the owning whitespace row provides the source-backed editing affordance without recomputing the document's cached Markdown-derived state
+
+#### Scenario: Whitespace row owning the caret renders a caret line, not a source island
+- **WHEN** the source caret owns a whitespace row in Visual Edit — for example after creating a blank line by pressing Enter (so a second newline lands outside any paragraph range), or after pressing Down arrow across an existing blank line
+- **THEN** the row is rendered as passive-height layout with a thin insertion caret line and no border, padding, monospace styling, or differentiated background
+- **AND** typed text is inserted into the canonical Markdown source at the caret position through the same dirty-state, undo/redo, autosave, and per-tab isolation paths as any other edit
+
+#### Scenario: Whitespace row not owning the caret remains passive
+- **WHEN** a whitespace row does not own the source caret
+- **THEN** it renders as passive layout without a caret, exactly as before, regardless of whether it owns the caret on other frames
 
 ### Requirement: Progressive Markdown marker reveal in Visual Edit
 Visual Edit SHALL keep supported paragraph, heading, list-item, and blockquote content visually rendered while it is focused. When precise editing requires Markdown syntax, the editor SHALL reveal only the smallest complete inline syntax group whose source mapping is proven exact, while `MarkdownDocument.text` remains the canonical representation. Display-to-source and source-to-display mappings SHALL remain UTF-8-safe and monotonic for pointer placement, selection, keyboard navigation, platform text input, and IME caret geometry. Syntax whose mapping is nested, overlapping, byte-inexact, or otherwise ambiguous MUST use a conservative source-backed edit island.
@@ -648,4 +632,32 @@ The repository SHALL maintain a current Visual Edit support matrix that classifi
 - **WHEN** a proposal changes how a Markdown construct is presented or edited in Visual Edit
 - **THEN** the proposal selects one support classification and names its exact fallback trigger
 - **AND** implementation and documentation cannot be considered complete until the matrix and invariant evidence are updated
+
+### Requirement: Rendered math preserves selection, mapping, and copy
+In Split Preview, Read, and Visual Edit, rendered inline math SHALL participate in prose layout as a single measured atom aligned to the surrounding text baseline, and display math SHALL participate as a source-mapped block. Pointer hit testing and selection SHALL resolve math to its byte-exact authored source boundaries rather than internal rendered glyphs. Copying a selection containing math as plain text or Markdown SHALL preserve the complete authored math syntax in document order; copying as HTML SHALL use the same safe static-math semantics as HTML export.
+
+#### Scenario: Inline math aligns and wraps atomically
+- **WHEN** a prose line contains text before and after inline math
+- **THEN** the formula baseline aligns with the surrounding text and participates in line wrapping as one indivisible atom
+- **AND** adjacent text retains its source mapping
+
+#### Scenario: Drag selection crosses a formula
+- **WHEN** the user drag-selects preview content from text before an inline formula to text after it
+- **THEN** the selection covers the complete formula atom and never a partial internal glyph range
+- **AND** no document or derived-cache state is mutated
+
+#### Scenario: Source-preserving copy includes delimiters
+- **WHEN** a preview or Visual Edit selection containing math is copied as plain text or Markdown
+- **THEN** the clipboard includes the complete authored `$...$`, `$$...$$`, or fenced `math` syntax at that source position
+- **AND** the payload is not replaced by a Unicode approximation
+
+#### Scenario: Formula hit testing maps to safe boundaries
+- **WHEN** the user clicks the leading or trailing half of an unfocused inline formula in Visual Edit
+- **THEN** the caret resolves to the corresponding source boundary or activates the complete source-backed group
+- **AND** it is never placed inside an unrepresented rendered glyph tree
+
+#### Scenario: Read mode remains non-editable
+- **WHEN** the user selects or copies a rendered formula in Read mode
+- **THEN** source-preserving copy is available
+- **AND** typing, cut, paste, or pointer interaction cannot mutate the document
 

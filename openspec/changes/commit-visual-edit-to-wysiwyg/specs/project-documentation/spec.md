@@ -1,0 +1,18 @@
+## MODIFIED Requirements
+
+### Requirement: Bilingual project overview
+The repository SHALL provide an English root README and a Simplified Chinese README that present equivalent, current overviews of Markion's installation, implemented workflows, limitations, configuration, export behavior, Visual Edit WYSIWYG coverage (including the WYSIWYG coverage roadmap of known gaps), and contributor verification commands. Each README SHALL provide a visible link to the other language edition and to the Visual Edit WYSIWYG coverage matrix. Stable capability purposes and project context metadata SHALL describe the current implemented architecture and MUST NOT characterize an archived capability as only future work.
+
+#### Scenario: English reader opens the repository
+- **WHEN** a reader opens `README.md`
+- **THEN** the document describes the current implemented application in English
+- **AND** it links to `README.zh-CN.md` and the Visual Edit WYSIWYG coverage matrix
+
+#### Scenario: Chinese reader selects the Chinese edition
+- **WHEN** a reader opens `README.zh-CN.md`
+- **THEN** the document presents the same capability and limitation coverage in Simplified Chinese
+- **AND** it links back to `README.md` and the Visual Edit WYSIWYG coverage matrix
+
+#### Scenario: README claims are checked against the project
+- **WHEN** either README describes a feature, release package, configuration option, limitation, development command, or a Visual Edit WYSIWYG coverage class or gap
+- **THEN** the claim matches the current stable OpenSpec requirements and implemented repository state
