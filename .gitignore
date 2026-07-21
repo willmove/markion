@@ -22,6 +22,8 @@
 # --- AI assistant / agent tooling ---
 /.claude/
 /.cursor/
+/.kimi/
+/.kiro/
 /.omp/
 /.opencode/
 /.pi/
