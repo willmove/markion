@@ -1422,10 +1422,17 @@ impl MarkionApp {
         if let Some(block) = self.active_tab().visual_list_blocks.get(target_block)
             && matches!(block.kind, VisualBlockKind::Whitespace)
         {
-            let target = match direction {
-                VisualNavigationDirection::Up => block.source_range.end,
-                VisualNavigationDirection::Down => block.source_range.start,
-            };
+            // Land on the blank-line row itself. Whitespace gap rows are
+            // legitimate caret destinations (see
+            // `visual_edit_down_arrow_into_blank_line_shows_caret_not_source_island`),
+            // and their projection anchors at `source_range.start`. Using
+            // `.end` for Up used to jump *past* the gap and land on the lower
+            // block's first offset, which looked like "Up did nothing" when
+            // the lower block was a paragraph and looked like "Up moved to
+            // the current line's start" when the caret started mid-paragraph.
+            // Both directions now resolve to the gap row's start so Up/Down
+            // are symmetric across a blank line.
+            let target = block.source_range.start;
             if extend_selection {
                 self.select_to(target, cx);
             } else {
