@@ -13,6 +13,41 @@ use crate::model::{
     VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualTableCell,
 };
 use crate::table::table_cell_source_ranges;
+use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fence};
+
+/// Collects the document's link reference definition lines so that per-block
+/// parsing in `inline_runs` can resolve reference-style links whose
+/// definitions live in other blocks. Lines inside fenced code blocks are
+/// skipped (they are code, not definitions), and footnote definitions
+/// (`[^label]:`) are excluded — `^` cannot start a link label, and keeping
+/// them out guarantees the appended suffix produces no parser events of its
+/// own interest to block mapping.
+fn collect_link_reference_definitions(text: &str) -> String {
+    let mut definitions = String::new();
+    let mut fence: Option<(char, usize)> = None;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some((marker, minimum)) = fence {
+            if is_closing_fence(trimmed, marker, minimum) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(open) = opening_fence(trimmed) {
+            fence = Some(open);
+            continue;
+        }
+        // Link reference definitions allow at most three leading spaces.
+        if line.len() - trimmed.len() <= 3
+            && !trimmed.starts_with("[^")
+            && is_reference_definition(trimmed)
+        {
+            definitions.push_str(trimmed);
+            definitions.push('\n');
+        }
+    }
+    definitions
+}
 
 impl VisualProjection {
     pub fn boundary_candidates(&self, display: usize) -> VisualBoundaryCandidates {
@@ -237,6 +272,12 @@ pub fn build_visual_projection_with_marked_range(
         (range.start, range.end)
     });
 
+    let link_group_ranges = block
+        .reveal_groups
+        .iter()
+        .filter(|group| group.kind == VisualRevealKind::Link)
+        .map(|group| &group.source_range)
+        .collect::<Vec<_>>();
     let mut projection = VisualProjection {
         text: String::new(),
         segments: Vec::with_capacity(pieces.len()),
@@ -255,10 +296,18 @@ pub fn build_visual_projection_with_marked_range(
                     display_range: display_range.clone(),
                     source_range: run.content_range.clone(),
                 });
+                // A run belongs to a link when it carries a local destination
+                // (inline link) or sits inside a resolved reference-style
+                // link's reveal group, whose target lives in another block.
+                let in_link = run.link_target_range.is_some()
+                    || link_group_ranges.iter().any(|range| {
+                        range.start <= run.content_range.start
+                            && run.content_range.end <= range.end
+                    });
                 projection.spans.push(VisualProjectionSpan {
                     display_range,
                     style: run.style,
-                    link: run.link_target_range.is_some(),
+                    link: in_link,
                     source: false,
                 });
             }
@@ -288,6 +337,9 @@ pub(crate) fn build_visual_blocks(
     preview: &[PreviewBlock],
     mut allocate_id: impl FnMut() -> VisualBlockId,
 ) -> Vec<VisualBlock> {
+    // Link reference definitions are document-scoped; per-block parsing needs
+    // them appended to resolve reference-style links (see `inline_runs`).
+    let reference_definitions = collect_link_reference_definitions(text);
     let mut blocks = Vec::with_capacity(preview.len() + 1);
     if let Some((_, body_start)) = split_front_matter(text)
         && body_start > 0
@@ -335,8 +387,13 @@ pub(crate) fn build_visual_blocks(
             ));
         }
 
-        let mut block =
-            visual_block_from_preview(text, preview_block, range.clone(), &mut allocate_id);
+        let mut block = visual_block_from_preview(
+            text,
+            preview_block,
+            range.clone(),
+            &reference_definitions,
+            &mut allocate_id,
+        );
         if block.source_range.start < covered_until {
             block.source_island = Some(VisualSourceIslandKind::Unsupported);
         }
@@ -394,6 +451,7 @@ fn visual_block_from_preview(
     text: &str,
     block: &PreviewBlock,
     source_range: Range<usize>,
+    reference_definitions: &str,
     allocate_id: &mut impl FnMut() -> VisualBlockId,
 ) -> VisualBlock {
     let (kind, mut source_island) = match block {
@@ -469,7 +527,8 @@ fn visual_block_from_preview(
     } else {
         source_range.clone()
     };
-    let (mut editable_runs, reveal_groups, contains_html) = inline_runs(text, inline_source_range);
+    let (mut editable_runs, reveal_groups, contains_html) =
+        inline_runs(text, inline_source_range, reference_definitions);
     append_trailing_horizontal_whitespace_run(
         text,
         &source_range,
@@ -852,15 +911,40 @@ struct RevealCandidate {
 fn inline_runs(
     text: &str,
     block_range: Range<usize>,
+    reference_definitions: &str,
 ) -> (Vec<VisualInlineRun>, Vec<VisualRevealGroup>, bool) {
     let source = &text[block_range.clone()];
+    // Reference-style links resolve against document-scoped definitions that
+    // live outside this block's slice. Appending them after a blank line lets
+    // pulldown-cmark resolve the references without shifting any in-block
+    // event offset: consumed definitions emit no events, and the loop below
+    // stops at the first event past the block slice (e.g. from a malformed
+    // line the parser could not consume as a definition).
+    let owned_parse_input;
+    let parse_input = if reference_definitions.is_empty() {
+        source
+    } else {
+        let mut input = String::with_capacity(source.len() + 2 + reference_definitions.len());
+        input.push_str(source);
+        if !input.ends_with('\n') {
+            input.push('\n');
+        }
+        input.push('\n');
+        input.push_str(reference_definitions);
+        owned_parse_input = input;
+        &owned_parse_input
+    };
     let mut runs = Vec::new();
     let mut candidates = Vec::new();
     let mut style = InlineStyle::default();
     let mut link_targets: Vec<Option<Range<usize>>> = Vec::new();
     let mut contains_html = false;
 
-    for (event, relative_range) in Parser::new_ext(source, markdown_options()).into_offset_iter() {
+    for (event, relative_range) in Parser::new_ext(parse_input, markdown_options()).into_offset_iter()
+    {
+        if relative_range.start >= source.len() {
+            break;
+        }
         let event_range =
             block_range.start + relative_range.start..block_range.start + relative_range.end;
         match event {
@@ -898,12 +982,22 @@ fn inline_runs(
                 style.strikethrough = false;
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
+                // pulldown-cmark reports a collapsed reference link's
+                // (`[label][]`) tag range as `[label]` only; extend it to
+                // cover the trailing `[]` so the reveal group exposes the
+                // complete authored syntax.
+                let mut link_range = event_range.clone();
+                if text[link_range.clone()].ends_with(']')
+                    && text[link_range.end..].starts_with("[]")
+                {
+                    link_range.end += 2;
+                }
                 candidates.push(RevealCandidate {
                     kind: VisualRevealKind::Link,
-                    source_range: event_range.clone(),
-                    link_target_range: find_link_target(text, &event_range, &dest_url),
+                    source_range: link_range.clone(),
+                    link_target_range: find_link_target(text, &link_range, &dest_url),
                 });
-                link_targets.push(find_link_target(text, &event_range, &dest_url));
+                link_targets.push(find_link_target(text, &link_range, &dest_url));
             }
             Event::End(TagEnd::Link) => {
                 link_targets.pop();
@@ -1236,15 +1330,26 @@ fn reveal_candidate_is_exact(
                 || (source.starts_with('$') && source.ends_with('$') && source.len() >= 2)
         }
         VisualRevealKind::Link => {
-            source.starts_with('[')
-                && source.ends_with(')')
-                && source.contains("](")
-                && candidate.link_target_range.as_ref().is_some_and(|target| {
+            if !source.starts_with('[') {
+                return false;
+            }
+            if source.ends_with(')') && source.contains("](") {
+                // Inline link: the destination is local, so it must map
+                // byte-exactly inside the revealed range.
+                candidate.link_target_range.as_ref().is_some_and(|target| {
                     target.start >= range.start
                         && target.end <= range.end
                         && text.is_char_boundary(target.start)
                         && text.is_char_boundary(target.end)
                 })
+            } else {
+                // Reference-style link (full `[text][label]`, collapsed
+                // `[label][]`, shortcut `[label]`): the use is local and the
+                // parser-resolved tag range is exact by construction; the
+                // destination lives in a definition block elsewhere in the
+                // document, so no local target range is required.
+                source.ends_with(']')
+            }
         }
         VisualRevealKind::Highlight
         | VisualRevealKind::Superscript
@@ -2428,5 +2533,133 @@ mod tests {
                     .iter()
                     .all(|run| !run.conservative_fallback)
         }));
+    }
+
+    #[test]
+    fn collects_link_reference_definitions_outside_fenced_code() {
+        let text = "# Title\n\n[alpha]: https://a.example\n\n```\n[beta]: https://b.example\n```\n\n   [gamma]: https://g.example \"Title\"\n\n[^note]: a footnote, not a link definition\n\n    [indented]: https://i.example\n";
+        let definitions = super::collect_link_reference_definitions(text);
+        assert!(definitions.contains("[alpha]: https://a.example"));
+        assert!(definitions.contains("[gamma]: https://g.example \"Title\""));
+        assert!(
+            !definitions.contains("[beta]"),
+            "definition inside a fenced code block must not be collected"
+        );
+        assert!(
+            !definitions.contains("[^note]"),
+            "footnote definitions are not link reference definitions"
+        );
+        assert!(
+            !definitions.contains("[indented]"),
+            "definitions indented four or more spaces are code blocks"
+        );
+    }
+
+    #[test]
+    fn reference_style_links_resolve_against_document_definitions() {
+        let source = "See the [Markion repository][markion-repo], the [docs][], and [markion].\n\n[markion-repo]: https://github.com/willmove/markion\n[docs]: https://example.com/docs\n[markion]: https://markion.dev\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let paragraph = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .expect("reference-link paragraph");
+
+        for label in ["Markion repository", "docs", "markion"] {
+            let run = paragraph
+                .editable_runs
+                .iter()
+                .find(|run| run.visible_text == label)
+                .unwrap_or_else(|| panic!("missing rendered label run {label:?}"));
+            assert!(
+                !run.conservative_fallback,
+                "reference link label {label:?} must stay visual"
+            );
+            assert!(
+                paragraph
+                    .editable_runs
+                    .iter()
+                    .all(|other| other.visible_text != "[markion-repo]"
+                        && other.visible_text != "["
+                        && other.visible_text != "]"),
+                "reference brackets must not render as literal text"
+            );
+        }
+
+        let link_groups = paragraph
+            .reveal_groups
+            .iter()
+            .filter(|group| group.kind == VisualRevealKind::Link)
+            .map(|group| &source[group.source_range.clone()])
+            .collect::<Vec<_>>();
+        assert!(link_groups.contains(&"[Markion repository][markion-repo]"));
+        assert!(link_groups.contains(&"[docs][]"));
+        assert!(link_groups.contains(&"[markion]"));
+
+        // Every run and reveal group stays inside the paragraph block: the
+        // appended definitions must not leak into the block's source mapping.
+        assert!(
+            paragraph
+                .editable_runs
+                .iter()
+                .all(|run| run.source_range.end <= paragraph.source_range.end
+                    && run.content_range.end <= paragraph.source_range.end)
+        );
+        assert!(
+            paragraph
+                .reveal_groups
+                .iter()
+                .all(|group| group.source_range.end <= paragraph.source_range.end)
+        );
+
+        // The rendered label is styled as a link even though its destination
+        // lives in the definition block (no local target range).
+        let projection =
+            build_visual_projection(source, paragraph, 0..0, paragraph.source_range.start);
+        assert!(projection.spans.iter().any(|span| {
+            span.link && &projection.text[span.display_range.clone()] == "Markion repository"
+        }));
+    }
+
+    #[test]
+    fn definition_inside_fenced_code_does_not_create_link() {
+        let source = "```\n[x]: https://x.example\n```\n\nSee [text][x].\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let paragraph = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .expect("paragraph after code block");
+        assert!(
+            paragraph
+                .reveal_groups
+                .iter()
+                .all(|group| group.kind != VisualRevealKind::Link),
+            "a definition inside a code fence must not resolve the reference"
+        );
+    }
+
+    #[test]
+    fn undefined_reference_stays_literal_text() {
+        let source = "See [text][missing].\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let paragraph = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .expect("paragraph");
+        assert!(
+            paragraph
+                .reveal_groups
+                .iter()
+                .all(|group| group.kind != VisualRevealKind::Link)
+        );
+        assert!(
+            paragraph
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text.contains("[text][missing]")
+                    || run.visible_text == "text")
+        );
     }
 }
