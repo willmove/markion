@@ -1511,15 +1511,20 @@ fn pane_density_and_scrollbar_constants_stay_compact_and_usable() {
 #[test]
 fn read_mode_preview_width_cap_only_applies_without_adaptive_width() {
     assert_eq!(READ_MODE_PREVIEW_MAX_WIDTH, 860.);
+    // Read mode: constrained when adaptive width is off (default), full when on.
     assert!(read_mode_preview_is_constrained(ViewMode::Read, false));
     assert!(!read_mode_preview_is_constrained(ViewMode::Read, true));
-    assert!(!read_mode_preview_is_constrained(ViewMode::Split, false));
-    assert!(!read_mode_preview_is_constrained(ViewMode::Split, true));
-    assert!(!read_mode_preview_is_constrained(ViewMode::Edit, false));
-    assert!(!read_mode_preview_is_constrained(
+    // Visual Edit mode: same as Read - constrained by default, full when adaptive.
+    assert!(read_mode_preview_is_constrained(
         ViewMode::VisualEdit,
         false
     ));
+    assert!(!read_mode_preview_is_constrained(ViewMode::VisualEdit, true));
+    // Split Preview and Edit are never constrained by the preference.
+    assert!(!read_mode_preview_is_constrained(ViewMode::Split, false));
+    assert!(!read_mode_preview_is_constrained(ViewMode::Split, true));
+    assert!(!read_mode_preview_is_constrained(ViewMode::Edit, false));
+    assert!(!read_mode_preview_is_constrained(ViewMode::Edit, true));
 }
 
 #[test]
