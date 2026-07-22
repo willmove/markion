@@ -17,6 +17,7 @@
 /.vscode/
 /.idea/
 /.codex/
+/.reasonix/
 *.iml
 
 # --- AI assistant / agent tooling ---
