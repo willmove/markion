@@ -62,7 +62,7 @@ User-authored (custom) themes SHALL be stored as `.toml` files in the themes dir
 - **THEN** `list_theme_definitions` returns exactly one `Midnight` entry, sourced from the `.toml`
 
 ### Requirement: Preferences panel SHALL expose Preview adaptive width
-The Preferences panel SHALL include a Preview adaptive width toggle in its non-theme display settings. Activating the toggle SHALL apply the Read mode preview width behavior immediately and persist the preference. The panel SHALL additionally include a Sync scroll toggle in the same display settings; activating it SHALL apply the Split Preview proportional scroll-coupling behavior immediately and persist the preference.
+The Preferences panel SHALL include a Preview adaptive width toggle in its non-theme display settings. Activating the toggle SHALL apply the rendered-content width behavior immediately across Read mode and Visual Edit mode and persist the preference. The panel SHALL additionally include a Sync scroll toggle in the same display settings; activating it SHALL apply the Split Preview proportional scroll-coupling behavior immediately and persist the preference.
 
 #### Scenario: Toggle appears in Preferences panel
 - **WHEN** the Preferences panel is open
@@ -71,20 +71,15 @@ The Preferences panel SHALL include a Preview adaptive width toggle in its non-t
 #### Scenario: Toggling Preview adaptive width applies immediately
 - **WHEN** the user toggles Preview adaptive width
 - **THEN** the active app state updates immediately
-- **AND** Read mode preview layout reflects the new setting on the next render
+- **AND** Read mode and Visual Edit mode rendered-content layout reflects the new setting on the next render
 
 #### Scenario: Toggling Preview adaptive width persists
 - **WHEN** the user toggles Preview adaptive width
 - **THEN** the preferences file is updated with the new boolean value
 
 #### Scenario: Toggling Sync scroll applies immediately
-- **WHEN** the user toggles Sync scroll in the Preferences panel
-- **THEN** the active app state updates immediately
-- **AND** the next Split Preview render couples or decouples the two panes' scroll positions accordingly
-
-#### Scenario: Toggling Sync scroll persists
 - **WHEN** the user toggles Sync scroll
-- **THEN** the preferences file is updated with the new boolean value
+- **THEN** Split Preview proportional scroll coupling reflects the new setting on the next render
 
 ### Requirement: Preferences panel SHALL expose supported display settings as controls
 The Preferences panel SHALL expose focus mode, typewriter mode, code line numbers, Preview adaptive width, sidebar visibility, and sidebar tab as interactive controls when those preferences are already supported by the app state and preferences file. Activating a control SHALL apply the setting immediately and persist it through the existing preferences file.

@@ -317,6 +317,7 @@ impl Render for MarkionApp {
                                     window.scale_factor(),
                                     typography,
                                     document_tab_band_visible(self.tabs.len()),
+                                    constrain_read_preview,
                                     cx,
                                 )
                             } else {
@@ -524,6 +525,7 @@ pub(super) fn visual_edit_surface_view(
     display_scale: f32,
     typography: DocumentTypographyMetrics,
     connected_to_tab_band: bool,
+    constrain_width: bool,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let is_empty = items.is_empty();
@@ -563,7 +565,7 @@ pub(super) fn visual_edit_surface_view(
                         list(
                             list_state,
                             cx.processor(move |app, ix: usize, _window, cx| {
-                                div()
+                                let row = div()
                                     .w_full()
                                     .line_height(px(typography.preview_row_line_height))
                                     .child(visual_block_view(
@@ -573,8 +575,17 @@ pub(super) fn visual_edit_surface_view(
                                         document_dir.as_deref(),
                                         display_scale,
                                         cx,
-                                    ))
-                                    .into_any_element()
+                                    ));
+                                if constrain_width {
+                                    div()
+                                        .w_full()
+                                        .flex()
+                                        .justify_center()
+                                        .child(row.max_w(px(READ_MODE_PREVIEW_MAX_WIDTH)))
+                                        .into_any_element()
+                                } else {
+                                    row.into_any_element()
+                                }
                             }),
                         )
                         .size_full()

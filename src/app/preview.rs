@@ -4,7 +4,7 @@ pub(super) fn read_mode_preview_is_constrained(
     view_mode: ViewMode,
     preview_adaptive_width: bool,
 ) -> bool {
-    matches!(view_mode, ViewMode::Read) && !preview_adaptive_width
+    matches!(view_mode, ViewMode::Read | ViewMode::VisualEdit) && !preview_adaptive_width
 }
 
 pub(super) fn view_mode_status_message(view_mode: ViewMode) -> Msg {
