@@ -270,6 +270,9 @@ fn render_docx_block(block: &PreviewBlock) -> String {
             docx_paragraph(&format!("{label}: {url}"), None)
         }
         PreviewBlock::Rule { .. } => docx_paragraph("----------", None),
+        PreviewBlock::FootnoteDefinition { label, text, .. } => {
+            docx_paragraph(&format!("[{label}] {}", text.text), None)
+        }
         PreviewBlock::Table { rows, .. } => render_docx_table(rows),
     }
 }

@@ -9,8 +9,9 @@ use crate::model::{
     InlineStyle, MathDelimiter, MathLayoutStyle, MathSource, PreviewBlock, VisualBlock,
     VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
     VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualInlineRun, VisualProjection, VisualProjectionSegment, VisualProjectionSpan,
-    VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualTableCell,
+    VisualInlineRun, VisualNavigationTarget, VisualProjection, VisualProjectionSegment,
+    VisualProjectionSpan, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
+    VisualTableCell,
 };
 use crate::table::table_cell_source_ranges;
 use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fence};
@@ -47,6 +48,61 @@ fn collect_link_reference_definitions(text: &str) -> String {
         }
     }
     definitions
+}
+
+/// Collects minimal `[^label]:` stubs so per-block `inline_runs` parsing can
+/// emit `FootnoteReference` events. Full definition bodies are intentionally
+/// omitted — stubs are enough for pulldown-cmark to resolve references, and
+/// they emit no in-block events past the prose slice.
+fn collect_footnote_definition_stubs(text: &str) -> String {
+    let mut stubs = String::new();
+    let mut fence: Option<(char, usize)> = None;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some((marker, minimum)) = fence {
+            if is_closing_fence(trimmed, marker, minimum) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(open) = opening_fence(trimmed) {
+            fence = Some(open);
+            continue;
+        }
+        if line.len() - trimmed.len() <= 3
+            && let Some(label) = footnote_definition_label(trimmed)
+        {
+            stubs.push_str("[^");
+            stubs.push_str(label);
+            stubs.push_str("]:\n");
+        }
+    }
+    stubs
+}
+
+fn footnote_definition_label(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("[^")?;
+    let close = rest.find("]:")?;
+    let label = &rest[..close];
+    (!label.is_empty()).then_some(label)
+}
+
+/// True when every non-blank line in `slice` is a link reference definition
+/// (not a footnote definition). Used to classify uncovered gaps that would
+/// otherwise become Unsupported source islands.
+fn is_link_reference_definition_gap(slice: &str) -> bool {
+    let mut saw_definition = false;
+    for line in slice.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("[^") || !is_reference_definition(trimmed) {
+            return false;
+        }
+        saw_definition = true;
+    }
+    saw_definition
 }
 
 impl VisualProjection {
@@ -337,9 +393,16 @@ pub(crate) fn build_visual_blocks(
     preview: &[PreviewBlock],
     mut allocate_id: impl FnMut() -> VisualBlockId,
 ) -> Vec<VisualBlock> {
-    // Link reference definitions are document-scoped; per-block parsing needs
-    // them appended to resolve reference-style links (see `inline_runs`).
-    let reference_definitions = collect_link_reference_definitions(text);
+    // Link / footnote definitions are document-scoped; per-block parsing needs
+    // them appended to resolve references (see `inline_runs`).
+    let mut reference_definitions = collect_link_reference_definitions(text);
+    let footnote_stubs = collect_footnote_definition_stubs(text);
+    if !footnote_stubs.is_empty() {
+        if !reference_definitions.is_empty() && !reference_definitions.ends_with('\n') {
+            reference_definitions.push('\n');
+        }
+        reference_definitions.push_str(&footnote_stubs);
+    }
     let mut blocks = Vec::with_capacity(preview.len() + 1);
     if let Some((_, body_start)) = split_front_matter(text)
         && body_start > 0
@@ -412,10 +475,23 @@ fn gap_block(
     range: Range<usize>,
     allocate_id: &mut impl FnMut() -> VisualBlockId,
 ) -> VisualBlock {
-    if text[range.clone()].trim().is_empty() {
+    let slice = &text[range.clone()];
+    if slice.trim().is_empty() {
         VisualBlock {
             id: allocate_id(),
             kind: VisualBlockKind::Whitespace,
+            source_range: range,
+            editable_runs: Vec::new(),
+            reveal_groups: Vec::new(),
+            marker_ranges: Vec::new(),
+            block_prefix: None,
+            source_island: None,
+            editor: None,
+        }
+    } else if is_link_reference_definition_gap(slice) {
+        VisualBlock {
+            id: allocate_id(),
+            kind: VisualBlockKind::ReferenceDefinition,
             source_range: range,
             editable_runs: Vec::new(),
             reveal_groups: Vec::new(),
@@ -515,6 +591,12 @@ fn visual_block_from_preview(
                 alignments: alignments.clone(),
             },
             Some(VisualSourceIslandKind::Table),
+        ),
+        PreviewBlock::FootnoteDefinition { label, .. } => (
+            VisualBlockKind::FootnoteDefinition {
+                label: label.clone(),
+            },
+            None,
         ),
     };
 
@@ -759,6 +841,7 @@ fn append_trailing_horizontal_whitespace_run(
         content_range: range,
         style: InlineStyle::default(),
         link_target_range: None,
+        navigation: None,
         math: None,
         conservative_fallback: false,
     });
@@ -820,7 +903,7 @@ fn inline_runs(
     let mut runs = Vec::new();
     let mut candidates = Vec::new();
     let mut style = InlineStyle::default();
-    let mut link_targets: Vec<Option<Range<usize>>> = Vec::new();
+    let mut link_stack: Vec<(Option<Range<usize>>, String)> = Vec::new();
     let mut contains_html = false;
 
     for (event, relative_range) in Parser::new_ext(parse_input, markdown_options()).into_offset_iter()
@@ -830,6 +913,11 @@ fn inline_runs(
         }
         let event_range =
             block_range.start + relative_range.start..block_range.start + relative_range.end;
+        let current_link = link_stack.last().cloned();
+        let current_link_target = current_link.as_ref().and_then(|(range, _)| range.clone());
+        let current_link_nav = current_link.as_ref().map(|(_, url)| {
+            VisualNavigationTarget::Url(url.clone())
+        });
         match event {
             Event::Start(Tag::Strong) => {
                 candidates.push(RevealCandidate {
@@ -875,15 +963,16 @@ fn inline_runs(
                 {
                     link_range.end += 2;
                 }
+                let dest = dest_url.to_string();
                 candidates.push(RevealCandidate {
                     kind: VisualRevealKind::Link,
                     source_range: link_range.clone(),
-                    link_target_range: find_link_target(text, &link_range, &dest_url),
+                    link_target_range: find_link_target(text, &link_range, &dest),
                 });
-                link_targets.push(find_link_target(text, &link_range, &dest_url));
+                link_stack.push((find_link_target(text, &link_range, &dest), dest));
             }
             Event::End(TagEnd::Link) => {
-                link_targets.pop();
+                link_stack.pop();
             }
             Event::Text(visible) => push_text_runs(
                 &mut runs,
@@ -892,7 +981,8 @@ fn inline_runs(
                 visible.as_ref(),
                 event_range,
                 style,
-                link_targets.last().cloned().flatten(),
+                current_link_target,
+                current_link_nav,
             ),
             Event::Code(visible) => {
                 candidates.push(RevealCandidate {
@@ -908,7 +998,8 @@ fn inline_runs(
                     visible.as_ref(),
                     event_range,
                     code_style,
-                    link_targets.last().cloned().flatten(),
+                    current_link_target,
+                    current_link_nav,
                     false,
                 );
             }
@@ -918,7 +1009,8 @@ fn inline_runs(
                 "\n",
                 event_range,
                 style,
-                link_targets.last().cloned().flatten(),
+                current_link_target,
+                current_link_nav,
                 false,
             ),
             Event::FootnoteReference(visible) => {
@@ -930,7 +1022,10 @@ fn inline_runs(
                     visible.as_ref(),
                     event_range,
                     footnote_style,
-                    link_targets.last().cloned().flatten(),
+                    current_link_target,
+                    Some(VisualNavigationTarget::Footnote {
+                        label: visible.to_string(),
+                    }),
                     false,
                 );
             }
@@ -956,7 +1051,8 @@ fn inline_runs(
                     source_range: event_range.clone(),
                     content_range: event_range.clone(),
                     style,
-                    link_target_range: link_targets.last().cloned().flatten(),
+                    link_target_range: current_link_target,
+                    navigation: current_link_nav,
                     math: Some(MathSource {
                         latex: visible.to_string(),
                         authored,
@@ -989,6 +1085,7 @@ fn push_text_runs(
     event_range: Range<usize>,
     base_style: InlineStyle,
     link_target_range: Option<Range<usize>>,
+    navigation: Option<VisualNavigationTarget>,
 ) {
     let event_source = &source[event_range.clone()];
     if event_source != visible {
@@ -999,6 +1096,7 @@ fn push_text_runs(
             event_range,
             base_style,
             link_target_range,
+            navigation,
             true,
         );
         return;
@@ -1013,6 +1111,7 @@ fn push_text_runs(
             event_range,
             base_style,
             link_target_range,
+            navigation,
             false,
         );
         return;
@@ -1074,6 +1173,7 @@ fn push_text_runs(
             global_range,
             style,
             link_target_range.clone(),
+            navigation.clone(),
             false,
         );
     }
@@ -1093,6 +1193,7 @@ fn push_run(
     event_range: Range<usize>,
     style: InlineStyle,
     link_target_range: Option<Range<usize>>,
+    navigation: Option<VisualNavigationTarget>,
     force_fallback: bool,
 ) {
     if visible.is_empty() {
@@ -1111,6 +1212,7 @@ fn push_run(
         content_range,
         style,
         link_target_range,
+        navigation,
         math: None,
         conservative_fallback,
     });
@@ -1500,8 +1602,8 @@ mod tests {
     use super::{build_visual_projection, build_visual_projection_with_marked_range};
     use crate::{
         MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockEditor, VisualBlockKind,
-        VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind, VisualRevealKind,
-        VisualSourceIslandKind,
+        VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind, VisualNavigationTarget,
+        VisualRevealKind, VisualSourceIslandKind,
     };
 
     #[test]
@@ -2544,6 +2646,117 @@ mod tests {
                 .iter()
                 .any(|run| run.visible_text.contains("[text][missing]")
                     || run.visible_text == "text")
+        );
+    }
+
+    #[test]
+    fn notes_sample_footnotes_and_link_defs_render_without_islands() {
+        let source = "## Notes\n\n\
+Visit the [Markion project page](https://github.com/willmove/markion), or use the reference link below.[^links]\n\n\
+Reference-style links work too: [Markion repository][markion-repo].\n\n\
+[^links]: Links can point to project pages, files, and useful references.\n\n\
+[markion-repo]: https://github.com/willmove/markion\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+
+        let footnote_para = blocks
+            .iter()
+            .find(|block| {
+                matches!(block.kind, VisualBlockKind::Paragraph)
+                    && source[block.source_range.clone()].contains("[^links]")
+            })
+            .expect("paragraph with footnote reference");
+        let footnote_run = footnote_para
+            .editable_runs
+            .iter()
+            .find(|run| run.style.superscript && run.visible_text == "links")
+            .expect("superscript footnote label run");
+        assert!(
+            !footnote_run.conservative_fallback,
+            "footnote reference must stay visual"
+        );
+        assert!(
+            footnote_para
+                .editable_runs
+                .iter()
+                .all(|run| run.visible_text != "[" && run.visible_text != "]"),
+            "footnote markers must not render as literal bracket runs"
+        );
+
+        let footnote_def = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::FootnoteDefinition { .. }))
+            .expect("footnote definition block");
+        assert!(footnote_def.source_island.is_none());
+        assert!(
+            source[footnote_def.source_range.clone()].contains("[^links]:"),
+            "footnote definition range must cover the marker"
+        );
+        assert!(
+            source[footnote_def.source_range.clone()]
+                .contains("Links can point to project pages"),
+            "footnote definition range must cover the body"
+        );
+        assert!(
+            blocks.iter().all(|block| {
+                !(matches!(block.kind, VisualBlockKind::Paragraph)
+                    && source[block.source_range.clone()]
+                        .starts_with("Links can point to project pages"))
+            }),
+            "footnote body must not also appear as an ordinary paragraph"
+        );
+
+        let link_def = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::ReferenceDefinition))
+            .expect("link reference definition block");
+        assert!(link_def.source_island.is_none());
+        assert!(source[link_def.source_range.clone()].contains("[markion-repo]:"));
+
+        let reference_para = blocks
+            .iter()
+            .find(|block| {
+                matches!(block.kind, VisualBlockKind::Paragraph)
+                    && source[block.source_range.clone()].contains("[Markion repository]")
+            })
+            .expect("reference-style link paragraph");
+        assert!(
+            reference_para
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text == "Markion repository"
+                    && !run.conservative_fallback),
+            "reference-style link must remain resolved"
+        );
+        assert!(
+            reference_para.editable_runs.iter().any(|run| {
+                matches!(
+                    &run.navigation,
+                    Some(VisualNavigationTarget::Url(url))
+                        if url == "https://github.com/willmove/markion"
+                )
+            }),
+            "reference-style link must expose a URL navigation target"
+        );
+        assert!(
+            footnote_para.editable_runs.iter().any(|run| {
+                matches!(
+                    &run.navigation,
+                    Some(VisualNavigationTarget::Footnote { label }) if label == "links"
+                )
+            }),
+            "footnote reference must expose a footnote navigation target"
+        );
+        assert!(
+            footnote_para
+                .editable_runs
+                .iter()
+                .any(|run| matches!(
+                    &run.navigation,
+                    Some(VisualNavigationTarget::Url(url))
+                        if url == "https://github.com/willmove/markion"
+                )),
+            "inline link must expose a URL navigation target"
         );
     }
 }

@@ -1608,6 +1608,39 @@ impl MarkionApp {
         cx.notify();
     }
 
+    /// Opens a URL or jumps to a footnote definition from a Visual Edit icon.
+    pub(super) fn activate_visual_navigation(
+        &mut self,
+        target: &VisualNavigationTarget,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            VisualNavigationTarget::Url(url) => {
+                if !url.trim().is_empty() {
+                    cx.open_url(url);
+                }
+            }
+            VisualNavigationTarget::Footnote { label } => {
+                let blocks = self.active_tab().document.visual_blocks_shared();
+                let Some(block_index) = blocks.iter().position(|block| {
+                    matches!(
+                        &block.kind,
+                        VisualBlockKind::FootnoteDefinition { label: def }
+                            if def == label
+                    )
+                }) else {
+                    return;
+                };
+                let offset = blocks[block_index].source_range.start;
+                self.move_to(offset, cx);
+                self.active_tab_mut()
+                    .visual_list
+                    .scroll_to_reveal_item(block_index);
+                cx.notify();
+            }
+        }
+    }
+
     fn move_to_visual_editor_target(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
         let tab = self.active_tab_mut();
         tab.selected_range = range;

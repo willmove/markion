@@ -589,6 +589,12 @@ pub enum VisualBlockKind {
         rows: Vec<Vec<RichText>>,
         alignments: Vec<TableAlignment>,
     },
+    /// Footnote definition (`[^label]: …`) covering marker and body.
+    FootnoteDefinition {
+        label: String,
+    },
+    /// Standalone link reference definition line(s) (`[label]: url`).
+    ReferenceDefinition,
     /// Whitespace-only source not owned by a parsed preview block. Visual Edit
     /// keeps it as a compact row so blank lines and trailing whitespace remain
     /// valid caret positions without showing raw source until focused.
@@ -605,9 +611,19 @@ pub struct VisualInlineRun {
     pub content_range: Range<usize>,
     pub style: InlineStyle,
     pub link_target_range: Option<Range<usize>>,
+    /// Resolved navigation destination for an adjacent Visual Edit icon.
+    /// Presentation-only: never mutates canonical source.
+    pub navigation: Option<VisualNavigationTarget>,
     pub math: Option<MathSource>,
     /// True when the parser's visible text does not map byte-for-byte to source.
     pub conservative_fallback: bool,
+}
+
+/// Destination opened or jumped to from a Visual Edit navigation icon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VisualNavigationTarget {
+    Url(String),
+    Footnote { label: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -904,6 +920,11 @@ pub enum PreviewBlock {
         alignments: Vec<TableAlignment>,
         source_range: Range<usize>,
     },
+    FootnoteDefinition {
+        label: String,
+        text: RichText,
+        source_range: Range<usize>,
+    },
 }
 
 impl PreviewBlock {
@@ -919,7 +940,8 @@ impl PreviewBlock {
             | Self::Html { source_range, .. }
             | Self::Image { source_range, .. }
             | Self::Rule { source_range }
-            | Self::Table { source_range, .. } => source_range,
+            | Self::Table { source_range, .. }
+            | Self::FootnoteDefinition { source_range, .. } => source_range,
         }
     }
 }

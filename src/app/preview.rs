@@ -87,7 +87,8 @@ pub(super) fn preview_run_plain_text(
             PreviewBlock::Heading { text, .. }
             | PreviewBlock::Paragraph { text, .. }
             | PreviewBlock::ListItem { text, .. }
-            | PreviewBlock::BlockQuote { text, .. },
+            | PreviewBlock::BlockQuote { text, .. }
+            | PreviewBlock::FootnoteDefinition { text, .. },
             PreviewTextRunId::Body,
         ) => Some(text.text.clone()),
         (PreviewBlock::CodeBlock { code, .. }, PreviewTextRunId::CodeBody) => Some(code.clone()),
@@ -113,7 +114,8 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
         PreviewBlock::Heading { .. }
         | PreviewBlock::Paragraph { .. }
         | PreviewBlock::ListItem { .. }
-        | PreviewBlock::BlockQuote { .. } => vec![PreviewTextRunId::Body],
+        | PreviewBlock::BlockQuote { .. }
+        | PreviewBlock::FootnoteDefinition { .. } => vec![PreviewTextRunId::Body],
         PreviewBlock::CodeBlock { .. } => vec![PreviewTextRunId::CodeBody],
         PreviewBlock::MathBlock { .. } => vec![PreviewTextRunId::MathLatex],
         PreviewBlock::Html { html, .. } => (!html_preview_plain_text(html).is_empty())
@@ -1897,6 +1899,8 @@ fn visual_projection_fragment(
 /// Source-backed mixed layout for Visual Edit. A focused formula is already a
 /// source piece in `build_visual_projection`; other formulas remain image
 /// atoms while adjacent prose keeps exact visible-to-source segments.
+/// When the block has link/footnote navigation targets, the same flex-wrap
+/// layout inserts a compact clickable icon after each navigable construct.
 pub(super) fn visual_text_with_math_element(
     block: &VisualBlock,
     block_index: usize,
@@ -1905,7 +1909,9 @@ pub(super) fn visual_text_with_math_element(
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let typography = app.typography_metrics();
-    if !block.editable_runs.iter().any(|run| run.math.is_some()) {
+    let has_math = block.editable_runs.iter().any(|run| run.math.is_some());
+    let nav_icons = visual_navigation_icons(block);
+    if !has_math && nav_icons.is_empty() {
         return visual_text_element(block, block_index, app, cx);
     }
 
@@ -1918,6 +1924,7 @@ pub(super) fn visual_text_with_math_element(
     );
     let mut children = Vec::new();
     let mut fragment_index = 0usize;
+    let mut remaining_icons = nav_icons;
     for (segment, projected_span) in projection.segments.iter().zip(&projection.spans) {
         let math = (!projected_span.source).then(|| {
             block
@@ -1937,6 +1944,15 @@ pub(super) fn visual_text_with_math_element(
             )
         {
             children.push(visual_math_atom(app, image, math.source_range.clone(), cx));
+            fragment_index += 1;
+            fragment_index += emit_navigation_icons_after(
+                &mut children,
+                &mut remaining_icons,
+                segment.source_range.end,
+                block_index,
+                fragment_index,
+                cx,
+            );
             continue;
         }
 
@@ -1963,13 +1979,21 @@ pub(super) fn visual_text_with_math_element(
                     block_index,
                     fragment_index,
                     fragment.to_string(),
-                    source_range,
+                    source_range.clone(),
                     style.clone(),
                     app,
                     cx,
                 ));
                 fragment_index += 1;
                 local_start += fragment.len();
+                fragment_index += emit_navigation_icons_after(
+                    &mut children,
+                    &mut remaining_icons,
+                    source_range.end,
+                    block_index,
+                    fragment_index,
+                    cx,
+                );
             }
         } else {
             children.push(visual_projection_fragment(
@@ -1982,6 +2006,14 @@ pub(super) fn visual_text_with_math_element(
                 cx,
             ));
             fragment_index += 1;
+            fragment_index += emit_navigation_icons_after(
+                &mut children,
+                &mut remaining_icons,
+                segment.source_range.end,
+                block_index,
+                fragment_index,
+                cx,
+            );
         }
     }
 
@@ -1991,6 +2023,92 @@ pub(super) fn visual_text_with_math_element(
         .flex_wrap()
         .items_end()
         .children(children)
+        .into_any_element()
+}
+
+fn visual_navigation_icons(block: &VisualBlock) -> Vec<(usize, VisualNavigationTarget)> {
+    let mut icons = Vec::new();
+    let mut index = 0usize;
+    while index < block.editable_runs.len() {
+        let Some(nav) = block.editable_runs[index].navigation.clone() else {
+            index += 1;
+            continue;
+        };
+        if matches!(&nav, VisualNavigationTarget::Url(url) if url.trim().is_empty()) {
+            index += 1;
+            continue;
+        }
+        let mut last = index;
+        while last + 1 < block.editable_runs.len()
+            && block.editable_runs[last + 1].navigation.as_ref() == Some(&nav)
+        {
+            last += 1;
+        }
+        icons.push((block.editable_runs[last].content_range.end, nav));
+        index = last + 1;
+    }
+    icons
+}
+
+fn emit_navigation_icons_after(
+    children: &mut Vec<gpui::AnyElement>,
+    remaining: &mut Vec<(usize, VisualNavigationTarget)>,
+    source_end: usize,
+    block_index: usize,
+    fragment_index: usize,
+    cx: &mut Context<MarkionApp>,
+) -> usize {
+    let mut emitted = 0usize;
+    while let Some(pos) = remaining
+        .iter()
+        .position(|(after, _)| *after == source_end)
+    {
+        let (_, target) = remaining.remove(pos);
+        children.push(visual_navigation_icon(
+            block_index,
+            fragment_index + emitted,
+            target,
+            cx,
+        ));
+        emitted += 1;
+    }
+    emitted
+}
+
+fn visual_navigation_icon(
+    block_index: usize,
+    fragment_index: usize,
+    target: VisualNavigationTarget,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let glyph = match &target {
+        VisualNavigationTarget::Url(_) => "↗",
+        VisualNavigationTarget::Footnote { .. } => "↓",
+    };
+    let element_id =
+        ElementId::from(("visual-nav-icon", block_index * 10_000 + fragment_index));
+    div()
+        .id(element_id)
+        .ml(px(2.))
+        .mr(px(1.))
+        .px(px(3.))
+        .rounded_sm()
+        .text_size(px(11.))
+        .line_height(px(14.))
+        .text_color(rgb(PREVIEW_LINK_COLOR))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.bg(rgba(0x2563eb22)))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseDownEvent, window, cx| {
+                // Keep the surrounding prose hit-target from placing a caret.
+                cx.stop_propagation();
+                let focus_handle = app.focus_handle.clone();
+                window.focus(&focus_handle);
+                app.activate_visual_navigation(&target, cx);
+            }),
+        )
+        .child(glyph)
         .into_any_element()
 }
 
@@ -2139,6 +2257,7 @@ pub(super) fn visual_block_view(
     let typography = app.typography_metrics();
     let owns_caret = visual_block_owns_caret(app, block_index);
     let is_whitespace = matches!(block.kind, VisualBlockKind::Whitespace);
+    let is_reference_definition = matches!(block.kind, VisualBlockKind::ReferenceDefinition);
     let always_source = matches!(
         block.source_island,
         Some(
@@ -2158,8 +2277,11 @@ pub(super) fn visual_block_view(
     // line look like a source island — see change
     // `fix-visual-edit-whitespace-caret-box`. Whitespace owning the caret
     // is painted as a thin caret line in the `Whitespace` arm below.
+    // Link reference definitions keep a muted editable row without island
+    // chrome even when they own the caret (empty editable_runs by design).
     let focused_conservative = owns_caret
         && !is_whitespace
+        && !is_reference_definition
         && block.editor.is_none()
         && (block.source_island.is_some() || block.editable_runs.is_empty());
     if focused_conservative || always_source {
@@ -2419,7 +2541,79 @@ pub(super) fn visual_block_view(
             }
         }
         VisualBlockKind::Unsupported => visual_source_island_view(app, block, block_index, cx),
+        VisualBlockKind::FootnoteDefinition { label } => div()
+            .mb(px(typography.paragraph_spacing))
+            .mt_2()
+            .pt_2()
+            .border_t_1()
+            .border_color(rgb(0xe2e8f0))
+            .flex()
+            .items_start()
+            .gap_2()
+            .text_size(px(typography.rendered_font_size))
+            .line_height(px(typography.paragraph_line_height))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(typography.rendered_font_size * 0.75))
+                    .text_color(rgb(0x64748b))
+                    .child(format!("[{label}]")),
+            )
+            .child(
+                div().flex_1().min_w_0().child(visual_text_with_math_element(
+                    block,
+                    block_index,
+                    app,
+                    display_scale,
+                    cx,
+                )),
+            ),
+        VisualBlockKind::ReferenceDefinition => visual_reference_definition_view(app, block, block_index, cx),
     }
+}
+
+/// Editable link-reference definition row without Unsupported island chrome.
+pub(super) fn visual_reference_definition_view(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let typography = app.typography_metrics();
+    let source = app.active_tab().document.text()[block.source_range.clone()].to_string();
+    let source_len = source.len();
+    div()
+        .mb_1()
+        .text_color(rgb(0x64748b))
+        .font_family("JetBrains Mono")
+        .text_size(px(typography.source_island_font_size))
+        .line_height(px(typography.source_island_line_height))
+        .child(VisualEditableText {
+            element_id: ElementId::from(("visual-reference-definition", block_index)),
+            block_index,
+            source_island: true,
+            text: StyledText::new(SharedString::from(source.clone())),
+            projection: VisualProjection {
+                text: source.clone(),
+                segments: vec![markion::VisualProjectionSegment {
+                    display_range: 0..source_len,
+                    source_range: block.source_range.clone(),
+                }],
+                spans: Vec::new(),
+                revealed_source_ranges: vec![block.source_range.clone()],
+                source_anchor: block.source_range.start,
+            },
+            source_selection: app.active_tab().selected_range.clone(),
+            source_cursor: app.active_tab().cursor_offset(),
+            marked_range: app.active_tab().marked_range.clone(),
+            caret_active: visual_block_owns_caret(app, block_index),
+            navigation_active: true,
+            entity: cx.entity(),
+            #[cfg(test)]
+            test_projection: None,
+            #[cfg(test)]
+            test_projection_styles: None,
+        })
 }
 
 fn visual_editor_field_element(
@@ -3354,6 +3548,33 @@ pub(super) fn preview_block_view(
                     .child(img(preview_image_source(url, document_dir)).max_w_full()),
             ),
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
+        PreviewBlock::FootnoteDefinition { label, text, .. } => div()
+            .mb(px(typography.paragraph_spacing))
+            .mt_2()
+            .pt_2()
+            .border_t_1()
+            .border_color(rgb(0xe2e8f0))
+            .flex()
+            .items_start()
+            .gap_2()
+            .text_size(px(typography.rendered_font_size))
+            .line_height(px(typography.paragraph_line_height))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(typography.rendered_font_size * 0.75))
+                    .text_color(rgb(0x64748b))
+                    .child(format!("[{label}]")),
+            )
+            .child(div().flex_1().min_w_0().child(rich_text_with_math_element(
+                app,
+                "preview-footnote",
+                text,
+                block_index,
+                PreviewTextRunId::Body,
+                display_scale,
+                cx,
+            ))),
         PreviewBlock::Table { rows, .. } => {
             // Split Preview and Read mode share this branch. Table mutation
             // belongs in Visual Edit or the source commands, so the preview
