@@ -112,11 +112,11 @@ pub use model::{
     TableAlignment, TableEdit, TableEditResult, ThemeColors, ThemeDefinition, ViewMode,
     VisualBlock, VisualBlockEdit, VisualBlockEditor, VisualBlockId, VisualBlockKind,
     VisualBlockPrefix, VisualBlockPrefixKind, VisualBoundaryCandidates, VisualCaretAffinity,
-    VisualEditorField, VisualEditorFieldKind, VisualInlineRun, VisualProjection,
-    VisualProjectionSegment, VisualProjectionSpan, VisualRevealGroup, VisualRevealKind,
-    VisualSourceIslandKind, VisualStructuralEdit, VisualTableCell, YamlFrontMatter,
-    builtin_theme_definitions, normalize_editor_font_size, normalize_heading_menu_max_level,
-    normalize_paragraph_spacing, normalize_rendered_font_size,
+    VisualEditorField, VisualEditorFieldKind, VisualInlineRun, VisualNavigationTarget,
+    VisualProjection, VisualProjectionSegment, VisualProjectionSpan, VisualRevealGroup,
+    VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit, VisualTableCell,
+    YamlFrontMatter, builtin_theme_definitions, normalize_editor_font_size,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
 };
 pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
@@ -1183,6 +1183,13 @@ impl MarkdownDocument {
                     output.push_str("\\end{figure}\n\n");
                 }
                 PreviewBlock::Rule { .. } => output.push_str("\\hrule\n\n"),
+                PreviewBlock::FootnoteDefinition { label, text, .. } => {
+                    output.push_str(&format!(
+                        "[{}] {}\n\n",
+                        escape_latex(&label),
+                        render_latex_rich_text(&text).trim()
+                    ));
+                }
                 PreviewBlock::Table {
                     rows, alignments, ..
                 } => {
@@ -1640,6 +1647,7 @@ impl MarkdownDocument {
         let mut table: Option<TableDraft> = None;
         let mut inline = InlineStateDraft::default();
         let mut table_ranges = table_ranges_fn(text).into_iter();
+        let mut footnote: Option<(String, Vec<InlineSpan>, std::ops::Range<usize>)> = None;
 
         for (event, range) in Parser::new_ext(body, markdown_options()).into_offset_iter() {
             let source_range = body_offset + range.start..body_offset + range.end;
@@ -1669,12 +1677,34 @@ impl MarkdownDocument {
                         });
                     }
                 }
+                Event::Start(Tag::FootnoteDefinition(label)) => {
+                    footnote = Some((label.to_string(), Vec::new(), source_range));
+                }
+                Event::End(TagEnd::FootnoteDefinition) => {
+                    if let Some((label, spans, _)) = footnote.take() {
+                        blocks.push(PreviewBlock::FootnoteDefinition {
+                            label,
+                            text: finish_rich_text(spans),
+                            source_range,
+                        });
+                    }
+                }
                 Event::Start(Tag::Paragraph) => {
                     paragraph = Some((Vec::new(), source_range));
                 }
                 Event::End(TagEnd::Paragraph) => {
-                    if list_item.is_none() && quote_depth == 0 && table.is_none() {
-                        if let Some((spans, paragraph_range)) = paragraph.take() {
+                    if let Some((spans, paragraph_range)) = paragraph.take() {
+                        if let Some((_, footnote_spans, _)) = footnote.as_mut() {
+                            if !footnote_spans.is_empty() && !spans.is_empty() {
+                                append_span(
+                                    footnote_spans,
+                                    "\n",
+                                    InlineStyle::default(),
+                                    None,
+                                );
+                            }
+                            footnote_spans.extend(spans);
+                        } else if list_item.is_none() && quote_depth == 0 && table.is_none() {
                             if html_only_paragraph_source(&text[paragraph_range.clone()]) {
                                 push_html_block(
                                     &mut blocks,
@@ -1690,12 +1720,9 @@ impl MarkdownDocument {
                                     },
                                 );
                             }
-                        }
-                    } else {
-                        paragraph.take();
-                        // Keep a line break between sibling paragraphs that get
-                        // flattened into one list item or blockquote block.
-                        if let Some(item) = list_item.as_mut() {
+                        } else if let Some(item) = list_item.as_mut() {
+                            // Keep a line break between sibling paragraphs that get
+                            // flattened into one list item or blockquote block.
                             append_span(&mut item.spans, "\n", InlineStyle::default(), None);
                         } else if quote_depth > 0 {
                             append_span(&mut quote, "\n", InlineStyle::default(), None);
