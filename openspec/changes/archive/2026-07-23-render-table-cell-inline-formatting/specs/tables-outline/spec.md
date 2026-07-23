@@ -1,9 +1,5 @@
-# tables-outline
+## MODIFIED Requirements
 
-## Purpose
-
-Covers GFM table rendering, the row/column editing toolbars, and the document outline panel. Direct cell-level visual table editing and outline folding/collapsing are **not** part of this capability — they are future candidates.
-## Requirements
 ### Requirement: GFM table rendering with row/column toolbar editing
 The editor SHALL render GFM tables as visual tables in the preview and Visual Edit surfaces. Tables in Split Preview and Read mode SHALL render as read-only visual grids without a table editing header or add, delete, or move row/column controls. Visual Edit SHALL provide directly editable cells plus a toolbar to add, delete, and move rows and columns of the corresponding source table, and source table commands SHALL remain available. Each cell edit SHALL produce one deterministic GFM table source replacement, preserve row ordering and declared alignments, escape field-terminating input safely, and return the exact new source selection for the active cell. Table cell alignment is parsed from the separator row and used by the LaTeX/HTML exporters.
 
@@ -61,19 +57,3 @@ Inline formatting inside table cells (bold, italic, strikethrough, inline code, 
 - **WHEN** exact cell boundaries or a deterministic lossless table replacement cannot be proven
 - **THEN** Visual Edit keeps the complete table source-backed
 - **AND** it does not apply a guessed cell mutation
-
-### Requirement: Document outline navigation
-The editor SHALL provide a toggleable outline panel that lists the document's heading hierarchy, supports click-to-jump navigation, highlights the heading for the section containing the cursor, and updates as headings change. The outline is a flat indented list; collapse/expand of subsections is **not** supported.
-
-#### Scenario: Outline lists headings and tracks the document
-- **WHEN** the outline panel is visible
-- **THEN** it lists all headings with their nesting indentation and updates when headings are added, removed, or changed
-
-#### Scenario: Click to jump
-- **WHEN** the user clicks a heading in the outline
-- **THEN** the editor scrolls to that heading's source position
-
-#### Scenario: Active section highlight
-- **WHEN** the cursor is within a given section
-- **THEN** the outline highlights the heading corresponding to that section
-
