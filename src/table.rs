@@ -4,15 +4,15 @@
 
 use std::ops::Range;
 
-use crate::model::TableAlignment;
+use crate::model::{InlineSpan, RichText, TableAlignment};
 use crate::text_util::clamp_to_char_boundary;
 
 #[derive(Default)]
 pub(crate) struct TableDraft {
-    pub rows: Vec<Vec<String>>,
+    pub rows: Vec<Vec<RichText>>,
     pub alignments: Vec<TableAlignment>,
-    pub current_row: Option<Vec<String>>,
-    pub current_cell: String,
+    pub current_row: Option<Vec<RichText>>,
+    pub current_cell: Vec<InlineSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

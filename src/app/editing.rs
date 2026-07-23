@@ -895,10 +895,7 @@ impl MarkionApp {
             && let Some(field) = self.active_tab().document.visual_editor_field_at(&selected)
         {
             match field.kind {
-                VisualEditorFieldKind::ImageAlt
-                | VisualEditorFieldKind::ImageDestination
-                | VisualEditorFieldKind::ImageTitle
-                | VisualEditorFieldKind::TableCell { .. } => {
+                VisualEditorFieldKind::TableCell { .. } => {
                     if let Some(target) = self
                         .active_tab()
                         .document
@@ -914,6 +911,11 @@ impl MarkionApp {
                     self.active_tab_mut().finish_undo_capture();
                     return;
                 }
+                // Image field kinds are retained on the enum but no longer
+                // produced by any visual editor, so they are unreachable here.
+                VisualEditorFieldKind::ImageAlt
+                | VisualEditorFieldKind::ImageDestination
+                | VisualEditorFieldKind::ImageTitle => {}
             }
         }
         let cursor = self.active_tab().selected_range.start;

@@ -600,23 +600,6 @@ fn visual_block_editor(
                 closing_delimiter,
             })
         }
-        PreviewBlock::Image { .. } => {
-            let (alt, destination, title) = image_field_ranges(text, source_range)?;
-            Some(VisualBlockEditor::Image {
-                alt: VisualEditorField {
-                    kind: VisualEditorFieldKind::ImageAlt,
-                    source_range: alt,
-                },
-                destination: VisualEditorField {
-                    kind: VisualEditorFieldKind::ImageDestination,
-                    source_range: destination,
-                },
-                title: title.map(|source_range| VisualEditorField {
-                    kind: VisualEditorFieldKind::ImageTitle,
-                    source_range,
-                }),
-            })
-        }
         PreviewBlock::Table { rows, .. } => {
             let source = text.get(source_range.clone())?;
             let cell_ranges = table_cell_source_ranges(source)?;
@@ -737,106 +720,6 @@ fn dollar_math_payload_ranges(
         source_range.start..source_range.start + 2,
         source_range.start + closing_start..source_range.start + closing_start + 2,
     ))
-}
-
-fn image_field_ranges(
-    text: &str,
-    source_range: Range<usize>,
-) -> Option<(Range<usize>, Range<usize>, Option<Range<usize>>)> {
-    let source = text
-        .get(source_range.clone())?
-        .trim_end_matches(['\r', '\n']);
-    if !source.starts_with("![") || source.contains('\n') || source.contains('\r') {
-        return None;
-    }
-    let alt_end = find_unescaped(source, 2, ']')?;
-    if source.as_bytes().get(alt_end + 1) != Some(&b'(') {
-        return None;
-    }
-    let close = find_matching_paren(source, alt_end + 1)?;
-    if close + 1 != source.len() {
-        return None;
-    }
-    let inside_start = alt_end + 2;
-    let inside_end = close;
-    let inside = &source[inside_start..inside_end];
-    if inside.starts_with('<') {
-        return None;
-    }
-    let destination_len = inside
-        .char_indices()
-        .find(|(_, ch)| ch.is_whitespace())
-        .map_or(inside.len(), |(offset, _)| offset);
-    if destination_len == 0 {
-        return None;
-    }
-    let destination = inside_start..inside_start + destination_len;
-    let rest = &inside[destination_len..];
-    let title = if rest.trim().is_empty() {
-        None
-    } else {
-        let leading = rest.len() - rest.trim_start().len();
-        let title_source = rest.trim();
-        let quote = title_source.chars().next()?;
-        let closing = match quote {
-            '"' => '"',
-            '\'' => '\'',
-            '(' => ')',
-            _ => return None,
-        };
-        let closing_offset = find_unescaped(title_source, quote.len_utf8(), closing)?;
-        if closing_offset + closing.len_utf8() != title_source.len() {
-            return None;
-        }
-        let start = inside_start + destination_len + leading + quote.len_utf8();
-        Some(start..inside_start + destination_len + leading + closing_offset)
-    };
-    Some((
-        source_range.start + 2..source_range.start + alt_end,
-        source_range.start + destination.start..source_range.start + destination.end,
-        title.map(|range| source_range.start + range.start..source_range.start + range.end),
-    ))
-}
-
-fn find_unescaped(source: &str, start: usize, needle: char) -> Option<usize> {
-    let mut escaped = false;
-    for (relative, ch) in source.get(start..)?.char_indices() {
-        if ch == '\\' {
-            escaped = !escaped;
-            continue;
-        }
-        if ch == needle && !escaped {
-            return Some(start + relative);
-        }
-        escaped = false;
-    }
-    None
-}
-
-fn find_matching_paren(source: &str, opening: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut escaped = false;
-    for (relative, ch) in source.get(opening..)?.char_indices() {
-        if ch == '\\' {
-            escaped = !escaped;
-            continue;
-        }
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    return Some(opening + relative);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 fn append_trailing_horizontal_whitespace_run(
@@ -2374,22 +2257,24 @@ mod tests {
     }
 
     #[test]
-    fn direct_image_metadata_is_exact_and_ambiguous_forms_fall_back() {
+    fn inline_image_has_no_direct_editor_but_keeps_source_island() {
         let source = "![替代\\]文本](images/a\\)b.png '标题')";
         let block = MarkdownDocument::from_text(source)
             .visual_blocks()
             .remove(0);
-        let Some(VisualBlockEditor::Image {
+        let VisualBlockKind::Image {
             alt,
-            destination,
+            url,
             title,
-        }) = block.editor
+        } = &block.kind
         else {
-            panic!("inline image should have direct metadata");
+            panic!("expected image block, got {:?}", block.kind);
         };
-        assert_eq!(&source[alt.source_range], "替代\\]文本");
-        assert_eq!(&source[destination.source_range], "images/a\\)b.png");
-        assert_eq!(&source[title.expect("title").source_range], "标题");
+        assert_eq!(alt, "替代]文本");
+        assert_eq!(url, "images/a)b.png");
+        assert_eq!(title.as_deref(), Some("标题"));
+        assert!(block.editor.is_none(), "image should have no direct editor");
+        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Image));
 
         for ambiguous in [
             "![alt][asset]\n\n[asset]: image.png",
@@ -2512,11 +2397,10 @@ mod tests {
                 .iter()
                 .any(|run| run.style.superscript)
         );
-        for editor in ["image", "code", "math", "table"] {
+        for editor in ["code", "math", "table"] {
             assert!(
                 blocks.iter().any(|block| match (editor, &block.editor) {
-                    ("image", Some(VisualBlockEditor::Image { .. }))
-                    | ("code", Some(VisualBlockEditor::Code { .. }))
+                    ("code", Some(VisualBlockEditor::Code { .. }))
                     | ("math", Some(VisualBlockEditor::Math { .. }))
                     | ("table", Some(VisualBlockEditor::Table { .. })) => true,
                     _ => false,

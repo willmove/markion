@@ -18,7 +18,7 @@ use typune_markdown::Parser;
 use crate::MarkdownDocument;
 use crate::escape::escape_xml_text;
 use crate::math::render_math;
-use crate::model::PreviewBlock;
+use crate::model::{PreviewBlock, RichText};
 use crate::parse::{HtmlPreviewPart, html_preview_parts};
 
 /// Runs a Typune exporter over the raw Markdown source. Returns `None` on any
@@ -296,7 +296,7 @@ fn docx_code_paragraph(text: &str) -> String {
     )
 }
 
-fn render_docx_table(rows: &[Vec<String>]) -> String {
+fn render_docx_table(rows: &[Vec<RichText>]) -> String {
     if rows.is_empty() {
         return String::new();
     }
@@ -308,7 +308,7 @@ fn render_docx_table(rows: &[Vec<String>]) -> String {
     for row in rows {
         output.push_str("<w:tr>");
         for column in 0..columns {
-            let cell = row.get(column).map(String::as_str).unwrap_or("");
+            let cell = row.get(column).map(|cell| cell.text.as_str()).unwrap_or("");
             output.push_str("<w:tc><w:tcPr><w:tcW w:w=\"2400\" w:type=\"dxa\"/></w:tcPr>");
             output.push_str(&docx_paragraph(cell, None));
             output.push_str("</w:tc>");

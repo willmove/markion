@@ -116,7 +116,11 @@ pub(crate) fn push_preview_rich(
         return;
     }
     if let Some(table) = table.as_mut() {
-        table.current_cell.push_str(text);
+        if parse_extended {
+            append_extended_text(&mut table.current_cell, text, style, link);
+        } else {
+            append_span(&mut table.current_cell, text, style, link);
+        }
         return;
     }
 
@@ -162,7 +166,12 @@ pub(crate) fn push_preview_math(
         return;
     }
     if let Some(table) = table.as_mut() {
-        table.current_cell.push_str(&math.authored);
+        table.current_cell.push(InlineSpan {
+            text: math.authored.clone(),
+            style,
+            link: link.map(str::to_string),
+            math: Some(math),
+        });
         return;
     }
 

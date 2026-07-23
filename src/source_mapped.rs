@@ -702,17 +702,6 @@ fn shift_block_editor(editor: &mut VisualBlockEditor, delta: isize) -> Option<()
             shift_editor_field(payload, delta)?;
             *closing_delimiter = shift_range(closing_delimiter, delta)?;
         }
-        VisualBlockEditor::Image {
-            alt,
-            destination,
-            title,
-        } => {
-            shift_editor_field(alt, delta)?;
-            shift_editor_field(destination, delta)?;
-            if let Some(title) = title {
-                shift_editor_field(title, delta)?;
-            }
-        }
         VisualBlockEditor::Table { cells } => {
             for cell in cells {
                 shift_editor_field(&mut cell.field, delta)?;

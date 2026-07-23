@@ -101,7 +101,7 @@ pub(super) fn preview_run_plain_text(
             Some(html_preview_plain_text(html))
         }
         (PreviewBlock::Table { rows, .. }, PreviewTextRunId::TableCell { row, col }) => {
-            rows.get(row).and_then(|r| r.get(col)).cloned()
+            rows.get(row).and_then(|r| r.get(col)).map(|cell| cell.text.clone())
         }
         _ => None,
     }
@@ -2265,28 +2265,16 @@ pub(super) fn visual_block_view(
         VisualBlockKind::Image {
             alt: image_alt,
             url,
+            title: image_title,
             ..
         } => {
-            if let Some(VisualBlockEditor::Image {
-                alt,
-                destination,
-                title,
-            }) = block.editor.as_ref()
-            {
-                return visual_image_editor(
-                    app,
-                    block_index,
-                    block.id,
-                    url,
-                    image_alt,
-                    document_dir,
-                    alt,
-                    destination,
-                    title.as_ref(),
-                    cx,
-                );
-            }
             let offset = block.source_range.start;
+            let caption = image_title
+                .as_deref()
+                .filter(|title| !title.is_empty())
+                .or_else(|| {
+                    (!image_alt.is_empty()).then_some(image_alt.as_str())
+                });
             div()
                 .mb_3()
                 .p_3()
@@ -2301,10 +2289,21 @@ pub(super) fn visual_block_view(
                 )
                 .child(
                     div()
-                        .rounded_md()
-                        .overflow_hidden()
-                        .bg(rgb(0xffffff))
-                        .child(img(preview_image_source(url, document_dir)).max_w_full()),
+                        .bg(rgb(0xf8fafc))
+                        .p_2()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .min_h(px(96.))
+                        .child(img(preview_image_source(url, document_dir)).max_w_full())
+                        .children(caption.map(|text| {
+                            div()
+                                .mt_1()
+                                .text_size(px(11.))
+                                .text_color(rgb(0x64748b))
+                                .child(text.to_string())
+                        })),
                 )
         }
         VisualBlockKind::Rule => {
@@ -2429,11 +2428,10 @@ fn visual_editor_field_element(
     field: &VisualEditorField,
     element_id: ElementId,
     styled_text: Option<StyledText>,
+    cell_rich: Option<&RichText>,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let source = app.active_tab().document.text();
-    let projection = visual_editor_field_projection(source, field);
-    let text = projection.text.clone();
     let source_cursor = app.active_tab().cursor_offset();
     let block_owns_caret = visual_block_owns_caret(app, block_index);
     let caret_active = block_owns_caret
@@ -2442,13 +2440,39 @@ fn visual_editor_field_element(
     let marked_range = app.active_tab().marked_range.clone().filter(|marked| {
         marked.start >= field.source_range.start && marked.end <= field.source_range.end
     });
+
+    // Table cells render inline formatting (bold, links, etc.) while unfocused,
+    // and reveal the authored source markup when focused for editing -
+    // mirroring how non-table visual blocks reveal inline constructs.
+    let (projection, text, highlights) = if let Some(rich) = cell_rich {
+        if caret_active {
+            let proj = visual_editor_field_projection(source, field);
+            let txt = proj.text.clone();
+            let hl = Vec::new();
+            (proj, txt, hl)
+        } else {
+            let (proj, hl) = table_cell_rendered_projection(rich, field);
+            let txt = proj.text.clone();
+            (proj, txt, hl)
+        }
+    } else {
+        let proj = visual_editor_field_projection(source, field);
+        let txt = proj.text.clone();
+        (proj, txt, Vec::new())
+    };
+
     #[cfg(test)]
     let test_projection = caret_active.then_some((text.clone(), Vec::new()));
+    let styled = if !highlights.is_empty() {
+        StyledText::new(SharedString::from(text.clone())).with_highlights(highlights)
+    } else {
+        styled_text.unwrap_or_else(|| StyledText::new(SharedString::from(text)))
+    };
     VisualEditableText {
         element_id,
         block_index,
         source_island: false,
-        text: styled_text.unwrap_or_else(|| StyledText::new(SharedString::from(text))),
+        text: styled,
         projection,
         source_selection: app.active_tab().selected_range.clone(),
         source_cursor,
@@ -2462,6 +2486,50 @@ fn visual_editor_field_element(
         test_projection_styles: None,
     }
     .into_any_element()
+}
+
+/// Builds a rendered (non-source-revealing) projection for a table cell from
+/// its already-parsed `RichText`. The display text is the rendered content
+/// (e.g. "bold" for `**bold**`); segments map the whole run to the cell's
+/// source range so clicks resolve inside the cell; spans carry the inline
+/// styles for highlight generation.
+fn table_cell_rendered_projection(
+    rich: &RichText,
+    field: &VisualEditorField,
+) -> (VisualProjection, Vec<(Range<usize>, HighlightStyle)>) {
+    let text = rich.text.clone();
+    let mut highlights = Vec::new();
+    let mut spans = Vec::new();
+    let mut offset = 0usize;
+    for span in &rich.spans {
+        let range = offset..offset + span.text.len();
+        offset = range.end;
+        if let Some(style) = visual_highlight_style(span.style, span.link.is_some()) {
+            highlights.push((range.clone(), style));
+        }
+        spans.push(markion::VisualProjectionSpan {
+            display_range: range,
+            style: span.style,
+            link: span.link.is_some(),
+            source: false,
+        });
+    }
+    let segments = if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![markion::VisualProjectionSegment {
+            display_range: 0..text.len(),
+            source_range: field.source_range.clone(),
+        }]
+    };
+    let projection = VisualProjection {
+        text,
+        segments,
+        spans,
+        revealed_source_ranges: Vec::new(),
+        source_anchor: field.source_range.start,
+    };
+    (projection, highlights)
 }
 
 pub(super) fn visual_editor_field_projection(
@@ -2560,6 +2628,7 @@ fn visual_code_editor(
             payload,
             ElementId::from(("visual-code-payload", block_id.as_u64())),
             Some(styled),
+            None,
             cx,
         ))
 }
@@ -2618,6 +2687,7 @@ fn visual_math_editor(
                     block_index,
                     payload,
                     ElementId::from(("visual-math-payload", block.id.as_u64())),
+                    None,
                     None,
                     cx,
                 )),
@@ -2700,112 +2770,6 @@ fn visual_diagram_editor(
                     payload,
                     ElementId::from(("visual-diagram-payload", block.id.as_u64())),
                     None,
-                    cx,
-                )),
-        )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn visual_image_editor(
-    app: &MarkionApp,
-    block_index: usize,
-    block_id: VisualBlockId,
-    url: &str,
-    image_alt: &str,
-    document_dir: Option<&Path>,
-    alt: &VisualEditorField,
-    destination: &VisualEditorField,
-    title: Option<&VisualEditorField>,
-    cx: &mut Context<MarkionApp>,
-) -> Div {
-    let fields = [
-        (app.tr(Msg::LabelImageAlt), alt),
-        (app.tr(Msg::LabelImageDestination), destination),
-    ];
-    div()
-        .mb_3()
-        .border_1()
-        .border_color(rgb(0xcbd5e1))
-        .rounded_md()
-        .overflow_hidden()
-        .child(
-            div()
-                .bg(rgb(0xf8fafc))
-                .p_2()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .min_h(px(96.))
-                .child(img(preview_image_source(url, document_dir)).max_w_full())
-                .children((!image_alt.is_empty()).then(|| {
-                    div()
-                        .mt_1()
-                        .text_size(px(11.))
-                        .text_color(rgb(0x64748b))
-                        .child(image_alt.to_string())
-                })),
-        )
-        .children(
-            fields
-                .into_iter()
-                .enumerate()
-                .map(|(index, (label, field))| {
-                    visual_image_field_row(app, block_id, block_index, index, label, field, cx)
-                }),
-        )
-        .children(title.map(|field| {
-            visual_image_field_row(
-                app,
-                block_id,
-                block_index,
-                2,
-                app.tr(Msg::LabelImageTitle),
-                field,
-                cx,
-            )
-        }))
-}
-
-fn visual_image_field_row(
-    app: &MarkionApp,
-    block_id: VisualBlockId,
-    block_index: usize,
-    field_index: usize,
-    label: &'static str,
-    field: &VisualEditorField,
-    cx: &mut Context<MarkionApp>,
-) -> Div {
-    div()
-        .border_t_1()
-        .border_color(rgb(0xe2e8f0))
-        .px_2()
-        .py_1()
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(
-            div()
-                .w(px(72.))
-                .flex_none()
-                .text_size(px(11.))
-                .text_color(rgb(0x64748b))
-                .child(label),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .font_family("JetBrains Mono")
-                .text_size(px(12.))
-                .child(visual_editor_field_element(
-                    app,
-                    block_index,
-                    field,
-                    ElementId::from((
-                        "visual-image-field",
-                        block_id.as_u64().wrapping_mul(8) | field_index as u64,
-                    )),
                     None,
                     cx,
                 )),
@@ -2837,7 +2801,7 @@ pub(super) fn visual_table_view(
     app: &MarkionApp,
     block: &VisualBlock,
     block_index: usize,
-    rows: &[Vec<String>],
+    rows: &[Vec<RichText>],
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
@@ -2914,24 +2878,39 @@ pub(super) fn visual_table_view(
                                 cx.listener(move |app, _, _, cx| app.move_to(offset, cx)),
                             )
                         })
-                        .child(field.map_or_else(
-                            || cell.clone().into_any_element(),
-                            |field| {
-                                visual_editor_field_element(
-                                    app,
-                                    block_index,
-                                    field,
-                                    ElementId::from((
-                                        "visual-table-cell",
-                                        (block.id.as_u64() << 24)
-                                            | ((row_index as u64) << 12)
-                                            | cell_index as u64,
-                                    )),
-                                    None,
-                                    cx,
-                                )
-                            },
-                        ))
+                        .child(if let Some(field) = field {
+                            visual_editor_field_element(
+                                app,
+                                block_index,
+                                field,
+                                ElementId::from((
+                                    "visual-table-cell",
+                                    (block.id.as_u64() << 24)
+                                        | ((row_index as u64) << 12)
+                                        | cell_index as u64,
+                                )),
+                                None,
+                                Some(cell),
+                                cx,
+                            )
+                        } else {
+                            rich_text_element(
+                                app,
+                                ElementId::from((
+                                    "visual-table-cell-readonly",
+                                    (block.id.as_u64() << 24)
+                                        | ((row_index as u64) << 12)
+                                        | cell_index as u64,
+                                )),
+                                cell,
+                                block_index,
+                                PreviewTextRunId::TableCell {
+                                    row: row_index,
+                                    col: cell_index,
+                                },
+                                cx,
+                            )
+                        })
                 }))
         }))
 }
@@ -3400,7 +3379,6 @@ pub(super) fn preview_block_view(
                         })
                         .children(row.iter().enumerate().map(|(cell_index, cell)| {
                             let is_last_cell = cell_index + 1 == row.len();
-                            let cell_text = cell.clone();
                             div()
                                 .flex_1()
                                 .min_w_0()
@@ -3409,7 +3387,7 @@ pub(super) fn preview_block_view(
                                     style.border_r_1().border_color(rgb(0xe2e8f0))
                                 })
                                 .text_size(px(typography.table_font_size))
-                                .child(selectable_plain_text(
+                                .child(rich_text_element(
                                     app,
                                     ElementId::from((
                                         "preview-table-cell",
@@ -3417,8 +3395,7 @@ pub(super) fn preview_block_view(
                                             | (((row_index as u64) & 0xffff) << 16)
                                             | ((cell_index as u64) & 0xffff),
                                     )),
-                                    StyledText::new(SharedString::from(cell_text.clone())),
-                                    cell_text,
+                                    cell,
                                     block_index,
                                     PreviewTextRunId::TableCell {
                                         row: row_index,

@@ -1495,10 +1495,7 @@ impl MarkdownDocument {
         let (block_index, editor, field_index) =
             blocks.iter().enumerate().find_map(|(block_index, block)| {
                 let editor = block.editor.as_ref()?;
-                if !matches!(
-                    editor,
-                    VisualBlockEditor::Image { .. } | VisualBlockEditor::Table { .. }
-                ) {
+                if !matches!(editor, VisualBlockEditor::Table { .. }) {
                     return None;
                 }
                 let fields = editor.fields();
@@ -1901,7 +1898,7 @@ impl MarkdownDocument {
                     if let Some(table) = table.as_mut()
                         && let Some(row) = table.current_row.as_mut()
                     {
-                        row.push(clean_preview_text(&table.current_cell));
+                        row.push(finish_rich_text(std::mem::take(&mut table.current_cell)));
                     }
                 }
                 Event::Text(text) => {
@@ -2964,6 +2961,35 @@ mod tests {
                 source_range: table_range,
             }
         );
+    }
+
+    #[test]
+    fn table_cells_parse_inline_formatting() {
+        let doc = MarkdownDocument::from_text(
+            "| Syntax | Example |\n|---|---|\n| `**bold**` | **bold** |\n| `[text](url)` | [link](https://github.com/willmove/markion) |",
+        );
+        let blocks = doc.preview_blocks();
+        assert_eq!(blocks.len(), 1);
+        let PreviewBlock::Table { rows, .. } = &blocks[0] else {
+            panic!("expected table, got {:?}", blocks[0]);
+        };
+        // Header row: plain text cells.
+        assert_eq!(rows[0][0].text, "Syntax");
+        assert_eq!(rows[0][1].text, "Example");
+        // Row 1, col 0: inline code span (the backtick fence).
+        assert_eq!(rows[1][0].text, "**bold**");
+        assert!(rows[1][0].spans.iter().any(|span| span.style.code));
+        // Row 1, col 1: bold.
+        assert_eq!(rows[1][1].text, "bold");
+        assert!(rows[1][1].spans.iter().any(|span| span.style.bold));
+        // Row 2, col 0: plain text of the link syntax example.
+        assert_eq!(rows[2][0].text, "[text](url)");
+        // Row 2, col 1: rendered link.
+        assert_eq!(rows[2][1].text, "link");
+        assert!(rows[2][1]
+            .spans
+            .iter()
+            .any(|span| span.link.as_deref() == Some("https://github.com/willmove/markion")));
     }
 
     #[test]
@@ -4997,42 +5023,6 @@ mod tests {
     }
 
     #[test]
-    fn direct_image_edit_escapes_only_unescaped_field_terminators_and_rejects_stale_events() {
-        let mut doc = MarkdownDocument::from_text("![alt](old.png \"title\")");
-        let block = doc.visual_blocks().remove(0);
-        let VisualBlockEditor::Image {
-            alt,
-            destination,
-            title,
-        } = block.editor.expect("direct image")
-        else {
-            unreachable!()
-        };
-
-        let alt_edit = doc
-            .direct_visual_block_edit(alt.source_range.clone(), "a] b\\] c")
-            .expect("alt edit");
-        assert_eq!(alt_edit.replacement, "a\\] b\\] c");
-        let destination_edit = doc
-            .direct_visual_block_edit(destination.source_range.clone(), "new path).png")
-            .expect("destination edit");
-        assert_eq!(destination_edit.replacement, "new%20path\\).png");
-        let title = title.expect("title field");
-        let title_edit = doc
-            .direct_visual_block_edit(title.source_range.clone(), "new \"title\"")
-            .expect("title edit");
-        assert_eq!(title_edit.replacement, "new \\\"title\\\"");
-
-        assert!(doc.validate_visual_block_edit(&destination_edit));
-        doc.replace_range(
-            destination_edit.range.clone(),
-            &destination_edit.replacement,
-        );
-        assert!(!doc.validate_visual_block_edit(&destination_edit));
-        assert_eq!(doc.text(), "![alt](new%20path\\).png \"title\")");
-    }
-
-    #[test]
     fn direct_table_edit_reflows_once_preserves_alignment_and_restores_logical_cell() {
         let source = "before\n\n| A | B |\n| :--- | ---: |\n| x | y |\n\nafter";
         let mut doc = MarkdownDocument::from_text(source);
@@ -5082,24 +5072,11 @@ mod tests {
     }
 
     #[test]
-    fn direct_image_and_table_tab_targets_follow_fields_then_handoff() {
+    fn direct_table_tab_targets_follow_fields_then_handoff() {
         let source =
-            "before\n\n![alt](image.png \"title\")\n\n| A | B |\n| --- | --- |\n| x | y |\n\nafter";
+            "before\n\n| A | B |\n| --- | --- |\n| x | y |\n\nafter";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks();
-        let image = blocks
-            .iter()
-            .find(|block| matches!(block.editor, Some(VisualBlockEditor::Image { .. })))
-            .unwrap();
-        let fields = image.editor.as_ref().unwrap().fields();
-        assert_eq!(
-            doc.visual_editor_tab_target(&fields[0].source_range, true),
-            Some(fields[1].source_range.clone())
-        );
-        assert_eq!(
-            doc.visual_editor_tab_target(&fields[1].source_range, false),
-            Some(fields[0].source_range.clone())
-        );
         let table = blocks
             .iter()
             .find(|block| matches!(block.editor, Some(VisualBlockEditor::Table { .. })))
@@ -5232,7 +5209,6 @@ mod tests {
         for required in [
             "VisualBlockEditor::Code",
             "VisualBlockEditor::Math",
-            "VisualBlockEditor::Image",
             "VisualBlockEditor::Table",
             "progressive source reveal",
             "YAML front matter",
