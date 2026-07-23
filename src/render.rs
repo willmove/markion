@@ -400,7 +400,7 @@ pub(crate) fn push_latex_list_item(output: &mut String, checked: Option<bool>, t
 
 /// Renders a Markdown table as a LaTeX `longtable`, deriving the column spec
 /// from the separator-row alignments (`Default` → `l`).
-pub(crate) fn render_latex_table(rows: &[Vec<String>], alignments: &[TableAlignment]) -> String {
+pub(crate) fn render_latex_table(rows: &[Vec<RichText>], alignments: &[TableAlignment]) -> String {
     if rows.is_empty() {
         return String::new();
     }
@@ -417,7 +417,7 @@ pub(crate) fn render_latex_table(rows: &[Vec<String>], alignments: &[TableAlignm
     for (index, row) in rows.iter().enumerate() {
         let mut cells = row
             .iter()
-            .map(|cell| escape_latex(cell))
+            .map(|cell| escape_latex(&cell.text))
             .collect::<Vec<_>>();
         cells.resize(columns, String::new());
         output.push_str(&cells.join(" & "));

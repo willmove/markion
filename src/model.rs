@@ -586,7 +586,7 @@ pub enum VisualBlockKind {
     },
     Rule,
     Table {
-        rows: Vec<Vec<String>>,
+        rows: Vec<Vec<RichText>>,
         alignments: Vec<TableAlignment>,
     },
     /// Whitespace-only source not owned by a parsed preview block. Visual Edit
@@ -653,11 +653,6 @@ pub enum VisualBlockEditor {
         payload: VisualEditorField,
         closing_delimiter: Range<usize>,
     },
-    Image {
-        alt: VisualEditorField,
-        destination: VisualEditorField,
-        title: Option<VisualEditorField>,
-    },
     Table {
         cells: Vec<VisualTableCell>,
     },
@@ -667,14 +662,6 @@ impl VisualBlockEditor {
     pub fn fields(&self) -> Vec<&VisualEditorField> {
         match self {
             Self::Code { payload, .. } | Self::Math { payload, .. } => vec![payload],
-            Self::Image {
-                alt,
-                destination,
-                title,
-            } => [Some(alt), Some(destination), title.as_ref()]
-                .into_iter()
-                .flatten()
-                .collect(),
             Self::Table { cells } => cells.iter().map(|cell| &cell.field).collect(),
         }
     }
@@ -912,7 +899,7 @@ pub enum PreviewBlock {
         source_range: Range<usize>,
     },
     Table {
-        rows: Vec<Vec<String>>,
+        rows: Vec<Vec<RichText>>,
         /// Per-column alignment from the separator row, as parsed upstream.
         alignments: Vec<TableAlignment>,
         source_range: Range<usize>,
