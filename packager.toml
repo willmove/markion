@@ -33,7 +33,7 @@ product-name = "Markion"
 # Providing `name` skips that buggy path entirely.
 name = "markion"
 identifier = "dev.markion.app"
-version = "0.1.9"
+version = "0.1.10"
 category = "Productivity"
 publisher = "Willmove"
 homepage = "https://github.com/willmove/markion"
