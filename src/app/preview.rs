@@ -1937,6 +1937,8 @@ fn visual_projection_fragment(
     style: Option<HighlightStyle>,
     app: &MarkionApp,
     cx: &mut Context<MarkionApp>,
+    #[cfg(test)] test_projection: Option<(String, Vec<Range<usize>>)>,
+    #[cfg(test)] test_projection_styles: Option<Vec<InlineStyle>>,
 ) -> gpui::AnyElement {
     let visible_len = visible.len();
     let highlights = style
@@ -1970,9 +1972,9 @@ fn visual_projection_fragment(
                 || app.active_tab().cursor_offset() == source_range.end),
         entity: cx.entity(),
         #[cfg(test)]
-        test_projection: None,
+        test_projection,
         #[cfg(test)]
-        test_projection_styles: None,
+        test_projection_styles,
     }
     .into_any_element()
 }
@@ -2004,6 +2006,24 @@ pub(super) fn visual_text_with_math_element(
         app.active_tab().cursor_offset(),
         app.active_tab().marked_range.clone(),
     );
+    #[cfg(test)]
+    let focused_test_projection = visual_block_is_focused(app, block).then(|| {
+        (
+            projection.text.clone(),
+            projection.revealed_source_ranges.clone(),
+        )
+    });
+    #[cfg(test)]
+    let focused_test_projection_styles = visual_block_is_focused(app, block).then(|| {
+        projection
+            .spans
+            .iter()
+            .filter(|span| !span.source)
+            .map(|span| span.style)
+            .collect::<Vec<_>>()
+    });
+    #[cfg(test)]
+    let mut recorded_full_projection = false;
     let mut children = Vec::new();
     let mut fragment_index = 0usize;
     let mut remaining_icons = nav_icons;
@@ -2063,6 +2083,16 @@ pub(super) fn visual_text_with_math_element(
                 }
                 let source_start = segment.source_range.start + local_start;
                 let source_range = source_start..source_start + fragment.len();
+                #[cfg(test)]
+                let (test_projection, test_projection_styles) = if !recorded_full_projection {
+                    recorded_full_projection = true;
+                    (
+                        focused_test_projection.clone(),
+                        focused_test_projection_styles.clone(),
+                    )
+                } else {
+                    (None, None)
+                };
                 children.push(visual_projection_fragment(
                     block_index,
                     fragment_index,
@@ -2071,6 +2101,10 @@ pub(super) fn visual_text_with_math_element(
                     style.clone(),
                     app,
                     cx,
+                    #[cfg(test)]
+                    test_projection,
+                    #[cfg(test)]
+                    test_projection_styles,
                 ));
                 fragment_index += 1;
                 local_start += fragment.len();
@@ -2084,6 +2118,16 @@ pub(super) fn visual_text_with_math_element(
                 );
             }
         } else {
+            #[cfg(test)]
+            let (test_projection, test_projection_styles) = if !recorded_full_projection {
+                recorded_full_projection = true;
+                (
+                    focused_test_projection.clone(),
+                    focused_test_projection_styles.clone(),
+                )
+            } else {
+                (None, None)
+            };
             children.push(visual_projection_fragment(
                 block_index,
                 fragment_index,
@@ -2092,6 +2136,10 @@ pub(super) fn visual_text_with_math_element(
                 style,
                 app,
                 cx,
+                #[cfg(test)]
+                test_projection,
+                #[cfg(test)]
+                test_projection_styles,
             ));
             fragment_index += 1;
             fragment_index += emit_navigation_icons_after(
