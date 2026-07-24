@@ -938,11 +938,8 @@ impl MarkionApp {
     /// Snapshot open saved tabs / workspace root into `self.session` and write
     /// `session.toml`. Best-effort: failures are logged via the status bar.
     pub(super) fn sync_and_persist_session(&mut self) {
-        self.session.open_files = self
-            .tabs
-            .iter()
-            .filter_map(|tab| tab.document.path().map(|path| comparable_document_path(path)))
-            .collect();
+        self.session.open_files =
+            session_open_files_from_paths(self.tabs.iter().map(|tab| tab.document.path()));
         self.session.active_file = self
             .active_tab()
             .document
