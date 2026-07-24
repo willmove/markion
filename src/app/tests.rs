@@ -104,6 +104,7 @@ fn every_application_dropdown_uses_shortcut_aware_rows() {
         })
         .expect("shortcut-aware menu row");
     assert!(row_source.contains("shortcut: Option<&'static str>"));
+    assert!(row_source.contains("impl Into<SharedString>"));
     assert!(row_source.contains(".justify_between()"));
     assert!(row_source.contains(".text_color(palette.muted)"));
 }
@@ -772,6 +773,36 @@ fn preview_selection_markdown_joins_covered_block_sources() {
     let html = MarkdownDocument::from_text(&md).render_html_fragment();
     assert!(html.contains("<h1"));
     assert!(html.to_lowercase().contains("hello"));
+}
+
+#[test]
+fn inline_math_baseline_margin_lifts_shallow_formulas_to_text_baseline() {
+    // Paragraph defaults: 14px body / 24px line. A shallow formula (tiny descent)
+    // previously used mb=descent and sat near the line box bottom; the margin
+    // must instead be text_baseline_from_bottom - math_descent.
+    let line_height = px(24.);
+    let font_ascent = px(11.2); // ≈ 0.8em
+    let font_descent = px(2.8); // ≈ 0.2em
+    let math_descent = px(1.0);
+    let margin = inline_math_baseline_margin_from_metrics(
+        line_height,
+        font_ascent,
+        font_descent,
+        math_descent,
+    );
+    // text baseline from bottom = (24 - 11.2 - 2.8)/2 + 2.8 = 7.8
+    assert!((f32::from(margin) - 6.8).abs() < 0.01);
+    // Old mb=descent left the formula ~5.8px too low for this case.
+    assert!(f32::from(margin) > f32::from(math_descent) + 4.0);
+
+    // Deep formulas may need a negative margin so descent hangs below the line.
+    let deep = inline_math_baseline_margin_from_metrics(
+        line_height,
+        font_ascent,
+        font_descent,
+        px(12.0),
+    );
+    assert!(f32::from(deep) < 0.0);
 }
 
 #[test]
@@ -2207,6 +2238,96 @@ fn visual_direct_math_editor_keeps_invalid_payload_ime_and_one_undo(cx: &mut Tes
 }
 
 #[gpui::test]
+fn visual_block_math_source_expands_and_collapses_without_editing(cx: &mut TestAppContext) {
+    let source = "$$\n\\frac{1}{2}\n$$\n\nAfter";
+    let document = MarkdownDocument::from_text(source);
+    let math_id = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.kind {
+            VisualBlockKind::MathBlock { .. } => Some(block.id),
+            _ => None,
+        })
+        .expect("math block");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let version = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(!tab.is_visual_source_expanded(math_id));
+        tab.document.version()
+    });
+
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.toggle_visual_source_expanded(math_id);
+        assert!(tab.is_visual_source_expanded(math_id));
+        cx.notify();
+    });
+    app.update(cx, |app, cx| {
+        // Clicking "outside" clears expand without touching the document.
+        app.active_tab_mut().retain_visual_source_expand = None;
+        app.active_tab_mut().apply_visual_source_outside_click();
+        assert!(!app.active_tab().is_visual_source_expanded(math_id));
+        assert_eq!(app.active_tab().document.version(), version);
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(app.active_tab().undo_stack.is_empty());
+        cx.notify();
+    });
+}
+
+#[gpui::test]
+fn visual_diagram_source_expands_and_collapses_without_editing(cx: &mut TestAppContext) {
+    let source = "```mermaid\nflowchart LR\nA --> B\n```\n\nAfter";
+    let document = MarkdownDocument::from_text(source);
+    let diagram_id = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match (&block.kind, block.editor.as_ref()) {
+            (VisualBlockKind::CodeBlock { language }, Some(VisualBlockEditor::Code { .. }))
+                if language.as_deref() == Some("mermaid") =>
+            {
+                Some(block.id)
+            }
+            _ => None,
+        })
+        .expect("mermaid diagram block");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let version = app.update(cx, |app, _| app.active_tab().document.version());
+    app.update(cx, |app, cx| {
+        app.active_tab_mut()
+            .set_visual_source_expanded(diagram_id, true);
+        assert!(app.active_tab().is_visual_source_expanded(diagram_id));
+        app.active_tab_mut().retain_visual_source_expand = None;
+        app.active_tab_mut().apply_visual_source_outside_click();
+        assert!(!app.active_tab().is_visual_source_expanded(diagram_id));
+        assert_eq!(app.active_tab().document.version(), version);
+        assert_eq!(app.active_tab().document.text(), source);
+        cx.notify();
+    });
+}
+
+#[gpui::test]
 fn visual_direct_table_cell_edit_reflows_traverses_and_undoes_once(cx: &mut TestAppContext) {
     let source = "| A | B |\n| :--- | ---: |\n| x | y |";
     let document = MarkdownDocument::from_text(source);
@@ -2374,6 +2495,7 @@ fn visual_edit_renders_local_live_preview_projection_and_edits_source(cx: &mut T
         window.focus(&app.read(cx).focus_handle);
         window.activate_window();
     });
+    cx.run_until_parked();
 
     app.update(cx, |app, _| {
         let (text, revealed) = app
@@ -4043,4 +4165,63 @@ fn default_heading_menu_exposes_h4_and_h5() {
         heading_native_menu_items(Language::En, DEFAULT_HEADING_MENU_MAX_LEVEL).len(),
         5
     );
+}
+
+#[test]
+fn session_restore_skips_missing_paths_and_untitled_tabs() {
+    let dir = tempfile::tempdir().unwrap();
+    let existing = dir.path().join("notes.md");
+    fs::write(&existing, "# hi\n").unwrap();
+    let missing = dir.path().join("gone.md");
+    let workspace = dir.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+
+    let session = SessionState {
+        workspace_root: Some(workspace.clone()),
+        open_files: vec![existing.clone(), missing.clone()],
+        active_file: Some(missing.clone()),
+        recent_files: Vec::new(),
+    };
+    let (root, open_files, active) = filter_restorable_session(&session);
+    assert_eq!(root.as_deref(), Some(workspace.as_path()));
+    assert_eq!(open_files, vec![existing.clone()]);
+    assert!(active.is_none());
+
+    assert!(session_open_files_from_paths([None, Some(existing.as_path())]).len() == 1);
+    assert!(session_open_files_from_paths([None::<&Path>, None]).is_empty());
+}
+
+#[test]
+fn cli_open_intent_disables_session_restore() {
+    assert!(should_restore_session(&StartupOpenIntent::None));
+    assert!(!should_restore_session(&StartupOpenIntent::File(PathBuf::from(
+        "a.md"
+    ))));
+    assert!(!should_restore_session(&StartupOpenIntent::Folder(
+        PathBuf::from("notes")
+    )));
+}
+
+#[test]
+fn open_recent_menu_is_wired_in_file_dropdown() {
+    let root_view_source = include_str!("root_view.rs");
+    assert!(root_view_source.contains(".on_action(cx.listener(Self::clear_recent_files))"));
+    assert!(root_view_source.contains("Msg::ItemOpenRecent"));
+    assert!(root_view_source.contains("Msg::ItemOpenRecentEmpty"));
+    assert!(root_view_source.contains("Msg::ItemClearRecentFiles"));
+    assert!(root_view_source.contains("open_recent_path"));
+
+    let in_window = root_view_source
+        .split_once("AppMenu::File => panel")
+        .and_then(|(_, rest)| rest.split_once("AppMenu::Edit =>").map(|(file, _)| file))
+        .expect("in-window File menu");
+    let folder = in_window
+        .find("Msg::ItemOpenFolder,")
+        .expect("Open Folder");
+    let recent = in_window.find("Msg::ItemOpenRecent").expect("Open Recent");
+    let clear = in_window
+        .find("Msg::ItemClearRecentFiles")
+        .expect("Clear Recent");
+    let save = in_window.find("Msg::ItemSave,").expect("Save");
+    assert!(folder < recent && recent < clear && clear < save);
 }

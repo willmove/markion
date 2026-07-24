@@ -59,6 +59,7 @@ impl MarkionApp {
                         let focused_existing = this
                             .update(cx, |app, cx| {
                                 if app.focus_existing_tab_for_path(&path, cx) {
+                                    app.record_recent_path(&path);
                                     app.active_menu = None;
                                     app.status = app.trf(Msg::StatusOpened, &[&display_path]);
                                     cx.notify();
@@ -78,6 +79,7 @@ impl MarkionApp {
                                     app.replace_active_tab(document, cx);
                                     app.active_menu = None;
                                     app.update_workspace_root_from_document(cx);
+                                    app.record_recent_path(&path);
                                     app.status = app.trf(Msg::StatusOpened, &[&display_path]);
                                     cx.notify();
                                 });
@@ -184,6 +186,7 @@ impl MarkionApp {
                         let focused_existing = this
                             .update(cx, |app, cx| {
                                 if app.focus_existing_tab_for_path(&path, cx) {
+                                    app.record_recent_path(&path);
                                     app.active_menu = None;
                                     app.status = app.trf(Msg::StatusOpened, &[&display_path]);
                                     cx.notify();
@@ -203,6 +206,7 @@ impl MarkionApp {
                                     app.open_in_new_tab(document, cx);
                                     app.active_menu = None;
                                     app.update_workspace_root_from_document(cx);
+                                    app.record_recent_path(&path);
                                     app.status = app.trf(Msg::StatusOpened, &[&display_path]);
                                     cx.notify();
                                 });
@@ -257,6 +261,7 @@ impl MarkionApp {
         }
         self.active_menu = None;
         self.refresh_search_matches();
+        self.sync_and_persist_session();
         self.status = t(self.language, Msg::StatusNewDocument).into();
         cx.notify();
     }
@@ -298,10 +303,16 @@ impl MarkionApp {
             .path()
             .map(|path| path.display().to_string())
             .unwrap_or_default();
-        let tab = self.active_tab_mut();
-        self.status = match tab.document.save() {
+        let saved_path = self.active_tab().document.path().map(Path::to_path_buf);
+        let save_result = self.active_tab_mut().document.save();
+        self.status = match save_result {
             Ok(()) => {
                 self.discard_current_recovery_file();
+                if let Some(path) = saved_path.as_ref() {
+                    self.record_recent_path(path);
+                } else {
+                    self.sync_and_persist_session();
+                }
                 self.trf(Msg::StatusSaved, &[&display_path])
             }
             Err(err) => self.trf(Msg::StatusSaveFailed, &[&err.to_string()]),
@@ -339,11 +350,12 @@ impl MarkionApp {
                 Some(path) => {
                     let display_path = path.display().to_string();
                     let _ = this.update(cx, |app, cx| {
-                        let tab = app.active_tab_mut();
-                        app.status = match tab.document.save_as(&path) {
+                        let save_result = app.active_tab_mut().document.save_as(&path);
+                        app.status = match save_result {
                             Ok(()) => {
                                 app.discard_current_recovery_file();
                                 app.update_workspace_root_from_document(cx);
+                                app.record_recent_path(&path);
                                 app.trf(Msg::StatusSaved, &[&display_path])
                             }
                             Err(err) => app.trf(Msg::StatusSaveFailed, &[&err.to_string()]),

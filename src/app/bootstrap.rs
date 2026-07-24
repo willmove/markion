@@ -376,15 +376,11 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 // Re-translate the native menu now that the saved language
                 // preference has been loaded by `MarkionApp::new`.
                 install_menus(app.language, app.heading_menu_max_level, cx);
-                app.apply_startup_open_intent(startup_intent, cx);
+                app.apply_startup_open_intent(startup_intent.clone(), cx);
+                app.restore_session_on_startup(&startup_intent, cx);
                 app.check_recovery_on_startup(window, cx);
-                // The file tree is intentionally NOT scanned on startup. With
-                // only the in-memory welcome document open there is no chosen
-                // workspace directory, and showing the program's own working
-                // directory is not useful for a Markdown editor. The tree stays
-                // `None` (empty-state placeholder) until a real file is opened,
-                // at which point `update_workspace_root_from_document` scans
-                // that file's parent directory.
+                // File-tree scanning is driven by session restore, CLI folder
+                // open, or opening a document — not by the process CWD.
                 cx.activate(true);
             })
             .unwrap();

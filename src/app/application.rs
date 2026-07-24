@@ -11,6 +11,13 @@ impl MarkionApp {
         let file_tree = None;
         let preferences_path = default_preferences_path();
         let preferences = load_app_preferences(&preferences_path).unwrap_or_default();
+        let session_path = default_session_path();
+        // Unit tests must not read/write the developer's real session.toml.
+        let session = if cfg!(test) {
+            SessionState::default()
+        } else {
+            load_session_state(&session_path).unwrap_or_default()
+        };
         let typography = DocumentTypographyMetrics::new(
             preferences.editor_font_size,
             preferences.rendered_font_size,
@@ -45,6 +52,8 @@ impl MarkionApp {
             confirming_close: false,
             allow_close: false,
             preferences_path,
+            session_path,
+            session,
             theme: AppTheme::from_name(&preferences.theme).unwrap_or(AppTheme::Paper),
             custom_theme,
             custom_themes,
@@ -152,6 +161,7 @@ impl MarkionApp {
             tab.marked_range = None;
         }
         self.refresh_search_matches();
+        self.sync_and_persist_session();
         cx.notify();
     }
 
@@ -313,6 +323,7 @@ impl MarkionApp {
                     Ok(document) => {
                         self.replace_active_tab(document, cx);
                         self.update_workspace_root_from_document(cx);
+                        self.record_recent_path(&path);
                         self.active_menu = None;
                         self.status = self.trf(Msg::StatusOpened, &[&display_path]);
                     }
@@ -384,6 +395,7 @@ impl MarkionApp {
         }
 
         self.workspace_root = root;
+        self.sync_and_persist_session();
     }
 
     pub(super) fn update_workspace_root_from_document(&mut self, cx: &mut Context<Self>) {
@@ -921,6 +933,163 @@ impl MarkionApp {
         {
             self.status = self.trf(Msg::StatusPreferencesSaveFailed, &[&err.to_string()]);
         }
+    }
+
+    /// Snapshot open saved tabs / workspace root into `self.session` and write
+    /// `session.toml`. Best-effort: failures are logged via the status bar.
+    pub(super) fn sync_and_persist_session(&mut self) {
+        self.session.open_files = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.document.path().map(|path| comparable_document_path(path)))
+            .collect();
+        self.session.active_file = self
+            .active_tab()
+            .document
+            .path()
+            .map(|path| comparable_document_path(path));
+        self.session.workspace_root = if self.file_tree.is_some() {
+            Some(comparable_document_path(&self.workspace_root))
+        } else {
+            None
+        };
+        self.persist_session();
+    }
+
+    pub(super) fn persist_session(&mut self) {
+        if cfg!(test) {
+            return;
+        }
+        if let Err(err) = save_session_state(&self.session_path, &self.session) {
+            tracing::warn!(error = %err, "failed to save session.toml");
+        }
+    }
+
+    /// Record a Markdown path in the recent-files list and persist session.
+    pub(super) fn record_recent_path(&mut self, path: &Path) {
+        let path = comparable_document_path(path);
+        self.session.touch_recent(path);
+        self.sync_and_persist_session();
+    }
+
+    /// Restore workspace root and saved tabs from the loaded session when there
+    /// is no CLI open intent. Missing paths are skipped.
+    pub(super) fn restore_session_on_startup(
+        &mut self,
+        intent: &StartupOpenIntent,
+        cx: &mut Context<Self>,
+    ) {
+        if !should_restore_session(intent) {
+            return;
+        }
+
+        let (workspace_root, open_files, active_file) = filter_restorable_session(&self.session);
+
+        if open_files.is_empty() {
+            if let Some(root) = workspace_root {
+                self.set_workspace_root(root);
+                self.schedule_file_tree_scan(None, cx);
+            }
+            return;
+        }
+
+        let mut opened_any = false;
+        let mut replaced_initial = false;
+        for path in open_files.iter() {
+            match MarkdownDocument::open(path) {
+                Ok(document) => {
+                    if !replaced_initial {
+                        self.replace_active_tab(document, cx);
+                        replaced_initial = true;
+                    } else {
+                        self.open_in_new_tab(document, cx);
+                    }
+                    opened_any = true;
+                }
+                Err(err) => {
+                    tracing::warn!(path = ?path, error = %err, "session restore skipped file");
+                }
+            }
+        }
+
+        if !opened_any {
+            if let Some(root) = workspace_root {
+                self.set_workspace_root(root);
+                self.schedule_file_tree_scan(None, cx);
+            }
+            return;
+        }
+
+        if let Some(active) = active_file.as_ref() {
+            let _ = self.focus_existing_tab_for_path(active, cx);
+        }
+
+        if let Some(root) = workspace_root {
+            // Prefer the persisted workspace root when it still exists; otherwise
+            // fall back to deriving the root from the active document.
+            self.set_workspace_root(root);
+            self.schedule_file_tree_scan(None, cx);
+        } else {
+            self.update_workspace_root_from_document(cx);
+        }
+
+        // Refresh recent list with restored paths and rewrite pruned session.
+        for path in &open_files {
+            if path.exists() {
+                self.session.touch_recent(comparable_document_path(path));
+            }
+        }
+        self.sync_and_persist_session();
+    }
+
+    pub(super) fn clear_recent_files(
+        &mut self,
+        _: &ClearRecentFiles,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.session.clear_recent();
+        self.persist_session();
+        self.active_menu = None;
+        self.status = t(self.language, Msg::StatusRecentFilesCleared).into();
+        cx.notify();
+    }
+
+    pub(super) fn open_recent_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let display_path = path.display().to_string();
+        if !path.is_file() {
+            self.session.remove_recent(&comparable_document_path(&path));
+            self.persist_session();
+            self.active_menu = None;
+            self.status = self.trf(Msg::StatusOpenFailed, &[&display_path]);
+            cx.notify();
+            return;
+        }
+
+        if self.focus_existing_tab_for_path(&path, cx) {
+            self.record_recent_path(&path);
+            self.active_menu = None;
+            self.status = self.trf(Msg::StatusOpened, &[&display_path]);
+            cx.notify();
+            return;
+        }
+
+        match MarkdownDocument::open(&path) {
+            Ok(document) => {
+                self.open_in_new_tab(document, cx);
+                self.update_workspace_root_from_document(cx);
+                self.record_recent_path(&path);
+                self.active_menu = None;
+                self.status = self.trf(Msg::StatusOpened, &[&display_path]);
+            }
+            Err(err) => {
+                self.session.remove_recent(&comparable_document_path(&path));
+                self.persist_session();
+                self.active_menu = None;
+                self.status = self.trf(Msg::StatusOpenFailed, &[&err.to_string()]);
+            }
+        }
+        cx.notify();
     }
 
     pub(super) fn active_search_text_mut(&mut self) -> Option<&mut String> {

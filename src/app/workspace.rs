@@ -293,6 +293,7 @@ impl MarkionApp {
     pub(super) fn open_file_in_new_tab_from_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let display_path = path.display().to_string();
         if self.focus_existing_tab_for_path(&path, cx) {
+            self.record_recent_path(&path);
             self.active_menu = None;
             self.status = self.trf(Msg::StatusOpened, &[&display_path]);
             cx.notify();
@@ -303,6 +304,7 @@ impl MarkionApp {
             Ok(document) => {
                 self.open_in_new_tab(document, cx);
                 self.update_workspace_root_from_document(cx);
+                self.record_recent_path(&path);
                 self.active_menu = None;
                 self.status = self.trf(Msg::StatusOpened, &[&display_path]);
             }

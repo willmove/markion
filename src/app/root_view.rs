@@ -105,6 +105,7 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::new_document))
             .on_action(cx.listener(Self::open_document))
             .on_action(cx.listener(Self::open_folder))
+            .on_action(cx.listener(Self::clear_recent_files))
             .on_action(cx.listener(Self::save_document))
             .on_action(cx.listener(Self::save_document_as))
             .on_action(cx.listener(Self::export_html))
@@ -496,6 +497,7 @@ impl Render for MarkionApp {
                 self.active_menu,
                 self.language,
                 self.heading_menu_max_level,
+                self.session.recent_files.clone(),
                 palette,
                 cx,
             ))
@@ -544,6 +546,19 @@ pub(super) fn visual_edit_surface_view(
                 .when(connected_to_tab_band, |surface| surface.border_t_0())
                 .border_color(palette.border)
                 .cursor(CursorStyle::IBeam)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|app, _: &MouseDownEvent, _, cx| {
+                        // Bubble after row/chrome handlers: collapse expanded
+                        // source panes unless a collapsible block retained this click.
+                        if !app.active_tab().expanded_visual_source_blocks.is_empty()
+                            || app.active_tab().retain_visual_source_expand.is_some()
+                        {
+                            app.active_tab_mut().apply_visual_source_outside_click();
+                            cx.notify();
+                        }
+                    }),
+                )
                 .when(is_empty, |surface| {
                     surface.child(
                         div()
@@ -1975,7 +1990,7 @@ pub(super) fn menu_title_button(
 }
 
 pub(super) fn menu_action_button(
-    label: &'static str,
+    label: impl Into<SharedString>,
     shortcut: Option<&'static str>,
     palette: ThemePalette,
     listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
@@ -1993,13 +2008,23 @@ pub(super) fn menu_action_button(
         .cursor_pointer()
         .hover(move |style| style.bg(palette.surface_bg))
         .on_mouse_up(MouseButton::Left, listener)
-        .child(div().min_w_0().child(label));
+        .child(div().min_w_0().child(label.into()));
 
     if let Some(shortcut) = shortcut {
         row.child(div().flex_none().text_color(palette.muted).child(shortcut))
     } else {
         row
     }
+}
+
+pub(super) fn menu_muted_label(label: impl Into<SharedString>, palette: ThemePalette) -> Div {
+    div()
+        .w_full()
+        .px_3()
+        .py_1()
+        .text_size(px(12.))
+        .text_color(palette.muted)
+        .child(label.into())
 }
 
 pub(super) fn menu_separator(palette: ThemePalette) -> Div {
@@ -2036,6 +2061,7 @@ pub(super) fn active_menu_dropdown(
     menu: Option<AppMenu>,
     language: Language,
     heading_menu_max_level: u8,
+    recent_files: Vec<PathBuf>,
     palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
@@ -2114,6 +2140,35 @@ pub(super) fn active_menu_dropdown(
                 menu_shortcuts::OPEN_DOCUMENT
             ))
             .child(action_item!(Msg::ItemOpenFolder, open_folder, OpenFolder))
+            .child(menu_separator(palette))
+            .child(menu_muted_label(t(language, Msg::ItemOpenRecent), palette))
+            .when(recent_files.is_empty(), |panel| {
+                panel.child(menu_muted_label(
+                    t(language, Msg::ItemOpenRecentEmpty),
+                    palette,
+                ))
+            })
+            .children(recent_files.into_iter().map(|path| {
+                let label = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                let open_path = path.clone();
+                menu_action_button(
+                    label,
+                    None,
+                    palette,
+                    cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                        app.open_recent_path(open_path.clone(), cx);
+                    }),
+                )
+            }))
+            .child(action_item!(
+                Msg::ItemClearRecentFiles,
+                clear_recent_files,
+                ClearRecentFiles
+            ))
             .child(action_item!(
                 Msg::ItemSave,
                 save_document,
