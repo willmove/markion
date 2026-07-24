@@ -5,7 +5,7 @@
 //! the crate root and the `document` module group.
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -121,6 +121,45 @@ pub fn normalize_rendered_font_size(value: i64) -> u16 {
 /// Clamps a rendered paragraph gap read from UI or persisted configuration.
 pub fn normalize_paragraph_spacing(value: i64) -> u16 {
     value.clamp(MIN_PARAGRAPH_SPACING as i64, MAX_PARAGRAPH_SPACING as i64) as u16
+}
+
+/// Maximum number of paths kept in the recent-files list.
+pub const MAX_RECENT_FILES: usize = 10;
+
+/// Persisted editor session: last workspace root, open saved tabs, and recent files.
+/// Stored separately from [`AppPreferences`] in `session.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionState {
+    pub workspace_root: Option<PathBuf>,
+    pub open_files: Vec<PathBuf>,
+    pub active_file: Option<PathBuf>,
+    pub recent_files: Vec<PathBuf>,
+}
+
+impl SessionState {
+    /// Move `path` to the front of `recent_files`, deduplicating and capping length.
+    pub fn touch_recent(&mut self, path: PathBuf) {
+        touch_recent_file(&mut self.recent_files, path, MAX_RECENT_FILES);
+    }
+
+    /// Remove `path` from the recent-files list if present.
+    pub fn remove_recent(&mut self, path: &Path) {
+        self.recent_files.retain(|entry| entry != path);
+    }
+
+    /// Clear the recent-files list.
+    pub fn clear_recent(&mut self) {
+        self.recent_files.clear();
+    }
+}
+
+/// Insert `path` at the front of `recent`, removing duplicates and truncating to `max`.
+pub fn touch_recent_file(recent: &mut Vec<PathBuf>, path: PathBuf, max: usize) {
+    recent.retain(|entry| entry != &path);
+    recent.insert(0, path);
+    if recent.len() > max {
+        recent.truncate(max);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

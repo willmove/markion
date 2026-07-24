@@ -1288,9 +1288,78 @@ pub(super) fn math_atom_boundary(authored_range: &Range<usize>, trailing_half: b
     }
 }
 
+/// Bottom margin that places a math atom's baseline on the surrounding text
+/// baseline inside an `items_end` flex row.
+///
+/// GPUI measured text does not report baselines to taffy, so `items_baseline`
+/// cannot align image atoms with prose. With `items_end`, both boxes share a
+/// bottom edge; this margin lifts the formula so `ascent` from its top meets
+/// the text baseline (mirroring HTML `vertical-align: -descent` relative to
+/// GPUI's half-leading baseline offset).
+pub(super) fn inline_math_baseline_margin_from_metrics(
+    line_height: Pixels,
+    font_ascent: Pixels,
+    font_descent: Pixels,
+    math_descent: Pixels,
+) -> Pixels {
+    let content = font_ascent + font_descent;
+    let padding_top = ((line_height - content) / 2.).max(px(0.));
+    let text_baseline_from_bottom = line_height - padding_top - font_ascent;
+    text_baseline_from_bottom - math_descent
+}
+
+fn inline_math_baseline_margin(
+    cx: &App,
+    font_size: f32,
+    line_height: f32,
+    math_descent: Pixels,
+) -> Pixels {
+    let font_id = cx.text_system().resolve_font(&font(".SystemUIFont"));
+    let font_size = px(font_size);
+    let line_height = px(line_height);
+    let font_ascent = cx.text_system().ascent(font_id, font_size);
+    let font_descent = cx.text_system().descent(font_id, font_size);
+    inline_math_baseline_margin_from_metrics(
+        line_height,
+        font_ascent,
+        font_descent,
+        math_descent,
+    )
+}
+
+/// GPUI's default text line-height when a block does not set one explicitly
+/// (`relative(phi)` ≈ 1.618 × font size).
+fn default_text_line_height(font_size: f32) -> f32 {
+    font_size * 1.618_034
+}
+
+fn visual_inline_text_metrics(
+    block: &VisualBlock,
+    typography: DocumentTypographyMetrics,
+) -> (f32, f32) {
+    match &block.kind {
+        VisualBlockKind::Heading { level } => {
+            let size = typography.heading_font_size((*level).into());
+            (size, default_text_line_height(size))
+        }
+        VisualBlockKind::BlockQuote => (typography.quote_font_size, typography.quote_line_height),
+        VisualBlockKind::ListItem { .. } => {
+            (typography.rendered_font_size, typography.list_line_height)
+        }
+        _ => (
+            typography.rendered_font_size,
+            typography.paragraph_line_height,
+        ),
+    }
+}
+
 /// Rendered formula with two atomic hit targets. Pointer positions resolve to
 /// the complete authored span's leading or trailing boundary; glyph internals
 /// are never exposed as selectable offsets.
+///
+/// When `inline_metrics` is `Some((font_size, line_height))`, the atom is
+/// baseline-compensated for an `items_end` prose row. Display/block callers
+/// pass `None`.
 fn preview_math_atom(
     app: &MarkionApp,
     image: Arc<MathImage>,
@@ -1298,6 +1367,7 @@ fn preview_math_atom(
     run_id: PreviewTextRunId,
     authored_range: Range<usize>,
     run_text: SharedString,
+    inline_metrics: Option<(f32, f32)>,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let selected = active_preview_run_selection(app, block_index, run_id, run_text.as_ref())
@@ -1305,12 +1375,15 @@ fn preview_math_atom(
     let start = math_atom_boundary(&authored_range, false);
     let end = math_atom_boundary(&authored_range, true);
     let metric_height = image.ascent + image.descent;
+    let baseline_margin = inline_metrics.map_or(px(0.), |(font_size, line_height)| {
+        inline_math_baseline_margin(cx, font_size, line_height, image.descent)
+    });
     div()
         .relative()
         .flex_none()
         .w(image.size.width)
         .h(metric_height)
-        .mb(image.descent)
+        .mb(baseline_margin)
         .when(selected, |atom| atom.bg(rgba(PREVIEW_SELECTION_COLOR)))
         .child(
             img(ImageSource::Render(image.image.clone()))
@@ -1356,6 +1429,8 @@ pub(super) fn rich_text_with_math_element(
     block_index: usize,
     run_id: PreviewTextRunId,
     display_scale: f32,
+    font_size: f32,
+    line_height: f32,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let typography = app.typography_metrics();
@@ -1372,6 +1447,7 @@ pub(super) fn rich_text_with_math_element(
 
     let full_selection = active_preview_run_selection(app, block_index, run_id, &rich.text);
     let run_text = SharedString::from(rich.text.clone());
+    let inline_metrics = Some((font_size, line_height));
     let mut children = Vec::new();
     let mut offset = 0usize;
     let mut fragment_index = 0usize;
@@ -1394,6 +1470,7 @@ pub(super) fn rich_text_with_math_element(
                     run_id,
                     span_range,
                     run_text.clone(),
+                    inline_metrics,
                     cx,
                 )),
                 MathCacheEntry::Pending | MathCacheEntry::Error(_) => {
@@ -1810,6 +1887,7 @@ fn visual_math_atom(
     app: &MarkionApp,
     image: Arc<MathImage>,
     source_range: Range<usize>,
+    inline_metrics: Option<(f32, f32)>,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let selected = {
@@ -1819,12 +1897,15 @@ fn visual_math_atom(
             && selection.end > source_range.start
     };
     let metric_height = image.ascent + image.descent;
+    let baseline_margin = inline_metrics.map_or(px(0.), |(font_size, line_height)| {
+        inline_math_baseline_margin(cx, font_size, line_height, image.descent)
+    });
     div()
         .relative()
         .flex_none()
         .w(image.size.width)
         .h(metric_height)
-        .mb(image.descent)
+        .mb(baseline_margin)
         .when(selected, |atom| atom.bg(rgba(PREVIEW_SELECTION_COLOR)))
         .child(
             img(ImageSource::Render(image.image.clone()))
@@ -1909,6 +1990,7 @@ pub(super) fn visual_text_with_math_element(
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let typography = app.typography_metrics();
+    let inline_metrics = visual_inline_text_metrics(block, typography);
     let has_math = block.editable_runs.iter().any(|run| run.math.is_some());
     let nav_icons = visual_navigation_icons(block);
     if !has_math && nav_icons.is_empty() {
@@ -1943,7 +2025,13 @@ pub(super) fn visual_text_with_math_element(
                 app.palette().text,
             )
         {
-            children.push(visual_math_atom(app, image, math.source_range.clone(), cx));
+            children.push(visual_math_atom(
+                app,
+                image,
+                math.source_range.clone(),
+                Some(inline_metrics),
+                cx,
+            ));
             fragment_index += 1;
             fragment_index += emit_navigation_icons_after(
                 &mut children,
@@ -2508,6 +2596,7 @@ pub(super) fn visual_block_view(
                                         app,
                                         image,
                                         block.source_range.clone(),
+                                        None,
                                         cx,
                                     )),
                             ),
@@ -2837,20 +2926,28 @@ fn visual_math_editor(
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
-    let presentation = match app.math_entry(
+    let entry = app.math_entry(
         latex,
         MathLayoutStyle::Display,
         typography.display_math_font_size,
         1.0,
         display_scale,
         app.palette().text,
-    ) {
+    );
+    let forced = !matches!(entry, MathCacheEntry::Ready(_));
+    let presentation = match entry {
         MathCacheEntry::Ready(image) => div()
             .w_full()
             .py_2()
             .flex()
             .justify_center()
-            .child(visual_math_atom(app, image, block.source_range.clone(), cx)),
+            .child(visual_math_atom(
+                app,
+                image,
+                block.source_range.clone(),
+                None,
+                cx,
+            )),
         MathCacheEntry::Pending => div()
             .py_2()
             .text_color(app.palette().muted)
@@ -2860,37 +2957,37 @@ fn visual_math_editor(
             .text_color(rgb(0xb91c1c))
             .child(app.math_error_message(&error)),
     };
-    div()
-        .mb_3()
-        .border_1()
-        .border_color(rgb(0xcbd5e1))
-        .rounded_md()
-        .overflow_hidden()
-        .child(presentation)
-        .child(
-            div()
-                .border_t_1()
-                .border_color(rgb(0xe2e8f0))
-                .bg(rgb(0xf8fafc))
-                .p_2()
-                .font_family("JetBrains Mono")
-                .text_size(px(typography.code_font_size))
-                .line_height(px(typography.code_line_height))
-                .child(visual_editor_field_element(
-                    app,
-                    block_index,
-                    payload,
-                    ElementId::from(("visual-math-payload", block.id.as_u64())),
-                    None,
-                    None,
-                    cx,
-                )),
-        )
+    let payload_editor = div()
+        .border_t_1()
+        .border_color(rgb(0xe2e8f0))
+        .bg(rgb(0xf8fafc))
+        .p_2()
+        .font_family("JetBrains Mono")
+        .text_size(px(typography.code_font_size))
+        .line_height(px(typography.code_line_height))
+        .child(visual_editor_field_element(
+            app,
+            block_index,
+            payload,
+            ElementId::from(("visual-math-payload", block.id.as_u64())),
+            None,
+            None,
+            cx,
+        ));
+    div().child(visual_collapsible_source_block(
+        app,
+        block.id,
+        payload,
+        forced,
+        presentation.into_any_element(),
+        payload_editor.into_any_element(),
+        cx,
+    ))
 }
 
 /// Renders a diagram fence in Visual Edit by layering the rasterized diagram
-/// on top of the editable source payload — the same "presentation above,
-/// source-backed editor below" shape as `visual_math_editor`.
+/// on top of an on-demand source payload editor (collapsed by default; expand
+/// via the hover `</>` control — same chrome as `visual_math_editor`).
 ///
 /// The payload editor is the only editing path: it mutates the canonical
 /// Markdown source via the normal visual-editor projection. The diagram image
@@ -2910,7 +3007,9 @@ fn visual_diagram_editor(
     // uses, so the visual-blocks render and the Split Preview render share one
     // cache entry for the same fence.
     let code = app.active_tab().document.text()[payload.source_range.clone()].to_string();
-    let presentation = match app.diagram_entry(language, &code) {
+    let entry = app.diagram_entry(language, &code);
+    let forced = !matches!(entry, Some(DiagramCacheEntry::Ready(_, _)));
+    let presentation = match entry {
         Some(DiagramCacheEntry::Ready(image, size)) => {
             // Match Split Preview: pin intrinsic width so the supersampled
             // raster is presented at 1x, and let wide diagrams scroll
@@ -2937,37 +3036,138 @@ fn visual_diagram_editor(
             .py_2()
             .text_color(rgb(0xb91c1c))
             .child(app.diagram_error_message(&error)),
-        None => div().w_full().py_2().text_color(app.palette().muted).child(
-            t(app.language, Msg::DiagramLoading),
-        ),
+        None => div()
+            .w_full()
+            .py_2()
+            .text_color(app.palette().muted)
+            .child(t(app.language, Msg::DiagramLoading)),
     };
+    let payload_editor = div()
+        .border_t_1()
+        .border_color(rgb(0xe2e8f0))
+        .bg(rgb(0xf8fafc))
+        .p_2()
+        .font_family("JetBrains Mono")
+        .text_size(px(typography.code_font_size))
+        .line_height(px(typography.code_line_height))
+        .child(code_block_header(app, language, code, cx))
+        .child(visual_editor_field_element(
+            app,
+            block_index,
+            payload,
+            ElementId::from(("visual-diagram-payload", block.id.as_u64())),
+            None,
+            None,
+            cx,
+        ));
+    div().child(visual_collapsible_source_block(
+        app,
+        block.id,
+        payload,
+        forced,
+        presentation.into_any_element(),
+        payload_editor.into_any_element(),
+        cx,
+    ))
+}
+
+/// Shared Obsidian-style chrome for block math and registered diagrams:
+/// render-only by default, hover `</>` expands the payload editor, click
+/// outside collapses (pending/error force the editor open).
+fn visual_collapsible_source_block(
+    app: &MarkionApp,
+    block_id: VisualBlockId,
+    payload: &VisualEditorField,
+    forced: bool,
+    presentation: gpui::AnyElement,
+    payload_editor: gpui::AnyElement,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    let tab = app.active_tab();
+    let cursor = tab.cursor_offset();
+    let caret_in_payload =
+        payload.source_range.contains(&cursor) || cursor == payload.source_range.end;
+    let user_expanded = tab.is_visual_source_expanded(block_id);
+    let show_payload = forced || user_expanded || caret_in_payload;
+    let show_toggle = forced
+        || user_expanded
+        || caret_in_payload
+        || tab.hovered_visual_source_block == Some(block_id);
+
     div()
+        .id(ElementId::from((
+            "visual-collapsible-source",
+            block_id.as_u64(),
+        )))
+        .relative()
         .mb_3()
         .border_1()
         .border_color(rgb(0xcbd5e1))
         .rounded_md()
         .overflow_hidden()
-        .child(presentation)
-        .child(
-            div()
-                .border_t_1()
-                .border_color(rgb(0xe2e8f0))
-                .bg(rgb(0xf8fafc))
-                .p_2()
-                .font_family("JetBrains Mono")
-                .text_size(px(typography.code_font_size))
-                .line_height(px(typography.code_line_height))
-                .child(code_block_header(app, language, code, cx))
-                .child(visual_editor_field_element(
-                    app,
-                    block_index,
-                    payload,
-                    ElementId::from(("visual-diagram-payload", block.id.as_u64())),
-                    None,
-                    None,
-                    cx,
-                )),
+        .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+            let tab = app.active_tab_mut();
+            let next = hovered.then_some(block_id);
+            let changed = if *hovered {
+                tab.hovered_visual_source_block != Some(block_id)
+            } else {
+                tab.hovered_visual_source_block == Some(block_id)
+            };
+            if !changed {
+                return;
+            }
+            tab.hovered_visual_source_block = next;
+            cx.notify();
+        }))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseDownEvent, _, _| {
+                app.active_tab_mut().retain_visual_source_expand = Some(block_id);
+            }),
         )
+        .child(presentation)
+        .when(show_payload, |chrome| chrome.child(payload_editor))
+        .when(show_toggle, |chrome| {
+            chrome.child(
+                div()
+                    .id(ElementId::from(("visual-source-toggle", block_id.as_u64())))
+                    .absolute()
+                    .top(px(4.))
+                    .right(px(4.))
+                    .px(px(6.))
+                    .py(px(2.))
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(0xcbd5e1))
+                    .bg(rgb(0xffffff))
+                    .text_size(px(11.))
+                    .line_height(px(14.))
+                    .text_color(rgb(0x475569))
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(|style| style.bg(rgb(0xf1f5f9)).text_color(rgb(0x0f172a)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |app, _: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            let focus_handle = app.focus_handle.clone();
+                            window.focus(&focus_handle);
+                            let tab = app.active_tab_mut();
+                            tab.retain_visual_source_expand = Some(block_id);
+                            if !forced {
+                                tab.toggle_visual_source_expanded(block_id);
+                                if tab.is_visual_source_expanded(block_id) {
+                                    tab.expanded_visual_source_blocks
+                                        .retain(|id| *id == block_id);
+                                }
+                            } else {
+                                tab.set_visual_source_expanded(block_id, true);
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child("</>"),
+            )
+        })
 }
 
 type TableToolbarAction = (&'static str, TableEdit, Msg);
@@ -3277,7 +3477,8 @@ pub(super) fn preview_block_view(
     let typography = app.typography_metrics();
     match block {
         PreviewBlock::Heading { level, text, .. } => {
-            let size = px(typography.heading_font_size((*level).into()));
+            let heading_size = typography.heading_font_size((*level).into());
+            let size = px(heading_size);
             div()
                 .mt_2()
                 .mb_2()
@@ -3290,6 +3491,8 @@ pub(super) fn preview_block_view(
                     block_index,
                     PreviewTextRunId::Body,
                     display_scale,
+                    heading_size,
+                    default_text_line_height(heading_size),
                     cx,
                 ))
         }
@@ -3304,6 +3507,8 @@ pub(super) fn preview_block_view(
                 block_index,
                 PreviewTextRunId::Body,
                 display_scale,
+                typography.rendered_font_size,
+                typography.paragraph_line_height,
                 cx,
             )),
         PreviewBlock::ListItem {
@@ -3351,6 +3556,8 @@ pub(super) fn preview_block_view(
                     block_index,
                     PreviewTextRunId::Body,
                     display_scale,
+                    typography.rendered_font_size,
+                    typography.list_line_height,
                     cx,
                 )))
         }
@@ -3369,6 +3576,8 @@ pub(super) fn preview_block_view(
                 block_index,
                 PreviewTextRunId::Body,
                 display_scale,
+                typography.quote_font_size,
+                typography.quote_line_height,
                 cx,
             )),
         PreviewBlock::CodeBlock { language, code, .. } => {
@@ -3474,6 +3683,7 @@ pub(super) fn preview_block_view(
                                     PreviewTextRunId::MathLatex,
                                     0..authored.len(),
                                     SharedString::from(authored.clone()),
+                                    None,
                                     cx,
                                 )),
                         ),
@@ -3573,6 +3783,8 @@ pub(super) fn preview_block_view(
                 block_index,
                 PreviewTextRunId::Body,
                 display_scale,
+                typography.rendered_font_size,
+                typography.paragraph_line_height,
                 cx,
             ))),
         PreviewBlock::Table { rows, .. } => {

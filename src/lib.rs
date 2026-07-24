@@ -105,18 +105,19 @@ pub use model::{
     DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE,
     DocumentStats, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences,
     Footnote, FrontMatterError, Heading, HighlightKind, HighlightedSpan, InlineSpan, InlineStyle,
-    MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
-    MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownFormat, MathDelimiter, MathExpression,
-    MathLayoutStyle, MathSource, PreviewBlock, RecoveryDocument, RenderedMath, ReplaceResult,
-    RichText, SearchError, SearchMatch, SearchMatchRange, SearchOptions, SidebarTab,
-    TableAlignment, TableEdit, TableEditResult, ThemeColors, ThemeDefinition, ViewMode,
-    VisualBlock, VisualBlockEdit, VisualBlockEditor, VisualBlockId, VisualBlockKind,
-    VisualBlockPrefix, VisualBlockPrefixKind, VisualBoundaryCandidates, VisualCaretAffinity,
-    VisualEditorField, VisualEditorFieldKind, VisualInlineRun, VisualNavigationTarget,
-    VisualProjection, VisualProjectionSegment, VisualProjectionSpan, VisualRevealGroup,
-    VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit, VisualTableCell,
-    YamlFrontMatter, builtin_theme_definitions, normalize_editor_font_size,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES, MAX_RENDERED_FONT_SIZE,
+    MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownFormat,
+    MathDelimiter, MathExpression, MathLayoutStyle, MathSource, PreviewBlock, RecoveryDocument,
+    RenderedMath, ReplaceResult, RichText, SearchError, SearchMatch, SearchMatchRange,
+    SearchOptions, SessionState, SidebarTab, TableAlignment, TableEdit, TableEditResult,
+    ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockEdit, VisualBlockEditor,
+    VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
+    VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualInlineRun, VisualNavigationTarget, VisualProjection, VisualProjectionSegment,
+    VisualProjectionSpan, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
+    VisualStructuralEdit, VisualTableCell, YamlFrontMatter, builtin_theme_definitions,
+    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
+    normalize_rendered_font_size, touch_recent_file,
 };
 pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
@@ -132,9 +133,10 @@ pub use parse::{HtmlPreviewPart, html_preview_parts, html_preview_plain_text};
 pub use storage::{
     FileTree, FileTreeEntry, FileTreeEntryKind, MARKDOWN_EXTENSIONS, delete_recovery_file,
     init_logging, is_markdown_path, list_recovery_files, list_theme_definitions,
-    load_app_preferences, load_recovery_file, load_theme_definition, parse_app_preferences,
-    parse_legacy_app_preferences, parse_theme_definition, render_app_preferences,
-    render_theme_definition, save_app_preferences, save_theme_definition,
+    load_app_preferences, load_recovery_file, load_session_state, load_theme_definition,
+    parse_app_preferences, parse_legacy_app_preferences, parse_session_state,
+    parse_theme_definition, render_app_preferences, render_session_state, render_theme_definition,
+    save_app_preferences, save_session_state, save_theme_definition,
 };
 
 use table::{
@@ -2543,6 +2545,10 @@ pub fn default_config_dir() -> PathBuf {
 
 pub fn default_preferences_path() -> PathBuf {
     crate::paths::default_preferences_path()
+}
+
+pub fn default_session_path() -> PathBuf {
+    crate::paths::default_session_path()
 }
 
 pub fn default_themes_dir() -> PathBuf {

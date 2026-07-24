@@ -244,6 +244,15 @@ pub(super) struct EditorTab {
     pub(super) preview_list: ListState,
     pub(super) visual_list: ListState,
     pub(super) visual_list_blocks: std::sync::Arc<Vec<VisualBlock>>,
+    /// Presentation-only: block-math / diagram fences whose LaTeX/source pane
+    /// the user expanded via the hover `</>` control. Not persisted; pruned when
+    /// stable block ids disappear after a visual-list sync.
+    pub(super) expanded_visual_source_blocks: HashSet<VisualBlockId>,
+    /// Block currently under the pointer for showing the source-toggle control.
+    pub(super) hovered_visual_source_block: Option<VisualBlockId>,
+    /// Set by a collapsible block's mouse-down so the Visual Edit surface can
+    /// collapse other expanded blocks without collapsing the clicked one.
+    pub(super) retain_visual_source_expand: Option<VisualBlockId>,
     /// One-shot request consumed by the next Visual Edit render. Keeping this
     /// separate from list state avoids snapping manual scroll back to the caret
     /// on every unrelated frame.
@@ -350,6 +359,9 @@ impl EditorTab {
             preview_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list_blocks: std::sync::Arc::new(Vec::new()),
+            expanded_visual_source_blocks: HashSet::new(),
+            hovered_visual_source_block: None,
+            retain_visual_source_expand: None,
             visual_cursor_reveal_pending: false,
             visual_caret_bounds: None,
             visual_marked_range_bounds: None,
@@ -432,6 +444,21 @@ impl EditorTab {
             self.visual_list.splice(range, count);
         }
         self.visual_list_blocks = blocks.clone();
+        let live_ids: HashSet<VisualBlockId> = blocks.iter().map(|block| block.id).collect();
+        self.expanded_visual_source_blocks
+            .retain(|id| live_ids.contains(id));
+        if self
+            .hovered_visual_source_block
+            .is_some_and(|id| !live_ids.contains(&id))
+        {
+            self.hovered_visual_source_block = None;
+        }
+        if self
+            .retain_visual_source_expand
+            .is_some_and(|id| !live_ids.contains(&id))
+        {
+            self.retain_visual_source_expand = None;
+        }
         self.visual_navigation_snapshots.retain(|index, snapshot| {
             snapshot.document_version == self.document.version()
                 && self.visual_navigation_snapshot_ids.get(index)
@@ -449,6 +476,32 @@ impl EditorTab {
             return None;
         }
         visual_block_index_for_offset(blocks, self.cursor_offset(), self.document.text().len())
+    }
+
+    pub(super) fn is_visual_source_expanded(&self, block_id: VisualBlockId) -> bool {
+        self.expanded_visual_source_blocks.contains(&block_id)
+    }
+
+    pub(super) fn toggle_visual_source_expanded(&mut self, block_id: VisualBlockId) {
+        if !self.expanded_visual_source_blocks.remove(&block_id) {
+            self.expanded_visual_source_blocks.insert(block_id);
+        }
+    }
+
+    pub(super) fn set_visual_source_expanded(&mut self, block_id: VisualBlockId, expanded: bool) {
+        if expanded {
+            self.expanded_visual_source_blocks.insert(block_id);
+        } else {
+            self.expanded_visual_source_blocks.remove(&block_id);
+        }
+    }
+
+    /// After a Visual Edit pointer down, keep `retain` expanded (if any) and
+    /// collapse every other manually expanded source pane.
+    pub(super) fn apply_visual_source_outside_click(&mut self) {
+        let retain = self.retain_visual_source_expand.take();
+        self.expanded_visual_source_blocks
+            .retain(|id| retain == Some(*id));
     }
 
     /// Drop the preview list back to an empty, top-scrolled state. Used when the
@@ -471,6 +524,9 @@ impl EditorTab {
         self.preview_parse_inflight = None;
         self.visual_list.reset(0);
         self.visual_list_blocks = std::sync::Arc::new(Vec::new());
+        self.expanded_visual_source_blocks.clear();
+        self.hovered_visual_source_block = None;
+        self.retain_visual_source_expand = None;
         self.visual_cursor_reveal_pending = true;
         self.visual_caret_bounds = None;
         self.visual_marked_range_bounds = None;
@@ -1052,6 +1108,44 @@ impl StartupOpenIntent {
             }
         }
     }
+}
+
+pub(super) fn should_restore_session(intent: &StartupOpenIntent) -> bool {
+    matches!(intent, StartupOpenIntent::None)
+}
+
+/// Filter a loaded session down to paths that still exist and are usable.
+pub(super) fn filter_restorable_session(
+    session: &SessionState,
+) -> (Option<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
+    let workspace_root = session
+        .workspace_root
+        .as_ref()
+        .filter(|root| root.is_dir())
+        .cloned();
+    let open_files: Vec<PathBuf> = session
+        .open_files
+        .iter()
+        .filter(|path| path.is_file() && is_markdown_path(path))
+        .cloned()
+        .collect();
+    let active_file = session
+        .active_file
+        .as_ref()
+        .filter(|path| open_files.iter().any(|open| open == *path))
+        .cloned();
+    (workspace_root, open_files, active_file)
+}
+
+/// Collect path-backed open tabs for the session snapshot. Untitled tabs are omitted.
+pub(super) fn session_open_files_from_paths<'a>(
+    paths: impl IntoIterator<Item = Option<&'a Path>>,
+) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .flatten()
+        .map(comparable_document_path)
+        .collect()
 }
 
 pub(super) fn resolve_startup_path(path: PathBuf, cwd: &Path) -> PathBuf {

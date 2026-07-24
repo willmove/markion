@@ -38,6 +38,10 @@ pub fn default_preferences_path() -> PathBuf {
     default_config_dir().join("config.toml")
 }
 
+pub fn default_session_path() -> PathBuf {
+    default_config_dir().join("session.toml")
+}
+
 pub fn default_log_dir() -> PathBuf {
     if cfg!(windows) {
         env::var_os("LOCALAPPDATA")

@@ -104,6 +104,9 @@ pub enum Msg {
     ItemNew,
     ItemOpen,
     ItemOpenFolder,
+    ItemOpenRecent,
+    ItemOpenRecentEmpty,
+    ItemClearRecentFiles,
     ItemSave,
     ItemSaveAs,
     /// Open a fresh empty document in a new tab.
@@ -336,6 +339,7 @@ pub enum Msg {
     StatusParagraphSpacing,
     StatusPreferenceResetCanceled,
     StatusLanguageSet,
+    StatusRecentFilesCleared,
 
     // --- Status bar: dynamic (use tf) ---
     /// {0}=err — "Recovery failed: {err}"
@@ -567,6 +571,8 @@ pub enum Msg {
     MathTooLarge,
     MathUnsupported,
     MathRenderFailed,
+    /// Hover control that expands the LaTeX / diagram source pane in Visual Edit.
+    EditSource,
 
     /// "Modified" save-state token in the title bar.
     TitleModified,
@@ -1365,6 +1371,9 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemNew => "New",
         Msg::ItemOpen => "Open",
         Msg::ItemOpenFolder => "Open Folder",
+        Msg::ItemOpenRecent => "Open Recent",
+        Msg::ItemOpenRecentEmpty => "(No recent files)",
+        Msg::ItemClearRecentFiles => "Clear Recent Files",
         Msg::ItemSave => "Save",
         Msg::ItemSaveAs => "Save As",
         Msg::ItemNewTab => "New Tab",
@@ -1568,6 +1577,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusParagraphSpacing => "Paragraph spacing: {0}",
         Msg::StatusPreferenceResetCanceled => "Preference reset canceled",
         Msg::StatusLanguageSet => "Language set",
+        Msg::StatusRecentFilesCleared => "Recent files cleared",
 
         Msg::StatusRecoveryFailed => "Recovery failed: {0}",
         Msg::StatusOpened => "Opened {0}",
@@ -1707,6 +1717,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::MathTooLarge => "The formula exceeds the rendering size limit.",
         Msg::MathUnsupported => "The formula uses unsupported notation or glyphs.",
         Msg::MathRenderFailed => "Formula rendering failed.",
+        Msg::EditSource => "Edit source",
         Msg::TitleModified => "Modified",
         Msg::TitleSaved => "Saved",
     }
@@ -1735,6 +1746,9 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemNew => "新規作成",
         Msg::ItemOpen => "開く",
         Msg::ItemOpenFolder => "フォルダーを開く",
+        Msg::ItemOpenRecent => "最近使ったファイル",
+        Msg::ItemOpenRecentEmpty => "（最近のファイルなし）",
+        Msg::ItemClearRecentFiles => "最近使ったファイルをクリア",
         Msg::ItemSave => "保存",
         Msg::ItemSaveAs => "名前を付けて保存",
         Msg::ItemNewTab => "新しいタブ",
@@ -1938,6 +1952,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusParagraphSpacing => "段落間隔: {0}",
         Msg::StatusPreferenceResetCanceled => "設定リセットをキャンセルしました",
         Msg::StatusLanguageSet => "言語を設定しました",
+        Msg::StatusRecentFilesCleared => "最近使ったファイルをクリアしました",
 
         Msg::StatusRecoveryFailed => "復元に失敗しました: {0}",
         Msg::StatusOpened => "{0} を開きました",
@@ -2079,6 +2094,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::MathTooLarge => "数式が描画サイズの上限を超えています。",
         Msg::MathUnsupported => "数式に未対応の記法または文字が含まれています。",
         Msg::MathRenderFailed => "数式の描画に失敗しました。",
+        Msg::EditSource => "ソースを編集",
         Msg::TitleModified => "変更あり",
         Msg::TitleSaved => "保存済み",
     }
@@ -2101,6 +2117,9 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemNew => "Nouveau",
         Msg::ItemOpen => "Ouvrir",
         Msg::ItemOpenFolder => "Ouvrir un dossier",
+        Msg::ItemOpenRecent => "Ouvrir récent",
+        Msg::ItemOpenRecentEmpty => "(Aucun fichier récent)",
+        Msg::ItemClearRecentFiles => "Effacer les fichiers récents",
         Msg::ItemSave => "Enregistrer",
         Msg::ItemSaveAs => "Enregistrer sous",
         Msg::ItemNewTab => "Nouvel onglet",
@@ -2297,6 +2316,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusParagraphSpacing => "Espacement des paragraphes : {0}",
         Msg::StatusPreferenceResetCanceled => "Réinitialisation des préférences annulée",
         Msg::StatusLanguageSet => "Langue définie",
+        Msg::StatusRecentFilesCleared => "Fichiers récents effacés",
         Msg::StatusRecoveryFailed => "Échec de la récupération : {0}",
         Msg::StatusOpened => "{0} ouvert",
         Msg::StatusOpenFailed => "Échec de l'ouverture : {0}",
@@ -2441,6 +2461,7 @@ fn fr(msg: Msg) -> &'static str {
             "La formule utilise une notation ou des glyphes non pris en charge."
         }
         Msg::MathRenderFailed => "Le rendu de la formule a échoué.",
+        Msg::EditSource => "Modifier la source",
         Msg::TitleModified => "Modifié",
         Msg::TitleSaved => "Enregistré",
     }
@@ -2463,6 +2484,9 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemNew => "Neu",
         Msg::ItemOpen => "Öffnen",
         Msg::ItemOpenFolder => "Ordner öffnen",
+        Msg::ItemOpenRecent => "Zuletzt geöffnet",
+        Msg::ItemOpenRecentEmpty => "(Keine zuletzt geöffneten Dateien)",
+        Msg::ItemClearRecentFiles => "Zuletzt geöffnete Dateien leeren",
         Msg::ItemSave => "Speichern",
         Msg::ItemSaveAs => "Speichern unter",
         Msg::ItemNewTab => "Neuer Tab",
@@ -2657,6 +2681,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusParagraphSpacing => "Absatzabstand: {0}",
         Msg::StatusPreferenceResetCanceled => "Zurücksetzen der Einstellungen abgebrochen",
         Msg::StatusLanguageSet => "Sprache gesetzt",
+        Msg::StatusRecentFilesCleared => "Zuletzt geöffnete Dateien geleert",
         Msg::StatusRecoveryFailed => "Wiederherstellung fehlgeschlagen: {0}",
         Msg::StatusOpened => "{0} geöffnet",
         Msg::StatusOpenFailed => "Öffnen fehlgeschlagen: {0}",
@@ -2799,6 +2824,7 @@ fn de(msg: Msg) -> &'static str {
             "Die Formel verwendet eine nicht unterstützte Notation oder Glyphe."
         }
         Msg::MathRenderFailed => "Das Rendern der Formel ist fehlgeschlagen.",
+        Msg::EditSource => "Quelle bearbeiten",
         Msg::TitleModified => "Geändert",
         Msg::TitleSaved => "Gespeichert",
     }
@@ -2821,6 +2847,9 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemNew => "Nuevo",
         Msg::ItemOpen => "Abrir",
         Msg::ItemOpenFolder => "Abrir carpeta",
+        Msg::ItemOpenRecent => "Abrir recientes",
+        Msg::ItemOpenRecentEmpty => "(No hay archivos recientes)",
+        Msg::ItemClearRecentFiles => "Borrar archivos recientes",
         Msg::ItemSave => "Guardar",
         Msg::ItemSaveAs => "Guardar como",
         Msg::ItemNewTab => "Nueva pestaña",
@@ -3015,6 +3044,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusParagraphSpacing => "Espacio entre párrafos: {0}",
         Msg::StatusPreferenceResetCanceled => "Restablecimiento de preferencias cancelado",
         Msg::StatusLanguageSet => "Idioma establecido",
+        Msg::StatusRecentFilesCleared => "Archivos recientes borrados",
         Msg::StatusRecoveryFailed => "Error de recuperación: {0}",
         Msg::StatusOpened => "{0} abierto",
         Msg::StatusOpenFailed => "Error al abrir: {0}",
@@ -3149,6 +3179,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::MathTooLarge => "La fórmula supera el límite de tamaño de renderizado.",
         Msg::MathUnsupported => "La fórmula usa notación o glifos no compatibles.",
         Msg::MathRenderFailed => "No se pudo renderizar la fórmula.",
+        Msg::EditSource => "Editar fuente",
         Msg::TitleModified => "Modificado",
         Msg::TitleSaved => "Guardado",
     }
@@ -3172,6 +3203,9 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemNew => "新建",
         Msg::ItemOpen => "打开",
         Msg::ItemOpenFolder => "打开文件夹",
+        Msg::ItemOpenRecent => "打开最近文件",
+        Msg::ItemOpenRecentEmpty => "（暂无最近文件）",
+        Msg::ItemClearRecentFiles => "清除最近文件",
         Msg::ItemSave => "保存",
         Msg::ItemSaveAs => "另存为",
         Msg::ItemNewTab => "新建标签页",
@@ -3375,6 +3409,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusParagraphSpacing => "段落间距：{0}",
         Msg::StatusPreferenceResetCanceled => "已取消重置首选项",
         Msg::StatusLanguageSet => "已设置语言",
+        Msg::StatusRecentFilesCleared => "已清除最近文件",
 
         Msg::StatusRecoveryFailed => "恢复失败：{0}",
         Msg::StatusOpened => "已打开 {0}",
@@ -3510,6 +3545,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::MathTooLarge => "公式超过渲染大小限制。",
         Msg::MathUnsupported => "公式包含不支持的记法或字形。",
         Msg::MathRenderFailed => "公式渲染失败。",
+        Msg::EditSource => "编辑源码",
         Msg::TitleModified => "已修改",
         Msg::TitleSaved => "已保存",
     }
@@ -3533,6 +3569,9 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemNew => "新增",
         Msg::ItemOpen => "開啟",
         Msg::ItemOpenFolder => "開啟資料夾",
+        Msg::ItemOpenRecent => "開啟最近檔案",
+        Msg::ItemOpenRecentEmpty => "（暫無最近檔案）",
+        Msg::ItemClearRecentFiles => "清除最近檔案",
         Msg::ItemSave => "儲存",
         Msg::ItemSaveAs => "另存新檔",
         Msg::ItemNewTab => "新增分頁",
@@ -3736,6 +3775,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusParagraphSpacing => "段落間距：{0}",
         Msg::StatusPreferenceResetCanceled => "已取消重設偏好設定",
         Msg::StatusLanguageSet => "已設定語言",
+        Msg::StatusRecentFilesCleared => "已清除最近檔案",
 
         Msg::StatusRecoveryFailed => "復原失敗：{0}",
         Msg::StatusOpened => "已開啟 {0}",
@@ -3873,6 +3913,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::MathTooLarge => "公式超過算繪大小限制。",
         Msg::MathUnsupported => "公式包含不支援的記法或字形。",
         Msg::MathRenderFailed => "公式算繪失敗。",
+        Msg::EditSource => "編輯原始碼",
         Msg::TitleModified => "已修改",
         Msg::TitleSaved => "已儲存",
     }
@@ -4205,6 +4246,9 @@ mod tests {
             Msg::ItemNew,
             Msg::ItemOpen,
             Msg::ItemOpenFolder,
+            Msg::ItemOpenRecent,
+            Msg::ItemOpenRecentEmpty,
+            Msg::ItemClearRecentFiles,
             Msg::ItemSave,
             Msg::ItemSaveAs,
             Msg::ItemNewTab,
@@ -4399,6 +4443,7 @@ mod tests {
             Msg::StatusParagraphSpacing,
             Msg::StatusPreferenceResetCanceled,
             Msg::StatusLanguageSet,
+            Msg::StatusRecentFilesCleared,
             Msg::StatusRecoveryFailed,
             Msg::StatusOpened,
             Msg::StatusOpenFailed,
