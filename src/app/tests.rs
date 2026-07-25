@@ -4703,13 +4703,18 @@ fn preview_image_cache_shares_across_tabs_and_releases_on_close(cx: &mut TestApp
             app.preview_image_cache.get(&shared_key),
             Some(PreviewImageEntry::Ready(_))
         ));
-        // Closing the dormant unique tab must drop its (already-released) key
-        // without disturbing the active shared claim.
+        // Closing the dormant unique tab leaves its image as an unclaimed LRU
+        // entry (reusable if the file reopens; evictable under budget) without
+        // disturbing the active shared claim.
         app.active_tab = 1;
         app.close_tab_confirmed(cx);
+        assert_eq!(app.preview_image_cache.claim_count(&unique_key), 0);
         assert!(
-            app.preview_image_cache.get(&unique_key).is_none(),
-            "unique image must leave the Markion cache when its only tab closes"
+            matches!(
+                app.preview_image_cache.get(&unique_key),
+                Some(PreviewImageEntry::Ready(_))
+            ),
+            "unique image stays cached as an unclaimed entry so reopening reuses it"
         );
         assert!(matches!(
             app.preview_image_cache.get(&shared_key),
@@ -4750,9 +4755,7 @@ fn open_recent_menu_is_wired_in_file_dropdown() {
         .split_once("AppMenu::File => panel")
         .and_then(|(_, rest)| rest.split_once("AppMenu::Edit =>").map(|(file, _)| file))
         .expect("in-window File menu");
-    let folder = in_window
-        .find("Msg::ItemOpenFolder,")
-        .expect("Open Folder");
+    let folder = in_window.find("Msg::ItemOpenFolder,").expect("Open Folder");
     let recent = in_window
         .find("Msg::ItemOpenRecent")
         .expect("Open Recent parent");
