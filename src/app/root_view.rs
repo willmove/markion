@@ -507,10 +507,22 @@ impl Render for MarkionApp {
                 self.active_menu,
                 self.language,
                 self.heading_menu_max_level,
-                self.session.recent_files.clone(),
                 palette,
                 cx,
             ))
+            .when(
+                self.active_menu == Some(AppMenu::File) && self.open_recent_submenu_open,
+                |root| {
+                    root.child(open_recent_submenu_panel(
+                        self.language,
+                        self.session.recent_files.clone(),
+                        AppMenu::File.dropdown_left(self.language),
+                        AppMenu::File.dropdown_width(self.language),
+                        palette,
+                        cx,
+                    ))
+                },
+            )
             .when(self.search_visible, |root| {
                 root.child(search_panel_view(self, cx))
             })
@@ -2004,7 +2016,7 @@ pub(super) fn menu_action_button(
     shortcut: Option<&'static str>,
     palette: ThemePalette,
     listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> Div {
     let row = div()
         .w_full()
         .px_3()
@@ -2025,6 +2037,32 @@ pub(super) fn menu_action_button(
     } else {
         row
     }
+}
+
+/// Parent row for a nested menu (e.g. File → Open Recent). Trailing chevron
+/// signals the flyout; hover opens and click toggles.
+pub(super) fn menu_submenu_parent_button(
+    label: impl Into<SharedString>,
+    palette: ThemePalette,
+    hover_listener: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
+    click_listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .w_full()
+        .px_3()
+        .py_1()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_4()
+        .text_size(px(12.))
+        .text_color(palette.text)
+        .cursor_pointer()
+        .hover(move |style| style.bg(palette.surface_bg))
+        .on_mouse_move(hover_listener)
+        .on_mouse_up(MouseButton::Left, click_listener)
+        .child(div().min_w_0().child(label.into()))
+        .child(div().flex_none().text_color(palette.muted).child("›"))
 }
 
 pub(super) fn menu_muted_label(label: impl Into<SharedString>, palette: ThemePalette) -> Div {
@@ -2071,7 +2109,6 @@ pub(super) fn active_menu_dropdown(
     menu: Option<AppMenu>,
     language: Language,
     heading_menu_max_level: u8,
-    recent_files: Vec<PathBuf>,
     palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
@@ -2134,103 +2171,98 @@ pub(super) fn active_menu_dropdown(
             action_item!(@build $msg, $method, $action, None)
         };
     }
+    // File-menu rows close the Open Recent flyout when hovered so only one
+    // nested surface stays open (the parent row opens it separately).
+    macro_rules! file_action_item {
+        ($($tt:tt)*) => {
+            action_item!($($tt)*).on_mouse_move(cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                app.close_open_recent_submenu(cx);
+            }))
+        };
+    }
 
     match menu {
         AppMenu::File => panel
-            .child(action_item!(
+            .child(file_action_item!(
                 Msg::ItemNew,
                 new_document,
                 NewDocument,
                 menu_shortcuts::NEW_DOCUMENT
             ))
-            .child(action_item!(
+            .child(file_action_item!(
                 Msg::ItemOpen,
                 open_document,
                 OpenDocument,
                 menu_shortcuts::OPEN_DOCUMENT
             ))
-            .child(action_item!(Msg::ItemOpenFolder, open_folder, OpenFolder))
-            .child(menu_separator(palette))
-            .child(menu_muted_label(t(language, Msg::ItemOpenRecent), palette))
-            .when(recent_files.is_empty(), |panel| {
-                panel.child(menu_muted_label(
-                    t(language, Msg::ItemOpenRecentEmpty),
-                    palette,
-                ))
-            })
-            .children(recent_files.into_iter().map(|path| {
-                let label = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(|name| name.to_string())
-                    .unwrap_or_else(|| path.display().to_string());
-                let open_path = path.clone();
-                menu_action_button(
-                    label,
-                    None,
-                    palette,
-                    cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
-                        app.open_recent_path(open_path.clone(), cx);
-                    }),
-                )
-            }))
-            .child(action_item!(
-                Msg::ItemClearRecentFiles,
-                clear_recent_files,
-                ClearRecentFiles
+            .child(file_action_item!(
+                Msg::ItemOpenFolder,
+                open_folder,
+                OpenFolder
             ))
-            .child(action_item!(
+            .child(menu_separator(palette))
+            .child(menu_submenu_parent_button(
+                t(language, Msg::ItemOpenRecent),
+                palette,
+                cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                    app.open_open_recent_submenu(cx);
+                }),
+                cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                    app.toggle_open_recent_submenu(cx);
+                }),
+            ))
+            .child(file_action_item!(
                 Msg::ItemSave,
                 save_document,
                 SaveDocument,
                 menu_shortcuts::SAVE_DOCUMENT
             ))
-            .child(action_item!(
+            .child(file_action_item!(
                 Msg::ItemSaveAs,
                 save_document_as,
                 SaveDocumentAs,
                 menu_shortcuts::SAVE_DOCUMENT_AS
             ))
             .child(menu_separator(palette))
-            .child(action_item!(Msg::ItemNewTab, new_tab, NewTab))
-            .child(action_item!(
+            .child(file_action_item!(Msg::ItemNewTab, new_tab, NewTab))
+            .child(file_action_item!(
                 Msg::ItemOpenInNewTab,
                 open_in_new_tab_action,
                 OpenInNewTab,
                 menu_shortcuts::OPEN_IN_NEW_TAB
             ))
-            .child(action_item!(
+            .child(file_action_item!(
                 Msg::ItemCloseTab,
                 close_tab,
                 CloseTab,
                 menu_shortcuts::CLOSE_TAB
             ))
-            .child(action_item!(
+            .child(file_action_item!(
                 Msg::ItemNextTab,
                 next_tab,
                 NextTab,
                 menu_shortcuts::NEXT_TAB
             ))
-            .child(action_item!(
+            .child(file_action_item!(
                 Msg::ItemPrevTab,
                 prev_tab,
                 PrevTab,
                 menu_shortcuts::PREV_TAB
             ))
             .child(menu_separator(palette))
-            .child(action_item!(
+            .child(file_action_item!(
                 Msg::ItemPreferences,
                 show_preferences,
                 ShowPreferences,
                 menu_shortcuts::SHOW_PREFERENCES
             ))
-            .child(action_item!(
+            .child(file_action_item!(
                 Msg::ItemResetPreferences,
                 reset_preferences,
                 ResetPreferences
             ))
             .child(menu_separator(palette))
-            .child(action_item!(
+            .child(file_action_item!(
                 Msg::ItemExit,
                 quit,
                 Quit,
@@ -2551,6 +2583,76 @@ pub(super) fn active_menu_dropdown(
             ))
             .child(action_item!(Msg::ItemAboutMarkion, about, AboutMarkion)),
     }
+}
+
+/// Nested File → Open Recent flyout: recent paths (or empty placeholder) and
+/// Clear Recent Files. Positioned to the right of the File dropdown with a
+/// small overlap so the pointer can travel from the parent row without a gap.
+pub(super) fn open_recent_submenu_panel(
+    language: Language,
+    recent_files: Vec<PathBuf>,
+    file_menu_left: Pixels,
+    file_menu_width: Pixels,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    // Align with the Open Recent parent row: menu-bar offset + panel padding +
+    // New/Open/Open Folder + separator.
+    const SUBMENU_TOP: f32 = 28. + 4. + 3. * 24. + 9.;
+    const OVERLAP: f32 = 4.;
+
+    let panel = div()
+        .absolute()
+        .top(px(SUBMENU_TOP))
+        .left(file_menu_left + file_menu_width - px(OVERLAP))
+        .w(px(280.))
+        .occlude()
+        .py_1()
+        .border_1()
+        .border_color(palette.border)
+        .rounded_md()
+        .bg(palette.panel_bg)
+        .text_color(palette.text)
+        .shadow_md()
+        .flex()
+        .flex_col()
+        .on_mouse_move(cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+            // Keep the flyout open while the pointer is over it.
+            app.open_open_recent_submenu(cx);
+        }));
+
+    let panel = if recent_files.is_empty() {
+        panel.child(menu_muted_label(
+            t(language, Msg::ItemOpenRecentEmpty),
+            palette,
+        ))
+    } else {
+        panel.children(recent_files.into_iter().map(|path| {
+            let label = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            let open_path = path.clone();
+            menu_action_button(
+                label,
+                None,
+                palette,
+                cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                    app.open_recent_path(open_path.clone(), cx);
+                }),
+            )
+        }))
+    };
+
+    panel.child(menu_action_button(
+        t(language, Msg::ItemClearRecentFiles),
+        None,
+        palette,
+        cx.listener(|app, _: &MouseUpEvent, window, cx| {
+            app.clear_recent_files(&ClearRecentFiles, window, cx);
+        }),
+    ))
 }
 
 /// Theme-aware Help -> Keyboard Shortcuts modal. The platform and category

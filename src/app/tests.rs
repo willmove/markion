@@ -4743,16 +4743,41 @@ fn open_recent_menu_is_wired_in_file_dropdown() {
     assert!(root_view_source.contains("Msg::ItemOpenRecentEmpty"));
     assert!(root_view_source.contains("Msg::ItemClearRecentFiles"));
     assert!(root_view_source.contains("open_recent_path"));
+    assert!(root_view_source.contains("fn open_recent_submenu_panel"));
+    assert!(root_view_source.contains("menu_submenu_parent_button"));
 
     let in_window = root_view_source
         .split_once("AppMenu::File => panel")
         .and_then(|(_, rest)| rest.split_once("AppMenu::Edit =>").map(|(file, _)| file))
         .expect("in-window File menu");
-    let folder = in_window.find("Msg::ItemOpenFolder,").expect("Open Folder");
-    let recent = in_window.find("Msg::ItemOpenRecent").expect("Open Recent");
-    let clear = in_window
-        .find("Msg::ItemClearRecentFiles")
-        .expect("Clear Recent");
+    let folder = in_window
+        .find("Msg::ItemOpenFolder,")
+        .expect("Open Folder");
+    let recent = in_window
+        .find("Msg::ItemOpenRecent")
+        .expect("Open Recent parent");
     let save = in_window.find("Msg::ItemSave,").expect("Save");
-    assert!(folder < recent && recent < clear && clear < save);
+    assert!(
+        folder < recent && recent < save,
+        "Open Recent parent must sit between Open Folder and Save in the File dropdown"
+    );
+    assert!(
+        !in_window.contains("Msg::ItemClearRecentFiles"),
+        "Clear Recent Files must not be a top-level File sibling"
+    );
+    assert!(
+        !in_window.contains("open_recent_path"),
+        "recent path open handlers must live in the Open Recent submenu builder"
+    );
+
+    let submenu = root_view_source
+        .split_once("fn open_recent_submenu_panel")
+        .and_then(|(_, rest)| {
+            rest.split_once("/// Theme-aware Help")
+                .map(|(body, _)| body)
+        })
+        .expect("Open Recent submenu builder");
+    assert!(submenu.contains("Msg::ItemOpenRecentEmpty"));
+    assert!(submenu.contains("Msg::ItemClearRecentFiles"));
+    assert!(submenu.contains("open_recent_path"));
 }

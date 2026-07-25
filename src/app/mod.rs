@@ -876,6 +876,9 @@ struct MarkionApp {
     active_tab: usize,
     focus_handle: FocusHandle,
     active_menu: Option<AppMenu>,
+    /// File → Open Recent nested submenu visibility. Cleared whenever
+    /// `active_menu` leaves File or the whole menu closes.
+    open_recent_submenu_open: bool,
     status: SharedString,
     confirming_close: bool,
     allow_close: bool,

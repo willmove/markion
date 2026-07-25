@@ -415,6 +415,7 @@ impl MarkionApp {
         } else {
             Some(menu)
         };
+        self.open_recent_submenu_open = false;
         cx.notify();
     }
 
@@ -422,8 +423,31 @@ impl MarkionApp {
         let next_menu = menu_after_hover(self.active_menu, menu);
         if next_menu != self.active_menu {
             self.active_menu = next_menu;
+            self.open_recent_submenu_open = false;
             cx.notify();
         }
+    }
+
+    pub(super) fn open_open_recent_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.active_menu == Some(AppMenu::File) && !self.open_recent_submenu_open {
+            self.open_recent_submenu_open = true;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn close_open_recent_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.open_recent_submenu_open {
+            self.open_recent_submenu_open = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_open_recent_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.active_menu != Some(AppMenu::File) {
+            return;
+        }
+        self.open_recent_submenu_open = !self.open_recent_submenu_open;
+        cx.notify();
     }
 
     pub(super) fn close_menu(
@@ -439,6 +463,7 @@ impl MarkionApp {
             || self.pending_name_input.is_some()
         {
             self.active_menu = None;
+            self.open_recent_submenu_open = false;
             self.file_tree_context_menu = None;
             self.preview_context_menu = None;
             self.pending_name_input = None;

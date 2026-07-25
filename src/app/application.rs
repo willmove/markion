@@ -48,6 +48,7 @@ impl MarkionApp {
             active_tab: 0,
             focus_handle: cx.focus_handle(),
             active_menu: None,
+            open_recent_submenu_open: false,
             status: t(Language::default(), Msg::StatusReady).into(),
             confirming_close: false,
             allow_close: false,
@@ -1073,6 +1074,7 @@ impl MarkionApp {
         self.session.clear_recent();
         self.persist_session();
         self.active_menu = None;
+        self.open_recent_submenu_open = false;
         self.status = t(self.language, Msg::StatusRecentFilesCleared).into();
         cx.notify();
     }
@@ -1083,6 +1085,7 @@ impl MarkionApp {
             self.session.remove_recent(&comparable_document_path(&path));
             self.persist_session();
             self.active_menu = None;
+            self.open_recent_submenu_open = false;
             self.status = self.trf(Msg::StatusOpenFailed, &[&display_path]);
             cx.notify();
             return;
@@ -1091,6 +1094,7 @@ impl MarkionApp {
         if self.focus_existing_tab_for_path(&path, cx) {
             self.record_recent_path(&path);
             self.active_menu = None;
+            self.open_recent_submenu_open = false;
             self.status = self.trf(Msg::StatusOpened, &[&display_path]);
             cx.notify();
             return;
@@ -1102,12 +1106,14 @@ impl MarkionApp {
                 self.update_workspace_root_from_document(cx);
                 self.record_recent_path(&path);
                 self.active_menu = None;
+                self.open_recent_submenu_open = false;
                 self.status = self.trf(Msg::StatusOpened, &[&display_path]);
             }
             Err(err) => {
                 self.session.remove_recent(&comparable_document_path(&path));
                 self.persist_session();
                 self.active_menu = None;
+                self.open_recent_submenu_open = false;
                 self.status = self.trf(Msg::StatusOpenFailed, &[&err.to_string()]);
             }
         }
