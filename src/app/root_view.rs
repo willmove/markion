@@ -44,6 +44,21 @@ impl Render for MarkionApp {
             } else {
                 std::sync::Arc::new(Vec::new())
             };
+        let document_dir = self
+            .active_tab()
+            .document
+            .path()
+            .and_then(Path::parent)
+            .map(PathBuf::from);
+        let active_tab = self.active_tab;
+        self.refresh_tab_image_claims(
+            active_tab,
+            &preview_blocks,
+            &visual_blocks,
+            document_dir.as_deref(),
+            cx,
+        );
+        self.ensure_preview_images(&preview_blocks, &visual_blocks, document_dir.as_deref(), cx);
         // Diagram cache warming needs both the preview blocks (Split/Read) and
         // the visual blocks (Visual Edit) because Visual Edit no longer parses
         // preview blocks — its diagram fences live only in `visual_blocks`.
@@ -64,12 +79,6 @@ impl Render for MarkionApp {
         // the non-driving pane, converging in one frame without a feedback loop.
         self.reconcile_sync_scroll();
         let title = title_from_path(self.active_tab().document.path());
-        let document_dir = self
-            .active_tab()
-            .document
-            .path()
-            .and_then(Path::parent)
-            .map(PathBuf::from);
         let is_dirty = self.active_tab().document.is_dirty();
         let dirty_marker = if is_dirty { " *" } else { "" };
         let save_state = t(
@@ -153,6 +162,7 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(Self::next_tab))
             .on_action(cx.listener(Self::prev_tab))
+            .on_action(cx.listener(Self::report_memory))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))

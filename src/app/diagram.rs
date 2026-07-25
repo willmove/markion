@@ -5,6 +5,8 @@ use gpui::{RenderImage, Size};
 use markion_diagram::{DiagramError, DiagramErrorKind, DiagramRender, DiagramTheme};
 
 pub(super) const DIAGRAM_CACHE_CAPACITY: usize = 128;
+/// Completed diagram raster budget (mirrors MathCache's byte bound).
+pub(super) const DIAGRAM_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Diagrams are rasterized above one device pixel per SVG unit and presented at
 /// their intrinsic size, because `RenderImage::scale_factor` is `pub(crate)` and
@@ -15,7 +17,7 @@ const DIAGRAM_SUPERSAMPLE: f32 = 2.0;
 /// `usvg::Options::default()` carries an empty font database, and usvg converts
 /// text to paths at parse time — every `<text>` node would be dropped without a
 /// diagnostic, leaving diagrams as unlabelled boxes and arrows.
-static DIAGRAM_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
+pub(super) static DIAGRAM_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut db = usvg::fontdb::Database::new();
     db.load_system_fonts();
     Arc::new(db)
@@ -93,14 +95,22 @@ pub(super) enum DiagramCacheEntry {
 
 pub(super) struct DiagramCache {
     capacity: usize,
-    entries: HashMap<DiagramCacheKey, DiagramCacheEntry>,
+    pub(super) max_completed_bytes: usize,
+    pub(super) completed_bytes: usize,
+    pub(super) entries: HashMap<DiagramCacheKey, DiagramCacheEntry>,
     completed_order: VecDeque<DiagramCacheKey>,
 }
 
 impl DiagramCache {
     pub(super) fn new(capacity: usize) -> Self {
+        Self::with_limits(capacity, DIAGRAM_CACHE_MAX_BYTES)
+    }
+
+    fn with_limits(capacity: usize, max_completed_bytes: usize) -> Self {
         Self {
             capacity,
+            max_completed_bytes,
+            completed_bytes: 0,
             entries: HashMap::new(),
             completed_order: VecDeque::new(),
         }
@@ -113,11 +123,8 @@ impl DiagramCache {
             return false;
         }
         while self.entries.len() >= self.capacity {
-            let Some(oldest) = self.completed_order.pop_front() else {
+            if self.evict_oldest_completed().is_none() {
                 return false;
-            };
-            if !matches!(self.entries.get(&oldest), Some(DiagramCacheEntry::Pending)) {
-                self.entries.remove(&oldest);
             }
         }
         self.entries.insert(key, DiagramCacheEntry::Pending);
@@ -128,26 +135,114 @@ impl DiagramCache {
         &mut self,
         key: &DiagramCacheKey,
         result: Result<(Arc<RenderImage>, Size<Pixels>), DiagramError>,
-    ) {
+    ) -> Vec<Arc<RenderImage>> {
+        let mut dropped = Vec::new();
         if !matches!(self.entries.get(key), Some(DiagramCacheEntry::Pending)) {
-            return;
+            return dropped;
         }
-        let entry = match result {
-            Ok((image, size)) => DiagramCacheEntry::Ready(image, size),
-            Err(error) => DiagramCacheEntry::Error(Arc::new(error)),
+        let result = match result {
+            Ok((image, size)) => {
+                let byte_len = render_image_byte_len(&image);
+                if byte_len > self.max_completed_bytes {
+                    Err(DiagramError::new(
+                        DiagramErrorKind::RenderFailed,
+                        "diagram raster exceeds the total diagram cache memory bound",
+                    ))
+                } else {
+                    Ok((image, size, byte_len))
+                }
+            }
+            Err(error) => Err(error),
         };
-        self.entries.insert(key.clone(), entry);
-        self.completed_order.push_back(key.clone());
+        match result {
+            Ok((image, size, byte_len)) => {
+                while self.completed_bytes.saturating_add(byte_len) > self.max_completed_bytes {
+                    match self.evict_oldest_completed() {
+                        Some(Some(old)) => dropped.push(old),
+                        Some(None) => {}
+                        None => break,
+                    }
+                }
+                if self.completed_bytes.saturating_add(byte_len) > self.max_completed_bytes {
+                    self.entries.insert(
+                        key.clone(),
+                        DiagramCacheEntry::Error(Arc::new(DiagramError::new(
+                            DiagramErrorKind::RenderFailed,
+                            "diagram raster exceeds the total diagram cache memory bound",
+                        ))),
+                    );
+                    self.completed_order.push_back(key.clone());
+                    dropped.push(image);
+                    return dropped;
+                }
+                self.completed_bytes = self.completed_bytes.saturating_add(byte_len);
+                self.entries
+                    .insert(key.clone(), DiagramCacheEntry::Ready(image, size));
+                self.completed_order.push_back(key.clone());
+            }
+            Err(error) => {
+                self.entries
+                    .insert(key.clone(), DiagramCacheEntry::Error(Arc::new(error)));
+                self.completed_order.push_back(key.clone());
+            }
+        }
+        dropped
     }
 
     pub(super) fn get(&self, key: &DiagramCacheKey) -> Option<DiagramCacheEntry> {
         self.entries.get(key).cloned()
     }
 
+    /// Evicts the oldest completed entry.
+    ///
+    /// Returns `Some(Some(image))` when a ready raster was removed, `Some(None)`
+    /// when an error entry was removed, and `None` when nothing could be evicted.
+    fn evict_oldest_completed(&mut self) -> Option<Option<Arc<RenderImage>>> {
+        while let Some(oldest) = self.completed_order.pop_front() {
+            let Some(entry) = self.entries.get(&oldest) else {
+                continue;
+            };
+            if matches!(entry, DiagramCacheEntry::Pending) {
+                continue;
+            }
+            match self.entries.remove(&oldest) {
+                Some(DiagramCacheEntry::Ready(image, _)) => {
+                    self.completed_bytes = self
+                        .completed_bytes
+                        .saturating_sub(render_image_byte_len(&image));
+                    return Some(Some(image));
+                }
+                Some(DiagramCacheEntry::Error(_)) => return Some(None),
+                _ => {}
+            }
+        }
+        None
+    }
+
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.entries.len()
     }
+
+    #[cfg(test)]
+    pub(super) fn completed_bytes(&self) -> usize {
+        self.completed_bytes
+    }
+}
+
+fn render_image_byte_len(image: &RenderImage) -> usize {
+    let mut total = 0usize;
+    for frame in 0..image.frame_count() {
+        if let Some(bytes) = image.as_bytes(frame) {
+            total = total.saturating_add(bytes.len());
+        } else {
+            let size = image.size(frame);
+            let w: i32 = size.width.into();
+            let h: i32 = size.height.into();
+            total = total.saturating_add((w.max(0) as usize).saturating_mul(h.max(0) as usize) * 4);
+        }
+    }
+    total
 }
 
 impl MarkionApp {
@@ -253,7 +348,9 @@ impl MarkionApp {
                     })
                     .await;
                 let _ = this.update(cx, |app, cx| {
-                    app.diagram_cache.complete(&key, result);
+                    for image in app.diagram_cache.complete(&key, result) {
+                        cx.drop_image(image, None);
+                    }
                     cx.notify();
                 });
             })
@@ -425,6 +522,44 @@ mod tests {
         cache.complete(&light, Ok(image(1)));
         assert!(cache.reserve_pending(dark));
         assert!(!cache.reserve_pending(light));
+    }
+
+    #[test]
+    fn byte_budget_evicts_ready_but_never_pending() {
+        let pending = key("pending", DiagramTheme::Light);
+        let old = key("old", DiagramTheme::Light);
+        let newer = key("newer", DiagramTheme::Light);
+        let mut cache = DiagramCache::with_limits(8, 4);
+        assert!(cache.reserve_pending(pending.clone()));
+        assert!(cache.reserve_pending(old.clone()));
+        cache.complete(&old, Ok(image(1)));
+        assert_eq!(cache.completed_bytes(), 4);
+        assert!(cache.reserve_pending(newer.clone()));
+        cache.complete(&newer, Ok(image(2)));
+        assert!(matches!(
+            cache.get(&pending),
+            Some(DiagramCacheEntry::Pending)
+        ));
+        assert!(cache.get(&old).is_none());
+        assert!(matches!(
+            cache.get(&newer),
+            Some(DiagramCacheEntry::Ready(_, _))
+        ));
+        assert_eq!(cache.completed_bytes(), 4);
+    }
+
+    #[test]
+    fn single_raster_larger_than_budget_becomes_error() {
+        let oversized = key("huge", DiagramTheme::Light);
+        let mut cache = DiagramCache::with_limits(8, 2);
+        assert!(cache.reserve_pending(oversized.clone()));
+        // 1x1 BGRA = 4 bytes > 2-byte budget.
+        cache.complete(&oversized, Ok(image(9)));
+        assert!(matches!(
+            cache.get(&oversized),
+            Some(DiagramCacheEntry::Error(_))
+        ));
+        assert_eq!(cache.completed_bytes(), 0);
     }
 
     #[test]

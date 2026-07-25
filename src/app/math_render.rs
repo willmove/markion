@@ -97,8 +97,8 @@ pub(super) enum MathCacheEntry {
 pub(super) struct MathCache {
     capacity: usize,
     max_completed_bytes: usize,
-    completed_bytes: usize,
-    entries: HashMap<MathCacheKey, MathCacheEntry>,
+    pub(super) completed_bytes: usize,
+    pub(super) entries: HashMap<MathCacheKey, MathCacheEntry>,
     completed_order: VecDeque<MathCacheKey>,
 }
 

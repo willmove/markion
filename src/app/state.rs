@@ -244,6 +244,9 @@ pub(super) struct EditorTab {
     pub(super) preview_list: ListState,
     pub(super) visual_list: ListState,
     pub(super) visual_list_blocks: std::sync::Arc<Vec<VisualBlock>>,
+    /// Preview-image keys currently claimed by this tab in `PreviewImageCache`.
+    /// Refreshed when preview/visual lists sync; released on tab close/replace.
+    pub(super) claimed_preview_images: HashSet<PreviewImageKey>,
     /// Presentation-only: block-math / diagram fences whose LaTeX/source pane
     /// the user expanded via the hover `</>` control. Not persisted; pruned when
     /// stable block ids disappear after a visual-list sync.
@@ -359,6 +362,7 @@ impl EditorTab {
             preview_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list_blocks: std::sync::Arc::new(Vec::new()),
+            claimed_preview_images: HashSet::new(),
             expanded_visual_source_blocks: HashSet::new(),
             hovered_visual_source_block: None,
             retain_visual_source_expand: None,
@@ -504,6 +508,55 @@ impl EditorTab {
             .retain(|id| retain == Some(*id));
     }
 
+    /// Enter inactive-tab dormancy: drop expensive derived/layout caches while
+    /// retaining text, selection, undo/redo, and scroll handles.
+    ///
+    /// Returns preview-image keys that were claimed by this tab so the app can
+    /// release them from `PreviewImageCache` (same path as tab close).
+    pub(super) fn enter_dormant(&mut self) -> HashSet<PreviewImageKey> {
+        self.document.evict_derived_caches();
+        self.last_lines.clear();
+        self.line_offsets.clear();
+        self.line_heights.clear();
+        self.last_bounds = None;
+        *self.display_text_cache.borrow_mut() = None;
+        *self.measured_height_cache.borrow_mut() = None;
+        *self.line_offsets_cache.borrow_mut() = None;
+
+        self.preview_list.reset(0);
+        self.preview_list_blocks = std::sync::Arc::new(Vec::new());
+        self.preview_reflects_version = None;
+        self.preview_changed_at = None;
+        self.preview_reflects_at = None;
+        self.preview_debounce_generation = self.preview_debounce_generation.wrapping_add(1);
+        self.preview_parse_inflight = None;
+        self.preview_seen_version = self.document.version();
+        self.clear_preview_selection();
+
+        self.visual_list.reset(0);
+        self.visual_list_blocks = std::sync::Arc::new(Vec::new());
+        self.expanded_visual_source_blocks.clear();
+        self.hovered_visual_source_block = None;
+        self.retain_visual_source_expand = None;
+        self.visual_caret_bounds = None;
+        self.visual_marked_range_bounds = None;
+        self.clear_visual_caret_affinity();
+        self.clear_visual_navigation_intent();
+        self.visual_navigation_snapshots.clear();
+        self.visual_navigation_snapshot_ids.clear();
+        self.visual_input_bounds = None;
+        #[cfg(test)]
+        {
+            self.visual_last_projection = None;
+            self.visual_last_projection_styles = None;
+            self.visual_projection_paint_count = 0;
+            self.visual_caret_paint_count = 0;
+        }
+
+        // Scroll fractions and editor_scroll are retained for reactivation.
+        std::mem::take(&mut self.claimed_preview_images)
+    }
+
     /// Drop the preview list back to an empty, top-scrolled state. Used when the
     /// document is wholesale replaced (open/new/reload) so the next render
     /// rebuilds the list from scratch and starts at the top rather than
@@ -524,6 +577,9 @@ impl EditorTab {
         self.preview_parse_inflight = None;
         self.visual_list.reset(0);
         self.visual_list_blocks = std::sync::Arc::new(Vec::new());
+        // Claims are released by MarkionApp before reset; clear the local set
+        // so a replaced tab never thinks it still owns those keys.
+        self.claimed_preview_images.clear();
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.retain_visual_source_expand = None;

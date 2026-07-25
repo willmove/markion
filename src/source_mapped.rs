@@ -133,6 +133,26 @@ pub(crate) struct SourceMappedCache {
 }
 
 impl SourceMappedCache {
+    /// Observational retained-size estimate for the source-mapped cache.
+    /// Region block Arcs that are uniquely owned here are counted; Arcs still
+    /// shared with the document's top-level preview cache are left to that site.
+    pub(crate) fn estimated_bytes(&self) -> (usize, usize) {
+        use crate::document_memory::{headings_bytes, preview_blocks_bytes};
+
+        let mut total = self.source.len() + std::mem::size_of::<Arc<str>>();
+        for region in &self.regions {
+            total += region.text.len() + std::mem::size_of::<Arc<str>>();
+            if Arc::strong_count(&region.blocks) == 1 {
+                total += preview_blocks_bytes(&region.blocks);
+            }
+            if Arc::strong_count(&region.headings) == 1 {
+                total += headings_bytes(&region.headings);
+            }
+        }
+        total += headings_bytes(&self.headings);
+        (total, self.regions.len())
+    }
+
     pub fn derive_full(source: &str, version: u64) -> Self {
         let (blocks, headings) = MarkdownDocument::derive_preview_and_outline(source);
         Self::seed_from_full(source, version, blocks, headings, 1)

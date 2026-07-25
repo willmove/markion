@@ -9,6 +9,7 @@ use pulldown_cmark::{Alignment, CodeBlockKind, CowStr, Event, Parser, Tag, TagEn
 use regex::RegexBuilder;
 
 mod diagram;
+mod document_memory;
 mod editing;
 mod escape;
 mod export;
@@ -25,6 +26,8 @@ mod storage;
 mod table;
 mod text_util;
 mod visual;
+
+pub use document_memory::{DocumentMemoryBreakdown, DocumentMemorySite};
 
 /// Markdown shown in the first in-memory document when Markion starts.
 ///
@@ -452,6 +455,19 @@ impl MarkdownDocument {
     fn invalidate_derived(&mut self) {
         self.dirty = true;
         self.text_version = self.text_version.wrapping_add(1);
+        self.clear_derived_caches();
+    }
+
+    /// Drop derived Markdown caches without treating this as an edit.
+    ///
+    /// Used when an inactive tab goes dormant: text, path, dirty, and
+    /// `text_version` are unchanged so selection/undo stay valid and
+    /// reactivation rebuilds through the existing lazy accessors.
+    pub fn evict_derived_caches(&mut self) {
+        self.clear_derived_caches();
+    }
+
+    fn clear_derived_caches(&mut self) {
         *self.cached_preview_blocks.borrow_mut() = None;
         *self.cached_visual_blocks.borrow_mut() = None;
         *self.cached_outline.borrow_mut() = None;
@@ -465,6 +481,142 @@ impl MarkdownDocument {
     /// can key their own derived caches on this value.
     pub fn version(&self) -> u64 {
         self.text_version
+    }
+
+    /// Observational retained-size breakdown. Reads existing derived caches
+    /// without calling the deriving accessors, so an unpopulated cache reports
+    /// zero and stays unpopulated.
+    pub fn memory_breakdown(&self) -> DocumentMemoryBreakdown {
+        use document_memory::{
+            DocumentMemorySite, headings_bytes, preview_blocks_bytes, visual_blocks_bytes,
+        };
+
+        let mut sites = Vec::new();
+
+        let preview = self.cached_preview_blocks.borrow();
+        let preview_populated = preview
+            .as_ref()
+            .is_some_and(|cached| cached.version == self.text_version);
+        let (preview_bytes, preview_count) = if preview_populated {
+            let blocks = &preview.as_ref().unwrap().value;
+            (preview_blocks_bytes(blocks), blocks.len())
+        } else {
+            (0, 0)
+        };
+        sites.push(DocumentMemorySite {
+            name: "preview_blocks",
+            estimated_bytes: preview_bytes,
+            item_count: preview_count,
+            populated: preview_populated,
+        });
+        drop(preview);
+
+        let visual = self.cached_visual_blocks.borrow();
+        let visual_populated = visual
+            .as_ref()
+            .is_some_and(|cached| cached.version == self.text_version);
+        let (visual_bytes, visual_count) = if visual_populated {
+            let blocks = &visual.as_ref().unwrap().value;
+            (visual_blocks_bytes(blocks), blocks.len())
+        } else {
+            (0, 0)
+        };
+        sites.push(DocumentMemorySite {
+            name: "visual_blocks",
+            estimated_bytes: visual_bytes,
+            item_count: visual_count,
+            populated: visual_populated,
+        });
+        drop(visual);
+
+        let outline = self.cached_outline.borrow();
+        let outline_populated = outline
+            .as_ref()
+            .is_some_and(|cached| cached.version == self.text_version);
+        let (outline_bytes, outline_count) = if outline_populated {
+            let headings = &outline.as_ref().unwrap().value;
+            (headings_bytes(headings), headings.len())
+        } else {
+            (0, 0)
+        };
+        sites.push(DocumentMemorySite {
+            name: "outline",
+            estimated_bytes: outline_bytes,
+            item_count: outline_count,
+            populated: outline_populated,
+        });
+        drop(outline);
+
+        let stats = self.cached_stats.borrow();
+        let stats_populated = stats
+            .as_ref()
+            .is_some_and(|cached| cached.version == self.text_version);
+        sites.push(DocumentMemorySite {
+            name: "stats",
+            estimated_bytes: if stats_populated {
+                std::mem::size_of::<DocumentStats>()
+            } else {
+                0
+            },
+            item_count: usize::from(stats_populated),
+            populated: stats_populated,
+        });
+        drop(stats);
+
+        let line_count_populated = self
+            .cached_line_count
+            .get()
+            .is_some_and(|(version, _)| version == self.text_version);
+        sites.push(DocumentMemorySite {
+            name: "line_count",
+            estimated_bytes: if line_count_populated {
+                std::mem::size_of::<usize>()
+            } else {
+                0
+            },
+            item_count: usize::from(line_count_populated),
+            populated: line_count_populated,
+        });
+
+        let source_mapped = self.source_mapped_cache.borrow();
+        let source_mapped_populated = source_mapped
+            .as_ref()
+            .is_some_and(|cache| cache.version == self.text_version);
+        let (source_mapped_bytes, region_count) = if source_mapped_populated {
+            source_mapped.as_ref().unwrap().estimated_bytes()
+        } else {
+            (0, 0)
+        };
+        sites.push(DocumentMemorySite {
+            name: "source_mapped_cache",
+            estimated_bytes: source_mapped_bytes,
+            item_count: region_count,
+            populated: source_mapped_populated,
+        });
+
+        DocumentMemoryBreakdown {
+            text_bytes: self.text.len(),
+            sites,
+        }
+    }
+
+    /// Image URLs reachable from already-populated derived caches only.
+    pub fn retained_image_refs(&self) -> Vec<String> {
+        use document_memory::{image_refs_from_preview, image_refs_from_visual};
+        let mut urls = Vec::new();
+        if let Some(cached) = self.cached_preview_blocks.borrow().as_ref()
+            && cached.version == self.text_version
+        {
+            image_refs_from_preview(&cached.value, &mut urls);
+        }
+        if let Some(cached) = self.cached_visual_blocks.borrow().as_ref()
+            && cached.version == self.text_version
+        {
+            image_refs_from_visual(&cached.value, &mut urls);
+        }
+        urls.sort();
+        urls.dedup();
+        urls
     }
 
     /// Number of logical lines (newline count + 1), cached per text version.
@@ -1698,12 +1850,7 @@ impl MarkdownDocument {
                     if let Some((spans, paragraph_range)) = paragraph.take() {
                         if let Some((_, footnote_spans, _)) = footnote.as_mut() {
                             if !footnote_spans.is_empty() && !spans.is_empty() {
-                                append_span(
-                                    footnote_spans,
-                                    "\n",
-                                    InlineStyle::default(),
-                                    None,
-                                );
+                                append_span(footnote_spans, "\n", InlineStyle::default(), None);
                             }
                             footnote_spans.extend(spans);
                         } else if list_item.is_none() && quote_depth == 0 && table.is_none() {
@@ -3019,10 +3166,12 @@ mod tests {
         assert_eq!(rows[2][0].text, "[text](url)");
         // Row 2, col 1: rendered link.
         assert_eq!(rows[2][1].text, "link");
-        assert!(rows[2][1]
-            .spans
-            .iter()
-            .any(|span| span.link.as_deref() == Some("https://github.com/willmove/markion")));
+        assert!(
+            rows[2][1]
+                .spans
+                .iter()
+                .any(|span| span.link.as_deref() == Some("https://github.com/willmove/markion"))
+        );
     }
 
     #[test]
@@ -5106,8 +5255,7 @@ mod tests {
 
     #[test]
     fn direct_table_tab_targets_follow_fields_then_handoff() {
-        let source =
-            "before\n\n| A | B |\n| --- | --- |\n| x | y |\n\nafter";
+        let source = "before\n\n| A | B |\n| --- | --- |\n| x | y |\n\nafter";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks();
         let table = blocks
@@ -5211,7 +5359,10 @@ mod tests {
         assert_eq!(&markdown[payload_range.clone()], "A --> B\n");
         assert!(visual.source_range.start <= payload_range.start);
         assert!(payload_range.end <= visual.source_range.end);
-        assert_eq!(&markdown[visual.source_range.clone()], "```MerMaid linenos\nA --> B\n```");
+        assert_eq!(
+            &markdown[visual.source_range.clone()],
+            "```MerMaid linenos\nA --> B\n```"
+        );
         assert!(visual.source_island.is_none());
     }
 

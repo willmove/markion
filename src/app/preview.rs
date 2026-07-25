@@ -101,9 +101,10 @@ pub(super) fn preview_run_plain_text(
         (PreviewBlock::Html { html, .. }, PreviewTextRunId::HtmlText) => {
             Some(html_preview_plain_text(html))
         }
-        (PreviewBlock::Table { rows, .. }, PreviewTextRunId::TableCell { row, col }) => {
-            rows.get(row).and_then(|r| r.get(col)).map(|cell| cell.text.clone())
-        }
+        (PreviewBlock::Table { rows, .. }, PreviewTextRunId::TableCell { row, col }) => rows
+            .get(row)
+            .and_then(|r| r.get(col))
+            .map(|cell| cell.text.clone()),
         _ => None,
     }
 }
@@ -1319,12 +1320,7 @@ fn inline_math_baseline_margin(
     let line_height = px(line_height);
     let font_ascent = cx.text_system().ascent(font_id, font_size);
     let font_descent = cx.text_system().descent(font_id, font_size);
-    inline_math_baseline_margin_from_metrics(
-        line_height,
-        font_ascent,
-        font_descent,
-        math_descent,
-    )
+    inline_math_baseline_margin_from_metrics(line_height, font_ascent, font_descent, math_descent)
 }
 
 /// GPUI's default text line-height when a block does not set one explicitly
@@ -2195,10 +2191,7 @@ fn emit_navigation_icons_after(
     cx: &mut Context<MarkionApp>,
 ) -> usize {
     let mut emitted = 0usize;
-    while let Some(pos) = remaining
-        .iter()
-        .position(|(after, _)| *after == source_end)
-    {
+    while let Some(pos) = remaining.iter().position(|(after, _)| *after == source_end) {
         let (_, target) = remaining.remove(pos);
         children.push(visual_navigation_icon(
             block_index,
@@ -2221,8 +2214,7 @@ fn visual_navigation_icon(
         VisualNavigationTarget::Url(_) => "↗",
         VisualNavigationTarget::Footnote { .. } => "↓",
     };
-    let element_id =
-        ElementId::from(("visual-nav-icon", block_index * 10_000 + fragment_index));
+    let element_id = ElementId::from(("visual-nav-icon", block_index * 10_000 + fragment_index));
     div()
         .id(element_id)
         .ml(px(2.))
@@ -2530,9 +2522,7 @@ pub(super) fn visual_block_view(
             let caption = image_title
                 .as_deref()
                 .filter(|title| !title.is_empty())
-                .or_else(|| {
-                    (!image_alt.is_empty()).then_some(image_alt.as_str())
-                });
+                .or_else(|| (!image_alt.is_empty()).then_some(image_alt.as_str()));
             div()
                 .mb_3()
                 .p_3()
@@ -2554,7 +2544,7 @@ pub(super) fn visual_block_view(
                         .items_center()
                         .justify_center()
                         .min_h(px(96.))
-                        .child(img(preview_image_source(url, document_dir)).max_w_full())
+                        .child(preview_image_view(app, url, document_dir))
                         .children(caption.map(|text| {
                             div()
                                 .mt_1()
@@ -2662,14 +2652,7 @@ pub(super) fn visual_block_view(
                 // code blocks. Non-diagram CodeBlocks keep the highlighted
                 // code editor.
                 if diagram_backend_id(language.as_deref()).is_some() {
-                    visual_diagram_editor(
-                        app,
-                        block,
-                        block_index,
-                        language.as_deref(),
-                        payload,
-                        cx,
-                    )
+                    visual_diagram_editor(app, block, block_index, language.as_deref(), payload, cx)
                 } else {
                     visual_code_editor(app, block.id, block_index, language.as_deref(), payload, cx)
                 }
@@ -2697,15 +2680,20 @@ pub(super) fn visual_block_view(
                     .child(format!("[{label}]")),
             )
             .child(
-                div().flex_1().min_w_0().child(visual_text_with_math_element(
-                    block,
-                    block_index,
-                    app,
-                    display_scale,
-                    cx,
-                )),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(visual_text_with_math_element(
+                        block,
+                        block_index,
+                        app,
+                        display_scale,
+                        cx,
+                    )),
             ),
-        VisualBlockKind::ReferenceDefinition => visual_reference_definition_view(app, block, block_index, cx),
+        VisualBlockKind::ReferenceDefinition => {
+            visual_reference_definition_view(app, block, block_index, cx)
+        }
     }
 }
 
@@ -2984,18 +2972,20 @@ fn visual_math_editor(
     );
     let forced = !matches!(entry, MathCacheEntry::Ready(_));
     let presentation = match entry {
-        MathCacheEntry::Ready(image) => div()
-            .w_full()
-            .py_2()
-            .flex()
-            .justify_center()
-            .child(visual_math_atom(
-                app,
-                image,
-                block.source_range.clone(),
-                None,
-                cx,
-            )),
+        MathCacheEntry::Ready(image) => {
+            div()
+                .w_full()
+                .py_2()
+                .flex()
+                .justify_center()
+                .child(visual_math_atom(
+                    app,
+                    image,
+                    block.source_range.clone(),
+                    None,
+                    cx,
+                ))
+        }
         MathCacheEntry::Pending => div()
             .py_2()
             .text_color(app.palette().muted)
@@ -3066,12 +3056,19 @@ fn visual_diagram_editor(
             // pattern at `preview_block_view`.
             div().w_full().py_2().flex().justify_center().child(
                 div()
-                    .id(ElementId::from(("visual-diagram-scroll", block.id.as_u64())))
+                    .id(ElementId::from((
+                        "visual-diagram-scroll",
+                        block.id.as_u64(),
+                    )))
                     .w_full()
                     .overflow_x_scroll()
-                    .child(div().min_w(size.width).flex().justify_center().child(
-                        img(ImageSource::Render(image)).w(size.width).max_w_full(),
-                    )),
+                    .child(
+                        div()
+                            .min_w(size.width)
+                            .flex()
+                            .justify_center()
+                            .child(img(ImageSource::Render(image)).w(size.width).max_w_full()),
+                    ),
             )
         }
         Some(DiagramCacheEntry::Pending) => div()
@@ -3393,7 +3390,7 @@ fn html_preview_block_view(
                 HtmlPreviewPart::Image { url, centered, .. } => div()
                     .mb_2()
                     .when(centered, |style| style.flex().justify_center())
-                    .child(img(preview_image_source(&url, document_dir)).max_w_full()),
+                    .child(preview_image_view(app, &url, document_dir)),
             }
         }))
 }
@@ -3803,7 +3800,7 @@ pub(super) fn preview_block_view(
                     .rounded_md()
                     .overflow_hidden()
                     .bg(rgb(0xffffff))
-                    .child(img(preview_image_source(url, document_dir)).max_w_full()),
+                    .child(preview_image_view(app, url, document_dir)),
             ),
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
         PreviewBlock::FootnoteDefinition { label, text, .. } => div()
@@ -3918,22 +3915,6 @@ pub(super) fn preview_table_button(
                 app.apply_table_edit_at(table_offset, edit, t(app.language, status).into(), cx);
             }),
         )
-}
-
-pub(super) fn preview_image_source(url: &str, document_dir: Option<&Path>) -> ImageSource {
-    if is_remote_resource(url) {
-        return remote_image_request_url(url).to_string().into();
-    }
-
-    let path = PathBuf::from(url);
-    let path = if path.is_absolute() {
-        path
-    } else if let Some(document_dir) = document_dir {
-        document_dir.join(path)
-    } else {
-        path
-    };
-    path.into()
 }
 
 pub(super) fn is_remote_resource(url: &str) -> bool {

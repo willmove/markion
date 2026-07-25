@@ -346,6 +346,8 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
             KeyBinding::new(menu_shortcuts::PREV_TAB.binding, PrevTab, None),
             KeyBinding::new(menu_shortcuts::OPEN_IN_NEW_TAB.binding, OpenInNewTab, None),
             KeyBinding::new(menu_shortcuts::CLOSE_TAB.binding, CloseTab, None),
+            // Developer diagnostic — not listed in menus or the shortcut panel.
+            KeyBinding::new("ctrl-shift-alt-m", ReportMemory, None),
         ]);
         // Install the native menu once with the default language; the window
         // hook below re-installs it after the saved language preference has

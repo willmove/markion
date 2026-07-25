@@ -3185,6 +3185,7 @@ dependencies = [
  "font8x8",
  "gpui",
  "image",
+ "libc",
  "markdown",
  "markion-diagram",
  "pulldown-cmark",
@@ -3204,6 +3205,7 @@ dependencies = [
  "two-face",
  "unicode-segmentation",
  "usvg",
+ "windows 0.61.3",
  "winresource",
  "zed-reqwest",
 ]

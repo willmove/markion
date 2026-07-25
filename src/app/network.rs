@@ -117,6 +117,44 @@ pub(super) fn install_http_client(cx: &mut App) -> Result<()> {
     Ok(())
 }
 
+/// Fetch a remote URL's response body on the shared HTTP runtime.
+///
+/// Used by the Markdown preview-image cache so decode work can run off the UI
+/// thread without depending on GPUI's asset loader.
+pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>> {
+    let runtime = HTTP_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("failed to initialize Markion HTTP runtime")
+    });
+    runtime.block_on(async {
+        let client = reqwest::Client::builder()
+            .use_rustls_tls()
+            .connect_timeout(Duration::from_secs(15))
+            .user_agent(format!("Markion/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .context("building preview-image HTTP client")?;
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .with_context(|| format!("requesting {url}"))?;
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "HTTP {} fetching {url}",
+                response.status().as_u16()
+            ));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .with_context(|| format!("reading body from {url}"))?;
+        Ok(bytes.to_vec())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{

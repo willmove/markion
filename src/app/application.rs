@@ -107,6 +107,7 @@ impl MarkionApp {
             recovery_dir: default_recovery_dir(),
             highlight_cache: RefCell::new(HashMap::new()),
             diagram_cache: DiagramCache::new(DIAGRAM_CACHE_CAPACITY),
+            preview_image_cache: PreviewImageCache::new(PREVIEW_IMAGE_CACHE_CAPACITY),
             math_cache: MathCache::new(MATH_CACHE_CAPACITY),
         }
     }
@@ -151,7 +152,7 @@ impl MarkionApp {
         if index >= self.tabs.len() {
             return;
         }
-        self.active_tab = index;
+        let previous = self.active_tab;
         // Selecting in another tab's preview must not leave a drag in progress
         // on the previous tab; clear the drag flag on all tabs for safety.
         for tab in &mut self.tabs {
@@ -160,6 +161,16 @@ impl MarkionApp {
             tab.finish_undo_capture();
             tab.marked_range = None;
         }
+        if previous != index {
+            // Dormant the tab being left: drop derived/layout caches, keep
+            // text/selection/undo/scroll. Active tab stays warm.
+            let released_keys = self.tabs[previous].enter_dormant();
+            let dropped = self.preview_image_cache.release_all(released_keys.iter());
+            for image in dropped {
+                cx.drop_image(image, None);
+            }
+        }
+        self.active_tab = index;
         self.refresh_search_matches();
         self.sync_and_persist_session();
         cx.notify();
@@ -485,6 +496,18 @@ impl MarkionApp {
     /// untitled tabs and crash-recovery restore; filesystem-backed opens should
     /// go through the path helpers so already-open files can reuse their tab.
     pub(super) fn open_in_new_tab(&mut self, document: MarkdownDocument, cx: &mut Context<Self>) {
+        let previous = self.active_tab;
+        // Opening a new tab leaves the previous one inactive — same dormancy
+        // policy as switch_active_tab.
+        self.tabs[previous].finish_undo_capture();
+        self.tabs[previous].preview_is_selecting = false;
+        self.tabs[previous].clear_visual_caret_affinity();
+        self.tabs[previous].marked_range = None;
+        let released = self.tabs[previous].enter_dormant();
+        let dropped = self.preview_image_cache.release_all(released.iter());
+        for image in dropped {
+            cx.drop_image(image, None);
+        }
         let tab = self.editor_tab_for_document(document);
         self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
@@ -506,6 +529,8 @@ impl MarkionApp {
         document: MarkdownDocument,
         cx: &mut Context<Self>,
     ) {
+        let active = self.active_tab;
+        self.release_tab_image_claims(active, cx);
         let tab = self.active_tab_mut();
         if let Some(recovery) = tab.last_recovery_file.take() {
             let _ = delete_recovery_file(recovery);

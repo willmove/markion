@@ -796,12 +796,8 @@ fn inline_math_baseline_margin_lifts_shallow_formulas_to_text_baseline() {
     assert!(f32::from(margin) > f32::from(math_descent) + 4.0);
 
     // Deep formulas may need a negative margin so descent hangs below the line.
-    let deep = inline_math_baseline_margin_from_metrics(
-        line_height,
-        font_ascent,
-        font_descent,
-        px(12.0),
-    );
+    let deep =
+        inline_math_baseline_margin_from_metrics(line_height, font_ascent, font_descent, px(12.0));
     assert!(f32::from(deep) < 0.0);
 }
 
@@ -1550,7 +1546,10 @@ fn read_mode_preview_width_cap_only_applies_without_adaptive_width() {
         ViewMode::VisualEdit,
         false
     ));
-    assert!(!read_mode_preview_is_constrained(ViewMode::VisualEdit, true));
+    assert!(!read_mode_preview_is_constrained(
+        ViewMode::VisualEdit,
+        true
+    ));
     // Split Preview and Edit are never constrained by the preference.
     assert!(!read_mode_preview_is_constrained(ViewMode::Split, false));
     assert!(!read_mode_preview_is_constrained(ViewMode::Split, true));
@@ -3133,12 +3132,9 @@ fn visual_edit_paragraph_enter_shows_caret_not_source_island(cx: &mut TestAppCon
         // After two Enters the caret is at end-of-document (offset 6) and the
         // trailing blank line owns it as a Whitespace row.
         let blocks = tab.document.visual_blocks_shared();
-        let block_index = visual_block_index_for_offset(
-            &blocks,
-            tab.cursor_offset(),
-            tab.document.text().len(),
-        )
-        .expect("the blank line should own a visual row");
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("the blank line should own a visual row");
         assert!(
             matches!(blocks[block_index].kind, VisualBlockKind::Whitespace),
             "Enter twice after a paragraph should land the caret on a Whitespace row"
@@ -3188,12 +3184,9 @@ fn visual_edit_down_arrow_skips_blank_line_gap_to_next_block(cx: &mut TestAppCon
     app.update(cx, |app, _| {
         let tab = app.active_tab();
         let blocks = tab.document.visual_blocks_shared();
-        let block_index = visual_block_index_for_offset(
-            &blocks,
-            tab.cursor_offset(),
-            tab.document.text().len(),
-        )
-        .expect("Down should land on a visual row");
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("Down should land on a visual row");
         assert!(
             matches!(blocks[block_index].kind, VisualBlockKind::Paragraph),
             "single Down from Para 1 should skip the blank-line gap and land in \
@@ -3245,12 +3238,9 @@ fn visual_edit_up_arrow_skips_blank_line_gap_to_heading(cx: &mut TestAppContext)
     app.update(cx, |app, _| {
         let tab = app.active_tab();
         let blocks = tab.document.visual_blocks_shared();
-        let block_index = visual_block_index_for_offset(
-            &blocks,
-            tab.cursor_offset(),
-            tab.document.text().len(),
-        )
-        .expect("Up should land on a visual row");
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("Up should land on a visual row");
         assert!(
             matches!(blocks[block_index].kind, VisualBlockKind::Heading { .. }),
             "single Up from the paragraph should skip the gap and land in the \
@@ -3290,12 +3280,9 @@ fn visual_edit_up_arrow_skips_blank_line_gap_to_heading(cx: &mut TestAppContext)
     app.update(cx, |app, _| {
         let tab = app.active_tab();
         let blocks = tab.document.visual_blocks_shared();
-        let block_index = visual_block_index_for_offset(
-            &blocks,
-            tab.cursor_offset(),
-            tab.document.text().len(),
-        )
-        .expect("Up should land on a visual row");
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("Up should land on a visual row");
         assert!(
             matches!(blocks[block_index].kind, VisualBlockKind::Heading { .. }),
             "Up from paragraph start must skip the gap into the heading, \
@@ -4194,12 +4181,558 @@ fn session_restore_skips_missing_paths_and_untitled_tabs() {
 #[test]
 fn cli_open_intent_disables_session_restore() {
     assert!(should_restore_session(&StartupOpenIntent::None));
-    assert!(!should_restore_session(&StartupOpenIntent::File(PathBuf::from(
-        "a.md"
-    ))));
+    assert!(!should_restore_session(&StartupOpenIntent::File(
+        PathBuf::from("a.md")
+    )));
     assert!(!should_restore_session(&StartupOpenIntent::Folder(
         PathBuf::from("notes")
     )));
+}
+
+#[gpui::test]
+fn report_memory_action_lists_expected_sites_without_side_effects(cx: &mut TestAppContext) {
+    let source = "# Hello\n\nParagraph.\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        app.active_tab_mut().sync_visual_list(&blocks);
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    let (version_before, selection_before, scroll_before, report) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().selected_range.clone(),
+            app.active_tab().editor_scroll.offset(),
+            app.memory_report(),
+        )
+    });
+
+    for name in [
+        "tabs[0].document_text",
+        "tabs[0].document.preview_blocks",
+        "tabs[0].document.visual_blocks",
+        "tabs[0].shaped_lines",
+        "global.preview_image_cache",
+        "global.diagram_cache",
+        "global.math_cache",
+        "global.highlight_cache",
+    ] {
+        assert!(
+            report.find_site(name).is_some(),
+            "missing site {name} in {}",
+            report.site_names().join(", ")
+        );
+    }
+
+    cx.dispatch_action(ReportMemory);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.version(), version_before);
+        assert_eq!(app.active_tab().selected_range, selection_before);
+        assert_eq!(app.active_tab().editor_scroll.offset(), scroll_before);
+        assert_eq!(app.active_tab().document.text(), source);
+        assert_eq!(app.status.as_ref(), t(app.language, Msg::StatusReady));
+        let again = app.memory_report();
+        assert!(
+            again.sites_equal(&report),
+            "site figures must agree; process counters may differ"
+        );
+        // Process footprint is present and does not disturb accounted totals.
+        assert_eq!(again.accounted_total(), report.accounted_total());
+        assert!(!again.format_log().contains("resident_current=unavailable"));
+        if let (Some(a), Some(b)) = (
+            report.process_footprint.resident_peak,
+            again.process_footprint.resident_peak,
+        ) {
+            assert!(b >= a, "producing a report must not lower resident_peak");
+        }
+    });
+}
+
+#[gpui::test]
+fn memory_harness_tab_growth_and_close_release(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    let before_second = app.update(cx, |app, cx| {
+        app.load_memory_profile(MemoryProfile::PlainLong, 1, MemoryWarmup::VisualEdit, cx);
+        app.memory_report().per_tab_total()
+    });
+    let global_before = app.update(cx, |app, _| app.memory_report().global_total());
+
+    app.update(cx, |app, cx| {
+        let document = MarkdownDocument::from_text(MemoryProfile::PlainLong.markdown());
+        app.open_in_new_tab(document, cx);
+        app.warm_active_tab(MemoryWarmup::VisualEdit, cx);
+    });
+    let with_second = app.update(cx, |app, _| app.memory_report());
+    // Opening a second tab dormants the first: both texts are retained, but only
+    // the active tab keeps warm visual caches — so per-tab total grows by about
+    // one document_text, not a second full warm derived set.
+    assert!(
+        with_second.per_tab_total() > before_second,
+        "second tab text should increase per-tab total ({} vs {})",
+        with_second.per_tab_total(),
+        before_second
+    );
+    assert!(
+        with_second.per_tab_total() < before_second.saturating_mul(2),
+        "dormancy must prevent a second full warm cache set ({} vs 2×{})",
+        with_second.per_tab_total(),
+        before_second
+    );
+    assert_eq!(
+        with_second
+            .find_site("tabs[0].document.visual_blocks")
+            .unwrap()
+            .estimated_bytes,
+        0,
+        "previous tab must be dormant after open_in_new_tab"
+    );
+    assert_eq!(
+        with_second.global_total(),
+        global_before,
+        "opening another text tab must not grow global render caches"
+    );
+
+    let released = app.update(cx, |app, cx| {
+        app.close_tab_confirmed(cx);
+        app.warm_active_tab(MemoryWarmup::VisualEdit, cx);
+        app.memory_report()
+    });
+    assert_eq!(
+        app.update(cx, |app, _| app.tabs.len()),
+        1,
+        "closing the extra tab should leave one tab"
+    );
+    assert_eq!(released.per_tab_total(), before_second);
+    assert_eq!(released.global_total(), with_second.global_total());
+}
+
+#[gpui::test]
+fn memory_harness_repeated_reports_are_identical(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.load_memory_profile(MemoryProfile::Code, 1, MemoryWarmup::Preview, cx);
+        let first = app.memory_report();
+        let second = app.memory_report();
+        assert!(
+            first.sites_equal(&second),
+            "site figures must agree across successive reports"
+        );
+        assert_eq!(first.accounted_total(), second.accounted_total());
+        if let (Some(a), Some(b)) = (
+            first.process_footprint.resident_peak,
+            second.process_footprint.resident_peak,
+        ) {
+            assert!(b >= a, "resident_peak must be monotonic");
+        }
+    });
+}
+
+#[gpui::test]
+fn memory_report_with_footprint_leaves_unpopulated_caches(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        // Text-only warmup: preview/visual caches must stay unpopulated.
+        app.load_memory_profile(MemoryProfile::PlainLong, 1, MemoryWarmup::TextOnly, cx);
+        let version = app.active_tab().document.version();
+        let report = app.memory_report();
+        assert_eq!(
+            report
+                .find_site("tabs[0].document.preview_blocks")
+                .unwrap()
+                .estimated_bytes,
+            0
+        );
+        assert_eq!(
+            report
+                .find_site("tabs[0].document.visual_blocks")
+                .unwrap()
+                .estimated_bytes,
+            0
+        );
+        assert!(
+            report.process_footprint.resident_current.is_some()
+                || report.process_footprint.resident_peak.is_some()
+                || report.process_platform == "unknown",
+            "footprint counters should be sampled when the platform supports them"
+        );
+        assert_eq!(app.active_tab().document.version(), version);
+        // Re-check caches stayed empty after sampling.
+        let again = app.memory_report();
+        assert_eq!(
+            again
+                .find_site("tabs[0].document.preview_blocks")
+                .unwrap()
+                .estimated_bytes,
+            0
+        );
+        assert_eq!(app.active_tab().document.version(), version);
+    });
+}
+
+#[gpui::test]
+fn inactive_tab_dormancy_clears_derived_caches_and_preserves_undo(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    let original_prefix = app.update(cx, |app, cx| {
+        app.view_mode = ViewMode::VisualEdit;
+        app.load_memory_profile(MemoryProfile::PlainLong, 2, MemoryWarmup::VisualEdit, cx);
+        // Active tab is index 1 after load_memory_profile. Edit + undo on it.
+        let tab = app.active_tab_mut();
+        let original_prefix = tab.document.text()[..5].to_string();
+        tab.selected_range = 0..5;
+        tab.push_undo_snapshot();
+        tab.document.replace_range(0..5, "HELLO");
+        tab.selected_range = 5..5;
+        // Re-warm visual caches after the edit.
+        let blocks = tab.document.visual_blocks_shared();
+        tab.sync_visual_list(&blocks);
+        original_prefix
+    });
+
+    let (version_before, text_before, undo_len, selection_before, warmed_visual) =
+        app.update(cx, |app, _| {
+            let report = app.memory_report();
+            let visual = report
+                .find_site("tabs[1].document.visual_blocks")
+                .expect("visual site");
+            assert!(
+                visual.estimated_bytes > 0,
+                "tab 1 should be warm before switch"
+            );
+            (
+                app.tabs[1].document.version(),
+                app.tabs[1].document.text().to_string(),
+                app.tabs[1].undo_stack.len(),
+                app.tabs[1].selected_range.clone(),
+                visual.estimated_bytes,
+            )
+        });
+
+    app.update(cx, |app, cx| {
+        app.switch_active_tab(0, cx);
+    });
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab, 0);
+        let report = app.memory_report();
+        for name in [
+            "tabs[1].document.visual_blocks",
+            "tabs[1].document.preview_blocks",
+            "tabs[1].shaped_lines",
+        ] {
+            let site = report.find_site(name).expect(name);
+            assert_eq!(
+                site.estimated_bytes, 0,
+                "{name} must be zero while dormant (was warm={warmed_visual})"
+            );
+        }
+        assert_eq!(
+            report
+                .find_site("tabs[1].visual_list_blocks")
+                .unwrap()
+                .counts[0]
+                .1,
+            0
+        );
+        assert_eq!(app.tabs[1].document.version(), version_before);
+        assert_eq!(app.tabs[1].document.text(), text_before);
+        assert_eq!(app.tabs[1].undo_stack.len(), undo_len);
+        assert_eq!(app.tabs[1].selected_range, selection_before);
+        // Active tab still reports document text.
+        assert!(
+            report
+                .find_site("tabs[0].document_text")
+                .unwrap()
+                .estimated_bytes
+                > 0
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        app.switch_active_tab(1, cx);
+        app.warm_active_tab(MemoryWarmup::VisualEdit, cx);
+        assert!(app.active_tab_mut().apply_undo());
+    });
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, 0..5);
+        assert!(
+            app.active_tab()
+                .document
+                .text()
+                .starts_with(&original_prefix),
+            "undo after dormancy must restore pre-edit text (prefix {original_prefix:?})"
+        );
+        let report = app.memory_report();
+        assert!(
+            report
+                .find_site("tabs[1].document.visual_blocks")
+                .unwrap()
+                .estimated_bytes
+                > 0,
+            "reactivated tab should rebuild visual blocks"
+        );
+    });
+}
+
+#[gpui::test]
+fn memory_harness_dormancy_drops_and_restores_derived_bytes(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    let warm_bytes = app.update(cx, |app, cx| {
+        app.view_mode = ViewMode::VisualEdit;
+        app.load_memory_profile(MemoryProfile::PlainLong, 2, MemoryWarmup::VisualEdit, cx);
+        // load leaves tab 1 warm and tab 0 dormant; re-warm tab 1 explicitly.
+        app.warm_active_tab(MemoryWarmup::VisualEdit, cx);
+        app.memory_report()
+            .find_site("tabs[1].document.visual_blocks")
+            .unwrap()
+            .estimated_bytes
+    });
+    assert!(warm_bytes > 0, "fixture tab must populate visual blocks");
+
+    let (dormant_derived, active_text) = app.update(cx, |app, cx| {
+        app.switch_active_tab(0, cx);
+        let report = app.memory_report();
+        let dormant = report
+            .find_site("tabs[1].document.visual_blocks")
+            .unwrap()
+            .estimated_bytes
+            + report
+                .find_site("tabs[1].document.preview_blocks")
+                .unwrap()
+                .estimated_bytes
+            + report
+                .find_site("tabs[1].shaped_lines")
+                .unwrap()
+                .estimated_bytes;
+        let active_text = report
+            .find_site("tabs[0].document_text")
+            .unwrap()
+            .estimated_bytes;
+        (dormant, active_text)
+    });
+    assert_eq!(
+        dormant_derived, 0,
+        "inactive tab derived sites must drop to zero"
+    );
+    assert!(active_text > 0, "active tab text must remain attributed");
+
+    let restored = app.update(cx, |app, cx| {
+        app.switch_active_tab(1, cx);
+        app.warm_active_tab(MemoryWarmup::VisualEdit, cx);
+        app.memory_report()
+            .find_site("tabs[1].document.visual_blocks")
+            .unwrap()
+            .estimated_bytes
+    });
+    assert!(
+        restored > 0,
+        "reactivated tab must rebuild visual blocks (was {warm_bytes} before dormancy)"
+    );
+}
+
+/// Informational dump for `docs/memory-retention.md`. Not a merge gate.
+#[gpui::test]
+fn memory_harness_attribution_dump(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    eprintln!(
+        "NOTE: peak counters are process-lifetime figures shared across profiles in this single test process — do not read them as per-profile costs."
+    );
+    for (profile, warmup) in [
+        (MemoryProfile::PlainLong, MemoryWarmup::VisualEdit),
+        (MemoryProfile::Images, MemoryWarmup::Preview),
+        (MemoryProfile::Diagrams, MemoryWarmup::Preview),
+        (MemoryProfile::Math, MemoryWarmup::Preview),
+        (MemoryProfile::Code, MemoryWarmup::Preview),
+    ] {
+        app.update(cx, |app, cx| {
+            app.load_memory_profile(profile, 1, warmup, cx);
+        });
+        // Let background preview-image / diagram rasters land before sampling.
+        cx.run_until_parked();
+        let report = app.update(cx, |app, _| app.memory_report());
+        let fp = report.process_footprint;
+        eprintln!(
+            "profile={} warmup={:?} per_tab={} global={} accounted={} preview_image_bytes={} diagram_bytes={} platform={} resident_current={:?} resident_peak={:?} commit_current={:?} commit_peak={:?} (peaks=process-lifetime)",
+            profile.name(),
+            warmup,
+            report.per_tab_total(),
+            report.global_total(),
+            report.accounted_total(),
+            report
+                .find_site("global.preview_image_cache")
+                .map(|site| site.estimated_bytes)
+                .unwrap_or(0),
+            report
+                .find_site("global.diagram_cache")
+                .and_then(|site| {
+                    site.counts
+                        .iter()
+                        .find(|(k, _)| k == "completed_bytes")
+                        .map(|(_, n)| *n)
+                })
+                .unwrap_or(0),
+            report.process_platform,
+            fp.resident_current,
+            fp.resident_peak,
+            fp.commit_current,
+            fp.commit_peak,
+        );
+    }
+}
+
+/// Informational probe: allocate then free large decode buffers and compare
+/// peak vs current process footprint. Not a merge gate.
+#[test]
+fn memory_decode_spike_footprint_probe() {
+    use image::{Rgba, RgbaImage};
+
+    let before = ProcessFootprint::sample();
+    // Simulate the preview decode path's full-resolution intermediate: several
+    // large RGBA buffers that are dropped before sampling again.
+    {
+        let mut held = Vec::new();
+        for _ in 0..4 {
+            let img = RgbaImage::from_pixel(2048, 2048, Rgba([10, 20, 30, 255]));
+            let rgba = img.into_raw();
+            held.push(rgba);
+        }
+        // Touch the buffers so they are not optimized away.
+        let checksum: usize = held.iter().map(|b| b.len()).sum();
+        assert!(checksum > 0);
+        drop(held);
+    }
+    let after = ProcessFootprint::sample();
+    eprintln!(
+        "decode_spike_probe platform={} before_resident={:?} after_resident={:?} after_peak={:?} before_commit={:?} after_commit={:?} after_commit_peak={:?}",
+        process_footprint_platform(),
+        before.resident_current,
+        after.resident_current,
+        after.resident_peak,
+        before.commit_current,
+        after.commit_current,
+        after.commit_peak,
+    );
+    if let (Some(cur), Some(peak)) = (after.resident_current, after.resident_peak) {
+        assert!(peak >= cur);
+    }
+    if let (Some(a), Some(b)) = (before.resident_peak, after.resident_peak) {
+        assert!(b >= a, "peak must not fall after the probe");
+    }
+}
+
+#[gpui::test]
+fn preview_image_cache_shares_across_tabs_and_releases_on_close(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared_png = dir.path().join("shared.png");
+    let unique_png = dir.path().join("unique.png");
+    write_solid_png(&shared_png, 8, 8, [10, 20, 30, 255]);
+    write_solid_png(&unique_png, 8, 8, [40, 50, 60, 255]);
+
+    let shared_md = dir.path().join("shared.md");
+    let unique_md = dir.path().join("unique.md");
+    std::fs::write(&shared_md, "![s](shared.png)\n").unwrap();
+    std::fs::write(&unique_md, "![u](unique.png)\n").unwrap();
+
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    let shared_key = PreviewImageKey::from_url("shared.png", Some(dir.path()));
+    let unique_key = PreviewImageKey::from_url("unique.png", Some(dir.path()));
+
+    let warm_preview = |app: &mut MarkionApp, cx: &mut Context<MarkionApp>| {
+        let preview = app.active_tab().document.preview_blocks_shared();
+        app.active_tab_mut().sync_preview_list(&preview);
+        let active = app.active_tab;
+        app.refresh_tab_image_claims(active, &preview, &[], Some(dir.path()), cx);
+        app.ensure_preview_images(&preview, &[], Some(dir.path()), cx);
+    };
+
+    let version_before = app.update(cx, |app, cx| {
+        let shared_doc = MarkdownDocument::open(&shared_md).expect("open shared");
+        app.replace_active_tab(shared_doc, cx);
+        let version = app.active_tab().document.version();
+        warm_preview(app, cx);
+        version
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        assert!(matches!(
+            app.preview_image_cache.get(&shared_key),
+            Some(PreviewImageEntry::Ready(_))
+        ));
+        assert_eq!(app.active_tab().document.version(), version_before);
+
+        let unique_doc = MarkdownDocument::open(&unique_md).expect("open unique");
+        app.open_in_new_tab(unique_doc, cx);
+        warm_preview(app, cx);
+    });
+    cx.run_until_parked();
+
+    // Dormancy released the first tab's shared claim; only unique is claimed.
+    app.update(cx, |app, _| {
+        assert_eq!(app.preview_image_cache.claim_count(&shared_key), 0);
+        assert_eq!(app.preview_image_cache.claim_count(&unique_key), 1);
+    });
+
+    app.update(cx, |app, cx| {
+        let shared_doc = MarkdownDocument::open(&shared_md).expect("open shared again");
+        app.open_in_new_tab(shared_doc, cx);
+        warm_preview(app, cx);
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        assert_eq!(app.preview_image_cache.claim_count(&shared_key), 1);
+        assert!(matches!(
+            app.preview_image_cache.get(&shared_key),
+            Some(PreviewImageEntry::Ready(_))
+        ));
+        // Closing the dormant unique tab must drop its (already-released) key
+        // without disturbing the active shared claim.
+        app.active_tab = 1;
+        app.close_tab_confirmed(cx);
+        assert!(
+            app.preview_image_cache.get(&unique_key).is_none(),
+            "unique image must leave the Markion cache when its only tab closes"
+        );
+        assert!(matches!(
+            app.preview_image_cache.get(&shared_key),
+            Some(PreviewImageEntry::Ready(_))
+        ));
+        // Remaining tabs: 0 = first shared (dormant), 1 = second shared (active).
+        // Close the dormant shared tab; the active claim keeps the raster.
+        app.active_tab = 0;
+        app.close_tab_confirmed(cx);
+        assert!(matches!(
+            app.preview_image_cache.get(&shared_key),
+            Some(PreviewImageEntry::Ready(_))
+        ));
+        assert_eq!(app.preview_image_cache.claim_count(&shared_key), 1);
+    });
+}
+
+fn write_solid_png(path: &Path, width: u32, height: u32, rgba: [u8; 4]) {
+    let mut img = image::RgbaImage::new(width, height);
+    for pixel in img.pixels_mut() {
+        *pixel = image::Rgba(rgba);
+    }
+    img.save(path).expect("write png");
 }
 
 #[test]
@@ -4215,9 +4748,7 @@ fn open_recent_menu_is_wired_in_file_dropdown() {
         .split_once("AppMenu::File => panel")
         .and_then(|(_, rest)| rest.split_once("AppMenu::Edit =>").map(|(file, _)| file))
         .expect("in-window File menu");
-    let folder = in_window
-        .find("Msg::ItemOpenFolder,")
-        .expect("Open Folder");
+    let folder = in_window.find("Msg::ItemOpenFolder,").expect("Open Folder");
     let recent = in_window.find("Msg::ItemOpenRecent").expect("Open Recent");
     let clear = in_window
         .find("Msg::ItemClearRecentFiles")

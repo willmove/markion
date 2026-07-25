@@ -249,6 +249,8 @@ impl MarkionApp {
         if let Some(recovery) = self.active_tab_mut().last_recovery_file.take() {
             let _ = delete_recovery_file(recovery);
         }
+        let active = self.active_tab;
+        self.release_tab_image_claims(active, cx);
         if self.tabs.len() <= 1 {
             // Closing the last tab leaves a fresh untitled document.
             self.tabs[0] = self.editor_tab_for_document(MarkdownDocument::new());

@@ -7,7 +7,7 @@ use std::{fs, io, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{SessionState, MAX_RECENT_FILES};
+use crate::model::{MAX_RECENT_FILES, SessionState};
 
 /// Serde-facing shape of `session.toml`. Kept separate so `model` stays
 /// dependency-free. Missing fields default to empty / none.
@@ -136,7 +136,7 @@ pub fn render_session_state(session: &SessionState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{touch_recent_file, MAX_RECENT_FILES};
+    use crate::model::{MAX_RECENT_FILES, touch_recent_file};
     use std::path::PathBuf;
 
     #[test]
@@ -192,12 +192,18 @@ mod tests {
             );
         }
         assert_eq!(recent.len(), MAX_RECENT_FILES);
-        assert_eq!(recent[0], PathBuf::from(format!("D:/f{}.md", MAX_RECENT_FILES + 2)));
+        assert_eq!(
+            recent[0],
+            PathBuf::from(format!("D:/f{}.md", MAX_RECENT_FILES + 2))
+        );
 
         touch_recent_file(&mut recent, PathBuf::from("D:/f5.md"), MAX_RECENT_FILES);
         assert_eq!(recent[0], PathBuf::from("D:/f5.md"));
         assert_eq!(
-            recent.iter().filter(|path| path == &&PathBuf::from("D:/f5.md")).count(),
+            recent
+                .iter()
+                .filter(|path| path == &&PathBuf::from("D:/f5.md"))
+                .count(),
             1
         );
     }

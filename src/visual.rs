@@ -13,8 +13,8 @@ use crate::model::{
     VisualProjectionSpan, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
     VisualTableCell,
 };
-use crate::table::table_cell_source_ranges;
 use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fence};
+use crate::table::table_cell_source_ranges;
 
 /// Collects the document's link reference definition lines so that per-block
 /// parsing in `inline_runs` can resolve reference-style links whose
@@ -357,8 +357,7 @@ pub fn build_visual_projection_with_marked_range(
                 // link's reveal group, whose target lives in another block.
                 let in_link = run.link_target_range.is_some()
                     || link_group_ranges.iter().any(|range| {
-                        range.start <= run.content_range.start
-                            && run.content_range.end <= range.end
+                        range.start <= run.content_range.start && run.content_range.end <= range.end
                     });
                 projection.spans.push(VisualProjectionSpan {
                     display_range,
@@ -906,7 +905,8 @@ fn inline_runs(
     let mut link_stack: Vec<(Option<Range<usize>>, String)> = Vec::new();
     let mut contains_html = false;
 
-    for (event, relative_range) in Parser::new_ext(parse_input, markdown_options()).into_offset_iter()
+    for (event, relative_range) in
+        Parser::new_ext(parse_input, markdown_options()).into_offset_iter()
     {
         if relative_range.start >= source.len() {
             break;
@@ -915,9 +915,9 @@ fn inline_runs(
             block_range.start + relative_range.start..block_range.start + relative_range.end;
         let current_link = link_stack.last().cloned();
         let current_link_target = current_link.as_ref().and_then(|(range, _)| range.clone());
-        let current_link_nav = current_link.as_ref().map(|(_, url)| {
-            VisualNavigationTarget::Url(url.clone())
-        });
+        let current_link_nav = current_link
+            .as_ref()
+            .map(|(_, url)| VisualNavigationTarget::Url(url.clone()));
         match event {
             Event::Start(Tag::Strong) => {
                 candidates.push(RevealCandidate {
@@ -2310,7 +2310,9 @@ mod tests {
             payload,
             info_range,
             closing_fence,
-        } = block.editor.expect("diagram fence should have a payload editor")
+        } = block
+            .editor
+            .expect("diagram fence should have a payload editor")
         else {
             panic!("expected Code editor for diagram fence");
         };
@@ -2364,12 +2366,7 @@ mod tests {
         let block = MarkdownDocument::from_text(source)
             .visual_blocks()
             .remove(0);
-        let VisualBlockKind::Image {
-            alt,
-            url,
-            title,
-        } = &block.kind
-        else {
+        let VisualBlockKind::Image { alt, url, title } = &block.kind else {
             panic!("expected image block, got {:?}", block.kind);
         };
         assert_eq!(alt, "替代]文本");
@@ -2693,8 +2690,7 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             "footnote definition range must cover the marker"
         );
         assert!(
-            source[footnote_def.source_range.clone()]
-                .contains("Links can point to project pages"),
+            source[footnote_def.source_range.clone()].contains("Links can point to project pages"),
             "footnote definition range must cover the body"
         );
         assert!(
@@ -2724,8 +2720,7 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             reference_para
                 .editable_runs
                 .iter()
-                .any(|run| run.visible_text == "Markion repository"
-                    && !run.conservative_fallback),
+                .any(|run| run.visible_text == "Markion repository" && !run.conservative_fallback),
             "reference-style link must remain resolved"
         );
         assert!(
@@ -2748,14 +2743,11 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             "footnote reference must expose a footnote navigation target"
         );
         assert!(
-            footnote_para
-                .editable_runs
-                .iter()
-                .any(|run| matches!(
-                    &run.navigation,
-                    Some(VisualNavigationTarget::Url(url))
-                        if url == "https://github.com/willmove/markion"
-                )),
+            footnote_para.editable_runs.iter().any(|run| matches!(
+                &run.navigation,
+                Some(VisualNavigationTarget::Url(url))
+                    if url == "https://github.com/willmove/markion"
+            )),
             "inline link must expose a URL navigation target"
         );
     }

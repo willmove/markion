@@ -19,11 +19,11 @@ use gpui::{
     EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle, FontWeight,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageSource, KeyBinding, LayoutId,
     ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, Rgba,
-    ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText, TextLayout,
-    TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window, WindowBounds,
-    WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, font, img, list, point, px,
-    rgb, rgba, size,
+    MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel,
+    RenderImage, Rgba, ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText,
+    TextLayout, TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window,
+    WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, font, img,
+    list, point, px, rgb, rgba, size,
 };
 use markion::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_EDITOR_FONT_SIZE,
@@ -146,6 +146,9 @@ actions!(
         CloseTab,
         NextTab,
         PrevTab,
+        /// Developer-facing: write a per-site retained-memory report to the
+        /// diagnostic log. Not advertised in menu chrome.
+        ReportMemory,
     ]
 );
 
@@ -836,8 +839,11 @@ mod documents;
 mod editing;
 mod editor_element;
 mod math_render;
+mod memory;
 mod network;
 mod preview;
+mod preview_image;
+mod process_memory;
 mod root_view;
 mod save_dialog;
 mod search;
@@ -851,7 +857,10 @@ use bootstrap::install_menus;
 use diagram::*;
 use editor_element::EditorElement;
 use math_render::*;
+use memory::*;
 use preview::*;
+use preview_image::*;
+use process_memory::*;
 use root_view::*;
 use save_dialog::*;
 use state::*;
@@ -957,6 +966,8 @@ struct MarkionApp {
     highlight_cache: HighlightCache,
     /// Shared across tabs and frames; pending entries are never evicted.
     diagram_cache: DiagramCache,
+    /// Decoded Markdown preview images owned by Markion (not GPUI loading_assets).
+    preview_image_cache: PreviewImageCache,
     /// Presentation-only formula results shared across tabs and document versions.
     math_cache: MathCache,
     /// Active interface language. Persisted via `AppPreferences::language`.
