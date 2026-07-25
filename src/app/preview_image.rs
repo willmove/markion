@@ -13,10 +13,24 @@ pub(super) const PREVIEW_IMAGE_CACHE_CAPACITY: usize = 64;
 pub(super) const PREVIEW_IMAGE_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 /// Longer edge of retained preview bitmaps, in device pixels.
 pub(super) const PREVIEW_IMAGE_MAX_EDGE: u32 = 2048;
+/// Floor for fair-share decode edge so tiny icons stay legible under pressure.
+pub(super) const PREVIEW_IMAGE_MIN_EDGE: u32 = 64;
 /// Overall in-flight fetch/decode safety cap (parallel warm for typical docs).
 pub(super) const PREVIEW_IMAGE_DECODE_CONCURRENCY: usize = 8;
 /// Tighter cap for probed oversized ("heavy") sources only.
 pub(super) const PREVIEW_IMAGE_HEAVY_DECODE_CONCURRENCY: usize = 3;
+
+/// Per-claim byte allowance under the completed-raster budget.
+fn fair_share_bytes(max_completed_bytes: usize, claim_count: usize) -> usize {
+    (max_completed_bytes / claim_count.max(1)).max(4)
+}
+
+/// Decode/display longer-edge cap so `claim_count` full-frame images fit the budget.
+pub(super) fn fair_share_max_edge(max_completed_bytes: usize, claim_count: usize) -> u32 {
+    let fair = fair_share_bytes(max_completed_bytes, claim_count);
+    let edge = ((fair / 4) as f64).sqrt().floor() as u32;
+    edge.clamp(PREVIEW_IMAGE_MIN_EDGE, PREVIEW_IMAGE_MAX_EDGE)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct PreviewImageKey {
@@ -136,6 +150,14 @@ impl PreviewImageCache {
         self.claims.get(key).copied().unwrap_or(0)
     }
 
+    pub(super) fn claimed_key_count(&self) -> usize {
+        self.claims.len()
+    }
+
+    pub(super) fn max_completed_bytes(&self) -> usize {
+        self.max_completed_bytes
+    }
+
     pub(super) fn in_flight_count(&self) -> usize {
         self.in_flight.len()
     }
@@ -188,7 +210,7 @@ impl PreviewImageCache {
             return false;
         }
         while self.entries.len() >= self.capacity {
-            if self.evict_oldest_ready().is_none() {
+            if !self.evict_oldest_unclaimed(&mut Vec::new()) {
                 return false;
             }
         }
@@ -222,28 +244,17 @@ impl PreviewImageCache {
             other => other,
         };
 
-        if let Ok(ready) = &result {
-            while self.completed_bytes.saturating_add(ready.byte_len) > self.max_completed_bytes {
-                if let Some(image) = self.evict_oldest_ready() {
-                    dropped.push(image);
-                } else {
-                    break;
-                }
-            }
-            if self.completed_bytes.saturating_add(ready.byte_len) > self.max_completed_bytes {
-                self.entries.insert(
-                    key.clone(),
-                    PreviewImageEntry::Error(Arc::from(
-                        "image raster exceeds the preview image cache budget",
-                    )),
-                );
-                self.touch_completed(key);
-                if let Ok(ready) = result {
+        let result = match result {
+            Ok(ready) => match self.fit_ready_under_budget(key, ready, &mut dropped) {
+                Ok(ready) => Ok(ready),
+                Err(ready) => {
+                    // Truly impossible to retain (no remaining bytes even at 1px).
                     dropped.push(ready.image);
+                    Err("image raster exceeds the preview image cache budget".into())
                 }
-                return dropped;
-            }
-        }
+            },
+            Err(message) => Err(message),
+        };
 
         let entry = match result {
             Ok(ready) => {
@@ -260,12 +271,92 @@ impl PreviewImageCache {
         dropped
     }
 
+    /// Make `ready` fit the completed-byte budget without evicting claimed images.
+    ///
+    /// Order: free unclaimed LRU → fair-share shrink of existing claimed ready
+    /// entries → downscale the incoming raster → last-resort reject.
+    fn fit_ready_under_budget(
+        &mut self,
+        key: &PreviewImageKey,
+        mut ready: PreviewImageReady,
+        dropped: &mut Vec<Arc<RenderImage>>,
+    ) -> Result<PreviewImageReady, PreviewImageReady> {
+        while self.completed_bytes.saturating_add(ready.byte_len) > self.max_completed_bytes {
+            if !self.evict_oldest_unclaimed(dropped) {
+                break;
+            }
+        }
+        if self.completed_bytes.saturating_add(ready.byte_len) <= self.max_completed_bytes {
+            return Ok(ready);
+        }
+
+        dropped.extend(self.shrink_claimed_ready_to_fair_share(key));
+        let fair = fair_share_bytes(self.max_completed_bytes, self.claims.len());
+        if ready.byte_len > fair {
+            let previous = ready.image.clone();
+            ready = downscale_ready_to_max_bytes(ready, fair);
+            dropped.push(previous);
+        }
+        if self.completed_bytes.saturating_add(ready.byte_len) <= self.max_completed_bytes {
+            return Ok(ready);
+        }
+
+        let remaining = self
+            .max_completed_bytes
+            .saturating_sub(self.completed_bytes)
+            .max(4);
+        if ready.byte_len > remaining {
+            let previous = ready.image.clone();
+            ready = downscale_ready_to_max_bytes(ready, remaining);
+            dropped.push(previous);
+        }
+        if self.completed_bytes.saturating_add(ready.byte_len) <= self.max_completed_bytes {
+            Ok(ready)
+        } else {
+            Err(ready)
+        }
+    }
+
+    /// Downscale oversized claimed ready entries toward the current fair share.
+    fn shrink_claimed_ready_to_fair_share(
+        &mut self,
+        except: &PreviewImageKey,
+    ) -> Vec<Arc<RenderImage>> {
+        let fair = fair_share_bytes(self.max_completed_bytes, self.claims.len());
+        let keys: Vec<PreviewImageKey> = self.completed_order.iter().cloned().collect();
+        let mut dropped = Vec::new();
+        for key in keys {
+            if &key == except {
+                continue;
+            }
+            let Some(PreviewImageEntry::Ready(ready)) = self.entries.get(&key).cloned() else {
+                continue;
+            };
+            if ready.byte_len <= fair {
+                continue;
+            }
+            let previous_bytes = ready.byte_len;
+            let previous_image = ready.image.clone();
+            let shrunk = downscale_ready_to_max_bytes(ready, fair);
+            self.completed_bytes = self
+                .completed_bytes
+                .saturating_sub(previous_bytes)
+                .saturating_add(shrunk.byte_len);
+            self.entries
+                .insert(key, PreviewImageEntry::Ready(shrunk));
+            dropped.push(previous_image);
+        }
+        dropped
+    }
+
     fn touch_completed(&mut self, key: &PreviewImageKey) {
         self.completed_order.retain(|k| k != key);
         self.completed_order.push_back(key.clone());
     }
 
-    fn evict_oldest_ready(&mut self) -> Option<Arc<RenderImage>> {
+    /// Evict the oldest unclaimed completed entry. Returns whether progress was made.
+    /// Ready images are appended to `dropped`; Error entries free a slot only.
+    fn evict_oldest_unclaimed(&mut self, dropped: &mut Vec<Arc<RenderImage>>) -> bool {
         // Only evict unclaimed completed entries. Evicting a still-claimed
         // (on-screen) ready image forces ensure→redecode→notify in a loop and
         // looks like continuous flicker in image-heavy documents.
@@ -275,9 +366,15 @@ impl PreviewImageCache {
                     self.entries.get(key),
                     Some(PreviewImageEntry::Ready(_) | PreviewImageEntry::Error(_))
                 )
-        })?;
+        });
+        let Some(index) = index else {
+            return false;
+        };
         let oldest = self.completed_order.remove(index).expect("index in range");
-        self.remove_entry(&oldest)
+        if let Some(image) = self.remove_entry(&oldest) {
+            dropped.push(image);
+        }
+        true
     }
 
     fn remove_entry(&mut self, key: &PreviewImageKey) -> Option<Arc<RenderImage>> {
@@ -335,6 +432,13 @@ pub(super) fn probe_is_heavy(key: &PreviewImageKey) -> bool {
 }
 
 pub(super) fn load_preview_image(key: &PreviewImageKey) -> Result<PreviewImageReady, String> {
+    load_preview_image_with_max_edge(key, PREVIEW_IMAGE_MAX_EDGE)
+}
+
+pub(super) fn load_preview_image_with_max_edge(
+    key: &PreviewImageKey,
+    max_edge: u32,
+) -> Result<PreviewImageReady, String> {
     let bytes = if let Some(path) = key.local_path() {
         std::fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?
     } else if let Some(url) = key.remote_url() {
@@ -357,9 +461,9 @@ pub(super) fn load_preview_image(key: &PreviewImageKey) -> Result<PreviewImageRe
             .any(|window| window == b"<svg" || window == b"<SVG");
 
     let rgba = if is_svg {
-        rasterize_svg_bytes(&bytes)?
+        rasterize_svg_bytes(&bytes, max_edge)?
     } else {
-        decode_raster_bytes(&bytes)?
+        decode_raster_bytes(&bytes, max_edge)?
     };
 
     rgba_to_ready(rgba)
@@ -385,10 +489,48 @@ fn rgba_to_ready(rgba: RgbaImage) -> Result<PreviewImageReady, String> {
     })
 }
 
+/// Shrink a ready raster so its BGRA footprint is at most `max_bytes`.
+fn downscale_ready_to_max_bytes(ready: PreviewImageReady, max_bytes: usize) -> PreviewImageReady {
+    if ready.byte_len <= max_bytes || ready.width == 0 || ready.height == 0 {
+        return ready;
+    }
+    let max_pixels = (max_bytes / 4).max(1);
+    let current_pixels = (ready.width as usize).saturating_mul(ready.height as usize);
+    if current_pixels <= max_pixels {
+        return ready;
+    }
+    let scale = (max_pixels as f32 / current_pixels as f32).sqrt();
+    let mut new_w = ((ready.width as f32) * scale).floor().max(1.0) as u32;
+    let mut new_h = ((ready.height as f32) * scale).floor().max(1.0) as u32;
+    while (new_w as usize).saturating_mul(new_h as usize).saturating_mul(4) > max_bytes {
+        if new_w >= new_h && new_w > 1 {
+            new_w -= 1;
+        } else if new_h > 1 {
+            new_h -= 1;
+        } else {
+            break;
+        }
+    }
+    let Some(bgra) = ready.image.as_bytes(0) else {
+        return ready;
+    };
+    let mut rgba_bytes = bgra.to_vec();
+    for pixel in rgba_bytes.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    let Some(rgba) = RgbaImage::from_raw(ready.width, ready.height, rgba_bytes) else {
+        return ready;
+    };
+    let resized = DynamicImage::ImageRgba8(rgba)
+        .resize_exact(new_w, new_h, FilterType::Triangle)
+        .into_rgba8();
+    rgba_to_ready(resized).unwrap_or(ready)
+}
+
 /// Decode a non-SVG image: prefer header probe + resize on `DynamicImage` before
 /// consuming into RGBA, so a full-resolution RGBA intermediate is not retained
 /// only to downsample it afterward.
-fn decode_raster_bytes(bytes: &[u8]) -> Result<RgbaImage, String> {
+fn decode_raster_bytes(bytes: &[u8], max_edge: u32) -> Result<RgbaImage, String> {
     // Opportunistic path: guess format, read dimensions, decode, then resize at
     // native depth before into_rgba8. image 0.25's JPEG backend (zune) does not
     // expose DCT scale factors through the public API, so "subsampled decode"
@@ -402,22 +544,23 @@ fn decode_raster_bytes(bytes: &[u8]) -> Result<RgbaImage, String> {
 
     // JPEG DCT scale is not exposed by image 0.25's public API; resize at native
     // depth before into_rgba8 still avoids a full-resolution RGBA intermediate.
-    Ok(resize_dynamic_to_display_edge(dyn_image).into_rgba8())
+    Ok(resize_dynamic_to_display_edge(dyn_image, max_edge).into_rgba8())
 }
 
-fn resize_dynamic_to_display_edge(image: DynamicImage) -> DynamicImage {
+fn resize_dynamic_to_display_edge(image: DynamicImage, max_edge: u32) -> DynamicImage {
     let (width, height) = image.dimensions();
     let long_edge = width.max(height);
-    if long_edge <= PREVIEW_IMAGE_MAX_EDGE {
+    let max_edge = max_edge.max(1);
+    if long_edge <= max_edge {
         return image;
     }
-    let scale = PREVIEW_IMAGE_MAX_EDGE as f32 / long_edge as f32;
+    let scale = max_edge as f32 / long_edge as f32;
     let new_w = ((width as f32) * scale).round().max(1.0) as u32;
     let new_h = ((height as f32) * scale).round().max(1.0) as u32;
     image.resize_exact(new_w, new_h, FilterType::Triangle)
 }
 
-fn rasterize_svg_bytes(bytes: &[u8]) -> Result<RgbaImage, String> {
+fn rasterize_svg_bytes(bytes: &[u8], max_edge: u32) -> Result<RgbaImage, String> {
     let options = usvg::Options {
         fontdb: DIAGRAM_FONT_DB.clone(),
         ..usvg::Options::default()
@@ -428,8 +571,9 @@ fn rasterize_svg_bytes(bytes: &[u8]) -> Result<RgbaImage, String> {
     let mut width = tree_size.width().ceil().max(1.0) as u32;
     let mut height = tree_size.height().ceil().max(1.0) as u32;
     let long_edge = width.max(height);
-    let scale = if long_edge > PREVIEW_IMAGE_MAX_EDGE {
-        PREVIEW_IMAGE_MAX_EDGE as f32 / long_edge as f32
+    let max_edge = max_edge.max(1);
+    let scale = if long_edge > max_edge {
+        max_edge as f32 / long_edge as f32
     } else {
         1.0
     };
@@ -479,6 +623,10 @@ impl MarkionApp {
     /// Start as many pending decodes as the overall / heavy caps allow.
     pub(super) fn schedule_pending_preview_decodes(&mut self, cx: &mut Context<Self>) {
         let candidates = self.preview_image_cache.pending_not_started();
+        let max_edge = fair_share_max_edge(
+            self.preview_image_cache.max_completed_bytes(),
+            self.preview_image_cache.claimed_key_count(),
+        );
         for key in candidates {
             let heavy = probe_is_heavy(&key);
             if !self.preview_image_cache.try_begin_decode(&key, heavy) {
@@ -492,7 +640,9 @@ impl MarkionApp {
             let load_key = key.clone();
             cx.spawn(async move |this, cx| {
                 let result = cx
-                    .background_spawn(async move { load_preview_image(&load_key) })
+                    .background_spawn(async move {
+                        load_preview_image_with_max_edge(&load_key, max_edge)
+                    })
                     .await;
                 let _ = this.update(cx, |app, cx| {
                     for image in app.preview_image_cache.complete(&key, result) {
@@ -648,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn byte_budget_keeps_pending_and_rejects_when_only_claimed_ready_exist() {
+    fn byte_budget_keeps_pending_and_shrinks_when_only_claimed_ready_exist() {
         let mut cache = PreviewImageCache::with_limits(8, 64);
         let pending = key("pending.png");
         let old = key("old.png");
@@ -660,7 +810,8 @@ mod tests {
         assert!(cache.reserve_pending(old.clone()));
         cache.complete(&old, Ok(ready(64)));
         assert!(cache.reserve_pending(newer.clone()));
-        // Claimed `old` must not be evicted; `newer` becomes Error; pending stays.
+        // Claimed `old` must not be evicted; both ready images shrink to fair-share.
+        // Pending stays pending (never evicted for budget).
         cache.complete(&newer, Ok(ready(64)));
         assert!(matches!(
             cache.get(&pending),
@@ -669,8 +820,9 @@ mod tests {
         assert!(matches!(cache.get(&old), Some(PreviewImageEntry::Ready(_))));
         assert!(matches!(
             cache.get(&newer),
-            Some(PreviewImageEntry::Error(_))
+            Some(PreviewImageEntry::Ready(_))
         ));
+        assert!(cache.completed_bytes() <= 64);
     }
 
     #[test]
@@ -710,7 +862,7 @@ mod tests {
     fn resize_dynamic_clamps_long_edge() {
         let dyn_image =
             DynamicImage::ImageRgba8(RgbaImage::from_pixel(4000, 1000, Rgba([1, 2, 3, 255])));
-        let out = resize_dynamic_to_display_edge(dyn_image);
+        let out = resize_dynamic_to_display_edge(dyn_image, PREVIEW_IMAGE_MAX_EDGE);
         assert_eq!(out.width(), PREVIEW_IMAGE_MAX_EDGE);
         assert_eq!(out.height(), 512);
     }
@@ -849,7 +1001,7 @@ mod tests {
             )
             .expect("encode");
         }
-        let out = decode_raster_bytes(&encoded).expect("decode");
+        let out = decode_raster_bytes(&encoded, PREVIEW_IMAGE_MAX_EDGE).expect("decode");
         assert_eq!(out.width(), PREVIEW_IMAGE_MAX_EDGE);
         assert_eq!(out.height(), 1024);
     }
@@ -868,17 +1020,57 @@ mod tests {
         cache.complete(&a, Ok(ready(64)));
         assert!(matches!(cache.get(&a), Some(PreviewImageEntry::Ready(_))));
 
-        // Completing `b` cannot fit without evicting claimed `a` — must Error `b`
-        // and leave `a` ready (no claimed eviction).
+        // Completing `b` cannot fit at full size without displacing claimed `a`.
+        // Fair-share shrink must keep both Ready (no sticky Error, no claimed eviction).
         cache.complete(&b, Ok(ready(64)));
         assert!(
             matches!(cache.get(&a), Some(PreviewImageEntry::Ready(_))),
             "claimed ready image must survive budget pressure"
         );
         assert!(
-            matches!(cache.get(&b), Some(PreviewImageEntry::Error(_))),
-            "incoming image that cannot fit without evicting claimed entries becomes Error"
+            matches!(cache.get(&b), Some(PreviewImageEntry::Ready(_))),
+            "incoming image must shrink to fair-share instead of sticky Error"
         );
-        assert_eq!(cache.completed_bytes(), 64);
+        assert!(cache.completed_bytes() <= 64);
+    }
+
+    #[test]
+    fn many_claimed_images_shrink_instead_of_sticky_budget_error() {
+        // User-visible regression after memory bounds: a long article claims every
+        // image, small/fast decodes fill the byte budget first, then large
+        // headers complete into permanent "exceeds the preview image cache budget".
+        let mut cache = PreviewImageCache::with_limits(16, 64);
+        let keys: Vec<_> = (0..8).map(|i| key(&format!("img{i}.png"))).collect();
+        for k in &keys {
+            cache.claim(k.clone());
+            assert!(cache.reserve_pending(k.clone()));
+        }
+        for k in &keys {
+            cache.complete(k, Ok(ready(16)));
+        }
+        for k in &keys {
+            assert!(
+                matches!(cache.get(k), Some(PreviewImageEntry::Ready(_))),
+                "{} should be Ready, got {:?}",
+                k.identity,
+                cache.get(k).map(|e| match e {
+                    PreviewImageEntry::Pending => "pending",
+                    PreviewImageEntry::Ready(_) => "ready",
+                    PreviewImageEntry::Error(m) => {
+                        let _ = m;
+                        "error"
+                    }
+                })
+            );
+        }
+        assert!(cache.completed_bytes() <= 64);
+        assert_eq!(
+            keys
+                .iter()
+                .filter(|k| matches!(cache.get(k), Some(PreviewImageEntry::Error(_))))
+                .count(),
+            0,
+            "budget pressure must not sticky-error claimed preview images"
+        );
     }
 }
