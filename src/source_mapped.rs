@@ -439,7 +439,13 @@ fn split_regions(source: &str) -> Vec<(usize, &str)> {
             continue;
         }
         if let Some(fence) = opening_fence(trimmed) {
-            if pending_break && line_start > *boundaries.last().unwrap() {
+            // An indented fence after a blank line is list-item content; only
+            // an unindented fence may open a new region. Fence tracking itself
+            // stays indentation-agnostic so closing detection is unchanged.
+            if pending_break
+                && raw.len() == trimmed.len()
+                && line_start > *boundaries.last().unwrap()
+            {
                 boundaries.push(line_start);
             }
             pending_break = false;
@@ -486,7 +492,13 @@ pub(crate) fn is_closing_fence(trimmed: &str, marker: char, minimum: usize) -> b
 }
 
 fn starts_with_continuation(raw: &str) -> bool {
-    if raw.starts_with('\t') || raw.starts_with("    ") {
+    // Any leading whitespace can be container continuation: list-item
+    // continuation indent equals the marker width (2 spaces for `- `, 3 for
+    // `1. `), not the 4 spaces of an indented code block. A boundary inside a
+    // container corrupts the standalone region parse, while merging an
+    // ordinary indented paragraph into the previous region is merely less
+    // incremental reuse.
+    if raw.starts_with([' ', '\t']) {
         return true;
     }
     let trimmed = raw.trim_start();
@@ -1076,6 +1088,93 @@ mod tests {
                     let mut normalized = incremental.clone();
                     normalized.id = full.id;
                     assert_eq!(&normalized, full, "source={source:?}");
+                }
+            }
+        }
+    }
+
+    /// The four release-corrupting fixtures: list items whose continuation
+    /// content is blank-line-separated and indented by the marker width.
+    const INDENTED_CONTINUATION_FIXTURES: [&str; 4] = [
+        "1. item one\n\n   continuation line\n\n2. item two\n",
+        "- item one\n\n  continuation a\n\n- item two\n",
+        "intro\n\n1. item\n\n   > quoted note\n\n   more text\n\n2. two\n",
+        "1. item\n\n   ```rust\n   let x = 1;\n   ```\n\n2. two\n",
+    ];
+
+    #[test]
+    fn region_boundaries_never_split_indented_continuations() {
+        let continuations = [
+            "   continuation line",
+            "  continuation a",
+            "   > quoted note",
+            "   ```rust",
+        ];
+        for (source, continuation) in INDENTED_CONTINUATION_FIXTURES.iter().zip(continuations) {
+            let parts = split_regions(source);
+            let offset = source.find(continuation).unwrap();
+            assert!(
+                !parts.iter().any(|(start, _)| *start == offset),
+                "boundary must not open before {continuation:?} in {source:?}"
+            );
+        }
+        // Unindented fences after a blank line still open a region.
+        let parts = split_regions("para\n\n```rs\ncode\n```\n\ntail\n");
+        assert!(parts.iter().any(|(start, _)| *start == 6));
+    }
+
+    #[test]
+    fn indented_continuations_stay_incremental_without_oracle_repair() {
+        // The debug oracle silently repairs incremental mismatches via full
+        // fallback; asserting the fallback counter is what makes a region
+        // regression fail in debug builds too.
+        for source in INDENTED_CONTINUATION_FIXTURES {
+            for offset in 0..=source.len() {
+                if !source.is_char_boundary(offset) {
+                    continue;
+                }
+                for insert in ["x", "\n"] {
+                    let mut document = MarkdownDocument::from_text(source);
+                    document.visual_blocks_shared();
+                    let before = document.source_mapped_derivation_counters();
+                    document.replace_range(offset..offset, insert);
+                    document.visual_blocks_shared();
+                    let after = document.source_mapped_derivation_counters();
+                    // `full_fallbacks` also counts legitimate conservative
+                    // fallbacks (e.g. the edit left an unclosed fence); only a
+                    // fallback on an incremental-eligible document is an
+                    // oracle repair of a region mismatch.
+                    if requires_full_parse(document.text()) {
+                        continue;
+                    }
+                    assert_eq!(
+                        after.full_fallbacks, before.full_fallbacks,
+                        "oracle repaired a region mismatch inserting {insert:?} at {offset} into {source:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indented_continuation_fixtures_equal_fresh_full_documents() {
+        for source in INDENTED_CONTINUATION_FIXTURES {
+            for offset in 0..=source.len() {
+                if !source.is_char_boundary(offset) {
+                    continue;
+                }
+                let mut document = MarkdownDocument::from_text(source);
+                document.visual_blocks_shared();
+                document.replace_range(offset..offset, "x");
+                let incremental_blocks = document.visual_blocks();
+                let full = MarkdownDocument::from_text(document.text());
+                let full_blocks = full.visual_blocks();
+                assert_eq!(document.preview_blocks(), full.preview_blocks());
+                assert_eq!(incremental_blocks.len(), full_blocks.len());
+                for (incremental, full) in incremental_blocks.iter().zip(&full_blocks) {
+                    let mut normalized = incremental.clone();
+                    normalized.id = full.id;
+                    assert_eq!(&normalized, full, "offset={offset} source={source:?}");
                 }
             }
         }
