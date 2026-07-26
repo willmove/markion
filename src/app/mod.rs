@@ -1123,7 +1123,6 @@ use bootstrap::{bind_app_keys, install_menus};
 use diagram::*;
 use editor_element::EditorElement;
 use math_render::*;
-use memory::*;
 use preview::*;
 use preview_image::*;
 use process_memory::*;

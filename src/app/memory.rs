@@ -15,6 +15,7 @@ pub(super) enum SiteContribution {
     Shared,
     /// Storage owned outside Markion and not enumerable; listed without a
     /// fabricated byte figure.
+    #[cfg(test)]
     External,
 }
 
@@ -54,6 +55,7 @@ impl MemorySite {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn external(name: impl Into<String>, counts: Vec<(String, usize)>) -> Self {
         Self {
             name: name.into(),
@@ -66,7 +68,9 @@ impl MemorySite {
     pub(super) fn contributes_bytes(&self) -> usize {
         match self.contribution {
             SiteContribution::Owned => self.estimated_bytes,
-            SiteContribution::Shared | SiteContribution::External => 0,
+            SiteContribution::Shared => 0,
+            #[cfg(test)]
+            SiteContribution::External => 0,
         }
     }
 }
@@ -105,12 +109,14 @@ impl MemoryReport {
     }
 
     /// Site figures only — process counters may differ between consecutive samples.
+    #[cfg(test)]
     pub(super) fn sites_equal(&self, other: &Self) -> bool {
         self.tab_sites == other.tab_sites
             && self.global_sites == other.global_sites
             && self.unaccounted_note == other.unaccounted_note
     }
 
+    #[cfg(test)]
     pub(super) fn site_names(&self) -> Vec<&str> {
         self.tab_sites
             .iter()
@@ -119,6 +125,7 @@ impl MemoryReport {
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn find_site(&self, name: &str) -> Option<&MemorySite> {
         self.tab_sites
             .iter()
@@ -161,6 +168,7 @@ fn format_site(site: &MemorySite) -> String {
     let kind = match site.contribution {
         SiteContribution::Owned => "owned",
         SiteContribution::Shared => "shared",
+        #[cfg(test)]
         SiteContribution::External => "external",
     };
     let counts = site
@@ -417,6 +425,7 @@ fn render_image_bytes(image: &RenderImage) -> usize {
 }
 
 /// Document content profiles used by the headless attribution harness.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MemoryProfile {
     PlainLong,
@@ -426,6 +435,7 @@ pub(super) enum MemoryProfile {
     Code,
 }
 
+#[cfg(test)]
 impl MemoryProfile {
     pub(super) fn all() -> &'static [Self] {
         &[
@@ -477,6 +487,7 @@ impl MemoryProfile {
 }
 
 /// How deeply to warm derived state when building a harness profile.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MemoryWarmup {
     /// Only load document text (no derived caches).
@@ -492,6 +503,7 @@ pub(super) enum MemoryWarmup {
 
 impl MarkionApp {
     /// Build `tab_count` tabs from a fixture profile and warm derived state.
+    #[cfg(test)]
     pub(super) fn load_memory_profile(
         &mut self,
         profile: MemoryProfile,
@@ -511,6 +523,7 @@ impl MarkionApp {
         self.sync_and_persist_session();
     }
 
+    #[cfg(test)]
     pub(super) fn warm_active_tab(&mut self, warmup: MemoryWarmup, cx: &mut Context<Self>) {
         let document_dir = self
             .active_tab()

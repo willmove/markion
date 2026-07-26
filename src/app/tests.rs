@@ -1,3 +1,4 @@
+use super::memory::{MemoryProfile, MemoryWarmup};
 use super::*;
 use gpui::{Modifiers, TestAppContext};
 
@@ -182,7 +183,7 @@ fn full_rebind_restores_fixed_keys_and_every_registry_action() {
 
 #[test]
 fn every_application_dropdown_uses_shortcut_aware_rows() {
-    let source = include_str!("root_view.rs");
+    let source = include_str!("root_view.rs").replace("\r\n", "\n");
     let menu_source = source
         .split_once("pub(super) fn active_menu_dropdown")
         .and_then(|(_, rest)| {
@@ -1629,7 +1630,7 @@ fn shortcut_catalog_lists_core_workflows() {
 
 #[test]
 fn preferences_panel_renders_and_wires_the_shortcuts_tab() {
-    let source = include_str!("root_view.rs");
+    let source = include_str!("root_view.rs").replace("\r\n", "\n");
     let panel = source
         .split_once("pub(super) fn preferences_panel_view")
         .and_then(|(_, rest)| rest.split_once("fn preferences_tab_strip"))

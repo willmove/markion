@@ -139,15 +139,14 @@ fn parse_status_kib(status: &str, key: &str) -> Option<usize> {
 #[cfg(target_os = "macos")]
 fn sample_macos() -> ProcessFootprint {
     use libc::{
-        KERN_SUCCESS, MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT, TASK_VM_INFO,
-        TASK_VM_INFO_COUNT, kern_return_t, mach_msg_type_number_t, mach_task_basic_info, task_info,
-        task_t, task_vm_info_data_t,
+        KERN_SUCCESS, MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT, kern_return_t,
+        mach_msg_type_number_t, mach_task_basic_info, task_info, task_t,
     };
 
     // SAFETY: mach_task_self() is a process-local port; task_info writes into
     // caller-owned structs whose count arguments match the flavour requested.
     unsafe {
-        extern "C" {
+        unsafe extern "C" {
             fn mach_task_self() -> task_t;
         }
 
@@ -160,15 +159,6 @@ fn sample_macos() -> ProcessFootprint {
             &mut basic_count,
         );
 
-        let mut vm: task_vm_info_data_t = std::mem::zeroed();
-        let mut vm_count: mach_msg_type_number_t = TASK_VM_INFO_COUNT;
-        let vm_kr: kern_return_t = task_info(
-            mach_task_self(),
-            TASK_VM_INFO as u32,
-            &mut vm as *mut _ as *mut _,
-            &mut vm_count,
-        );
-
         let mut footprint = ProcessFootprint {
             resident_current: None,
             resident_peak: None,
@@ -178,16 +168,6 @@ fn sample_macos() -> ProcessFootprint {
         if basic_kr == KERN_SUCCESS {
             footprint.resident_current = Some(basic.resident_size as usize);
             footprint.resident_peak = Some(basic.resident_size_max as usize);
-        }
-        if vm_kr == KERN_SUCCESS {
-            // phys_footprint is the closest macOS analogue of private commit.
-            footprint.commit_current = Some(vm.phys_footprint as usize);
-            if vm.resident_size > 0 {
-                footprint.resident_current = Some(vm.resident_size as usize);
-            }
-            if vm.resident_size_peak > 0 {
-                footprint.resident_peak = Some(vm.resident_size_peak as usize);
-            }
         }
         footprint
     }
