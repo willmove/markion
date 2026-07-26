@@ -87,10 +87,13 @@ pub(super) fn preview_run_plain_text(
             PreviewBlock::Heading { text, .. }
             | PreviewBlock::Paragraph { text, .. }
             | PreviewBlock::ListItem { text, .. }
-            | PreviewBlock::BlockQuote { text, .. }
             | PreviewBlock::FootnoteDefinition { text, .. },
             PreviewTextRunId::Body,
         ) => Some(text.text.clone()),
+        (PreviewBlock::BlockQuote { text, .. }, PreviewTextRunId::Body) => Some(text.text.clone()),
+        (PreviewBlock::BlockQuote { children, .. }, PreviewTextRunId::QuoteChild(index)) => {
+            children.get(index).map(|child| child.plain_text())
+        }
         (PreviewBlock::CodeBlock { code, .. }, PreviewTextRunId::CodeBody) => Some(code.clone()),
         (PreviewBlock::CodeBlock { code, .. }, PreviewTextRunId::CodeLine(line_index)) => {
             code.lines().nth(line_index).map(|line| line.to_string())
@@ -115,8 +118,17 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
         PreviewBlock::Heading { .. }
         | PreviewBlock::Paragraph { .. }
         | PreviewBlock::ListItem { .. }
-        | PreviewBlock::BlockQuote { .. }
         | PreviewBlock::FootnoteDefinition { .. } => vec![PreviewTextRunId::Body],
+        PreviewBlock::BlockQuote { children, .. } => [PreviewTextRunId::Body]
+            .into_iter()
+            .chain(
+                children
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, child)| !child.plain_text().is_empty())
+                    .map(|(index, _)| PreviewTextRunId::QuoteChild(index)),
+            )
+            .collect(),
         PreviewBlock::CodeBlock { .. } => vec![PreviewTextRunId::CodeBody],
         PreviewBlock::MathBlock { .. } => vec![PreviewTextRunId::MathLatex],
         PreviewBlock::Html { html, .. } => (!html_preview_plain_text(html).is_empty())
@@ -3606,25 +3618,86 @@ pub(super) fn preview_block_view(
                     cx,
                 )))
         }
-        PreviewBlock::BlockQuote { text, .. } => div()
-            .mb_3()
-            .pl_3()
-            .border_l_1()
-            .border_color(rgb(0x94a3b8))
-            .text_color(rgb(0x475569))
-            .text_size(px(typography.quote_font_size))
-            .line_height(px(typography.quote_line_height))
-            .child(rich_text_with_math_element(
-                app,
-                "preview-quote",
-                text,
-                block_index,
-                PreviewTextRunId::Body,
-                display_scale,
-                typography.quote_font_size,
-                typography.quote_line_height,
-                cx,
-            )),
+        PreviewBlock::BlockQuote { text, children, .. } => {
+            let mut container = div()
+                .mb_3()
+                .pl_3()
+                .border_l_1()
+                .border_color(rgb(0x94a3b8))
+                .text_color(rgb(0x475569))
+                .text_size(px(typography.quote_font_size))
+                .line_height(px(typography.quote_line_height));
+            if !text.is_empty() {
+                container = container.child(rich_text_with_math_element(
+                    app,
+                    "preview-quote",
+                    text,
+                    block_index,
+                    PreviewTextRunId::Body,
+                    display_scale,
+                    typography.quote_font_size,
+                    typography.quote_line_height,
+                    cx,
+                ));
+            }
+            for (child_index, child) in children.iter().enumerate() {
+                let PreviewBlock::ListItem {
+                    level,
+                    ordered,
+                    index,
+                    checked,
+                    text,
+                    ..
+                } = child
+                else {
+                    continue;
+                };
+                if text.is_empty() && checked.is_none() {
+                    continue;
+                }
+                let marker = match checked {
+                    Some(true) => "☑".to_string(),
+                    Some(false) => "☐".to_string(),
+                    None if *ordered => format!("{}.", index.unwrap_or(1)),
+                    None => match level {
+                        1 => "•".to_string(),
+                        2 => "◦".to_string(),
+                        _ => "▪".to_string(),
+                    },
+                };
+                let marker_color = match checked {
+                    Some(true) => rgb(0x16a34a),
+                    _ => rgb(0x64748b),
+                };
+                container = container.child(
+                    div()
+                        .mt_1()
+                        .ml(px((*level as f32 - 1.).max(0.) * 18.))
+                        .flex()
+                        .items_start()
+                        .child(
+                            div()
+                                .flex_none()
+                                .min_w(px(22.))
+                                .pr_1()
+                                .text_color(marker_color)
+                                .child(marker),
+                        )
+                        .child(div().flex_1().min_w_0().child(rich_text_with_math_element(
+                            app,
+                            "preview-quote-list-item",
+                            text,
+                            block_index,
+                            PreviewTextRunId::QuoteChild(child_index),
+                            display_scale,
+                            typography.quote_font_size,
+                            typography.quote_line_height,
+                            cx,
+                        ))),
+                );
+            }
+            container
+        }
         PreviewBlock::CodeBlock { language, code, .. } => {
             match app.diagram_entry(language.as_deref(), code) {
                 Some(DiagramCacheEntry::Ready(image, size)) => div()

@@ -16,6 +16,7 @@ mod export;
 mod frontmatter;
 mod highlight;
 pub mod i18n;
+pub mod keystroke;
 mod math;
 pub mod model;
 mod parse;
@@ -1280,9 +1281,51 @@ impl MarkdownDocument {
                     }
                     output.push_str(&format!("\\end{{{environment}}}\n\n"));
                 }
-                PreviewBlock::BlockQuote { text, .. } => {
+                PreviewBlock::BlockQuote { text, children, .. } => {
                     output.push_str("\\begin{quote}\n");
                     output.push_str(&render_latex_rich_text(&text));
+                    if !text.text.is_empty() && !children.is_empty() {
+                        output.push('\n');
+                    }
+                    let mut children = children.into_iter().peekable();
+                    while let Some(child) = children.next() {
+                        match child {
+                            PreviewBlock::ListItem {
+                                ordered,
+                                checked,
+                                text,
+                                ..
+                            } => {
+                                let environment = if ordered { "enumerate" } else { "itemize" };
+                                output.push_str(&format!("\\begin{{{environment}}}\n"));
+                                push_latex_list_item(&mut output, checked, &text);
+                                // Consecutive same-kind items share one environment.
+                                while let Some(PreviewBlock::ListItem {
+                                    ordered: next_ordered,
+                                    ..
+                                }) = children.peek()
+                                {
+                                    if *next_ordered != ordered {
+                                        break;
+                                    }
+                                    let Some(PreviewBlock::ListItem { checked, text, .. }) =
+                                        children.next()
+                                    else {
+                                        unreachable!("peeked a list item");
+                                    };
+                                    push_latex_list_item(&mut output, checked, &text);
+                                }
+                                output.push_str(&format!("\\end{{{environment}}}\n"));
+                            }
+                            other => {
+                                let child_text = other.plain_text();
+                                if !child_text.is_empty() {
+                                    output.push_str(&escape_latex(&child_text));
+                                    output.push('\n');
+                                }
+                            }
+                        }
+                    }
                     output.push_str("\n\\end{quote}\n\n");
                 }
                 PreviewBlock::CodeBlock { language, code, .. } => {
@@ -1793,6 +1836,7 @@ impl MarkdownDocument {
         let mut paragraph: Option<(Vec<InlineSpan>, std::ops::Range<usize>)> = None;
         let mut quote_depth = 0usize;
         let mut quote: Vec<InlineSpan> = Vec::new();
+        let mut quote_children: Vec<PreviewBlock> = Vec::new();
         let mut quote_source_range: Option<std::ops::Range<usize>> = None;
         let mut list_stack: Vec<ListLevelDraft> = Vec::new();
         let mut list_item: Option<ListItemDraft> = None;
@@ -1882,15 +1926,18 @@ impl MarkdownDocument {
                     quote_depth += 1;
                     if quote_depth == 1 {
                         quote.clear();
+                        quote_children.clear();
                         quote_source_range = Some(source_range);
                     }
                 }
                 Event::End(TagEnd::BlockQuote(_)) => {
                     if quote_depth == 1 {
                         let text = finish_rich_text(std::mem::take(&mut quote));
-                        if !text.is_empty() {
+                        let children = std::mem::take(&mut quote_children);
+                        if !text.is_empty() || !children.is_empty() {
                             blocks.push(PreviewBlock::BlockQuote {
                                 text,
+                                children,
                                 source_range: quote_source_range.take().unwrap_or(source_range),
                             });
                         } else {
@@ -1912,7 +1959,12 @@ impl MarkdownDocument {
                     // A new item can begin while the previous one is still
                     // open (a nested list follows the item's own text). Flush
                     // the open draft so the parent item is not lost.
-                    flush_list_item(&mut blocks, list_item.take());
+                    let target = if quote_depth > 0 {
+                        &mut quote_children
+                    } else {
+                        &mut blocks
+                    };
+                    flush_list_item(target, list_item.take());
                     let index = list_stack.last_mut().and_then(|level| {
                         level.ordered.then(|| {
                             let index = level.next_index;
@@ -1936,7 +1988,12 @@ impl MarkdownDocument {
                     if let Some(item) = list_item.as_mut() {
                         item.source_range = source_range;
                     }
-                    flush_list_item(&mut blocks, list_item.take());
+                    let target = if quote_depth > 0 {
+                        &mut quote_children
+                    } else {
+                        &mut blocks
+                    };
+                    flush_list_item(target, list_item.take());
                 }
                 Event::TaskListMarker(checked) => {
                     if let Some(item) = list_item.as_mut() {
@@ -3053,6 +3110,33 @@ mod tests {
     }
 
     #[test]
+    fn docx_export_includes_blockquote_list_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let docx = dir.path().join("quote.docx");
+        let doc = MarkdownDocument::from_text("> intro\n>\n> 1. first\n> 2. second\n");
+
+        export::write_docx(&docx, &doc).unwrap();
+        let package = String::from_utf8_lossy(&fs::read(docx).unwrap()).into_owned();
+
+        assert!(package.contains("&gt; intro"));
+        assert!(package.contains("&gt; 1. first"));
+        assert!(package.contains("&gt; 2. second"));
+    }
+
+    #[test]
+    fn latex_export_keeps_blockquote_list_items_inside_quote() {
+        let doc = MarkdownDocument::from_text("> intro\n>\n> 1. first\n> 2. second\n");
+        let latex = doc.render_latex_document();
+
+        let quote_start = latex.find("\\begin{quote}").expect("quote environment");
+        let quote_end = latex.find("\\end{quote}").expect("quote environment end");
+        let itemize = latex.find("\\begin{enumerate}").expect("quoted enumerate");
+        assert!(itemize > quote_start && itemize < quote_end);
+        assert!(latex[quote_start..quote_end].contains("\\item first"));
+        assert!(latex[quote_start..quote_end].contains("\\item second"));
+    }
+
+    #[test]
     fn parses_markdown_preview_blocks() {
         let doc = MarkdownDocument::from_text(
             "# Title\n\nParagraph with **bold** text.\n\n- [x] Done\n- [ ] Next\n\n> Quote\n\n```rust\nfn main() {}\n```\n\n---\n\n| A | B |\n|---|---|\n| 1 | 2 |",
@@ -3141,6 +3225,144 @@ mod tests {
                 source_range: table_range,
             }
         );
+    }
+
+    #[test]
+    fn blockquote_keeps_ordered_list_items_as_children() {
+        let doc = MarkdownDocument::from_text("> intro\n>\n> 1. first\n> 2. second\n");
+        let blocks = doc.preview_blocks();
+        assert_eq!(blocks.len(), 1);
+        let PreviewBlock::BlockQuote { text, children, .. } = &blocks[0] else {
+            panic!("expected blockquote, got {:?}", blocks[0]);
+        };
+        assert_eq!(text.text, "intro");
+        assert_eq!(children.len(), 2);
+        assert!(matches!(
+            &children[0],
+            PreviewBlock::ListItem {
+                level: 1,
+                ordered: true,
+                index: Some(1),
+                checked: None,
+                text,
+                ..
+            } if text.text == "first"
+        ));
+        assert!(matches!(
+            &children[1],
+            PreviewBlock::ListItem {
+                level: 1,
+                ordered: true,
+                index: Some(2),
+                text,
+                ..
+            } if text.text == "second"
+        ));
+        // The list items must not leak out as top-level blocks.
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| matches!(block, PreviewBlock::ListItem { .. }))
+        );
+        // Plain-text extraction folds in the child list items.
+        assert_eq!(blocks[0].plain_text(), "intro\nfirst\nsecond");
+    }
+
+    #[test]
+    fn blockquote_ordered_list_honors_start_index() {
+        let doc = MarkdownDocument::from_text("> 3. third\n> 4. fourth\n");
+        let blocks = doc.preview_blocks();
+        assert_eq!(blocks.len(), 1);
+        let PreviewBlock::BlockQuote { children, .. } = &blocks[0] else {
+            panic!("expected blockquote, got {:?}", blocks[0]);
+        };
+        assert_eq!(children.len(), 2);
+        assert!(matches!(
+            &children[0],
+            PreviewBlock::ListItem {
+                ordered: true,
+                index: Some(3),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &children[1],
+            PreviewBlock::ListItem {
+                ordered: true,
+                index: Some(4),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn blockquote_keeps_unordered_and_task_list_items_as_children() {
+        let doc = MarkdownDocument::from_text("> - plain\n> - [x] done\n> - [ ] todo\n");
+        let blocks = doc.preview_blocks();
+        assert_eq!(blocks.len(), 1);
+        let PreviewBlock::BlockQuote { children, .. } = &blocks[0] else {
+            panic!("expected blockquote, got {:?}", blocks[0]);
+        };
+        assert_eq!(children.len(), 3);
+        assert!(matches!(
+            &children[0],
+            PreviewBlock::ListItem {
+                ordered: false,
+                checked: None,
+                text,
+                ..
+            } if text.text == "plain"
+        ));
+        assert!(matches!(
+            &children[1],
+            PreviewBlock::ListItem {
+                checked: Some(true),
+                text,
+                ..
+            } if text.text == "done"
+        ));
+        assert!(matches!(
+            &children[2],
+            PreviewBlock::ListItem {
+                checked: Some(false),
+                text,
+                ..
+            } if text.text == "todo"
+        ));
+    }
+
+    #[test]
+    fn blockquote_preserves_nested_list_levels() {
+        let doc = MarkdownDocument::from_text("> - outer\n>   - inner\n");
+        let blocks = doc.preview_blocks();
+        assert_eq!(blocks.len(), 1);
+        let PreviewBlock::BlockQuote { children, .. } = &blocks[0] else {
+            panic!("expected blockquote, got {:?}", blocks[0]);
+        };
+        assert_eq!(children.len(), 2);
+        assert!(matches!(
+            &children[0],
+            PreviewBlock::ListItem { level: 1, text, .. } if text.text == "outer"
+        ));
+        assert!(matches!(
+            &children[1],
+            PreviewBlock::ListItem { level: 2, text, .. } if text.text == "inner"
+        ));
+    }
+
+    #[test]
+    fn blockquote_with_only_paragraphs_has_no_children() {
+        let doc = MarkdownDocument::from_text("> just a quote\n> continued\n");
+        let blocks = doc.preview_blocks();
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(
+            &blocks[0],
+            PreviewBlock::BlockQuote {
+                text,
+                children,
+                ..
+            } if text.text == "just a quote\ncontinued" && children.is_empty()
+        ));
     }
 
     #[test]
@@ -4126,6 +4348,7 @@ mod tests {
             export: ExportPreferences {
                 pdf_engine: "tectonic".to_string(),
             },
+            shortcut_overrides: std::collections::BTreeMap::new(),
         };
 
         save_app_preferences(&path, &preferences).unwrap();

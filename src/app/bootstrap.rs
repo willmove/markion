@@ -169,11 +169,160 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
         },
         Menu {
             name: t(language, Msg::MenuHelp).into(),
-            items: vec![
-                MenuItem::action(t(language, Msg::ItemKeyboardShortcuts), ShowShortcuts),
-                MenuItem::action(t(language, Msg::ItemAboutMarkion), AboutMarkion),
-            ],
+            items: vec![MenuItem::action(
+                t(language, Msg::ItemAboutMarkion),
+                AboutMarkion,
+            )],
         },
+    ]);
+}
+
+/// Shortcut overrides loaded from `config.toml` before the window exists, so
+/// the very first keymap already honours customized bindings. Preferences are
+/// loaded again by `MarkionApp::new`; this early read only feeds keybinding.
+fn startup_shortcut_overrides() -> BTreeMap<String, String> {
+    let preferences = load_app_preferences(default_preferences_path()).unwrap_or_default();
+    sanitized_shortcut_overrides(&preferences.shortcut_overrides)
+}
+
+/// Bind the complete application keymap: fixed core-editing keys, fixed
+/// file-tree keys, and every registry action at its effective binding
+/// (override when present and valid, else default). Callers that rebind at
+/// runtime must `clear_key_bindings()` first; this function is the single
+/// binding code path so a rebind restores the full set.
+pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) {
+    let eff = |shortcut: &MenuShortcut| shortcut.effective_binding(overrides);
+    cx.bind_keys([
+        KeyBinding::new("backspace", Backspace, None),
+        KeyBinding::new("delete", Delete, None),
+        KeyBinding::new("left", Left, None),
+        KeyBinding::new("right", Right, None),
+        KeyBinding::new("up", Up, None),
+        KeyBinding::new("down", Down, None),
+        KeyBinding::new("shift-left", SelectLeft, None),
+        KeyBinding::new("shift-right", SelectRight, None),
+        KeyBinding::new("shift-up", SelectUp, None),
+        KeyBinding::new("shift-down", SelectDown, None),
+        // `secondary-` maps to `cmd` on macOS and `ctrl` on Windows/Linux,
+        // so shortcuts match each platform's convention.
+        KeyBinding::new(eff(&menu_shortcuts::SELECT_ALL), SelectAll, None),
+        KeyBinding::new(eff(&menu_shortcuts::PASTE), Paste, None),
+        KeyBinding::new(eff(&menu_shortcuts::COPY), Copy, None),
+        KeyBinding::new(eff(&menu_shortcuts::CUT), Cut, None),
+        KeyBinding::new(eff(&menu_shortcuts::UNDO), Undo, None),
+        KeyBinding::new(eff(&menu_shortcuts::REDO), Redo, None),
+        KeyBinding::new(eff(&menu_shortcuts::BOLD), Bold, None),
+        KeyBinding::new(eff(&menu_shortcuts::ITALIC), Italic, None),
+        KeyBinding::new(eff(&menu_shortcuts::INLINE_CODE), InlineCode, None),
+        KeyBinding::new(eff(&menu_shortcuts::INSERT_LINK), InsertLink, None),
+        KeyBinding::new(eff(&menu_shortcuts::INSERT_IMAGE), InsertImage, None),
+        KeyBinding::new(eff(&menu_shortcuts::HEADING_1), Heading1, None),
+        KeyBinding::new(eff(&menu_shortcuts::HEADING_2), Heading2, None),
+        KeyBinding::new(eff(&menu_shortcuts::HEADING_3), Heading3, None),
+        KeyBinding::new(eff(&menu_shortcuts::HEADING_4), Heading4, None),
+        KeyBinding::new(eff(&menu_shortcuts::HEADING_5), Heading5, None),
+        KeyBinding::new(eff(&menu_shortcuts::HEADING_6), Heading6, None),
+        KeyBinding::new("home", Home, None),
+        KeyBinding::new("end", End, None),
+        KeyBinding::new("enter", InsertNewline, None),
+        KeyBinding::new("tab", Indent, None),
+        KeyBinding::new("shift-tab", Outdent, None),
+        KeyBinding::new(eff(&menu_shortcuts::NEW_DOCUMENT), NewDocument, None),
+        KeyBinding::new(eff(&menu_shortcuts::OPEN_DOCUMENT), OpenDocument, None),
+        KeyBinding::new(eff(&menu_shortcuts::SAVE_DOCUMENT), SaveDocument, None),
+        KeyBinding::new(eff(&menu_shortcuts::SAVE_DOCUMENT_AS), SaveDocumentAs, None),
+        KeyBinding::new(eff(&menu_shortcuts::EXPORT_HTML), ExportHtml, None),
+        KeyBinding::new(
+            eff(&menu_shortcuts::EXPORT_PLAIN_HTML),
+            ExportPlainHtml,
+            None,
+        ),
+        KeyBinding::new(eff(&menu_shortcuts::EXPORT_PDF), ExportPdf, None),
+        KeyBinding::new(eff(&menu_shortcuts::EXPORT_LATEX), ExportLatex, None),
+        KeyBinding::new(eff(&menu_shortcuts::EXPORT_DOCX), ExportDocx, None),
+        KeyBinding::new(eff(&menu_shortcuts::EXPORT_PNG), ExportPng, None),
+        KeyBinding::new(eff(&menu_shortcuts::EXPORT_JPEG), ExportJpeg, None),
+        KeyBinding::new(eff(&menu_shortcuts::TOGGLE_VIEW_MODE), ToggleViewMode, None),
+        KeyBinding::new(eff(&menu_shortcuts::SET_EDIT_MODE), SetEditMode, None),
+        KeyBinding::new(
+            eff(&menu_shortcuts::SET_VISUAL_EDIT_MODE),
+            SetVisualEditMode,
+            None,
+        ),
+        KeyBinding::new(
+            eff(&menu_shortcuts::SET_SPLIT_PREVIEW_MODE),
+            SetSplitPreviewMode,
+            None,
+        ),
+        KeyBinding::new(eff(&menu_shortcuts::SET_READ_MODE), SetReadMode, None),
+        // NB: no `secondary-b` for the sidebar — that collides with Bold.
+        // Use Ctrl/Cmd+Shift+B instead.
+        KeyBinding::new(eff(&menu_shortcuts::TOGGLE_SIDEBAR), ToggleSidebar, None),
+        KeyBinding::new(eff(&menu_shortcuts::TOGGLE_FILE_TREE), ToggleFileTree, None),
+        KeyBinding::new(
+            eff(&menu_shortcuts::FOCUS_FILE_TREE_SEARCH),
+            FocusFileTreeSearch,
+            None,
+        ),
+        KeyBinding::new("escape", ClearFileTreeSearch, None),
+        KeyBinding::new("f5", RefreshFileTree, None),
+        KeyBinding::new("secondary-alt-n", CreateTreeFile, None),
+        KeyBinding::new("secondary-alt-shift-n", CreateTreeFolder, None),
+        KeyBinding::new("f2", RenameTreeEntry, None),
+        KeyBinding::new("secondary-delete", DeleteTreeEntry, None),
+        KeyBinding::new(eff(&menu_shortcuts::TOGGLE_OUTLINE), ToggleOutline, None),
+        KeyBinding::new(eff(&menu_shortcuts::CYCLE_THEME), CycleTheme, None),
+        KeyBinding::new(
+            eff(&menu_shortcuts::TOGGLE_FOCUS_MODE),
+            ToggleFocusMode,
+            None,
+        ),
+        KeyBinding::new(
+            eff(&menu_shortcuts::TOGGLE_TYPEWRITER_MODE),
+            ToggleTypewriterMode,
+            None,
+        ),
+        KeyBinding::new(
+            eff(&menu_shortcuts::TOGGLE_CODE_LINE_NUMBERS),
+            ToggleCodeLineNumbers,
+            None,
+        ),
+        KeyBinding::new(eff(&menu_shortcuts::FORMAT_TABLE), FormatTable, None),
+        KeyBinding::new(eff(&menu_shortcuts::TABLE_ADD_ROW), TableAddRow, None),
+        KeyBinding::new(eff(&menu_shortcuts::TABLE_DELETE_ROW), TableDeleteRow, None),
+        KeyBinding::new(
+            eff(&menu_shortcuts::TABLE_MOVE_ROW_UP),
+            TableMoveRowUp,
+            None,
+        ),
+        KeyBinding::new(
+            eff(&menu_shortcuts::TABLE_MOVE_ROW_DOWN),
+            TableMoveRowDown,
+            None,
+        ),
+        KeyBinding::new(eff(&menu_shortcuts::TABLE_ADD_COLUMN), TableAddColumn, None),
+        KeyBinding::new(
+            eff(&menu_shortcuts::TABLE_DELETE_COLUMN),
+            TableDeleteColumn,
+            None,
+        ),
+        KeyBinding::new(eff(&menu_shortcuts::SHOW_FIND), ShowFind, None),
+        KeyBinding::new(eff(&menu_shortcuts::SHOW_REPLACE), ShowReplace, None),
+        KeyBinding::new(eff(&menu_shortcuts::FIND_NEXT), FindNext, None),
+        KeyBinding::new(eff(&menu_shortcuts::FIND_PREVIOUS), FindPrevious, None),
+        KeyBinding::new(
+            eff(&menu_shortcuts::SHOW_PREFERENCES),
+            ShowPreferences,
+            None,
+        ),
+        KeyBinding::new(eff(&menu_shortcuts::SHOW_SHORTCUTS), ShowShortcuts, None),
+        KeyBinding::new(eff(&menu_shortcuts::QUIT), Quit, None),
+        KeyBinding::new(eff(&menu_shortcuts::NEXT_TAB), NextTab, None),
+        KeyBinding::new(eff(&menu_shortcuts::PREV_TAB), PrevTab, None),
+        KeyBinding::new(eff(&menu_shortcuts::OPEN_IN_NEW_TAB), OpenInNewTab, None),
+        KeyBinding::new(eff(&menu_shortcuts::CLOSE_TAB), CloseTab, None),
+        // Developer diagnostic — not listed in menus or the shortcut reference.
+        KeyBinding::new("ctrl-shift-alt-m", ReportMemory, None),
     ]);
 }
 
@@ -201,154 +350,8 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
             tracing::error!(%error, "failed to initialize HTTP client; remote images are disabled");
         }
 
-        cx.bind_keys([
-            KeyBinding::new("backspace", Backspace, None),
-            KeyBinding::new("delete", Delete, None),
-            KeyBinding::new("left", Left, None),
-            KeyBinding::new("right", Right, None),
-            KeyBinding::new("up", Up, None),
-            KeyBinding::new("down", Down, None),
-            KeyBinding::new("shift-left", SelectLeft, None),
-            KeyBinding::new("shift-right", SelectRight, None),
-            KeyBinding::new("shift-up", SelectUp, None),
-            KeyBinding::new("shift-down", SelectDown, None),
-            // `secondary-` maps to `cmd` on macOS and `ctrl` on Windows/Linux,
-            // so shortcuts match each platform's convention.
-            KeyBinding::new(menu_shortcuts::SELECT_ALL.binding, SelectAll, None),
-            KeyBinding::new(menu_shortcuts::PASTE.binding, Paste, None),
-            KeyBinding::new(menu_shortcuts::COPY.binding, Copy, None),
-            KeyBinding::new(menu_shortcuts::CUT.binding, Cut, None),
-            KeyBinding::new(menu_shortcuts::UNDO.binding, Undo, None),
-            KeyBinding::new(menu_shortcuts::REDO.binding, Redo, None),
-            KeyBinding::new(menu_shortcuts::BOLD.binding, Bold, None),
-            KeyBinding::new(menu_shortcuts::ITALIC.binding, Italic, None),
-            KeyBinding::new(menu_shortcuts::INLINE_CODE.binding, InlineCode, None),
-            KeyBinding::new(menu_shortcuts::INSERT_LINK.binding, InsertLink, None),
-            KeyBinding::new(menu_shortcuts::INSERT_IMAGE.binding, InsertImage, None),
-            KeyBinding::new(menu_shortcuts::HEADING_1.binding, Heading1, None),
-            KeyBinding::new(menu_shortcuts::HEADING_2.binding, Heading2, None),
-            KeyBinding::new(menu_shortcuts::HEADING_3.binding, Heading3, None),
-            KeyBinding::new(menu_shortcuts::HEADING_4.binding, Heading4, None),
-            KeyBinding::new(menu_shortcuts::HEADING_5.binding, Heading5, None),
-            KeyBinding::new(menu_shortcuts::HEADING_6.binding, Heading6, None),
-            KeyBinding::new("home", Home, None),
-            KeyBinding::new("end", End, None),
-            KeyBinding::new("enter", InsertNewline, None),
-            KeyBinding::new("tab", Indent, None),
-            KeyBinding::new("shift-tab", Outdent, None),
-            KeyBinding::new(menu_shortcuts::NEW_DOCUMENT.binding, NewDocument, None),
-            KeyBinding::new(menu_shortcuts::OPEN_DOCUMENT.binding, OpenDocument, None),
-            KeyBinding::new(menu_shortcuts::SAVE_DOCUMENT.binding, SaveDocument, None),
-            KeyBinding::new(
-                menu_shortcuts::SAVE_DOCUMENT_AS.binding,
-                SaveDocumentAs,
-                None,
-            ),
-            KeyBinding::new(menu_shortcuts::EXPORT_HTML.binding, ExportHtml, None),
-            KeyBinding::new(
-                menu_shortcuts::EXPORT_PLAIN_HTML.binding,
-                ExportPlainHtml,
-                None,
-            ),
-            KeyBinding::new(menu_shortcuts::EXPORT_PDF.binding, ExportPdf, None),
-            KeyBinding::new(menu_shortcuts::EXPORT_LATEX.binding, ExportLatex, None),
-            KeyBinding::new(menu_shortcuts::EXPORT_DOCX.binding, ExportDocx, None),
-            KeyBinding::new(menu_shortcuts::EXPORT_PNG.binding, ExportPng, None),
-            KeyBinding::new(menu_shortcuts::EXPORT_JPEG.binding, ExportJpeg, None),
-            KeyBinding::new(
-                menu_shortcuts::TOGGLE_VIEW_MODE.binding,
-                ToggleViewMode,
-                None,
-            ),
-            KeyBinding::new(menu_shortcuts::SET_EDIT_MODE.binding, SetEditMode, None),
-            KeyBinding::new(
-                menu_shortcuts::SET_VISUAL_EDIT_MODE.binding,
-                SetVisualEditMode,
-                None,
-            ),
-            KeyBinding::new(
-                menu_shortcuts::SET_SPLIT_PREVIEW_MODE.binding,
-                SetSplitPreviewMode,
-                None,
-            ),
-            KeyBinding::new(menu_shortcuts::SET_READ_MODE.binding, SetReadMode, None),
-            // NB: no `secondary-b` for the sidebar — that collides with Bold.
-            // Use Ctrl/Cmd+Shift+B instead.
-            KeyBinding::new(menu_shortcuts::TOGGLE_SIDEBAR.binding, ToggleSidebar, None),
-            KeyBinding::new(
-                menu_shortcuts::TOGGLE_FILE_TREE.binding,
-                ToggleFileTree,
-                None,
-            ),
-            KeyBinding::new("secondary-alt-f", FocusFileTreeSearch, None),
-            KeyBinding::new("escape", ClearFileTreeSearch, None),
-            KeyBinding::new("f5", RefreshFileTree, None),
-            KeyBinding::new("secondary-alt-n", CreateTreeFile, None),
-            KeyBinding::new("secondary-alt-shift-n", CreateTreeFolder, None),
-            KeyBinding::new("f2", RenameTreeEntry, None),
-            KeyBinding::new("secondary-delete", DeleteTreeEntry, None),
-            KeyBinding::new(menu_shortcuts::TOGGLE_OUTLINE.binding, ToggleOutline, None),
-            KeyBinding::new(menu_shortcuts::CYCLE_THEME.binding, CycleTheme, None),
-            KeyBinding::new(
-                menu_shortcuts::TOGGLE_FOCUS_MODE.binding,
-                ToggleFocusMode,
-                None,
-            ),
-            KeyBinding::new(
-                menu_shortcuts::TOGGLE_TYPEWRITER_MODE.binding,
-                ToggleTypewriterMode,
-                None,
-            ),
-            KeyBinding::new(
-                menu_shortcuts::TOGGLE_CODE_LINE_NUMBERS.binding,
-                ToggleCodeLineNumbers,
-                None,
-            ),
-            KeyBinding::new(menu_shortcuts::FORMAT_TABLE.binding, FormatTable, None),
-            KeyBinding::new(menu_shortcuts::TABLE_ADD_ROW.binding, TableAddRow, None),
-            KeyBinding::new(
-                menu_shortcuts::TABLE_DELETE_ROW.binding,
-                TableDeleteRow,
-                None,
-            ),
-            KeyBinding::new(
-                menu_shortcuts::TABLE_MOVE_ROW_UP.binding,
-                TableMoveRowUp,
-                None,
-            ),
-            KeyBinding::new(
-                menu_shortcuts::TABLE_MOVE_ROW_DOWN.binding,
-                TableMoveRowDown,
-                None,
-            ),
-            KeyBinding::new(
-                menu_shortcuts::TABLE_ADD_COLUMN.binding,
-                TableAddColumn,
-                None,
-            ),
-            KeyBinding::new(
-                menu_shortcuts::TABLE_DELETE_COLUMN.binding,
-                TableDeleteColumn,
-                None,
-            ),
-            KeyBinding::new(menu_shortcuts::SHOW_FIND.binding, ShowFind, None),
-            KeyBinding::new(menu_shortcuts::SHOW_REPLACE.binding, ShowReplace, None),
-            KeyBinding::new(menu_shortcuts::FIND_NEXT.binding, FindNext, None),
-            KeyBinding::new(menu_shortcuts::FIND_PREVIOUS.binding, FindPrevious, None),
-            KeyBinding::new(
-                menu_shortcuts::SHOW_PREFERENCES.binding,
-                ShowPreferences,
-                None,
-            ),
-            KeyBinding::new(menu_shortcuts::SHOW_SHORTCUTS.binding, ShowShortcuts, None),
-            KeyBinding::new(menu_shortcuts::QUIT.binding, Quit, None),
-            KeyBinding::new(menu_shortcuts::NEXT_TAB.binding, NextTab, None),
-            KeyBinding::new(menu_shortcuts::PREV_TAB.binding, PrevTab, None),
-            KeyBinding::new(menu_shortcuts::OPEN_IN_NEW_TAB.binding, OpenInNewTab, None),
-            KeyBinding::new(menu_shortcuts::CLOSE_TAB.binding, CloseTab, None),
-            // Developer diagnostic — not listed in menus or the shortcut panel.
-            KeyBinding::new("ctrl-shift-alt-m", ReportMemory, None),
-        ]);
+        // Bind the full keymap with any customized shortcuts from config.toml.
+        bind_app_keys(cx, &startup_shortcut_overrides());
         // Install the native menu once with the default language; the window
         // hook below re-installs it after the saved language preference has
         // been loaded, so the OS menu bar honours the user's choice on launch.

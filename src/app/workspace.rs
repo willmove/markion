@@ -247,8 +247,8 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.shortcut_panel_open {
-            self.close_shortcut_panel(window, cx);
+        if self.preferences_panel_open {
+            self.close_preferences_panel(window, cx);
             return;
         }
         // Escape first cancels any open name prompt (create/rename); only if

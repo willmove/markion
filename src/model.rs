@@ -195,6 +195,10 @@ pub struct AppPreferences {
     /// Export behavior ([export] table). Configurable only via the config
     /// file, not the Preferences panel.
     pub export: ExportPreferences,
+    /// Menu-action shortcut overrides ([shortcuts] table): stable action id
+    /// -> GPUI keystroke string. Actions without an entry use their default
+    /// binding.
+    pub shortcut_overrides: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AppPreferences {
@@ -216,6 +220,7 @@ impl Default for AppPreferences {
             language: "en".to_string(),
             auto_save: AutoSavePreferences::default(),
             export: ExportPreferences::default(),
+            shortcut_overrides: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -925,6 +930,9 @@ pub enum PreviewBlock {
     },
     BlockQuote {
         text: RichText,
+        /// Nested blocks that belong to this quote (e.g. list items authored
+        /// inside the blockquote). Empty for paragraph-only quotes.
+        children: Vec<PreviewBlock>,
         source_range: Range<usize>,
     },
     CodeBlock {
@@ -981,6 +989,42 @@ impl PreviewBlock {
             | Self::Rule { source_range }
             | Self::Table { source_range, .. }
             | Self::FootnoteDefinition { source_range, .. } => source_range,
+        }
+    }
+
+    /// Plain-text content of the block, including text nested inside child
+    /// blocks (currently list items inside a blockquote).
+    pub fn plain_text(&self) -> String {
+        match self {
+            Self::Heading { text, .. }
+            | Self::Paragraph { text, .. }
+            | Self::ListItem { text, .. }
+            | Self::FootnoteDefinition { text, .. } => text.text.clone(),
+            Self::BlockQuote { text, children, .. } => {
+                let mut out = text.text.clone();
+                for child in children {
+                    let child_text = child.plain_text();
+                    if child_text.is_empty() {
+                        continue;
+                    }
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(&child_text);
+                }
+                out
+            }
+            Self::CodeBlock { code, .. } => code.clone(),
+            Self::MathBlock { latex, .. } => latex.clone(),
+            Self::Html { html, .. } => html.clone(),
+            Self::Image { alt, .. } => alt.clone(),
+            Self::Rule { .. } => String::new(),
+            Self::Table { rows, .. } => rows
+                .iter()
+                .flat_map(|row| row.iter())
+                .map(|cell| cell.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 }

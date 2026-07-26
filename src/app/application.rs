@@ -61,10 +61,12 @@ impl MarkionApp {
             themes_dir,
             selected_theme_name,
             preferences_panel_open: false,
-            shortcut_panel_open: false,
-            shortcut_panel_focus: cx.focus_handle(),
+            preferences_tab: PreferencesTab::default(),
+            preferences_panel_focus: cx.focus_handle(),
             shortcut_platform: ShortcutPlatform::current(),
             shortcut_category: ShortcutCategory::Files,
+            shortcut_overrides: sanitized_shortcut_overrides(&preferences.shortcut_overrides),
+            shortcut_capture: None,
             focus_mode: preferences.focus_mode,
             typewriter_mode: preferences.typewriter_mode,
             code_line_numbers: preferences.code_line_numbers,
@@ -882,6 +884,7 @@ impl MarkionApp {
             language: self.language.code().to_string(),
             auto_save: self.auto_save_preferences,
             export: self.export_preferences.clone(),
+            shortcut_overrides: self.shortcut_overrides.clone(),
         }
     }
 

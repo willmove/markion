@@ -227,7 +227,38 @@ fn render_docx_block(block: &PreviewBlock) -> String {
             };
             docx_paragraph(&format!("{marker}{text}"), None)
         }
-        PreviewBlock::BlockQuote { text, .. } => docx_paragraph(&format!("> {text}"), None),
+        PreviewBlock::BlockQuote { text, children, .. } => {
+            let mut output = String::new();
+            if !text.is_empty() {
+                output.push_str(&docx_paragraph(&format!("> {text}"), None));
+            }
+            for child in children {
+                match child {
+                    PreviewBlock::ListItem {
+                        ordered,
+                        index,
+                        checked,
+                        text,
+                        ..
+                    } => {
+                        let marker = match checked {
+                            Some(true) => "[x] ".to_string(),
+                            Some(false) => "[ ] ".to_string(),
+                            None if *ordered => format!("{}. ", index.unwrap_or(1)),
+                            None => "- ".to_string(),
+                        };
+                        output.push_str(&docx_paragraph(&format!("> {marker}{text}"), None));
+                    }
+                    other => {
+                        let child_text = other.plain_text();
+                        if !child_text.is_empty() {
+                            output.push_str(&docx_paragraph(&format!("> {child_text}"), None));
+                        }
+                    }
+                }
+            }
+            output
+        }
         PreviewBlock::CodeBlock { language, code, .. } => {
             let mut output = String::new();
             if let Some(language) = language {

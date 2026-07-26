@@ -7,7 +7,7 @@
 //! `load_app_preferences` can migrate it to TOML once, after which the legacy
 //! file is ignored.
 
-use std::{fs, io, path::Path};
+use std::{collections::BTreeMap, fs, io, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +52,9 @@ struct PreferencesFile {
     sidebar_tab: String,
     auto_save: AutoSaveFile,
     export: ExportFile,
+    /// [shortcuts] table: action id -> GPUI keystroke string.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    shortcuts: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -118,6 +121,7 @@ impl From<&AppPreferences> for PreferencesFile {
             export: ExportFile {
                 pdf_engine: preferences.export.pdf_engine.clone(),
             },
+            shortcuts: preferences.shortcut_overrides.clone(),
         }
     }
 }
@@ -156,6 +160,7 @@ impl From<PreferencesFile> for AppPreferences {
                     }
                 },
             },
+            shortcut_overrides: file.shortcuts,
         }
     }
 }
@@ -332,6 +337,28 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_overrides_round_trip_and_empty_table_is_omitted() {
+        let defaults = render_app_preferences(&AppPreferences::default());
+        assert!(
+            !defaults.contains("[shortcuts]"),
+            "empty shortcut overrides must not create a TOML table: {defaults}"
+        );
+
+        let mut preferences = AppPreferences::default();
+        preferences
+            .shortcut_overrides
+            .insert("bold".to_string(), "ctrl-alt-b".to_string());
+        preferences
+            .shortcut_overrides
+            .insert("show-shortcuts".to_string(), "f9".to_string());
+
+        let rendered = render_app_preferences(&preferences);
+        assert!(rendered.contains("[shortcuts]"));
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(parsed.shortcut_overrides, preferences.shortcut_overrides);
+    }
 
     #[test]
     fn typography_preferences_round_trip_and_default_when_missing() {

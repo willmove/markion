@@ -37,6 +37,82 @@ fn menu_shortcut_labels_follow_platform_conventions() {
 }
 
 #[test]
+fn shortcut_registry_ids_are_stable_unique_and_fully_catalogued() {
+    let mut registry_ids = std::collections::BTreeSet::new();
+    for shortcut in menu_shortcuts::ALL {
+        assert!(
+            !shortcut.id.is_empty()
+                && !shortcut.id.starts_with('-')
+                && !shortcut.id.ends_with('-')
+                && shortcut
+                    .id
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'),
+            "shortcut id must be kebab-case: {}",
+            shortcut.id
+        );
+        assert!(
+            registry_ids.insert(shortcut.id),
+            "duplicate shortcut id: {}",
+            shortcut.id
+        );
+        assert_eq!(shortcut_by_id(shortcut.id), Some(shortcut));
+    }
+
+    let catalog = shortcut_catalog(Language::En, EXTENDED_HEADING_MENU_MAX_LEVEL);
+    let catalog_ids = catalog
+        .sections
+        .iter()
+        .flat_map(|section| section.actions.iter())
+        .flat_map(|action| action.ids().iter().copied())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        catalog_ids, registry_ids,
+        "every customizable registry action must be editable in Preferences"
+    );
+
+    for action in catalog.sections.iter().flat_map(|section| &section.actions) {
+        for platform in ShortcutPlatform::ALL {
+            for (&action_id, &catalog_label) in action
+                .ids()
+                .iter()
+                .zip(action.combinations(platform).iter())
+            {
+                assert_eq!(
+                    shortcut_by_id(action_id).map(|shortcut| shortcut.label(platform)),
+                    Some(catalog_label),
+                    "catalog and registry default labels diverged for {action_id}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn shortcut_effective_binding_and_label_fall_back_to_defaults() {
+    let mut overrides = BTreeMap::new();
+    overrides.insert("bold".to_string(), "ctrl-alt-b".to_string());
+    assert_eq!(
+        menu_shortcuts::BOLD.effective_binding(&overrides),
+        "ctrl-alt-b"
+    );
+    assert_eq!(
+        menu_shortcuts::BOLD.effective_label(&overrides, ShortcutPlatform::WindowsLinux),
+        "Ctrl+Alt+B"
+    );
+
+    overrides.insert("bold".to_string(), "bogus-mod-b".to_string());
+    assert_eq!(
+        menu_shortcuts::BOLD.effective_binding(&overrides),
+        menu_shortcuts::BOLD.binding
+    );
+    assert_eq!(
+        menu_shortcuts::BOLD.effective_label(&overrides, ShortcutPlatform::MacOS),
+        menu_shortcuts::BOLD.label(ShortcutPlatform::MacOS)
+    );
+}
+
+#[test]
 fn menu_shortcut_metadata_has_one_redo_binding() {
     assert_eq!(menu_shortcuts::SAVE_DOCUMENT.binding, "secondary-s");
     assert_eq!(
@@ -53,7 +129,7 @@ fn menu_shortcut_metadata_has_one_redo_binding() {
     let bootstrap = include_str!("bootstrap.rs");
     assert_eq!(
         bootstrap
-            .matches("KeyBinding::new(menu_shortcuts::REDO.binding, Redo, None)")
+            .matches("KeyBinding::new(eff(&menu_shortcuts::REDO), Redo, None)")
             .count(),
         1,
         "Redo must be installed exactly once"
@@ -63,12 +139,54 @@ fn menu_shortcut_metadata_has_one_redo_binding() {
 }
 
 #[test]
+fn full_rebind_restores_fixed_keys_and_every_registry_action() {
+    let bootstrap = include_str!("bootstrap.rs");
+    let bind = bootstrap
+        .split_once("pub(super) fn bind_app_keys")
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn run()"))
+        .map(|(body, _)| body)
+        .expect("complete application key binding function");
+
+    for fixed in [
+        "backspace",
+        "delete",
+        "left",
+        "right",
+        "up",
+        "down",
+        "home",
+        "end",
+        "enter",
+        "tab",
+        "shift-tab",
+        "escape",
+        "f5",
+        "f2",
+        "secondary-delete",
+    ] {
+        assert!(
+            bind.contains(&format!("KeyBinding::new(\"{fixed}\"")),
+            "full rebind omitted fixed key {fixed}"
+        );
+    }
+    assert_eq!(
+        bind.matches("eff(&menu_shortcuts::").count(),
+        menu_shortcuts::ALL.len(),
+        "every customizable registry action must be restored exactly once"
+    );
+
+    let shortcuts = include_str!("shortcuts.rs");
+    assert!(shortcuts.contains("cx.clear_key_bindings()"));
+    assert!(shortcuts.contains("bind_app_keys(cx, &self.shortcut_overrides)"));
+}
+
+#[test]
 fn every_application_dropdown_uses_shortcut_aware_rows() {
     let source = include_str!("root_view.rs");
     let menu_source = source
         .split_once("pub(super) fn active_menu_dropdown")
         .and_then(|(_, rest)| {
-            rest.split_once("/// Theme-aware Help")
+            rest.split_once("pub(super) fn open_recent_submenu_panel")
                 .map(|(menu, _)| menu)
         })
         .expect("in-window application menu builder");
@@ -79,7 +197,6 @@ fn every_application_dropdown_uses_shortcut_aware_rows() {
         "AppMenu::View =>",
         "AppMenu::Format =>",
         "AppMenu::Export =>",
-        "AppMenu::Help =>",
     ];
     for (index, boundary) in menu_boundaries.iter().enumerate() {
         let body = menu_source
@@ -96,6 +213,16 @@ fn every_application_dropdown_uses_shortcut_aware_rows() {
         );
     }
 
+    let help_menu = menu_source
+        .split_once("AppMenu::Help =>")
+        .map(|(_, body)| body)
+        .expect("Help menu match arm");
+    assert!(help_menu.contains("Msg::ItemAboutMarkion"));
+    assert!(
+        !help_menu.contains("Msg::ItemKeyboardShortcuts"),
+        "Help must not expose the shortcut reference after it moved to Preferences"
+    );
+
     let row_source = source
         .split_once("pub(super) fn menu_action_button")
         .and_then(|(_, rest)| {
@@ -103,7 +230,7 @@ fn every_application_dropdown_uses_shortcut_aware_rows() {
                 .map(|(row, _)| row)
         })
         .expect("shortcut-aware menu row");
-    assert!(row_source.contains("shortcut: Option<&'static str>"));
+    assert!(row_source.contains("shortcut: Option<String>"));
     assert!(row_source.contains("impl Into<SharedString>"));
     assert!(row_source.contains(".justify_between()"));
     assert!(row_source.contains(".text_color(palette.muted)"));
@@ -115,7 +242,7 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
     let menu_source = source
         .split_once("pub(super) fn active_menu_dropdown")
         .and_then(|(_, rest)| {
-            rest.split_once("/// Theme-aware Help")
+            rest.split_once("pub(super) fn open_recent_submenu_panel")
                 .map(|(menu, _)| menu)
         })
         .expect("in-window application menu builder");
@@ -137,10 +264,6 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
         ("Msg::ItemFind,", "menu_shortcuts::SHOW_FIND"),
         ("Msg::ItemBold,", "menu_shortcuts::BOLD"),
         ("Msg::ItemExportPdf,", "menu_shortcuts::EXPORT_PDF"),
-        (
-            "Msg::ItemKeyboardShortcuts,",
-            "menu_shortcuts::SHOW_SHORTCUTS",
-        ),
     ] {
         assert!(
             invocation(message).contains(descriptor),
@@ -165,6 +288,8 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
         menu_shortcuts::REDO.label(ShortcutPlatform::WindowsLinux),
         "Ctrl+Y"
     );
+    assert!(menu_source.contains("effective_label(shortcut_overrides, shortcut_platform)"));
+    assert!(!menu_source.contains("Msg::ItemKeyboardShortcuts"));
 }
 
 #[test]
@@ -394,7 +519,9 @@ fn startup_installs_http_client_before_building_ui() {
     let install = bootstrap_source
         .find("network::install_http_client(cx)")
         .expect("HTTP client installation");
-    let bind_keys = bootstrap_source.find("cx.bind_keys").expect("key bindings");
+    let bind_keys = bootstrap_source
+        .find("bind_app_keys(cx, &startup_shortcut_overrides())")
+        .expect("key bindings");
 
     assert!(install < bind_keys);
 }
@@ -559,6 +686,40 @@ fn preview_table_cells_remain_selectable_without_editing_toolbar() {
     assert_eq!(
         preview_run_plain_text(&block, PreviewTextRunId::TableCell { row: 1, col: 0 }).as_deref(),
         Some("alpha")
+    );
+}
+
+#[test]
+fn preview_blockquote_exposes_child_list_items_as_selectable_runs() {
+    let quoted_item = |text: &str, index: u64| PreviewBlock::ListItem {
+        level: 1,
+        ordered: true,
+        index: Some(index),
+        checked: None,
+        text: RichText::plain(text),
+        source_range: 0..0,
+    };
+    let block = PreviewBlock::BlockQuote {
+        text: RichText::plain("intro"),
+        children: vec![quoted_item("first", 1), quoted_item("second", 2)],
+        source_range: 0..0,
+    };
+
+    assert_eq!(
+        preview_block_runs(&block),
+        vec![
+            PreviewTextRunId::Body,
+            PreviewTextRunId::QuoteChild(0),
+            PreviewTextRunId::QuoteChild(1),
+        ]
+    );
+    assert_eq!(
+        preview_run_plain_text(&block, PreviewTextRunId::Body).as_deref(),
+        Some("intro")
+    );
+    assert_eq!(
+        preview_run_plain_text(&block, PreviewTextRunId::QuoteChild(1)).as_deref(),
+        Some("second")
     );
 }
 
@@ -1467,7 +1628,248 @@ fn shortcut_catalog_lists_core_workflows() {
 }
 
 #[test]
-fn shortcut_panel_uses_target_default_and_replaces_native_prompt() {
+fn preferences_panel_renders_and_wires_the_shortcuts_tab() {
+    let source = include_str!("root_view.rs");
+    let panel = source
+        .split_once("pub(super) fn preferences_panel_view")
+        .and_then(|(_, rest)| rest.split_once("fn preferences_tab_strip"))
+        .map(|(body, _)| body)
+        .expect("Preferences panel view");
+    assert!(panel.contains("PreferencesTab::General"));
+    assert!(panel.contains("PreferencesTab::Shortcuts"));
+    assert!(panel.contains("preferences_shortcuts_body(app, palette, cx)"));
+    assert!(panel.contains("track_focus(&app.preferences_panel_focus)"));
+    assert!(panel.contains("handle_shortcut_capture_key(event, window, cx)"));
+
+    let shortcuts_body = source
+        .split_once("fn preferences_shortcuts_body")
+        .and_then(|(_, rest)| {
+            rest.split_once("#[allow(clippy::too_many_arguments)]\nfn shortcut_action_row")
+        })
+        .map(|(body, _)| body)
+        .expect("Preferences shortcuts body");
+    assert!(shortcuts_body.contains("ShortcutPlatform::ALL"));
+    assert!(shortcuts_body.contains("catalog.sections.iter()"));
+    assert!(shortcuts_body.contains("action.ids()"));
+
+    let binding_editor = source
+        .split_once("fn shortcut_binding_editor")
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn preference_numeric_row"))
+        .map(|(body, _)| body)
+        .expect("shortcut binding editor");
+    assert!(binding_editor.contains("app.shortcut_label(shortcut, platform)"));
+    assert!(binding_editor.contains("app.begin_shortcut_capture(action_id, window, cx)"));
+    assert!(binding_editor.contains("app.reset_shortcut(action_id, cx)"));
+    assert!(binding_editor.contains("Msg::ShortcutCapturePrompt"));
+    assert!(binding_editor.contains("Msg::ShortcutResetAction"));
+}
+
+#[gpui::test]
+fn shortcut_validation_rejects_invalid_conflicting_and_reserved_bindings(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.shortcut_assignment_error("bold", "b"),
+            Some(ShortcutCaptureError::NotAssignable)
+        );
+        assert!(matches!(
+            app.shortcut_assignment_error("bold", menu_shortcuts::ITALIC.binding),
+            Some(ShortcutCaptureError::Conflict(_))
+        ));
+        assert!(matches!(
+            app.shortcut_assignment_error("bold", "enter"),
+            Some(ShortcutCaptureError::Conflict(_))
+        ));
+        assert_eq!(app.shortcut_assignment_error("bold", "ctrl-alt-b"), None);
+    });
+}
+
+#[gpui::test]
+fn global_shortcut_clear_restores_defaults_and_exits_capture(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.shortcut_overrides
+            .insert("bold".to_string(), "ctrl-alt-b".to_string());
+        app.shortcut_capture = Some(ShortcutCapture {
+            action_id: "italic".to_string(),
+            error: None,
+        });
+        app.clear_shortcut_overrides(cx);
+        assert!(app.shortcut_overrides.is_empty());
+        assert!(app.shortcut_capture.is_none());
+        assert_eq!(
+            menu_shortcuts::BOLD.effective_binding(&app.shortcut_overrides),
+            menu_shortcuts::BOLD.binding
+        );
+    });
+
+    let reset_source = include_str!("appearance.rs");
+    let reset = reset_source
+        .split_once("pub(super) fn reset_preferences")
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn toggle_focus_mode"))
+        .map(|(body, _)| body)
+        .expect("global Preferences reset handler");
+    assert!(reset.contains("app.clear_shortcut_overrides(cx)"));
+    assert!(reset.contains("app.persist_preferences()"));
+}
+
+#[gpui::test]
+fn shortcut_remap_persists_reloads_rejects_conflict_and_resets(cx: &mut TestAppContext) {
+    let config_dir = tempfile::tempdir().unwrap();
+    let preferences_path = config_dir.path().join("config.toml");
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, _| {
+        app.preferences_path = preferences_path.clone();
+        // MarkionApp::new loads the machine's real preferences before this test
+        // redirects persistence. Clear any user-defined bindings so the test's
+        // temporary config is a fully isolated restart/reset fixture.
+        app.shortcut_overrides.clear();
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.begin_shortcut_capture("bold", window, cx);
+            app.handle_shortcut_capture_key(
+                &KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("ctrl-alt-b").unwrap(),
+                    is_held: false,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.shortcut_overrides.get("bold").map(String::as_str),
+            Some("ctrl-alt-b")
+        );
+        assert!(app.shortcut_capture.is_none());
+    });
+    let reloaded = load_app_preferences(&preferences_path).unwrap();
+    assert_eq!(
+        reloaded.shortcut_overrides.get("bold").map(String::as_str),
+        Some("ctrl-alt-b"),
+        "a restarted app must recover the persisted override"
+    );
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.begin_shortcut_capture("italic", window, cx);
+            app.handle_shortcut_capture_key(
+                &KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("ctrl-alt-b").unwrap(),
+                    is_held: false,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    app.update(cx, |app, _| {
+        assert!(matches!(
+            app.shortcut_capture
+                .as_ref()
+                .and_then(|capture| capture.error.as_ref()),
+            Some(ShortcutCaptureError::Conflict(_))
+        ));
+        assert!(!app.shortcut_overrides.contains_key("italic"));
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.handle_shortcut_capture_key(
+                &KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("escape").unwrap(),
+                    is_held: false,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    app.update(cx, |app, cx| {
+        assert!(app.shortcut_capture.is_none());
+        app.reset_shortcut("bold", cx);
+        assert!(app.shortcut_overrides.is_empty());
+    });
+    let reset_toml = std::fs::read_to_string(&preferences_path).unwrap();
+    assert!(!reset_toml.contains("[shortcuts]"));
+}
+
+#[gpui::test]
+fn shortcuts_preferences_renders_in_light_and_dark_themes(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_panel_open = true;
+        app.preferences_tab = PreferencesTab::Shortcuts;
+        app
+    });
+
+    for theme in [AppTheme::Paper, AppTheme::Ink] {
+        app.update(cx, |app, cx| {
+            app.theme = theme;
+            app.custom_theme = None;
+            app.selected_theme_name = theme.name().to_string();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert!(app.preferences_panel_open);
+            assert_eq!(app.preferences_tab, PreferencesTab::Shortcuts);
+            assert_eq!(app.selected_theme_name, theme.name());
+            assert_ne!(app.palette().app_bg, app.palette().text);
+        });
+    }
+}
+
+#[gpui::test]
+fn live_rebind_dispatches_override_and_preserves_core_and_file_tree_keys(cx: &mut TestAppContext) {
+    let mut overrides = BTreeMap::new();
+    overrides.insert("toggle-sidebar".to_string(), "ctrl-alt-j".to_string());
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("ab"))];
+        app.active_tab_mut().selected_range = 2..2;
+        app.shortcut_overrides = overrides.clone();
+        app
+    });
+    cx.update(|window, cx| {
+        cx.clear_key_bindings();
+        bind_app_keys(cx, &overrides);
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    let sidebar_before = app.update(cx, |app, _| app.sidebar_visible);
+    cx.simulate_keystrokes("ctrl-alt-j");
+    let sidebar_after_override = app.update(cx, |app, _| app.sidebar_visible);
+    assert_ne!(sidebar_after_override, sidebar_before);
+
+    cx.simulate_keystrokes(menu_shortcuts::TOGGLE_SIDEBAR.binding);
+    assert_eq!(
+        app.update(cx, |app, _| app.sidebar_visible),
+        sidebar_after_override,
+        "the default binding must stop dispatching after an override"
+    );
+
+    cx.simulate_keystrokes("backspace");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "a");
+    });
+
+    cx.simulate_keystrokes("f5");
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.status,
+            t(app.language, Msg::StatusFileTreeRefreshed),
+            "fixed file-tree shortcuts must survive a live rebind"
+        );
+    });
+}
+
+#[test]
+fn show_shortcuts_opens_preferences_on_shortcuts_tab() {
     assert_eq!(
         ShortcutPlatform::current(),
         if cfg!(target_os = "macos") {
@@ -1480,32 +1882,31 @@ fn shortcut_panel_uses_target_default_and_replaces_native_prompt() {
     let search_source = include_str!("search.rs");
     let show_shortcuts = search_source
         .split_once("pub(super) fn show_shortcuts")
-        .and_then(|(_, rest)| rest.split_once("pub(super) fn select_shortcut_platform"))
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn select_preferences_tab"))
         .map(|(body, _)| body)
-        .expect("shortcut panel open handler");
-    assert!(show_shortcuts.contains("self.shortcut_panel_open = true"));
+        .expect("show shortcuts handler");
+    assert!(show_shortcuts.contains("self.preferences_tab = PreferencesTab::Shortcuts"));
+    assert!(show_shortcuts.contains("self.preferences_panel_open = true"));
     assert!(show_shortcuts.contains("ShortcutPlatform::current()"));
     assert!(show_shortcuts.contains("ShortcutCategory::Files"));
     assert!(!show_shortcuts.contains("window.prompt"));
     assert!(search_source.contains("self.shortcut_platform = platform"));
     assert!(search_source.contains("self.shortcut_category = category"));
 
-    let root_view_source = include_str!("root_view.rs");
-    assert!(root_view_source.contains("root.child(shortcut_panel_view(self, cx))"));
-    assert!(root_view_source.contains("ShortcutPlatform::ALL"));
-    assert!(root_view_source.contains("catalog.sections.iter()"));
-
     let bootstrap_source = include_str!("bootstrap.rs");
+    assert!(bootstrap_source.contains("Msg::ItemAboutMarkion"));
     assert!(
-        bootstrap_source.contains(
-            "KeyBinding::new(menu_shortcuts::SHOW_SHORTCUTS.binding, ShowShortcuts, None)"
-        )
+        !bootstrap_source.contains("Msg::ItemKeyboardShortcuts"),
+        "the native Help menu must not expose the shortcut reference"
     );
-    assert!(bootstrap_source.contains("KeyBinding::new(menu_shortcuts::BOLD.binding, Bold, None)"));
     assert!(
-        bootstrap_source.contains(
-            "KeyBinding::new(menu_shortcuts::TOGGLE_SIDEBAR.binding, ToggleSidebar, None)"
-        )
+        bootstrap_source
+            .contains("KeyBinding::new(eff(&menu_shortcuts::SHOW_SHORTCUTS), ShowShortcuts, None)")
+    );
+    assert!(bootstrap_source.contains("KeyBinding::new(eff(&menu_shortcuts::BOLD), Bold, None)"));
+    assert!(
+        bootstrap_source
+            .contains("KeyBinding::new(eff(&menu_shortcuts::TOGGLE_SIDEBAR), ToggleSidebar, None)")
     );
 }
 
@@ -4776,7 +5177,7 @@ fn open_recent_menu_is_wired_in_file_dropdown() {
     let submenu = root_view_source
         .split_once("fn open_recent_submenu_panel")
         .and_then(|(_, rest)| {
-            rest.split_once("/// Theme-aware Help")
+            rest.split_once("pub(super) fn preferences_panel_view")
                 .map(|(body, _)| body)
         })
         .expect("Open Recent submenu builder");

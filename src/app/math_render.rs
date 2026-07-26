@@ -289,9 +289,29 @@ impl MarkionApp {
                 PreviewBlock::Heading { text, .. }
                 | PreviewBlock::Paragraph { text, .. }
                 | PreviewBlock::ListItem { text, .. }
-                | PreviewBlock::BlockQuote { text, .. }
                 | PreviewBlock::FootnoteDefinition { text, .. } => {
                     for span in &text.spans {
+                        if let Some(math) = &span.math {
+                            requested.insert(self.math_key(
+                                &math.latex,
+                                math.style,
+                                typography.math_font_size(math.style),
+                                zoom,
+                                display_scale,
+                                foreground,
+                            ));
+                        }
+                    }
+                }
+                PreviewBlock::BlockQuote { text, children, .. } => {
+                    let child_texts = children.iter().filter_map(|child| match child {
+                        PreviewBlock::ListItem { text, .. } => Some(text),
+                        _ => None,
+                    });
+                    for span in std::iter::once(text)
+                        .chain(child_texts)
+                        .flat_map(|rich| rich.spans.iter())
+                    {
                         if let Some(math) = &span.math {
                             requested.insert(self.math_key(
                                 &math.latex,

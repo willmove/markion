@@ -655,12 +655,22 @@ pub(crate) fn shift_preview_block(block: &mut PreviewBlock, delta: isize) -> Opt
         | PreviewBlock::ListItem {
             text, source_range, ..
         }
-        | PreviewBlock::BlockQuote { text, source_range }
         | PreviewBlock::FootnoteDefinition {
             text, source_range, ..
         } => {
             *source_range = shift_range(source_range, delta)?;
             shift_rich_text(text, delta)?;
+        }
+        PreviewBlock::BlockQuote {
+            text,
+            children,
+            source_range,
+        } => {
+            *source_range = shift_range(source_range, delta)?;
+            shift_rich_text(text, delta)?;
+            for child in children {
+                shift_preview_block(child, delta)?;
+            }
         }
         PreviewBlock::CodeBlock { source_range, .. }
         | PreviewBlock::MathBlock { source_range, .. }

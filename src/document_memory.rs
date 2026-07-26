@@ -78,8 +78,10 @@ pub(crate) fn preview_block_bytes(block: &PreviewBlock) -> usize {
         PreviewBlock::Heading { text, .. }
         | PreviewBlock::Paragraph { text, .. }
         | PreviewBlock::ListItem { text, .. }
-        | PreviewBlock::BlockQuote { text, .. }
         | PreviewBlock::FootnoteDefinition { text, .. } => base + rich_text_bytes(text),
+        PreviewBlock::BlockQuote { text, children, .. } => {
+            base + rich_text_bytes(text) + children.iter().map(preview_block_bytes).sum::<usize>()
+        }
         PreviewBlock::CodeBlock { language, code, .. } => {
             base + option_string_bytes(language.as_deref()) + string_bytes(code)
         }

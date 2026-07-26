@@ -507,6 +507,7 @@ impl Render for MarkionApp {
                 self.active_menu,
                 self.language,
                 self.heading_menu_max_level,
+                &self.shortcut_overrides,
                 palette,
                 cx,
             ))
@@ -534,9 +535,6 @@ impl Render for MarkionApp {
             })
             .when(self.preferences_panel_open, |root| {
                 root.child(preferences_panel_view(self, cx))
-            })
-            .when(self.shortcut_panel_open, |root| {
-                root.child(shortcut_panel_view(self, cx))
             })
     }
 }
@@ -2013,7 +2011,7 @@ pub(super) fn menu_title_button(
 
 pub(super) fn menu_action_button(
     label: impl Into<SharedString>,
-    shortcut: Option<&'static str>,
+    shortcut: Option<String>,
     palette: ThemePalette,
     listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
 ) -> Div {
@@ -2109,6 +2107,7 @@ pub(super) fn active_menu_dropdown(
     menu: Option<AppMenu>,
     language: Language,
     heading_menu_max_level: u8,
+    shortcut_overrides: &BTreeMap<String, String>,
     palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
@@ -2164,7 +2163,7 @@ pub(super) fn active_menu_dropdown(
                 @build $msg,
                 $method,
                 $action,
-                Some($shortcut.label(shortcut_platform))
+                Some($shortcut.effective_label(shortcut_overrides, shortcut_platform))
             )
         };
         ($msg:expr, $method:ident, $action:expr) => {
@@ -2574,14 +2573,7 @@ pub(super) fn active_menu_dropdown(
                 ExportJpeg,
                 menu_shortcuts::EXPORT_JPEG
             )),
-        AppMenu::Help => panel
-            .child(action_item!(
-                Msg::ItemKeyboardShortcuts,
-                show_shortcuts,
-                ShowShortcuts,
-                menu_shortcuts::SHOW_SHORTCUTS
-            ))
-            .child(action_item!(Msg::ItemAboutMarkion, about, AboutMarkion)),
+        AppMenu::Help => panel.child(action_item!(Msg::ItemAboutMarkion, about, AboutMarkion)),
     }
 }
 
@@ -2655,11 +2647,470 @@ pub(super) fn open_recent_submenu_panel(
     ))
 }
 
-/// Theme-aware Help -> Keyboard Shortcuts modal. The platform and category
-/// selectors only change transient app state; the catalog itself stays in the
-/// i18n layer so labels and displayed bindings share one source of truth.
-pub(super) fn shortcut_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+/// Modal overlay for the in-app Preferences panel. Clicks dispatch through
+/// `cx.listener` closures so each setting updates live app state and persists
+/// through the existing preferences path.
+pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let palette = app.palette();
+    let app_entity = cx.entity();
+    let themes = app.available_themes();
+    let active_name = app.selected_theme_name.clone();
+    let active_tab = app.preferences_tab;
+    let panel_width = if active_tab == PreferencesTab::Shortcuts {
+        720.
+    } else {
+        560.
+    };
+
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .bg(rgba(0x00000055))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .occlude()
+                .track_focus(&app.preferences_panel_focus)
+                .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
+                    app.handle_shortcut_capture_key(event, window, cx);
+                }))
+                .w(px(panel_width))
+                .max_w(px(720.))
+                .max_h(px(560.))
+                .when(active_tab == PreferencesTab::Shortcuts, |panel| {
+                    panel.h(px(560.)).overflow_hidden()
+                })
+                .py_4()
+                .bg(palette.panel_bg)
+                .border_1()
+                .border_color(palette.border)
+                .rounded_lg()
+                .shadow_lg()
+                .text_color(palette.text)
+                .flex()
+                .flex_col()
+                // Title bar.
+                .child(
+                    div()
+                        .px_4()
+                        .pb_3()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(app.tr(Msg::PrefPanelTitle)),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .text_color(palette.muted)
+                                .hover(|style| style.bg(palette.surface_bg))
+                                .child("✕")
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                                        app.close_preferences_panel(window, cx);
+                                    }),
+                                ),
+                        ),
+                )
+                .child(preferences_tab_strip(app, palette, cx))
+                // Scrollable body.
+                .when(active_tab == PreferencesTab::General, |panel| {
+                    panel.child(
+                        div()
+                            .id("preferences-panel-body")
+                            .flex_1()
+                            .min_h_0()
+                            .px_4()
+                            .overflow_y_scroll()
+                            .scrollbar_width(px(8.))
+                            .flex()
+                            .flex_col()
+                            .gap_4()
+                            // Language choices appear first so the rest of the
+                            // panel immediately reflects the user's UI language.
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(palette.muted)
+                                            .child(app.tr(Msg::PrefPanelLanguageSection)),
+                                    )
+                                    .child(div().flex().gap_2().children(
+                                        Language::all().iter().map(|&lang| {
+                                            let is_active = app.language == lang;
+                                            preference_option_button(
+                                                format!(
+                                                    "{}  {}",
+                                                    if is_active { "✓" } else { " " },
+                                                    lang.native_name()
+                                                ),
+                                                is_active,
+                                                palette,
+                                                cx.listener(
+                                                    move |app, _: &MouseUpEvent, _window, cx| {
+                                                        app.apply_language(lang, cx);
+                                                    },
+                                                ),
+                                            )
+                                        }),
+                                    )),
+                            )
+                            // Theme grid.
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(palette.muted)
+                                            .child(app.tr(Msg::PrefPanelThemeSection)),
+                                    )
+                                    .child(div().flex().flex_wrap().gap_2().children(
+                                        themes.iter().map(|theme| {
+                                            let theme_name = theme.name.clone();
+                                            let is_active =
+                                                theme.name.eq_ignore_ascii_case(&active_name);
+                                            let colors = theme.colors;
+                                            let app_entity = app_entity.clone();
+                                            let border = if is_active {
+                                                palette.active_bg
+                                            } else {
+                                                palette.border
+                                            };
+                                            div()
+                                                .w(px(120.))
+                                                .p_2()
+                                                .rounded_md()
+                                                .border_1()
+                                                .border_color(border)
+                                                .bg(rgb(colors.panel_bg))
+                                                .cursor_pointer()
+                                                .hover(move |style| {
+                                                    style.border_color(palette.active_bg)
+                                                })
+                                                .flex()
+                                                .flex_col()
+                                                .gap_1()
+                                                .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                                                    app_entity.update(cx, |app, cx| {
+                                                        app.apply_theme_by_name(&theme_name, cx);
+                                                    });
+                                                })
+                                                .child(
+                                                    div()
+                                                        .h(px(28.))
+                                                        .rounded_sm()
+                                                        .flex()
+                                                        .child(
+                                                            div().flex_1().bg(rgb(colors.app_bg)),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .bg(rgb(colors.surface_bg)),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .bg(rgb(colors.active_bg)),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .w(px(6.))
+                                                                .bg(rgb(colors.active_text)),
+                                                        ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .gap_1()
+                                                        .text_size(px(11.))
+                                                        .child(
+                                                            div()
+                                                                .min_w_0()
+                                                                .text_color(rgb(colors.text))
+                                                                .child(theme.name.clone()),
+                                                        )
+                                                        .when(is_active, |row| {
+                                                            row.child(
+                                                                div()
+                                                                    .text_color(palette.active_bg)
+                                                                    .child("✓"),
+                                                            )
+                                                        }),
+                                                )
+                                        }),
+                                    )),
+                            )
+                            // Document typography.
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(palette.muted)
+                                            .child(app.tr(Msg::PrefPanelTypographySection)),
+                                    )
+                                    .child(preference_numeric_row(
+                                        app.tr(Msg::PrefPanelEditorFontSize),
+                                        app.editor_font_size,
+                                        MIN_EDITOR_FONT_SIZE,
+                                        MAX_EDITOR_FONT_SIZE,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            if let Some(value) = preference_step_value(
+                                                app.editor_font_size,
+                                                MIN_EDITOR_FONT_SIZE,
+                                                MAX_EDITOR_FONT_SIZE,
+                                                -1,
+                                            ) {
+                                                app.set_editor_font_size(value as i64, cx);
+                                            }
+                                        }),
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            if let Some(value) = preference_step_value(
+                                                app.editor_font_size,
+                                                MIN_EDITOR_FONT_SIZE,
+                                                MAX_EDITOR_FONT_SIZE,
+                                                1,
+                                            ) {
+                                                app.set_editor_font_size(value as i64, cx);
+                                            }
+                                        }),
+                                    ))
+                                    .child(preference_numeric_row(
+                                        app.tr(Msg::PrefPanelRenderedFontSize),
+                                        app.rendered_font_size,
+                                        MIN_RENDERED_FONT_SIZE,
+                                        MAX_RENDERED_FONT_SIZE,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            if let Some(value) = preference_step_value(
+                                                app.rendered_font_size,
+                                                MIN_RENDERED_FONT_SIZE,
+                                                MAX_RENDERED_FONT_SIZE,
+                                                -1,
+                                            ) {
+                                                app.set_rendered_font_size(value as i64, cx);
+                                            }
+                                        }),
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            if let Some(value) = preference_step_value(
+                                                app.rendered_font_size,
+                                                MIN_RENDERED_FONT_SIZE,
+                                                MAX_RENDERED_FONT_SIZE,
+                                                1,
+                                            ) {
+                                                app.set_rendered_font_size(value as i64, cx);
+                                            }
+                                        }),
+                                    ))
+                                    .child(preference_numeric_row(
+                                        app.tr(Msg::PrefPanelParagraphSpacing),
+                                        app.paragraph_spacing,
+                                        MIN_PARAGRAPH_SPACING,
+                                        MAX_PARAGRAPH_SPACING,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            if let Some(value) = preference_step_value(
+                                                app.paragraph_spacing,
+                                                MIN_PARAGRAPH_SPACING,
+                                                MAX_PARAGRAPH_SPACING,
+                                                -1,
+                                            ) {
+                                                app.set_paragraph_spacing(value as i64, cx);
+                                            }
+                                        }),
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            if let Some(value) = preference_step_value(
+                                                app.paragraph_spacing,
+                                                MIN_PARAGRAPH_SPACING,
+                                                MAX_PARAGRAPH_SPACING,
+                                                1,
+                                            ) {
+                                                app.set_paragraph_spacing(value as i64, cx);
+                                            }
+                                        }),
+                                    )),
+                            )
+                            // Other settings.
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(palette.muted)
+                                            .child(app.tr(Msg::PrefPanelOtherSection)),
+                                    )
+                                    .child(preference_boolean_row(
+                                        app.tr(Msg::PrefPanelFocusMode),
+                                        app.focus_mode,
+                                        app.language,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                                            app.toggle_focus_mode(&ToggleFocusMode, window, cx);
+                                        }),
+                                    ))
+                                    .child(preference_boolean_row(
+                                        app.tr(Msg::PrefPanelTypewriterMode),
+                                        app.typewriter_mode,
+                                        app.language,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                                            app.toggle_typewriter_mode(
+                                                &ToggleTypewriterMode,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ))
+                                    .child(preference_boolean_row(
+                                        app.tr(Msg::PrefPanelCodeLineNumbers),
+                                        app.code_line_numbers,
+                                        app.language,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                                            app.toggle_code_line_numbers(
+                                                &ToggleCodeLineNumbers,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ))
+                                    .child(preference_boolean_row(
+                                        app.tr(Msg::PrefPanelPreviewAdaptiveWidth),
+                                        app.preview_adaptive_width,
+                                        app.language,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.toggle_preview_adaptive_width(cx);
+                                        }),
+                                    ))
+                                    .child(preference_heading_menu_row(app, palette, cx))
+                                    .child(preference_boolean_row(
+                                        app.tr(Msg::PrefPanelSyncScroll),
+                                        app.sync_scroll,
+                                        app.language,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.toggle_sync_scroll(cx);
+                                        }),
+                                    ))
+                                    .child(preference_sidebar_row(app, palette, cx)),
+                            ),
+                    )
+                })
+                .when(active_tab == PreferencesTab::Shortcuts, |panel| {
+                    panel.child(preferences_shortcuts_body(app, palette, cx))
+                }),
+        )
+}
+
+fn preferences_tab_strip(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    div()
+        .px_4()
+        .pb_3()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(preferences_tab_button(
+            app.tr(Msg::PrefPanelTabGeneral),
+            app.preferences_tab == PreferencesTab::General,
+            palette,
+            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                app.select_preferences_tab(PreferencesTab::General, cx);
+            }),
+        ))
+        .child(preferences_tab_button(
+            app.tr(Msg::PrefPanelTabShortcuts),
+            app.preferences_tab == PreferencesTab::Shortcuts,
+            palette,
+            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                app.select_preferences_tab(PreferencesTab::Shortcuts, cx);
+            }),
+        ))
+}
+
+fn preferences_tab_button(
+    label: &'static str,
+    active: bool,
+    palette: ThemePalette,
+    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    let background = if active {
+        palette.active_bg
+    } else {
+        palette.surface_bg
+    };
+    let foreground = if active {
+        palette.active_text
+    } else {
+        palette.text
+    };
+
+    div()
+        .min_w(px(112.))
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(if active {
+            palette.active_bg
+        } else {
+            palette.border
+        })
+        .bg(background)
+        .text_color(foreground)
+        .text_size(px(12.))
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .justify_center()
+        .hover(move |style| style.border_color(palette.active_bg))
+        .on_mouse_up(MouseButton::Left, listener)
+        .child(label)
+}
+
+fn preferences_shortcuts_body(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
     let language = app.language;
     let selected_platform = app.shortcut_platform;
     let selected_category = app.shortcut_category;
@@ -2669,164 +3120,105 @@ pub(super) fn shortcut_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>
         .expect("shortcut catalog contains every category");
 
     div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .p_4()
-        .bg(rgba(0x00000066))
+        .id("preferences-shortcuts-body")
+        .flex_1()
+        .min_h_0()
+        .border_t_1()
+        .border_color(palette.border)
+        .overflow_hidden()
         .flex()
-        .items_center()
-        .justify_center()
+        .flex_col()
+        .child(
+            div().px_4().py_3().flex_none().flex().items_center().child(
+                div()
+                    .p(px(2.))
+                    .rounded_md()
+                    .bg(palette.surface_bg)
+                    .border_1()
+                    .border_color(palette.border)
+                    .flex()
+                    .gap_1()
+                    .children(ShortcutPlatform::ALL.into_iter().map(|platform| {
+                        shortcut_platform_tab(
+                            platform.label(language),
+                            platform == selected_platform,
+                            palette,
+                            cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                                app.select_shortcut_platform(platform, cx);
+                            }),
+                        )
+                    })),
+            ),
+        )
         .child(
             div()
-                .occlude()
-                .track_focus(&app.shortcut_panel_focus)
-                .w(px(720.))
-                .max_w(px(720.))
-                .flex_none()
-                .min_w_0()
-                .h(px(560.))
-                .overflow_hidden()
-                .bg(palette.panel_bg)
-                .border_1()
+                .flex_1()
+                .min_h_0()
+                .border_t_1()
                 .border_color(palette.border)
-                .rounded_lg()
-                .shadow_lg()
-                .text_color(palette.text)
+                .overflow_hidden()
                 .flex()
-                .flex_col()
                 .child(
                     div()
-                        .w(px(718.))
-                        .h(px(52.))
-                        .px_4()
+                        .id("preferences-shortcut-categories")
+                        .w(px(152.))
                         .flex_none()
+                        .py_2()
+                        .border_r_1()
+                        .border_color(palette.border)
+                        .bg(palette.surface_bg)
+                        .overflow_y_scroll()
+                        .scrollbar_width(px(8.))
+                        .children(catalog.sections.iter().map(|section| {
+                            let category = section.category;
+                            shortcut_category_button(
+                                section.label,
+                                category == selected_category,
+                                palette,
+                                cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                                    app.select_shortcut_category(category, cx);
+                                }),
+                            )
+                        })),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
                         .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_4()
+                        .flex_col()
                         .child(
                             div()
-                                .min_w_0()
-                                .text_size(px(15.))
+                                .h(px(42.))
+                                .px_4()
+                                .flex_none()
+                                .flex()
+                                .items_center()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(app.tr(Msg::DialogShortcutsTitle)),
+                                .text_size(px(13.))
+                                .child(section.label),
                         )
                         .child(
                             div()
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .text_color(palette.muted)
-                                .hover(move |style| style.bg(palette.surface_bg))
-                                .child("✕")
-                                .on_mouse_up(
-                                    MouseButton::Left,
-                                    cx.listener(|app, _: &MouseUpEvent, window, cx| {
-                                        app.close_shortcut_panel(window, cx);
-                                    }),
-                                ),
-                        ),
-                )
-                .child(
-                    div()
-                        .w(px(718.))
-                        .px_4()
-                        .pb_3()
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .child(
-                            div()
-                                .p(px(2.))
-                                .rounded_md()
-                                .bg(palette.surface_bg)
-                                .border_1()
-                                .border_color(palette.border)
-                                .flex()
-                                .gap_1()
-                                .children(ShortcutPlatform::ALL.into_iter().map(|platform| {
-                                    shortcut_platform_tab(
-                                        platform.label(language),
-                                        platform == selected_platform,
-                                        palette,
-                                        cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
-                                            app.select_shortcut_platform(platform, cx);
-                                        }),
-                                    )
-                                })),
-                        ),
-                )
-                .child(
-                    div()
-                        .w(px(718.))
-                        .flex_1()
-                        .min_h_0()
-                        .border_t_1()
-                        .border_color(palette.border)
-                        .overflow_hidden()
-                        .flex()
-                        .child(
-                            div()
-                                .id("shortcut-panel-categories")
-                                .w(px(152.))
-                                .flex_none()
-                                .py_2()
-                                .border_r_1()
-                                .border_color(palette.border)
-                                .bg(palette.surface_bg)
+                                .id("preferences-shortcut-actions")
+                                .flex_1()
+                                .min_h_0()
                                 .overflow_y_scroll()
                                 .scrollbar_width(px(8.))
-                                .children(catalog.sections.iter().map(|section| {
-                                    let category = section.category;
-                                    shortcut_category_button(
-                                        section.label,
-                                        category == selected_category,
+                                .border_t_1()
+                                .border_color(palette.border)
+                                .children(section.actions.iter().map(|action| {
+                                    shortcut_action_row(
+                                        app,
+                                        action.label,
+                                        action.ids(),
+                                        action.combinations(selected_platform),
+                                        selected_platform,
                                         palette,
-                                        cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
-                                            app.select_shortcut_category(category, cx);
-                                        }),
+                                        cx,
                                     )
                                 })),
-                        )
-                        .child(
-                            div()
-                                .w(px(566.))
-                                .flex_none()
-                                .min_w_0()
-                                .min_h_0()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .h(px(42.))
-                                        .px_4()
-                                        .flex_none()
-                                        .flex()
-                                        .items_center()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_size(px(13.))
-                                        .child(section.label),
-                                )
-                                .child(
-                                    div()
-                                        .id("shortcut-panel-actions")
-                                        .flex_1()
-                                        .min_h_0()
-                                        .overflow_y_scroll()
-                                        .scrollbar_width(px(8.))
-                                        .border_t_1()
-                                        .border_color(palette.border)
-                                        .children(section.actions.iter().map(|action| {
-                                            shortcut_action_row(
-                                                action.label,
-                                                action.combinations(selected_platform),
-                                                palette,
-                                            )
-                                        })),
-                                ),
                         ),
                 ),
         )
@@ -2911,419 +3303,183 @@ fn shortcut_category_button(
         .child(label)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn shortcut_action_row(
+    app: &MarkionApp,
     label: &'static str,
-    combinations: &'static [&'static str],
+    action_ids: &'static [&'static str],
+    default_labels: &'static [&'static str],
+    platform: ShortcutPlatform,
     palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
 ) -> Div {
+    let feedback = app.shortcut_capture.as_ref().and_then(|capture| {
+        if !action_ids.contains(&capture.action_id.as_str()) {
+            return None;
+        }
+        capture.error.as_ref().map(|error| match error {
+            ShortcutCaptureError::NotAssignable => {
+                app.tr(Msg::ShortcutErrorNotAssignable).to_string()
+            }
+            ShortcutCaptureError::Conflict(target) => {
+                app.trf(Msg::ShortcutErrorConflict, &[target]).to_string()
+            }
+        })
+    });
+
     div()
         .w_full()
-        .min_h(px(46.))
+        .min_h(px(48.))
         .px_4()
         .py_2()
         .border_b_1()
         .border_color(palette.border)
         .flex()
-        .items_start()
-        .justify_between()
-        .gap_3()
+        .flex_col()
+        .gap_1()
         .child(
             div()
-                .w(px(150.))
-                .flex_none()
-                .pt_1()
-                .text_size(px(13.))
-                .child(label),
-        )
-        .child(
-            div()
-                .w(px(350.))
-                .flex_none()
+                .w_full()
                 .flex()
-                .flex_wrap()
-                .justify_end()
-                .gap_1()
-                .children(
-                    combinations
-                        .iter()
-                        .copied()
-                        .map(|shortcut| shortcut_key_label(shortcut, palette)),
-                ),
-        )
-}
-
-fn shortcut_key_label(shortcut: &'static str, palette: ThemePalette) -> Div {
-    div()
-        .min_h(px(26.))
-        .px_2()
-        .py_1()
-        .rounded_sm()
-        .border_1()
-        .border_color(palette.border)
-        .bg(palette.surface_bg)
-        .text_color(palette.text)
-        .text_size(px(11.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(shortcut)
-}
-
-/// Modal overlay for the in-app Preferences panel. Clicks dispatch through
-/// `cx.listener` closures so each setting updates live app state and persists
-/// through the existing preferences path.
-pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
-    let palette = app.palette();
-    let app_entity = cx.entity();
-    let themes = app.available_themes();
-    let active_name = app.selected_theme_name.clone();
-
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full()
-        .bg(rgba(0x00000055))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(
-            div()
-                .occlude()
-                .w(px(560.))
-                .max_h(px(560.))
-                .py_4()
-                .bg(palette.panel_bg)
-                .border_1()
-                .border_color(palette.border)
-                .rounded_lg()
-                .shadow_lg()
-                .text_color(palette.text)
-                .flex()
-                .flex_col()
-                // Title bar.
+                .items_start()
+                .justify_between()
+                .gap_3()
                 .child(
                     div()
-                        .px_4()
-                        .pb_3()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_size(px(15.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(app.tr(Msg::PrefPanelTitle)),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .cursor_pointer()
-                                .text_color(palette.muted)
-                                .hover(|style| style.bg(palette.surface_bg))
-                                .child("✕")
-                                .on_mouse_up(
-                                    MouseButton::Left,
-                                    cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
-                                        app.close_preferences(cx);
-                                    }),
-                                ),
-                        ),
+                        .w(px(150.))
+                        .flex_none()
+                        .pt_1()
+                        .text_size(px(13.))
+                        .child(label),
                 )
-                // Scrollable body.
                 .child(
                     div()
-                        .id("preferences-panel-body")
-                        .px_4()
-                        .overflow_y_scroll()
-                        .scrollbar_width(px(8.))
+                        .flex_1()
+                        .min_w_0()
                         .flex()
-                        .flex_col()
-                        .gap_4()
-                        // Language choices appear first so the rest of the
-                        // panel immediately reflects the user's UI language.
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(palette.muted)
-                                        .child(app.tr(Msg::PrefPanelLanguageSection)),
-                                )
-                                .child(div().flex().gap_2().children(Language::all().iter().map(
-                                    |&lang| {
-                                        let is_active = app.language == lang;
-                                        preference_option_button(
-                                            format!(
-                                                "{}  {}",
-                                                if is_active { "✓" } else { " " },
-                                                lang.native_name()
-                                            ),
-                                            is_active,
-                                            palette,
-                                            cx.listener(
-                                                move |app, _: &MouseUpEvent, _window, cx| {
-                                                    app.apply_language(lang, cx);
-                                                },
-                                            ),
-                                        )
-                                    },
-                                ))),
-                        )
-                        // Theme grid.
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(palette.muted)
-                                        .child(app.tr(Msg::PrefPanelThemeSection)),
-                                )
-                                .child(div().flex().flex_wrap().gap_2().children(
-                                    themes.iter().map(|theme| {
-                                        let theme_name = theme.name.clone();
-                                        let is_active =
-                                            theme.name.eq_ignore_ascii_case(&active_name);
-                                        let colors = theme.colors;
-                                        let app_entity = app_entity.clone();
-                                        let border = if is_active {
-                                            palette.active_bg
-                                        } else {
-                                            palette.border
-                                        };
-                                        div()
-                                            .w(px(120.))
-                                            .p_2()
-                                            .rounded_md()
-                                            .border_1()
-                                            .border_color(border)
-                                            .bg(rgb(colors.panel_bg))
-                                            .cursor_pointer()
-                                            .hover(move |style| {
-                                                style.border_color(palette.active_bg)
-                                            })
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .on_mouse_up(MouseButton::Left, move |_, _, cx| {
-                                                app_entity.update(cx, |app, cx| {
-                                                    app.apply_theme_by_name(&theme_name, cx);
-                                                });
-                                            })
-                                            .child(
-                                                div()
-                                                    .h(px(28.))
-                                                    .rounded_sm()
-                                                    .flex()
-                                                    .child(div().flex_1().bg(rgb(colors.app_bg)))
-                                                    .child(
-                                                        div().flex_1().bg(rgb(colors.surface_bg)),
-                                                    )
-                                                    .child(div().flex_1().bg(rgb(colors.active_bg)))
-                                                    .child(
-                                                        div().w(px(6.)).bg(rgb(colors.active_text)),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .gap_1()
-                                                    .text_size(px(11.))
-                                                    .child(
-                                                        div()
-                                                            .min_w_0()
-                                                            .text_color(rgb(colors.text))
-                                                            .child(theme.name.clone()),
-                                                    )
-                                                    .when(is_active, |row| {
-                                                        row.child(
-                                                            div()
-                                                                .text_color(palette.active_bg)
-                                                                .child("✓"),
-                                                        )
-                                                    }),
-                                            )
-                                    }),
-                                )),
-                        )
-                        // Document typography.
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(palette.muted)
-                                        .child(app.tr(Msg::PrefPanelTypographySection)),
-                                )
-                                .child(preference_numeric_row(
-                                    app.tr(Msg::PrefPanelEditorFontSize),
-                                    app.editor_font_size,
-                                    MIN_EDITOR_FONT_SIZE,
-                                    MAX_EDITOR_FONT_SIZE,
-                                    palette,
-                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                                        if let Some(value) = preference_step_value(
-                                            app.editor_font_size,
-                                            MIN_EDITOR_FONT_SIZE,
-                                            MAX_EDITOR_FONT_SIZE,
-                                            -1,
-                                        ) {
-                                            app.set_editor_font_size(value as i64, cx);
-                                        }
-                                    }),
-                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                                        if let Some(value) = preference_step_value(
-                                            app.editor_font_size,
-                                            MIN_EDITOR_FONT_SIZE,
-                                            MAX_EDITOR_FONT_SIZE,
-                                            1,
-                                        ) {
-                                            app.set_editor_font_size(value as i64, cx);
-                                        }
-                                    }),
-                                ))
-                                .child(preference_numeric_row(
-                                    app.tr(Msg::PrefPanelRenderedFontSize),
-                                    app.rendered_font_size,
-                                    MIN_RENDERED_FONT_SIZE,
-                                    MAX_RENDERED_FONT_SIZE,
-                                    palette,
-                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                                        if let Some(value) = preference_step_value(
-                                            app.rendered_font_size,
-                                            MIN_RENDERED_FONT_SIZE,
-                                            MAX_RENDERED_FONT_SIZE,
-                                            -1,
-                                        ) {
-                                            app.set_rendered_font_size(value as i64, cx);
-                                        }
-                                    }),
-                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                                        if let Some(value) = preference_step_value(
-                                            app.rendered_font_size,
-                                            MIN_RENDERED_FONT_SIZE,
-                                            MAX_RENDERED_FONT_SIZE,
-                                            1,
-                                        ) {
-                                            app.set_rendered_font_size(value as i64, cx);
-                                        }
-                                    }),
-                                ))
-                                .child(preference_numeric_row(
-                                    app.tr(Msg::PrefPanelParagraphSpacing),
-                                    app.paragraph_spacing,
-                                    MIN_PARAGRAPH_SPACING,
-                                    MAX_PARAGRAPH_SPACING,
-                                    palette,
-                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                                        if let Some(value) = preference_step_value(
-                                            app.paragraph_spacing,
-                                            MIN_PARAGRAPH_SPACING,
-                                            MAX_PARAGRAPH_SPACING,
-                                            -1,
-                                        ) {
-                                            app.set_paragraph_spacing(value as i64, cx);
-                                        }
-                                    }),
-                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                                        if let Some(value) = preference_step_value(
-                                            app.paragraph_spacing,
-                                            MIN_PARAGRAPH_SPACING,
-                                            MAX_PARAGRAPH_SPACING,
-                                            1,
-                                        ) {
-                                            app.set_paragraph_spacing(value as i64, cx);
-                                        }
-                                    }),
-                                )),
-                        )
-                        // Other settings.
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(palette.muted)
-                                        .child(app.tr(Msg::PrefPanelOtherSection)),
-                                )
-                                .child(preference_boolean_row(
-                                    app.tr(Msg::PrefPanelFocusMode),
-                                    app.focus_mode,
-                                    app.language,
-                                    palette,
-                                    cx.listener(|app, _: &MouseUpEvent, window, cx| {
-                                        app.toggle_focus_mode(&ToggleFocusMode, window, cx);
-                                    }),
-                                ))
-                                .child(preference_boolean_row(
-                                    app.tr(Msg::PrefPanelTypewriterMode),
-                                    app.typewriter_mode,
-                                    app.language,
-                                    palette,
-                                    cx.listener(|app, _: &MouseUpEvent, window, cx| {
-                                        app.toggle_typewriter_mode(
-                                            &ToggleTypewriterMode,
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                ))
-                                .child(preference_boolean_row(
-                                    app.tr(Msg::PrefPanelCodeLineNumbers),
-                                    app.code_line_numbers,
-                                    app.language,
-                                    palette,
-                                    cx.listener(|app, _: &MouseUpEvent, window, cx| {
-                                        app.toggle_code_line_numbers(
-                                            &ToggleCodeLineNumbers,
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                ))
-                                .child(preference_boolean_row(
-                                    app.tr(Msg::PrefPanelPreviewAdaptiveWidth),
-                                    app.preview_adaptive_width,
-                                    app.language,
-                                    palette,
-                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                                        app.toggle_preview_adaptive_width(cx);
-                                    }),
-                                ))
-                                .child(preference_heading_menu_row(app, palette, cx))
-                                .child(preference_boolean_row(
-                                    app.tr(Msg::PrefPanelSyncScroll),
-                                    app.sync_scroll,
-                                    app.language,
-                                    palette,
-                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                                        app.toggle_sync_scroll(cx);
-                                    }),
-                                ))
-                                .child(preference_sidebar_row(app, palette, cx)),
-                        ),
+                        .flex_wrap()
+                        .justify_end()
+                        .gap_1()
+                        .children(action_ids.iter().enumerate().map(|(index, &action_id)| {
+                            let default_label =
+                                default_labels.get(index).copied().unwrap_or(action_id);
+                            shortcut_binding_editor(
+                                app,
+                                action_id,
+                                default_label,
+                                platform,
+                                palette,
+                                cx,
+                            )
+                        })),
                 ),
         )
+        .when_some(feedback, |row, feedback| {
+            row.child(
+                div()
+                    .w_full()
+                    .flex()
+                    .justify_end()
+                    .text_size(px(11.))
+                    .text_color(palette.active_bg)
+                    .child(feedback),
+            )
+        })
+}
+
+fn shortcut_binding_editor(
+    app: &MarkionApp,
+    action_id: &'static str,
+    default_label: &'static str,
+    platform: ShortcutPlatform,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let capturing = app
+        .shortcut_capture
+        .as_ref()
+        .is_some_and(|capture| capture.action_id == action_id);
+    let overridden = app.shortcut_overrides.contains_key(action_id);
+    let binding_label = if capturing {
+        app.tr(Msg::ShortcutCapturePrompt).to_string()
+    } else {
+        shortcut_by_id(action_id)
+            .map(|shortcut| app.shortcut_label(shortcut, platform))
+            .unwrap_or_else(|| default_label.to_string())
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .when(overridden, |controls| {
+            controls.child(
+                div()
+                    .text_color(palette.active_bg)
+                    .text_size(px(12.))
+                    .child("•"),
+            )
+        })
+        .child(
+            div()
+                .min_h(px(26.))
+                .min_w(px(if capturing { 168. } else { 72. }))
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .border_1()
+                .border_color(if capturing || overridden {
+                    palette.active_bg
+                } else {
+                    palette.border
+                })
+                .bg(if capturing {
+                    palette.active_bg
+                } else {
+                    palette.surface_bg
+                })
+                .text_color(if capturing {
+                    palette.active_text
+                } else {
+                    palette.text
+                })
+                .text_size(px(11.))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .hover(move |style| style.border_color(palette.active_bg))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                        app.begin_shortcut_capture(action_id, window, cx);
+                    }),
+                )
+                .child(binding_label),
+        )
+        .when(overridden, |controls| {
+            controls.child(
+                div()
+                    .min_h(px(26.))
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(palette.border)
+                    .bg(palette.panel_bg)
+                    .text_color(palette.muted)
+                    .text_size(px(11.))
+                    .cursor_pointer()
+                    .hover(move |style| style.border_color(palette.active_bg))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                            app.reset_shortcut(action_id, cx);
+                        }),
+                    )
+                    .child(app.tr(Msg::ShortcutResetAction)),
+            )
+        })
 }
 
 #[allow(clippy::too_many_arguments)]

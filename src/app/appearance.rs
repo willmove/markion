@@ -30,7 +30,7 @@ impl MarkionApp {
     pub(super) fn show_preferences(
         &mut self,
         _: &ShowPreferences,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // The Preferences panel is rendered in-app (see `preferences_panel_view`),
@@ -38,14 +38,13 @@ impl MarkionApp {
         // theme file dropped into the themes dir since launch shows up.
         self.ensure_sample_custom_theme();
         self.custom_themes = list_theme_definitions(&self.themes_dir).unwrap_or_default();
-        self.shortcut_panel_open = false;
+        self.preferences_tab = PreferencesTab::General;
+        if self.shortcut_capture.take().is_some() {
+            self.rebind_keys(cx);
+        }
         self.preferences_panel_open = true;
         self.active_menu = None;
-        cx.notify();
-    }
-
-    pub(super) fn close_preferences(&mut self, cx: &mut Context<Self>) {
-        self.preferences_panel_open = false;
+        window.focus(&self.preferences_panel_focus);
         cx.notify();
     }
 
@@ -116,6 +115,7 @@ impl MarkionApp {
                     app.sidebar_tab = preferences.sidebar_tab;
                     // Reset also restores the default interface language.
                     app.language = Language::from_code(&preferences.language);
+                    app.clear_shortcut_overrides(cx);
                     app.persist_preferences();
                     install_menus(app.language, app.heading_menu_max_level, cx);
                     app.status = t(app.language, Msg::StatusPreferencesReset).into();

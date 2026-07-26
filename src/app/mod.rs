@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     env,
     ffi::OsString,
     fs, io,
@@ -17,13 +17,13 @@ use gpui::{
     App, Application, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle, DefiniteLength,
     DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler, Empty, Entity,
     EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle, FontWeight,
-    GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageSource, KeyBinding, LayoutId,
-    ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel,
-    RenderImage, Rgba, ScrollHandle, SharedString, Stateful, StrikethroughStyle, Style, StyledText,
-    TextLayout, TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window,
-    WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, font, img,
-    list, point, px, rgb, rgba, size,
+    GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageSource, KeyBinding, KeyDownEvent,
+    LayoutId, ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton,
+    PromptLevel, RenderImage, Rgba, ScrollHandle, SharedString, Stateful, StrikethroughStyle,
+    Style, StyledText, TextLayout, TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle,
+    Window, WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, font,
+    img, list, point, px, rgb, rgba, size,
 };
 use markion::{
     AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_EDITOR_FONT_SIZE,
@@ -172,19 +172,29 @@ fn menu_after_hover(active: Option<AppMenu>, hovered: AppMenu) -> Option<AppMenu
     active.map(|_| hovered)
 }
 
-/// One source of truth for a keyboard binding and the text shown beside its
-/// in-window menu item. Explicit platform labels keep GPUI's internal
-/// `secondary` modifier out of user-facing chrome.
+/// One source of truth for a customizable keyboard action: its stable id
+/// (the `config.toml` `[shortcuts]` key), default GPUI binding, and the
+/// curated text shown beside its in-window menu item and in the shortcut
+/// reference. Explicit platform labels keep GPUI's internal `secondary`
+/// modifier out of user-facing chrome; overridden bindings are rendered
+/// through `markion::keystroke::format_keystroke_label` instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MenuShortcut {
+    id: &'static str,
     binding: &'static str,
     windows_linux: &'static str,
     macos: &'static str,
 }
 
 impl MenuShortcut {
-    const fn new(binding: &'static str, windows_linux: &'static str, macos: &'static str) -> Self {
+    const fn new(
+        id: &'static str,
+        binding: &'static str,
+        windows_linux: &'static str,
+        macos: &'static str,
+    ) -> Self {
         Self {
+            id,
             binding,
             windows_linux,
             macos,
@@ -197,112 +207,336 @@ impl MenuShortcut {
             ShortcutPlatform::MacOS => self.macos,
         }
     }
+
+    /// The binding that should dispatch this action: a valid stored override
+    /// when present, otherwise the default.
+    fn effective_binding<'a>(&self, overrides: &'a BTreeMap<String, String>) -> &'a str {
+        overrides
+            .get(self.id)
+            .filter(|binding| {
+                markion::keystroke::KeystrokeParts::parse(binding, ShortcutPlatform::current())
+                    .is_some()
+                    && gpui::Keystroke::parse(binding).is_ok()
+            })
+            .map(String::as_str)
+            .unwrap_or(self.binding)
+    }
+
+    /// The label shown in menus and the shortcut reference: the curated
+    /// default label, or a formatted rendering of the override.
+    fn effective_label(
+        &self,
+        overrides: &BTreeMap<String, String>,
+        platform: ShortcutPlatform,
+    ) -> String {
+        if let Some(binding) = overrides.get(self.id).filter(|binding| {
+            markion::keystroke::KeystrokeParts::parse(binding, platform).is_some()
+        }) {
+            markion::keystroke::format_keystroke_label(binding, platform)
+        } else {
+            self.label(platform).to_string()
+        }
+    }
 }
 
-/// Shared descriptors for actions that appear in the six application menus.
-/// Unbound menu actions intentionally have no entry in this module.
+/// Look up a registry entry by its stable action id.
+fn shortcut_by_id(id: &str) -> Option<&'static MenuShortcut> {
+    menu_shortcuts::ALL
+        .iter()
+        .find(|shortcut| shortcut.id == id)
+}
+
+/// Shared descriptors for actions that appear in the six application menus
+/// (plus the file-tree search focus shortcut, which lives in the same
+/// customizable registry). Unbound menu actions intentionally have no entry
+/// in this module.
 mod menu_shortcuts {
     use super::MenuShortcut;
 
-    pub const NEW_DOCUMENT: MenuShortcut = MenuShortcut::new("secondary-n", "Ctrl+N", "Cmd+N");
-    pub const OPEN_DOCUMENT: MenuShortcut = MenuShortcut::new("secondary-o", "Ctrl+O", "Cmd+O");
-    pub const SAVE_DOCUMENT: MenuShortcut = MenuShortcut::new("secondary-s", "Ctrl+S", "Cmd+S");
-    pub const SAVE_DOCUMENT_AS: MenuShortcut =
-        MenuShortcut::new("secondary-shift-s", "Ctrl+Shift+S", "Cmd+Shift+S");
-    pub const OPEN_IN_NEW_TAB: MenuShortcut = MenuShortcut::new("secondary-t", "Ctrl+T", "Cmd+T");
-    pub const CLOSE_TAB: MenuShortcut = MenuShortcut::new("secondary-w", "Ctrl+W", "Cmd+W");
-    pub const NEXT_TAB: MenuShortcut = MenuShortcut::new("ctrl-tab", "Ctrl+Tab", "Ctrl+Tab");
-    pub const PREV_TAB: MenuShortcut =
-        MenuShortcut::new("ctrl-shift-tab", "Ctrl+Shift+Tab", "Ctrl+Shift+Tab");
+    pub const NEW_DOCUMENT: MenuShortcut =
+        MenuShortcut::new("new-document", "secondary-n", "Ctrl+N", "Cmd+N");
+    pub const OPEN_DOCUMENT: MenuShortcut =
+        MenuShortcut::new("open-document", "secondary-o", "Ctrl+O", "Cmd+O");
+    pub const SAVE_DOCUMENT: MenuShortcut =
+        MenuShortcut::new("save-document", "secondary-s", "Ctrl+S", "Cmd+S");
+    pub const SAVE_DOCUMENT_AS: MenuShortcut = MenuShortcut::new(
+        "save-document-as",
+        "secondary-shift-s",
+        "Ctrl+Shift+S",
+        "Cmd+Shift+S",
+    );
+    pub const OPEN_IN_NEW_TAB: MenuShortcut =
+        MenuShortcut::new("open-in-new-tab", "secondary-t", "Ctrl+T", "Cmd+T");
+    pub const CLOSE_TAB: MenuShortcut =
+        MenuShortcut::new("close-tab", "secondary-w", "Ctrl+W", "Cmd+W");
+    pub const NEXT_TAB: MenuShortcut =
+        MenuShortcut::new("next-tab", "ctrl-tab", "Ctrl+Tab", "Ctrl+Tab");
+    pub const PREV_TAB: MenuShortcut = MenuShortcut::new(
+        "prev-tab",
+        "ctrl-shift-tab",
+        "Ctrl+Shift+Tab",
+        "Ctrl+Shift+Tab",
+    );
     pub const SHOW_PREFERENCES: MenuShortcut =
-        MenuShortcut::new("secondary-comma", "Ctrl+,", "Cmd+,");
-    pub const QUIT: MenuShortcut = MenuShortcut::new("secondary-q", "Ctrl+Q", "Cmd+Q");
+        MenuShortcut::new("show-preferences", "secondary-comma", "Ctrl+,", "Cmd+,");
+    pub const QUIT: MenuShortcut = MenuShortcut::new("quit", "secondary-q", "Ctrl+Q", "Cmd+Q");
 
-    pub const UNDO: MenuShortcut = MenuShortcut::new("secondary-z", "Ctrl+Z", "Cmd+Z");
-    pub const REDO: MenuShortcut = MenuShortcut::new("secondary-y", "Ctrl+Y", "Cmd+Y");
-    pub const COPY: MenuShortcut = MenuShortcut::new("secondary-c", "Ctrl+C", "Cmd+C");
-    pub const CUT: MenuShortcut = MenuShortcut::new("secondary-x", "Ctrl+X", "Cmd+X");
-    pub const PASTE: MenuShortcut = MenuShortcut::new("secondary-v", "Ctrl+V", "Cmd+V");
-    pub const SELECT_ALL: MenuShortcut = MenuShortcut::new("secondary-a", "Ctrl+A", "Cmd+A");
+    pub const UNDO: MenuShortcut = MenuShortcut::new("undo", "secondary-z", "Ctrl+Z", "Cmd+Z");
+    pub const REDO: MenuShortcut = MenuShortcut::new("redo", "secondary-y", "Ctrl+Y", "Cmd+Y");
+    pub const COPY: MenuShortcut = MenuShortcut::new("copy", "secondary-c", "Ctrl+C", "Cmd+C");
+    pub const CUT: MenuShortcut = MenuShortcut::new("cut", "secondary-x", "Ctrl+X", "Cmd+X");
+    pub const PASTE: MenuShortcut = MenuShortcut::new("paste", "secondary-v", "Ctrl+V", "Cmd+V");
+    pub const SELECT_ALL: MenuShortcut =
+        MenuShortcut::new("select-all", "secondary-a", "Ctrl+A", "Cmd+A");
 
-    pub const TOGGLE_VIEW_MODE: MenuShortcut =
-        MenuShortcut::new("secondary-shift-v", "Ctrl+Shift+V", "Cmd+Shift+V");
-    pub const SET_EDIT_MODE: MenuShortcut =
-        MenuShortcut::new("secondary-alt-1", "Ctrl+Alt+1", "Cmd+Option+1");
-    pub const SET_VISUAL_EDIT_MODE: MenuShortcut =
-        MenuShortcut::new("secondary-alt-4", "Ctrl+Alt+4", "Cmd+Option+4");
-    pub const SET_SPLIT_PREVIEW_MODE: MenuShortcut =
-        MenuShortcut::new("secondary-alt-2", "Ctrl+Alt+2", "Cmd+Option+2");
-    pub const SET_READ_MODE: MenuShortcut =
-        MenuShortcut::new("secondary-alt-3", "Ctrl+Alt+3", "Cmd+Option+3");
-    pub const TOGGLE_SIDEBAR: MenuShortcut =
-        MenuShortcut::new("secondary-shift-b", "Ctrl+Shift+B", "Cmd+Shift+B");
-    pub const TOGGLE_FILE_TREE: MenuShortcut =
-        MenuShortcut::new("secondary-shift-f", "Ctrl+Shift+F", "Cmd+Shift+F");
-    pub const TOGGLE_OUTLINE: MenuShortcut = MenuShortcut::new("f6", "F6", "F6");
-    pub const TOGGLE_FOCUS_MODE: MenuShortcut = MenuShortcut::new("f7", "F7", "F7");
-    pub const TOGGLE_TYPEWRITER_MODE: MenuShortcut = MenuShortcut::new("f8", "F8", "F8");
-    pub const TOGGLE_CODE_LINE_NUMBERS: MenuShortcut =
-        MenuShortcut::new("secondary-shift-4", "Ctrl+Shift+4", "Cmd+Shift+4");
-    pub const SHOW_FIND: MenuShortcut = MenuShortcut::new("secondary-f", "Ctrl+F", "Cmd+F");
-    pub const SHOW_REPLACE: MenuShortcut = MenuShortcut::new("secondary-h", "Ctrl+H", "Cmd+H");
-    pub const FIND_NEXT: MenuShortcut = MenuShortcut::new("f3", "F3", "F3");
-    pub const FIND_PREVIOUS: MenuShortcut = MenuShortcut::new("shift-f3", "Shift+F3", "Shift+F3");
-    pub const CYCLE_THEME: MenuShortcut =
-        MenuShortcut::new("secondary-shift-t", "Ctrl+Shift+T", "Cmd+Shift+T");
+    pub const TOGGLE_VIEW_MODE: MenuShortcut = MenuShortcut::new(
+        "toggle-view-mode",
+        "secondary-shift-v",
+        "Ctrl+Shift+V",
+        "Cmd+Shift+V",
+    );
+    pub const SET_EDIT_MODE: MenuShortcut = MenuShortcut::new(
+        "set-edit-mode",
+        "secondary-alt-1",
+        "Ctrl+Alt+1",
+        "Cmd+Option+1",
+    );
+    pub const SET_VISUAL_EDIT_MODE: MenuShortcut = MenuShortcut::new(
+        "set-visual-edit-mode",
+        "secondary-alt-4",
+        "Ctrl+Alt+4",
+        "Cmd+Option+4",
+    );
+    pub const SET_SPLIT_PREVIEW_MODE: MenuShortcut = MenuShortcut::new(
+        "set-split-preview-mode",
+        "secondary-alt-2",
+        "Ctrl+Alt+2",
+        "Cmd+Option+2",
+    );
+    pub const SET_READ_MODE: MenuShortcut = MenuShortcut::new(
+        "set-read-mode",
+        "secondary-alt-3",
+        "Ctrl+Alt+3",
+        "Cmd+Option+3",
+    );
+    pub const TOGGLE_SIDEBAR: MenuShortcut = MenuShortcut::new(
+        "toggle-sidebar",
+        "secondary-shift-b",
+        "Ctrl+Shift+B",
+        "Cmd+Shift+B",
+    );
+    pub const TOGGLE_FILE_TREE: MenuShortcut = MenuShortcut::new(
+        "toggle-file-tree",
+        "secondary-shift-f",
+        "Ctrl+Shift+F",
+        "Cmd+Shift+F",
+    );
+    pub const TOGGLE_OUTLINE: MenuShortcut = MenuShortcut::new("toggle-outline", "f6", "F6", "F6");
+    pub const TOGGLE_FOCUS_MODE: MenuShortcut =
+        MenuShortcut::new("toggle-focus-mode", "f7", "F7", "F7");
+    pub const TOGGLE_TYPEWRITER_MODE: MenuShortcut =
+        MenuShortcut::new("toggle-typewriter-mode", "f8", "F8", "F8");
+    pub const TOGGLE_CODE_LINE_NUMBERS: MenuShortcut = MenuShortcut::new(
+        "toggle-code-line-numbers",
+        "secondary-shift-4",
+        "Ctrl+Shift+4",
+        "Cmd+Shift+4",
+    );
+    pub const SHOW_FIND: MenuShortcut =
+        MenuShortcut::new("show-find", "secondary-f", "Ctrl+F", "Cmd+F");
+    pub const SHOW_REPLACE: MenuShortcut =
+        MenuShortcut::new("show-replace", "secondary-h", "Ctrl+H", "Cmd+H");
+    pub const FIND_NEXT: MenuShortcut = MenuShortcut::new("find-next", "f3", "F3", "F3");
+    pub const FIND_PREVIOUS: MenuShortcut =
+        MenuShortcut::new("find-previous", "shift-f3", "Shift+F3", "Shift+F3");
+    pub const CYCLE_THEME: MenuShortcut = MenuShortcut::new(
+        "cycle-theme",
+        "secondary-shift-t",
+        "Ctrl+Shift+T",
+        "Cmd+Shift+T",
+    );
+    pub const FOCUS_FILE_TREE_SEARCH: MenuShortcut = MenuShortcut::new(
+        "focus-file-tree-search",
+        "secondary-alt-f",
+        "Ctrl+Alt+F",
+        "Cmd+Option+F",
+    );
 
-    pub const BOLD: MenuShortcut = MenuShortcut::new("secondary-b", "Ctrl+B", "Cmd+B");
-    pub const ITALIC: MenuShortcut = MenuShortcut::new("secondary-i", "Ctrl+I", "Cmd+I");
-    pub const INLINE_CODE: MenuShortcut = MenuShortcut::new("secondary-e", "Ctrl+E", "Cmd+E");
-    pub const INSERT_LINK: MenuShortcut = MenuShortcut::new("secondary-k", "Ctrl+K", "Cmd+K");
-    pub const INSERT_IMAGE: MenuShortcut =
-        MenuShortcut::new("secondary-shift-i", "Ctrl+Shift+I", "Cmd+Shift+I");
-    pub const HEADING_1: MenuShortcut = MenuShortcut::new("secondary-1", "Ctrl+1", "Cmd+1");
-    pub const HEADING_2: MenuShortcut = MenuShortcut::new("secondary-2", "Ctrl+2", "Cmd+2");
-    pub const HEADING_3: MenuShortcut = MenuShortcut::new("secondary-3", "Ctrl+3", "Cmd+3");
-    pub const HEADING_4: MenuShortcut = MenuShortcut::new("secondary-4", "Ctrl+4", "Cmd+4");
-    pub const HEADING_5: MenuShortcut = MenuShortcut::new("secondary-5", "Ctrl+5", "Cmd+5");
-    pub const HEADING_6: MenuShortcut = MenuShortcut::new("secondary-6", "Ctrl+6", "Cmd+6");
-    pub const FORMAT_TABLE: MenuShortcut =
-        MenuShortcut::new("secondary-shift-m", "Ctrl+Shift+M", "Cmd+Shift+M");
-    pub const TABLE_ADD_ROW: MenuShortcut =
-        MenuShortcut::new("secondary-alt-enter", "Ctrl+Alt+Enter", "Cmd+Option+Enter");
+    pub const BOLD: MenuShortcut = MenuShortcut::new("bold", "secondary-b", "Ctrl+B", "Cmd+B");
+    pub const ITALIC: MenuShortcut = MenuShortcut::new("italic", "secondary-i", "Ctrl+I", "Cmd+I");
+    pub const INLINE_CODE: MenuShortcut =
+        MenuShortcut::new("inline-code", "secondary-e", "Ctrl+E", "Cmd+E");
+    pub const INSERT_LINK: MenuShortcut =
+        MenuShortcut::new("insert-link", "secondary-k", "Ctrl+K", "Cmd+K");
+    pub const INSERT_IMAGE: MenuShortcut = MenuShortcut::new(
+        "insert-image",
+        "secondary-shift-i",
+        "Ctrl+Shift+I",
+        "Cmd+Shift+I",
+    );
+    pub const HEADING_1: MenuShortcut =
+        MenuShortcut::new("heading-1", "secondary-1", "Ctrl+1", "Cmd+1");
+    pub const HEADING_2: MenuShortcut =
+        MenuShortcut::new("heading-2", "secondary-2", "Ctrl+2", "Cmd+2");
+    pub const HEADING_3: MenuShortcut =
+        MenuShortcut::new("heading-3", "secondary-3", "Ctrl+3", "Cmd+3");
+    pub const HEADING_4: MenuShortcut =
+        MenuShortcut::new("heading-4", "secondary-4", "Ctrl+4", "Cmd+4");
+    pub const HEADING_5: MenuShortcut =
+        MenuShortcut::new("heading-5", "secondary-5", "Ctrl+5", "Cmd+5");
+    pub const HEADING_6: MenuShortcut =
+        MenuShortcut::new("heading-6", "secondary-6", "Ctrl+6", "Cmd+6");
+    pub const FORMAT_TABLE: MenuShortcut = MenuShortcut::new(
+        "format-table",
+        "secondary-shift-m",
+        "Ctrl+Shift+M",
+        "Cmd+Shift+M",
+    );
+    pub const TABLE_ADD_ROW: MenuShortcut = MenuShortcut::new(
+        "table-add-row",
+        "secondary-alt-enter",
+        "Ctrl+Alt+Enter",
+        "Cmd+Option+Enter",
+    );
     pub const TABLE_DELETE_ROW: MenuShortcut = MenuShortcut::new(
+        "table-delete-row",
         "secondary-alt-backspace",
         "Ctrl+Alt+Backspace",
         "Cmd+Option+Backspace",
     );
-    pub const TABLE_MOVE_ROW_UP: MenuShortcut =
-        MenuShortcut::new("secondary-alt-up", "Ctrl+Alt+Up", "Cmd+Option+Up");
-    pub const TABLE_MOVE_ROW_DOWN: MenuShortcut =
-        MenuShortcut::new("secondary-alt-down", "Ctrl+Alt+Down", "Cmd+Option+Down");
-    pub const TABLE_ADD_COLUMN: MenuShortcut =
-        MenuShortcut::new("secondary-alt-right", "Ctrl+Alt+Right", "Cmd+Option+Right");
-    pub const TABLE_DELETE_COLUMN: MenuShortcut =
-        MenuShortcut::new("secondary-alt-left", "Ctrl+Alt+Left", "Cmd+Option+Left");
+    pub const TABLE_MOVE_ROW_UP: MenuShortcut = MenuShortcut::new(
+        "table-move-row-up",
+        "secondary-alt-up",
+        "Ctrl+Alt+Up",
+        "Cmd+Option+Up",
+    );
+    pub const TABLE_MOVE_ROW_DOWN: MenuShortcut = MenuShortcut::new(
+        "table-move-row-down",
+        "secondary-alt-down",
+        "Ctrl+Alt+Down",
+        "Cmd+Option+Down",
+    );
+    pub const TABLE_ADD_COLUMN: MenuShortcut = MenuShortcut::new(
+        "table-add-column",
+        "secondary-alt-right",
+        "Ctrl+Alt+Right",
+        "Cmd+Option+Right",
+    );
+    pub const TABLE_DELETE_COLUMN: MenuShortcut = MenuShortcut::new(
+        "table-delete-column",
+        "secondary-alt-left",
+        "Ctrl+Alt+Left",
+        "Cmd+Option+Left",
+    );
 
-    pub const EXPORT_HTML: MenuShortcut =
-        MenuShortcut::new("secondary-shift-h", "Ctrl+Shift+H", "Cmd+Shift+H");
+    pub const EXPORT_HTML: MenuShortcut = MenuShortcut::new(
+        "export-html",
+        "secondary-shift-h",
+        "Ctrl+Shift+H",
+        "Cmd+Shift+H",
+    );
     pub const EXPORT_PLAIN_HTML: MenuShortcut = MenuShortcut::new(
+        "export-plain-html",
         "secondary-alt-shift-h",
         "Ctrl+Alt+Shift+H",
         "Cmd+Option+Shift+H",
     );
-    pub const EXPORT_PDF: MenuShortcut =
-        MenuShortcut::new("secondary-shift-p", "Ctrl+Shift+P", "Cmd+Shift+P");
-    pub const EXPORT_LATEX: MenuShortcut =
-        MenuShortcut::new("secondary-shift-l", "Ctrl+Shift+L", "Cmd+Shift+L");
-    pub const EXPORT_DOCX: MenuShortcut =
-        MenuShortcut::new("secondary-shift-d", "Ctrl+Shift+D", "Cmd+Shift+D");
-    pub const EXPORT_PNG: MenuShortcut =
-        MenuShortcut::new("secondary-shift-g", "Ctrl+Shift+G", "Cmd+Shift+G");
+    pub const EXPORT_PDF: MenuShortcut = MenuShortcut::new(
+        "export-pdf",
+        "secondary-shift-p",
+        "Ctrl+Shift+P",
+        "Cmd+Shift+P",
+    );
+    pub const EXPORT_LATEX: MenuShortcut = MenuShortcut::new(
+        "export-latex",
+        "secondary-shift-l",
+        "Ctrl+Shift+L",
+        "Cmd+Shift+L",
+    );
+    pub const EXPORT_DOCX: MenuShortcut = MenuShortcut::new(
+        "export-docx",
+        "secondary-shift-d",
+        "Ctrl+Shift+D",
+        "Cmd+Shift+D",
+    );
+    pub const EXPORT_PNG: MenuShortcut = MenuShortcut::new(
+        "export-png",
+        "secondary-shift-g",
+        "Ctrl+Shift+G",
+        "Cmd+Shift+G",
+    );
     pub const EXPORT_JPEG: MenuShortcut = MenuShortcut::new(
+        "export-jpeg",
         "secondary-alt-shift-g",
         "Ctrl+Alt+Shift+G",
         "Cmd+Option+Shift+G",
     );
 
-    pub const SHOW_SHORTCUTS: MenuShortcut = MenuShortcut::new("f1", "F1", "F1");
+    pub const SHOW_SHORTCUTS: MenuShortcut = MenuShortcut::new("show-shortcuts", "f1", "F1", "F1");
+
+    /// Every customizable action, in registry order. Used for rebinding,
+    /// conflict detection, and validating stored overrides.
+    pub const ALL: &[MenuShortcut] = &[
+        NEW_DOCUMENT,
+        OPEN_DOCUMENT,
+        SAVE_DOCUMENT,
+        SAVE_DOCUMENT_AS,
+        OPEN_IN_NEW_TAB,
+        CLOSE_TAB,
+        NEXT_TAB,
+        PREV_TAB,
+        SHOW_PREFERENCES,
+        QUIT,
+        UNDO,
+        REDO,
+        COPY,
+        CUT,
+        PASTE,
+        SELECT_ALL,
+        TOGGLE_VIEW_MODE,
+        SET_EDIT_MODE,
+        SET_VISUAL_EDIT_MODE,
+        SET_SPLIT_PREVIEW_MODE,
+        SET_READ_MODE,
+        TOGGLE_SIDEBAR,
+        TOGGLE_FILE_TREE,
+        TOGGLE_OUTLINE,
+        TOGGLE_FOCUS_MODE,
+        TOGGLE_TYPEWRITER_MODE,
+        TOGGLE_CODE_LINE_NUMBERS,
+        SHOW_FIND,
+        SHOW_REPLACE,
+        FIND_NEXT,
+        FIND_PREVIOUS,
+        CYCLE_THEME,
+        FOCUS_FILE_TREE_SEARCH,
+        BOLD,
+        ITALIC,
+        INLINE_CODE,
+        INSERT_LINK,
+        INSERT_IMAGE,
+        HEADING_1,
+        HEADING_2,
+        HEADING_3,
+        HEADING_4,
+        HEADING_5,
+        HEADING_6,
+        FORMAT_TABLE,
+        TABLE_ADD_ROW,
+        TABLE_DELETE_ROW,
+        TABLE_MOVE_ROW_UP,
+        TABLE_MOVE_ROW_DOWN,
+        TABLE_ADD_COLUMN,
+        TABLE_DELETE_COLUMN,
+        EXPORT_HTML,
+        EXPORT_PLAIN_HTML,
+        EXPORT_PDF,
+        EXPORT_LATEX,
+        EXPORT_DOCX,
+        EXPORT_PNG,
+        EXPORT_JPEG,
+        SHOW_SHORTCUTS,
+    ];
 }
 
 impl AppMenu {
@@ -744,11 +978,16 @@ enum PaneScrollTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreviewTextRunId {
     Body,
+    /// Text of the n-th nested child block inside a blockquote.
+    QuoteChild(usize),
     CodeBody,
     CodeLine(usize),
     MathLatex,
     HtmlText,
-    TableCell { row: usize, col: usize },
+    TableCell {
+        row: usize,
+        col: usize,
+    },
 }
 
 impl PreviewTextRunId {
@@ -756,6 +995,7 @@ impl PreviewTextRunId {
     fn rank(self) -> (u8, usize, usize) {
         match self {
             Self::Body => (0, 0, 0),
+            Self::QuoteChild(i) => (0, 1 + i, 0),
             Self::CodeBody => (1, 0, 0),
             Self::CodeLine(i) => (2, i, 0),
             Self::MathLatex => (3, 0, 0),
@@ -821,6 +1061,31 @@ enum PreviewContextAction {
     CopyLinkAddress,
 }
 
+/// Tabs inside the Preferences panel.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PreferencesTab {
+    #[default]
+    General,
+    Shortcuts,
+}
+
+/// A shortcut row waiting for the user to press a new key combination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShortcutCapture {
+    action_id: String,
+    error: Option<ShortcutCaptureError>,
+}
+
+/// Why a captured keystroke was rejected; rendered through the i18n layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShortcutCaptureError {
+    /// Bare printable key or otherwise unassignable keystroke.
+    NotAssignable,
+    /// Matches another action's effective binding or a reserved fixed key;
+    /// payload is the display name of the conflicting target.
+    Conflict(String),
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PaneScrollbarDrag {
     target: PaneScrollTarget,
@@ -847,13 +1112,14 @@ mod process_memory;
 mod root_view;
 mod save_dialog;
 mod search;
+mod shortcuts;
 mod state;
 mod workspace;
 
 #[cfg(test)]
 mod tests;
 
-use bootstrap::install_menus;
+use bootstrap::{bind_app_keys, install_menus};
 use diagram::*;
 use editor_element::EditorElement;
 use math_render::*;
@@ -863,6 +1129,7 @@ use preview_image::*;
 use process_memory::*;
 use root_view::*;
 use save_dialog::*;
+use shortcuts::sanitized_shortcut_overrides;
 use state::*;
 
 pub(super) fn run() {
@@ -894,14 +1161,22 @@ struct MarkionApp {
     /// built-in theme table and user-loaded `.theme` files. Empty/unknown
     /// values fall back to the legacy `theme`/`custom_theme` fields.
     selected_theme_name: String,
-    /// Whether the in-app Preferences panel (theme + language picker) is open.
+    /// Whether the in-app Preferences panel (theme + language picker +
+    /// shortcut editor) is open.
     preferences_panel_open: bool,
-    /// Modal Help -> Keyboard Shortcuts panel state. This is transient UI state
-    /// and is deliberately not persisted with editor preferences.
-    shortcut_panel_open: bool,
-    shortcut_panel_focus: FocusHandle,
+    /// Active tab inside the Preferences panel. Transient UI state,
+    /// deliberately not persisted with editor preferences.
+    preferences_tab: PreferencesTab,
+    preferences_panel_focus: FocusHandle,
     shortcut_platform: ShortcutPlatform,
     shortcut_category: ShortcutCategory,
+    /// Menu-action shortcut overrides loaded from `config.toml`
+    /// (`[shortcuts]`, action id -> GPUI keystroke string).
+    shortcut_overrides: BTreeMap<String, String>,
+    /// Shortcut row currently capturing a new binding, if any. While this is
+    /// set the application keymap is cleared so the captured keystroke cannot
+    /// dispatch an action; ending capture rebinds everything.
+    shortcut_capture: Option<ShortcutCapture>,
     focus_mode: bool,
     typewriter_mode: bool,
     code_line_numbers: bool,

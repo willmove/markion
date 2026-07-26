@@ -258,15 +258,33 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.shortcut_panel_open = true;
+        // The shortcut reference lives in the Preferences panel now, so F1
+        // opens Preferences directly on its Shortcuts tab.
+        self.preferences_tab = PreferencesTab::Shortcuts;
         self.shortcut_platform = ShortcutPlatform::current();
         self.shortcut_category = ShortcutCategory::Files;
-        self.preferences_panel_open = false;
+        if self.shortcut_capture.take().is_some() {
+            self.rebind_keys(cx);
+        }
+        self.preferences_panel_open = true;
         self.file_tree_context_menu = None;
         self.preview_context_menu = None;
         self.status = t(self.language, Msg::StatusKeyboardShortcuts).into();
         self.active_menu = None;
-        window.focus(&self.shortcut_panel_focus);
+        window.focus(&self.preferences_panel_focus);
+        cx.notify();
+    }
+
+    pub(super) fn select_preferences_tab(&mut self, tab: PreferencesTab, cx: &mut Context<Self>) {
+        if self.preferences_tab == tab {
+            return;
+        }
+        self.preferences_tab = tab;
+        // Leaving the Shortcuts tab must not strand a capturing row with the
+        // keymap cleared.
+        if self.shortcut_capture.take().is_some() {
+            self.rebind_keys(cx);
+        }
         cx.notify();
     }
 
@@ -292,11 +310,16 @@ impl MarkionApp {
         }
     }
 
-    pub(super) fn close_shortcut_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.shortcut_panel_open {
+    /// Close the Preferences panel from a keyboard path (Escape), restoring
+    /// editor focus and dropping any in-flight shortcut capture.
+    pub(super) fn close_preferences_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.preferences_panel_open {
             return;
         }
-        self.shortcut_panel_open = false;
+        if self.shortcut_capture.take().is_some() {
+            self.rebind_keys(cx);
+        }
+        self.preferences_panel_open = false;
         window.focus(&self.focus_handle);
         cx.notify();
     }

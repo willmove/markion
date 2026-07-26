@@ -413,6 +413,25 @@ pub(crate) fn build_visual_blocks(
         ));
     }
 
+    // Visual Edit keeps its previous flat projection: a blockquote's nested
+    // children (e.g. list items) are projected as their own rows following the
+    // quote row, exactly as if they were top-level preview blocks. A quote
+    // with no paragraph text contributes no row of its own.
+    let expanded: Vec<&PreviewBlock> = preview
+        .iter()
+        .flat_map(|block| match block {
+            PreviewBlock::BlockQuote { text, children, .. } if !children.is_empty() => {
+                if text.is_empty() {
+                    children.iter().collect::<Vec<_>>()
+                } else {
+                    std::iter::once(block).chain(children.iter()).collect()
+                }
+            }
+            _ => vec![block],
+        })
+        .collect();
+    let preview = expanded.as_slice();
+
     let mut source_ranges = preview
         .iter()
         .map(|block| visual_block_source_range(text, block))

@@ -556,6 +556,22 @@ pub enum Msg {
     PrefPanelHeadingMenuSix,
     /// Close (×) button tooltip/aria-style label for the panel.
     PrefPanelClose,
+    /// "General" tab label in the Preferences panel tab strip.
+    PrefPanelTabGeneral,
+    /// "Shortcuts" tab label in the Preferences panel tab strip.
+    PrefPanelTabShortcuts,
+    /// Prompt shown in a shortcut row while it waits for a key press.
+    ShortcutCapturePrompt,
+    /// Inline feedback for a keystroke that may not be assigned at all.
+    ShortcutErrorNotAssignable,
+    /// Inline feedback for a keystroke already in use. {0}=conflicting target.
+    ShortcutErrorConflict,
+    /// Per-action "restore default binding" control label.
+    ShortcutResetAction,
+    /// Status line after a shortcut was reassigned. {0}=new binding label.
+    StatusShortcutUpdated,
+    /// Status line after a shortcut was restored to its default.
+    StatusShortcutReset,
 
     // --- Diagram preview ---
     DiagramLoading,
@@ -664,6 +680,10 @@ struct ShortcutKeys {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShortcutAction {
     pub label: &'static str,
+    /// Stable action ids of this row, parallel to `combinations`. A row can
+    /// cover several actions (e.g. "Undo/Redo"), and the i-th id owns the
+    /// i-th displayed combination.
+    ids: &'static [&'static str],
     windows_linux: &'static [&'static str],
     macos: &'static [&'static str],
 }
@@ -674,6 +694,12 @@ impl ShortcutAction {
             ShortcutPlatform::WindowsLinux => self.windows_linux,
             ShortcutPlatform::MacOS => self.macos,
         }
+    }
+
+    /// Stable action ids behind this row, in the same order as
+    /// [`Self::combinations`].
+    pub const fn ids(self) -> &'static [&'static str] {
+        self.ids
     }
 }
 
@@ -695,11 +721,67 @@ impl ShortcutCatalog {
             .iter()
             .find(|section| section.category == category)
     }
+
+    fn section_mut(&mut self, category: ShortcutCategory) -> Option<&mut ShortcutSection> {
+        self.sections
+            .iter_mut()
+            .find(|section| section.category == category)
+    }
 }
 
 pub fn shortcut_catalog(lang: Language, heading_menu_max_level: u8) -> ShortcutCatalog {
     let extended = heading_menu_max_level >= crate::model::EXTENDED_HEADING_MENU_MAX_LEVEL;
-    build_shortcut_catalog(shortcut_labels(lang), extended)
+    let mut catalog = build_shortcut_catalog(shortcut_labels(lang), extended);
+
+    // These fixed editing labels already live in the shared menu catalog, so
+    // reuse them here instead of duplicating another seven-language array.
+    // Stable action ids still drive binding resolution in the Preferences UI.
+    let editing = catalog
+        .section_mut(ShortcutCategory::Editing)
+        .expect("shortcut catalog contains Editing");
+    let insert_before_undo = editing.actions.len().saturating_sub(1);
+    editing.actions.splice(
+        insert_before_undo..insert_before_undo,
+        [
+            ShortcutAction {
+                label: t(lang, Msg::ItemCopy),
+                ids: &["copy"],
+                windows_linux: &["Ctrl+C"],
+                macos: &["Cmd+C"],
+            },
+            ShortcutAction {
+                label: t(lang, Msg::ItemCut),
+                ids: &["cut"],
+                windows_linux: &["Ctrl+X"],
+                macos: &["Cmd+X"],
+            },
+            ShortcutAction {
+                label: t(lang, Msg::ItemPaste),
+                ids: &["paste"],
+                windows_linux: &["Ctrl+V"],
+                macos: &["Cmd+V"],
+            },
+            ShortcutAction {
+                label: t(lang, Msg::ItemSelectAll),
+                ids: &["select-all"],
+                windows_linux: &["Ctrl+A"],
+                macos: &["Cmd+A"],
+            },
+        ],
+    );
+
+    catalog
+        .section_mut(ShortcutCategory::View)
+        .expect("shortcut catalog contains View")
+        .actions
+        .push(ShortcutAction {
+            label: t(lang, Msg::ItemKeyboardShortcuts),
+            ids: &["show-shortcuts"],
+            windows_linux: &["F1"],
+            macos: &["F1"],
+        });
+
+    catalog
 }
 
 struct ShortcutLabels {
@@ -712,6 +794,96 @@ struct ShortcutLabels {
     tables: [&'static str; 4],
     export: [&'static str; 7],
 }
+
+/// Stable action ids per catalog row, parallel to the `*_KEYS` tables below.
+/// These are the `config.toml` `[shortcuts]` keys, so the settings UI can map
+/// a displayed combination back to the action it belongs to.
+const FILE_IDS: [&[&str]; 5] = [
+    &["new-document"],
+    &["open-document"],
+    &["save-document"],
+    &["save-document-as"],
+    &["quit"],
+];
+
+const TAB_IDS: [&[&str]; 3] = [
+    &["open-in-new-tab"],
+    &["close-tab"],
+    &["next-tab", "prev-tab"],
+];
+
+const EDITING_IDS: [&[&str]; 7] = [
+    &["bold"],
+    &["italic"],
+    &["inline-code"],
+    &["insert-link"],
+    &["insert-image"],
+    &[
+        "heading-1",
+        "heading-2",
+        "heading-3",
+        "heading-4",
+        "heading-5",
+    ],
+    &["undo", "redo"],
+];
+
+const EDITING_IDS_EXTENDED: [&[&str]; 7] = [
+    &["bold"],
+    &["italic"],
+    &["inline-code"],
+    &["insert-link"],
+    &["insert-image"],
+    &[
+        "heading-1",
+        "heading-2",
+        "heading-3",
+        "heading-4",
+        "heading-5",
+        "heading-6",
+    ],
+    &["undo", "redo"],
+];
+
+const VIEW_IDS: [&[&str]; 14] = [
+    &["toggle-view-mode"],
+    &["set-edit-mode"],
+    &["set-visual-edit-mode"],
+    &["set-split-preview-mode"],
+    &["set-read-mode"],
+    &["toggle-sidebar"],
+    &["toggle-file-tree"],
+    &["toggle-outline"],
+    &["focus-file-tree-search"],
+    &["cycle-theme"],
+    &["toggle-focus-mode"],
+    &["toggle-typewriter-mode"],
+    &["toggle-code-line-numbers"],
+    &["show-preferences"],
+];
+
+const SEARCH_IDS: [&[&str]; 3] = [
+    &["show-find"],
+    &["show-replace"],
+    &["find-next", "find-previous"],
+];
+
+const TABLE_IDS: [&[&str]; 4] = [
+    &["format-table"],
+    &["table-add-row", "table-delete-row"],
+    &["table-move-row-up", "table-move-row-down"],
+    &["table-add-column", "table-delete-column"],
+];
+
+const EXPORT_IDS: [&[&str]; 7] = [
+    &["export-html"],
+    &["export-plain-html"],
+    &["export-pdf"],
+    &["export-latex"],
+    &["export-docx"],
+    &["export-png"],
+    &["export-jpeg"],
+];
 
 const FILE_KEYS: [ShortcutKeys; 5] = [
     ShortcutKeys {
@@ -945,12 +1117,14 @@ fn build_shortcut_catalog(labels: ShortcutLabels, extended: bool) -> ShortcutCat
                 labels.sections[0],
                 &labels.files,
                 &FILE_KEYS,
+                &FILE_IDS,
             ),
             build_shortcut_section(
                 ShortcutCategory::Tabs,
                 labels.sections[1],
                 &labels.tabs,
                 &TAB_KEYS,
+                &TAB_IDS,
             ),
             build_shortcut_section(
                 ShortcutCategory::Editing,
@@ -961,30 +1135,39 @@ fn build_shortcut_catalog(labels: ShortcutLabels, extended: bool) -> ShortcutCat
                 } else {
                     &EDITING_KEYS
                 },
+                if extended {
+                    &EDITING_IDS_EXTENDED
+                } else {
+                    &EDITING_IDS
+                },
             ),
             build_shortcut_section(
                 ShortcutCategory::View,
                 labels.sections[3],
                 &labels.view,
                 &VIEW_KEYS,
+                &VIEW_IDS,
             ),
             build_shortcut_section(
                 ShortcutCategory::Search,
                 labels.sections[4],
                 &labels.search,
                 &SEARCH_KEYS,
+                &SEARCH_IDS,
             ),
             build_shortcut_section(
                 ShortcutCategory::Tables,
                 labels.sections[5],
                 &labels.tables,
                 &TABLE_KEYS,
+                &TABLE_IDS,
             ),
             build_shortcut_section(
                 ShortcutCategory::Export,
                 labels.sections[6],
                 &labels.export,
                 &EXPORT_KEYS,
+                &EXPORT_IDS,
             ),
         ],
     }
@@ -995,18 +1178,26 @@ fn build_shortcut_section(
     title: &'static str,
     actions: &[&'static str],
     keys: &[ShortcutKeys],
+    ids: &[&'static [&'static str]],
 ) -> ShortcutSection {
     debug_assert_eq!(actions.len(), keys.len());
+    debug_assert_eq!(actions.len(), ids.len());
     ShortcutSection {
         category,
         label: title,
         actions: actions
             .iter()
             .zip(keys.iter())
-            .map(|(&label, keys)| ShortcutAction {
-                label,
-                windows_linux: keys.windows_linux,
-                macos: keys.macos,
+            .zip(ids.iter())
+            .map(|((&label, keys), &ids)| {
+                debug_assert_eq!(ids.len(), keys.windows_linux.len());
+                debug_assert_eq!(ids.len(), keys.macos.len());
+                ShortcutAction {
+                    label,
+                    ids,
+                    windows_linux: keys.windows_linux,
+                    macos: keys.macos,
+                }
             })
             .collect(),
     }
@@ -1706,6 +1897,16 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Close",
+        Msg::PrefPanelTabGeneral => "General",
+        Msg::PrefPanelTabShortcuts => "Shortcuts",
+        Msg::ShortcutCapturePrompt => "Press keys… (Esc cancels)",
+        Msg::ShortcutErrorNotAssignable => {
+            "That key cannot be assigned. Add a modifier or use F1–F12."
+        }
+        Msg::ShortcutErrorConflict => "Already used by {0}",
+        Msg::ShortcutResetAction => "Reset",
+        Msg::StatusShortcutUpdated => "Shortcut set to {0}",
+        Msg::StatusShortcutReset => "Shortcut restored to default",
         Msg::DiagramLoading => "Rendering diagram…",
         Msg::DiagramUnsupported => "This diagram format is not supported.",
         Msg::DiagramInputTooLarge => "The diagram source exceeds the size limit.",
@@ -2083,6 +2284,16 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "閉じる",
+        Msg::PrefPanelTabGeneral => "一般",
+        Msg::PrefPanelTabShortcuts => "ショートカット",
+        Msg::ShortcutCapturePrompt => "キーを押してください…（Escで取消）",
+        Msg::ShortcutErrorNotAssignable => {
+            "このキーは割り当てできません。修飾キーを追加するか F1〜F12 を使用してください。"
+        }
+        Msg::ShortcutErrorConflict => "すでに {0} が使用しています",
+        Msg::ShortcutResetAction => "リセット",
+        Msg::StatusShortcutUpdated => "ショートカットを {0} に設定しました",
+        Msg::StatusShortcutReset => "ショートカットを既定に戻しました",
         Msg::DiagramLoading => "図を描画しています…",
         Msg::DiagramUnsupported => "この図形式はサポートされていません。",
         Msg::DiagramInputTooLarge => "図のソースがサイズ上限を超えています。",
@@ -2448,6 +2659,16 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Fermer",
+        Msg::PrefPanelTabGeneral => "Général",
+        Msg::PrefPanelTabShortcuts => "Raccourcis",
+        Msg::ShortcutCapturePrompt => "Appuyez sur les touches… (Échap annule)",
+        Msg::ShortcutErrorNotAssignable => {
+            "Cette touche ne peut pas être assignée. Ajoutez un modificateur ou utilisez F1–F12."
+        }
+        Msg::ShortcutErrorConflict => "Déjà utilisé par {0}",
+        Msg::ShortcutResetAction => "Réinitialiser",
+        Msg::StatusShortcutUpdated => "Raccourci défini sur {0}",
+        Msg::StatusShortcutReset => "Raccourci rétabli par défaut",
         Msg::DiagramLoading => "Rendu du diagramme…",
         Msg::DiagramUnsupported => "Ce format de diagramme n’est pas pris en charge.",
         Msg::DiagramInputTooLarge => "La source du diagramme dépasse la taille autorisée.",
@@ -2811,6 +3032,16 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Schließen",
+        Msg::PrefPanelTabGeneral => "Allgemein",
+        Msg::PrefPanelTabShortcuts => "Tastenkürzel",
+        Msg::ShortcutCapturePrompt => "Tasten drücken… (Esc bricht ab)",
+        Msg::ShortcutErrorNotAssignable => {
+            "Diese Taste kann nicht zugewiesen werden. Modifikator hinzufügen oder F1–F12 nutzen."
+        }
+        Msg::ShortcutErrorConflict => "Bereits von {0} verwendet",
+        Msg::ShortcutResetAction => "Zurücksetzen",
+        Msg::StatusShortcutUpdated => "Tastenkürzel auf {0} gesetzt",
+        Msg::StatusShortcutReset => "Tastenkürzel auf Standard zurückgesetzt",
         Msg::DiagramLoading => "Diagramm wird gerendert…",
         Msg::DiagramUnsupported => "Dieses Diagrammformat wird nicht unterstützt.",
         Msg::DiagramInputTooLarge => "Der Diagrammquelltext überschreitet die Größenbegrenzung.",
@@ -3168,6 +3399,16 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Cerrar",
+        Msg::PrefPanelTabGeneral => "General",
+        Msg::PrefPanelTabShortcuts => "Atajos",
+        Msg::ShortcutCapturePrompt => "Pulsa las teclas… (Esc cancela)",
+        Msg::ShortcutErrorNotAssignable => {
+            "Esa tecla no se puede asignar. Añade un modificador o usa F1–F12."
+        }
+        Msg::ShortcutErrorConflict => "Ya lo usa {0}",
+        Msg::ShortcutResetAction => "Restablecer",
+        Msg::StatusShortcutUpdated => "Atajo establecido en {0}",
+        Msg::StatusShortcutReset => "Atajo restablecido al valor predeterminado",
         Msg::DiagramLoading => "Renderizando diagrama…",
         Msg::DiagramUnsupported => "Este formato de diagrama no es compatible.",
         Msg::DiagramInputTooLarge => "El código del diagrama supera el límite de tamaño.",
@@ -3534,6 +3775,14 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "关闭",
+        Msg::PrefPanelTabGeneral => "常规",
+        Msg::PrefPanelTabShortcuts => "快捷键",
+        Msg::ShortcutCapturePrompt => "请按下按键…（Esc 取消）",
+        Msg::ShortcutErrorNotAssignable => "该按键无法分配，请添加修饰键或使用 F1–F12。",
+        Msg::ShortcutErrorConflict => "已被“{0}”占用",
+        Msg::ShortcutResetAction => "重置",
+        Msg::StatusShortcutUpdated => "快捷键已设置为 {0}",
+        Msg::StatusShortcutReset => "快捷键已恢复默认",
         Msg::DiagramLoading => "正在渲染图表…",
         Msg::DiagramUnsupported => "不支持此图表格式。",
         Msg::DiagramInputTooLarge => "图表源代码超过大小限制。",
@@ -3902,6 +4151,14 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "關閉",
+        Msg::PrefPanelTabGeneral => "一般",
+        Msg::PrefPanelTabShortcuts => "快速鍵",
+        Msg::ShortcutCapturePrompt => "請按下按鍵…（Esc 取消）",
+        Msg::ShortcutErrorNotAssignable => "此按鍵無法指派，請加上修飾鍵或使用 F1–F12。",
+        Msg::ShortcutErrorConflict => "已被「{0}」占用",
+        Msg::ShortcutResetAction => "重設",
+        Msg::StatusShortcutUpdated => "快速鍵已設定為 {0}",
+        Msg::StatusShortcutReset => "快速鍵已恢復預設",
         Msg::DiagramLoading => "正在算繪圖表…",
         Msg::DiagramUnsupported => "不支援此圖表格式。",
         Msg::DiagramInputTooLarge => "圖表原始碼超過大小限制。",
@@ -4552,6 +4809,14 @@ mod tests {
             Msg::PrefPanelSyncScroll,
             Msg::PrefPanelSidebar,
             Msg::PrefPanelHeadingMenu,
+            Msg::PrefPanelTabGeneral,
+            Msg::PrefPanelTabShortcuts,
+            Msg::ShortcutCapturePrompt,
+            Msg::ShortcutErrorNotAssignable,
+            Msg::ShortcutErrorConflict,
+            Msg::ShortcutResetAction,
+            Msg::StatusShortcutUpdated,
+            Msg::StatusShortcutReset,
             Msg::PrefPanelHeadingMenuThree,
             Msg::PrefPanelHeadingMenuSix,
             Msg::PrefPanelClose,
