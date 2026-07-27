@@ -26,27 +26,31 @@ use gpui::{
     anchored, canvas, div, fill, font, img, list, point, px, rgb, rgba, size,
 };
 use markion::{
-    AppPreferences, AutoSavePreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
+    AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement, BlockTarget,
+    BlockTransform, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
     DEFAULT_RENDERED_FONT_SIZE, DiskState, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
     ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind,
     HighlightedSpan, HtmlPreviewPart, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
     Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
-    MarkdownFormat, MathLayoutStyle, Msg, P0Msg, PreviewBlock, RichText, SearchMatchRange,
-    SearchOptions, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab, TableEdit,
-    ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockEditor, VisualBlockId,
-    VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind,
-    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
-    builtin_theme_definitions, default_preferences_path, default_recovery_dir,
-    default_session_path, default_themes_dir, delete_recovery_file, diagram_backend_id,
-    highlight_code, html_preview_parts, html_preview_plain_text, image_extension_supported,
-    import_image_bytes, import_image_file, inline_image_at, inline_link_at, is_markdown_path,
-    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
-    load_session_state, normalize_editor_font_size, normalize_heading_menu_max_level,
-    normalize_paragraph_spacing, normalize_rendered_font_size, p0_t, p0_tf, save_app_preferences,
+    MarkdownFormat, MathLayoutStyle, Msg, P0Msg, P1Msg, PreviewBlock, RecoveryInventoryEntry,
+    RecoverySourceState, RichText, SearchMatchRange, SearchOptions, SessionState, ShortcutCategory,
+    ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery, TableEdit, ThemeColors,
+    ThemeDefinition, ViewMode, VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind,
+    VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind, VisualNavigationTarget,
+    VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind, adjacent_reorder_target,
+    block_can_reorder_at, block_can_transform_at, build_visual_projection,
+    build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
+    default_preferences_path, default_recovery_dir, default_session_path, default_themes_dir,
+    delete_block, delete_recovery_file, diagram_backend_id, duplicate_block, highlight_code,
+    html_preview_parts, html_preview_plain_text, image_extension_supported, import_image_bytes,
+    import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
+    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
+    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
+    normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf, reorder_block, save_app_preferences,
     save_session_state, save_theme_definition, serialize_inline_image, serialize_inline_link,
-    shortcut_catalog, sidebar_tab_label, t, tf, title_from_path,
+    shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at, t, tf,
+    title_from_path, transform_block,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -754,6 +758,54 @@ struct LinkEditorState {
     field: LinkEditorField,
 }
 
+#[derive(Clone, Debug)]
+struct RecoveryManagerState {
+    entries: Vec<RecoveryInventoryEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct SlashCommandState {
+    query: SlashQuery,
+    selected: usize,
+}
+
+#[derive(Clone, Debug)]
+struct BlockMenuState {
+    target: BlockTarget,
+}
+
+fn slash_command_label(language: Language, command: SlashCommand) -> String {
+    match command {
+        SlashCommand::Text => p1_t(language, P1Msg::TextBlock).to_string(),
+        SlashCommand::Heading(level) => {
+            p1_tf(language, P1Msg::Heading, &[&level.clamp(1, 6).to_string()])
+        }
+        SlashCommand::BulletedList => p1_t(language, P1Msg::BulletedList).to_string(),
+        SlashCommand::NumberedList => p1_t(language, P1Msg::NumberedList).to_string(),
+        SlashCommand::TaskList => p1_t(language, P1Msg::TaskList).to_string(),
+        SlashCommand::Quote => p1_t(language, P1Msg::Quote).to_string(),
+        SlashCommand::CodeBlock => p1_t(language, P1Msg::CodeBlock).to_string(),
+        SlashCommand::Divider => p1_t(language, P1Msg::Divider).to_string(),
+        SlashCommand::Table => p1_t(language, P1Msg::Table).to_string(),
+    }
+}
+
+fn localized_slash_commands(language: Language, query: &str) -> Vec<SlashCommand> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return SlashCommand::ALL.to_vec();
+    }
+    SlashCommand::ALL
+        .into_iter()
+        .filter(|command| {
+            command.search_terms().contains(&needle)
+                || slash_command_label(language, *command)
+                    .to_lowercase()
+                    .contains(&needle)
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppTheme {
     Paper,
@@ -983,6 +1035,10 @@ fn document_tab_band_height(tab_count: usize) -> f32 {
 struct DraggedEditorSplitHandle;
 #[derive(Debug, Clone)]
 struct DraggedSidebarHandle;
+#[derive(Debug, Clone)]
+struct DraggedVisualBlock {
+    target: BlockTarget,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PaneScrollTarget {
@@ -1243,6 +1299,13 @@ struct MarkionApp {
     /// is pasted/dropped into an untitled tab and consumed after Save As.
     pending_image_import: Option<Vec<PendingImageInput>>,
     link_editor: Option<LinkEditorState>,
+    /// Startup crash snapshots awaiting an explicit per-entry decision. This
+    /// remains open independently of the active editor tab so unreadable or
+    /// deferred snapshots are never silently removed.
+    recovery_manager: Option<RecoveryManagerState>,
+    slash_commands: Option<SlashCommandState>,
+    dismissed_slash_query: Option<SlashQuery>,
+    block_menu: Option<BlockMenuState>,
     search_visible: bool,
     replace_visible: bool,
     search_query: String,

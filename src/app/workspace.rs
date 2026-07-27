@@ -3,6 +3,9 @@ use super::*;
 impl MarkionApp {
     pub(super) fn set_view_mode(&mut self, view_mode: ViewMode, cx: &mut Context<Self>) {
         assign_view_mode(&mut self.view_mode, view_mode);
+        self.slash_commands = None;
+        self.dismissed_slash_query = None;
+        self.block_menu = None;
         self.active_tab_mut().clear_visual_caret_affinity();
         self.active_tab_mut().clear_visual_navigation_intent();
         self.active_tab_mut().finish_undo_capture();
@@ -247,6 +250,15 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.slash_commands.is_some() {
+            self.dismissed_slash_query = self.slash_commands.take().map(|state| state.query);
+            cx.notify();
+            return;
+        }
+        if self.block_menu.is_some() {
+            self.close_visual_block_menu(cx);
+            return;
+        }
         if self.preferences_panel_open {
             self.close_preferences_panel(window, cx);
             return;

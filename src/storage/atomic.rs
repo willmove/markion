@@ -20,6 +20,12 @@ pub fn atomic_write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Resu
         .unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
 
+    let destination_permissions = match fs::metadata(path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err),
+    };
+
     let temp = unique_temp_path(path);
     let result = (|| {
         let mut file = OpenOptions::new()
@@ -28,6 +34,11 @@ pub fn atomic_write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Resu
             .open(&temp)?;
         file.write_all(bytes.as_ref())?;
         file.sync_all()?;
+        if let Some(permissions) = destination_permissions {
+            file.set_permissions(permissions)?;
+            // Persist the metadata update before the replacement becomes visible.
+            file.sync_all()?;
+        }
         drop(file);
         replace_file(&temp, path)?;
         sync_parent(parent);
@@ -114,11 +125,41 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target_dir = dir.path().join("target");
         fs::create_dir(&target_dir).unwrap();
-        let err = atomic_write(&target_dir, b"replacement").unwrap_err();
-        assert!(matches!(
-            err.kind(),
-            io::ErrorKind::PermissionDenied | io::ErrorKind::Other
-        ));
+        atomic_write(&target_dir, b"replacement").unwrap_err();
         assert!(target_dir.is_dir());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn atomic_write_preserves_destination_permission_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("permissions.md");
+        fs::write(&path, "old").unwrap();
+        let before = fs::metadata(&path).unwrap().permissions();
+
+        atomic_write(&path, b"new").unwrap();
+
+        let after = fs::metadata(&path).unwrap().permissions();
+        assert_eq!(after.readonly(), before.readonly());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_existing_unix_mode_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("private.md");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+
+        atomic_write(&path, b"new complete value").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new complete value");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

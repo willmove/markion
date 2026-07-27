@@ -28,7 +28,10 @@ pub use preferences::{
     load_app_preferences, parse_app_preferences, parse_legacy_app_preferences,
     render_app_preferences, save_app_preferences,
 };
-pub use recovery::{delete_recovery_file, list_recovery_files, load_recovery_file};
+pub use recovery::{
+    RecoveryInventoryEntry, RecoverySourceState, delete_recovery_file, inspect_recovery_files,
+    list_recovery_files, load_recovery_file,
+};
 pub use resources::{
     ImportedImage, image_extension_supported, import_image_bytes, import_image_file,
 };

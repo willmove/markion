@@ -5270,6 +5270,304 @@ fn visual_link_editor_commits_one_exact_undoable_mutation(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn p1_visual_slash_keyboard_and_escape_preserve_atomic_history(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("/"))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (escape_version, escape_blocks) = app.update(cx, |app, _| {
+        assert!(app.slash_commands.is_some());
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+    cx.dispatch_action(ClearFileTreeSearch);
+    app.update(cx, |app, _| {
+        assert!(app.slash_commands.is_none());
+        assert_eq!(app.active_tab().document.text(), "/");
+        assert_eq!(app.active_tab().document.version(), escape_version);
+        assert!(Arc::ptr_eq(
+            &escape_blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+
+    let start_version = app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("/"))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 1..1;
+        app.dismissed_slash_query = None;
+        app.sync_slash_command_state(cx);
+        cx.notify();
+        app.active_tab().document.version()
+    });
+    cx.dispatch_action(Down);
+    cx.dispatch_action(InsertNewline);
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "# ");
+        assert_eq!(tab.document.version(), start_version + 1);
+        assert_eq!(tab.selected_range, 2..2);
+        assert_eq!(tab.undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "/");
+        assert_eq!(app.active_tab().selected_range, 1..1);
+    });
+}
+
+#[gpui::test]
+fn p1_visual_slash_pointer_and_block_menu_apply_exact_commands(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("/"))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.debug_bounds("slash-command-palette")
+        .expect("slash command palette should be rendered");
+    let heading = cx
+        .debug_bounds("slash-command-1")
+        .expect("H1 slash command should be rendered");
+    cx.simulate_click(heading.center(), Modifiers::none());
+    cx.run_until_parked();
+    let block_start_version = app.update(cx, |app, cx| {
+        assert_eq!(app.active_tab().document.text(), "# ");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("one\n\ntwo"))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 1..1;
+        cx.notify();
+        app.active_tab().document.version()
+    });
+    cx.run_until_parked();
+
+    let menu = cx
+        .debug_bounds("visual-block-menu-button")
+        .expect("focused supported block should render block menu chrome");
+    cx.simulate_click(menu.center(), Modifiers::none());
+    cx.run_until_parked();
+    let task = cx
+        .debug_bounds("visual-block-transform-9")
+        .expect("task-list transform should be rendered");
+    cx.simulate_click(task.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "- [ ] one\n\ntwo");
+        assert_eq!(app.active_tab().document.version(), block_start_version + 1);
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "```rust\nlet x = 1;\n```",
+        ))];
+        app.active_tab = 0;
+        let cursor = app.active_tab().document.text().find("let").unwrap() + 1;
+        app.active_tab_mut().selected_range = cursor..cursor;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.debug_bounds("visual-block-menu-button")
+        .expect("exact fenced code should expose block transformations");
+    cx.debug_bounds("visual-block-drag-grip")
+        .expect("exact fenced code should expose a separate drag grip");
+}
+
+#[gpui::test]
+fn p1_localized_slash_query_supports_ime_and_one_step_confirmation_undo(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("/"))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.view_mode = ViewMode::VisualEdit;
+        app.language = Language::ZhHans;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "标", None, window, cx);
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "标题", None, window, cx);
+            EntityInputHandler::unmark_text(app, window, cx);
+        });
+    });
+    app.update(cx, |app, cx| {
+        app.sync_slash_command_state(cx);
+        assert_eq!(app.active_tab().document.text(), "/标题");
+        assert_eq!(
+            localized_slash_commands(app.language, "标题"),
+            vec![
+                SlashCommand::Heading(1),
+                SlashCommand::Heading(2),
+                SlashCommand::Heading(3),
+                SlashCommand::Heading(4),
+                SlashCommand::Heading(5),
+                SlashCommand::Heading(6),
+            ]
+        );
+        let query_version = app.active_tab().document.version();
+        assert!(app.confirm_selected_slash_command(cx));
+        assert_eq!(app.active_tab().document.text(), "# ");
+        assert_eq!(app.active_tab().document.version(), query_version + 1);
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), "/标题");
+    });
+}
+
+#[gpui::test]
+fn p1_visual_block_operations_are_tab_local_stale_safe_and_one_step_undoable(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("one\n\ntwo")),
+            EditorTab::new(MarkdownDocument::from_text("other tab")),
+        ];
+        app.active_tab = 0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let first = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .unwrap();
+        let target = BlockTarget::from_block(app.active_tab().document.version(), first);
+        app.move_visual_block(target, true, cx);
+        let button_result = app.active_tab().document.text().to_string();
+        assert_eq!(button_result, "two\n\none\n\n");
+        assert_eq!(app.tabs[1].document.text(), "other tab");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), "one\n\ntwo");
+
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let content = blocks
+            .iter()
+            .filter(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .collect::<Vec<_>>();
+        let first = BlockTarget::from_block(app.active_tab().document.version(), content[0]);
+        let second = BlockTarget::from_block(app.active_tab().document.version(), content[1]);
+        app.reorder_visual_block(first, second, BlockPlacement::After, cx);
+        assert_eq!(app.active_tab().document.text(), button_result);
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), "one\n\ntwo");
+        assert!(app.active_tab_mut().apply_redo());
+        assert_eq!(app.active_tab().document.text(), button_result);
+        assert!(app.active_tab_mut().apply_undo());
+
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let target = BlockTarget::from_block(app.active_tab().document.version(), &blocks[0]);
+        app.active_tab_mut().document.insert(0, "changed ");
+        let after_external_mutation = app.active_tab().document.text().to_string();
+        app.transform_visual_block(target, BlockTransform::Heading(1), cx);
+        assert_eq!(app.active_tab().document.text(), after_external_mutation);
+        assert_eq!(app.status, p1_t(app.language, P1Msg::BlockStale));
+    });
+}
+
+#[gpui::test]
+fn p1_restored_snapshot_survives_restore_reuses_clean_tab_and_clears_after_save(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let document_path = dir.path().join("important.md");
+    let recovery_dir = dir.path().join("recoveries");
+    let mut document = MarkdownDocument::from_text("disk");
+    document.save_as(&document_path).unwrap();
+    document.set_text("recovered work");
+    let recovery_path = document
+        .save_recovery_copy_with_id(&recovery_dir, 41)
+        .unwrap();
+
+    let clean_document = MarkdownDocument::open(&document_path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(clean_document)];
+        app.recovery_dir = recovery_dir;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+        app.update(cx, |app, cx| app.check_recovery_on_startup(window, cx));
+    });
+    cx.run_until_parked();
+    cx.debug_bounds("restore-all-recoveries")
+        .expect("recovery manager should render bulk actions");
+    app.update(cx, |app, cx| {
+        assert_eq!(app.recovery_manager.as_ref().unwrap().entries.len(), 1);
+        app.restore_recovery_entry(&recovery_path, cx).unwrap();
+        assert_eq!(
+            app.tabs.len(),
+            1,
+            "matching clean session tab must be reused"
+        );
+        assert_eq!(app.active_tab().document.text(), "recovered work");
+        assert_eq!(
+            app.active_tab().last_recovery_file.as_deref(),
+            Some(recovery_path.as_path())
+        );
+        assert!(
+            recovery_path.exists(),
+            "restore must retain its durable snapshot"
+        );
+
+        app.active_tab_mut().document.save().unwrap();
+        app.discard_current_recovery_file();
+        assert!(!recovery_path.exists());
+    });
+}
+
+#[gpui::test]
+fn p1_explicit_quit_discard_removes_every_tab_recovery(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.md");
+    let second = dir.path().join("second.md");
+    fs::write(&first, "first").unwrap();
+    fs::write(&second, "second").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut first_tab = EditorTab::new(MarkdownDocument::from_text("one"));
+        first_tab.last_recovery_file = Some(first.clone());
+        let mut second_tab = EditorTab::new(MarkdownDocument::from_text("two"));
+        second_tab.last_recovery_file = Some(second.clone());
+        app.tabs = vec![first_tab, second_tab];
+        app
+    });
+    app.update(cx, |app, _| app.discard_all_tab_recovery_files());
+    assert!(!first.exists());
+    assert!(!second.exists());
+    app.update(cx, |app, _| {
+        assert!(app.tabs.iter().all(|tab| tab.last_recovery_file.is_none()));
+    });
+}
+
+#[gpui::test]
 fn canceling_link_editor_preserves_version_cache_and_history(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);

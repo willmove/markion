@@ -2423,7 +2423,13 @@ pub(super) fn visual_block_view(
         && block.editor.is_none()
         && (block.source_island.is_some() || block.editable_runs.is_empty());
     if focused_conservative || always_source {
-        return visual_source_island_view(app, block, block_index, cx);
+        let row = visual_source_island_view(app, block, block_index, cx);
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        return if block_can_transform_at(&blocks, block_index) {
+            visual_block_chrome(app, block, block_index, owns_caret, row, cx)
+        } else {
+            row
+        };
     }
 
     let row = match &block.kind {
@@ -2723,6 +2729,12 @@ pub(super) fn visual_block_view(
             visual_reference_definition_view(app, block, block_index, cx)
         }
     };
+    let blocks = app.active_tab().document.visual_blocks_shared();
+    let row = if block_can_transform_at(&blocks, block_index) {
+        visual_block_chrome(app, block, block_index, owns_caret, row, cx)
+    } else {
+        row
+    };
     if let Some(quote) = &block.quote_context {
         let (padding_top, padding_bottom) = match quote.edge {
             VisualQuoteGroupEdge::Only => (4., 4.),
@@ -2742,6 +2754,304 @@ pub(super) fn visual_block_view(
     } else {
         row
     }
+}
+
+fn visual_block_chrome(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    owns_caret: bool,
+    content: Div,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let palette = app.palette();
+    let target = BlockTarget::from_block(app.active_tab().document.version(), block);
+    let blocks = app.active_tab().document.visual_blocks_shared();
+    let reorderable = block_can_reorder_at(&blocks, block_index);
+    let menu_open = app
+        .block_menu
+        .as_ref()
+        .is_some_and(|menu| menu.target == target);
+    let before_target = target.clone();
+    let after_target = target.clone();
+    let drag_target = target.clone();
+    let menu_target = target.clone();
+
+    div()
+        .relative()
+        .w_full()
+        .flex()
+        .items_start()
+        .child(
+            div()
+                .w(px(if reorderable { 48. } else { 28. }))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(owns_caret, |chrome| {
+                    chrome
+                        .when(reorderable, |chrome| {
+                            chrome.child(
+                                div()
+                                    .id("visual-block-drag-grip")
+                                    .debug_selector(|| "visual-block-drag-grip".to_string())
+                                    .w(px(22.))
+                                    .h(px(22.))
+                                    .rounded_sm()
+                                    .text_size(px(14.))
+                                    .text_color(palette.muted)
+                                    .cursor(CursorStyle::OpenHand)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .hover(move |style| style.bg(palette.surface_bg))
+                                    .child("⠿")
+                                    .on_drag(
+                                        DraggedVisualBlock {
+                                            target: drag_target,
+                                        },
+                                        move |_, _, _, cx| cx.new(|_| Empty),
+                                    ),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id("visual-block-menu-button")
+                                .debug_selector(|| "visual-block-menu-button".to_string())
+                                .w(px(22.))
+                                .h(px(22.))
+                                .rounded_sm()
+                                .text_size(px(14.))
+                                .text_color(palette.muted)
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .hover(move |style| style.bg(palette.surface_bg))
+                                .child("⋮")
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                        app.open_visual_block_menu(menu_target.clone(), cx);
+                                    }),
+                                ),
+                        )
+                }),
+        )
+        .child(div().min_w_0().flex_1().child(content))
+        .when(reorderable, |row| {
+            row.child(
+                div()
+                    .id(("visual-block-drop-before", block.id.as_u64()))
+                    .absolute()
+                    .top(px(-3.))
+                    .left_0()
+                    .right_0()
+                    .h(px(6.))
+                    .on_drop::<DraggedVisualBlock>(cx.listener(
+                        move |app, dragged: &DraggedVisualBlock, _, cx| {
+                            app.reorder_visual_block(
+                                dragged.target.clone(),
+                                before_target.clone(),
+                                BlockPlacement::Before,
+                                cx,
+                            );
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .id(("visual-block-drop-after", block.id.as_u64()))
+                    .absolute()
+                    .bottom(px(-3.))
+                    .left_0()
+                    .right_0()
+                    .h(px(6.))
+                    .on_drop::<DraggedVisualBlock>(cx.listener(
+                        move |app, dragged: &DraggedVisualBlock, _, cx| {
+                            app.reorder_visual_block(
+                                dragged.target.clone(),
+                                after_target.clone(),
+                                BlockPlacement::After,
+                                cx,
+                            );
+                        },
+                    )),
+            )
+        })
+        .when(menu_open, |row| {
+            row.child(visual_block_menu(app.language, target, palette, cx))
+        })
+}
+
+fn visual_block_menu(
+    language: Language,
+    target: BlockTarget,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let transforms = [
+        BlockTransform::Text,
+        BlockTransform::Heading(1),
+        BlockTransform::Heading(2),
+        BlockTransform::Heading(3),
+        BlockTransform::Heading(4),
+        BlockTransform::Heading(5),
+        BlockTransform::Heading(6),
+        BlockTransform::BulletedList,
+        BlockTransform::NumberedList,
+        BlockTransform::TaskList,
+        BlockTransform::Quote,
+        BlockTransform::CodeBlock,
+        BlockTransform::Divider,
+        BlockTransform::Table,
+    ];
+    div()
+        .id(("visual-block-menu", target.block_id.as_u64()))
+        .absolute()
+        .top(px(24.))
+        .left(px(24.))
+        .w(px(220.))
+        .max_h(px(520.))
+        .occlude()
+        .p_2()
+        .bg(palette.panel_bg)
+        .border_1()
+        .border_color(palette.border)
+        .rounded_lg()
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .px_2()
+                .py_1()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(palette.muted)
+                .child(p1_t(language, P1Msg::TurnInto)),
+        )
+        .children(
+            transforms
+                .into_iter()
+                .enumerate()
+                .map(|(index, transform)| {
+                    let target = target.clone();
+                    let label = block_transform_label(language, transform);
+                    div()
+                        .id(visual_block_transform_element_id(index))
+                        .debug_selector(move || {
+                            visual_block_transform_element_id(index).to_string()
+                        })
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .text_size(px(12.))
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(palette.surface_bg))
+                        .child(label)
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                app.transform_visual_block(target.clone(), transform, cx);
+                            }),
+                        )
+                }),
+        )
+        .child(div().my_1().h(px(1.)).bg(palette.border))
+        .child(block_operation_button(
+            "visual-block-duplicate",
+            p1_t(language, P1Msg::DuplicateBlock),
+            target.clone(),
+            palette,
+            cx,
+            |app, target, cx| app.duplicate_visual_block(target, cx),
+        ))
+        .child(block_operation_button(
+            "visual-block-move-up",
+            p1_t(language, P1Msg::MoveUp),
+            target.clone(),
+            palette,
+            cx,
+            |app, target, cx| app.move_visual_block(target, false, cx),
+        ))
+        .child(block_operation_button(
+            "visual-block-move-down",
+            p1_t(language, P1Msg::MoveDown),
+            target.clone(),
+            palette,
+            cx,
+            |app, target, cx| app.move_visual_block(target, true, cx),
+        ))
+        .child(block_operation_button(
+            "visual-block-delete",
+            p1_t(language, P1Msg::DeleteBlock),
+            target,
+            palette,
+            cx,
+            |app, target, cx| app.delete_visual_block(target, cx),
+        ))
+}
+
+fn visual_block_transform_element_id(index: usize) -> &'static str {
+    const IDS: [&str; 14] = [
+        "visual-block-transform-0",
+        "visual-block-transform-1",
+        "visual-block-transform-2",
+        "visual-block-transform-3",
+        "visual-block-transform-4",
+        "visual-block-transform-5",
+        "visual-block-transform-6",
+        "visual-block-transform-7",
+        "visual-block-transform-8",
+        "visual-block-transform-9",
+        "visual-block-transform-10",
+        "visual-block-transform-11",
+        "visual-block-transform-12",
+        "visual-block-transform-13",
+    ];
+    IDS[index.min(IDS.len() - 1)]
+}
+
+fn block_transform_label(language: Language, transform: BlockTransform) -> String {
+    match transform {
+        BlockTransform::Text => p1_t(language, P1Msg::TextBlock).to_string(),
+        BlockTransform::Heading(level) => p1_tf(language, P1Msg::Heading, &[&level.to_string()]),
+        BlockTransform::BulletedList => p1_t(language, P1Msg::BulletedList).to_string(),
+        BlockTransform::NumberedList => p1_t(language, P1Msg::NumberedList).to_string(),
+        BlockTransform::TaskList => p1_t(language, P1Msg::TaskList).to_string(),
+        BlockTransform::Quote => p1_t(language, P1Msg::Quote).to_string(),
+        BlockTransform::CodeBlock => p1_t(language, P1Msg::CodeBlock).to_string(),
+        BlockTransform::Divider => p1_t(language, P1Msg::Divider).to_string(),
+        BlockTransform::Table => p1_t(language, P1Msg::Table).to_string(),
+    }
+}
+
+fn block_operation_button(
+    id: &'static str,
+    label: &'static str,
+    target: BlockTarget,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+    operation: impl Fn(&mut MarkionApp, BlockTarget, &mut Context<MarkionApp>) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_2()
+        .py_1()
+        .rounded_sm()
+        .text_size(px(12.))
+        .cursor_pointer()
+        .hover(move |style| style.bg(palette.surface_bg))
+        .child(label)
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                operation(app, target.clone(), cx);
+            }),
+        )
 }
 
 /// Editable link-reference definition row without Unsupported island chrome.

@@ -49,7 +49,7 @@ pub(super) fn install_window_close_guard(
                 app_entity.update(cx, |app, cx| {
                     app.confirming_close = false;
                     if confirmed {
-                        app.discard_current_recovery_file();
+                        app.discard_all_tab_recovery_files();
                         app.allow_close = true;
                         cx.quit();
                     } else {

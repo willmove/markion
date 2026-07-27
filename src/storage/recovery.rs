@@ -6,7 +6,31 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::{DiskIdentity, model::RecoveryDocument};
+use crate::{DiskIdentity, DiskState, MarkdownDocument, model::RecoveryDocument};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoverySourceState {
+    Untitled,
+    Unchanged,
+    Modified,
+    Missing,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryInventoryEntry {
+    pub recovery_path: PathBuf,
+    pub modified: Option<SystemTime>,
+    pub original_path: Option<PathBuf>,
+    pub source_state: RecoverySourceState,
+    pub error: Option<String>,
+}
+
+impl RecoveryInventoryEntry {
+    pub fn is_readable(&self) -> bool {
+        self.error.is_none()
+    }
+}
 
 pub fn list_recovery_files(dir: impl AsRef<Path>) -> io::Result<Vec<PathBuf>> {
     let dir = dir.as_ref();
@@ -52,6 +76,54 @@ pub fn load_recovery_file(path: impl AsRef<Path>) -> io::Result<RecoveryDocument
         disk_identity: None,
         text,
     })
+}
+
+pub fn inspect_recovery_files(dir: impl AsRef<Path>) -> io::Result<Vec<RecoveryInventoryEntry>> {
+    list_recovery_files(dir)?
+        .into_iter()
+        .map(|recovery_path| {
+            let modified = fs::metadata(&recovery_path)
+                .and_then(|metadata| metadata.modified())
+                .ok();
+            let entry = match load_recovery_file(&recovery_path) {
+                Ok(recovery) => {
+                    let original_path = recovery.original_path.clone();
+                    let source_state = if original_path.is_none() {
+                        RecoverySourceState::Untitled
+                    } else if recovery.disk_identity.is_none() {
+                        RecoverySourceState::Unknown
+                    } else {
+                        let mut document = MarkdownDocument::recovered_with_identity(
+                            String::new(),
+                            recovery.original_path,
+                            recovery.disk_identity,
+                        );
+                        match document.check_disk_state() {
+                            Ok(DiskState::Unchanged) => RecoverySourceState::Unchanged,
+                            Ok(DiskState::Modified) => RecoverySourceState::Modified,
+                            Ok(DiskState::Missing) => RecoverySourceState::Missing,
+                            Err(_) => RecoverySourceState::Unknown,
+                        }
+                    };
+                    RecoveryInventoryEntry {
+                        recovery_path: recovery_path.clone(),
+                        modified,
+                        original_path,
+                        source_state,
+                        error: None,
+                    }
+                }
+                Err(err) => RecoveryInventoryEntry {
+                    recovery_path: recovery_path.clone(),
+                    modified,
+                    original_path: None,
+                    source_state: RecoverySourceState::Unknown,
+                    error: Some(err.to_string()),
+                },
+            };
+            Ok(entry)
+        })
+        .collect()
 }
 
 fn load_recovery_v2(payload: &str) -> io::Result<RecoveryDocument> {
@@ -211,5 +283,37 @@ mod tests {
         assert_eq!(recovered.original_path, Some(PathBuf::from("D:/note.md")));
         assert!(recovered.disk_identity.is_none());
         assert_eq!(recovered.text, "old text");
+    }
+
+    #[test]
+    fn recovery_inventory_classifies_all_entries_without_deleting_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.md");
+        let recovery_dir = dir.path().join("recovery");
+        let mut document = MarkdownDocument::from_text("saved");
+        document.save_as(&source).unwrap();
+        document.set_text("dirty");
+        let valid = document
+            .save_recovery_copy_with_id(&recovery_dir, 7)
+            .unwrap();
+        let corrupt = recovery_dir.join("corrupt.md");
+        fs::write(&corrupt, "not a recovery").unwrap();
+
+        let entries = inspect_recovery_files(&recovery_dir).unwrap();
+        assert_eq!(entries.len(), 2);
+        let valid_entry = entries
+            .iter()
+            .find(|entry| entry.recovery_path == valid)
+            .unwrap();
+        assert!(valid_entry.is_readable());
+        assert_eq!(valid_entry.original_path.as_deref(), Some(source.as_path()));
+        assert_eq!(valid_entry.source_state, RecoverySourceState::Unchanged);
+        let corrupt_entry = entries
+            .iter()
+            .find(|entry| entry.recovery_path == corrupt)
+            .unwrap();
+        assert!(!corrupt_entry.is_readable());
+        assert!(valid.exists());
+        assert!(corrupt.exists());
     }
 }

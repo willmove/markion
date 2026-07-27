@@ -8,6 +8,7 @@ impl Focusable for MarkionApp {
 
 impl Render for MarkionApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_slash_command_state(cx);
         let palette = self.palette();
         let typography = self.typography_metrics();
         // The preview pane is hidden in Edit mode, so skip the full-document
@@ -567,7 +568,377 @@ impl Render for MarkionApp {
             .when(self.link_editor.is_some(), |root| {
                 root.child(link_editor_view(self, cx))
             })
+            .when(self.slash_commands.is_some(), |root| {
+                root.child(slash_command_palette_view(self, cx))
+            })
+            .when(self.recovery_manager.is_some(), |root| {
+                root.child(recovery_manager_view(self, cx))
+            })
     }
+}
+
+fn slash_command_palette_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
+    let palette = app.palette();
+    let state = app
+        .slash_commands
+        .clone()
+        .expect("slash palette is rendered only while its state is present");
+    let commands = localized_slash_commands(app.language, &state.query.query);
+    let query = state.query;
+    div()
+        .id("slash-command-palette")
+        .debug_selector(|| "slash-command-palette".to_string())
+        .absolute()
+        .right(px(28.))
+        .top(px(72.))
+        .w(px(280.))
+        .max_h(px(520.))
+        .occlude()
+        .p_2()
+        .bg(palette.panel_bg)
+        .border_1()
+        .border_color(palette.border)
+        .rounded_lg()
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .px_2()
+                .py_1()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(palette.muted)
+                .child(p1_t(app.language, P1Msg::SlashCommands)),
+        )
+        .when(commands.is_empty(), |panel| {
+            panel.child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_size(px(12.))
+                    .text_color(palette.muted)
+                    .child(p1_t(app.language, P1Msg::NoCommands)),
+            )
+        })
+        .children(commands.into_iter().enumerate().map(|(index, command)| {
+            let selected = index == state.selected;
+            let query = query.clone();
+            div()
+                .id(slash_command_element_id(index))
+                .debug_selector(move || slash_command_element_id(index).to_string())
+                .px_2()
+                .py_2()
+                .rounded_md()
+                .text_size(px(12.))
+                .cursor_pointer()
+                .when(selected, |row| {
+                    row.bg(palette.active_bg).text_color(palette.active_text)
+                })
+                .when(!selected, |row| {
+                    row.hover(move |style| style.bg(palette.surface_bg))
+                })
+                .child(slash_command_label(app.language, command))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                        app.execute_slash_command(query.clone(), command, cx);
+                    }),
+                )
+        }))
+}
+
+fn slash_command_element_id(index: usize) -> &'static str {
+    const IDS: [&str; 14] = [
+        "slash-command-0",
+        "slash-command-1",
+        "slash-command-2",
+        "slash-command-3",
+        "slash-command-4",
+        "slash-command-5",
+        "slash-command-6",
+        "slash-command-7",
+        "slash-command-8",
+        "slash-command-9",
+        "slash-command-10",
+        "slash-command-11",
+        "slash-command-12",
+        "slash-command-13",
+    ];
+    IDS[index.min(IDS.len() - 1)]
+}
+
+fn recovery_manager_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+    let palette = app.palette();
+    let entries = app
+        .recovery_manager
+        .as_ref()
+        .map(|manager| manager.entries.clone())
+        .unwrap_or_default();
+    let readable_count = entries.iter().filter(|entry| entry.is_readable()).count();
+
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .bg(rgba(0x00000066))
+        .px_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .occlude()
+                .w_full()
+                .max_w(px(760.))
+                .max_h(px(580.))
+                .p_4()
+                .bg(palette.panel_bg)
+                .border_1()
+                .border_color(palette.border)
+                .rounded_lg()
+                .shadow_lg()
+                .text_color(palette.text)
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(px(16.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(p1_t(app.language, P1Msg::RecoveryManagerTitle)),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(palette.muted)
+                                        .child(p1_t(app.language, P1Msg::RecoveryManagerDetail)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("recovery-manager-close")
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .text_color(palette.muted)
+                                .hover(|style| style.bg(palette.surface_bg))
+                                .child("✕")
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                                        app.close_recovery_manager(cx);
+                                    }),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("recovery-manager-entries")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .scrollbar_width(px(8.))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .children(entries.into_iter().enumerate().map(|(index, entry)| {
+                            let restore_path = entry.recovery_path.clone();
+                            let discard_path = entry.recovery_path.clone();
+                            let recovery_label = entry.recovery_path.display().to_string();
+                            let original_label = entry
+                                .original_path
+                                .as_ref()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|| {
+                                    p1_t(app.language, P1Msg::RecoveryUntitled).to_string()
+                                });
+                            let source_label = p1_t(
+                                app.language,
+                                match entry.source_state {
+                                    RecoverySourceState::Untitled => P1Msg::RecoveryUntitled,
+                                    RecoverySourceState::Unchanged => P1Msg::RecoveryUnchanged,
+                                    RecoverySourceState::Modified => P1Msg::RecoveryModified,
+                                    RecoverySourceState::Missing => P1Msg::RecoveryMissing,
+                                    RecoverySourceState::Unknown => P1Msg::RecoveryUnknown,
+                                },
+                            );
+                            let readable = entry.is_readable();
+                            let error = entry.error.clone();
+                            div()
+                                .id(("recovery-entry", index))
+                                .p_3()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(palette.border)
+                                .bg(palette.surface_bg)
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_size(px(13.))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(original_label),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(palette.muted)
+                                                .child(recovery_label),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(if readable {
+                                                    palette.muted
+                                                } else {
+                                                    rgb(0xdc2626)
+                                                })
+                                                .child(error.map_or_else(
+                                                    || source_label.to_string(),
+                                                    |error| {
+                                                        p1_tf(
+                                                            app.language,
+                                                            P1Msg::RecoveryUnreadable,
+                                                            &[&error],
+                                                        )
+                                                    },
+                                                )),
+                                        ),
+                                )
+                                .when(readable, |row| {
+                                    row.child(
+                                        div()
+                                            .id(("restore-recovery", index))
+                                            .px_3()
+                                            .py_1()
+                                            .rounded_md()
+                                            .bg(palette.active_bg)
+                                            .text_color(palette.active_text)
+                                            .cursor_pointer()
+                                            .child(t(app.language, Msg::DialogButtonRestore))
+                                            .on_mouse_up(
+                                                MouseButton::Left,
+                                                cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                                    if let Err(err) = app
+                                                        .restore_recovery_entry(&restore_path, cx)
+                                                    {
+                                                        app.status = p1_tf(
+                                                            app.language,
+                                                            P1Msg::RecoverySomeFailed,
+                                                            &[&err.to_string()],
+                                                        )
+                                                        .into();
+                                                        cx.notify();
+                                                    }
+                                                }),
+                                            ),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .id(("discard-recovery", index))
+                                        .px_3()
+                                        .py_1()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(palette.border)
+                                        .cursor_pointer()
+                                        .child(t(app.language, Msg::DialogButtonDiscard))
+                                        .on_mouse_up(
+                                            MouseButton::Left,
+                                            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                                app.discard_recovery_entry(&discard_path, cx);
+                                            }),
+                                        ),
+                                )
+                        })),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("keep-recoveries")
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(palette.border)
+                                .cursor_pointer()
+                                .child(p1_t(app.language, P1Msg::KeepForLater))
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                                        app.close_recovery_manager(cx);
+                                    }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("discard-all-recoveries")
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(palette.border)
+                                .cursor_pointer()
+                                .child(p1_t(app.language, P1Msg::DiscardAll))
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                                        app.discard_all_recovery_entries(cx);
+                                    }),
+                                ),
+                        )
+                        .when(readable_count > 0, |row| {
+                            row.child(
+                                div()
+                                    .id("restore-all-recoveries")
+                                    .debug_selector(|| "restore-all-recoveries".to_string())
+                                    .px_3()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(palette.active_bg)
+                                    .text_color(palette.active_text)
+                                    .cursor_pointer()
+                                    .child(p1_t(app.language, P1Msg::RestoreAll))
+                                    .on_mouse_up(
+                                        MouseButton::Left,
+                                        cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                                            app.restore_all_recovery_entries(cx);
+                                        }),
+                                    ),
+                            )
+                        }),
+                ),
+        )
 }
 
 pub(super) fn visual_selection_supports_contextual_format(

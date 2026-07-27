@@ -1,6 +1,253 @@
 use super::*;
 
 impl MarkionApp {
+    pub(super) fn sync_slash_command_state(&mut self, cx: &mut Context<Self>) {
+        let query = if self.block_menu.is_none()
+            && self.recovery_manager.is_none()
+            && self.link_editor.is_none()
+            && matches!(self.view_mode, ViewMode::VisualEdit)
+            && self.active_tab().selected_range.is_empty()
+            && self.active_tab().marked_range.is_none()
+        {
+            slash_query_at(
+                self.active_tab().document.text(),
+                self.active_tab().cursor_offset(),
+                self.active_tab().document.version(),
+            )
+        } else {
+            None
+        };
+        let Some(query) = query else {
+            if self.slash_commands.take().is_some() {
+                cx.notify();
+            }
+            return;
+        };
+        if self.dismissed_slash_query.as_ref() == Some(&query) {
+            if self.slash_commands.take().is_some() {
+                cx.notify();
+            }
+            return;
+        }
+        self.dismissed_slash_query = None;
+        if let Some(state) = &mut self.slash_commands
+            && state.query == query
+        {
+            let count = localized_slash_commands(self.language, &query.query).len();
+            state.selected = state.selected.min(count.saturating_sub(1));
+            return;
+        }
+        self.slash_commands = Some(SlashCommandState { query, selected: 0 });
+        cx.notify();
+    }
+
+    pub(super) fn move_slash_selection(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
+        let Some(state) = &mut self.slash_commands else {
+            return false;
+        };
+        let count = localized_slash_commands(self.language, &state.query.query).len();
+        if count == 0 {
+            return true;
+        }
+        state.selected = if forward {
+            (state.selected + 1) % count
+        } else if state.selected == 0 {
+            count - 1
+        } else {
+            state.selected - 1
+        };
+        cx.notify();
+        true
+    }
+
+    pub(super) fn confirm_selected_slash_command(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(state) = self.slash_commands.clone() else {
+            return false;
+        };
+        let commands = localized_slash_commands(self.language, &state.query.query);
+        let Some(command) = commands.get(state.selected).copied() else {
+            return true;
+        };
+        self.execute_slash_command(state.query, command, cx);
+        true
+    }
+
+    pub(super) fn execute_slash_command(
+        &mut self,
+        query: SlashQuery,
+        command: SlashCommand,
+        cx: &mut Context<Self>,
+    ) {
+        match slash_command_edit(
+            self.active_tab().document.text(),
+            self.active_tab().document.version(),
+            &query,
+            command,
+        ) {
+            Ok(edit) => self.apply_exact_block_edit(
+                edit,
+                p1_t(self.language, P1Msg::SlashCommands).into(),
+                cx,
+            ),
+            Err(error) => self.report_block_edit_error(error, cx),
+        }
+    }
+
+    pub(super) fn open_visual_block_menu(&mut self, target: BlockTarget, cx: &mut Context<Self>) {
+        self.block_menu = Some(BlockMenuState { target });
+        self.slash_commands = None;
+        cx.notify();
+    }
+
+    pub(super) fn close_visual_block_menu(&mut self, cx: &mut Context<Self>) {
+        self.block_menu = None;
+        cx.notify();
+    }
+
+    pub(super) fn transform_visual_block(
+        &mut self,
+        target: BlockTarget,
+        transform: BlockTransform,
+        cx: &mut Context<Self>,
+    ) {
+        let blocks = self.active_tab().document.visual_blocks_shared();
+        match transform_block(
+            self.active_tab().document.text(),
+            self.active_tab().document.version(),
+            &blocks,
+            &target,
+            transform,
+        ) {
+            Ok(edit) => {
+                self.apply_exact_block_edit(edit, p1_t(self.language, P1Msg::TurnInto).into(), cx)
+            }
+            Err(error) => self.report_block_edit_error(error, cx),
+        }
+    }
+
+    pub(super) fn duplicate_visual_block(&mut self, target: BlockTarget, cx: &mut Context<Self>) {
+        let blocks = self.active_tab().document.visual_blocks_shared();
+        match duplicate_block(
+            self.active_tab().document.text(),
+            self.active_tab().document.version(),
+            &blocks,
+            &target,
+        ) {
+            Ok(edit) => self.apply_exact_block_edit(
+                edit,
+                p1_t(self.language, P1Msg::BlockDuplicated).into(),
+                cx,
+            ),
+            Err(error) => self.report_block_edit_error(error, cx),
+        }
+    }
+
+    pub(super) fn delete_visual_block(&mut self, target: BlockTarget, cx: &mut Context<Self>) {
+        let blocks = self.active_tab().document.visual_blocks_shared();
+        match delete_block(
+            self.active_tab().document.text(),
+            self.active_tab().document.version(),
+            &blocks,
+            &target,
+        ) {
+            Ok(edit) => self.apply_exact_block_edit(
+                edit,
+                p1_t(self.language, P1Msg::BlockDeleted).into(),
+                cx,
+            ),
+            Err(error) => self.report_block_edit_error(error, cx),
+        }
+    }
+
+    pub(super) fn move_visual_block(
+        &mut self,
+        target: BlockTarget,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let blocks = self.active_tab().document.visual_blocks_shared();
+        let destination = match adjacent_reorder_target(
+            self.active_tab().document.version(),
+            &blocks,
+            &target,
+            forward,
+        ) {
+            Ok(destination) => destination,
+            Err(error) => {
+                self.report_block_edit_error(error, cx);
+                return;
+            }
+        };
+        let placement = if forward {
+            BlockPlacement::After
+        } else {
+            BlockPlacement::Before
+        };
+        self.reorder_visual_block(target, destination, placement, cx);
+    }
+
+    pub(super) fn reorder_visual_block(
+        &mut self,
+        moving: BlockTarget,
+        destination: BlockTarget,
+        placement: BlockPlacement,
+        cx: &mut Context<Self>,
+    ) {
+        let blocks = self.active_tab().document.visual_blocks_shared();
+        match reorder_block(
+            self.active_tab().document.text(),
+            self.active_tab().document.version(),
+            &blocks,
+            &moving,
+            &destination,
+            placement,
+        ) {
+            Ok(edit) => {
+                self.apply_exact_block_edit(edit, p1_t(self.language, P1Msg::BlockMoved).into(), cx)
+            }
+            Err(error) => self.report_block_edit_error(error, cx),
+        }
+    }
+
+    fn apply_exact_block_edit(
+        &mut self,
+        edit: BlockEdit,
+        status: SharedString,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_tab_mut().finish_undo_capture();
+        let snapshot = self.snapshot();
+        self.active_tab_mut()
+            .document
+            .replace_range(edit.range, &edit.replacement);
+        self.commit_undo_snapshot(snapshot);
+        let tab = self.active_tab_mut();
+        tab.selected_range = edit.selection_after;
+        tab.selection_reversed = false;
+        tab.marked_range = None;
+        self.slash_commands = None;
+        self.dismissed_slash_query = None;
+        self.block_menu = None;
+        self.status = status;
+        self.after_document_changed(cx);
+        cx.notify();
+    }
+
+    fn report_block_edit_error(&mut self, error: BlockEditError, cx: &mut Context<Self>) {
+        self.slash_commands = None;
+        self.dismissed_slash_query = None;
+        self.block_menu = None;
+        self.status = p1_t(
+            self.language,
+            match error {
+                BlockEditError::Stale => P1Msg::BlockStale,
+                BlockEditError::Unsupported | BlockEditError::Ambiguous => P1Msg::BlockUnsupported,
+            },
+        )
+        .into();
+        cx.notify();
+    }
+
     pub(super) fn request_image_import(
         &mut self,
         inputs: Vec<PendingImageInput>,
@@ -1098,6 +1345,10 @@ impl MarkionApp {
     }
 
     pub(super) fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        self.sync_slash_command_state(cx);
+        if self.move_slash_selection(false, cx) {
+            return;
+        }
         if self.move_visual_vertical(VisualNavigationDirection::Up, false, cx) {
             return;
         }
@@ -1115,6 +1366,10 @@ impl MarkionApp {
     }
 
     pub(super) fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        self.sync_slash_command_state(cx);
+        if self.move_slash_selection(true, cx) {
+            return;
+        }
         if self.move_visual_vertical(VisualNavigationDirection::Down, false, cx) {
             return;
         }
@@ -1189,6 +1444,10 @@ impl MarkionApp {
         }
         if self.link_editor.is_some() {
             self.confirm_link_editor(cx);
+            return;
+        }
+        self.sync_slash_command_state(cx);
+        if self.confirm_selected_slash_command(cx) {
             return;
         }
         let selected = self.active_tab().selected_range.clone();

@@ -100,6 +100,10 @@ impl MarkionApp {
             pending_name_input: None,
             pending_image_import: None,
             link_editor: None,
+            recovery_manager: None,
+            slash_commands: None,
+            dismissed_slash_query: None,
+            block_menu: None,
             search_visible: false,
             replace_visible: false,
             search_query: String::new(),
@@ -179,6 +183,9 @@ impl MarkionApp {
             }
         }
         self.active_tab = index;
+        self.slash_commands = None;
+        self.dismissed_slash_query = None;
+        self.block_menu = None;
         self.refresh_search_matches();
         self.sync_and_persist_session();
         cx.notify();
@@ -271,75 +278,156 @@ impl MarkionApp {
 
     pub(super) fn check_recovery_on_startup(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Ok(files) = list_recovery_files(&self.recovery_dir) else {
+        let Ok(entries) = inspect_recovery_files(&self.recovery_dir) else {
             return;
         };
-        if files.is_empty() {
+        if entries.is_empty() {
             return;
         }
-
-        let recovery_paths = files
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let detail = tf(self.language, Msg::DialogRestoreDetail, &[&recovery_paths]);
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            self.tr(Msg::DialogRestoreTitle),
-            Some(&detail),
-            &[
-                PromptButton::ok(self.tr(Msg::DialogButtonRestore)),
-                PromptButton::cancel(self.tr(Msg::DialogButtonDiscard)),
-            ],
-            cx,
-        );
-
+        self.recovery_manager = Some(RecoveryManagerState { entries });
         self.status = t(self.language, Msg::StatusRecoveryAvailable).into();
         cx.notify();
+    }
 
-        cx.spawn(async move |this, cx| {
-            let restore = matches!(answer.await, Ok(0));
-            let _ = this.update(cx, |app, cx| {
-                if restore {
-                    let mut first_error = None;
-                    for path in &files {
-                        match load_recovery_file(path) {
-                            Ok(recovery) => {
-                                app.open_in_new_tab(
-                                    MarkdownDocument::recovered_with_identity(
-                                        recovery.text,
-                                        recovery.original_path,
-                                        recovery.disk_identity,
-                                    ),
-                                    cx,
-                                );
-                                let _ = delete_recovery_file(path);
-                            }
-                            Err(err) => {
-                                // Keep unreadable snapshots available for manual recovery.
-                                first_error.get_or_insert(err);
-                            }
-                        }
-                    }
-                    app.status = if let Some(err) = first_error {
-                        tf(app.language, Msg::StatusRecoveryFailed, &[&err.to_string()]).into()
-                    } else {
-                        t(app.language, Msg::StatusRecoveredDocument).into()
-                    };
-                } else {
-                    for path in &files {
-                        let _ = delete_recovery_file(path);
-                    }
-                    app.status = t(app.language, Msg::StatusRecoveryDiscarded).into();
-                }
-                cx.notify();
-            });
-        })
-        .detach();
+    pub(super) fn restore_recovery_entry(
+        &mut self,
+        recovery_path: &Path,
+        cx: &mut Context<Self>,
+    ) -> io::Result<()> {
+        let recovery = load_recovery_file(recovery_path)?;
+        let original_path = recovery.original_path.clone();
+        let document = MarkdownDocument::recovered_with_identity(
+            recovery.text,
+            recovery.original_path,
+            recovery.disk_identity,
+        );
+
+        let reusable_index = original_path.as_deref().and_then(|path| {
+            find_tab_with_document_path(&self.tabs, path)
+                .filter(|index| !self.tabs[*index].document.is_dirty())
+        });
+        if let Some(index) = reusable_index {
+            self.switch_active_tab(index, cx);
+            self.replace_active_tab(document, cx);
+        } else {
+            self.open_in_new_tab(document, cx);
+        }
+        self.active_tab_mut().last_recovery_file = Some(recovery_path.to_path_buf());
+        self.remove_recovery_manager_entry(recovery_path);
+        self.status = p1_tf(
+            self.language,
+            P1Msg::RecoveryRestored,
+            &[&recovery_path.display().to_string()],
+        )
+        .into();
+        self.sync_and_persist_session();
+        cx.notify();
+        Ok(())
+    }
+
+    pub(super) fn restore_all_recovery_entries(&mut self, cx: &mut Context<Self>) {
+        let paths = self
+            .recovery_manager
+            .as_ref()
+            .map(|manager| {
+                manager
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.is_readable())
+                    .map(|entry| entry.recovery_path.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut failed = false;
+        for path in paths {
+            failed |= self.restore_recovery_entry(&path, cx).is_err();
+        }
+        if failed {
+            self.status = p1_tf(
+                self.language,
+                P1Msg::RecoverySomeFailed,
+                &[p1_t(self.language, P1Msg::RecoveryUnknown)],
+            )
+            .into();
+        }
+        cx.notify();
+    }
+
+    pub(super) fn discard_recovery_entry(&mut self, recovery_path: &Path, cx: &mut Context<Self>) {
+        match delete_recovery_file(recovery_path) {
+            Ok(()) => {
+                self.remove_recovery_manager_entry(recovery_path);
+                self.status = p1_tf(
+                    self.language,
+                    P1Msg::RecoveryDiscarded,
+                    &[&recovery_path.display().to_string()],
+                )
+                .into();
+            }
+            Err(err) => {
+                self.status = p1_tf(
+                    self.language,
+                    P1Msg::RecoverySomeFailed,
+                    &[&err.to_string()],
+                )
+                .into();
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn discard_all_recovery_entries(&mut self, cx: &mut Context<Self>) {
+        let paths = self
+            .recovery_manager
+            .as_ref()
+            .map(|manager| {
+                manager
+                    .entries
+                    .iter()
+                    .map(|entry| entry.recovery_path.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut failed = false;
+        for path in paths {
+            if delete_recovery_file(&path).is_ok() {
+                self.remove_recovery_manager_entry(&path);
+            } else {
+                failed = true;
+            }
+        }
+        self.status = if failed {
+            p1_tf(
+                self.language,
+                P1Msg::RecoverySomeFailed,
+                &[p1_t(self.language, P1Msg::RecoveryUnknown)],
+            )
+            .into()
+        } else {
+            t(self.language, Msg::StatusRecoveryDiscarded).into()
+        };
+        cx.notify();
+    }
+
+    pub(super) fn close_recovery_manager(&mut self, cx: &mut Context<Self>) {
+        self.recovery_manager = None;
+        cx.notify();
+    }
+
+    fn remove_recovery_manager_entry(&mut self, recovery_path: &Path) {
+        let Some(manager) = &mut self.recovery_manager else {
+            return;
+        };
+        manager
+            .entries
+            .retain(|entry| entry.recovery_path != recovery_path);
+        let empty = manager.entries.is_empty();
+        if empty {
+            self.recovery_manager = None;
+        }
     }
 
     pub(super) fn apply_startup_open_intent(
@@ -392,6 +480,9 @@ impl MarkionApp {
     }
 
     pub(super) fn after_document_changed(&mut self, cx: &mut Context<Self>) {
+        self.slash_commands = None;
+        self.dismissed_slash_query = None;
+        self.block_menu = None;
         let tab = self.active_tab_mut();
         tab.clear_visual_caret_affinity();
         tab.clear_visual_navigation_intent();
@@ -574,6 +665,14 @@ impl MarkionApp {
     pub(super) fn discard_current_recovery_file(&mut self) {
         if let Some(recovery) = self.active_tab_mut().last_recovery_file.take() {
             let _ = delete_recovery_file(recovery);
+        }
+    }
+
+    pub(super) fn discard_all_tab_recovery_files(&mut self) {
+        for tab in &mut self.tabs {
+            if let Some(recovery) = tab.last_recovery_file.take() {
+                let _ = delete_recovery_file(recovery);
+            }
         }
     }
 

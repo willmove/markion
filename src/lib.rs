@@ -11,6 +11,7 @@ use std::{
 use pulldown_cmark::{Alignment, CodeBlockKind, CowStr, Event, Parser, Tag, TagEnd, html};
 use regex::RegexBuilder;
 
+pub mod block_edit;
 mod diagram;
 mod document_memory;
 mod editing;
@@ -134,23 +135,31 @@ pub use model::{
 };
 pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
+pub use block_edit::{
+    BlockEdit, BlockEditError, BlockPlacement, BlockTarget, BlockTransform, SlashCommand,
+    SlashQuery, adjacent_reorder_target, block_can_reorder, block_can_reorder_at,
+    block_can_transform, block_can_transform_at, delete_block, duplicate_block,
+    filtered_slash_commands, reorder_block, slash_command_edit, slash_query_at, transform_block,
+    validate_block_target,
+};
 pub use diagram::{builtin_diagram_registry, diagram_backend_id};
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
 pub use i18n::{
-    Language, Msg, P0Msg, ShortcutAction, ShortcutCatalog, ShortcutCategory, ShortcutPlatform,
-    ShortcutSection, p0_t, p0_tf, shortcut_catalog, sidebar_tab_label, t, tf,
+    Language, Msg, P0Msg, P1Msg, ShortcutAction, ShortcutCatalog, ShortcutCategory,
+    ShortcutPlatform, ShortcutSection, p0_t, p0_tf, p1_t, p1_tf, shortcut_catalog,
+    sidebar_tab_label, t, tf,
 };
 pub use math::{render_math, validate_latex};
 pub use parse::{HtmlPreviewPart, html_preview_parts, html_preview_plain_text};
 
 pub use storage::{
     FileTree, FileTreeEntry, FileTreeEntryKind, ImportedImage, MARKDOWN_EXTENSIONS,
-    delete_recovery_file, image_extension_supported, import_image_bytes, import_image_file,
-    init_logging, is_markdown_path, list_recovery_files, list_theme_definitions,
-    load_app_preferences, load_recovery_file, load_session_state, load_theme_definition,
-    parse_app_preferences, parse_legacy_app_preferences, parse_session_state,
-    parse_theme_definition, render_app_preferences, render_session_state, render_theme_definition,
-    save_app_preferences, save_session_state, save_theme_definition,
+    RecoveryInventoryEntry, RecoverySourceState, delete_recovery_file, image_extension_supported,
+    import_image_bytes, import_image_file, init_logging, inspect_recovery_files, is_markdown_path,
+    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
+    load_session_state, load_theme_definition, parse_app_preferences, parse_legacy_app_preferences,
+    parse_session_state, parse_theme_definition, render_app_preferences, render_session_state,
+    render_theme_definition, save_app_preferences, save_session_state, save_theme_definition,
 };
 
 use table::{
