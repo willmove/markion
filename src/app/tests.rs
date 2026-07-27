@@ -5241,6 +5241,206 @@ fn report_memory_action_lists_expected_sites_without_side_effects(cx: &mut TestA
 }
 
 #[gpui::test]
+fn visual_link_editor_commits_one_exact_undoable_mutation(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("open 文档"))];
+        app.active_tab_mut().selected_range = 5..11;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let version = app.active_tab().document.version();
+        app.open_link_editor(cx);
+        let editor = app.link_editor.as_mut().unwrap();
+        editor.url = "docs/a b.md".into();
+        editor.title = "标题".into();
+        app.confirm_link_editor(cx);
+        assert_eq!(
+            app.active_tab().document.text(),
+            "open [文档](<docs/a b.md> \"标题\")"
+        );
+        assert_eq!(app.active_tab().document.version(), version + 1);
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), "open 文档");
+        assert_eq!(app.active_tab().selected_range, 5..11);
+    });
+}
+
+#[gpui::test]
+fn canceling_link_editor_preserves_version_cache_and_history(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("[label](old)"))];
+        app.active_tab_mut().selected_range = 3..3;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    app.update(cx, |app, cx| {
+        let version = app.active_tab().document.version();
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        app.open_link_editor(cx);
+        app.link_editor.as_mut().unwrap().url = "changed".into();
+        app.cancel_link_editor(cx);
+        assert_eq!(app.active_tab().document.text(), "[label](old)");
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(app.active_tab().undo_stack.is_empty());
+        assert!(Arc::ptr_eq(
+            &blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+    });
+}
+
+#[gpui::test]
+fn link_editor_ime_composition_stays_out_of_canonical_markdown_until_apply(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("文档"))];
+        app.active_tab_mut().selected_range = 0..6;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+
+    app.update(cx, |app, cx| app.open_link_editor(cx));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "链", None, window, cx);
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "链接", None, window, cx);
+            EntityInputHandler::replace_text_in_range(app, None, "链接", window, cx);
+        });
+    });
+    app.update(cx, |app, cx| {
+        assert_eq!(app.active_tab().document.text(), "文档");
+        assert_eq!(app.link_editor.as_ref().unwrap().url, "链接");
+        app.confirm_link_editor(cx);
+        assert_eq!(app.active_tab().document.text(), "[文档](链接)");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn pasted_clipboard_image_uses_managed_asset_and_one_undo(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let mut document = MarkdownDocument::from_text("before ");
+    document.save_as(&path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = 7..7;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_image(&gpui::Image::from_bytes(
+            ImageFormat::Png,
+            b"clipboard-image".to_vec(),
+        )));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.update(cx, |app, _| {
+        let text = app.active_tab().document.text();
+        assert!(
+            text.starts_with("before ![pasted-image](note.assets/pasted-image-"),
+            "unexpected pasted source: {text:?}"
+        );
+        assert!(text.ends_with(".png)"));
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        let asset = fs::read_dir(dir.path().join("note.assets"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(fs::read(asset).unwrap(), b"clipboard-image");
+    });
+}
+
+#[gpui::test]
+fn visual_image_presentation_is_one_exact_undoable_mutation(cx: &mut TestAppContext) {
+    let source = "![图](old.png \"Caption\")";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let version = app.active_tab().document.version();
+        app.set_image_presentation_at(
+            3,
+            ImagePresentation {
+                width_percent: 50,
+                alignment: ImageAlignment::Right,
+            },
+            cx,
+        );
+        assert_eq!(
+            app.active_tab().document.text(),
+            "![图](old.png \"Caption {width=50 align=right}\")"
+        );
+        assert_eq!(app.active_tab().document.version(), version + 1);
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), source);
+    });
+}
+
+#[gpui::test]
+fn external_change_reload_and_dirty_conflict_preserve_expected_source(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("external.md");
+    fs::write(&path, "disk one").unwrap();
+    let document = MarkdownDocument::open(&path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app
+    });
+
+    fs::write(&path, "disk version two").unwrap();
+    app.update(cx, |app, cx| app.check_external_changes(cx));
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "disk version two");
+        assert!(!app.active_tab().document.is_dirty());
+        assert_eq!(app.active_tab().external_conflict, None);
+    });
+
+    app.update(cx, |app, _| {
+        app.active_tab_mut().document.set_text("local dirty")
+    });
+    fs::write(&path, "third external version").unwrap();
+    app.update(cx, |app, cx| app.check_external_changes(cx));
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "local dirty");
+        assert!(app.active_tab().document.is_dirty());
+        assert_eq!(
+            app.active_tab().external_conflict,
+            Some(DiskState::Modified)
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "third external version");
+    });
+}
+
+#[test]
+fn contextual_toolbar_requires_one_exact_editable_run() {
+    let document = MarkdownDocument::from_text("plain text and **bold**");
+    let blocks = document.visual_blocks_shared();
+    let mut tab = EditorTab::new(document);
+    tab.selected_range = 0..5;
+    assert!(visual_selection_supports_contextual_format(&tab, &blocks));
+    tab.selected_range = 0..blocks[0].source_range.end;
+    assert!(!visual_selection_supports_contextual_format(&tab, &blocks));
+}
+
+#[gpui::test]
 fn memory_harness_tab_growth_and_close_release(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
     cx.update(|window, cx| {

@@ -742,7 +742,11 @@ pub(super) fn preview_image_view(app: &MarkionApp, url: &str, document_dir: Opti
             .justify_center()
             .text_color(rgb(0xb91c1c))
             .text_size(px(12.))
-            .child(message.to_string()),
+            .child(p0_tf(
+                app.language,
+                P0Msg::MissingImage,
+                &[url, message.as_ref()],
+            )),
     }
 }
 
@@ -941,6 +945,20 @@ mod tests {
             Ok(_) => panic!("unsupported identity must fail"),
         };
         assert!(err.contains("unsupported"));
+    }
+
+    #[test]
+    fn missing_local_image_reports_the_resolved_resource() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("missing.png");
+        let key = PreviewImageKey {
+            identity: format!("local:{}", path.display()),
+        };
+        let err = match load_preview_image(&key) {
+            Err(message) => message,
+            Ok(_) => panic!("missing image must not decode"),
+        };
+        assert!(err.contains("missing.png"), "unexpected error: {err}");
     }
 
     #[test]

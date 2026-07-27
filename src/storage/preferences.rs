@@ -209,7 +209,7 @@ pub fn save_app_preferences(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, render_app_preferences(preferences))
+    super::atomic_write(path, render_app_preferences(preferences).as_bytes())
 }
 
 /// Parses the TOML preferences format. Missing fields take their defaults.

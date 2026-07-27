@@ -385,6 +385,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 app.apply_startup_open_intent(startup_intent.clone(), cx);
                 app.restore_session_on_startup(&startup_intent, cx);
                 app.check_recovery_on_startup(window, cx);
+                app.arm_external_file_poll(cx);
                 // File-tree scanning is driven by session restore, CLI folder
                 // open, or opening a document — not by the process CWD.
                 cx.activate(true);

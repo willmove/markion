@@ -205,7 +205,7 @@ pub fn save_theme_definition(path: impl AsRef<Path>, theme: &ThemeDefinition) ->
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, render_theme_definition(theme))
+    super::atomic_write(path, render_theme_definition(theme).as_bytes())
 }
 
 /// Lists custom themes in `dir`. Reads `.toml` themes, plus any `.theme` whose

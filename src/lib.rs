@@ -1,8 +1,11 @@
 use std::{
     collections::HashMap,
-    fs, io,
+    fs,
+    hash::{Hash, Hasher},
+    io,
     ops::Range,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use pulldown_cmark::{Alignment, CodeBlockKind, CowStr, Event, Parser, Tag, TagEnd, html};
@@ -16,6 +19,7 @@ mod export;
 mod frontmatter;
 mod highlight;
 pub mod i18n;
+mod inline_edit;
 pub mod keystroke;
 mod math;
 pub mod model;
@@ -29,6 +33,10 @@ mod text_util;
 mod visual;
 
 pub use document_memory::{DocumentMemoryBreakdown, DocumentMemorySite};
+pub use inline_edit::{
+    ImageAlignment, ImagePresentation, InlineMarkdownTarget, inline_image_at, inline_link_at,
+    serialize_inline_image, serialize_inline_link,
+};
 
 /// Markdown shown in the first in-memory document when Markion starts.
 ///
@@ -129,14 +137,15 @@ pub use visual::{build_visual_projection, build_visual_projection_with_marked_ra
 pub use diagram::{builtin_diagram_registry, diagram_backend_id};
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
 pub use i18n::{
-    Language, Msg, ShortcutAction, ShortcutCatalog, ShortcutCategory, ShortcutPlatform,
-    ShortcutSection, shortcut_catalog, sidebar_tab_label, t, tf,
+    Language, Msg, P0Msg, ShortcutAction, ShortcutCatalog, ShortcutCategory, ShortcutPlatform,
+    ShortcutSection, p0_t, p0_tf, shortcut_catalog, sidebar_tab_label, t, tf,
 };
 pub use math::{render_math, validate_latex};
 pub use parse::{HtmlPreviewPart, html_preview_parts, html_preview_plain_text};
 
 pub use storage::{
-    FileTree, FileTreeEntry, FileTreeEntryKind, MARKDOWN_EXTENSIONS, delete_recovery_file,
+    FileTree, FileTreeEntry, FileTreeEntryKind, ImportedImage, MARKDOWN_EXTENSIONS,
+    delete_recovery_file, image_extension_supported, import_image_bytes, import_image_file,
     init_logging, is_markdown_path, list_recovery_files, list_theme_definitions,
     load_app_preferences, load_recovery_file, load_session_state, load_theme_definition,
     parse_app_preferences, parse_legacy_app_preferences, parse_session_state,
@@ -172,13 +181,76 @@ use editing::{
     paragraph_range_at, selected_line_starts,
 };
 
-use storage::recovery::recovery_file_path;
+use storage::{
+    atomic_write,
+    recovery::{recovery_file_path, stable_recovery_file_path},
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiskIdentity {
+    pub modified: Option<SystemTime>,
+    pub len: u64,
+    pub digest: u64,
+}
+
+impl DiskIdentity {
+    fn for_bytes(path: &Path, bytes: &[u8]) -> io::Result<Self> {
+        let metadata = fs::metadata(path)?;
+        Ok(Self {
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+            digest: content_digest(bytes),
+        })
+    }
+
+    fn read(path: &Path) -> io::Result<(Self, Vec<u8>)> {
+        let bytes = fs::read(path)?;
+        let identity = Self::for_bytes(path, &bytes)?;
+        Ok((identity, bytes))
+    }
+
+    fn metadata_matches(&self, path: &Path) -> io::Result<bool> {
+        let metadata = fs::metadata(path)?;
+        Ok(self.len == metadata.len() && self.modified == metadata.modified().ok())
+    }
+}
+
+fn content_digest(bytes: &[u8]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskState {
+    Unchanged,
+    Modified,
+    Missing,
+}
+
+fn external_change_error(path: &Path, missing: bool) -> io::Error {
+    let detail = if missing {
+        "was removed"
+    } else {
+        "changed on disk"
+    };
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "{} {detail}; reload, overwrite, or save a copy",
+            path.display()
+        ),
+    )
+}
 
 #[derive(Debug)]
 pub struct MarkdownDocument {
     text: String,
     path: Option<PathBuf>,
     dirty: bool,
+    /// Content identity captured at open or the last successful save. This is
+    /// persistence metadata only and never participates in derived caches.
+    disk_identity: Option<DiskIdentity>,
     // --- Derived-state cache (lazily computed, invalidated on text change) ---
     // Parsing markdown is the dominant per-frame cost during typing: a single
     // render used to trigger up to five full pulldown-cmark passes plus a
@@ -206,6 +278,7 @@ impl Clone for MarkdownDocument {
             text: self.text.clone(),
             path: self.path.clone(),
             dirty: self.dirty,
+            disk_identity: self.disk_identity.clone(),
             text_version: self.text_version,
             cached_preview_blocks: std::cell::RefCell::new(None),
             cached_visual_blocks: std::cell::RefCell::new(None),
@@ -252,6 +325,7 @@ impl MarkdownDocument {
             text,
             path,
             dirty,
+            disk_identity: None,
             text_version: Self::next_text_version(),
             cached_preview_blocks: std::cell::RefCell::new(None),
             cached_visual_blocks: std::cell::RefCell::new(None),
@@ -275,30 +349,110 @@ impl MarkdownDocument {
         Self::with_state(text.into(), path, true)
     }
 
+    pub fn recovered_with_identity(
+        text: impl Into<String>,
+        path: Option<PathBuf>,
+        disk_identity: Option<DiskIdentity>,
+    ) -> Self {
+        let mut document = Self::with_state(text.into(), path, true);
+        document.disk_identity = disk_identity;
+        document
+    }
+
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
-        Ok(Self::with_state(
-            fs::read_to_string(path)?,
-            Some(path.to_path_buf()),
-            false,
-        ))
+        let (identity, bytes) = DiskIdentity::read(path)?;
+        let text = String::from_utf8(bytes)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        let mut document = Self::with_state(text, Some(path.to_path_buf()), false);
+        document.disk_identity = Some(identity);
+        Ok(document)
     }
 
     pub fn save(&mut self) -> io::Result<()> {
         let path = self
             .path
             .as_ref()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "document has no path"))?;
-        fs::write(path, &self.text)?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "document has no path"))?
+            .clone();
+        match self.check_disk_state()? {
+            DiskState::Unchanged => {}
+            DiskState::Modified => return Err(external_change_error(&path, false)),
+            DiskState::Missing => return Err(external_change_error(&path, true)),
+        }
+        self.write_to_path(&path)?;
+        Ok(())
+    }
+
+    /// Explicitly replaces the current destination even when its on-disk
+    /// identity diverged. Callers must obtain user confirmation first.
+    pub fn force_save(&mut self) -> io::Result<()> {
+        let path = self
+            .path
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "document has no path"))?
+            .clone();
+        self.write_to_path(&path)
+    }
+
+    fn write_to_path(&mut self, path: &Path) -> io::Result<()> {
+        atomic_write(path, self.text.as_bytes())?;
+        self.disk_identity = Some(DiskIdentity::for_bytes(path, self.text.as_bytes())?);
         self.dirty = false;
         Ok(())
     }
 
     pub fn save_as(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref();
-        fs::write(path, &self.text)?;
+        atomic_write(path, self.text.as_bytes())?;
+        let identity = DiskIdentity::for_bytes(path, self.text.as_bytes())?;
         self.path = Some(path.to_path_buf());
+        self.disk_identity = Some(identity);
         self.dirty = false;
+        Ok(())
+    }
+
+    pub fn disk_identity(&self) -> Option<&DiskIdentity> {
+        self.disk_identity.as_ref()
+    }
+
+    /// Checks the current destination against the bytes opened or last saved.
+    /// Metadata-only touches are accepted and refresh the cheap identity.
+    pub fn check_disk_state(&mut self) -> io::Result<DiskState> {
+        let Some(path) = self.path.as_ref() else {
+            return Ok(DiskState::Unchanged);
+        };
+        if !path.exists() {
+            return Ok(DiskState::Missing);
+        }
+        let Some(known) = self.disk_identity.as_ref() else {
+            return Ok(DiskState::Modified);
+        };
+        if known.metadata_matches(path)? {
+            return Ok(DiskState::Unchanged);
+        }
+        let (current, _) = DiskIdentity::read(path)?;
+        if current.digest == known.digest {
+            self.disk_identity = Some(current);
+            Ok(DiskState::Unchanged)
+        } else {
+            Ok(DiskState::Modified)
+        }
+    }
+
+    /// Reloads the destination as the new clean canonical source.
+    pub fn reload_from_disk(&mut self) -> io::Result<()> {
+        let path = self
+            .path
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "document has no path"))?
+            .clone();
+        let (identity, bytes) = DiskIdentity::read(&path)?;
+        let text = String::from_utf8(bytes)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        self.set_text(text);
+        self.dirty = false;
+        self.disk_identity = Some(identity);
         Ok(())
     }
 
@@ -324,7 +478,7 @@ impl MarkdownDocument {
         let path = path.as_ref();
         match format {
             ExportFormat::Markdown => {
-                fs::write(path, &self.text)?;
+                atomic_write(path, self.text.as_bytes())?;
                 Ok(ExportBackend::BuiltIn)
             }
             ExportFormat::Html => {
@@ -2660,7 +2814,43 @@ impl MarkdownDocument {
             "markion-recovery-v1\npath:{original_path}\n---\n{}",
             self.text
         );
-        fs::write(&path, payload)?;
+        atomic_write(&path, payload.as_bytes())?;
+        Ok(path)
+    }
+
+    pub fn save_recovery_copy_with_id(
+        &self,
+        dir: impl AsRef<Path>,
+        recovery_id: u64,
+    ) -> io::Result<PathBuf> {
+        let dir = dir.as_ref();
+        fs::create_dir_all(dir)?;
+        let path = stable_recovery_file_path(dir, self.path.as_deref(), recovery_id);
+        let original_path = self
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        let (modified, len, digest) = self.disk_identity.as_ref().map_or(
+            (String::new(), String::new(), String::new()),
+            |identity| {
+                let modified = identity
+                    .modified
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_millis().to_string())
+                    .unwrap_or_default();
+                (
+                    modified,
+                    identity.len.to_string(),
+                    identity.digest.to_string(),
+                )
+            },
+        );
+        let payload = format!(
+            "markion-recovery-v2\npath:{original_path}\ndisk-modified-ms:{modified}\ndisk-len:{len}\ndisk-digest:{digest}\n---\n{}",
+            self.text
+        );
+        atomic_write(&path, payload.as_bytes())?;
         Ok(path)
     }
 
@@ -5414,6 +5604,76 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "modified");
         assert!(!doc.is_dirty());
+    }
+
+    #[test]
+    fn save_refuses_external_changes_and_force_save_is_explicit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conflict.md");
+        fs::write(&path, "disk v1").unwrap();
+        let mut document = MarkdownDocument::open(&path).unwrap();
+        document.set_text("local edits");
+        atomic_write(&path, b"external v2").unwrap();
+
+        let err = document.save().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "external v2");
+        assert!(document.is_dirty());
+
+        document.force_save().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "local edits");
+        assert!(!document.is_dirty());
+    }
+
+    #[test]
+    fn identical_external_rewrite_is_not_a_false_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("touch.md");
+        fs::write(&path, "same bytes").unwrap();
+        let mut document = MarkdownDocument::open(&path).unwrap();
+        atomic_write(&path, b"same bytes").unwrap();
+        document.set_text("next bytes");
+        document.save().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "next bytes");
+    }
+
+    #[test]
+    fn missing_destination_is_a_conflict_until_explicit_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.md");
+        fs::write(&path, "saved").unwrap();
+        let mut document = MarkdownDocument::open(&path).unwrap();
+        document.set_text("local");
+        fs::remove_file(&path).unwrap();
+        assert_eq!(document.check_disk_state().unwrap(), DiskState::Missing);
+        assert_eq!(
+            document.save().unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(!path.exists());
+        document.force_save().unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), "local");
+    }
+
+    #[test]
+    fn recovered_document_cannot_replace_diverged_disk_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("recovered.md");
+        fs::write(&path, "disk before crash").unwrap();
+        let baseline = MarkdownDocument::open(&path).unwrap();
+        let identity = baseline.disk_identity().cloned();
+
+        atomic_write(&path, b"newer external content").unwrap();
+        let mut recovered = MarkdownDocument::recovered_with_identity(
+            "unsaved recovered edits",
+            Some(path.clone()),
+            identity,
+        );
+
+        let err = recovered.save().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(path).unwrap(), "newer external content");
+        assert!(recovered.is_dirty());
     }
 
     #[test]

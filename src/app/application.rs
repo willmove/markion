@@ -98,6 +98,8 @@ impl MarkionApp {
             file_tree_context_menu: None,
             preview_context_menu: None,
             pending_name_input: None,
+            pending_image_import: None,
+            link_editor: None,
             search_visible: false,
             replace_visible: false,
             search_query: String::new(),
@@ -275,15 +277,16 @@ impl MarkionApp {
         let Ok(files) = list_recovery_files(&self.recovery_dir) else {
             return;
         };
-        let Some(path) = files.last().cloned() else {
+        if files.is_empty() {
             return;
-        };
+        }
 
-        let detail = tf(
-            self.language,
-            Msg::DialogRestoreDetail,
-            &[&path.display().to_string()],
-        );
+        let recovery_paths = files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = tf(self.language, Msg::DialogRestoreDetail, &[&recovery_paths]);
         let answer = window.prompt(
             PromptLevel::Warning,
             self.tr(Msg::DialogRestoreTitle),
@@ -302,23 +305,35 @@ impl MarkionApp {
             let restore = matches!(answer.await, Ok(0));
             let _ = this.update(cx, |app, cx| {
                 if restore {
-                    match load_recovery_file(&path) {
-                        Ok(recovery) => {
-                            app.open_in_new_tab(
-                                MarkdownDocument::recovered(recovery.text, recovery.original_path),
-                                cx,
-                            );
-                            let _ = delete_recovery_file(&path);
-                            app.status = t(app.language, Msg::StatusRecoveredDocument).into();
-                        }
-                        Err(err) => {
-                            app.status =
-                                tf(app.language, Msg::StatusRecoveryFailed, &[&err.to_string()])
-                                    .into();
+                    let mut first_error = None;
+                    for path in &files {
+                        match load_recovery_file(path) {
+                            Ok(recovery) => {
+                                app.open_in_new_tab(
+                                    MarkdownDocument::recovered_with_identity(
+                                        recovery.text,
+                                        recovery.original_path,
+                                        recovery.disk_identity,
+                                    ),
+                                    cx,
+                                );
+                                let _ = delete_recovery_file(path);
+                            }
+                            Err(err) => {
+                                // Keep unreadable snapshots available for manual recovery.
+                                first_error.get_or_insert(err);
+                            }
                         }
                     }
+                    app.status = if let Some(err) = first_error {
+                        tf(app.language, Msg::StatusRecoveryFailed, &[&err.to_string()]).into()
+                    } else {
+                        t(app.language, Msg::StatusRecoveredDocument).into()
+                    };
                 } else {
-                    let _ = delete_recovery_file(&path);
+                    for path in &files {
+                        let _ = delete_recovery_file(path);
+                    }
                     app.status = t(app.language, Msg::StatusRecoveryDiscarded).into();
                 }
                 cx.notify();
@@ -393,6 +408,70 @@ impl MarkionApp {
         self.refresh_search_matches();
         self.center_cursor_if_typewriter();
         self.schedule_autosave(cx);
+    }
+
+    pub(super) fn check_external_changes(&mut self, cx: &mut Context<Self>) {
+        for index in 0..self.tabs.len() {
+            let state = match self.tabs[index].document.check_disk_state() {
+                Ok(state) => state,
+                Err(err) => {
+                    tracing::warn!(error = %err, "external file check failed");
+                    continue;
+                }
+            };
+            match state {
+                DiskState::Unchanged => self.tabs[index].external_conflict = None,
+                DiskState::Modified if !self.tabs[index].document.is_dirty() => {
+                    self.release_tab_image_claims(index, cx);
+                    let tab = &mut self.tabs[index];
+                    match tab.document.reload_from_disk() {
+                        Ok(()) => {
+                            tab.external_conflict = None;
+                            tab.selected_range = 0..0;
+                            tab.selection_reversed = false;
+                            tab.marked_range = None;
+                            tab.undo_stack.clear();
+                            tab.redo_stack.clear();
+                            tab.reset_preview_list();
+                            if index == self.active_tab {
+                                self.status = p0_t(self.language, P0Msg::ExternalReloaded).into();
+                            }
+                        }
+                        Err(err) => {
+                            tab.external_conflict = Some(DiskState::Modified);
+                            tracing::warn!(error = %err, "external file reload failed");
+                        }
+                    }
+                }
+                DiskState::Modified | DiskState::Missing => {
+                    self.tabs[index].external_conflict = Some(state);
+                    if index == self.active_tab {
+                        self.status = match state {
+                            DiskState::Missing => {
+                                p0_t(self.language, P0Msg::ExternalMissing).into()
+                            }
+                            _ => p0_t(self.language, P0Msg::ExternalConflict).into(),
+                        };
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn arm_external_file_poll(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                Timer::after(Duration::from_secs(2)).await;
+                if this
+                    .update(cx, |app, cx| app.check_external_changes(cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     pub(super) fn set_workspace_root(&mut self, root: PathBuf) {
@@ -718,36 +797,57 @@ impl MarkionApp {
                 }
 
                 let tab = &mut app.tabs[active_index];
-                match tab.document.autosave(&recovery_dir) {
-                    Ok(AutosaveOutcome::NoChanges) => {}
-                    Ok(AutosaveOutcome::SavedFile(path)) => {
-                        if let Some(recovery) = tab.last_recovery_file.take() {
-                            let _ = delete_recovery_file(recovery);
-                        }
-                        app.status = tf(
-                            app.language,
-                            Msg::StatusAutoSaved,
-                            &[&path.display().to_string()],
-                        )
-                        .into();
-                    }
-                    Ok(AutosaveOutcome::SavedRecovery(path)) => {
+                let recovery = match tab
+                    .document
+                    .save_recovery_copy_with_id(&recovery_dir, tab.recovery_id)
+                {
+                    Ok(path) => {
                         if let Some(previous) = tab.last_recovery_file.replace(path.clone())
                             && previous != path
                         {
                             let _ = delete_recovery_file(previous);
                         }
-                        app.status = tf(
-                            app.language,
-                            Msg::StatusRecoverySaved,
-                            &[&path.display().to_string()],
-                        )
-                        .into();
+                        path
                     }
                     Err(err) => {
-                        tracing::warn!(error = %err, "auto-save failed");
+                        tracing::warn!(error = %err, "recovery snapshot failed");
                         app.status =
                             tf(app.language, Msg::StatusAutoSaveFailed, &[&err.to_string()]).into();
+                        cx.notify();
+                        return;
+                    }
+                };
+
+                if tab.document.path().is_none() {
+                    app.status = tf(
+                        app.language,
+                        Msg::StatusRecoverySaved,
+                        &[&recovery.display().to_string()],
+                    )
+                    .into();
+                } else {
+                    match tab.document.save() {
+                        Ok(()) => {
+                            if let Some(recovery) = tab.last_recovery_file.take() {
+                                let _ = delete_recovery_file(recovery);
+                            }
+                            let path = tab.document.path().unwrap();
+                            app.status = tf(
+                                app.language,
+                                Msg::StatusAutoSaved,
+                                &[&path.display().to_string()],
+                            )
+                            .into();
+                        }
+                        Err(err) => {
+                            if err.kind() == io::ErrorKind::AlreadyExists {
+                                tab.external_conflict = Some(DiskState::Modified);
+                            }
+                            tracing::warn!(error = %err, "auto-save failed after recovery");
+                            app.status =
+                                tf(app.language, Msg::StatusAutoSaveFailed, &[&err.to_string()])
+                                    .into();
+                        }
                     }
                 }
                 cx.notify();
@@ -1128,29 +1228,32 @@ impl MarkionApp {
         cx.notify();
     }
 
-    pub(super) fn active_search_text_mut(&mut self) -> Option<&mut String> {
-        match self.search_focus {
-            Some(SearchField::Find) => Some(&mut self.search_query),
-            Some(SearchField::Replace) => Some(&mut self.replace_text),
-            None => None,
-        }
-    }
-
     pub(super) fn has_text_input_focus(&self) -> bool {
         self.pending_name_input.is_some()
+            || self.link_editor.is_some()
             || self.file_tree_query_focused
             || self.search_focus.is_some()
     }
 
     pub(super) fn active_input_text_mut(&mut self) -> Option<&mut String> {
         if self.pending_name_input.is_some() {
-            self.pending_name_input
+            return self
+                .pending_name_input
                 .as_mut()
-                .map(|pending| &mut pending.buffer)
-        } else if self.file_tree_query_focused {
-            Some(&mut self.file_tree_query)
-        } else {
-            self.active_search_text_mut()
+                .map(|pending| &mut pending.buffer);
+        }
+        match self.link_editor.as_mut() {
+            Some(editor) => Some(match editor.field {
+                LinkEditorField::Label => &mut editor.label,
+                LinkEditorField::Url => &mut editor.url,
+                LinkEditorField::Title => &mut editor.title,
+            }),
+            None if self.file_tree_query_focused => Some(&mut self.file_tree_query),
+            None => match self.search_focus {
+                Some(SearchField::Find) => Some(&mut self.search_query),
+                Some(SearchField::Replace) => Some(&mut self.replace_text),
+                None => None,
+            },
         }
     }
 
@@ -1159,6 +1262,8 @@ impl MarkionApp {
             // The name prompt edits a single buffer; no search/tree filtering
             // runs while it is open.
             self.status = t(self.language, Msg::StatusNamingEntry).into();
+        } else if self.link_editor.is_some() {
+            self.status = p0_t(self.language, P0Msg::EditingLink).into();
         } else if self.file_tree_query_focused {
             self.status = self.file_tree_summary().into();
         } else {

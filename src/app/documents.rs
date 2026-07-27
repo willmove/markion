@@ -307,8 +307,17 @@ impl MarkionApp {
             .unwrap_or_default();
         let saved_path = self.active_tab().document.path().map(Path::to_path_buf);
         let save_result = self.active_tab_mut().document.save();
+        if save_result
+            .as_ref()
+            .is_err_and(|err| err.kind() == io::ErrorKind::AlreadyExists)
+        {
+            self.active_tab_mut().external_conflict = Some(DiskState::Modified);
+            self.prompt_external_save_conflict(window, cx);
+            return;
+        }
         self.status = match save_result {
             Ok(()) => {
+                self.active_tab_mut().external_conflict = None;
                 self.discard_current_recovery_file();
                 if let Some(path) = saved_path.as_ref() {
                     self.record_recent_path(path);
@@ -320,6 +329,88 @@ impl MarkionApp {
             Err(err) => self.trf(Msg::StatusSaveFailed, &[&err.to_string()]),
         };
         self.active_menu = None;
+        cx.notify();
+    }
+
+    fn prompt_external_save_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = self
+            .active_tab()
+            .document
+            .path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            p0_t(self.language, P0Msg::ExternalDialogTitle),
+            Some(&p0_tf(self.language, P0Msg::ExternalDialogDetail, &[&path])),
+            &[
+                PromptButton::ok(p0_t(self.language, P0Msg::Reload)),
+                PromptButton::ok(p0_t(self.language, P0Msg::Overwrite)),
+                PromptButton::ok(p0_t(self.language, P0Msg::SaveCopy)),
+                PromptButton::cancel(self.tr(Msg::DialogButtonCancel)),
+            ],
+            cx,
+        );
+        let window_handle = window.window_handle();
+        self.status = p0_t(self.language, P0Msg::WaitingExternalDecision).into();
+        cx.notify();
+
+        cx.spawn(async move |this, cx| match answer.await {
+            Ok(0) => {
+                let _ = this.update(cx, |app, cx| app.reload_active_external(cx));
+            }
+            Ok(1) => {
+                let _ = this.update(cx, |app, cx| {
+                    match app.active_tab_mut().document.force_save() {
+                        Ok(()) => {
+                            app.active_tab_mut().external_conflict = None;
+                            app.discard_current_recovery_file();
+                            app.status = p0_t(app.language, P0Msg::ExternalOverwritten).into();
+                        }
+                        Err(err) => {
+                            app.status = app.trf(Msg::StatusSaveFailed, &[&err.to_string()]);
+                        }
+                    }
+                    cx.notify();
+                });
+            }
+            Ok(2) => {
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    let _ = this.update(cx, |app, cx| {
+                        app.save_document_as(&SaveDocumentAs, window, cx)
+                    });
+                });
+            }
+            _ => {
+                let _ = this.update(cx, |app, cx| {
+                    app.status = t(app.language, Msg::StatusCanceled).into();
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn reload_active_external(&mut self, cx: &mut Context<Self>) {
+        let active = self.active_tab;
+        self.release_tab_image_claims(active, cx);
+        let tab = self.active_tab_mut();
+        match tab.document.reload_from_disk() {
+            Ok(()) => {
+                tab.external_conflict = None;
+                tab.selected_range = 0..0;
+                tab.selection_reversed = false;
+                tab.marked_range = None;
+                tab.undo_stack.clear();
+                tab.redo_stack.clear();
+                tab.reset_preview_list();
+                if let Some(recovery) = tab.last_recovery_file.take() {
+                    let _ = delete_recovery_file(recovery);
+                }
+                self.status = p0_t(self.language, P0Msg::ExternalReloadDiscarded).into();
+            }
+            Err(err) => self.status = self.trf(Msg::StatusOpenFailed, &[&err.to_string()]),
+        }
         cx.notify();
     }
 
@@ -355,9 +446,11 @@ impl MarkionApp {
                         let save_result = app.active_tab_mut().document.save_as(&path);
                         app.status = match save_result {
                             Ok(()) => {
+                                app.active_tab_mut().external_conflict = None;
                                 app.discard_current_recovery_file();
                                 app.update_workspace_root_from_document(cx);
                                 app.record_recent_path(&path);
+                                app.flush_pending_image_import(cx);
                                 app.trf(Msg::StatusSaved, &[&display_path])
                             }
                             Err(err) => app.trf(Msg::StatusSaveFailed, &[&err.to_string()]),
@@ -371,6 +464,9 @@ impl MarkionApp {
             };
 
             let _ = this.update(cx, |app, cx| {
+                if status == t(language, Msg::StatusSaveCanceled) {
+                    app.pending_image_import = None;
+                }
                 app.active_menu = None;
                 app.status = status.into();
                 cx.notify();

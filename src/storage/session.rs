@@ -8,6 +8,7 @@ use std::{fs, io, path::Path};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{MAX_RECENT_FILES, SessionState};
+use crate::storage::atomic_write;
 
 /// Serde-facing shape of `session.toml`. Kept separate so `model` stays
 /// dependency-free. Missing fields default to empty / none.
@@ -118,7 +119,7 @@ pub fn save_session_state(path: impl AsRef<Path>, session: &SessionState) -> io:
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, render_session_state(session))
+    atomic_write(path, render_session_state(session).as_bytes())
 }
 
 /// Parses the TOML session format. Missing fields take their defaults.

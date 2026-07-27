@@ -14,37 +14,39 @@ use std::{
 
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle, DefiniteLength,
-    DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler, Empty, Entity,
-    EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle, FontWeight,
-    GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageSource, KeyBinding, KeyDownEvent,
-    LayoutId, ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton,
-    PromptLevel, RenderImage, Rgba, ScrollHandle, SharedString, Stateful, StrikethroughStyle,
-    Style, StyledText, TextLayout, TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle,
-    Window, WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, font,
-    img, list, point, px, rgb, rgba, size,
+    App, Application, Bounds, ClickEvent, ClipboardEntry, ClipboardItem, Context, CursorStyle,
+    DefiniteLength, DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler,
+    Empty, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle,
+    FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageFormat, ImageSource,
+    KeyBinding, KeyDownEvent, LayoutId, ListAlignment, ListState, Menu, MenuItem, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point,
+    PromptButton, PromptLevel, RenderImage, Rgba, ScrollHandle, SharedString, Stateful,
+    StrikethroughStyle, Style, StyledText, TextLayout, TextRun, Timer, TitlebarOptions,
+    UTF16Selection, UnderlineStyle, Window, WindowBounds, WindowOptions, WrappedLine, actions,
+    anchored, canvas, div, fill, font, img, list, point, px, rgb, rgba, size,
 };
 use markion::{
-    AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_EDITOR_FONT_SIZE,
-    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE, EXTENDED_HEADING_MENU_MAX_LEVEL,
-    ExportBackend, ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind,
-    HighlightKind, HighlightedSpan, HtmlPreviewPart, InlineSpan, InlineStyle, Language,
-    MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
-    MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat,
-    MathLayoutStyle, Msg, PreviewBlock, RichText, SearchMatchRange, SearchOptions, SessionState,
-    ShortcutCategory, ShortcutPlatform, SidebarTab, TableEdit, ThemeColors, ThemeDefinition,
-    ViewMode, VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity,
-    VisualEditorField, VisualEditorFieldKind, VisualNavigationTarget, VisualProjection,
-    VisualQuoteGroupEdge, VisualSourceIslandKind, build_visual_projection,
-    build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
-    default_preferences_path, default_recovery_dir, default_session_path, default_themes_dir,
-    delete_recovery_file, diagram_backend_id, highlight_code, html_preview_parts,
-    html_preview_plain_text, is_markdown_path, list_recovery_files, list_theme_definitions,
-    load_app_preferences, load_recovery_file, load_session_state, normalize_editor_font_size,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
-    save_app_preferences, save_session_state, save_theme_definition, shortcut_catalog,
-    sidebar_tab_label, t, tf, title_from_path,
+    AppPreferences, AutoSavePreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
+    DEFAULT_RENDERED_FONT_SIZE, DiskState, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
+    ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind,
+    HighlightedSpan, HtmlPreviewPart, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
+    Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
+    MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
+    MarkdownFormat, MathLayoutStyle, Msg, P0Msg, PreviewBlock, RichText, SearchMatchRange,
+    SearchOptions, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab, TableEdit,
+    ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockEditor, VisualBlockId,
+    VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind,
+    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
+    builtin_theme_definitions, default_preferences_path, default_recovery_dir,
+    default_session_path, default_themes_dir, delete_recovery_file, diagram_backend_id,
+    highlight_code, html_preview_parts, html_preview_plain_text, image_extension_supported,
+    import_image_bytes, import_image_file, inline_image_at, inline_link_at, is_markdown_path,
+    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
+    load_session_state, normalize_editor_font_size, normalize_heading_menu_max_level,
+    normalize_paragraph_spacing, normalize_rendered_font_size, p0_t, p0_tf, save_app_preferences,
+    save_session_state, save_theme_definition, serialize_inline_image, serialize_inline_link,
+    shortcut_catalog, sidebar_tab_label, t, tf, title_from_path,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -630,6 +632,13 @@ struct PendingNameInput {
     buffer: String,
 }
 
+#[derive(Clone, Debug)]
+struct PendingImageInput {
+    stem: String,
+    extension: String,
+    bytes: Vec<u8>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FileTreeContextTarget {
     Workspace,
@@ -726,6 +735,23 @@ fn file_tree_context_action_label(action: FileTreeContextAction) -> Msg {
 enum SearchField {
     Find,
     Replace,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinkEditorField {
+    Label,
+    Url,
+    Title,
+}
+
+#[derive(Clone, Debug)]
+struct LinkEditorState {
+    source_range: Range<usize>,
+    document_version: u64,
+    label: String,
+    url: String,
+    title: String,
+    field: LinkEditorField,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1213,6 +1239,10 @@ struct MarkionApp {
     /// Open inline name prompt for a file-tree create/rename action; reuses
     /// the redirected-text-input path so keystrokes route into its buffer.
     pending_name_input: Option<PendingNameInput>,
+    /// Image bytes waiting for a durable Markdown base path. Set when an image
+    /// is pasted/dropped into an untitled tab and consumed after Save As.
+    pending_image_import: Option<Vec<PendingImageInput>>,
+    link_editor: Option<LinkEditorState>,
     search_visible: bool,
     replace_visible: bool,
     search_query: String,

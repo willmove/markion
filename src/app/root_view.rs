@@ -103,6 +103,8 @@ impl Render for MarkionApp {
         let visual_items = visual_blocks.clone();
         let visual_items_doc_dir = document_dir.clone();
         let visual_list_state = self.active_tab().visual_list.clone();
+        let show_selection_toolbar = matches!(self.view_mode, ViewMode::VisualEdit)
+            && visual_selection_supports_contextual_format(self.active_tab(), &visual_blocks);
 
         div()
             .size_full()
@@ -558,7 +560,182 @@ impl Render for MarkionApp {
             .when(self.preferences_panel_open, |root| {
                 root.child(preferences_panel_view(self, cx))
             })
+            .when(
+                show_selection_toolbar && self.link_editor.is_none(),
+                |root| root.child(visual_selection_toolbar(self.language, cx)),
+            )
+            .when(self.link_editor.is_some(), |root| {
+                root.child(link_editor_view(self, cx))
+            })
     }
+}
+
+pub(super) fn visual_selection_supports_contextual_format(
+    tab: &EditorTab,
+    blocks: &[VisualBlock],
+) -> bool {
+    let selection = &tab.selected_range;
+    if selection.is_empty() {
+        return false;
+    }
+    blocks.iter().any(|block| {
+        block.source_island.is_none()
+            && block.editable_runs.iter().any(|run| {
+                !run.conservative_fallback
+                    && run.math.is_none()
+                    && run.content_range.start <= selection.start
+                    && run.content_range.end >= selection.end
+            })
+    })
+}
+
+fn visual_selection_toolbar(language: Language, cx: &mut Context<MarkionApp>) -> Div {
+    let button = |id: &'static str, label: &'static str| {
+        div()
+            .id(id)
+            .px_3()
+            .py_1()
+            .rounded_sm()
+            .text_size(px(12.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .cursor(CursorStyle::PointingHand)
+            .hover(|style| style.bg(rgb(0xe2e8f0)))
+            .child(label)
+    };
+    div()
+        .absolute()
+        .top(px(68.))
+        .right(px(28.))
+        .p_1()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0xcbd5e1))
+        .bg(rgb(0xffffff))
+        .shadow_lg()
+        .flex()
+        .gap_1()
+        .child(
+            button("visual-context-bold", "B")
+                .on_click(cx.listener(|app, _, window, cx| app.bold(&Bold, window, cx))),
+        )
+        .child(
+            button("visual-context-italic", "I")
+                .on_click(cx.listener(|app, _, window, cx| app.italic(&Italic, window, cx))),
+        )
+        .child(
+            button("visual-context-code", "</>").on_click(
+                cx.listener(|app, _, window, cx| app.inline_code(&InlineCode, window, cx)),
+            ),
+        )
+        .child(
+            button("visual-context-link", t(language, Msg::ItemLink))
+                .on_click(cx.listener(|app, _, _, cx| app.open_link_editor(cx))),
+        )
+}
+
+fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+    let editor = app.link_editor.as_ref().expect("link editor visible");
+    let field = |id: &'static str,
+                 label: &'static str,
+                 value: &str,
+                 kind: LinkEditorField,
+                 active: bool,
+                 cx: &mut Context<MarkionApp>| {
+        div()
+            .id(id)
+            .p_2()
+            .rounded_sm()
+            .border_1()
+            .border_color(if active { rgb(0x2563eb) } else { rgb(0xcbd5e1) })
+            .cursor(CursorStyle::IBeam)
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |app, _, _, cx| app.focus_link_editor_field(kind, cx)),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(rgb(0x64748b))
+                    .child(label),
+            )
+            .child(
+                div()
+                    .mt_1()
+                    .text_size(px(13.))
+                    .child(if value.is_empty() { " " } else { value }.to_string()),
+            )
+    };
+    div()
+        .absolute()
+        .top(px(62.))
+        .right(px(24.))
+        .w(px(420.))
+        .p_3()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0xcbd5e1))
+        .bg(rgb(0xffffff))
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_size(px(14.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(p0_t(app.language, P0Msg::EditLink)),
+        )
+        .child(field(
+            "link-editor-label",
+            p0_t(app.language, P0Msg::LinkText),
+            &editor.label,
+            LinkEditorField::Label,
+            editor.field == LinkEditorField::Label,
+            cx,
+        ))
+        .child(field(
+            "link-editor-url",
+            p0_t(app.language, P0Msg::LinkUrl),
+            &editor.url,
+            LinkEditorField::Url,
+            editor.field == LinkEditorField::Url,
+            cx,
+        ))
+        .child(field(
+            "link-editor-title",
+            p0_t(app.language, P0Msg::OptionalTitle),
+            &editor.title,
+            LinkEditorField::Title,
+            editor.field == LinkEditorField::Title,
+            cx,
+        ))
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .gap_2()
+                .child(
+                    div()
+                        .id("link-editor-cancel")
+                        .px_3()
+                        .py_1()
+                        .cursor(CursorStyle::PointingHand)
+                        .child(t(app.language, Msg::DialogButtonCancel))
+                        .on_click(cx.listener(|app, _, _, cx| app.cancel_link_editor(cx))),
+                )
+                .child(
+                    div()
+                        .id("link-editor-apply")
+                        .px_3()
+                        .py_1()
+                        .rounded_sm()
+                        .bg(rgb(0x2563eb))
+                        .text_color(rgb(0xffffff))
+                        .cursor(CursorStyle::PointingHand)
+                        .child(p0_t(app.language, P0Msg::Apply))
+                        .on_click(cx.listener(|app, _, _, cx| app.confirm_link_editor(cx))),
+                ),
+        )
 }
 
 pub(super) fn visual_edit_surface_view(

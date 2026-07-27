@@ -165,3 +165,11 @@ The system SHALL route every user-visible string for Heading menu depth and H4â€
 - **WHEN** the active interface language changes
 - **THEN** the Heading menu depth control label and option text render in the active language
 
+### Requirement: P0 authoring and conflict workflows SHALL be localized
+Every user-visible label, status, prompt, validation error, missing-resource message, contextual-control tooltip, link/image editor field, and external-change/recovery action introduced by this change SHALL be routed through the localization catalog for every supported language.
+
+#### Scenario: P0 workflows render in each supported language
+- **WHEN** the application language changes while a resource, link-editor, missing-resource, external-change, or recovery surface is visible
+- **THEN** all user-facing text on that surface uses the selected language
+- **AND** no implementation-only English literal is presented as UI text
+

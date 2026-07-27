@@ -107,6 +107,7 @@ tempfile = "3.20"
 cargo-packager-updater = "0.2.3"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Storage_FileSystem",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
 ] }

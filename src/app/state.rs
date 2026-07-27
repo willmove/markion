@@ -233,6 +233,10 @@ pub(super) fn compact_history_entry(older: &EditorSnapshot, newer_text: &str) ->
 /// themes, sidebar, search panel) stays on `MarkionApp`.
 pub(super) struct EditorTab {
     pub(super) document: MarkdownDocument,
+    /// Destination divergence detected after open/save. This state never
+    /// rewrites the canonical in-memory Markdown by itself.
+    pub(super) external_conflict: Option<DiskState>,
+    pub(super) recovery_id: u64,
     pub(super) undo_stack: Vec<UndoEntry>,
     pub(super) redo_stack: Vec<UndoEntry>,
     pub(super) undo_capture: Option<UndoCapture>,
@@ -354,6 +358,8 @@ impl EditorTab {
         let version = document.version();
         Self {
             document,
+            external_conflict: None,
+            recovery_id: next_recovery_id(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             undo_capture: None,
@@ -1032,6 +1038,12 @@ impl EditorTab {
         utf16_offset_to_byte_offset(text, range_utf16.start)
             ..utf16_offset_to_byte_offset(text, range_utf16.end)
     }
+}
+
+fn next_recovery_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 pub(super) fn comparable_document_path(path: &Path) -> PathBuf {

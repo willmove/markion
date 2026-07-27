@@ -331,13 +331,41 @@ impl MarkionApp {
     pub(super) fn handle_external_drop(
         &mut self,
         dragged: &ExternalPaths,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let mut images = Vec::new();
         for path in dragged.paths() {
             if path.is_file() && is_markdown_path(path) {
                 self.open_file_in_new_tab_from_path(path.clone(), cx);
+            } else if path.is_file() && image_extension_supported(path) {
+                match fs::read(path) {
+                    Ok(bytes) => images.push(PendingImageInput {
+                        stem: path
+                            .file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .unwrap_or("image")
+                            .to_string(),
+                        extension: path
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            .unwrap_or("png")
+                            .to_string(),
+                        bytes,
+                    }),
+                    Err(err) => {
+                        self.status = p0_tf(
+                            self.language,
+                            P0Msg::DroppedImageReadFailed,
+                            &[&err.to_string()],
+                        )
+                        .into();
+                    }
+                }
             }
+        }
+        if !images.is_empty() {
+            self.request_image_import(images, window, cx);
         }
     }
 

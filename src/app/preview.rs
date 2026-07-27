@@ -2529,10 +2529,25 @@ pub(super) fn visual_block_view(
             ..
         } => {
             let offset = block.source_range.start;
-            let caption = image_title
-                .as_deref()
+            let exact_image = inline_image_at(app.active_tab().document.text(), offset);
+            let presentation = exact_image
+                .as_ref()
+                .and_then(|image| image.presentation)
+                .unwrap_or_default();
+            let caption = exact_image
+                .as_ref()
+                .and_then(|image| image.title.as_deref())
+                .or(image_title.as_deref())
                 .filter(|title| !title.is_empty())
                 .or_else(|| (!image_alt.is_empty()).then_some(image_alt.as_str()));
+            let image = div()
+                .w(gpui::relative(presentation.width_percent as f32 / 100.))
+                .child(preview_image_view(app, url, document_dir));
+            let image = match presentation.alignment {
+                ImageAlignment::Left => div().w_full().flex().items_start().child(image),
+                ImageAlignment::Center => div().w_full().flex().items_center().child(image),
+                ImageAlignment::Right => div().w_full().flex().items_end().child(image),
+            };
             div()
                 .mb_3()
                 .p_3()
@@ -2554,13 +2569,16 @@ pub(super) fn visual_block_view(
                         .items_center()
                         .justify_center()
                         .min_h(px(96.))
-                        .child(preview_image_view(app, url, document_dir))
+                        .child(image)
                         .children(caption.map(|text| {
                             div()
                                 .mt_1()
                                 .text_size(px(11.))
                                 .text_color(rgb(0x64748b))
                                 .child(text.to_string())
+                        }))
+                        .children((owns_caret && exact_image.is_some()).then(|| {
+                            visual_image_controls(offset, presentation, app.language, cx)
                         })),
                 )
         }
@@ -3148,6 +3166,127 @@ fn visual_diagram_editor(
 /// Shared Obsidian-style chrome for block math and registered diagrams:
 /// render-only by default, hover `</>` expands the payload editor, click
 /// outside collapses (pending/error force the editor open).
+fn visual_image_controls(
+    offset: usize,
+    presentation: ImagePresentation,
+    language: Language,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let button = |id: &'static str, label: &'static str| {
+        div()
+            .id((id, offset))
+            .px_2()
+            .py_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(0xcbd5e1))
+            .bg(rgb(0xffffff))
+            .text_size(px(11.))
+            .cursor(CursorStyle::PointingHand)
+            .child(label)
+    };
+    div()
+        .mt_2()
+        .flex()
+        .flex_wrap()
+        .gap_1()
+        .child(
+            button("image-width-25", "25%").on_click(cx.listener(move |app, _, _, cx| {
+                app.set_image_presentation_at(
+                    offset,
+                    ImagePresentation {
+                        width_percent: 25,
+                        ..presentation
+                    },
+                    cx,
+                )
+            })),
+        )
+        .child(
+            button("image-width-50", "50%").on_click(cx.listener(move |app, _, _, cx| {
+                app.set_image_presentation_at(
+                    offset,
+                    ImagePresentation {
+                        width_percent: 50,
+                        ..presentation
+                    },
+                    cx,
+                )
+            })),
+        )
+        .child(
+            button("image-width-75", "75%").on_click(cx.listener(move |app, _, _, cx| {
+                app.set_image_presentation_at(
+                    offset,
+                    ImagePresentation {
+                        width_percent: 75,
+                        ..presentation
+                    },
+                    cx,
+                )
+            })),
+        )
+        .child(
+            button("image-width-100", "100%").on_click(cx.listener(move |app, _, _, cx| {
+                app.set_image_presentation_at(
+                    offset,
+                    ImagePresentation {
+                        width_percent: 100,
+                        ..presentation
+                    },
+                    cx,
+                )
+            })),
+        )
+        .child(
+            button("image-align-left", p0_t(language, P0Msg::Left)).on_click(cx.listener(
+                move |app, _, _, cx| {
+                    app.set_image_presentation_at(
+                        offset,
+                        ImagePresentation {
+                            alignment: ImageAlignment::Left,
+                            ..presentation
+                        },
+                        cx,
+                    )
+                },
+            )),
+        )
+        .child(
+            button("image-align-center", p0_t(language, P0Msg::Center)).on_click(cx.listener(
+                move |app, _, _, cx| {
+                    app.set_image_presentation_at(
+                        offset,
+                        ImagePresentation {
+                            alignment: ImageAlignment::Center,
+                            ..presentation
+                        },
+                        cx,
+                    )
+                },
+            )),
+        )
+        .child(
+            button("image-align-right", p0_t(language, P0Msg::Right)).on_click(cx.listener(
+                move |app, _, _, cx| {
+                    app.set_image_presentation_at(
+                        offset,
+                        ImagePresentation {
+                            alignment: ImageAlignment::Right,
+                            ..presentation
+                        },
+                        cx,
+                    )
+                },
+            )),
+        )
+        .child(
+            button("image-replace", p0_t(language, P0Msg::Replace)).on_click(
+                cx.listener(move |app, _, _, cx| app.replace_image_resource_at(offset, cx)),
+            ),
+        )
+}
+
 fn visual_collapsible_source_block(
     app: &MarkionApp,
     block_id: VisualBlockId,

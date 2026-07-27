@@ -1129,6 +1129,7 @@ impl std::error::Error for FrontMatterError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryDocument {
     pub original_path: Option<PathBuf>,
+    pub disk_identity: Option<crate::DiskIdentity>,
     pub text: String,
 }
 

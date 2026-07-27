@@ -1,6 +1,178 @@
 use super::*;
 
 impl MarkionApp {
+    pub(super) fn request_image_import(
+        &mut self,
+        inputs: Vec<PendingImageInput>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if inputs.is_empty() {
+            return;
+        }
+        if self.active_tab().document.path().is_none() {
+            self.pending_image_import = Some(inputs);
+            self.status = p0_t(self.language, P0Msg::SaveBeforeImage).into();
+            self.save_document_as(&SaveDocumentAs, window, cx);
+            return;
+        }
+        self.insert_image_inputs(inputs, cx);
+    }
+
+    pub(super) fn flush_pending_image_import(&mut self, cx: &mut Context<Self>) {
+        let Some(inputs) = self.pending_image_import.take() else {
+            return;
+        };
+        if self.active_tab().document.path().is_some() {
+            self.insert_image_inputs(inputs, cx);
+        }
+    }
+
+    fn insert_image_inputs(&mut self, inputs: Vec<PendingImageInput>, cx: &mut Context<Self>) {
+        let Some(document_path) = self.active_tab().document.path().map(Path::to_path_buf) else {
+            self.pending_image_import = Some(inputs);
+            return;
+        };
+        let mut markdown = Vec::with_capacity(inputs.len());
+        let mut failures = Vec::new();
+        for input in inputs {
+            match import_image_bytes(&document_path, &input.stem, &input.extension, &input.bytes) {
+                Ok(imported) => markdown.push(serialize_inline_image(
+                    &input.stem,
+                    &imported.relative_url,
+                    None,
+                    None,
+                )),
+                Err(err) => failures.push(err.to_string()),
+            }
+        }
+        if markdown.is_empty() {
+            self.status = failures.join("; ").into();
+            cx.notify();
+            return;
+        }
+
+        self.active_tab_mut().finish_undo_capture();
+        let snapshot = self.snapshot();
+        let replacement = markdown.join("\n");
+        let selected = self.active_tab().selected_range.clone();
+        let insertion_start = selected.start;
+        self.active_tab_mut()
+            .document
+            .replace_range(selected, &replacement);
+        self.commit_undo_snapshot(snapshot);
+        let tab = self.active_tab_mut();
+        tab.selected_range =
+            insertion_start + replacement.len()..insertion_start + replacement.len();
+        tab.selection_reversed = false;
+        tab.marked_range = None;
+        self.status = if failures.is_empty() {
+            t(self.language, Msg::StatusFmtImage).into()
+        } else {
+            p0_tf(
+                self.language,
+                P0Msg::ImagePartialFailure,
+                &[&failures.join("; ")],
+            )
+            .into()
+        };
+        self.after_document_changed(cx);
+        cx.notify();
+    }
+
+    pub(super) fn set_image_presentation_at(
+        &mut self,
+        offset: usize,
+        presentation: ImagePresentation,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = inline_image_at(self.active_tab().document.text(), offset) else {
+            return;
+        };
+        let replacement = serialize_inline_image(
+            &target.label,
+            &target.url,
+            target.title.as_deref(),
+            Some(presentation),
+        );
+        self.replace_exact_inline_target(target.source_range, replacement, cx);
+    }
+
+    pub(super) fn replace_image_resource_at(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(p0_t(self.language, P0Msg::ChooseReplacementImage).into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(source_path) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |app, cx| {
+                if !image_extension_supported(&source_path) {
+                    app.status = p0_t(app.language, P0Msg::UnsupportedImage).into();
+                    cx.notify();
+                    return;
+                }
+                let Some(target) = inline_image_at(app.active_tab().document.text(), offset) else {
+                    app.status = p0_t(app.language, P0Msg::ImageSourceAmbiguous).into();
+                    cx.notify();
+                    return;
+                };
+                let Some(document_path) = app.active_tab().document.path().map(Path::to_path_buf)
+                else {
+                    app.status = p0_t(app.language, P0Msg::SaveBeforeImage).into();
+                    cx.notify();
+                    return;
+                };
+                match import_image_file(&document_path, &source_path) {
+                    Ok(imported) => {
+                        let replacement = serialize_inline_image(
+                            &target.label,
+                            &imported.relative_url,
+                            target.title.as_deref(),
+                            target.presentation,
+                        );
+                        app.replace_exact_inline_target(target.source_range, replacement, cx);
+                    }
+                    Err(err) => {
+                        app.status =
+                            p0_tf(app.language, P0Msg::ImageReplaceFailed, &[&err.to_string()])
+                                .into();
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn replace_exact_inline_target(
+        &mut self,
+        source_range: Range<usize>,
+        replacement: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_tab_mut().finish_undo_capture();
+        let snapshot = self.snapshot();
+        let start = source_range.start;
+        self.active_tab_mut()
+            .document
+            .replace_range(source_range, &replacement);
+        self.commit_undo_snapshot(snapshot);
+        let tab = self.active_tab_mut();
+        tab.selected_range = start..start + replacement.len();
+        tab.selection_reversed = false;
+        tab.marked_range = None;
+        self.status = t(self.language, Msg::StatusFmtImage).into();
+        self.after_document_changed(cx);
+        cx.notify();
+    }
+
     pub(super) fn snapshot(&self) -> EditorSnapshot {
         self.active_tab().snapshot()
     }
@@ -127,7 +299,107 @@ impl MarkionApp {
     }
 
     pub(super) fn insert_link(&mut self, _: &InsertLink, _: &mut Window, cx: &mut Context<Self>) {
-        self.apply_markdown_format(MarkdownFormat::Link, self.tr(Msg::StatusFmtLink).into(), cx);
+        if matches!(self.view_mode, ViewMode::VisualEdit) {
+            self.open_link_editor(cx);
+        } else {
+            self.apply_markdown_format(
+                MarkdownFormat::Link,
+                self.tr(Msg::StatusFmtLink).into(),
+                cx,
+            );
+        }
+    }
+
+    pub(super) fn open_link_editor(&mut self, cx: &mut Context<Self>) {
+        let selected = self.active_tab().selected_range.clone();
+        let cursor = self.active_tab().cursor_offset();
+        let existing = inline_link_at(self.active_tab().document.text(), cursor);
+        let (source_range, label, url, title) = if let Some(link) = existing {
+            (
+                link.source_range,
+                link.label,
+                link.url,
+                link.title.unwrap_or_default(),
+            )
+        } else if !selected.is_empty() {
+            (
+                selected.clone(),
+                self.active_tab().document.text()[selected].to_string(),
+                String::new(),
+                String::new(),
+            )
+        } else {
+            (selected, "link text".into(), String::new(), String::new())
+        };
+        self.link_editor = Some(LinkEditorState {
+            source_range,
+            document_version: self.active_tab().document.version(),
+            label,
+            url,
+            title,
+            field: LinkEditorField::Url,
+        });
+        self.input_marked_len = 0;
+        self.status = p0_t(self.language, P0Msg::EditingLink).into();
+        cx.notify();
+    }
+
+    pub(super) fn focus_link_editor_field(
+        &mut self,
+        field: LinkEditorField,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(editor) = self.link_editor.as_mut() {
+            editor.field = field;
+            self.input_marked_len = 0;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn cancel_link_editor(&mut self, cx: &mut Context<Self>) {
+        self.link_editor = None;
+        self.input_marked_len = 0;
+        self.status = t(self.language, Msg::StatusCanceled).into();
+        cx.notify();
+    }
+
+    pub(super) fn confirm_link_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.link_editor.take() else {
+            return;
+        };
+        self.input_marked_len = 0;
+        if editor.url.trim().is_empty() {
+            self.link_editor = Some(editor);
+            self.status = p0_t(self.language, P0Msg::LinkUrlRequired).into();
+            cx.notify();
+            return;
+        }
+        if self.active_tab().document.version() != editor.document_version
+            || editor.source_range.end > self.active_tab().document.text().len()
+        {
+            self.status = p0_t(self.language, P0Msg::LinkStale).into();
+            cx.notify();
+            return;
+        }
+        let replacement = serialize_inline_link(
+            &editor.label,
+            editor.url.trim(),
+            (!editor.title.trim().is_empty()).then_some(editor.title.trim()),
+        );
+        self.active_tab_mut().finish_undo_capture();
+        let snapshot = self.snapshot();
+        let start = editor.source_range.start;
+        self.active_tab_mut()
+            .document
+            .replace_range(editor.source_range, &replacement);
+        self.commit_undo_snapshot(snapshot);
+        let tab = self.active_tab_mut();
+        tab.selected_range = start..start + replacement.len();
+        tab.selection_reversed = false;
+        tab.marked_range = None;
+        self.status = t(self.language, Msg::StatusFmtLink).into();
+        self.after_document_changed(cx);
+        cx.notify();
     }
 
     pub(super) fn insert_image(&mut self, _: &InsertImage, _: &mut Window, cx: &mut Context<Self>) {
@@ -915,6 +1187,10 @@ impl MarkionApp {
             self.confirm_pending_name(&ConfirmPendingName, _window, cx);
             return;
         }
+        if self.link_editor.is_some() {
+            self.confirm_link_editor(cx);
+            return;
+        }
         let selected = self.active_tab().selected_range.clone();
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && let Some(field) = self.active_tab().document.visual_editor_field_at(&selected)
@@ -1110,7 +1386,36 @@ impl MarkionApp {
     }
 
     pub(super) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+        let Some(item) = cx.read_from_clipboard() else {
+            self.status = t(self.language, Msg::StatusClipboardEmpty).into();
+            cx.notify();
+            return;
+        };
+        if !self.has_text_input_focus()
+            && let Some(image) = item.entries().iter().find_map(|entry| match entry {
+                ClipboardEntry::Image(image) => Some(image),
+                ClipboardEntry::String(_) => None,
+            })
+        {
+            let extension = match image.format {
+                ImageFormat::Png => "png",
+                ImageFormat::Jpeg => "jpg",
+                ImageFormat::Webp => "webp",
+                ImageFormat::Gif => "gif",
+                ImageFormat::Svg => "svg",
+                ImageFormat::Bmp => "bmp",
+                ImageFormat::Tiff => "tiff",
+            };
+            self.request_image_import(
+                vec![PendingImageInput {
+                    stem: "pasted-image".into(),
+                    extension: extension.into(),
+                    bytes: image.bytes.clone(),
+                }],
+                window,
+                cx,
+            );
+        } else if let Some(text) = item.text() {
             if self.has_text_input_focus() {
                 self.push_text_input(&text, cx);
                 return;

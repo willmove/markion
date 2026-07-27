@@ -7,13 +7,18 @@
 //! - [`logging`]: diagnostic file logging
 //! - [`theme_file`]: user `.toml` custom theme files (with `.theme` migration)
 //! - [`recovery`]: crash-recovery copies
+//! - [`atomic`]: same-directory durable atomic file replacement
 
+pub mod atomic;
 pub mod file_tree;
 pub mod logging;
 pub mod preferences;
 pub mod recovery;
+pub mod resources;
 pub mod session;
 pub mod theme_file;
+
+pub use atomic::atomic_write;
 
 pub use file_tree::{
     FileTree, FileTreeEntry, FileTreeEntryKind, MARKDOWN_EXTENSIONS, is_markdown_path,
@@ -24,6 +29,9 @@ pub use preferences::{
     render_app_preferences, save_app_preferences,
 };
 pub use recovery::{delete_recovery_file, list_recovery_files, load_recovery_file};
+pub use resources::{
+    ImportedImage, image_extension_supported, import_image_bytes, import_image_file,
+};
 pub use session::{
     load_session_state, parse_session_state, render_session_state, save_session_state,
 };
