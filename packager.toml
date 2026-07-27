@@ -24,6 +24,18 @@
 # NOTE on signing: builds are UNSIGNED (no paid code-signing certificate). Users
 # will see Gatekeeper (macOS) / SmartScreen (Windows) warnings on first launch
 # and must bypass them manually. See README "Install" section.
+#
+# Aliyun OSS mirror (release.yml `mirror-oss` job):
+#   After a successful `v*` tag build, the release workflow also uploads the
+#   four installers, this `packager.toml`, a generated `manifest.json`, and
+#   `sha256sums.txt` to an Aliyun OSS Bucket at:
+#       ${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/<filename>
+#   The in-app "Check for Updates…" action (Help menu) fetches that
+#   `manifest.json` and notifies the user when a newer version exists.
+#   There is NO `[updater]` table here: cargo-packager 0.11.x's `Config` struct
+#   has no `updater` field, and every config table is `deny_unknown_fields`,
+#   so adding one breaks `cargo packager` immediately. The manifest and any
+#   future signature are produced by the workflow, not by the packager.
 
 product-name = "Markion"
 # `name` is the internal app/package identifier. Setting it explicitly is

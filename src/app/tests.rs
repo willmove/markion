@@ -218,6 +218,7 @@ fn every_application_dropdown_uses_shortcut_aware_rows() {
         .split_once("AppMenu::Help =>")
         .map(|(_, body)| body)
         .expect("Help menu match arm");
+    assert!(help_menu.contains("Msg::ItemCheckForUpdates"));
     assert!(help_menu.contains("Msg::ItemAboutMarkion"));
     assert!(
         !help_menu.contains("Msg::ItemKeyboardShortcuts"),
@@ -276,6 +277,7 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
         "Msg::ItemOpenFolder,",
         "Msg::ItemNewTab,",
         "Msg::ItemResetPreferences,",
+        "Msg::ItemCheckForUpdates,",
         "Msg::ItemBullets,",
         "Msg::ItemAboutMarkion,",
     ] {
@@ -1940,6 +1942,7 @@ fn show_shortcuts_opens_preferences_on_shortcuts_tab() {
     assert!(search_source.contains("self.shortcut_category = category"));
 
     let bootstrap_source = include_str!("bootstrap.rs");
+    assert!(bootstrap_source.contains("Msg::ItemCheckForUpdates"));
     assert!(bootstrap_source.contains("Msg::ItemAboutMarkion"));
     assert!(
         !bootstrap_source.contains("Msg::ItemKeyboardShortcuts"),

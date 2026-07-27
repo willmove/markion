@@ -92,6 +92,7 @@ two-face.workspace = true
 # would break the Linux release build; Markion's own save-dialog adapter uses
 # rfd's GTK-free XDG Portal/Wayland backend instead).
 serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

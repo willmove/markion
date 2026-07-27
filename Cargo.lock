@@ -3194,6 +3194,7 @@ dependencies = [
  "resvg",
  "rfd",
  "serde",
+ "serde_json",
  "serde_yaml",
  "syntect",
  "tempfile",

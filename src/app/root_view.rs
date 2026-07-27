@@ -155,6 +155,7 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::show_shortcuts))
             .on_action(cx.listener(Self::show_preferences))
             .on_action(cx.listener(Self::reset_preferences))
+            .on_action(cx.listener(Self::check_for_updates))
             .on_action(cx.listener(Self::about))
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::new_tab))
@@ -2595,7 +2596,14 @@ pub(super) fn active_menu_dropdown(
                 ExportJpeg,
                 menu_shortcuts::EXPORT_JPEG
             )),
-        AppMenu::Help => panel.child(action_item!(Msg::ItemAboutMarkion, about, AboutMarkion)),
+        AppMenu::Help => panel
+            .child(action_item!(
+                Msg::ItemCheckForUpdates,
+                check_for_updates,
+                CheckForUpdates
+            ))
+            .child(menu_separator(palette))
+            .child(action_item!(Msg::ItemAboutMarkion, about, AboutMarkion)),
     }
 }
 

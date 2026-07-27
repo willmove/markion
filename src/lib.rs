@@ -4546,6 +4546,8 @@ mod tests {
             sidebar_visible: false,
             sidebar_tab: SidebarTab::Outline,
             language: "zh".to_string(),
+            check_for_updates_on_startup: true,
+            last_update_check: Some("2026-07-27T10:30:00Z".to_string()),
             auto_save: AutoSavePreferences {
                 enabled: false,
                 delay_secs: 30,

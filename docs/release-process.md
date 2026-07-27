@@ -120,8 +120,11 @@ All of these jobs must succeed:
 - Build and package on `macos-latest`.
 - Build and package on `ubuntu-22.04`.
 - Publish GitHub Release.
+- Mirror installers to Aliyun OSS.
 
 If the workflow fails, inspect it with `gh run view <tag-run-id> --log-failed`. Do not report the release as complete. If the public tag already exists, preserve it and either fix forward or ask the maintainer how to proceed.
+
+The `mirror-oss` job uploads the four installers, `packager.toml`, a generated `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/` on the configured Aliyun OSS Bucket. It runs independently of the `Publish GitHub Release` job; a GitHub Release failure does not block the mirror and vice versa. A mirror failure is still an incomplete release - correct or retry it before reporting completion.
 
 ## 7. Curate the release notes
 
@@ -227,6 +230,7 @@ Confirm that:
 - The curated notes and full comparison link are present.
 - The assets include `markion_X.Y.Z_x64-setup.exe`, `Markion_X.Y.Z_aarch64.dmg`, `markion_X.Y.Z_amd64.deb`, and `markion_X.Y.Z_x86_64.AppImage`.
 - The tag workflow succeeded on all three native platforms and in the publish job.
+- The `mirror-oss` job succeeded, and the Aliyun OSS path `${OSS_PREFIX}/latest/` contains the four installers, `packager.toml`, `manifest.json`, and `sha256sums.txt`. The `version` field inside `manifest.json` equals `X.Y.Z`.
 - Local `main`, `origin/main`, the release commit, and the annotated tag resolve to the intended release state.
 - The local worktree is clean.
 

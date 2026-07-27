@@ -76,7 +76,13 @@ jobs:
 
       # Each runner is native for its matrix target, and packager expects the
       # executable in target/release rather than target/<triple>/release.
+      # Inject the OSS mirror coordinates so the "Check for Updates" feature
+      # bakes the correct public URL into the release binary at compile time
+      # (see src/app/update.rs `option_env!` defaults).
       - name: Build release binary
+        env:
+          MARKION_OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
+          MARKION_OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
         run: cargo build --release
 
       # Source installation matches the proven Medor workflow and avoids
@@ -118,3 +124,79 @@ jobs:
           files: dist/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  # Mirrors the tagged release's installers and packaging config to a domestic
+  # Aliyun OSS Bucket at a stable `${OSS_PREFIX}/latest/` path, alongside a
+  # generated `manifest.json` that the in-app "Check for Updates" action reads.
+  # Independent of the `release` job: a GitHub Release failure does not block
+  # the mirror, and vice versa. Runs only on `v*` tags.
+  mirror-oss:
+    name: Mirror installers to Aliyun OSS
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts to mirror
+        run: ls -laR dist
+
+      - name: Derive version without leading v
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Compute SHA-256 digests for each installer
+        run: |
+          cd dist
+          sha256sum *.exe *.dmg *.deb *.AppImage > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Build manifest.json
+        shell: bash
+        env:
+          OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, datetime
+          base = os.environ["OSS_PUBLIC_BASE"].rstrip("/") + "/" + os.environ["OSS_PREFIX"].rstrip("/") + "/latest"
+          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          assets = {
+              "windows-x86_64": f"markion_{version}_x64-setup.exe",
+              "macos-aarch64":  f"Markion_{version}_aarch64.dmg",
+              "linux-amd64":    f"markion_{version}_amd64.deb",
+              "linux-appimage": f"markion_{version}_x86_64.AppImage",
+          }
+          out = {
+              "version": version,
+              "tag": os.environ["GITHUB_REF_NAME"],
+              "pub_date": datetime.datetime.utcnow().isoformat() + "Z",
+              "assets": {k: {"filename": v} for k, v in assets.items()},
+          }
+          pathlib.Path("dist/manifest.json").write_text(json.dumps(out, indent=2) + "\n")
+          print(json.dumps(out, indent=2))
+          PY
+
+      - name: Upload installers, packager.toml, manifest, and sha256sums to Aliyun OSS
+        uses: tvrcgo/oss-action@master
+        with:
+          key-id: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          key-secret: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          endpoint: ${{ secrets.OSS_ENDPOINT }}
+          bucket: ${{ secrets.OSS_BUCKET }}
+          assets: |
+            dist/markion_${{ env.VERSION }}_x64-setup.exe:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_x64-setup.exe
+            dist/Markion_${{ env.VERSION }}_aarch64.dmg:${{ secrets.OSS_PREFIX }}/latest/Markion_${{ env.VERSION }}_aarch64.dmg
+            dist/markion_${{ env.VERSION }}_amd64.deb:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_amd64.deb
+            dist/markion_${{ env.VERSION }}_x86_64.AppImage:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_x86_64.AppImage
+            dist/manifest.json:${{ secrets.OSS_PREFIX }}/latest/manifest.json
+            dist/sha256sums.txt:${{ secrets.OSS_PREFIX }}/latest/sha256sums.txt
+            packager.toml:${{ secrets.OSS_PREFIX }}/latest/packager.toml

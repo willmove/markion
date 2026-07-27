@@ -193,6 +193,7 @@ pub enum Msg {
     ItemPreferences,
     ItemResetPreferences,
     ItemKeyboardShortcuts,
+    ItemCheckForUpdates,
     ItemAboutMarkion,
 
     // --- Panel / tab labels ---
@@ -253,6 +254,10 @@ pub enum Msg {
     StatusWaitingDeleteConfirm,
     StatusDeleteCanceled,
     StatusAboutMarkion,
+    StatusUpdateChecking,
+    StatusUpdateUpToDate,
+    StatusUpdateAvailable,
+    StatusUpdateCheckFailed,
     StatusKeyboardShortcuts,
     StatusUndo,
     StatusNothingToUndo,
@@ -428,6 +433,18 @@ pub enum Msg {
     DialogAboutTitle,
     /// About detail body. {0}=version {1}=repo url.
     DialogAboutDetail,
+    /// Update check: up-to-date dialog title.
+    DialogUpToDateTitle,
+    /// Update check: up-to-date dialog body.
+    DialogUpToDateDetail,
+    /// Update check: newer version available dialog title.
+    DialogUpdateAvailableTitle,
+    /// Update-available detail body. {0}=new version {1}=download url.
+    DialogUpdateAvailableDetail,
+    /// Update check: failure dialog title.
+    DialogUpdateCheckFailedTitle,
+    /// Update-check failure body. {0}=error message.
+    DialogUpdateCheckFailedDetail,
     /// Keyboard Shortcuts dialog title.
     DialogShortcutsTitle,
     /// Preferences dialog title.
@@ -1641,6 +1658,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemResetPreferences => "Reset Preferences",
         Msg::ItemKeyboardShortcuts => "Keyboard Shortcuts",
         Msg::ItemAboutMarkion => "About Markion",
+        Msg::ItemCheckForUpdates => "Check for Updates…",
 
         Msg::LabelEditor => "Editor",
         Msg::LabelPreview => "Preview",
@@ -1689,6 +1707,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "Waiting for delete confirmation...",
         Msg::StatusDeleteCanceled => "Delete canceled",
         Msg::StatusAboutMarkion => "About Markion",
+        Msg::StatusUpdateChecking => "Checking for updates…",
+        Msg::StatusUpdateUpToDate => "Markion is up to date",
+        Msg::StatusUpdateAvailable => "Update available: {0}",
+        Msg::StatusUpdateCheckFailed => "Update check failed: {0}",
         Msg::StatusKeyboardShortcuts => "Keyboard shortcuts",
         Msg::StatusUndo => "Undo",
         Msg::StatusNothingToUndo => "Nothing to undo",
@@ -1820,6 +1842,20 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogAboutTitle => "About Markion",
         Msg::DialogAboutDetail => {
             "Version: {0}\n\nA local-first Markdown editor built with Rust and GPUI.\n\nGitHub: {1}"
+        }
+        Msg::DialogUpToDateTitle => "Up to Date",
+        Msg::DialogUpToDateDetail => "You are running the latest version of Markion.",
+        Msg::DialogUpdateAvailableTitle => "Update Available",
+        Msg::DialogUpdateAvailableDetail => {
+            "Markion {0} is available. Download it from:
+
+{1}"
+        }
+        Msg::DialogUpdateCheckFailedTitle => "Update Check Failed",
+        Msg::DialogUpdateCheckFailedDetail => {
+            "Could not check for updates:
+
+{0}"
         }
         Msg::DialogShortcutsTitle => "Keyboard Shortcuts",
         Msg::DialogPreferencesTitle => "Preferences",
@@ -2026,6 +2062,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemResetPreferences => "設定をリセット",
         Msg::ItemKeyboardShortcuts => "キーボードショートカット",
         Msg::ItemAboutMarkion => "Markionについて",
+        Msg::ItemCheckForUpdates => "更新を確認…",
 
         Msg::LabelEditor => "エディタ",
         Msg::LabelPreview => "プレビュー",
@@ -2074,6 +2111,10 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "削除の確認待ち...",
         Msg::StatusDeleteCanceled => "削除をキャンセルしました",
         Msg::StatusAboutMarkion => "Markionについて",
+        Msg::StatusUpdateChecking => "更新を確認しています…",
+        Msg::StatusUpdateUpToDate => "Markion は最新です",
+        Msg::StatusUpdateAvailable => "更新があります: {0}",
+        Msg::StatusUpdateCheckFailed => "更新確認に失敗しました: {0}",
         Msg::StatusKeyboardShortcuts => "キーボードショートカット",
         Msg::StatusUndo => "元に戻す",
         Msg::StatusNothingToUndo => "元に戻す操作はありません",
@@ -2207,6 +2248,20 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogAboutTitle => "Markionについて",
         Msg::DialogAboutDetail => {
             "バージョン: {0}\n\nRustとGPUIで構築されたローカルファーストのMarkdownエディタです。\n\nGitHub: {1}"
+        }
+        Msg::DialogUpToDateTitle => "最新です",
+        Msg::DialogUpToDateDetail => "Markion は最新のバージョンを実行しています。",
+        Msg::DialogUpdateAvailableTitle => "更新があります",
+        Msg::DialogUpdateAvailableDetail => {
+            "Markion {0} が利用可能です。次の URL からダウンロードしてください:
+
+{1}"
+        }
+        Msg::DialogUpdateCheckFailedTitle => "更新確認に失敗しました",
+        Msg::DialogUpdateCheckFailedDetail => {
+            "更新を確認できませんでした:
+
+{0}"
         }
         Msg::DialogShortcutsTitle => "キーボードショートカット",
         Msg::DialogPreferencesTitle => "設定",
@@ -2402,6 +2457,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemResetPreferences => "Réinitialiser les préférences",
         Msg::ItemKeyboardShortcuts => "Raccourcis clavier",
         Msg::ItemAboutMarkion => "À propos de Markion",
+        Msg::ItemCheckForUpdates => "Rechercher des mises à jour…",
         Msg::LabelEditor => "Éditeur",
         Msg::LabelPreview => "Aperçu",
         Msg::LabelFiles => "Fichiers",
@@ -2447,6 +2503,10 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "En attente de confirmation de suppression...",
         Msg::StatusDeleteCanceled => "Suppression annulée",
         Msg::StatusAboutMarkion => "À propos de Markion",
+        Msg::StatusUpdateChecking => "Recherche de mises à jour…",
+        Msg::StatusUpdateUpToDate => "Markion est à jour",
+        Msg::StatusUpdateAvailable => "Mise à jour disponible : {0}",
+        Msg::StatusUpdateCheckFailed => "Échec de la vérification : {0}",
         Msg::StatusKeyboardShortcuts => "Raccourcis clavier",
         Msg::StatusUndo => "Annuler",
         Msg::StatusNothingToUndo => "Rien à annuler",
@@ -2578,6 +2638,20 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogAboutTitle => "À propos de Markion",
         Msg::DialogAboutDetail => {
             "Version : {0}\n\nUn éditeur Markdown local-first construit avec Rust et GPUI.\n\nGitHub : {1}"
+        }
+        Msg::DialogUpToDateTitle => "À jour",
+        Msg::DialogUpToDateDetail => "Vous exécutez la dernière version de Markion.",
+        Msg::DialogUpdateAvailableTitle => "Mise à jour disponible",
+        Msg::DialogUpdateAvailableDetail => {
+            "Markion {0} est disponible. Téléchargez-le depuis :
+
+{1}"
+        }
+        Msg::DialogUpdateCheckFailedTitle => "Échec de la vérification",
+        Msg::DialogUpdateCheckFailedDetail => {
+            "Impossible de vérifier les mises à jour :
+
+{0}"
         }
         Msg::DialogShortcutsTitle => "Raccourcis clavier",
         Msg::DialogPreferencesTitle => "Préférences",
@@ -2779,6 +2853,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemResetPreferences => "Einstellungen zurücksetzen",
         Msg::ItemKeyboardShortcuts => "Tastenkürzel",
         Msg::ItemAboutMarkion => "Über Markion",
+        Msg::ItemCheckForUpdates => "Nach Updates suchen…",
         Msg::LabelEditor => "Editor",
         Msg::LabelPreview => "Vorschau",
         Msg::LabelFiles => "Dateien",
@@ -2824,6 +2899,10 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "Warte auf Löschbestätigung...",
         Msg::StatusDeleteCanceled => "Löschen abgebrochen",
         Msg::StatusAboutMarkion => "Über Markion",
+        Msg::StatusUpdateChecking => "Suche nach Updates…",
+        Msg::StatusUpdateUpToDate => "Markion ist aktuell",
+        Msg::StatusUpdateAvailable => "Update verfügbar: {0}",
+        Msg::StatusUpdateCheckFailed => "Update-Prüfung fehlgeschlagen: {0}",
         Msg::StatusKeyboardShortcuts => "Tastenkürzel",
         Msg::StatusUndo => "Rückgängig",
         Msg::StatusNothingToUndo => "Nichts rückgängig zu machen",
@@ -2951,6 +3030,20 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogAboutTitle => "Über Markion",
         Msg::DialogAboutDetail => {
             "Version: {0}\n\nEin lokal-first Markdown-Editor, entwickelt mit Rust und GPUI.\n\nGitHub: {1}"
+        }
+        Msg::DialogUpToDateTitle => "Aktuell",
+        Msg::DialogUpToDateDetail => "Sie verwenden die neueste Version von Markion.",
+        Msg::DialogUpdateAvailableTitle => "Update verfügbar",
+        Msg::DialogUpdateAvailableDetail => {
+            "Markion {0} ist verfügbar. Download unter:
+
+{1}"
+        }
+        Msg::DialogUpdateCheckFailedTitle => "Update-Prüfung fehlgeschlagen",
+        Msg::DialogUpdateCheckFailedDetail => {
+            "Update-Prüfung nicht möglich:
+
+{0}"
         }
         Msg::DialogShortcutsTitle => "Tastenkürzel",
         Msg::DialogPreferencesTitle => "Einstellungen",
@@ -3152,6 +3245,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemResetPreferences => "Restablecer preferencias",
         Msg::ItemKeyboardShortcuts => "Atajos de teclado",
         Msg::ItemAboutMarkion => "Acerca de Markion",
+        Msg::ItemCheckForUpdates => "Buscar actualizaciones…",
         Msg::LabelEditor => "Editor",
         Msg::LabelPreview => "Vista previa",
         Msg::LabelFiles => "Archivos",
@@ -3197,6 +3291,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "Esperando confirmación de eliminación...",
         Msg::StatusDeleteCanceled => "Eliminación cancelada",
         Msg::StatusAboutMarkion => "Acerca de Markion",
+        Msg::StatusUpdateChecking => "Buscando actualizaciones…",
+        Msg::StatusUpdateUpToDate => "Markion está actualizado",
+        Msg::StatusUpdateAvailable => "Actualización disponible: {0}",
+        Msg::StatusUpdateCheckFailed => "Error al buscar actualizaciones: {0}",
         Msg::StatusKeyboardShortcuts => "Atajos de teclado",
         Msg::StatusUndo => "Deshacer",
         Msg::StatusNothingToUndo => "Nada que deshacer",
@@ -3326,6 +3424,20 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogAboutTitle => "Acerca de Markion",
         Msg::DialogAboutDetail => {
             "Versión: {0}\n\nUn editor Markdown local-first construido con Rust y GPUI.\n\nGitHub: {1}"
+        }
+        Msg::DialogUpToDateTitle => "Actualizado",
+        Msg::DialogUpToDateDetail => "Estás usando la última versión de Markion.",
+        Msg::DialogUpdateAvailableTitle => "Actualización disponible",
+        Msg::DialogUpdateAvailableDetail => {
+            "Markion {0} está disponible. Descárgalo desde:
+
+{1}"
+        }
+        Msg::DialogUpdateCheckFailedTitle => "Error al buscar actualizaciones",
+        Msg::DialogUpdateCheckFailedDetail => {
+            "No se pudo buscar actualizaciones:
+
+{0}"
         }
         Msg::DialogShortcutsTitle => "Atajos de teclado",
         Msg::DialogPreferencesTitle => "Preferencias",
@@ -3523,6 +3635,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemResetPreferences => "重置首选项",
         Msg::ItemKeyboardShortcuts => "键盘快捷键",
         Msg::ItemAboutMarkion => "关于 Markion",
+        Msg::ItemCheckForUpdates => "检查更新…",
 
         Msg::LabelEditor => "编辑器",
         Msg::LabelPreview => "预览",
@@ -3571,6 +3684,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "等待删除确认…",
         Msg::StatusDeleteCanceled => "已取消删除",
         Msg::StatusAboutMarkion => "关于 Markion",
+        Msg::StatusUpdateChecking => "正在检查更新…",
+        Msg::StatusUpdateUpToDate => "Markion 已是最新版本",
+        Msg::StatusUpdateAvailable => "发现新版本：{0}",
+        Msg::StatusUpdateCheckFailed => "检查更新失败：{0}",
         Msg::StatusKeyboardShortcuts => "键盘快捷键",
         Msg::StatusUndo => "已撤销",
         Msg::StatusNothingToUndo => "没有可撤销的操作",
@@ -3700,6 +3817,20 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogAboutTitle => "关于 Markion",
         Msg::DialogAboutDetail => {
             "版本：{0}\n\n一款使用 Rust 与 GPUI 构建的本地优先 Markdown 编辑器。\n\nGitHub：{1}"
+        }
+        Msg::DialogUpToDateTitle => "已是最新版本",
+        Msg::DialogUpToDateDetail => "您正在使用最新版本的 Markion。",
+        Msg::DialogUpdateAvailableTitle => "发现新版本",
+        Msg::DialogUpdateAvailableDetail => {
+            "Markion {0} 已发布。请从以下地址下载：
+
+{1}"
+        }
+        Msg::DialogUpdateCheckFailedTitle => "检查更新失败",
+        Msg::DialogUpdateCheckFailedDetail => {
+            "无法检查更新：
+
+{0}"
         }
         Msg::DialogShortcutsTitle => "键盘快捷键",
         Msg::DialogPreferencesTitle => "首选项",
@@ -3897,6 +4028,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemResetPreferences => "重設偏好設定",
         Msg::ItemKeyboardShortcuts => "鍵盤快速鍵",
         Msg::ItemAboutMarkion => "關於 Markion",
+        Msg::ItemCheckForUpdates => "檢查更新…",
 
         Msg::LabelEditor => "編輯器",
         Msg::LabelPreview => "預覽",
@@ -3945,6 +4077,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "等待刪除確認…",
         Msg::StatusDeleteCanceled => "已取消刪除",
         Msg::StatusAboutMarkion => "關於 Markion",
+        Msg::StatusUpdateChecking => "正在檢查更新…",
+        Msg::StatusUpdateUpToDate => "Markion 已是最新版本",
+        Msg::StatusUpdateAvailable => "發現新版本：{0}",
+        Msg::StatusUpdateCheckFailed => "檢查更新失敗：{0}",
         Msg::StatusKeyboardShortcuts => "鍵盤快速鍵",
         Msg::StatusUndo => "已復原",
         Msg::StatusNothingToUndo => "沒有可復原的動作",
@@ -4076,6 +4212,20 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogAboutTitle => "關於 Markion",
         Msg::DialogAboutDetail => {
             "版本：{0}\n\n一款使用 Rust 與 GPUI 打造的本機優先 Markdown 編輯器。\n\nGitHub：{1}"
+        }
+        Msg::DialogUpToDateTitle => "已是最新版本",
+        Msg::DialogUpToDateDetail => "您正在使用最新版本的 Markion。",
+        Msg::DialogUpdateAvailableTitle => "發現新版本",
+        Msg::DialogUpdateAvailableDetail => {
+            "Markion {0} 已發布。請從以下位址下載：
+
+{1}"
+        }
+        Msg::DialogUpdateCheckFailedTitle => "檢查更新失敗",
+        Msg::DialogUpdateCheckFailedDetail => {
+            "無法檢查更新：
+
+{0}"
         }
         Msg::DialogShortcutsTitle => "鍵盤快速鍵",
         Msg::DialogPreferencesTitle => "偏好設定",
@@ -4576,6 +4726,7 @@ mod tests {
             Msg::ItemPreferences,
             Msg::ItemResetPreferences,
             Msg::ItemKeyboardShortcuts,
+            Msg::ItemCheckForUpdates,
             Msg::ItemAboutMarkion,
             Msg::LabelEditor,
             Msg::LabelPreview,
@@ -4622,6 +4773,10 @@ mod tests {
             Msg::StatusWaitingDeleteConfirm,
             Msg::StatusDeleteCanceled,
             Msg::StatusAboutMarkion,
+            Msg::StatusUpdateChecking,
+            Msg::StatusUpdateUpToDate,
+            Msg::StatusUpdateAvailable,
+            Msg::StatusUpdateCheckFailed,
             Msg::StatusKeyboardShortcuts,
             Msg::StatusUndo,
             Msg::StatusNothingToUndo,
@@ -4744,6 +4899,12 @@ mod tests {
             Msg::DialogButtonExitWithoutSaving,
             Msg::DialogAboutTitle,
             Msg::DialogAboutDetail,
+            Msg::DialogUpToDateTitle,
+            Msg::DialogUpToDateDetail,
+            Msg::DialogUpdateAvailableTitle,
+            Msg::DialogUpdateAvailableDetail,
+            Msg::DialogUpdateCheckFailedTitle,
+            Msg::DialogUpdateCheckFailedDetail,
             Msg::DialogShortcutsTitle,
             Msg::DialogPreferencesTitle,
             Msg::DialogPreferencesDetail,

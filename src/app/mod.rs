@@ -139,6 +139,7 @@ actions!(
         ShowShortcuts,
         ShowPreferences,
         ResetPreferences,
+        CheckForUpdates,
         AboutMarkion,
         Quit,
         NewTab,
@@ -1105,6 +1106,7 @@ mod save_dialog;
 mod search;
 mod shortcuts;
 mod state;
+mod update;
 mod workspace;
 
 #[cfg(test)]
@@ -1241,4 +1243,10 @@ struct MarkionApp {
     math_cache: MathCache,
     /// Active interface language. Persisted via `AppPreferences::language`.
     language: Language,
+    /// Whether `MarkionApp::new` should schedule a silent update check on
+    /// startup. Persisted via `AppPreferences::check_for_updates_on_startup`.
+    check_for_updates_on_startup: bool,
+    /// ISO-8601 timestamp of the most recent update check. Persisted via
+    /// `AppPreferences::last_update_check`; used to throttle startup checks.
+    last_update_check: Option<String>,
 }

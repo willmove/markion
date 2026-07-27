@@ -31,6 +31,10 @@ struct PreferencesFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     custom_theme: Option<String>,
     language: String,
+    #[serde(default)]
+    check_for_updates_on_startup: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_update_check: Option<String>,
     focus_mode: bool,
     typewriter_mode: bool,
     code_line_numbers: bool,
@@ -100,6 +104,8 @@ impl From<&AppPreferences> for PreferencesFile {
             theme: preferences.theme.clone(),
             custom_theme: preferences.custom_theme.clone(),
             language: preferences.language.clone(),
+            check_for_updates_on_startup: preferences.check_for_updates_on_startup,
+            last_update_check: preferences.last_update_check.clone(),
             focus_mode: preferences.focus_mode,
             typewriter_mode: preferences.typewriter_mode,
             code_line_numbers: preferences.code_line_numbers,
@@ -132,6 +138,8 @@ impl From<PreferencesFile> for AppPreferences {
             theme: file.theme,
             custom_theme: file.custom_theme.filter(|name| !name.is_empty()),
             language: file.language,
+            check_for_updates_on_startup: file.check_for_updates_on_startup,
+            last_update_check: file.last_update_check,
             focus_mode: file.focus_mode,
             typewriter_mode: file.typewriter_mode,
             code_line_numbers: file.code_line_numbers,
@@ -448,6 +456,47 @@ mod tests {
         );
         let parsed = parse_app_preferences(&rendered).unwrap();
         assert!(parsed.sync_scroll, "parsed sync_scroll should be true");
+    }
+
+    #[test]
+    fn update_check_preferences_default_off_and_none() {
+        let defaults = AppPreferences::default();
+        assert!(!defaults.check_for_updates_on_startup);
+        assert!(defaults.last_update_check.is_none());
+    }
+
+    #[test]
+    fn update_check_preferences_round_trip_through_toml() {
+        let preferences = AppPreferences {
+            check_for_updates_on_startup: true,
+            last_update_check: Some("2026-07-27T10:30:00Z".to_string()),
+            ..AppPreferences::default()
+        };
+        let rendered = render_app_preferences(&preferences);
+        assert!(
+            rendered.contains("check_for_updates_on_startup = true"),
+            "rendered TOML should set check_for_updates_on_startup = true: {rendered}"
+        );
+        assert!(
+            rendered.contains("last_update_check = \"2026-07-27T10:30:00Z\""),
+            "rendered TOML should set last_update_check: {rendered}"
+        );
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert!(parsed.check_for_updates_on_startup);
+        assert_eq!(
+            parsed.last_update_check.as_deref(),
+            Some("2026-07-27T10:30:00Z"),
+        );
+    }
+
+    #[test]
+    fn missing_update_check_preferences_fall_back_to_defaults() {
+        // A pre-existing config.toml written before these preferences existed
+        // omits both fields; the deserializer must treat them as defaults.
+        let text = "theme = \"Paper\"\nlanguage = \"en\"\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert!(!parsed.check_for_updates_on_startup);
+        assert!(parsed.last_update_check.is_none());
     }
 
     #[test]

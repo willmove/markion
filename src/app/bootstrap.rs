@@ -169,10 +169,11 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
         },
         Menu {
             name: t(language, Msg::MenuHelp).into(),
-            items: vec![MenuItem::action(
-                t(language, Msg::ItemAboutMarkion),
-                AboutMarkion,
-            )],
+            items: vec![
+                MenuItem::action(t(language, Msg::ItemCheckForUpdates), CheckForUpdates),
+                MenuItem::separator(),
+                MenuItem::action(t(language, Msg::ItemAboutMarkion), AboutMarkion),
+            ],
         },
     ]);
 }
