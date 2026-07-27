@@ -3265,6 +3265,86 @@ pub(super) fn table_toolbar_actions_for_view_mode(
     }
 }
 
+pub(super) const VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_X_PX: f32 = 6.;
+pub(super) const VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_Y_PX: f32 = 2.;
+pub(super) const VISUAL_TABLE_TOOLBAR_BUTTON_FONT_SIZE_PX: f32 = 10.;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VisualTableToolbarTarget {
+    pub(super) document_version: u64,
+    pub(super) block_id: VisualBlockId,
+    pub(super) row: usize,
+    pub(super) column: usize,
+    pub(super) source_offset: usize,
+    pub(super) row_count: usize,
+    pub(super) column_count: usize,
+}
+
+pub(super) fn visual_table_toolbar_target(
+    document_version: u64,
+    block: &VisualBlock,
+    cursor_offset: usize,
+) -> Option<VisualTableToolbarTarget> {
+    let VisualBlockKind::Table { rows, .. } = &block.kind else {
+        return None;
+    };
+    let Some(VisualBlockEditor::Table { cells }) = block.editor.as_ref() else {
+        return None;
+    };
+    let row_count = rows.len();
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if row_count == 0 || column_count == 0 {
+        return None;
+    }
+
+    let cell = cells.iter().find(|cell| {
+        let range = &cell.field.source_range;
+        cursor_offset >= range.start && cursor_offset <= range.end
+    })?;
+    if cell.row >= row_count || cell.column >= column_count {
+        return None;
+    }
+
+    Some(VisualTableToolbarTarget {
+        document_version,
+        block_id: block.id,
+        row: cell.row,
+        column: cell.column,
+        source_offset: cell.field.source_range.start,
+        row_count,
+        column_count,
+    })
+}
+
+pub(super) fn table_toolbar_action_available(
+    target: VisualTableToolbarTarget,
+    edit: TableEdit,
+) -> bool {
+    match edit {
+        TableEdit::Format | TableEdit::AddRow | TableEdit::AddColumn => true,
+        TableEdit::DeleteRow => target.row > 0,
+        TableEdit::MoveRowUp => target.row > 1,
+        TableEdit::MoveRowDown => target.row > 0 && target.row + 1 < target.row_count,
+        TableEdit::DeleteColumn => target.column_count > 1,
+    }
+}
+
+pub(super) fn revalidate_visual_table_toolbar_target(
+    target: VisualTableToolbarTarget,
+    edit: TableEdit,
+    document_version: u64,
+    cursor_offset: usize,
+    blocks: &[VisualBlock],
+) -> Option<usize> {
+    if target.document_version != document_version {
+        return None;
+    }
+    let block = blocks.iter().find(|block| block.id == target.block_id)?;
+    let current = visual_table_toolbar_target(document_version, block, cursor_offset)?;
+    (current == target && table_toolbar_action_available(current, edit))
+        .then_some(current.source_offset)
+}
+
 pub(super) fn visual_table_view(
     app: &MarkionApp,
     block: &VisualBlock,
@@ -3274,6 +3354,11 @@ pub(super) fn visual_table_view(
 ) -> Div {
     let typography = app.typography_metrics();
     let table_offset = block.source_range.start;
+    let toolbar_target = visual_table_toolbar_target(
+        app.active_tab().document.version(),
+        block,
+        app.active_tab().cursor_offset(),
+    );
     let cells = match block.editor.as_ref() {
         Some(VisualBlockEditor::Table { cells }) => Some(cells),
         _ => None,
@@ -3305,7 +3390,9 @@ pub(super) fn visual_table_view(
                     table_toolbar_actions_for_view_mode(ViewMode::VisualEdit)
                         .iter()
                         .map(|&(label, edit, status)| {
-                            preview_table_button(label, table_offset, edit, status, cx)
+                            let target = toolbar_target
+                                .filter(|target| table_toolbar_action_available(*target, edit));
+                            preview_table_button(label, edit, status, target, cx)
                         }),
                 ),
         )
@@ -3982,32 +4069,80 @@ pub(super) fn preview_block_view(
 
 pub(super) fn preview_table_button(
     label: &'static str,
-    table_offset: usize,
     edit: TableEdit,
     status: Msg,
+    target: Option<VisualTableToolbarTarget>,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
-    div()
+    let button = div()
         .flex_none()
-        .px_2()
-        .py_1()
+        .px(px(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_X_PX))
+        .py(px(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_Y_PX))
         .rounded_sm()
         .border_1()
+        .text_size(px(VISUAL_TABLE_TOOLBAR_BUTTON_FONT_SIZE_PX))
+        .child(label)
+        .debug_selector(|| table_toolbar_action_debug_selector(edit, target.is_some()).to_string());
+
+    let Some(target) = target else {
+        return button
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xf8fafc))
+            .text_color(rgb(0x94a3b8));
+    };
+
+    button
         .border_color(rgb(0xcbd5e1))
         .bg(rgb(0xffffff))
-        .text_size(px(11.))
         .text_color(rgb(0x334155))
         .cursor_pointer()
-        .child(label)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                window.focus(&app.focus_handle);
+            }),
+        )
         .on_mouse_up(
             MouseButton::Left,
             cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
-                let tab = app.active_tab_mut();
-                tab.selected_range = table_offset..table_offset;
-                tab.selection_reversed = false;
-                app.apply_table_edit_at(table_offset, edit, t(app.language, status).into(), cx);
+                cx.stop_propagation();
+                let offset = {
+                    let tab = app.active_tab();
+                    revalidate_visual_table_toolbar_target(
+                        target,
+                        edit,
+                        tab.document.version(),
+                        tab.cursor_offset(),
+                        &tab.visual_list_blocks,
+                    )
+                };
+                if let Some(offset) = offset {
+                    app.apply_table_edit_at(offset, edit, t(app.language, status).into(), cx);
+                } else {
+                    cx.notify();
+                }
             }),
         )
+}
+
+fn table_toolbar_action_debug_selector(edit: TableEdit, enabled: bool) -> &'static str {
+    match (edit, enabled) {
+        (TableEdit::Format, true) => "visual-table-format",
+        (TableEdit::Format, false) => "visual-table-format-disabled",
+        (TableEdit::AddRow, true) => "visual-table-add-row",
+        (TableEdit::AddRow, false) => "visual-table-add-row-disabled",
+        (TableEdit::DeleteRow, true) => "visual-table-delete-row",
+        (TableEdit::DeleteRow, false) => "visual-table-delete-row-disabled",
+        (TableEdit::MoveRowUp, true) => "visual-table-move-row-up",
+        (TableEdit::MoveRowUp, false) => "visual-table-move-row-up-disabled",
+        (TableEdit::MoveRowDown, true) => "visual-table-move-row-down",
+        (TableEdit::MoveRowDown, false) => "visual-table-move-row-down-disabled",
+        (TableEdit::AddColumn, true) => "visual-table-add-column",
+        (TableEdit::AddColumn, false) => "visual-table-add-column-disabled",
+        (TableEdit::DeleteColumn, true) => "visual-table-delete-column",
+        (TableEdit::DeleteColumn, false) => "visual-table-delete-column-disabled",
+    }
 }
 
 pub(super) fn is_remote_resource(url: &str) -> bool {

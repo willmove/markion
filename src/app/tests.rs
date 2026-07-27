@@ -1671,6 +1671,45 @@ fn preferences_panel_renders_and_wires_the_shortcuts_tab() {
     assert!(binding_editor.contains("Msg::ShortcutResetAction"));
 }
 
+#[test]
+fn preferences_language_picker_contains_variable_width_labels() {
+    let source = include_str!("root_view.rs").replace("\r\n", "\n");
+    let panel = source
+        .split_once("pub(super) fn preferences_panel_view")
+        .and_then(|(_, rest)| rest.split_once("fn preferences_tab_strip"))
+        .map(|(body, _)| body)
+        .expect("Preferences panel view");
+    let language_section = panel
+        .split_once(".child(app.tr(Msg::PrefPanelLanguageSection))")
+        .and_then(|(_, rest)| rest.split_once("// Theme grid."))
+        .map(|(body, _)| body)
+        .expect("Preferences language section");
+
+    assert!(panel.contains("720.\n    } else {\n        640."));
+    assert!(panel.contains(".w_full()"));
+    assert!(panel.contains(".max_w(px(panel_width))"));
+    assert!(language_section.contains(".flex_wrap()"));
+    assert!(language_section.contains("preference_language_button("));
+    assert!(
+        !language_section.contains("format!("),
+        "marker and label layout must not be encoded as formatted whitespace"
+    );
+
+    let language_button = source
+        .split_once("fn preference_language_button")
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn preference_option_button"))
+        .map(|(body, _)| body)
+        .expect("language-specific preference button");
+    assert!(language_button.contains(".min_w(px(72.))"));
+    assert!(language_button.contains(".flex_none()"));
+    assert!(language_button.contains(".whitespace_nowrap()"));
+    assert!(language_button.contains(".gap_0p5()"));
+    assert!(language_button.contains(".w(px(12.))"));
+    assert!(language_button.contains("let marker = if active { \"✓\" } else { \"\" };"));
+    assert!(language_button.contains(".child(marker)"));
+    assert!(language_button.contains(".child(label)"));
+}
+
 #[gpui::test]
 fn shortcut_validation_rejects_invalid_conflicting_and_reserved_bindings(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
@@ -2009,6 +2048,171 @@ fn table_edit_toolbar_is_available_only_in_visual_edit() {
             TableEdit::AddColumn,
             TableEdit::DeleteColumn,
         ]
+    );
+}
+
+fn visual_table_cell_range(
+    document: &MarkdownDocument,
+    table_index: usize,
+    row: usize,
+    column: usize,
+) -> Range<usize> {
+    document
+        .visual_blocks()
+        .into_iter()
+        .filter_map(|block| match block.editor {
+            Some(VisualBlockEditor::Table { cells }) => Some(cells),
+            _ => None,
+        })
+        .nth(table_index)
+        .and_then(|cells| {
+            cells
+                .into_iter()
+                .find(|cell| cell.row == row && cell.column == column)
+        })
+        .map(|cell| cell.field.source_range)
+        .expect("visual table cell range")
+}
+
+#[test]
+fn visual_table_toolbar_target_tracks_caret_empty_utf8_staleness_and_table_ownership() {
+    let source = "| A | 名称 |\n| --- | --- |\n|   | 值 |\n\n| C | D |\n| --- | --- |\n| x | y |";
+    let document = MarkdownDocument::from_text(source);
+    let blocks = document.visual_blocks();
+    let tables = blocks
+        .iter()
+        .filter(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(tables.len(), 2);
+    let version = document.version();
+
+    let utf8_range = visual_table_cell_range(&document, 0, 0, 1);
+    let mut tab = EditorTab::new(document);
+    tab.selected_range = utf8_range.clone();
+    tab.selection_reversed = false;
+    let forward = visual_table_toolbar_target(version, tables[0], tab.cursor_offset())
+        .expect("forward selection endpoint owns the UTF-8 cell");
+    assert_eq!((forward.row, forward.column), (0, 1));
+    assert!(source.is_char_boundary(forward.source_offset));
+
+    tab.selection_reversed = true;
+    let reversed = visual_table_toolbar_target(version, tables[0], tab.cursor_offset())
+        .expect("reversed selection endpoint owns the same UTF-8 cell");
+    assert_eq!(forward, reversed);
+
+    let empty_range = visual_table_cell_range(&tab.document, 0, 1, 0);
+    assert!(empty_range.is_empty());
+    let empty = visual_table_toolbar_target(version, tables[0], empty_range.start)
+        .expect("an empty cell owns its exact zero-width caret position");
+    assert_eq!((empty.row, empty.column), (1, 0));
+    assert!(source.is_char_boundary(empty.source_offset));
+
+    let second_range = visual_table_cell_range(&tab.document, 1, 1, 1);
+    assert!(visual_table_toolbar_target(version, tables[0], second_range.end).is_none());
+    let second = visual_table_toolbar_target(version, tables[1], second_range.end)
+        .expect("only the second table owns its cell caret");
+    assert_eq!((second.row, second.column), (1, 1));
+    assert_eq!(
+        revalidate_visual_table_toolbar_target(
+            second,
+            TableEdit::AddRow,
+            version,
+            second_range.end,
+            &blocks,
+        ),
+        Some(second.source_offset)
+    );
+    assert_eq!(
+        revalidate_visual_table_toolbar_target(
+            second,
+            TableEdit::AddRow,
+            version + 1,
+            second_range.end,
+            &blocks,
+        ),
+        None,
+        "a target from another document version must be rejected"
+    );
+    assert_eq!(
+        revalidate_visual_table_toolbar_target(
+            second,
+            TableEdit::AddRow,
+            version,
+            utf8_range.end,
+            &blocks,
+        ),
+        None,
+        "moving the canonical caret out of the target cell invalidates activation"
+    );
+}
+
+#[test]
+fn visual_table_toolbar_availability_matches_structural_boundaries() {
+    let document = MarkdownDocument::from_text(
+        "| H1 | H2 | H3 |\n| --- | --- | --- |\n| a1 | a2 | a3 |\n| b1 | b2 | b3 |",
+    );
+    let cursor = visual_table_cell_range(&document, 0, 0, 1).end;
+    let block = document
+        .visual_blocks()
+        .into_iter()
+        .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+        .expect("visual table block");
+    let base = visual_table_toolbar_target(document.version(), &block, cursor)
+        .expect("header cell toolbar target");
+
+    assert!(table_toolbar_action_available(base, TableEdit::AddRow));
+    assert!(table_toolbar_action_available(base, TableEdit::AddColumn));
+    assert!(!table_toolbar_action_available(base, TableEdit::DeleteRow));
+    assert!(!table_toolbar_action_available(base, TableEdit::MoveRowUp));
+    assert!(!table_toolbar_action_available(
+        base,
+        TableEdit::MoveRowDown
+    ));
+
+    let first_body = VisualTableToolbarTarget { row: 1, ..base };
+    assert!(table_toolbar_action_available(
+        first_body,
+        TableEdit::DeleteRow
+    ));
+    assert!(!table_toolbar_action_available(
+        first_body,
+        TableEdit::MoveRowUp
+    ));
+    assert!(table_toolbar_action_available(
+        first_body,
+        TableEdit::MoveRowDown
+    ));
+
+    let last_body = VisualTableToolbarTarget { row: 2, ..base };
+    assert!(table_toolbar_action_available(
+        last_body,
+        TableEdit::MoveRowUp
+    ));
+    assert!(!table_toolbar_action_available(
+        last_body,
+        TableEdit::MoveRowDown
+    ));
+
+    let final_column = VisualTableToolbarTarget {
+        column: 0,
+        column_count: 1,
+        ..base
+    };
+    assert!(!table_toolbar_action_available(
+        final_column,
+        TableEdit::DeleteColumn
+    ));
+}
+
+#[test]
+fn visual_table_toolbar_uses_shared_compact_button_metrics() {
+    assert_eq!(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_X_PX, 6.);
+    assert_eq!(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_Y_PX, 2.);
+    assert_eq!(VISUAL_TABLE_TOOLBAR_BUTTON_FONT_SIZE_PX, 10.);
+    assert_eq!(
+        table_toolbar_actions_for_view_mode(ViewMode::VisualEdit).len(),
+        6,
+        "the shared compact metrics cover every Visual Edit table action"
     );
 }
 
@@ -2851,6 +3055,251 @@ fn visual_direct_table_cell_edit_reflows_traverses_and_undoes_once(cx: &mut Test
     cx.dispatch_action(Undo);
     app.update(cx, |app, _| {
         assert_eq!(app.active_tab().document.text(), source)
+    });
+}
+
+#[gpui::test]
+fn visual_table_toolbar_clicks_target_the_focused_non_first_cell(cx: &mut TestAppContext) {
+    let source = "| H1 | H2 | H3 |\n| --- | --- | --- |\n| a1 | a2 | a3 |\n| b1 | b2 | b3 |\n| c1 | c2 | c3 |";
+    let cases = [
+        (TableEdit::AddRow, "visual-table-add-row"),
+        (TableEdit::DeleteRow, "visual-table-delete-row"),
+        (TableEdit::MoveRowUp, "visual-table-move-row-up"),
+        (TableEdit::MoveRowDown, "visual-table-move-row-down"),
+        (TableEdit::AddColumn, "visual-table-add-column"),
+        (TableEdit::DeleteColumn, "visual-table-delete-column"),
+    ];
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    for (edit, selector) in cases {
+        let document = MarkdownDocument::from_text(source);
+        let selected_range = visual_table_cell_range(&document, 0, 2, 1);
+        let mut expected = MarkdownDocument::from_text(source);
+        let expected_result = expected
+            .edit_table_at(selected_range.start, edit)
+            .expect("the focused middle cell supports every toolbar action");
+        let expected_text = expected.text().to_string();
+        let expected_selection = expected_result.selected_range.clone();
+        let expected_kind = VisualEditorFieldKind::TableCell {
+            row: expected_result.row,
+            column: expected_result.column,
+        };
+
+        app.update(cx, |app, cx| {
+            app.tabs = vec![EditorTab::new(document)];
+            app.active_tab_mut().selected_range = selected_range.clone();
+            app.active_tab_mut().visual_cursor_reveal_pending = true;
+            app.view_mode = ViewMode::VisualEdit;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let (version, blocks) = app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            (tab.document.version(), tab.document.visual_blocks_shared())
+        });
+
+        let button = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("enabled toolbar button {selector} should be rendered"));
+        cx.simulate_click(button.center(), Modifiers::none());
+        cx.run_until_parked();
+
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert_eq!(
+                tab.document.text(),
+                expected_text,
+                "wrong target for {edit:?}"
+            );
+            assert_eq!(tab.selected_range, expected_selection);
+            assert_eq!(tab.document.version(), version + 1);
+            assert!(tab.document.is_dirty());
+            assert_eq!(tab.undo_stack.len(), 1);
+            assert_eq!(tab.autosave_generation, 1);
+            assert!(!Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+            assert_eq!(
+                tab.document
+                    .visual_editor_field_at(&tab.selected_range)
+                    .expect("result selection stays in a visual table cell")
+                    .kind,
+                expected_kind
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn visual_table_toolbar_disables_unowned_and_invalid_actions_without_side_effects(
+    cx: &mut TestAppContext,
+) {
+    let table = "| H1 | H2 |\n| --- | --- |\n| a1 | a2 |\n| b1 | b2 |";
+    let source = format!("Intro\n\n{table}");
+    let document = MarkdownDocument::from_text(source.clone());
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let unowned_add = cx
+        .debug_bounds("visual-table-add-row-disabled")
+        .expect("toolbar without an owned caret renders Add Row disabled");
+    let before = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.text().to_string(),
+            tab.selected_range.clone(),
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.undo_stack.len(),
+        )
+    });
+    cx.simulate_click(unowned_add.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), before.0);
+        assert_eq!(tab.selected_range, before.1);
+        assert_eq!(tab.document.version(), before.2);
+        assert_eq!(tab.document.is_dirty(), before.3);
+        assert_eq!(tab.undo_stack.len(), before.4);
+    });
+
+    let header = app.update(cx, |app, _| {
+        visual_table_cell_range(&app.active_tab().document, 0, 0, 0)
+    });
+    app.update(cx, |app, cx| app.move_to(header.start, cx));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-delete-row-disabled")
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds("visual-table-move-row-up-disabled")
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds("visual-table-move-row-down-disabled")
+            .is_some()
+    );
+
+    let first_body = app.update(cx, |app, _| {
+        visual_table_cell_range(&app.active_tab().document, 0, 1, 0)
+    });
+    app.update(cx, |app, cx| app.move_to(first_body.start, cx));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-move-row-up-disabled")
+            .is_some()
+    );
+    assert!(cx.debug_bounds("visual-table-move-row-down").is_some());
+
+    let last_body = app.update(cx, |app, _| {
+        visual_table_cell_range(&app.active_tab().document, 0, 2, 0)
+    });
+    app.update(cx, |app, cx| app.move_to(last_body.start, cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-table-move-row-up").is_some());
+    let disabled_down = cx
+        .debug_bounds("visual-table-move-row-down-disabled")
+        .expect("last body row cannot move down");
+    let version = app.update(cx, |app, _| app.active_tab().document.version());
+    cx.simulate_click(disabled_down.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), source);
+        assert_eq!(tab.document.version(), version);
+        assert!(!tab.document.is_dirty());
+        assert!(tab.undo_stack.is_empty());
+    });
+}
+
+#[gpui::test]
+fn visual_table_toolbar_isolates_tables_and_roundtrips_one_history_entry(cx: &mut TestAppContext) {
+    let source = "| A | B |\n| --- | --- |\n| a1 | a2 |\n\nBetween\n\n| C | D |\n| --- | --- |\n| c1 | c2 |\n| d1 | d2 |";
+    let document = MarkdownDocument::from_text(source);
+    let selected = visual_table_cell_range(&document, 1, 1, 1);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = selected;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let first_table_disabled = cx
+        .debug_bounds("visual-table-add-row-disabled")
+        .expect("the table without the caret has no guessed target");
+    cx.simulate_click(first_table_disabled.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+
+    let delete_row = cx
+        .debug_bounds("visual-table-delete-row")
+        .expect("the caret-owning second table exposes Delete Row");
+    cx.simulate_click(delete_row.center(), Modifiers::none());
+    cx.run_until_parked();
+    let edited = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.undo_stack.len(), 1);
+        assert!(tab.document.text().contains("| a1 | a2 |"));
+        assert!(!tab.document.text().contains("| c1  | c2  |"));
+        tab.document.text().to_string()
+    });
+
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source)
+    });
+    cx.dispatch_action(Redo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), edited)
+    });
+}
+
+#[gpui::test]
+fn source_table_command_still_targets_the_source_caret(cx: &mut TestAppContext) {
+    let source = "| A | B |\n| --- | --- |\n| a1 | a2 |\n| b1 | b2 |";
+    let cursor = source.find("b2").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    cx.dispatch_action(TableDeleteRow);
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(tab.document.text().contains("a1"));
+        assert!(!tab.document.text().contains("b1"));
+        assert_eq!(tab.undo_stack.len(), 1);
     });
 }
 

@@ -2659,7 +2659,7 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
     let panel_width = if active_tab == PreferencesTab::Shortcuts {
         720.
     } else {
-        560.
+        640.
     };
 
     div()
@@ -2668,6 +2668,7 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
         .left_0()
         .size_full()
         .bg(rgba(0x00000055))
+        .px_4()
         .flex()
         .items_center()
         .justify_center()
@@ -2678,8 +2679,8 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                 .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
                     app.handle_shortcut_capture_key(event, window, cx);
                 }))
-                .w(px(panel_width))
-                .max_w(px(720.))
+                .w_full()
+                .max_w(px(panel_width))
                 .max_h(px(560.))
                 .when(active_tab == PreferencesTab::Shortcuts, |panel| {
                     panel.h(px(560.)).overflow_hidden()
@@ -2752,15 +2753,11 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                             .text_color(palette.muted)
                                             .child(app.tr(Msg::PrefPanelLanguageSection)),
                                     )
-                                    .child(div().flex().gap_2().children(
+                                    .child(div().flex().flex_wrap().gap_2().children(
                                         Language::all().iter().map(|&lang| {
                                             let is_active = app.language == lang;
-                                            preference_option_button(
-                                                format!(
-                                                    "{}  {}",
-                                                    if is_active { "✓" } else { " " },
-                                                    lang.native_name()
-                                                ),
+                                            preference_language_button(
+                                                lang.native_name(),
                                                 is_active,
                                                 palette,
                                                 cx.listener(
@@ -3698,6 +3695,52 @@ pub(super) fn preference_sidebar_row(
                     }),
                 )),
         )
+}
+
+fn preference_language_button(
+    label: &'static str,
+    active: bool,
+    palette: ThemePalette,
+    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    let background = if active {
+        palette.active_bg
+    } else {
+        palette.surface_bg
+    };
+    let foreground = if active {
+        palette.active_text
+    } else {
+        palette.text
+    };
+    let border = if active {
+        palette.active_bg
+    } else {
+        palette.border
+    };
+    let marker = if active { "✓" } else { "" };
+
+    div()
+        .min_w(px(72.))
+        .flex_none()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(border)
+        .bg(background)
+        .text_color(foreground)
+        .text_size(px(12.))
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap_0p5()
+        .hover(move |style| style.border_color(palette.active_bg))
+        .on_mouse_up(MouseButton::Left, listener)
+        .child(div().w(px(12.)).flex_none().text_center().child(marker))
+        .child(label)
 }
 
 pub(super) fn preference_option_button(

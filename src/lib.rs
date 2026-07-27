@@ -777,13 +777,11 @@ impl MarkdownDocument {
         match edit {
             TableEdit::Format => {}
             TableEdit::AddRow => {
-                selected_row = selected_row.max(1);
                 let insert_at = (selected_row + 1).min(table.rows.len());
                 table
                     .rows
                     .insert(insert_at, vec![String::new(); table.column_count()]);
                 selected_row = insert_at;
-                selected_column = 0;
             }
             TableEdit::DeleteRow => {
                 if selected_row == 0 || table.rows.len() <= 1 {
@@ -4052,6 +4050,127 @@ mod tests {
     }
 
     #[test]
+    fn table_edits_target_exact_non_first_rows_and_columns_and_return_exact_cells() {
+        fn assert_result_cell(
+            document: &MarkdownDocument,
+            result: &TableEditResult,
+            row: usize,
+            column: usize,
+        ) {
+            assert_eq!((result.row, result.column), (row, column));
+            let field = document
+                .visual_editor_field_at(&result.selected_range)
+                .expect("table edit result selects an exact visual cell");
+            assert_eq!(field.kind, VisualEditorFieldKind::TableCell { row, column });
+            assert_eq!(field.source_range, result.selected_range);
+        }
+
+        let source = "| H1 | H2 | H3 |\n| :--- | :---: | ---: |\n| a1 | a2 | a3 |\n| b1 | b2 | b3 |\n| c1 | c2 | c3 |";
+
+        let mut add_from_header = MarkdownDocument::from_text(source);
+        let header_cursor = add_from_header.text().find("H2").unwrap();
+        let result = add_from_header
+            .edit_table_at(header_cursor, TableEdit::AddRow)
+            .unwrap();
+        let parsed = parse_markdown_table(add_from_header.text()).unwrap();
+        assert_eq!(parsed.rows[1], vec!["", "", ""]);
+        assert_eq!(parsed.rows[2], vec!["a1", "a2", "a3"]);
+        assert_result_cell(&add_from_header, &result, 1, 1);
+
+        let mut add_after_body = MarkdownDocument::from_text(source);
+        let body_cursor = add_after_body.text().find("b2").unwrap();
+        let result = add_after_body
+            .edit_table_at(body_cursor, TableEdit::AddRow)
+            .unwrap();
+        let parsed = parse_markdown_table(add_after_body.text()).unwrap();
+        assert_eq!(parsed.rows[2], vec!["b1", "b2", "b3"]);
+        assert_eq!(parsed.rows[3], vec!["", "", ""]);
+        assert_eq!(parsed.rows[4], vec!["c1", "c2", "c3"]);
+        assert_result_cell(&add_after_body, &result, 3, 1);
+
+        let mut delete_body = MarkdownDocument::from_text(source);
+        let cursor = delete_body.text().find("b2").unwrap();
+        let result = delete_body
+            .edit_table_at(cursor, TableEdit::DeleteRow)
+            .unwrap();
+        let parsed = parse_markdown_table(delete_body.text()).unwrap();
+        assert_eq!(
+            parsed.rows,
+            vec![
+                vec!["H1", "H2", "H3"],
+                vec!["a1", "a2", "a3"],
+                vec!["c1", "c2", "c3"],
+            ]
+        );
+        assert_result_cell(&delete_body, &result, 2, 1);
+
+        let mut move_up = MarkdownDocument::from_text(source);
+        let cursor = move_up.text().find("b2").unwrap();
+        let result = move_up.edit_table_at(cursor, TableEdit::MoveRowUp).unwrap();
+        let parsed = parse_markdown_table(move_up.text()).unwrap();
+        assert_eq!(parsed.rows[1], vec!["b1", "b2", "b3"]);
+        assert_eq!(parsed.rows[2], vec!["a1", "a2", "a3"]);
+        assert_result_cell(&move_up, &result, 1, 1);
+
+        let mut move_down = MarkdownDocument::from_text(source);
+        let cursor = move_down.text().find("b2").unwrap();
+        let result = move_down
+            .edit_table_at(cursor, TableEdit::MoveRowDown)
+            .unwrap();
+        let parsed = parse_markdown_table(move_down.text()).unwrap();
+        assert_eq!(parsed.rows[2], vec!["c1", "c2", "c3"]);
+        assert_eq!(parsed.rows[3], vec!["b1", "b2", "b3"]);
+        assert_result_cell(&move_down, &result, 3, 1);
+
+        let mut add_column = MarkdownDocument::from_text(source);
+        let cursor = add_column.text().find("b2").unwrap();
+        let result = add_column
+            .edit_table_at(cursor, TableEdit::AddColumn)
+            .unwrap();
+        let parsed = parse_markdown_table(add_column.text()).unwrap();
+        assert_eq!(parsed.rows[2], vec!["b1", "b2", "", "b3"]);
+        assert_eq!(
+            parsed.alignments,
+            vec![
+                TableAlignment::Left,
+                TableAlignment::Center,
+                TableAlignment::Default,
+                TableAlignment::Right,
+            ]
+        );
+        assert_result_cell(&add_column, &result, 2, 2);
+
+        let mut delete_column = MarkdownDocument::from_text(source);
+        let cursor = delete_column.text().find("b2").unwrap();
+        let result = delete_column
+            .edit_table_at(cursor, TableEdit::DeleteColumn)
+            .unwrap();
+        let parsed = parse_markdown_table(delete_column.text()).unwrap();
+        assert_eq!(parsed.rows[2], vec!["b1", "b3"]);
+        assert_eq!(
+            parsed.alignments,
+            vec![TableAlignment::Left, TableAlignment::Right]
+        );
+        assert_result_cell(&delete_column, &result, 2, 1);
+
+        let mut first_body = MarkdownDocument::from_text(source);
+        let cursor = first_body.text().find("a2").unwrap();
+        assert_eq!(first_body.edit_table_at(cursor, TableEdit::MoveRowUp), None);
+        let mut last_body = MarkdownDocument::from_text(source);
+        let cursor = last_body.text().find("c2").unwrap();
+        assert_eq!(
+            last_body.edit_table_at(cursor, TableEdit::MoveRowDown),
+            None
+        );
+        let mut final_column = MarkdownDocument::from_text("| H |\n| --- |\n| v |");
+        let cursor = final_column.text().find('v').unwrap();
+        assert_eq!(
+            final_column.edit_table_at(cursor, TableEdit::DeleteColumn),
+            None
+        );
+    }
+
+    #[test]
     fn table_ranges_track_multiple_source_tables() {
         let doc = MarkdownDocument::from_text(
             "Intro\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nText\n\n| C | D |\n|---|---|\n| 3 | 4 |",
@@ -4170,13 +4289,17 @@ mod tests {
         let mut doc = MarkdownDocument::from_text("| 名 | 值 |\n|---|---|\n| 文 | 1 |");
         let cursor_inside_utf8 = doc.text().find("文").unwrap() + 1;
 
-        doc.edit_table_at(cursor_inside_utf8, TableEdit::AddColumn)
+        let result = doc
+            .edit_table_at(cursor_inside_utf8, TableEdit::AddColumn)
             .unwrap();
 
         assert_eq!(
             doc.text(),
             "| 名   |     | 值   |\n| --- | --- | --- |\n| 文   |     | 1   |"
         );
+        assert_eq!((result.row, result.column), (1, 1));
+        assert!(doc.text().is_char_boundary(result.selected_range.start));
+        assert!(doc.text().is_char_boundary(result.selected_range.end));
     }
 
     #[test]
