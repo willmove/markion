@@ -118,10 +118,11 @@ pub use model::{
     VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
     VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
     VisualInlineRun, VisualNavigationTarget, VisualProjection, VisualProjectionSegment,
-    VisualProjectionSpan, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
-    VisualStructuralEdit, VisualTableCell, YamlFrontMatter, builtin_theme_definitions,
-    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
-    normalize_rendered_font_size, touch_recent_file,
+    VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge, VisualRevealGroup,
+    VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit, VisualTableCell,
+    YamlFrontMatter, builtin_theme_definitions, normalize_editor_font_size,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    touch_recent_file,
 };
 pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
@@ -1079,7 +1080,7 @@ impl MarkdownDocument {
         let prefix = visual::structural_prefix_at(&self.text, cursor)?;
         let line_start = self.line_start_at(cursor);
         let line_end = self.line_end_at(cursor);
-        if prefix.source_range.start != line_start || cursor < prefix.source_range.end {
+        if cursor < prefix.source_range.end {
             return None;
         }
         let content_is_empty = self.text[prefix.source_range.end..line_end]
@@ -1104,11 +1105,11 @@ impl MarkdownDocument {
             VisualBlockKind::Heading { .. }
                 | VisualBlockKind::BlockQuote
                 | VisualBlockKind::ListItem { .. }
-        );
-        // pulldown-cmark does not emit preview content for an empty blockquote
-        // or ordinary list item, so the visual model conservatively represents
-        // a line such as `> ` or `- ` as an unsupported gap. Permit only the
-        // exact empty-structure exit in that gap; explicit code, HTML, math,
+        ) || active_block.quote_context.is_some();
+        // pulldown-cmark does not emit preview content for an ordinary empty
+        // list item, so that line remains an unsupported gap. (An empty quote
+        // now has a quote-context whitespace row.) Permit only the exact
+        // empty-structure exit in the gap; explicit code, HTML, math,
         // front-matter, image, and table source islands remain excluded.
         let orphaned_empty_structure = empty_structure_exit
             && matches!(active_block.kind, VisualBlockKind::Unsupported)
@@ -1119,10 +1120,11 @@ impl MarkdownDocument {
             return None;
         }
         if empty_structure_exit {
+            let next = prefix.source_range.start;
             return Some(VisualStructuralEdit {
                 range: prefix.source_range,
                 replacement: String::new(),
-                selection_after: line_start..line_start,
+                selection_after: next..next,
             });
         }
 
@@ -1150,7 +1152,8 @@ impl MarkdownDocument {
             VisualBlockKind::Heading { .. }
                 | VisualBlockKind::BlockQuote
                 | VisualBlockKind::ListItem { .. }
-        ) {
+        ) && active_block.quote_context.is_none()
+        {
             return None;
         }
         let prefix = visual::structural_prefix_at(&self.text, cursor)?;
@@ -1281,12 +1284,8 @@ impl MarkdownDocument {
                     }
                     output.push_str(&format!("\\end{{{environment}}}\n\n"));
                 }
-                PreviewBlock::BlockQuote { text, children, .. } => {
+                PreviewBlock::BlockQuote { children, .. } => {
                     output.push_str("\\begin{quote}\n");
-                    output.push_str(&render_latex_rich_text(&text));
-                    if !text.text.is_empty() && !children.is_empty() {
-                        output.push('\n');
-                    }
                     let mut children = children.into_iter().peekable();
                     while let Some(child) = children.next() {
                         match child {
@@ -1316,6 +1315,10 @@ impl MarkdownDocument {
                                     push_latex_list_item(&mut output, checked, &text);
                                 }
                                 output.push_str(&format!("\\end{{{environment}}}\n"));
+                            }
+                            PreviewBlock::Paragraph { text, .. } => {
+                                output.push_str(&render_latex_rich_text(&text));
+                                output.push('\n');
                             }
                             other => {
                                 let child_text = other.plain_text();
@@ -1897,7 +1900,19 @@ impl MarkdownDocument {
                                 append_span(footnote_spans, "\n", InlineStyle::default(), None);
                             }
                             footnote_spans.extend(spans);
-                        } else if list_item.is_none() && quote_depth == 0 && table.is_none() {
+                        } else if let Some(item) = list_item.as_mut() {
+                            // Keep a line break between sibling paragraphs that get
+                            // flattened into one list item.
+                            append_span(&mut item.spans, "\n", InlineStyle::default(), None);
+                        } else if quote_depth > 0 {
+                            push_nonempty_block(
+                                &mut quote_children,
+                                PreviewBlock::Paragraph {
+                                    text: finish_rich_text(spans),
+                                    source_range: paragraph_range,
+                                },
+                            );
+                        } else if table.is_none() {
                             if html_only_paragraph_source(&text[paragraph_range.clone()]) {
                                 push_html_block(
                                     &mut blocks,
@@ -1913,12 +1928,6 @@ impl MarkdownDocument {
                                     },
                                 );
                             }
-                        } else if let Some(item) = list_item.as_mut() {
-                            // Keep a line break between sibling paragraphs that get
-                            // flattened into one list item or blockquote block.
-                            append_span(&mut item.spans, "\n", InlineStyle::default(), None);
-                        } else if quote_depth > 0 {
-                            append_span(&mut quote, "\n", InlineStyle::default(), None);
                         }
                     }
                 }
@@ -1932,11 +1941,18 @@ impl MarkdownDocument {
                 }
                 Event::End(TagEnd::BlockQuote(_)) => {
                     if quote_depth == 1 {
-                        let text = finish_rich_text(std::mem::take(&mut quote));
+                        let residual = finish_rich_text(std::mem::take(&mut quote));
+                        if !residual.is_empty() {
+                            quote_children.push(PreviewBlock::Paragraph {
+                                text: residual,
+                                source_range: quote_source_range
+                                    .clone()
+                                    .unwrap_or_else(|| source_range.clone()),
+                            });
+                        }
                         let children = std::mem::take(&mut quote_children);
-                        if !text.is_empty() || !children.is_empty() {
+                        if !children.is_empty() {
                             blocks.push(PreviewBlock::BlockQuote {
-                                text,
                                 children,
                                 source_range: quote_source_range.take().unwrap_or(source_range),
                             });
@@ -3113,7 +3129,7 @@ mod tests {
     fn docx_export_includes_blockquote_list_items() {
         let dir = tempfile::tempdir().unwrap();
         let docx = dir.path().join("quote.docx");
-        let doc = MarkdownDocument::from_text("> intro\n>\n> 1. first\n> 2. second\n");
+        let doc = MarkdownDocument::from_text("> intro\n>\n> 1. first\n> 2. second\n>\n> outro\n");
 
         export::write_docx(&docx, &doc).unwrap();
         let package = String::from_utf8_lossy(&fs::read(docx).unwrap()).into_owned();
@@ -3121,11 +3137,14 @@ mod tests {
         assert!(package.contains("&gt; intro"));
         assert!(package.contains("&gt; 1. first"));
         assert!(package.contains("&gt; 2. second"));
+        assert!(package.contains("&gt; outro"));
+        assert!(package.find("&gt; intro") < package.find("&gt; 1. first"));
+        assert!(package.find("&gt; 2. second") < package.find("&gt; outro"));
     }
 
     #[test]
     fn latex_export_keeps_blockquote_list_items_inside_quote() {
-        let doc = MarkdownDocument::from_text("> intro\n>\n> 1. first\n> 2. second\n");
+        let doc = MarkdownDocument::from_text("> intro\n>\n> 1. first\n> 2. second\n>\n> outro\n");
         let latex = doc.render_latex_document();
 
         let quote_start = latex.find("\\begin{quote}").expect("quote environment");
@@ -3134,6 +3153,9 @@ mod tests {
         assert!(itemize > quote_start && itemize < quote_end);
         assert!(latex[quote_start..quote_end].contains("\\item first"));
         assert!(latex[quote_start..quote_end].contains("\\item second"));
+        let quote = &latex[quote_start..quote_end];
+        assert!(quote.find("intro") < quote.find("\\item first"));
+        assert!(quote.find("\\item second") < quote.find("outro"));
     }
 
     #[test]
@@ -3206,7 +3228,8 @@ mod tests {
         ));
         assert!(matches!(
             &blocks[4],
-            PreviewBlock::BlockQuote { text, .. } if text.text == "Quote"
+            PreviewBlock::BlockQuote { children, .. }
+                if matches!(children.as_slice(), [PreviewBlock::Paragraph { text, .. }] if text.text == "Quote")
         ));
         assert!(matches!(
             &blocks[5],
@@ -3232,13 +3255,16 @@ mod tests {
         let doc = MarkdownDocument::from_text("> intro\n>\n> 1. first\n> 2. second\n");
         let blocks = doc.preview_blocks();
         assert_eq!(blocks.len(), 1);
-        let PreviewBlock::BlockQuote { text, children, .. } = &blocks[0] else {
+        let PreviewBlock::BlockQuote { children, .. } = &blocks[0] else {
             panic!("expected blockquote, got {:?}", blocks[0]);
         };
-        assert_eq!(text.text, "intro");
-        assert_eq!(children.len(), 2);
+        assert_eq!(children.len(), 3);
         assert!(matches!(
             &children[0],
+            PreviewBlock::Paragraph { text, .. } if text.text == "intro"
+        ));
+        assert!(matches!(
+            &children[1],
             PreviewBlock::ListItem {
                 level: 1,
                 ordered: true,
@@ -3249,7 +3275,7 @@ mod tests {
             } if text.text == "first"
         ));
         assert!(matches!(
-            &children[1],
+            &children[2],
             PreviewBlock::ListItem {
                 level: 1,
                 ordered: true,
@@ -3266,6 +3292,34 @@ mod tests {
         );
         // Plain-text extraction folds in the child list items.
         assert_eq!(blocks[0].plain_text(), "intro\nfirst\nsecond");
+    }
+
+    #[test]
+    fn blockquote_preserves_intro_list_outro_author_order() {
+        let doc = MarkdownDocument::from_text(
+            "> intro *em*\n>\n> 3. first $x$\n> 4. second\n>\n> outro **bold**\n",
+        );
+        let blocks = doc.preview_blocks();
+        let PreviewBlock::BlockQuote { children, .. } = &blocks[0] else {
+            panic!("expected blockquote");
+        };
+        assert_eq!(children.len(), 4);
+        assert!(matches!(&children[0], PreviewBlock::Paragraph { text, .. }
+            if text.text == "intro em" && text.spans.iter().any(|span| span.style.italic)));
+        assert!(
+            matches!(&children[1], PreviewBlock::ListItem { index: Some(3), text, .. }
+            if text.text == "first $x$" && text.spans.iter().any(|span| span.math.is_some()))
+        );
+        assert!(
+            matches!(&children[2], PreviewBlock::ListItem { index: Some(4), text, .. }
+            if text.text == "second")
+        );
+        assert!(matches!(&children[3], PreviewBlock::Paragraph { text, .. }
+            if text.text == "outro bold" && text.spans.iter().any(|span| span.style.bold)));
+        assert_eq!(
+            blocks[0].plain_text(),
+            "intro em\nfirst $x$\nsecond\noutro bold"
+        );
     }
 
     #[test]
@@ -3351,17 +3405,17 @@ mod tests {
     }
 
     #[test]
-    fn blockquote_with_only_paragraphs_has_no_children() {
+    fn blockquote_with_only_paragraphs_has_one_ordered_child() {
         let doc = MarkdownDocument::from_text("> just a quote\n> continued\n");
         let blocks = doc.preview_blocks();
         assert_eq!(blocks.len(), 1);
         assert!(matches!(
             &blocks[0],
             PreviewBlock::BlockQuote {
-                text,
                 children,
                 ..
-            } if text.text == "just a quote\ncontinued" && children.is_empty()
+            } if matches!(children.as_slice(), [PreviewBlock::Paragraph { text, .. }]
+                if text.text == "just a quote\ncontinued")
         ));
     }
 
@@ -3518,6 +3572,29 @@ mod tests {
     }
 
     #[test]
+    fn visual_structural_edits_demote_quoted_list_before_quote() {
+        let mut continued = MarkdownDocument::from_text("> 1. item");
+        let edit = continued.visual_enter_edit(continued.text().len()).unwrap();
+        continued.replace_range(edit.range, &edit.replacement);
+        assert_eq!(continued.text(), "> 1. item\n> 2. ");
+
+        let mut empty = MarkdownDocument::from_text("> 1. ");
+        let edit = empty.visual_enter_edit(empty.text().len()).unwrap();
+        empty.replace_range(edit.range, &edit.replacement);
+        assert_eq!(empty.text(), "> ");
+        assert_eq!(edit.selection_after, 2..2);
+
+        let mut demoted = MarkdownDocument::from_text("> 1. item");
+        let edit = demoted.visual_backspace_edit(5).unwrap();
+        demoted.replace_range(edit.range, &edit.replacement);
+        assert_eq!(demoted.text(), "> item");
+        assert_eq!(edit.selection_after, 2..2);
+        let edit = demoted.visual_backspace_edit(2).unwrap();
+        demoted.replace_range(edit.range, &edit.replacement);
+        assert_eq!(demoted.text(), "item");
+    }
+
+    #[test]
     fn visual_structural_helpers_are_non_mutating_until_applied() {
         let doc = MarkdownDocument::from_text("- item");
         let version = doc.version();
@@ -3645,7 +3722,12 @@ mod tests {
         for block in &blocks {
             let rich = match block {
                 PreviewBlock::Heading { text, .. } => text,
-                PreviewBlock::BlockQuote { text, .. } => text,
+                PreviewBlock::BlockQuote { children, .. } => {
+                    let Some(PreviewBlock::Paragraph { text, .. }) = children.first() else {
+                        continue;
+                    };
+                    text
+                }
                 _ => continue,
             };
             let joined: String = rich.spans.iter().map(|span| span.text.as_str()).collect();

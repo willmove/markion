@@ -701,25 +701,31 @@ fn preview_blockquote_exposes_child_list_items_as_selectable_runs() {
         source_range: 0..0,
     };
     let block = PreviewBlock::BlockQuote {
-        text: RichText::plain("intro"),
-        children: vec![quoted_item("first", 1), quoted_item("second", 2)],
+        children: vec![
+            PreviewBlock::Paragraph {
+                text: RichText::plain("intro"),
+                source_range: 0..0,
+            },
+            quoted_item("first", 1),
+            quoted_item("second", 2),
+        ],
         source_range: 0..0,
     };
 
     assert_eq!(
         preview_block_runs(&block),
         vec![
-            PreviewTextRunId::Body,
             PreviewTextRunId::QuoteChild(0),
             PreviewTextRunId::QuoteChild(1),
+            PreviewTextRunId::QuoteChild(2),
         ]
     );
     assert_eq!(
-        preview_run_plain_text(&block, PreviewTextRunId::Body).as_deref(),
+        preview_run_plain_text(&block, PreviewTextRunId::QuoteChild(0)).as_deref(),
         Some("intro")
     );
     assert_eq!(
-        preview_run_plain_text(&block, PreviewTextRunId::QuoteChild(1)).as_deref(),
+        preview_run_plain_text(&block, PreviewTextRunId::QuoteChild(2)).as_deref(),
         Some("second")
     );
 }
@@ -3250,6 +3256,97 @@ fn visual_edit_does_not_duplicate_nested_list_input_in_the_parent(cx: &mut TestA
     app.update(cx, |app, _| {
         let (text, _) = app.active_tab().visual_last_projection.as_ref().unwrap();
         assert_eq!(text, "parent");
+    });
+}
+
+#[gpui::test]
+fn visual_edit_quoted_siblings_support_navigation_input_ime_copy_and_history(
+    cx: &mut TestAppContext,
+) {
+    let source = "> first\n>\n> 1. second\n> 2. third\n";
+    let first_cursor = source.find("first").unwrap() + 2;
+    let second_start = source.find("second").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = first_cursor..first_cursor;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let caret = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.visual_last_projection.as_ref().unwrap().0, "first");
+        tab.visual_caret_bounds.expect("quoted caret geometry")
+    });
+    cx.simulate_click(caret.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    for _ in 0..2 {
+        cx.dispatch_action(Down);
+        cx.run_until_parked();
+        if app.update(cx, |app, _| app.active_tab().cursor_offset()) >= second_start {
+            break;
+        }
+    }
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().cursor_offset() >= second_start);
+    });
+    app.update(cx, |app, cx| app.move_to(second_start + 2, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().visual_last_projection.as_ref().unwrap().0,
+            "second"
+        );
+    });
+
+    cx.dispatch_action(SelectRight);
+    cx.dispatch_action(Copy);
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert!(copied.is_some_and(|text| !text.is_empty()));
+
+    cx.simulate_input("中🙂");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().document.text().contains("中🙂"));
+        assert!(app.active_tab().undo_stack.len() >= 1);
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_and_mark_text_in_range(
+                app,
+                None,
+                "输入",
+                Some(0..0),
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(tab.marked_range.is_some());
+        assert!(tab.visual_marked_range_bounds.is_some());
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::unmark_text(app, window, cx)
+        });
+    });
+    cx.dispatch_action(Undo);
+    cx.dispatch_action(Redo);
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().document.text().contains("输入"));
+        assert!(app.active_tab().marked_range.is_none());
     });
 }
 

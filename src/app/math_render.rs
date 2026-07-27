@@ -303,15 +303,15 @@ impl MarkionApp {
                         }
                     }
                 }
-                PreviewBlock::BlockQuote { text, children, .. } => {
+                PreviewBlock::BlockQuote { children, .. } => {
                     let child_texts = children.iter().filter_map(|child| match child {
-                        PreviewBlock::ListItem { text, .. } => Some(text),
+                        PreviewBlock::Heading { text, .. }
+                        | PreviewBlock::Paragraph { text, .. }
+                        | PreviewBlock::ListItem { text, .. }
+                        | PreviewBlock::FootnoteDefinition { text, .. } => Some(text),
                         _ => None,
                     });
-                    for span in std::iter::once(text)
-                        .chain(child_texts)
-                        .flat_map(|rich| rich.spans.iter())
-                    {
+                    for span in child_texts.flat_map(|rich| rich.spans.iter()) {
                         if let Some(math) = &span.math {
                             requested.insert(self.math_key(
                                 &math.latex,

@@ -596,6 +596,9 @@ pub struct VisualBlock {
     pub marker_ranges: Vec<Range<usize>>,
     /// Exact structural prefix for supported line-oriented blocks.
     pub block_prefix: Option<VisualBlockPrefix>,
+    /// Quote decoration and exact source markers inherited from an enclosing
+    /// blockquote. The visual row remains a paragraph/list leaf.
+    pub quote_context: Option<VisualQuoteContext>,
     pub source_island: Option<VisualSourceIslandKind>,
     /// Exact editable fields for a dedicated complex-block editor. Absent
     /// when the authored syntax cannot be mapped losslessly.
@@ -849,6 +852,28 @@ pub struct VisualBlockPrefix {
     pub source_range: Range<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisualQuoteGroupEdge {
+    Only,
+    First,
+    Middle,
+    Last,
+}
+
+/// Source-backed quote metadata attached to an ordinary visual leaf row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualQuoteContext {
+    pub depth: usize,
+    /// Every quote-marker prefix intersecting this row, one per physical line.
+    pub marker_ranges: Vec<Range<usize>>,
+    /// Semantic source emitted for the underlying paragraph or list item.
+    pub leaf_source_range: Range<usize>,
+    /// Source range of the containing quote, used to keep adjacent rows in one
+    /// visual group without reparsing during rendering.
+    pub group_source_range: Range<usize>,
+    pub edge: VisualQuoteGroupEdge,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisualStructuralEdit {
     pub range: Range<usize>,
@@ -929,9 +954,9 @@ pub enum PreviewBlock {
         source_range: Range<usize>,
     },
     BlockQuote {
-        text: RichText,
-        /// Nested blocks that belong to this quote (e.g. list items authored
-        /// inside the blockquote). Empty for paragraph-only quotes.
+        /// Ordered leaf blocks authored inside the quote. Paragraphs and list
+        /// items remain distinct so every source byte has exactly one visual
+        /// owner and consumers preserve the authored block order.
         children: Vec<PreviewBlock>,
         source_range: Range<usize>,
     },
@@ -1000,20 +1025,12 @@ impl PreviewBlock {
             | Self::Paragraph { text, .. }
             | Self::ListItem { text, .. }
             | Self::FootnoteDefinition { text, .. } => text.text.clone(),
-            Self::BlockQuote { text, children, .. } => {
-                let mut out = text.text.clone();
-                for child in children {
-                    let child_text = child.plain_text();
-                    if child_text.is_empty() {
-                        continue;
-                    }
-                    if !out.is_empty() {
-                        out.push('\n');
-                    }
-                    out.push_str(&child_text);
-                }
-                out
-            }
+            Self::BlockQuote { children, .. } => children
+                .iter()
+                .map(PreviewBlock::plain_text)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n"),
             Self::CodeBlock { code, .. } => code.clone(),
             Self::MathBlock { latex, .. } => latex.clone(),
             Self::Html { html, .. } => html.clone(),

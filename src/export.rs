@@ -227,11 +227,8 @@ fn render_docx_block(block: &PreviewBlock) -> String {
             };
             docx_paragraph(&format!("{marker}{text}"), None)
         }
-        PreviewBlock::BlockQuote { text, children, .. } => {
+        PreviewBlock::BlockQuote { children, .. } => {
             let mut output = String::new();
-            if !text.is_empty() {
-                output.push_str(&docx_paragraph(&format!("> {text}"), None));
-            }
             for child in children {
                 match child {
                     PreviewBlock::ListItem {

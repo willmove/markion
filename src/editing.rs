@@ -127,8 +127,25 @@ pub(crate) fn markdown_continuation(before_cursor: &str) -> String {
     let indent = leading_whitespace(before_cursor);
     let rest = &before_cursor[indent.len()..];
 
-    if rest == ">" || rest.starts_with("> ") {
-        return format!("{indent}> ");
+    if rest.starts_with('>') {
+        let mut quote_end = 0;
+        while rest.as_bytes().get(quote_end) == Some(&b'>') {
+            quote_end += 1;
+            if matches!(rest.as_bytes().get(quote_end), Some(b' ' | b'\t')) {
+                quote_end += 1;
+            }
+        }
+        let quote = &rest[..quote_end];
+        let inner = &rest[quote_end..];
+        let inner_indent = leading_whitespace(inner);
+        let inner_rest = &inner[inner_indent.len()..];
+        if let Some(marker) = unordered_list_marker(inner_rest) {
+            return format!("{indent}{quote}{inner_indent}{marker}");
+        }
+        if let Some(marker) = ordered_list_marker(inner_rest) {
+            return format!("{indent}{quote}{inner_indent}{marker}");
+        }
+        return format!("{indent}{quote}");
     }
 
     if let Some(marker) = unordered_list_marker(rest) {

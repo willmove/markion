@@ -6,7 +6,8 @@ Markion's Visual Edit mode is WYSIWYG-oriented, not a second rich-text document 
 
 | Construct | Normal Visual Edit presentation | Canonical editable range | Conservative fallback trigger | Required evidence |
 |---|---|---|---|---|
-| Paragraphs, headings, blockquotes, list/task items | Rendered direct text | Exact inline content and structural prefix ranges | Byte-inexact or crossing parser events | Projection round-trip, formatting, structural Enter/Backspace, pointer, IME, undo |
+| Paragraphs, headings, list/task items | Rendered direct text | Exact inline content and structural prefix ranges | Byte-inexact or crossing parser events | Projection round-trip, formatting, structural Enter/Backspace, pointer, IME, undo |
+| Mixed blockquote flows (paragraph/list/task leaves) | Ordinary rendered rows inside one quote boundary; no recursive editor | One disjoint leaf range plus exact per-line quote-marker ranges and optional inner list prefix | Overlapping ownership, ambiguous marker partition, or byte-inexact inline events | Intro/list/outro order, complete non-overlapping coverage, independent prefix reveal, quoted structural editing, stable identity |
 | Emphasis, strong, strike, inline code, links, highlight, super/subscript, inline math | Rendered with progressive source reveal | Smallest complete proven syntax group | Malformed, escaped, overlapping, or ambiguous syntax | Reveal-group containment, caret affinity, cross-run selection, UTF-8 input |
 | Ordinary fenced code | `VisualBlockEditor::Code`: highlighted payload editor with fences hidden | Payload only; opening fence, info string, and closing fence are immutable metadata | Unclosed/ambiguous fence or registered diagram backend | Exact fence/payload ranges, memoized highlights, delimiter preservation, edge handoff, IME/history |
 | Display/fenced block math | `VisualBlockEditor::Math`: rendered formula plus LaTeX payload editor | LaTeX payload only; delimiters remain authored | Inline-only/ambiguous form | Valid/invalid/pending render, delimiter preservation, CJK/emoji IME geometry, one-action undo |
@@ -29,11 +30,21 @@ Every derived range must:
 5. Reject a `VisualBlockEdit` when document version, `VisualBlockId`, field metadata, or replacement policy is stale.
 6. Preserve exact post-edit selection/marked ranges after sanitization or table reformatting.
 
+For blockquotes, the container owns no visual row. Its ordered paragraph/list
+children partition the quote source into disjoint rows, while structural-only
+`>` separator lines become quote-context whitespace rows. Quote markers and an
+inner list/task marker are separate reveal and edit layers: Enter continues the
+combined structure, and Backspace removes the inner layer before the quote.
+
 Interaction-only state such as focus, hover, selection, caret affinity, layout geometry, Tab traversal, and scroll position must not change the document version or invalidate per-version derived caches.
 
 ## Parser Ownership
 
 - `pulldown-cmark` in the root document model owns semantic Markdown classification.
+- Visual Edit uses the same semantic extensions but disables smart punctuation
+  for its source-backed inline projection. ASCII quotes and dash sequences stay
+  byte-identical and editable there; Split Preview, Read, HTML/LaTeX/DOCX export,
+  and other presentation parsers retain smart punctuation.
 - `src/visual.rs` proves byte boundaries only inside an already-classified preview block. It must return no direct metadata when round-trip proof fails.
 - `src/table.rs` owns the shared GFM table range, parse, format, and mutation rules used by source commands and Visual Edit.
 - `crates/markdown` owns its GPUI-free parser/AST and exporter contracts. It does not own a parallel Visual Edit mutation model.

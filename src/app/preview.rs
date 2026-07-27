@@ -90,7 +90,6 @@ pub(super) fn preview_run_plain_text(
             | PreviewBlock::FootnoteDefinition { text, .. },
             PreviewTextRunId::Body,
         ) => Some(text.text.clone()),
-        (PreviewBlock::BlockQuote { text, .. }, PreviewTextRunId::Body) => Some(text.text.clone()),
         (PreviewBlock::BlockQuote { children, .. }, PreviewTextRunId::QuoteChild(index)) => {
             children.get(index).map(|child| child.plain_text())
         }
@@ -119,15 +118,11 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
         | PreviewBlock::Paragraph { .. }
         | PreviewBlock::ListItem { .. }
         | PreviewBlock::FootnoteDefinition { .. } => vec![PreviewTextRunId::Body],
-        PreviewBlock::BlockQuote { children, .. } => [PreviewTextRunId::Body]
-            .into_iter()
-            .chain(
-                children
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, child)| !child.plain_text().is_empty())
-                    .map(|(index, _)| PreviewTextRunId::QuoteChild(index)),
-            )
+        PreviewBlock::BlockQuote { children, .. } => children
+            .iter()
+            .enumerate()
+            .filter(|(_, child)| !child.plain_text().is_empty())
+            .map(|(index, _)| PreviewTextRunId::QuoteChild(index))
             .collect(),
         PreviewBlock::CodeBlock { .. } => vec![PreviewTextRunId::CodeBody],
         PreviewBlock::MathBlock { .. } => vec![PreviewTextRunId::MathLatex],
@@ -1345,6 +1340,9 @@ fn visual_inline_text_metrics(
     block: &VisualBlock,
     typography: DocumentTypographyMetrics,
 ) -> (f32, f32) {
+    if block.quote_context.is_some() {
+        return (typography.quote_font_size, typography.quote_line_height);
+    }
     match &block.kind {
         VisualBlockKind::Heading { level } => {
             let size = typography.heading_font_size((*level).into());
@@ -2428,7 +2426,7 @@ pub(super) fn visual_block_view(
         return visual_source_island_view(app, block, block_index, cx);
     }
 
-    match &block.kind {
+    let row = match &block.kind {
         VisualBlockKind::Heading { level } => {
             let size = px(typography.heading_font_size((*level).into()));
             div()
@@ -2706,6 +2704,25 @@ pub(super) fn visual_block_view(
         VisualBlockKind::ReferenceDefinition => {
             visual_reference_definition_view(app, block, block_index, cx)
         }
+    };
+    if let Some(quote) = &block.quote_context {
+        let (padding_top, padding_bottom) = match quote.edge {
+            VisualQuoteGroupEdge::Only => (4., 4.),
+            VisualQuoteGroupEdge::First => (4., 0.),
+            VisualQuoteGroupEdge::Middle => (0., 0.),
+            VisualQuoteGroupEdge::Last => (0., 4.),
+        };
+        div()
+            .ml(px(quote.depth.saturating_sub(1) as f32 * 8.))
+            .pl_3()
+            .pt(px(padding_top))
+            .pb(px(padding_bottom))
+            .border_l_1()
+            .border_color(rgb(0x94a3b8))
+            .text_color(rgb(0x475569))
+            .child(row)
+    } else {
+        row
     }
 }
 
@@ -3618,7 +3635,7 @@ pub(super) fn preview_block_view(
                     cx,
                 )))
         }
-        PreviewBlock::BlockQuote { text, children, .. } => {
+        PreviewBlock::BlockQuote { children, .. } => {
             let mut container = div()
                 .mb_3()
                 .pl_3()
@@ -3627,20 +3644,23 @@ pub(super) fn preview_block_view(
                 .text_color(rgb(0x475569))
                 .text_size(px(typography.quote_font_size))
                 .line_height(px(typography.quote_line_height));
-            if !text.is_empty() {
-                container = container.child(rich_text_with_math_element(
-                    app,
-                    "preview-quote",
-                    text,
-                    block_index,
-                    PreviewTextRunId::Body,
-                    display_scale,
-                    typography.quote_font_size,
-                    typography.quote_line_height,
-                    cx,
-                ));
-            }
             for (child_index, child) in children.iter().enumerate() {
+                if let PreviewBlock::Paragraph { text, .. } = child {
+                    if !text.is_empty() {
+                        container = container.child(rich_text_with_math_element(
+                            app,
+                            "preview-quote",
+                            text,
+                            block_index,
+                            PreviewTextRunId::QuoteChild(child_index),
+                            display_scale,
+                            typography.quote_font_size,
+                            typography.quote_line_height,
+                            cx,
+                        ));
+                    }
+                    continue;
+                }
                 let PreviewBlock::ListItem {
                     level,
                     ordered,

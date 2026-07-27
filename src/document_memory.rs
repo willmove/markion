@@ -79,8 +79,8 @@ pub(crate) fn preview_block_bytes(block: &PreviewBlock) -> usize {
         | PreviewBlock::Paragraph { text, .. }
         | PreviewBlock::ListItem { text, .. }
         | PreviewBlock::FootnoteDefinition { text, .. } => base + rich_text_bytes(text),
-        PreviewBlock::BlockQuote { text, children, .. } => {
-            base + rich_text_bytes(text) + children.iter().map(preview_block_bytes).sum::<usize>()
+        PreviewBlock::BlockQuote { children, .. } => {
+            base + children.iter().map(preview_block_bytes).sum::<usize>()
         }
         PreviewBlock::CodeBlock { language, code, .. } => {
             base + option_string_bytes(language.as_deref()) + string_bytes(code)
@@ -150,6 +150,12 @@ pub(crate) fn visual_block_bytes(block: &VisualBlock) -> usize {
         .marker_ranges
         .capacity()
         .saturating_mul(std::mem::size_of::<std::ops::Range<usize>>());
+    if let Some(quote) = &block.quote_context {
+        total += quote
+            .marker_ranges
+            .capacity()
+            .saturating_mul(std::mem::size_of::<std::ops::Range<usize>>());
+    }
     match &block.kind {
         VisualBlockKind::CodeBlock { language } => {
             total += option_string_bytes(language.as_deref());

@@ -128,10 +128,10 @@ pub(crate) fn push_preview_rich(
         spans
     } else if let Some(item) = list_item.as_mut() {
         &mut item.spans
-    } else if quote_depth > 0 {
-        quote
     } else if let Some((paragraph, _)) = paragraph.as_mut() {
         paragraph
+    } else if quote_depth > 0 {
+        quote
     } else {
         return;
     };
@@ -179,10 +179,10 @@ pub(crate) fn push_preview_math(
         spans
     } else if let Some(item) = list_item.as_mut() {
         &mut item.spans
-    } else if quote_depth > 0 {
-        quote
     } else if let Some((paragraph, _)) = paragraph.as_mut() {
         paragraph
+    } else if quote_depth > 0 {
+        quote
     } else {
         return;
     };
@@ -354,10 +354,13 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
 
 pub(crate) fn push_nonempty_block(blocks: &mut Vec<PreviewBlock>, block: PreviewBlock) {
     match &block {
-        PreviewBlock::Heading { text, .. }
-        | PreviewBlock::Paragraph { text, .. }
-        | PreviewBlock::BlockQuote { text, .. } => {
+        PreviewBlock::Heading { text, .. } | PreviewBlock::Paragraph { text, .. } => {
             if !text.is_empty() {
+                blocks.push(block);
+            }
+        }
+        PreviewBlock::BlockQuote { children, .. } => {
+            if !children.is_empty() {
                 blocks.push(block);
             }
         }
@@ -1240,6 +1243,14 @@ pub(crate) fn markdown_options() -> Options {
         | Options::ENABLE_SMART_PUNCTUATION
         | Options::ENABLE_HEADING_ATTRIBUTES
         | Options::ENABLE_GFM
+}
+
+/// Visual Edit needs byte-identical visible text so every rendered character
+/// maps back to authored source. Preview/Read/export keep smart punctuation.
+pub(crate) fn visual_markdown_options() -> Options {
+    let mut options = markdown_options();
+    options.remove(Options::ENABLE_SMART_PUNCTUATION);
+    options
 }
 
 pub(crate) fn heading_level_to_u8(level: HeadingLevel) -> u8 {

@@ -10,8 +10,8 @@ use crate::model::{
     VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
     VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
     VisualInlineRun, VisualNavigationTarget, VisualProjection, VisualProjectionSegment,
-    VisualProjectionSpan, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
-    VisualTableCell,
+    VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge, VisualRevealGroup,
+    VisualRevealKind, VisualSourceIslandKind, VisualTableCell,
 };
 use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fence};
 use crate::table::table_cell_source_ranges;
@@ -291,6 +291,15 @@ pub fn build_visual_projection_with_marked_range(
     {
         revealed_source_ranges.push(prefix.source_range.clone());
     }
+    if let Some(quote) = &block.quote_context {
+        revealed_source_ranges.extend(
+            quote
+                .marker_ranges
+                .iter()
+                .filter(|range| endpoint_is_active(range, false))
+                .cloned(),
+        );
+    }
     // A caret inside nested syntax activates every containing reveal group.
     // Keep only the outermost range so source is emitted exactly once and the
     // display/source mapping stays monotonic.
@@ -385,7 +394,13 @@ pub fn build_visual_projection_with_marked_range(
     }
     projection
 }
-use crate::parse::{ExtendedInlineKind, extended_inline_matches, markdown_options};
+use crate::parse::{ExtendedInlineKind, extended_inline_matches, visual_markdown_options};
+
+#[derive(Clone)]
+struct VisualLeaf<'a> {
+    block: &'a PreviewBlock,
+    quote_group: Option<Range<usize>>,
+}
 
 pub(crate) fn build_visual_blocks(
     text: &str,
@@ -413,31 +428,40 @@ pub(crate) fn build_visual_blocks(
         ));
     }
 
-    // Visual Edit keeps its previous flat projection: a blockquote's nested
-    // children (e.g. list items) are projected as their own rows following the
-    // quote row, exactly as if they were top-level preview blocks. A quote
-    // with no paragraph text contributes no row of its own.
-    let expanded: Vec<&PreviewBlock> = preview
+    // Blockquotes are containers only. Their ordered leaf children become
+    // visual rows; projecting the container as well would make parent and
+    // child source ranges overlap and duplicate content on screen.
+    let expanded: Vec<VisualLeaf<'_>> = preview
         .iter()
         .flat_map(|block| match block {
-            PreviewBlock::BlockQuote { text, children, .. } if !children.is_empty() => {
-                if text.is_empty() {
-                    children.iter().collect::<Vec<_>>()
-                } else {
-                    std::iter::once(block).chain(children.iter()).collect()
-                }
-            }
-            _ => vec![block],
+            PreviewBlock::BlockQuote {
+                children,
+                source_range,
+            } => children
+                .iter()
+                .map(|child| VisualLeaf {
+                    block: child,
+                    quote_group: Some(source_range.clone()),
+                })
+                .collect::<Vec<_>>(),
+            _ => vec![VisualLeaf {
+                block,
+                quote_group: None,
+            }],
         })
         .collect();
-    let preview = expanded.as_slice();
 
-    let mut source_ranges = preview
+    let mut source_ranges = expanded
         .iter()
-        .map(|block| visual_block_source_range(text, block))
+        .map(|leaf| {
+            let range = visual_block_source_range(text, leaf.block);
+            leaf.quote_group.as_ref().map_or(range.clone(), |group| {
+                quoted_leaf_source_range(text, range, group)
+            })
+        })
         .collect::<Vec<_>>();
     for index in 0..source_ranges.len().saturating_sub(1) {
-        let nested_list_start = match (&preview[index], &preview[index + 1]) {
+        let nested_list_start = match (expanded[index].block, expanded[index + 1].block) {
             (
                 PreviewBlock::ListItem { level, .. },
                 PreviewBlock::ListItem {
@@ -459,21 +483,43 @@ pub(crate) fn build_visual_blocks(
     }
 
     let mut covered_until = blocks.last().map_or(0, |block| block.source_range.end);
-    for (preview_block, range) in preview.iter().zip(source_ranges) {
+    for (leaf, range) in expanded.iter().zip(source_ranges) {
         if range.start > covered_until {
-            blocks.push(gap_block(
-                text,
-                covered_until..range.start,
-                &mut allocate_id,
-            ));
+            let gap_range = covered_until..range.start;
+            let quote_group = leaf
+                .quote_group
+                .as_ref()
+                .filter(|group| gap_range.start >= group.start && gap_range.end <= group.end);
+            blocks.push(gap_block(text, gap_range, quote_group, &mut allocate_id));
         }
 
+        let quote_context = leaf.quote_group.as_ref().map(|group| {
+            quote_context_for_row(
+                text,
+                range.clone(),
+                leaf.block.source_range().clone(),
+                group.clone(),
+            )
+        });
         let mut block = visual_block_from_preview(
             text,
-            preview_block,
+            leaf.block,
             range.clone(),
+            quote_context,
             &reference_definitions,
             &mut allocate_id,
+        );
+        let overlaps_same_quote_group = block.quote_context.as_ref().is_some_and(|quote| {
+            blocks
+                .last()
+                .and_then(|previous| previous.quote_context.as_ref())
+                .is_some_and(|previous| previous.group_source_range == quote.group_source_range)
+                && block.source_range.start < covered_until
+        });
+        debug_assert!(
+            !overlaps_same_quote_group,
+            "visual leaves overlap inside one quote group: covered through {covered_until}, next={:?}",
+            block.source_range
         );
         if block.source_range.start < covered_until {
             block.source_island = Some(VisualSourceIslandKind::Unsupported);
@@ -483,18 +529,152 @@ pub(crate) fn build_visual_blocks(
     }
 
     if covered_until < text.len() {
-        blocks.push(gap_block(text, covered_until..text.len(), &mut allocate_id));
+        blocks.push(gap_block(
+            text,
+            covered_until..text.len(),
+            None,
+            &mut allocate_id,
+        ));
     }
+    assign_quote_group_edges(&mut blocks);
     blocks
+}
+
+fn quoted_leaf_source_range(
+    text: &str,
+    mut range: Range<usize>,
+    group: &Range<usize>,
+) -> Range<usize> {
+    let line_start = text[..range.start].rfind('\n').map_or(0, |index| index + 1);
+    range.start = line_start.max(group.start);
+    range.end = range.end.min(group.end);
+    range
+}
+
+fn quote_prefix_on_line(
+    text: &str,
+    line_start: usize,
+    line_end: usize,
+) -> Option<(Range<usize>, usize)> {
+    let line = &text[line_start..line_end];
+    let bytes = line.as_bytes();
+    let mut cursor = bytes
+        .iter()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    let mut depth = 0;
+    while bytes.get(cursor) == Some(&b'>') {
+        depth += 1;
+        cursor += 1;
+        if matches!(bytes.get(cursor), Some(b' ' | b'\t')) {
+            cursor += 1;
+        }
+    }
+    (depth > 0).then_some((line_start..line_start + cursor, depth))
+}
+
+fn quote_context_for_row(
+    text: &str,
+    row_range: Range<usize>,
+    leaf_source_range: Range<usize>,
+    group_source_range: Range<usize>,
+) -> VisualQuoteContext {
+    let mut marker_ranges = Vec::new();
+    let mut depth = 0;
+    let mut line_start = row_range.start;
+    while line_start < row_range.end {
+        let line_end = text[line_start..row_range.end]
+            .find('\n')
+            .map_or(row_range.end, |relative| line_start + relative);
+        if let Some((prefix, line_depth)) = quote_prefix_on_line(text, line_start, line_end) {
+            marker_ranges.push(prefix);
+            depth = depth.max(line_depth);
+        }
+        if line_end >= row_range.end {
+            break;
+        }
+        line_start = line_end + 1;
+    }
+    VisualQuoteContext {
+        depth: depth.max(1),
+        marker_ranges,
+        leaf_source_range,
+        group_source_range,
+        edge: VisualQuoteGroupEdge::Middle,
+    }
+}
+
+fn quote_gap_is_structural_only(slice: &str) -> bool {
+    slice.lines().all(|line| {
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        if trimmed.is_empty() {
+            return true;
+        }
+        let mut rest = trimmed;
+        let mut saw_quote = false;
+        while let Some(after) = rest.strip_prefix('>') {
+            saw_quote = true;
+            rest = after.trim_start_matches([' ', '\t']);
+        }
+        saw_quote && rest.is_empty()
+    })
+}
+
+fn assign_quote_group_edges(blocks: &mut [VisualBlock]) {
+    let mut index = 0;
+    while index < blocks.len() {
+        let Some(group) = blocks[index]
+            .quote_context
+            .as_ref()
+            .map(|quote| quote.group_source_range.clone())
+        else {
+            index += 1;
+            continue;
+        };
+        let start = index;
+        while index + 1 < blocks.len()
+            && blocks[index + 1]
+                .quote_context
+                .as_ref()
+                .is_some_and(|quote| quote.group_source_range == group)
+        {
+            index += 1;
+        }
+        let end = index;
+        for (offset, block) in blocks[start..=end].iter_mut().enumerate() {
+            let quote = block.quote_context.as_mut().expect("quote group member");
+            quote.edge = match (offset == 0, start + offset == end) {
+                (true, true) => VisualQuoteGroupEdge::Only,
+                (true, false) => VisualQuoteGroupEdge::First,
+                (false, true) => VisualQuoteGroupEdge::Last,
+                (false, false) => VisualQuoteGroupEdge::Middle,
+            };
+        }
+        index += 1;
+    }
 }
 
 fn gap_block(
     text: &str,
     range: Range<usize>,
+    quote_group: Option<&Range<usize>>,
     allocate_id: &mut impl FnMut() -> VisualBlockId,
 ) -> VisualBlock {
     let slice = &text[range.clone()];
-    if slice.trim().is_empty() {
+    let standalone_quote_gap = quote_group.is_none()
+        && quote_gap_is_structural_only(slice)
+        && slice
+            .lines()
+            .any(|line| line.trim_start_matches([' ', '\t']).starts_with('>'));
+    if slice.trim().is_empty()
+        || standalone_quote_gap
+        || (quote_group.is_some() && quote_gap_is_structural_only(slice))
+    {
+        let quote_group = quote_group
+            .cloned()
+            .or_else(|| standalone_quote_gap.then(|| range.clone()));
+        let quote_context = quote_group
+            .map(|group| quote_context_for_row(text, range.clone(), range.clone(), group));
         VisualBlock {
             id: allocate_id(),
             kind: VisualBlockKind::Whitespace,
@@ -503,6 +683,7 @@ fn gap_block(
             reveal_groups: Vec::new(),
             marker_ranges: Vec::new(),
             block_prefix: None,
+            quote_context,
             source_island: None,
             editor: None,
         }
@@ -515,6 +696,7 @@ fn gap_block(
             reveal_groups: Vec::new(),
             marker_ranges: Vec::new(),
             block_prefix: None,
+            quote_context: None,
             source_island: None,
             editor: None,
         }
@@ -536,6 +718,7 @@ fn source_island(
         reveal_groups: Vec::new(),
         marker_ranges: Vec::new(),
         block_prefix: None,
+        quote_context: None,
         source_island: Some(kind),
         editor: None,
     }
@@ -545,6 +728,7 @@ fn visual_block_from_preview(
     text: &str,
     block: &PreviewBlock,
     source_range: Range<usize>,
+    quote_context: Option<VisualQuoteContext>,
     reference_definitions: &str,
     allocate_id: &mut impl FnMut() -> VisualBlockId,
 ) -> VisualBlock {
@@ -618,14 +802,21 @@ fn visual_block_from_preview(
         ),
     };
 
-    let block_prefix = block_prefix(text, &kind, source_range.clone());
+    let block_prefix = block_prefix(text, &kind, source_range.clone(), quote_context.as_ref());
     let inline_source_range = if matches!(kind, VisualBlockKind::ListItem { .. }) {
         block_prefix.as_ref().map_or_else(
             || source_range.clone(),
             |prefix| prefix.source_range.end..source_range.end,
         )
     } else {
-        source_range.clone()
+        quote_context
+            .as_ref()
+            .and_then(|quote| quote.marker_ranges.first())
+            .filter(|prefix| prefix.start == source_range.start)
+            .map_or_else(
+                || source_range.clone(),
+                |prefix| prefix.end..source_range.end,
+            )
     };
     let (mut editable_runs, reveal_groups, contains_html) =
         inline_runs(text, inline_source_range, reference_definitions);
@@ -649,6 +840,7 @@ fn visual_block_from_preview(
         reveal_groups,
         marker_ranges,
         block_prefix,
+        quote_context,
         source_island: source_island.or(contains_html.then_some(VisualSourceIslandKind::Html)),
         editor,
     }
@@ -925,7 +1117,7 @@ fn inline_runs(
     let mut contains_html = false;
 
     for (event, relative_range) in
-        Parser::new_ext(parse_input, markdown_options()).into_offset_iter()
+        Parser::new_ext(parse_input, visual_markdown_options()).into_offset_iter()
     {
         if relative_range.start >= source.len() {
             break;
@@ -1373,17 +1565,23 @@ fn block_prefix(
     text: &str,
     kind: &VisualBlockKind,
     block_range: Range<usize>,
+    quote_context: Option<&VisualQuoteContext>,
 ) -> Option<VisualBlockPrefix> {
     let line_end = text[block_range.clone()]
         .find('\n')
         .map_or(block_range.end, |relative| block_range.start + relative);
     let line = &text[block_range.start..line_end];
-    let indentation_len = line
+    let quote_prefix_len = quote_context
+        .and_then(|quote| quote.marker_ranges.first())
+        .filter(|range| range.start == block_range.start)
+        .map_or(0, |range| range.end - block_range.start);
+    let prefix_base = block_range.start + quote_prefix_len;
+    let indentation_len = line[quote_prefix_len..]
         .bytes()
         .take_while(|byte| matches!(byte, b' ' | b'\t'))
         .count();
-    let marker_start = indentation_len;
-    let indentation_range = block_range.start..block_range.start + indentation_len;
+    let marker_start = quote_prefix_len + indentation_len;
+    let indentation_range = prefix_base..prefix_base + indentation_len;
 
     let (prefix_end, prefix_kind) = match kind {
         VisualBlockKind::Heading { level } => {
@@ -1478,7 +1676,7 @@ fn block_prefix(
     Some(VisualBlockPrefix {
         kind: prefix_kind,
         indentation_range,
-        source_range: block_range.start..block_range.start + prefix_end,
+        source_range: prefix_base..block_range.start + prefix_end,
     })
 }
 
@@ -1502,59 +1700,68 @@ pub(crate) fn structural_prefix_at(text: &str, byte_index: usize) -> Option<Visu
         .find('\n')
         .map_or(text.len(), |relative| cursor + relative);
     let line = &text[line_start..line_end];
-    let indentation_len = line
+    let outer_indentation_len = line
         .bytes()
         .take_while(|byte| matches!(byte, b' ' | b'\t'))
         .count();
-    let indentation_range = line_start..line_start + indentation_len;
-    let marker_start = indentation_len;
     let bytes = line.as_bytes();
 
-    let (prefix_end, kind) = if bytes.get(marker_start) == Some(&b'#') {
+    let mut quote_end = outer_indentation_len;
+    let mut quote_depth = 0;
+    while bytes.get(quote_end) == Some(&b'>') {
+        quote_depth += 1;
+        quote_end += 1;
+        if matches!(bytes.get(quote_end), Some(b' ' | b'\t')) {
+            quote_end += 1;
+        }
+    }
+
+    let (prefix_base, indentation_len) = if quote_depth > 0 {
+        let inner_indent = line[quote_end..]
+            .bytes()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        (quote_end, inner_indent)
+    } else {
+        (0, outer_indentation_len)
+    };
+    let marker_start = prefix_base + indentation_len;
+    let indentation_range = line_start + prefix_base..line_start + prefix_base + indentation_len;
+
+    let parsed_inner = if bytes.get(marker_start) == Some(&b'#') {
         let level = line[marker_start..]
             .bytes()
             .take_while(|byte| *byte == b'#')
             .count();
         if !(1..=6).contains(&level) || bytes.get(marker_start + level) != Some(&b' ') {
-            return None;
+            None
+        } else {
+            Some((
+                skip_ascii_spacing(line, marker_start + level),
+                VisualBlockPrefixKind::Heading { level: level as u8 },
+            ))
         }
-        (
-            skip_ascii_spacing(line, marker_start + level),
-            VisualBlockPrefixKind::Heading { level: level as u8 },
-        )
-    } else if bytes.get(marker_start) == Some(&b'>') {
-        let mut end = marker_start;
-        let mut depth = 0;
-        while bytes.get(end) == Some(&b'>') {
-            depth += 1;
-            end += 1;
-            end = skip_ascii_spacing(line, end);
-        }
-        (end, VisualBlockPrefixKind::BlockQuote { depth })
     } else if matches!(bytes.get(marker_start), Some(b'-' | b'+' | b'*')) {
-        let marker = bytes[marker_start];
         let after_marker = skip_ascii_spacing(line, marker_start + 1);
         if after_marker == marker_start + 1 {
-            return None;
-        }
-        if let Some(task) = bytes.get(after_marker..after_marker + 3)
+            None
+        } else if let Some(task) = bytes.get(after_marker..after_marker + 3)
             && task.first() == Some(&b'[')
             && task.last() == Some(&b']')
             && matches!(task[1], b' ' | b'x' | b'X')
         {
-            (
+            Some((
                 skip_ascii_spacing(line, after_marker + 3),
                 VisualBlockPrefixKind::TaskList {
                     level: 1,
                     checked: !matches!(task[1], b' '),
                 },
-            )
+            ))
         } else {
-            let _ = marker;
-            (
+            Some((
                 after_marker,
                 VisualBlockPrefixKind::UnorderedList { level: 1 },
-            )
+            ))
         }
     } else {
         let digits_start = marker_start;
@@ -1563,23 +1770,35 @@ pub(crate) fn structural_prefix_at(text: &str, byte_index: usize) -> Option<Visu
             end += 1;
         }
         if end == digits_start || !matches!(bytes.get(end), Some(b'.' | b')')) {
-            return None;
+            None
+        } else {
+            let index = line[digits_start..end].parse::<u64>().ok()?;
+            let after_marker = skip_ascii_spacing(line, end + 1);
+            (after_marker > end + 1).then_some((
+                after_marker,
+                VisualBlockPrefixKind::OrderedList { level: 1, index },
+            ))
         }
-        let index = line[digits_start..end].parse::<u64>().ok()?;
-        let after_marker = skip_ascii_spacing(line, end + 1);
-        if after_marker == end + 1 {
-            return None;
-        }
-        (
-            after_marker,
-            VisualBlockPrefixKind::OrderedList { level: 1, index },
-        )
     };
+
+    let (source_start, prefix_end, kind, indentation_range) =
+        if let Some((prefix_end, kind)) = parsed_inner {
+            (prefix_base, prefix_end, kind, indentation_range)
+        } else if quote_depth > 0 {
+            (
+                0,
+                quote_end,
+                VisualBlockPrefixKind::BlockQuote { depth: quote_depth },
+                line_start..line_start + outer_indentation_len,
+            )
+        } else {
+            return None;
+        };
 
     Some(VisualBlockPrefix {
         kind,
         indentation_range,
-        source_range: line_start..line_start + prefix_end,
+        source_range: line_start + source_start..line_start + prefix_end,
     })
 }
 
@@ -1622,8 +1841,178 @@ mod tests {
     use crate::{
         MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockEditor, VisualBlockKind,
         VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind, VisualNavigationTarget,
-        VisualRevealKind, VisualSourceIslandKind,
+        VisualQuoteGroupEdge, VisualRevealKind, VisualSourceIslandKind,
     };
+
+    #[test]
+    fn quoted_mixed_chinese_fixture_projects_once_without_overlap_or_islands() {
+        let source = "> **写在前面：**\n>\n> 这半年，装机的人都被同一件事按在地上摩擦——**内存疯了**。\n>\n> 这篇文章要回答三个问题：\n> 1. **到底疯到什么程度**——用数字说话；\n> 2. **为什么内存造不快**——从一个电容讲起；\n> 3. **AI 怎么改变产能去向**——HBM 更消耗晶圆。\n>\n> 看完之后，你应该能自己判断。\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+
+        assert_eq!(blocks.first().unwrap().source_range.start, 0);
+        assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+        assert!(blocks.windows(2).all(|pair| {
+            pair[0].source_range.end == pair[1].source_range.start
+                && source.is_char_boundary(pair[0].source_range.end)
+        }));
+        assert!(blocks.iter().all(|block| {
+            !matches!(
+                block.kind,
+                VisualBlockKind::Unsupported | VisualBlockKind::BlockQuote
+            ) && block.source_island.is_none()
+                && block.quote_context.is_some()
+        }));
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+                .count(),
+            3
+        );
+
+        let quoted = blocks
+            .iter()
+            .filter_map(|block| block.quote_context.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(quoted.first().unwrap().edge, VisualQuoteGroupEdge::First);
+        assert_eq!(quoted.last().unwrap().edge, VisualQuoteGroupEdge::Last);
+        assert!(
+            quoted
+                .iter()
+                .flat_map(|quote| &quote.marker_ranges)
+                .all(|range| { source[range.clone()].trim_start().starts_with('>') })
+        );
+
+        let rendered = blocks
+            .iter()
+            .map(|block| {
+                let cursor = block
+                    .editable_runs
+                    .first()
+                    .map_or(block.source_range.end, |run| run.content_range.start);
+                build_visual_projection(source, block, cursor..cursor, cursor).text
+            })
+            .collect::<String>();
+        for phrase in [
+            "写在前面",
+            "到底疯到什么程度",
+            "为什么内存造不快",
+            "AI 怎么改变产能去向",
+        ] {
+            assert_eq!(rendered.matches(phrase).count(), 1, "{phrase}: {rendered}");
+        }
+    }
+
+    #[test]
+    fn visual_quote_keeps_ascii_punctuation_source_exact() {
+        let source = "> \"double\" and 'single' -- dash\n> 1. \"item\" --- long\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert!(blocks.iter().all(|block| {
+            block.source_island.is_none()
+                && block
+                    .editable_runs
+                    .iter()
+                    .all(|run| !run.conservative_fallback)
+        }));
+        let rendered = blocks
+            .iter()
+            .map(|block| {
+                let cursor = block.editable_runs[0].content_range.start;
+                build_visual_projection(source, block, cursor..cursor, cursor).text
+            })
+            .collect::<String>();
+        assert!(rendered.contains("\"double\" and 'single' -- dash"));
+        assert!(rendered.contains("\"item\" --- long"));
+        let preview_text = doc.preview_blocks()[0].plain_text();
+        assert!(preview_text.contains('“') && preview_text.contains('’'));
+    }
+
+    #[test]
+    fn quoted_nested_lists_and_blank_separators_remain_partitioned() {
+        let source = "> - parent\n>   - child\n> - [x] done\n>\n> outro\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| { pair[0].source_range.end == pair[1].source_range.start })
+        );
+        assert!(
+            blocks
+                .iter()
+                .all(|block| { block.source_island.is_none() && block.quote_context.is_some() })
+        );
+        let projected = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .map(|block| {
+                let cursor = block.editable_runs[0].content_range.start;
+                build_visual_projection(source, block, cursor..cursor, cursor).text
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(projected, ["parent", "child", "done", "outro"]);
+    }
+
+    #[test]
+    fn empty_quote_marker_is_quote_context_whitespace() {
+        let source = "> \n";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        assert!(matches!(blocks.as_slice(), [block]
+        if matches!(block.kind, VisualBlockKind::Whitespace)
+            && block.source_range == (0..source.len())
+            && block.source_island.is_none()
+            && block.quote_context.as_ref().is_some_and(|quote| {
+                quote.depth == 1
+                    && quote.marker_ranges == vec![0..2]
+                    && quote.edge == VisualQuoteGroupEdge::Only
+            })));
+    }
+
+    #[test]
+    fn quote_and_list_prefix_layers_reveal_independently() {
+        let source = "> > 3. item";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .unwrap();
+        let quote = block.quote_context.as_ref().unwrap();
+        assert_eq!(quote.depth, 2);
+        assert_eq!(&source[quote.marker_ranges[0].clone()], "> > ");
+        let list = block.block_prefix.as_ref().unwrap();
+        assert_eq!(
+            list.kind,
+            VisualBlockPrefixKind::OrderedList { level: 1, index: 3 }
+        );
+        assert_eq!(&source[list.source_range.clone()], "3. ");
+
+        let content_cursor = source.find("item").unwrap();
+        let hidden = build_visual_projection(
+            source,
+            block,
+            content_cursor..content_cursor,
+            content_cursor,
+        );
+        assert_eq!(hidden.text, "item");
+
+        let quote_cursor = quote.marker_ranges[0].start;
+        let quote_revealed =
+            build_visual_projection(source, block, quote_cursor..quote_cursor, quote_cursor);
+        assert_eq!(quote_revealed.text, "> > item");
+        assert_eq!(
+            quote_revealed
+                .source_for_display(quote_revealed.display_for_source(quote_cursor).unwrap()),
+            quote_cursor
+        );
+
+        let list_cursor = list.source_range.start;
+        let list_revealed =
+            build_visual_projection(source, block, list_cursor..list_cursor, list_cursor);
+        assert_eq!(list_revealed.text, "3. item");
+    }
 
     #[test]
     fn maps_common_inline_runs_to_exact_source_content() {
@@ -1711,11 +2100,6 @@ mod tests {
     fn derives_supported_quote_and_list_prefixes() {
         let cases = [
             (
-                "> quote\n",
-                VisualBlockPrefixKind::BlockQuote { depth: 1 },
-                "> ",
-            ),
-            (
                 "3. ordered\n",
                 VisualBlockPrefixKind::OrderedList { level: 1, index: 3 },
                 "3. ",
@@ -1745,6 +2129,12 @@ mod tests {
                 "source: {source:?}"
             );
         }
+
+        let quoted_source = "> quote\n";
+        let quoted = MarkdownDocument::from_text(quoted_source).visual_blocks();
+        let context = quoted[0].quote_context.as_ref().expect("quote context");
+        assert_eq!(context.depth, 1);
+        assert_eq!(&quoted_source[context.marker_ranges[0].clone()], "> ");
 
         let nested_source = "- parent\n  - nested\n";
         let nested = MarkdownDocument::from_text(nested_source).visual_blocks();
@@ -1936,6 +2326,37 @@ mod tests {
     }
 
     #[test]
+    fn quoted_interaction_projections_reuse_one_per_version_cache() {
+        let source = "> intro **bold**\n>\n> 1. first\n> 2. second\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let counters = doc.source_mapped_derivation_counters();
+        let version = doc.version();
+
+        for block in blocks.iter() {
+            for cursor in block
+                .quote_context
+                .iter()
+                .flat_map(|quote| quote.marker_ranges.iter().map(|range| range.start))
+                .chain(
+                    block
+                        .editable_runs
+                        .iter()
+                        .map(|run| run.content_range.start),
+                )
+            {
+                let _ = build_visual_projection(source, block, cursor..cursor, cursor);
+                let end = block.source_range.end.min(cursor + 1);
+                let _ = build_visual_projection(source, block, cursor..end, end);
+            }
+        }
+
+        assert_eq!(doc.version(), version);
+        assert_eq!(doc.source_mapped_derivation_counters(), counters);
+        assert!(Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+    }
+
+    #[test]
     fn projection_reveals_only_the_active_inline_group() {
         let source = "plain **世界** and [site](url \"Title\")";
         let doc = MarkdownDocument::from_text(source);
@@ -1988,7 +2409,7 @@ mod tests {
                         VisualBlockKind::Heading { .. }
                             | VisualBlockKind::ListItem { .. }
                             | VisualBlockKind::BlockQuote
-                    )
+                    ) || block.quote_context.is_some()
                 })
                 .expect("supported visual block");
             let cursor = source.len();

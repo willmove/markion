@@ -608,6 +608,16 @@ pub(crate) fn reconcile_visual_block_ids(
         if shift_visual_block(&mut shifted, delta).is_none() {
             continue;
         }
+        if let (Some(shifted_quote), Some(candidate_quote)) = (
+            shifted.quote_context.as_mut(),
+            candidate.quote_context.as_ref(),
+        ) {
+            // The containing quote range may grow because of an edit in an
+            // earlier sibling even when this leaf's own source is unchanged.
+            // Group bounds are navigation metadata, not row identity; edge,
+            // depth, marker, and leaf ranges must still match exactly.
+            shifted_quote.group_source_range = candidate_quote.group_source_range.clone();
+        }
         shifted.id = candidate.id;
         if shifted == *candidate {
             candidate.id = old.id;
@@ -662,12 +672,10 @@ pub(crate) fn shift_preview_block(block: &mut PreviewBlock, delta: isize) -> Opt
             shift_rich_text(text, delta)?;
         }
         PreviewBlock::BlockQuote {
-            text,
             children,
             source_range,
         } => {
             *source_range = shift_range(source_range, delta)?;
-            shift_rich_text(text, delta)?;
             for child in children {
                 shift_preview_block(child, delta)?;
             }
@@ -769,6 +777,13 @@ pub(crate) fn shift_visual_block(block: &mut VisualBlock, delta: isize) -> Optio
     }
     if let Some(prefix) = block.block_prefix.as_mut() {
         shift_prefix(prefix, delta)?;
+    }
+    if let Some(quote) = block.quote_context.as_mut() {
+        for range in &mut quote.marker_ranges {
+            *range = shift_range(range, delta)?;
+        }
+        quote.leaf_source_range = shift_range(&quote.leaf_source_range, delta)?;
+        quote.group_source_range = shift_range(&quote.group_source_range, delta)?;
     }
     if let Some(editor) = block.editor.as_mut() {
         shift_block_editor(editor, delta)?;
@@ -881,6 +896,65 @@ mod tests {
         let prefixed = document.visual_blocks();
         assert_eq!(prefixed[4].id, second_id);
         assert_eq!(prefixed[6].id, tail_id);
+    }
+
+    #[test]
+    fn quoted_siblings_keep_ids_while_changed_or_split_rows_do_not() {
+        let source = "> intro\n>\n> 1. one\n> 2. two\n>\n> outro\n";
+        let mut document = MarkdownDocument::from_text(source);
+        let original = document.visual_blocks();
+        let id_for = |blocks: &[VisualBlock], source: &str, needle: &str| {
+            blocks
+                .iter()
+                .find(|block| source[block.source_range.clone()].contains(needle))
+                .map(|block| block.id)
+                .unwrap()
+        };
+        let one_id = id_for(&original, source, "one");
+        let two_id = id_for(&original, source, "two");
+        let outro_id = id_for(&original, source, "outro");
+
+        let one = document.text().find("one").unwrap();
+        document.replace_range(one..one + 3, "changed-one");
+        let updated = document.visual_blocks();
+        assert_ne!(id_for(&updated, document.text(), "changed-one"), one_id);
+        assert_eq!(id_for(&updated, document.text(), "two"), two_id);
+        assert_eq!(id_for(&updated, document.text(), "outro"), outro_id);
+
+        let outro = document.text().find("outro").unwrap() + 3;
+        document.insert(outro, "\n>\n> ");
+        let split = document.visual_blocks();
+        assert!(!split.iter().any(|block| block.id == outro_id));
+    }
+
+    #[test]
+    fn quoted_incremental_variants_equal_fresh_full_models() {
+        let cases = [
+            ("> 段落\n>\n> 1. one\n> 2. two\n", "one", 3usize, "一项"),
+            ("> CRLF\r\n>\r\n> - item\r\n", "item", 4, "项目"),
+            ("> intro\n>\n> - item\n", ">\n", 2, "> \n"),
+            ("> 1. item\n", "1. ", 3, ""),
+            ("> before after\n", " ", 1, "\n>\n> "),
+        ];
+        for (source, needle, replaced_len, replacement) in cases {
+            let mut incremental = MarkdownDocument::from_text(source);
+            incremental.visual_blocks_shared();
+            let start = incremental.text().find(needle).unwrap();
+            incremental.replace_range(start..start + replaced_len, replacement);
+            let incremental_blocks = incremental.visual_blocks();
+            let full = MarkdownDocument::from_text(incremental.text()).visual_blocks();
+            assert_eq!(
+                incremental_blocks.len(),
+                full.len(),
+                "{}",
+                incremental.text()
+            );
+            for (incremental, full) in incremental_blocks.iter().zip(&full) {
+                let mut normalized = incremental.clone();
+                normalized.id = full.id;
+                assert_eq!(&normalized, full, "{}", incremental.source_range.start);
+            }
+        }
     }
 
     #[test]
