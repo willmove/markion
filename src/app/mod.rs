@@ -813,6 +813,9 @@ const PANE_INNER_PADDING: f32 = 9.;
 const PREVIEW_SCROLLBAR_SAFE_RIGHT_PADDING: f32 =
     PANE_INNER_PADDING + PANE_SCROLLBAR_RESERVED_WIDTH;
 const SIDEBAR_COMPACT_PADDING: f32 = 2.5;
+const OUTLINE_ROW_VERTICAL_PADDING: f32 = 1.;
+const OUTLINE_ROW_LINE_HEIGHT: f32 = 17.;
+const OUTLINE_ROW_GAP: f32 = 0.;
 const READ_MODE_PREVIEW_MAX_WIDTH: f32 = 860.;
 const PANE_SCROLLBAR_RESERVED_WIDTH: f32 = 15.;
 const PANE_SCROLLBAR_THUMB_WIDTH: f32 = 9.;
@@ -941,18 +944,6 @@ fn document_tab_band_visible(tab_count: usize) -> bool {
 fn document_tab_band_height(tab_count: usize) -> f32 {
     if document_tab_band_visible(tab_count) {
         DOCUMENT_TAB_BAND_HEIGHT
-    } else {
-        0.
-    }
-}
-
-fn document_tab_band_leading_width(
-    tab_count: usize,
-    sidebar_visible: bool,
-    sidebar_width: f32,
-) -> f32 {
-    if document_tab_band_visible(tab_count) && sidebar_visible {
-        sidebar_width + SIDEBAR_DIVIDER_WIDTH
     } else {
         0.
     }
@@ -1205,6 +1196,7 @@ struct MarkionApp {
     file_tree_query: String,
     file_tree_query_focused: bool,
     file_tree_scroll: ScrollHandle,
+    outline_scroll: ScrollHandle,
     // Byte length of the trailing IME composition inside whichever redirected
     // text field (file-tree filter / search) currently has logical focus.
     input_marked_len: usize,

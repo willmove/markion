@@ -88,6 +88,7 @@ impl MarkionApp {
             file_tree_query: String::new(),
             file_tree_query_focused: false,
             file_tree_scroll: ScrollHandle::new(),
+            outline_scroll: ScrollHandle::new(),
             input_marked_len: 0,
             selected_tree_path: None,
             collapsed_tree_paths: HashSet::new(),

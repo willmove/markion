@@ -1219,11 +1219,6 @@ impl MarkionApp {
             return div();
         }
         let active = self.active_tab;
-        let leading_width = document_tab_band_leading_width(
-            self.tabs.len(),
-            self.sidebar_visible,
-            self.sidebar_width,
-        );
         let document_bar = div()
             .h_full()
             .flex_1()
@@ -1340,17 +1335,6 @@ impl MarkionApp {
             .border_color(palette.border)
             .bg(palette.panel_bg)
             .flex()
-            .when(leading_width > 0., |band| {
-                band.child(
-                    div()
-                        .h_full()
-                        .w(px(leading_width))
-                        .flex_none()
-                        .border_r_1()
-                        .border_color(palette.border)
-                        .bg(palette.panel_bg),
-                )
-            })
             .child(document_bar)
     }
 

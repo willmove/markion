@@ -276,21 +276,17 @@ impl Render for MarkionApp {
                         )),
                 ),
             )
-            .child(self.tab_bar_view(cx))
             .child(
                 div()
-                    .id("main-content-row")
+                    .id("workspace-row")
                     .flex()
                     .flex_1()
                     .min_h_0()
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::close_menu))
-                    // Drag-move/drop for the two resize dividers. DragMoveEvent
-                    // gives the cursor position plus the bounds of this row, so
-                    // each handler converts the x offset into a ratio / width.
-                    .on_drag_move::<DraggedEditorSplitHandle>(
-                        cx.listener(Self::on_editor_split_drag),
-                    )
-                    .on_drop::<DraggedEditorSplitHandle>(cx.listener(Self::on_editor_split_drop))
+                    // The sidebar spans the complete workspace below the menu,
+                    // including the height occupied by document tabs to its right.
+                    // Its drag coordinate therefore remains relative to this outer
+                    // row, whose left edge is the window's left edge.
                     .on_drag_move::<DraggedSidebarHandle>(cx.listener(Self::on_sidebar_resize_drag))
                     .on_drop::<DraggedSidebarHandle>(cx.listener(|_, _, _, cx| {
                         cx.notify();
@@ -302,6 +298,29 @@ impl Render for MarkionApp {
                     })
                     .child(
                         div()
+                            .id("document-workspace-column")
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .child(self.tab_bar_view(cx))
+                            .child(
+                                div()
+                                    .id("main-content-row")
+                                    .flex()
+                                    .flex_1()
+                                    .min_h_0()
+                                    // Pane split coordinates must exclude the sidebar,
+                                    // so its drag handler lives on this document-only row.
+                                    .on_drag_move::<DraggedEditorSplitHandle>(
+                                        cx.listener(Self::on_editor_split_drag),
+                                    )
+                                    .on_drop::<DraggedEditorSplitHandle>(
+                                        cx.listener(Self::on_editor_split_drop),
+                                    )
+                                    .child(
+                                        div()
                             // Sized by the draggable split ratio instead of a flat
                             // flex_1, so dragging the divider actually resizes it.
                             .flex_basis(DefiniteLength::Fraction(editor_width))
@@ -485,6 +504,8 @@ impl Render for MarkionApp {
                             .when(
                                 matches!(self.view_mode, ViewMode::Edit | ViewMode::VisualEdit),
                                 |style| style.hidden(),
+                            ),
+                                    ),
                             ),
                     ),
             )
@@ -1327,51 +1348,52 @@ pub(super) fn outline_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>)
         .current_heading_index(app.active_tab().cursor_offset());
     let app_entity = cx.entity();
 
-    div()
-        .flex_1()
-        .min_h_0()
-        .flex()
-        .flex_col()
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .children(outline.iter().enumerate().map(|(index, heading)| {
-                    let app_entity = app_entity.clone();
-                    let offset = heading.offset;
-                    let active = current == Some(index);
-                    let title = heading.title.clone();
-                    let background = if active {
-                        palette.active_bg
-                    } else {
-                        palette.panel_bg
-                    };
+    div().flex_1().min_h_0().flex().flex_col().child(
+        div()
+            .id("outline-scroll")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .scrollbar_width(px(8.))
+            .track_scroll(&app.outline_scroll)
+            .children(outline.iter().enumerate().map(|(index, heading)| {
+                let app_entity = app_entity.clone();
+                let offset = heading.offset;
+                let active = current == Some(index);
+                let title = heading.title.clone();
+                let background = if active {
+                    palette.active_bg
+                } else {
+                    palette.panel_bg
+                };
 
-                    div()
-                        .mb_1()
-                        .ml(px((heading.level.saturating_sub(1) as f32) * 12.))
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(background)
-                        .text_size(px(12.))
-                        .text_color(if active {
-                            palette.active_text
-                        } else {
-                            palette.text
-                        })
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(palette.active_bg))
-                        .child(title)
-                        .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                            let focus_handle = app_entity.read(cx).focus_handle.clone();
-                            window.focus(&focus_handle);
-                            app_entity.update(cx, |app, cx| {
-                                app.jump_to_offset(offset, cx);
-                            });
-                        })
-                })),
-        )
+                div()
+                    .mb(px(OUTLINE_ROW_GAP))
+                    .ml(px((heading.level.saturating_sub(1) as f32) * 12.))
+                    .w_full()
+                    .px_2()
+                    .py(px(OUTLINE_ROW_VERTICAL_PADDING))
+                    .rounded_md()
+                    .bg(background)
+                    .text_size(px(12.))
+                    .line_height(px(OUTLINE_ROW_LINE_HEIGHT))
+                    .text_color(if active {
+                        palette.active_text
+                    } else {
+                        palette.text
+                    })
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(palette.active_bg))
+                    .child(title)
+                    .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                        let focus_handle = app_entity.read(cx).focus_handle.clone();
+                        window.focus(&focus_handle);
+                        app_entity.update(cx, |app, cx| {
+                            app.jump_to_offset(offset, cx);
+                        });
+                    })
+            })),
+    )
 }
 
 /// Unified left sidebar: a tab bar switches between the Files panel and the

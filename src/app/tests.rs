@@ -4819,24 +4819,58 @@ fn active_tab_accessors_clamp_a_stale_index() {
 }
 
 #[test]
-fn document_tab_band_geometry_tracks_visibility_and_sidebar_width() {
+fn document_tab_band_geometry_tracks_visibility_in_document_column() {
     assert!(!document_tab_band_visible(0));
     assert!(!document_tab_band_visible(1));
     assert!(document_tab_band_visible(2));
 
     assert_eq!(document_tab_band_height(1), 0.);
     assert_eq!(document_tab_band_height(2), DOCUMENT_TAB_BAND_HEIGHT);
+}
 
-    assert_eq!(document_tab_band_leading_width(1, true, 230.), 0.);
-    assert_eq!(document_tab_band_leading_width(2, false, 230.), 0.);
+#[test]
+fn workspace_layout_places_sidebar_beside_document_stack_and_scopes_drags() {
+    let root_view = include_str!("root_view.rs");
+    let workspace_start = root_view
+        .find(".id(\"workspace-row\")")
+        .expect("workspace row");
+    let document_start = workspace_start
+        + root_view[workspace_start..]
+            .find(".id(\"document-workspace-column\")")
+            .expect("document workspace column");
+    let before_document = &root_view[workspace_start..document_start];
+    assert!(before_document.contains(".child(sidebar_view(self, cx))"));
+    assert!(before_document.contains("on_drag_move::<DraggedSidebarHandle>"));
+    assert!(!before_document.contains("on_drag_move::<DraggedEditorSplitHandle>"));
+
+    let document_stack = &root_view[document_start..];
+    let tab_band = document_stack
+        .find(".child(self.tab_bar_view(cx))")
+        .expect("document tab band");
+    let content_row = document_stack
+        .find(".id(\"main-content-row\")")
+        .expect("document content row");
+    assert!(tab_band < content_row);
+    assert!(document_stack[content_row..].contains("on_drag_move::<DraggedEditorSplitHandle>"));
+
+    let editing = include_str!("editing.rs");
+    let tab_bar = editing
+        .split_once("pub(super) fn tab_bar_view")
+        .expect("tab bar function")
+        .1
+        .split_once("pub(super) fn cursor_offset")
+        .expect("tab bar function end")
+        .0;
+    assert!(!tab_bar.contains("leading_width"));
+}
+
+#[test]
+fn outline_row_metrics_are_compact() {
+    assert_eq!(OUTLINE_ROW_GAP, 0.);
+    assert!(OUTLINE_ROW_VERTICAL_PADDING * 2. <= 2.);
     assert_eq!(
-        document_tab_band_leading_width(2, true, 230.),
-        230. + SIDEBAR_DIVIDER_WIDTH
-    );
-    assert_eq!(
-        document_tab_band_leading_width(3, true, 318.),
-        318. + SIDEBAR_DIVIDER_WIDTH,
-        "the tab controls must follow the same live sidebar width as the pane boundary"
+        OUTLINE_ROW_LINE_HEIGHT + OUTLINE_ROW_VERTICAL_PADDING * 2. + OUTLINE_ROW_GAP,
+        19.
     );
 }
 
