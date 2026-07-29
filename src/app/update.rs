@@ -1,11 +1,10 @@
 //! In-app "Check for Updates" action.
 //!
-//! Fetches `${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/manifest.json` from the
-//! Aliyun OSS mirror that the release workflow's `mirror-oss` job publishes,
-//! compares the manifest's `version` against `env!("CARGO_PKG_VERSION")`, and
+//! Fetches the repository's latest published GitHub Release through the GitHub
+//! REST API, compares its `tag_name` against `env!("CARGO_PKG_VERSION")`, and
 //! surfaces the result through a modal dialog:
 //!
-//! - newer version -> dialog links the OSS download URL for the user's platform;
+//! - newer version -> dialog links the GitHub asset for the user's platform;
 //! - same/older version -> "up to date";
 //! - fetch or parse failure -> error dialog (no crash).
 //!
@@ -20,38 +19,26 @@ use serde::Deserialize;
 use serde_json;
 use std::env::consts;
 
-/// OSS public base URL (Bucket-level domain). Injected at build time via the
-/// `MARKION_OSS_PUBLIC_BASE` env var (CI reads it from the `OSS_PUBLIC_BASE`
-/// GitHub secret); local dev builds fall back to the real mirror so the menu
-/// item works out of the box.
-const OSS_PUBLIC_BASE: &str = match option_env!("MARKION_OSS_PUBLIC_BASE") {
-    Some(value) => value,
-    None => "https://marknice.oss-cn-heyuan.aliyuncs.com",
-};
+/// GitHub's unauthenticated "Get the latest release" endpoint. GitHub Releases
+/// remains the source of truth, and the shared HTTP helper supplies the
+/// required Markion User-Agent header.
+const GITHUB_LATEST_RELEASE_API_URL: &str =
+    "https://api.github.com/repos/willmove/markion/releases/latest";
 
-/// OSS object-key prefix. Same injection rule; CI sets `MARKION_OSS_PREFIX`
-/// from the `OSS_PREFIX` GitHub secret.
-const OSS_PREFIX: &str = match option_env!("MARKION_OSS_PREFIX") {
-    Some(value) => value,
-    None => "releases",
-};
-
-/// Manifest shape produced by the `mirror-oss` workflow job. Only the fields
-/// the client actually reads are declared; `pub_date` is parsed-but-unused so
-/// a future field addition stays backward-compatible.
+/// Subset of GitHub's release response used by the update checker. Serde
+/// ignores the API's other fields, keeping this model resilient to additions.
 #[derive(Debug, Deserialize)]
-struct UpdateManifest {
-    version: String,
+struct GitHubRelease {
+    tag_name: String,
     #[allow(dead_code)]
-    tag: String,
-    #[allow(dead_code)]
-    pub_date: String,
-    assets: std::collections::BTreeMap<String, UpdateAsset>,
+    html_url: String,
+    assets: Vec<GitHubReleaseAsset>,
 }
 
 #[derive(Debug, Deserialize)]
-struct UpdateAsset {
-    filename: String,
+struct GitHubReleaseAsset {
+    name: String,
+    browser_download_url: String,
 }
 
 /// Outcome of a single update check. Built off the UI thread, then applied on
@@ -74,15 +61,13 @@ impl MarkionApp {
         // fetch resolves, mirroring the pattern in `editing.rs` (`quit_confirm`).
         let window_handle = window.window_handle();
         let language = self.language;
-        let manifest_url = format!("{}/{}/latest/manifest.json", OSS_PUBLIC_BASE, OSS_PREFIX);
-
         self.status = self.tr(Msg::StatusUpdateChecking).into();
         self.active_menu = None;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            let outcome = match fetch_manifest(&manifest_url).await {
-                Ok(manifest) => compare_with_running(&manifest),
+            let outcome = match fetch_latest_release(GITHUB_LATEST_RELEASE_API_URL) {
+                Ok(release) => compare_with_running(&release),
                 Err(err) => UpdateCheckOutcome::Failed(err.to_string()),
             };
 
@@ -145,22 +130,28 @@ impl MarkionApp {
     }
 }
 
-/// Fetches and parses the update manifest from the OSS mirror. Runs on the
-/// shared HTTP runtime (`network::fetch_url_bytes`), so no new tokio runtime
-/// is created and no GPUI `HttpClient` registration is needed.
-async fn fetch_manifest(url: &str) -> Result<UpdateManifest> {
-    let url = url.to_string();
-    let bytes = network::fetch_url_bytes(&url)?;
-    serde_json::from_slice(&bytes).with_context(|| format!("parsing update manifest from {url}"))
+/// Fetches and parses GitHub's latest published release. Runs on the shared
+/// HTTP runtime (`network::fetch_url_bytes`), so no new tokio runtime is
+/// created and no GPUI `HttpClient` registration is needed.
+fn fetch_latest_release(url: &str) -> Result<GitHubRelease> {
+    let bytes = network::fetch_url_bytes(url)?;
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing GitHub latest release response from {url}"))
 }
 
-/// Compares the manifest's version against the running build's version and,
-/// if newer, maps the user's platform to the matching asset URL.
-fn compare_with_running(manifest: &UpdateManifest) -> UpdateCheckOutcome {
-    let Some(remote) = parse_semver(&manifest.version) else {
+/// Compares the release tag against the running build's version and, if newer,
+/// maps the user's platform to the matching GitHub asset URL.
+fn compare_with_running(release: &GitHubRelease) -> UpdateCheckOutcome {
+    let Some(version) = release.tag_name.strip_prefix('v') else {
         return UpdateCheckOutcome::Failed(format!(
-            "manifest version {:?} is not a valid semver",
-            manifest.version
+            "GitHub release tag {:?} does not start with 'v'",
+            release.tag_name
+        ));
+    };
+    let Some(remote) = parse_semver(version) else {
+        return UpdateCheckOutcome::Failed(format!(
+            "GitHub release tag {:?} is not a valid release version",
+            release.tag_name
         ));
     };
     let Some(current) = parse_semver(env!("CARGO_PKG_VERSION")) else {
@@ -172,24 +163,28 @@ fn compare_with_running(manifest: &UpdateManifest) -> UpdateCheckOutcome {
     if remote <= current {
         return UpdateCheckOutcome::UpToDate;
     }
-    let platform_key = match (consts::OS, consts::ARCH) {
-        ("windows", "x86_64") => "windows-x86_64",
-        ("macos", "aarch64") => "macos-aarch64",
-        ("linux", "x86_64") => "linux-amd64",
-        _ => "linux-appimage",
+    let asset_suffix = match (consts::OS, consts::ARCH) {
+        ("windows", "x86_64") => "_x64-setup.exe",
+        ("macos", "aarch64") => "_aarch64.dmg",
+        ("linux", "x86_64") => "_amd64.deb",
+        (os, arch) => {
+            return UpdateCheckOutcome::Failed(format!(
+                "no GitHub Release asset mapping for platform {os:?}/{arch:?}"
+            ));
+        }
     };
-    let Some(asset) = manifest.assets.get(platform_key) else {
+    let Some(asset) = release
+        .assets
+        .iter()
+        .find(|asset| asset.name.ends_with(asset_suffix))
+    else {
         return UpdateCheckOutcome::Failed(format!(
-            "no download asset declared for platform {platform_key:?}"
+            "latest GitHub Release has no asset ending with {asset_suffix:?}"
         ));
     };
-    let url = format!(
-        "{}/{}/latest/{}",
-        OSS_PUBLIC_BASE, OSS_PREFIX, asset.filename
-    );
     UpdateCheckOutcome::Available {
-        version: manifest.version.clone(),
-        url,
+        version: version.to_string(),
+        url: asset.browser_download_url.clone(),
     }
 }
 
@@ -211,6 +206,27 @@ fn parse_semver(text: &str) -> Option<(u64, u64, u64)> {
 mod tests {
     use super::*;
 
+    fn release_with_version(version: &str) -> GitHubRelease {
+        GitHubRelease {
+            tag_name: format!("v{version}"),
+            html_url: format!("https://github.com/willmove/markion/releases/tag/v{version}"),
+            assets: [
+                ("markion_9.9.9_x64-setup.exe", "windows"),
+                ("Markion_9.9.9_aarch64.dmg", "macos"),
+                ("markion_9.9.9_amd64.deb", "linux"),
+                ("markion_9.9.9_x86_64.AppImage", "appimage"),
+            ]
+            .into_iter()
+            .map(|(name, platform)| GitHubReleaseAsset {
+                name: name.to_string(),
+                browser_download_url: format!(
+                    "https://github.com/willmove/markion/releases/download/v{version}/{platform}"
+                ),
+            })
+            .collect(),
+        }
+    }
+
     #[test]
     fn semver_parser_handles_releases() {
         assert_eq!(parse_semver("0.1.12"), Some((0, 1, 12)));
@@ -223,37 +239,17 @@ mod tests {
     }
 
     #[test]
-    fn newer_manifest_version_yields_available_outcome() {
-        // Include all four platform assets so the test passes regardless of
-        // which platform it runs on (`compare_with_running` picks the host's key).
-        let mut assets = std::collections::BTreeMap::new();
-        for (key, filename) in [
-            ("windows-x86_64", "markion_9.9.9_x64-setup.exe"),
-            ("macos-aarch64", "Markion_9.9.9_aarch64.dmg"),
-            ("linux-amd64", "markion_9.9.9_amd64.deb"),
-            ("linux-appimage", "markion_9.9.9_x86_64.AppImage"),
-        ] {
-            assets.insert(
-                key.to_string(),
-                UpdateAsset {
-                    filename: filename.to_string(),
-                },
-            );
-        }
-        let manifest = UpdateManifest {
-            version: "9.9.9".to_string(),
-            tag: "v9.9.9".to_string(),
-            pub_date: "2026-01-01T00:00:00Z".to_string(),
-            assets,
-        };
-        match compare_with_running(&manifest) {
+    fn newer_github_release_yields_available_outcome() {
+        // Include every supported asset so the test passes on each CI host.
+        let release = release_with_version("9.9.9");
+        match compare_with_running(&release) {
             UpdateCheckOutcome::Available { version, url } => {
                 assert!(version.starts_with("9.9.9"));
                 assert!(
                     url.starts_with(
-                        "https://markion.oss-cn-hangzhou.aliyuncs.com/releases/latest/"
-                    ) || url.contains("/latest/"),
-                    "url should point at the OSS latest path: {url}"
+                        "https://github.com/willmove/markion/releases/download/v9.9.9/"
+                    ),
+                    "url should point at the GitHub Release asset: {url}"
                 );
             }
             other => panic!("expected Available, got {other:?}"),
@@ -261,29 +257,52 @@ mod tests {
     }
 
     #[test]
-    fn equal_or_older_manifest_version_is_up_to_date() {
-        let manifest = UpdateManifest {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            tag: String::new(),
-            pub_date: String::new(),
-            assets: std::collections::BTreeMap::new(),
-        };
+    fn equal_or_older_github_release_is_up_to_date() {
+        let release = release_with_version(env!("CARGO_PKG_VERSION"));
         assert!(matches!(
-            compare_with_running(&manifest),
+            compare_with_running(&release),
             UpdateCheckOutcome::UpToDate
         ));
     }
 
     #[test]
-    fn unparseable_manifest_version_is_failure() {
-        let manifest = UpdateManifest {
-            version: "not-a-version".to_string(),
-            tag: String::new(),
-            pub_date: String::new(),
-            assets: std::collections::BTreeMap::new(),
-        };
+    fn unparseable_github_release_tag_is_failure() {
+        let mut release = release_with_version("9.9.9");
+        release.tag_name = "not-a-version".to_string();
         assert!(matches!(
-            compare_with_running(&manifest),
+            compare_with_running(&release),
+            UpdateCheckOutcome::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn github_latest_release_json_is_parsed() {
+        let release: GitHubRelease = serde_json::from_str(
+            r#"{
+                "tag_name": "v9.9.9",
+                "html_url": "https://github.com/willmove/markion/releases/tag/v9.9.9",
+                "assets": [{
+                    "name": "markion_9.9.9_x64-setup.exe",
+                    "browser_download_url": "https://github.com/willmove/markion/releases/download/v9.9.9/markion_9.9.9_x64-setup.exe"
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(release.tag_name, "v9.9.9");
+        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets[0].name, "markion_9.9.9_x64-setup.exe");
+    }
+
+    #[test]
+    #[ignore = "requires external network access to api.github.com"]
+    fn live_github_latest_release_can_be_checked() {
+        let release = fetch_latest_release(GITHUB_LATEST_RELEASE_API_URL).unwrap();
+        assert!(release.tag_name.starts_with('v'));
+        assert!(parse_semver(&release.tag_name[1..]).is_some());
+        assert!(!release.assets.is_empty());
+        assert!(!matches!(
+            compare_with_running(&release),
             UpdateCheckOutcome::Failed(_)
         ));
     }

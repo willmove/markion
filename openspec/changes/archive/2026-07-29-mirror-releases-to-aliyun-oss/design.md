@@ -5,11 +5,11 @@ Markion's release pipeline today produces three native installers per `v*` tag (
 This change adds two capabilities on top of the existing pipeline:
 
 1. A `mirror-oss` GitHub Actions job that copies the tagged release's assets to an Aliyun OSS Bucket under a stable `${OSS_PREFIX}/latest/` prefix, alongside a generated `manifest.json`.
-2. An in-app "Check for Updates" action that fetches that manifest and tells the user whether a newer version is available.
+2. An in-app "Check for Updates" action that fetches GitHub's latest published Release and tells the user whether a newer version is available. Using the already-live GitHub endpoint decouples initial checker verification from the first future OSS mirror upload.
 
 The maintainer has already configured the OSS credentials as GitHub repository secrets: `OSS_ACCESS_KEY_ID`, `OSS_ACCESS_KEY_SECRET`, `OSS_BUCKET`, `OSS_ENDPOINT`, `OSS_PREFIX`, `OSS_PUBLIC_BASE`.
 
-A hard external constraint shapes the design: **cargo-packager 0.11.x has no `updater` field in its `Config` struct, and every config table is `deny_unknown_fields`** (verified against docs.rs/cargo-packager/0.11.8). So the packager cannot be asked to sign installers or emit updater manifests; the workflow must produce the manifest itself, and the client must verify versions by parsing that manifest rather than relying on a packager-provided `latest.yml`.
+A hard external constraint shapes the mirror design: **cargo-packager 0.11.x has no `updater` field in its `Config` struct, and every config table is `deny_unknown_fields`** (verified against docs.rs/cargo-packager/0.11.8). So the packager cannot be asked to sign installers or emit updater manifests; the workflow produces the OSS metadata manifest itself. The initial client check instead consumes GitHub's standard latest-release JSON, avoiding any dependency on the not-yet-published OSS manifest.
 
 The existing app already has a complete HTTP layer - `MarkionHttpClient` (`src/app/network.rs`) wraps `zed-reqwest` over a single shared `tokio::runtime::Runtime` and is registered on the GPUI `App` at startup. The update check reuses this; no new network dependency is introduced.
 
@@ -17,7 +17,7 @@ The existing app already has a complete HTTP layer - `MarkionHttpClient` (`src/a
 
 **Goals:**
 - Every tagged release is mirrored to OSS at a stable URL so users with poor GitHub connectivity can download the latest installer quickly.
-- The running app can discover a newer version via a user-invoked Help menu action, and (when newer) link the user straight to the correct OSS asset for their platform.
+- The running app can discover a newer version via a user-invoked Help menu action, and (when newer) show the correct GitHub Release asset URL for its platform.
 - The mirror is a pure distribution channel - it never replaces GitHub Releases as the source of truth, and never mutates the installers.
 - No new crate dependencies; the existing `zed-reqwest` + `tokio` runtime is reused.
 - Existing `config.toml` preference files remain valid.
@@ -33,9 +33,9 @@ The existing app already has a complete HTTP layer - `MarkionHttpClient` (`src/a
 
 ### D1. OSS object layout: `${OSS_PREFIX}/latest/` only
 
-The mirror holds exactly one copy of each asset, under `${OSS_PREFIX}/latest/<filename>`. The `mirror-oss` job overwrites these objects on every tag push. Per-tag history is preserved on GitHub Releases; OSS holds only the newest mirror to keep storage cost minimal and the client fetch path a single, stable URL.
+The mirror holds exactly one copy of each asset, under `${OSS_PREFIX}/latest/<filename>`. The `mirror-oss` job overwrites these objects on every tag push. Per-tag history is preserved on GitHub Releases; OSS holds only the newest mirror to keep storage cost minimal and expose a single, stable mirror URL.
 
-- **Alternative considered**: mirror to both `${OSS_PREFIX}/latest/` and `${OSS_PREFIX}/<tag>/`. Rejected for this change: doubles storage, doubles upload time, and the client only ever needs `latest`. A future change can add per-tag archiving if a "rollback to a specific version" UX is wanted.
+- **Alternative considered**: mirror to both `${OSS_PREFIX}/latest/` and `${OSS_PREFIX}/<tag>/`. Rejected for this change: doubles storage and upload time. A future change can add per-tag archiving if a "rollback to a specific version" UX is wanted.
 
 ### D2. Manifest format: a single `manifest.json` (not `latest.yml`)
 
@@ -55,24 +55,20 @@ The workflow generates `manifest.json` at `${OSS_PREFIX}/latest/manifest.json`:
 }
 ```
 
-The client constructs each asset's full URL as `${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/<filename>`. Only the filename lives in the manifest; the base is supplied at build time as a compile-time constant (read from an env var baked in at `cargo build`), so a future OSS migration only needs a rebuild, not a manifest re-issue.
+The manifest is retained as self-contained mirror metadata and a possible input for a future mirror-backed updater. The initial checker does not consume it; GitHub's latest-release response already supplies `tag_name`, each asset `name`, and each asset's `browser_download_url`.
 
 - **Alternative considered**: emit Tauri-style `latest.yml` / `latest-mac.yml` / `latest-linux.yml` and use `cargo-packager-updater` on the client. Rejected: (a) cargo-packager 0.11.x does not emit these, so the workflow would have to synthesize them anyway; (b) `cargo-packager-updater` expects signed assets and would force a signing scheme onto this change; (c) a single JSON manifest is simpler to produce and parse than three YAML files.
 
-### D3. Pubkey baked into the binary via `env!`, not a preference
+### D3. Initial update discovery uses GitHub's latest-release API
 
-`OSS_PUBLIC_BASE` and `OSS_PREFIX` are compile-time constants injected via `env!`/`option_env!` at build time:
+The checker uses a source constant baked into the binary:
 
 ```rust
-const OSS_PUBLIC_BASE: &str = option_env!("MARKION_OSS_PUBLIC_BASE")
-    .unwrap_or("https://markion.oss-cn-hangzhou.aliyuncs.com");
-const OSS_PREFIX: &str = option_env!("MARKION_OSS_PREFIX")
-    .unwrap_or("releases");
+const GITHUB_LATEST_RELEASE_API_URL: &str =
+    "https://api.github.com/repos/willmove/markion/releases/latest";
 ```
 
-The CI workflow sets these env vars on the build step. Local dev builds fall back to the documented defaults, so the menu item still works against the real mirror.
-
-- **Alternative considered**: store them in `config.toml` as preferences. Rejected: these are deployment constants, not user choices; a preference would let a user misconfigure them and silently break update checks, and would require validation logic we don't want to maintain.
+The response's `tag_name` is the version source, and `assets[].browser_download_url` is the notify-only download link. The existing HTTP helper supplies a Markion User-Agent, which GitHub accepts for unauthenticated public-repository requests. Keeping the endpoint non-configurable prevents preference drift. Moving discovery to the OSS manifest remains a follow-up after its publication path has been verified by a real tag.
 
 ### D4. Semver comparison: tiny inline parser, no new dep
 
@@ -82,7 +78,7 @@ A ~30-line `parse_semver(major, minor, patch)` that handles the `MAJOR.MINOR.PAT
 
 ### D5. Update check runs off the render path via `cx.spawn`
 
-The `check_for_updates()` handler spawns an async task that fetches the manifest, parses it, compares versions, and then - back on the app context - sets `self.status` and shows a `window.prompt` dialog. This mirrors the existing async pattern in `src/app/application.rs:298-324` and the `about` dialog pattern in `src/app/search.rs:237-253`. The render path is never blocked, and the cached-per-version Markdown invariants are untouched.
+The `check_for_updates()` handler spawns an async task that fetches the GitHub Release JSON, parses it, compares versions, and then - back on the app context - sets `self.status` and shows a `window.prompt` dialog. This mirrors the existing async pattern in `src/app/application.rs:298-324` and the `about` dialog pattern in `src/app/search.rs:237-253`. The render path is never blocked, and the cached-per-version Markdown invariants are untouched.
 
 ### D6. Preferences: opt-in startup check, default off
 
@@ -105,10 +101,10 @@ The `mirror-oss` job uses `tvrcgo/oss-action@master`, whose `assets:` input maps
 - **[Risk] OSS credentials leak** -> All six OSS values are read from `${{ secrets.* }}` in the workflow; none is committed. The `mirror-oss` job requests only `contents: read`. Recommend (out of band) a RAM sub-account scoped to this one bucket.
 - **[Risk] `latest/` overwrite loses the previous version on OSS** -> Accepted: GitHub Releases retains every tagged version; OSS is explicitly a "current" pointer, not an archive.
 - **[Risk] Manifest drift from actual assets** -> The `manifest.json` is generated in the same job step that uploads the assets, from the same `dist/` directory, so the filenames in the manifest always match the uploaded files. The SHA-256 digests in `sha256sums.txt` give users an independent audit path.
-- **[Risk] Client hits a stale `latest/manifest.json` due to OSS CDN caching** -> OSS default TTL on overwrites is short; if a CDN is later enabled in front of the bucket, the workflow should set a `Cache-Control: no-cache` header on `manifest.json`. Recorded as a follow-up; not in scope here.
-- **[Risk] Notify-only update check frustrates users who expect auto-install** -> The dialog links the OSS download URL, so the user is one click away from the installer. Full auto-install is an explicit future change.
+- **[Risk] GitHub API is rate-limited or unreachable** -> The checker makes one unauthenticated request only when invoked and reports any HTTP failure without crashing. Startup checking remains opt-in.
+- **[Risk] Notify-only update check frustrates users who expect auto-install** -> The dialog shows the GitHub asset URL for the supported platform. Full auto-install is an explicit future change.
 - **[Trade-off] Inline semver parser** -> Will not handle pre-release/build metadata. Acceptable while Markion tags are strict `vX.Y.Z`; swap to the `semver` crate if that changes.
-- **[Trade-off] `OSS_PUBLIC_BASE`/`OSS_PREFIX` as compile-time constants** -> A bucket migration requires a rebuild. Acceptable: releases are built in CI anyway.
+- **[Trade-off] GitHub remains the discovery dependency during initial verification** -> This does not yet exercise OSS discovery, but it verifies the fetch/parse/compare/dialog path against an already-live authoritative release source before changing channels.
 
 ## Migration Plan
 

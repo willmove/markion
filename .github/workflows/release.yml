@@ -76,13 +76,7 @@ jobs:
 
       # Each runner is native for its matrix target, and packager expects the
       # executable in target/release rather than target/<triple>/release.
-      # Inject the OSS mirror coordinates so the "Check for Updates" feature
-      # bakes the correct public URL into the release binary at compile time
-      # (see src/app/update.rs `option_env!` defaults).
       - name: Build release binary
-        env:
-          MARKION_OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
-          MARKION_OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
         run: cargo build --release
 
       # Source installation matches the proven Medor workflow and avoids
@@ -127,7 +121,7 @@ jobs:
 
   # Mirrors the tagged release's installers and packaging config to a domestic
   # Aliyun OSS Bucket at a stable `${OSS_PREFIX}/latest/` path, alongside a
-  # generated `manifest.json` that the in-app "Check for Updates" action reads.
+  # generated `manifest.json` for mirror metadata and future clients.
   # Independent of the `release` job: a GitHub Release failure does not block
   # the mirror, and vice versa. Runs only on `v*` tags.
   mirror-oss:

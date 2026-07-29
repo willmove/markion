@@ -30,8 +30,8 @@
 #   four installers, this `packager.toml`, a generated `manifest.json`, and
 #   `sha256sums.txt` to an Aliyun OSS Bucket at:
 #       ${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/<filename>
-#   The in-app "Check for Updates…" action (Help menu) fetches that
-#   `manifest.json` and notifies the user when a newer version exists.
+#   The in-app "Check for Updates…" action currently discovers releases from
+#   GitHub's latest-release API; this manifest remains mirror metadata.
 #   There is NO `[updater]` table here: cargo-packager 0.11.x's `Config` struct
 #   has no `updater` field, and every config table is `deny_unknown_fields`,
 #   so adding one breaks `cargo packager` immediately. The manifest and any

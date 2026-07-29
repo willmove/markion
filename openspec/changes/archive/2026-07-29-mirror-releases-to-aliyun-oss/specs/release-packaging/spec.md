@@ -29,33 +29,33 @@ Upon successful completion of the per-platform `build` jobs for a `v*` tag, the 
 - **THEN** the operator does not report the release as complete and corrects or retries the mirror upload, even though the GitHub Release may already be published
 - **AND** the public version tag is preserved unless explicit authorization is given for a destructive correction
 
-#### Scenario: Manifest describes the release for the update check
+#### Scenario: Manifest describes the mirrored release
 - **WHEN** the `mirror-oss` job generates `manifest.json`
 - **THEN** the manifest contains the release version (without the leading `v`), the tag name, an ISO-8601 publication timestamp, and a map from platform identifier (`windows-x86_64`, `macos-aarch64`, `linux-amd64`, `linux-appimage`) to the installer filename
-- **AND** the client constructs each asset's full URL by concatenating the configured public base URL, the configured prefix, `latest/`, and the filename
+- **AND** the manifest remains available as mirror metadata without being required for the initial in-app update-check verification
 
-### Requirement: The app SHALL check for updates against the OSS manifest
+### Requirement: The app SHALL check GitHub's latest published Release for updates
 
-The application SHALL expose a "Check for Updates…" action in the Help menu that, when invoked, fetches `${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/manifest.json` via the existing in-app HTTP client, parses the manifest, compares its `version` field against `env!("CARGO_PKG_VERSION")` using a semantic-version comparison, and surfaces the result through a modal dialog. When the manifest's version is newer than the running version, the dialog SHALL display the newer version number and a link (or copyable URL) to the OSS asset appropriate for the user's platform and architecture. When the manifest's version is equal to or older than the running version, the dialog SHALL report that the application is up to date. When the fetch fails or the manifest cannot be parsed, the dialog SHALL report the failure without crashing the application. The check SHALL NOT download or install the new version automatically; it is notify-only. The application MAY additionally perform this check on startup when the `check_for_updates_on_startup` preference is `true` (default `false`), in which case it SHALL be silent unless a newer version is found, and SHALL record the check timestamp in the `last_update_check` preference. The OSS public base URL and prefix SHALL be compile-time constants injected at build time, not user-configurable preferences. The update check SHALL run off the main render path inside an async task and SHALL NOT recompute any cached-per-version Markdown state.
+The application SHALL expose a "Check for Updates…" action in the Help menu that, when invoked, fetches `https://api.github.com/repos/willmove/markion/releases/latest` via the existing in-app HTTP layer, parses the latest published Release, compares its `tag_name` (after the required leading `v`) against `env!("CARGO_PKG_VERSION")` using a semantic-version comparison, and surfaces the result through a modal dialog. When the Release version is newer than the running version, the dialog SHALL display the newer version number and a link (or copyable URL) from the matching GitHub asset's `browser_download_url` for the user's supported platform and architecture. When the Release version is equal to or older than the running version, the dialog SHALL report that the application is up to date. When the fetch fails, the response cannot be parsed, the tag is invalid, or a supported-platform asset is missing, the dialog SHALL report the failure without crashing the application. The check SHALL NOT download or install the new version automatically; it is notify-only. The application MAY additionally perform this check on startup when the `check_for_updates_on_startup` preference is `true` (default `false`), in which case it SHALL be silent unless a newer version is found, and SHALL record the check timestamp in the `last_update_check` preference. The update check SHALL run off the main render path inside an async task and SHALL NOT recompute any cached-per-version Markdown state.
 
 #### Scenario: User invokes Check for Updates and a newer version is available
-- **WHEN** the user chooses "Check for Updates…" from the Help menu and the fetched manifest's version is newer than `CARGO_PKG_VERSION`
-- **THEN** a modal dialog appears showing the newer version number and a link to the OSS download URL for the user's platform
+- **WHEN** the user chooses "Check for Updates…" from the Help menu and GitHub's latest published Release version is newer than `CARGO_PKG_VERSION`
+- **THEN** a modal dialog appears showing the newer version number and the matching GitHub asset URL for the user's platform
 - **AND** no file is downloaded or installed
 
 #### Scenario: User invokes Check for Updates and is up to date
-- **WHEN** the user chooses "Check for Updates…" from the Help menu and the fetched manifest's version is equal to or older than `CARGO_PKG_VERSION`
+- **WHEN** the user chooses "Check for Updates…" from the Help menu and GitHub's latest published Release version is equal to or older than `CARGO_PKG_VERSION`
 - **THEN** a modal dialog appears reporting that the application is up to date
 
 #### Scenario: Update check fails without crashing
-- **WHEN** the manifest fetch fails, the response is not valid JSON, or the version field cannot be parsed
+- **WHEN** the GitHub latest-release fetch fails, the response is not valid JSON, the tag cannot be parsed, or the matching supported-platform asset is missing
 - **THEN** a modal dialog appears reporting that the update check failed
 - **AND** the application continues running normally
 
 #### Scenario: Startup check is opt-in and silent unless newer
 - **WHEN** the `check_for_updates_on_startup` preference is `true` and the application starts
-- **THEN** the application performs the same manifest fetch and version comparison as the menu action
-- **AND** no dialog appears unless the manifest's version is newer than the running version
+- **THEN** the application performs the same GitHub latest-release fetch and version comparison as the menu action
+- **AND** no dialog appears unless the GitHub Release version is newer than the running version
 - **AND** the timestamp of the check is recorded in the `last_update_check` preference
 
 #### Scenario: Update check does not alter cached Markdown state

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This change adds a domestic OSS download mirror for tagged releases and an in-app "Check for Updates" action that reads a manifest from that mirror. It is config- and additive-source only: the build/packaging pipeline is unchanged, no cached-per-version Markdown invariant is touched, and the update check runs off the main render path. The OpenSpec change scaffolding (proposal, design, spec delta) is already complete; the tasks below implement it.
+This change adds a domestic OSS download mirror for tagged releases and an in-app "Check for Updates" action. Initial functional verification discovers versions through GitHub's already-live latest-release API; the OSS manifest remains mirror metadata until the mirror path is verified by a real tag. No cached-per-version Markdown invariant is touched, and the update check runs off the main render path.
 
 ## Tasks
 
@@ -16,7 +16,7 @@ This change adds a domestic OSS download mirror for tagged releases and an in-ap
   - _Requirements: release-packaging (tagged-release mirror + manifest + secret usage + job independence)_
 
 - [x] 2. Document the mirror in `packager.toml`
-  - [x] 2.1 Add a comment block near the top of `packager.toml` describing the OSS mirror URL (`${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/`), that the app's update check fetches `manifest.json` from there, and that no `[updater]` table is present because cargo-packager 0.11.x `Config` rejects it.
+  - [x] 2.1 Add a comment block near the top of `packager.toml` describing the OSS mirror URL (`${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/`), the generated mirror metadata, and that no `[updater]` table is present because cargo-packager 0.11.x `Config` rejects it.
   - _Requirements: release-packaging (no `[updater]`; packager unchanged functionally)_
 
 - [x] 3. Update the release runbook
@@ -32,10 +32,10 @@ This change adds a domestic OSS download mirror for tagged releases and an in-ap
   - _Requirements: release-packaging (Help menu exposes the update check action)_
 
 - [x] 5. Implement the update check handler
-  - [x] 5.1 Create `src/app/update.rs` with a `check_for_updates()` method on `MarkionApp` matching the `about` handler's signature, and a `UpdateManifest` struct (version, tag, pub_date, assets map) plus the inline semver parser `(u64, u64, u64)`.
-  - [x] 5.2 Define compile-time constants `OSS_PUBLIC_BASE` and `OSS_PREFIX` via `option_env!` with documented defaults.
-  - [x] 5.3 In `check_for_updates()`, spawn an async task (`cx.spawn`) that fetches `${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/manifest.json` via the existing `MarkionHttpClient` / `fetch_url_bytes`, parses JSON, compares versions, and on completion updates `self.status` and shows a `window.prompt` dialog (newer -> link OSS asset URL for the detected platform; up-to-date; error).
-  - [x] 5.4 Select the asset for the user's platform via `std::env::consts::{OS, ARCH}` mapped to the manifest's platform keys (`windows-x86_64`, `macos-aarch64`, `linux-amd64`, `linux-appimage`).
+  - [x] 5.1 Create `src/app/update.rs` with a `check_for_updates()` method on `MarkionApp` matching the `about` handler's signature, a minimal GitHub latest-release response model, and the inline semver parser `(u64, u64, u64)`.
+  - [x] 5.2 Define the fixed GitHub latest-release API endpoint for the public repository.
+  - [x] 5.3 In `check_for_updates()`, spawn an async task (`cx.spawn`) that fetches the latest GitHub Release via the existing HTTP layer, parses JSON, compares `tag_name`, and on completion updates `self.status` and shows a `window.prompt` dialog (newer -> matching GitHub asset URL; up-to-date; error).
+  - [x] 5.4 Select the asset for the user's supported platform via `std::env::consts::{OS, ARCH}` and GitHub asset filename suffixes.
   - [x] 5.5 Register the `update` module in `src/app/mod.rs` and re-export `check_for_updates` so the menu action dispatch resolves.
   - _Requirements: release-packaging (check-for-updates behavior, notify-only, off-render-path, no cached-state recomputation)_
 
@@ -63,3 +63,10 @@ This change adds a domestic OSS download mirror for tagged releases and an in-ap
 - [x] 9.3 `cargo test --workspace` passes (including the i18n completeness test and the preference round-trip tests).
 - [x] 9.4 `git diff --check` clean; no unintended edits.
 - [x] 9.5 The end-to-end OSS upload is verified on the next real `v*` tag push (deferred - not part of this change's local validation).
+
+- [x] 10. Verify the update checker against GitHub's live latest release
+  - [x] 10.1 Update the proposal, design, delta spec, task plan, workflow comments, and packager comments so GitHub is the initial update-discovery source while the OSS manifest remains mirror metadata.
+  - [x] 10.2 Replace the OSS manifest response model with GitHub's `tag_name` and asset `browser_download_url` model without adding dependencies.
+  - [x] 10.3 Add focused tests for GitHub JSON parsing, version outcomes, platform asset selection, invalid tags, and an explicitly ignored live-network check.
+  - [x] 10.4 Run the focused update-check tests, including the explicit live GitHub test, and confirm the current latest stable Release is handled without failure.
+  - [x] 10.5 Run formatting, the workspace test suite, OpenSpec validation where available, and `git diff --check`. (`openspec` is not available in this shell's PATH; all other checks passed.)
