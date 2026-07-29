@@ -5,7 +5,7 @@
 Covers the application chrome: view modes, menus, status bar, themes, focus/typewriter modes, find/replace, preferences, cross-platform behavior, performance characteristics, and error feedback. Interface internationalization is tracked separately under the `ui-i18n` capability. Font-family/size configuration, per-theme code-highlight themes, extension-syntax toggles, error logging to file, and crash-report prompts are **not** part of this capability — they are future candidates.
 ## Requirements
 ### Requirement: View modes and application chrome
-The editor SHALL provide source, split, and preview view modes, a toggleable sidebar (file tree / outline), a visible in-window menu bar (File, Edit, View, Format, Export, Help) with click-outside-to-close behavior, and a status bar.
+The editor SHALL provide source, split, and preview view modes, a toggleable sidebar (file tree / outline), a visible in-window menu bar (File, Edit, View, Format, Export, Help) with click-outside-to-close behavior, and a status bar. When the sidebar is visible, its column SHALL begin directly below the menu bar and extend through both the document-tab band and main content region, while document-tab controls and document panes remain in the adjacent document-workspace column.
 
 #### Scenario: View modes are switchable
 - **WHEN** the user switches between source, split, and preview modes
@@ -14,6 +14,16 @@ The editor SHALL provide source, split, and preview view modes, a toggleable sid
 #### Scenario: In-window menu bar and status bar
 - **WHEN** the editor is running
 - **THEN** a visible in-window menu bar and a status bar are present, and open menus close on outside click
+
+#### Scenario: Visible sidebar occupies the workspace from its top edge
+- **WHEN** the Files or Outline sidebar is visible
+- **THEN** the sidebar begins immediately below the menu bar and its tab controls occupy the top of that column
+- **AND** no empty document-tab-band spacer is rendered above the sidebar
+- **AND** any visible document-tab controls begin in the adjacent document-workspace column and remain aligned when the sidebar is resized
+
+#### Scenario: Hidden sidebar returns the full workspace width
+- **WHEN** the sidebar is hidden
+- **THEN** the document-tab controls and document panes use the full available workspace width below the menu bar
 
 ### Requirement: Built-in and custom themes
 The editor SHALL ship a fixed catalog of built-in themes (the original six — Paper, Ink, Solar, Forest, Rose, Graphite — kept first and in order, plus popular editor palettes) and SHALL load user-defined `.theme` files (hex-color key=value format) from the local themes directory. Theme names are identity keys written to the preferences file. Customization is via the `.theme` color format; CSS-based theming is **not** supported.
