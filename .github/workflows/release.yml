@@ -74,6 +74,20 @@ jobs:
             libvulkan-dev \
             libasound2-dev
 
+      # The public key is intentionally embedded only in the tagged Windows
+      # binary. Untagged and local builds keep the browser-download path.
+      - name: Configure updater public key for tagged builds
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          UPDATE_PUBLIC_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PUBLIC_KEY }}
+        run: |
+          test -n "$UPDATE_PUBLIC_KEY" || {
+            echo "CARGO_PACKAGER_SIGN_PUBLIC_KEY is required for tagged releases" >&2
+            exit 1
+          }
+          echo "MARKION_UPDATE_PUBLIC_KEY=$UPDATE_PUBLIC_KEY" >> "$GITHUB_ENV"
+
       # Each runner is native for its matrix target, and packager expects the
       # executable in target/release rather than target/<triple>/release.
       - name: Build release binary
@@ -82,7 +96,7 @@ jobs:
       # Source installation matches the proven Medor workflow and avoids
       # cargo-packager config auto-detection issues seen with prebuilt binaries.
       - name: Install cargo-packager
-        run: cargo install cargo-packager --locked --force
+        run: cargo install cargo-packager --version 0.11.8 --locked --force
 
       - name: Package (${{ matrix.formats }})
         run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }}
@@ -95,9 +109,126 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  prepare-update:
+    name: Sign Windows updater and build metadata
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download packaged installers
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Derive version without leading v
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Validate updater signing configuration
+        shell: bash
+        env:
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+          CARGO_PACKAGER_SIGN_PUBLIC_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PUBLIC_KEY }}
+          OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          for name in \
+            CARGO_PACKAGER_SIGN_PRIVATE_KEY \
+            CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD \
+            CARGO_PACKAGER_SIGN_PUBLIC_KEY \
+            OSS_PUBLIC_BASE \
+            OSS_PREFIX
+          do
+            test -n "${!name}" || {
+              echo "$name is required for tagged releases" >&2
+              exit 1
+            }
+          done
+
+      - name: Install cargo-packager signer
+        run: |
+          cargo install cargo-packager --version 0.11.8 --locked --force
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Sign Windows NSIS installer
+        shell: bash
+        env:
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+        run: |
+          installer="dist/markion_${VERSION}_x64-setup.exe"
+          test -f "$installer"
+          cargo packager signer sign "$installer"
+          test -s "$installer.sig"
+
+      - name: Verify signing keypair and installer signature
+        shell: bash
+        env:
+          CARGO_PACKAGER_SIGN_PUBLIC_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PUBLIC_KEY }}
+        run: |
+          installer="dist/markion_${VERSION}_x64-setup.exe"
+          printf '%s' "$CARGO_PACKAGER_SIGN_PUBLIC_KEY" | base64 --decode > updater-public.key
+          base64 --decode "$installer.sig" > updater-signature.sig
+          minisign -Vm "$installer" -p updater-public.key -x updater-signature.sig
+
+      - name: Build update.json
+        shell: bash
+        env:
+          OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          python3 - <<'PY'
+          import datetime
+          import json
+          import os
+          import pathlib
+
+          version = os.environ["VERSION"]
+          installer = f"markion_{version}_x64-setup.exe"
+          signature = pathlib.Path(f"dist/{installer}.sig").read_text().strip()
+          base = (
+              os.environ["OSS_PUBLIC_BASE"].rstrip("/")
+              + "/"
+              + os.environ["OSS_PREFIX"].strip("/")
+              + "/latest"
+          )
+          out = {
+              "version": version,
+              "notes": f"Markion {version}",
+              "pub_date": datetime.datetime.now(datetime.timezone.utc)
+              .isoformat()
+              .replace("+00:00", "Z"),
+              "platforms": {
+                  "windows-x86_64": {
+                      "url": f"{base}/{installer}",
+                      "signature": signature,
+                      "format": "nsis",
+                  }
+              },
+          }
+          pathlib.Path("dist/update.json").write_text(
+              json.dumps(out, indent=2) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(out, indent=2))
+          PY
+
+      - name: Upload signed updater metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: markion-update-metadata
+          path: |
+            dist/markion_${{ env.VERSION }}_x64-setup.exe.sig
+            dist/update.json
+          if-no-files-found: error
+          retention-days: 14
+
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, prepare-update]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -126,7 +257,7 @@ jobs:
   # the mirror, and vice versa. Runs only on `v*` tags.
   mirror-oss:
     name: Mirror installers to Aliyun OSS
-    needs: build
+    needs: [build, prepare-update]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -179,7 +310,7 @@ jobs:
           print(json.dumps(out, indent=2))
           PY
 
-      - name: Upload installers, packager.toml, manifest, and sha256sums to Aliyun OSS
+      - name: Upload installers, updater metadata, packager config, manifest, and sha256sums to Aliyun OSS
         uses: tvrcgo/oss-action@master
         with:
           key-id: ${{ secrets.OSS_ACCESS_KEY_ID }}
@@ -191,6 +322,8 @@ jobs:
             dist/Markion_${{ env.VERSION }}_aarch64.dmg:${{ secrets.OSS_PREFIX }}/latest/Markion_${{ env.VERSION }}_aarch64.dmg
             dist/markion_${{ env.VERSION }}_amd64.deb:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_amd64.deb
             dist/markion_${{ env.VERSION }}_x86_64.AppImage:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_x86_64.AppImage
+            dist/markion_${{ env.VERSION }}_x64-setup.exe.sig:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_x64-setup.exe.sig
+            dist/update.json:${{ secrets.OSS_PREFIX }}/latest/update.json
             dist/manifest.json:${{ secrets.OSS_PREFIX }}/latest/manifest.json
             dist/sha256sums.txt:${{ secrets.OSS_PREFIX }}/latest/sha256sums.txt
             packager.toml:${{ secrets.OSS_PREFIX }}/latest/packager.toml

@@ -11,6 +11,28 @@ This runbook is the canonical procedure for publishing a stable Markion release 
 - Preserve public tags. Never delete, force-move, or recreate a published tag without explicit authorization.
 - Required tools: stable Rust and Cargo, Git, GitHub CLI (`gh`), OpenSpec CLI, and an authenticated GitHub account with permission to push and publish Releases.
 
+### Windows updater signing
+
+The one-click Windows x86_64 updater uses a dedicated cargo-packager Minisign key. Generate the production keypair once, outside the repository, and keep an encrypted offline backup:
+
+```bash
+cargo install cargo-packager --version 0.11.8 --locked
+export CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD='<strong unique password>'
+cargo packager signer generate --ci --path markion-updater.key
+```
+
+This creates `markion-updater.key` and `markion-updater.key.pub`. Never commit either file. Configure these repository Actions secrets before tagging:
+
+- `CARGO_PACKAGER_SIGN_PRIVATE_KEY`: the complete contents of `markion-updater.key`.
+- `CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD`: the key password.
+- `CARGO_PACKAGER_SIGN_PUBLIC_KEY`: the complete contents of `markion-updater.key.pub`.
+
+The public key is embedded only in tagged builds. The private key and password are consumed only by the tag-only `prepare-update` job and must never appear in repository files, logs, or workflow artifacts. The existing OSS secrets are also required because `update.json` directs the Windows client to the installer under `${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/`.
+
+Minisign authenticates the updater payload; it is not Windows Authenticode signing. SmartScreen can therefore still warn when launching Markion or its installer, and macOS builds remain unsigned and unnotarized.
+
+Treat rotation as a planned migration, not a secret replacement. The current client trusts one key and the workflow verifies that the embedded public key matches the signing private key, so changing both keys in one release would strand existing clients. Before rotating, implement and test a bridge client that trusts both old and new public keys, publish that bridge while signing with the old key, and wait for it to be distributed. Only then sign subsequent releases with the new key, retaining the old key for a documented transition period.
+
 Check the operating context before editing anything:
 
 ```bash
@@ -119,12 +141,13 @@ All of these jobs must succeed:
 - Build and package on `windows-latest`.
 - Build and package on `macos-latest`.
 - Build and package on `ubuntu-22.04`.
+- Sign the Windows updater and build metadata.
 - Publish GitHub Release.
 - Mirror installers to Aliyun OSS.
 
 If the workflow fails, inspect it with `gh run view <tag-run-id> --log-failed`. Do not report the release as complete. If the public tag already exists, preserve it and either fix forward or ask the maintainer how to proceed.
 
-The `mirror-oss` job uploads the four installers, `packager.toml`, a generated `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/` on the configured Aliyun OSS Bucket. It runs independently of the `Publish GitHub Release` job; a GitHub Release failure does not block the mirror and vice versa. A mirror failure is still an incomplete release - correct or retry it before reporting completion.
+The tag-only `prepare-update` job signs the exact Windows NSIS installer and produces `update.json`. Both `release` and `mirror-oss` depend on that prepared metadata but not on each other, so a GitHub Release failure does not block the mirror and vice versa. The mirror uploads the four installers, the Windows installer `.sig`, `update.json`, `packager.toml`, a generated `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/`. A signing, publication, or mirror failure is an incomplete release—correct or retry it before reporting completion.
 
 ## 7. Curate the release notes
 
@@ -229,8 +252,10 @@ Confirm that:
 - The Release is published, not a draft, and not an unintended prerelease.
 - The curated notes and full comparison link are present.
 - The assets include `markion_X.Y.Z_x64-setup.exe`, `Markion_X.Y.Z_aarch64.dmg`, `markion_X.Y.Z_amd64.deb`, and `markion_X.Y.Z_x86_64.AppImage`.
+- The assets also include `markion_X.Y.Z_x64-setup.exe.sig` and `update.json`; `update.json` has version `X.Y.Z`, a `windows-x86_64` entry with `format: "nsis"`, the full signature, and the intended OSS installer URL.
 - The tag workflow succeeded on all three native platforms and in the publish job.
-- The `mirror-oss` job succeeded, and the Aliyun OSS path `${OSS_PREFIX}/latest/` contains the four installers, `packager.toml`, `manifest.json`, and `sha256sums.txt`. The `version` field inside `manifest.json` equals `X.Y.Z`.
+- The `prepare-update` and `mirror-oss` jobs succeeded, and the Aliyun OSS path `${OSS_PREFIX}/latest/` contains the four installers, the Windows `.sig`, `update.json`, `packager.toml`, `manifest.json`, and `sha256sums.txt`. The version fields inside both manifests equal `X.Y.Z`.
+- From a clean Windows x86_64 installation of the previous version, the updater accepts the signature, starts the passive NSIS installer, and refuses to begin while any document is dirty. Manual download remains available when the signed path fails.
 - Local `main`, `origin/main`, the release commit, and the annotated tag resolve to the intended release state.
 - The local worktree is clean.
 

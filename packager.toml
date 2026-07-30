@@ -21,21 +21,24 @@
 #   - Linux:   .deb + .AppImage   (--formats deb,appimage)
 #   - Windows: NSIS .exe installer (--formats nsis)
 #
-# NOTE on signing: builds are UNSIGNED (no paid code-signing certificate). Users
-# will see Gatekeeper (macOS) / SmartScreen (Windows) warnings on first launch
-# and must bypass them manually. See README "Install" section.
+# NOTE on signing: builds have no paid platform code-signing certificate, so
+# users can still see Gatekeeper (macOS) / SmartScreen (Windows) warnings. The
+# Windows NSIS installer is separately signed with minisign for the in-app
+# updater; that authenticates update downloads but is not Authenticode signing.
 #
 # Aliyun OSS mirror (release.yml `mirror-oss` job):
 #   After a successful `v*` tag build, the release workflow also uploads the
-#   four installers, this `packager.toml`, a generated `manifest.json`, and
-#   `sha256sums.txt` to an Aliyun OSS Bucket at:
+#   four installers, updater `update.json` + `.sig`, this `packager.toml`, a
+#   generated `manifest.json`, and `sha256sums.txt` to an Aliyun OSS Bucket at:
 #       ${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/<filename>
-#   The in-app "Check for Updates…" action currently discovers releases from
-#   GitHub's latest-release API; this manifest remains mirror metadata.
+#   The in-app "Check for Updates…" action discovers releases from GitHub's
+#   latest-release API. Signed Windows builds then use the stable `update.json`
+#   asset to authenticate and install the NSIS package; `manifest.json` remains
+#   general mirror metadata.
 #   There is NO `[updater]` table here: cargo-packager 0.11.x's `Config` struct
 #   has no `updater` field, and every config table is `deny_unknown_fields`,
-#   so adding one breaks `cargo packager` immediately. The manifest and any
-#   future signature are produced by the workflow, not by the packager.
+#   so adding one breaks `cargo packager` immediately. Updater metadata and its
+#   signature are produced by the workflow, not this packager config.
 
 product-name = "Markion"
 # `name` is the internal app/package identifier. Setting it explicitly is

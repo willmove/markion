@@ -2,19 +2,22 @@
 //!
 //! Fetches the repository's latest published GitHub Release through the GitHub
 //! REST API, compares its `tag_name` against `env!("CARGO_PKG_VERSION")`, and
-//! surfaces the result through a modal dialog:
+//! surfaces the result through an actionable modal dialog:
 //!
-//! - newer version -> dialog links the GitHub asset for the user's platform;
+//! - newer version -> dialog offers signed install or browser download;
 //! - same/older version -> "up to date";
 //! - fetch or parse failure -> error dialog (no crash).
 //!
-//! The check is notify-only: it never downloads or installs the new version.
-//! It runs off the main render path inside an async `cx.spawn` task and does
-//! not touch any cached-per-version Markdown state. See the OpenSpec change
-//! `mirror-releases-to-aliyun-oss` for the full contract.
+//! Windows x86_64 tagged builds with an embedded updater public key can, after
+//! explicit user confirmation, download a signed NSIS installer, verify its
+//! cargo-packager Minisign signature, launch it in passive mode, and exit.
+//! Other builds open the matching Release asset in the system browser. All
+//! network and installer work runs off the render path and never touches
+//! cached-per-version Markdown state.
 
 use super::*;
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
+use gpui::AnyWindowHandle;
 use serde::Deserialize;
 use serde_json;
 use std::env::consts;
@@ -25,12 +28,22 @@ use std::env::consts;
 const GITHUB_LATEST_RELEASE_API_URL: &str =
     "https://api.github.com/repos/willmove/markion/releases/latest";
 
+/// Human-facing latest Release page used when discovery or an exact platform
+/// asset lookup fails. Keeping this separate from the API URL gives every
+/// recoverable failure an actionable browser fallback.
+const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/willmove/markion/releases/latest";
+
+/// Stable metadata asset attached to each tagged GitHub Release. The manifest
+/// points at the OSS-mirrored NSIS installer so the large download uses the
+/// domestic distribution channel while GitHub remains the version authority.
+const SIGNED_UPDATE_MANIFEST_URL: &str =
+    "https://github.com/willmove/markion/releases/latest/download/update.json";
+
 /// Subset of GitHub's release response used by the update checker. Serde
 /// ignores the API's other fields, keeping this model resilient to additions.
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
-    #[allow(dead_code)]
     html_url: String,
     assets: Vec<GitHubReleaseAsset>,
 }
@@ -47,7 +60,35 @@ struct GitHubReleaseAsset {
 enum UpdateCheckOutcome {
     UpToDate,
     Available { version: String, url: String },
-    Failed(String),
+    Failed { error: String, manual_url: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdatePrimaryAction {
+    SignedInstall,
+    BrowserDownload,
+}
+
+fn configured_update_public_key() -> Option<&'static str> {
+    option_env!("MARKION_UPDATE_PUBLIC_KEY")
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+}
+
+fn update_primary_action_for(
+    os: &str,
+    arch: &str,
+    public_key: Option<&str>,
+) -> UpdatePrimaryAction {
+    if os == "windows" && arch == "x86_64" && public_key.is_some_and(|key| !key.trim().is_empty()) {
+        UpdatePrimaryAction::SignedInstall
+    } else {
+        UpdatePrimaryAction::BrowserDownload
+    }
+}
+
+fn current_update_primary_action() -> UpdatePrimaryAction {
+    update_primary_action_for(consts::OS, consts::ARCH, configured_update_public_key())
 }
 
 impl MarkionApp {
@@ -60,74 +101,259 @@ impl MarkionApp {
         // Capture the window handle so the dialog can be shown after the async
         // fetch resolves, mirroring the pattern in `editing.rs` (`quit_confirm`).
         let window_handle = window.window_handle();
-        let language = self.language;
         self.status = self.tr(Msg::StatusUpdateChecking).into();
         self.active_menu = None;
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            let outcome = match fetch_latest_release(GITHUB_LATEST_RELEASE_API_URL) {
-                Ok(release) => compare_with_running(&release),
-                Err(err) => UpdateCheckOutcome::Failed(err.to_string()),
-            };
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    match fetch_latest_release(GITHUB_LATEST_RELEASE_API_URL) {
+                        Ok(release) => compare_with_running(&release),
+                        Err(err) => UpdateCheckOutcome::Failed {
+                            error: err.to_string(),
+                            manual_url: GITHUB_LATEST_RELEASE_URL.to_string(),
+                        },
+                    }
+                })
+                .await;
 
             let _ = this.update(cx, |app, cx| {
-                app.status = match &outcome {
+                match &outcome {
                     UpdateCheckOutcome::UpToDate => {
-                        t(app.language, Msg::StatusUpdateUpToDate).into()
-                    }
-                    UpdateCheckOutcome::Available { version, .. } => {
-                        tf(app.language, Msg::StatusUpdateAvailable, &[version]).into()
-                    }
-                    UpdateCheckOutcome::Failed(err) => {
-                        tf(app.language, Msg::StatusUpdateCheckFailed, &[err]).into()
-                    }
-                };
-                cx.notify();
-
-                // Show the modal dialog via the captured window handle, after
-                // the status bar has been updated. `std::mem::drop` matches the
-                // `about` handler: the result future is informational only.
-                // The closure receives its own `&mut Context<V>` (the third
-                // parameter); we must use THAT `cx` for `window.prompt`, not
-                // the outer `cx` which `update` has already borrowed.
-                let _ = window_handle.update(cx, |_, window, cx| match &outcome {
-                    UpdateCheckOutcome::UpToDate => {
-                        let detail = t(language, Msg::DialogUpToDateDetail);
-                        std::mem::drop(window.prompt(
-                            PromptLevel::Info,
-                            t(language, Msg::DialogUpToDateTitle),
-                            Some(detail),
-                            &[PromptButton::ok(t(language, Msg::DialogButtonOk))],
-                            cx,
-                        ));
+                        app.status = t(app.language, Msg::StatusUpdateUpToDate).into();
+                        let language = app.language;
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            std::mem::drop(window.prompt(
+                                PromptLevel::Info,
+                                t(language, Msg::DialogUpToDateTitle),
+                                Some(t(language, Msg::DialogUpToDateDetail)),
+                                &[PromptButton::ok(t(language, Msg::DialogButtonOk))],
+                                cx,
+                            ));
+                        });
                     }
                     UpdateCheckOutcome::Available { version, url } => {
-                        let detail =
-                            tf(language, Msg::DialogUpdateAvailableDetail, &[version, url]);
-                        std::mem::drop(window.prompt(
-                            PromptLevel::Info,
-                            t(language, Msg::DialogUpdateAvailableTitle),
-                            Some(&detail),
-                            &[PromptButton::ok(t(language, Msg::DialogButtonOk))],
+                        app.status =
+                            tf(app.language, Msg::StatusUpdateAvailable, &[version]).into();
+                        app.prompt_update_available(
+                            version.clone(),
+                            url.clone(),
+                            window_handle,
                             cx,
-                        ));
+                        );
                     }
-                    UpdateCheckOutcome::Failed(err) => {
-                        let detail = tf(language, Msg::DialogUpdateCheckFailedDetail, &[err]);
-                        std::mem::drop(window.prompt(
-                            PromptLevel::Warning,
-                            t(language, Msg::DialogUpdateCheckFailedTitle),
-                            Some(&detail),
-                            &[PromptButton::ok(t(language, Msg::DialogButtonOk))],
+                    UpdateCheckOutcome::Failed { error, manual_url } => app
+                        .show_update_check_failure(
+                            error.clone(),
+                            manual_url.clone(),
+                            window_handle,
                             cx,
-                        ));
-                    }
-                });
+                        ),
+                }
+                cx.notify();
             });
         })
         .detach();
     }
+
+    fn show_update_check_failure(
+        &mut self,
+        error: String,
+        manual_url: String,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        self.status = tf(self.language, Msg::StatusUpdateCheckFailed, &[&error]).into();
+        cx.notify();
+
+        let language = self.language;
+        let detail = tf(language, Msg::DialogUpdateCheckFailedDetail, &[&error]);
+        let Ok(answer) = window_handle.update(cx, |_, window, cx| {
+            window.prompt(
+                PromptLevel::Warning,
+                t(language, Msg::DialogUpdateCheckFailedTitle),
+                Some(&detail),
+                &[
+                    PromptButton::ok(t(language, Msg::DialogButtonDownloadManually)),
+                    PromptButton::cancel(t(language, Msg::DialogButtonLater)),
+                ],
+                cx,
+            )
+        }) else {
+            return;
+        };
+
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |_, cx| cx.open_url(&manual_url));
+            }
+        })
+        .detach();
+    }
+
+    fn prompt_update_available(
+        &mut self,
+        version: String,
+        url: String,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        let action = current_update_primary_action();
+        let language = self.language;
+        let detail = tf(language, Msg::DialogUpdateAvailableDetail, &[&version]);
+        let primary_label = match action {
+            UpdatePrimaryAction::SignedInstall => t(language, Msg::DialogButtonDownloadAndInstall),
+            UpdatePrimaryAction::BrowserDownload => t(language, Msg::DialogButtonDownloadUpdate),
+        };
+        let Ok(answer) = window_handle.update(cx, |_, window, cx| {
+            window.prompt(
+                PromptLevel::Info,
+                t(language, Msg::DialogUpdateAvailableTitle),
+                Some(&detail),
+                &[
+                    PromptButton::ok(primary_label),
+                    PromptButton::cancel(t(language, Msg::DialogButtonLater)),
+                ],
+                cx,
+            )
+        }) else {
+            return;
+        };
+
+        cx.spawn(async move |this, cx| {
+            if !matches!(answer.await, Ok(0)) {
+                return;
+            }
+            let _ = this.update(cx, |app, cx| {
+                app.activate_update_action(action, version, url, window_handle, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn activate_update_action(
+        &mut self,
+        action: UpdatePrimaryAction,
+        version: String,
+        url: String,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        if action == UpdatePrimaryAction::BrowserDownload {
+            cx.open_url(&url);
+            return;
+        }
+
+        if self.tabs.iter().any(|tab| tab.document.is_dirty()) {
+            let language = self.language;
+            let _ = window_handle.update(cx, |_, window, cx| {
+                std::mem::drop(window.prompt(
+                    PromptLevel::Warning,
+                    t(language, Msg::DialogUpdateSaveFirstTitle),
+                    Some(t(language, Msg::DialogUpdateSaveFirstDetail)),
+                    &[PromptButton::ok(t(language, Msg::DialogButtonOk))],
+                    cx,
+                ));
+            });
+            return;
+        }
+
+        self.status = tf(self.language, Msg::StatusUpdateDownloading, &[&version]).into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { install_signed_update() })
+                .await;
+            if let Err(error) = result {
+                let _ = this.update(cx, |app, cx| {
+                    app.show_update_install_failure(error.to_string(), url, window_handle, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn show_update_install_failure(
+        &mut self,
+        error: String,
+        manual_url: String,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        self.status = tf(self.language, Msg::StatusUpdateInstallFailed, &[&error]).into();
+        cx.notify();
+
+        let language = self.language;
+        let detail = tf(language, Msg::DialogUpdateInstallFailedDetail, &[&error]);
+        let Ok(answer) = window_handle.update(cx, |_, window, cx| {
+            window.prompt(
+                PromptLevel::Warning,
+                t(language, Msg::DialogUpdateInstallFailedTitle),
+                Some(&detail),
+                &[
+                    PromptButton::ok(t(language, Msg::DialogButtonDownloadManually)),
+                    PromptButton::cancel(t(language, Msg::DialogButtonLater)),
+                ],
+                cx,
+            )
+        }) else {
+            return;
+        };
+
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |_, cx| cx.open_url(&manual_url));
+            }
+        })
+        .detach();
+    }
+}
+
+#[cfg(windows)]
+fn install_signed_update() -> Result<()> {
+    use cargo_packager_updater::{
+        Config, WindowsConfig, WindowsUpdateInstallMode, check_update, semver::Version, url::Url,
+    };
+
+    let public_key = configured_update_public_key()
+        .ok_or_else(|| anyhow!("this build does not contain an updater public key"))?;
+    let current_version =
+        Version::parse(env!("CARGO_PKG_VERSION")).context("parsing the running Markion version")?;
+    let endpoint =
+        Url::parse(SIGNED_UPDATE_MANIFEST_URL).context("parsing the signed update manifest URL")?;
+    let config = Config {
+        endpoints: vec![endpoint],
+        pubkey: public_key.to_string(),
+        windows: Some(WindowsConfig {
+            installer_args: None,
+            install_mode: Some(WindowsUpdateInstallMode::Passive),
+        }),
+    };
+    let update = check_update(current_version, config)
+        .context("checking the signed update manifest")?
+        .ok_or_else(|| anyhow!("the signed update manifest contains no newer version"))?;
+    // cargo-packager-updater 0.2.3 returns ordinary network/signature errors,
+    // but its NSIS launcher uses `expect` if PowerShell cannot be spawned.
+    // Catch that library panic so the app can keep running and offer the
+    // immutable GitHub asset as a manual fallback.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        update.download_and_install()
+    })) {
+        Ok(result) => result.context("downloading, verifying, and launching the signed update"),
+        Err(_) => Err(anyhow!(
+            "the verified installer process could not be started"
+        )),
+    }
+}
+
+#[cfg(not(windows))]
+fn install_signed_update() -> Result<()> {
+    Err(anyhow!(
+        "signed automatic installation is supported only on Windows"
+    ))
 }
 
 /// Fetches and parses GitHub's latest published release. Runs on the shared
@@ -142,50 +368,70 @@ fn fetch_latest_release(url: &str) -> Result<GitHubRelease> {
 /// Compares the release tag against the running build's version and, if newer,
 /// maps the user's platform to the matching GitHub asset URL.
 fn compare_with_running(release: &GitHubRelease) -> UpdateCheckOutcome {
+    compare_with_running_for(release, consts::OS, consts::ARCH)
+}
+
+fn compare_with_running_for(release: &GitHubRelease, os: &str, arch: &str) -> UpdateCheckOutcome {
     let Some(version) = release.tag_name.strip_prefix('v') else {
-        return UpdateCheckOutcome::Failed(format!(
-            "GitHub release tag {:?} does not start with 'v'",
-            release.tag_name
-        ));
+        return UpdateCheckOutcome::Failed {
+            error: format!(
+                "GitHub release tag {:?} does not start with 'v'",
+                release.tag_name
+            ),
+            manual_url: release.html_url.clone(),
+        };
     };
     let Some(remote) = parse_semver(version) else {
-        return UpdateCheckOutcome::Failed(format!(
-            "GitHub release tag {:?} is not a valid release version",
-            release.tag_name
-        ));
+        return UpdateCheckOutcome::Failed {
+            error: format!(
+                "GitHub release tag {:?} is not a valid release version",
+                release.tag_name
+            ),
+            manual_url: release.html_url.clone(),
+        };
     };
     let Some(current) = parse_semver(env!("CARGO_PKG_VERSION")) else {
-        return UpdateCheckOutcome::Failed(format!(
-            "running version {:?} is not a valid semver",
-            env!("CARGO_PKG_VERSION")
-        ));
+        return UpdateCheckOutcome::Failed {
+            error: format!(
+                "running version {:?} is not a valid semver",
+                env!("CARGO_PKG_VERSION")
+            ),
+            manual_url: release.html_url.clone(),
+        };
     };
     if remote <= current {
         return UpdateCheckOutcome::UpToDate;
     }
-    let asset_suffix = match (consts::OS, consts::ARCH) {
-        ("windows", "x86_64") => "_x64-setup.exe",
-        ("macos", "aarch64") => "_aarch64.dmg",
-        ("linux", "x86_64") => "_amd64.deb",
-        (os, arch) => {
-            return UpdateCheckOutcome::Failed(format!(
-                "no GitHub Release asset mapping for platform {os:?}/{arch:?}"
-            ));
+    let url = match browser_download_url(release, os, arch) {
+        Ok(url) => url,
+        Err(error) => {
+            return UpdateCheckOutcome::Failed {
+                error,
+                manual_url: release.html_url.clone(),
+            };
         }
-    };
-    let Some(asset) = release
-        .assets
-        .iter()
-        .find(|asset| asset.name.ends_with(asset_suffix))
-    else {
-        return UpdateCheckOutcome::Failed(format!(
-            "latest GitHub Release has no asset ending with {asset_suffix:?}"
-        ));
     };
     UpdateCheckOutcome::Available {
         version: version.to_string(),
-        url: asset.browser_download_url.clone(),
+        url,
     }
+}
+
+/// Returns the exact supported package URL, or the Release page on an
+/// unsupported OS/architecture where no installable package can be promised.
+fn browser_download_url(release: &GitHubRelease, os: &str, arch: &str) -> Result<String, String> {
+    let asset_suffix = match (os, arch) {
+        ("windows", "x86_64") => "_x64-setup.exe",
+        ("macos", "aarch64") => "_aarch64.dmg",
+        ("linux", "x86_64") => "_amd64.deb",
+        _ => return Ok(release.html_url.clone()),
+    };
+    release
+        .assets
+        .iter()
+        .find(|asset| asset.name.ends_with(asset_suffix))
+        .map(|asset| asset.browser_download_url.clone())
+        .ok_or_else(|| format!("latest GitHub Release has no asset ending with {asset_suffix:?}"))
 }
 
 /// Minimal `MAJOR.MINOR.PATCH` parser. Markion tags are strict `vX.Y.Z`, so
@@ -239,6 +485,61 @@ mod tests {
     }
 
     #[test]
+    fn signed_install_requires_windows_x86_64_and_a_public_key() {
+        assert_eq!(
+            update_primary_action_for("windows", "x86_64", Some("encoded-public-key")),
+            UpdatePrimaryAction::SignedInstall
+        );
+        assert_eq!(
+            update_primary_action_for("windows", "x86_64", None),
+            UpdatePrimaryAction::BrowserDownload
+        );
+        assert_eq!(
+            update_primary_action_for("windows", "x86_64", Some("   ")),
+            UpdatePrimaryAction::BrowserDownload
+        );
+        assert_eq!(
+            update_primary_action_for("windows", "aarch64", Some("encoded-public-key")),
+            UpdatePrimaryAction::BrowserDownload
+        );
+        assert_eq!(
+            update_primary_action_for("macos", "aarch64", Some("encoded-public-key")),
+            UpdatePrimaryAction::BrowserDownload
+        );
+        assert_eq!(
+            update_primary_action_for("linux", "x86_64", Some("encoded-public-key")),
+            UpdatePrimaryAction::BrowserDownload
+        );
+    }
+
+    #[test]
+    fn update_available_detail_never_contains_the_raw_download_url() {
+        for language in [
+            Language::En,
+            Language::ZhHans,
+            Language::ZhHant,
+            Language::Ja,
+            Language::Fr,
+            Language::De,
+            Language::Es,
+        ] {
+            let detail = tf(language, Msg::DialogUpdateAvailableDetail, &["9.9.9"]);
+            assert!(detail.contains("9.9.9"), "missing version in {language:?}");
+            assert!(!detail.contains("http"), "raw URL leaked in {language:?}");
+        }
+    }
+
+    #[test]
+    fn updater_flow_preserves_manual_and_dirty_document_fallbacks() {
+        let source = include_str!("update.rs");
+        assert!(source.contains("tab.document.is_dirty()"));
+        assert!(source.contains("background_executor()"));
+        assert!(source.contains("catch_unwind"));
+        assert!(source.contains("Msg::DialogButtonDownloadManually"));
+        assert!(SIGNED_UPDATE_MANIFEST_URL.ends_with("/latest/download/update.json"));
+    }
+
+    #[test]
     fn newer_github_release_yields_available_outcome() {
         // Include every supported asset so the test passes on each CI host.
         let release = release_with_version("9.9.9");
@@ -257,6 +558,32 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_platform_uses_the_release_page_as_browser_fallback() {
+        let release = release_with_version("9.9.9");
+        assert_eq!(
+            browser_download_url(&release, "windows", "aarch64").unwrap(),
+            release.html_url
+        );
+        assert_eq!(
+            browser_download_url(&release, "freebsd", "x86_64").unwrap(),
+            release.html_url
+        );
+    }
+
+    #[test]
+    fn missing_supported_asset_retains_the_release_page_fallback() {
+        let mut release = release_with_version("9.9.9");
+        release.assets.clear();
+        assert!(browser_download_url(&release, "windows", "x86_64").is_err());
+        match compare_with_running_for(&release, "windows", "x86_64") {
+            UpdateCheckOutcome::Failed { manual_url, .. } => {
+                assert_eq!(manual_url, release.html_url);
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn equal_or_older_github_release_is_up_to_date() {
         let release = release_with_version(env!("CARGO_PKG_VERSION"));
         assert!(matches!(
@@ -271,7 +598,7 @@ mod tests {
         release.tag_name = "not-a-version".to_string();
         assert!(matches!(
             compare_with_running(&release),
-            UpdateCheckOutcome::Failed(_)
+            UpdateCheckOutcome::Failed { .. }
         ));
     }
 
@@ -303,7 +630,7 @@ mod tests {
         assert!(!release.assets.is_empty());
         assert!(!matches!(
             compare_with_running(&release),
-            UpdateCheckOutcome::Failed(_)
+            UpdateCheckOutcome::Failed { .. }
         ));
     }
 }

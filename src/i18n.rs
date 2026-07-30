@@ -258,6 +258,8 @@ pub enum Msg {
     StatusUpdateUpToDate,
     StatusUpdateAvailable,
     StatusUpdateCheckFailed,
+    StatusUpdateDownloading,
+    StatusUpdateInstallFailed,
     StatusKeyboardShortcuts,
     StatusUndo,
     StatusNothingToUndo,
@@ -428,6 +430,10 @@ pub enum Msg {
     DialogButtonReset,
     DialogButtonRestore,
     DialogButtonExitWithoutSaving,
+    DialogButtonDownloadAndInstall,
+    DialogButtonDownloadUpdate,
+    DialogButtonDownloadManually,
+    DialogButtonLater,
 
     /// About Markion dialog title.
     DialogAboutTitle,
@@ -439,12 +445,20 @@ pub enum Msg {
     DialogUpToDateDetail,
     /// Update check: newer version available dialog title.
     DialogUpdateAvailableTitle,
-    /// Update-available detail body. {0}=new version {1}=download url.
+    /// Update-available detail body. {0}=new version.
     DialogUpdateAvailableDetail,
     /// Update check: failure dialog title.
     DialogUpdateCheckFailedTitle,
     /// Update-check failure body. {0}=error message.
     DialogUpdateCheckFailedDetail,
+    /// Signed update is blocked by unsaved documents.
+    DialogUpdateSaveFirstTitle,
+    /// Signed update save-first explanation.
+    DialogUpdateSaveFirstDetail,
+    /// Signed update download, verification, or launch failure title.
+    DialogUpdateInstallFailedTitle,
+    /// Signed update failure body. {0}=error message.
+    DialogUpdateInstallFailedDetail,
     /// Keyboard Shortcuts dialog title.
     DialogShortcutsTitle,
     /// Preferences dialog title.
@@ -1711,6 +1725,8 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusUpdateUpToDate => "Markion is up to date",
         Msg::StatusUpdateAvailable => "Update available: {0}",
         Msg::StatusUpdateCheckFailed => "Update check failed: {0}",
+        Msg::StatusUpdateDownloading => "Downloading and verifying Markion {0}…",
+        Msg::StatusUpdateInstallFailed => "Automatic update failed: {0}",
         Msg::StatusKeyboardShortcuts => "Keyboard shortcuts",
         Msg::StatusUndo => "Undo",
         Msg::StatusNothingToUndo => "Nothing to undo",
@@ -1838,6 +1854,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "Reset",
         Msg::DialogButtonRestore => "Restore",
         Msg::DialogButtonExitWithoutSaving => "Exit Without Saving",
+        Msg::DialogButtonDownloadAndInstall => "Download and Install",
+        Msg::DialogButtonDownloadUpdate => "Download Update",
+        Msg::DialogButtonDownloadManually => "Download Manually",
+        Msg::DialogButtonLater => "Later",
 
         Msg::DialogAboutTitle => "About Markion",
         Msg::DialogAboutDetail => {
@@ -1846,14 +1866,20 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogUpToDateTitle => "Up to Date",
         Msg::DialogUpToDateDetail => "You are running the latest version of Markion.",
         Msg::DialogUpdateAvailableTitle => "Update Available",
-        Msg::DialogUpdateAvailableDetail => {
-            "Markion {0} is available. Download it from:
-
-{1}"
-        }
+        Msg::DialogUpdateAvailableDetail => "Markion {0} is available.",
         Msg::DialogUpdateCheckFailedTitle => "Update Check Failed",
         Msg::DialogUpdateCheckFailedDetail => {
             "Could not check for updates:
+
+{0}"
+        }
+        Msg::DialogUpdateSaveFirstTitle => "Save changes before updating",
+        Msg::DialogUpdateSaveFirstDetail => {
+            "Save all open documents, then check for updates again."
+        }
+        Msg::DialogUpdateInstallFailedTitle => "Automatic Update Failed",
+        Msg::DialogUpdateInstallFailedDetail => {
+            "Markion could not download, verify, or start the update:
 
 {0}"
         }
@@ -2115,6 +2141,8 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusUpdateUpToDate => "Markion は最新です",
         Msg::StatusUpdateAvailable => "更新があります: {0}",
         Msg::StatusUpdateCheckFailed => "更新確認に失敗しました: {0}",
+        Msg::StatusUpdateDownloading => "Markion {0} をダウンロードして検証しています…",
+        Msg::StatusUpdateInstallFailed => "自動更新に失敗しました: {0}",
         Msg::StatusKeyboardShortcuts => "キーボードショートカット",
         Msg::StatusUndo => "元に戻す",
         Msg::StatusNothingToUndo => "元に戻す操作はありません",
@@ -2244,6 +2272,10 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "リセット",
         Msg::DialogButtonRestore => "復元",
         Msg::DialogButtonExitWithoutSaving => "保存せずに終了",
+        Msg::DialogButtonDownloadAndInstall => "ダウンロードしてインストール",
+        Msg::DialogButtonDownloadUpdate => "更新をダウンロード",
+        Msg::DialogButtonDownloadManually => "手動でダウンロード",
+        Msg::DialogButtonLater => "後で",
 
         Msg::DialogAboutTitle => "Markionについて",
         Msg::DialogAboutDetail => {
@@ -2252,14 +2284,20 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogUpToDateTitle => "最新です",
         Msg::DialogUpToDateDetail => "Markion は最新のバージョンを実行しています。",
         Msg::DialogUpdateAvailableTitle => "更新があります",
-        Msg::DialogUpdateAvailableDetail => {
-            "Markion {0} が利用可能です。次の URL からダウンロードしてください:
-
-{1}"
-        }
+        Msg::DialogUpdateAvailableDetail => "Markion {0} が利用可能です。",
         Msg::DialogUpdateCheckFailedTitle => "更新確認に失敗しました",
         Msg::DialogUpdateCheckFailedDetail => {
             "更新を確認できませんでした:
+
+{0}"
+        }
+        Msg::DialogUpdateSaveFirstTitle => "更新前に変更を保存してください",
+        Msg::DialogUpdateSaveFirstDetail => {
+            "開いているすべての文書を保存してから、もう一度更新を確認してください。"
+        }
+        Msg::DialogUpdateInstallFailedTitle => "自動更新に失敗しました",
+        Msg::DialogUpdateInstallFailedDetail => {
+            "更新をダウンロード、検証、または開始できませんでした:
 
 {0}"
         }
@@ -2507,6 +2545,8 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusUpdateUpToDate => "Markion est à jour",
         Msg::StatusUpdateAvailable => "Mise à jour disponible : {0}",
         Msg::StatusUpdateCheckFailed => "Échec de la vérification : {0}",
+        Msg::StatusUpdateDownloading => "Téléchargement et vérification de Markion {0}…",
+        Msg::StatusUpdateInstallFailed => "Échec de la mise à jour automatique : {0}",
         Msg::StatusKeyboardShortcuts => "Raccourcis clavier",
         Msg::StatusUndo => "Annuler",
         Msg::StatusNothingToUndo => "Rien à annuler",
@@ -2635,6 +2675,10 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "Réinitialiser",
         Msg::DialogButtonRestore => "Restaurer",
         Msg::DialogButtonExitWithoutSaving => "Quitter sans enregistrer",
+        Msg::DialogButtonDownloadAndInstall => "Télécharger et installer",
+        Msg::DialogButtonDownloadUpdate => "Télécharger la mise à jour",
+        Msg::DialogButtonDownloadManually => "Télécharger manuellement",
+        Msg::DialogButtonLater => "Plus tard",
         Msg::DialogAboutTitle => "À propos de Markion",
         Msg::DialogAboutDetail => {
             "Version : {0}\n\nUn éditeur Markdown local-first construit avec Rust et GPUI.\n\nGitHub : {1}"
@@ -2642,14 +2686,20 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogUpToDateTitle => "À jour",
         Msg::DialogUpToDateDetail => "Vous exécutez la dernière version de Markion.",
         Msg::DialogUpdateAvailableTitle => "Mise à jour disponible",
-        Msg::DialogUpdateAvailableDetail => {
-            "Markion {0} est disponible. Téléchargez-le depuis :
-
-{1}"
-        }
+        Msg::DialogUpdateAvailableDetail => "Markion {0} est disponible.",
         Msg::DialogUpdateCheckFailedTitle => "Échec de la vérification",
         Msg::DialogUpdateCheckFailedDetail => {
             "Impossible de vérifier les mises à jour :
+
+{0}"
+        }
+        Msg::DialogUpdateSaveFirstTitle => "Enregistrez avant la mise à jour",
+        Msg::DialogUpdateSaveFirstDetail => {
+            "Enregistrez tous les documents ouverts, puis recherchez à nouveau les mises à jour."
+        }
+        Msg::DialogUpdateInstallFailedTitle => "Échec de la mise à jour automatique",
+        Msg::DialogUpdateInstallFailedDetail => {
+            "Markion n’a pas pu télécharger, vérifier ou démarrer la mise à jour :
 
 {0}"
         }
@@ -2903,6 +2953,8 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusUpdateUpToDate => "Markion ist aktuell",
         Msg::StatusUpdateAvailable => "Update verfügbar: {0}",
         Msg::StatusUpdateCheckFailed => "Update-Prüfung fehlgeschlagen: {0}",
+        Msg::StatusUpdateDownloading => "Markion {0} wird heruntergeladen und geprüft…",
+        Msg::StatusUpdateInstallFailed => "Automatisches Update fehlgeschlagen: {0}",
         Msg::StatusKeyboardShortcuts => "Tastenkürzel",
         Msg::StatusUndo => "Rückgängig",
         Msg::StatusNothingToUndo => "Nichts rückgängig zu machen",
@@ -3027,6 +3079,10 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "Zurücksetzen",
         Msg::DialogButtonRestore => "Wiederherstellen",
         Msg::DialogButtonExitWithoutSaving => "Ohne Speichern beenden",
+        Msg::DialogButtonDownloadAndInstall => "Herunterladen und installieren",
+        Msg::DialogButtonDownloadUpdate => "Update herunterladen",
+        Msg::DialogButtonDownloadManually => "Manuell herunterladen",
+        Msg::DialogButtonLater => "Später",
         Msg::DialogAboutTitle => "Über Markion",
         Msg::DialogAboutDetail => {
             "Version: {0}\n\nEin lokal-first Markdown-Editor, entwickelt mit Rust und GPUI.\n\nGitHub: {1}"
@@ -3034,14 +3090,20 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogUpToDateTitle => "Aktuell",
         Msg::DialogUpToDateDetail => "Sie verwenden die neueste Version von Markion.",
         Msg::DialogUpdateAvailableTitle => "Update verfügbar",
-        Msg::DialogUpdateAvailableDetail => {
-            "Markion {0} ist verfügbar. Download unter:
-
-{1}"
-        }
+        Msg::DialogUpdateAvailableDetail => "Markion {0} ist verfügbar.",
         Msg::DialogUpdateCheckFailedTitle => "Update-Prüfung fehlgeschlagen",
         Msg::DialogUpdateCheckFailedDetail => {
             "Update-Prüfung nicht möglich:
+
+{0}"
+        }
+        Msg::DialogUpdateSaveFirstTitle => "Änderungen vor dem Update speichern",
+        Msg::DialogUpdateSaveFirstDetail => {
+            "Speichern Sie alle geöffneten Dokumente und suchen Sie dann erneut nach Updates."
+        }
+        Msg::DialogUpdateInstallFailedTitle => "Automatisches Update fehlgeschlagen",
+        Msg::DialogUpdateInstallFailedDetail => {
+            "Markion konnte das Update nicht herunterladen, prüfen oder starten:
 
 {0}"
         }
@@ -3295,6 +3357,8 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusUpdateUpToDate => "Markion está actualizado",
         Msg::StatusUpdateAvailable => "Actualización disponible: {0}",
         Msg::StatusUpdateCheckFailed => "Error al buscar actualizaciones: {0}",
+        Msg::StatusUpdateDownloading => "Descargando y verificando Markion {0}…",
+        Msg::StatusUpdateInstallFailed => "Error de actualización automática: {0}",
         Msg::StatusKeyboardShortcuts => "Atajos de teclado",
         Msg::StatusUndo => "Deshacer",
         Msg::StatusNothingToUndo => "Nada que deshacer",
@@ -3421,6 +3485,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "Restablecer",
         Msg::DialogButtonRestore => "Restaurar",
         Msg::DialogButtonExitWithoutSaving => "Salir sin guardar",
+        Msg::DialogButtonDownloadAndInstall => "Descargar e instalar",
+        Msg::DialogButtonDownloadUpdate => "Descargar actualización",
+        Msg::DialogButtonDownloadManually => "Descargar manualmente",
+        Msg::DialogButtonLater => "Más tarde",
         Msg::DialogAboutTitle => "Acerca de Markion",
         Msg::DialogAboutDetail => {
             "Versión: {0}\n\nUn editor Markdown local-first construido con Rust y GPUI.\n\nGitHub: {1}"
@@ -3428,14 +3496,20 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogUpToDateTitle => "Actualizado",
         Msg::DialogUpToDateDetail => "Estás usando la última versión de Markion.",
         Msg::DialogUpdateAvailableTitle => "Actualización disponible",
-        Msg::DialogUpdateAvailableDetail => {
-            "Markion {0} está disponible. Descárgalo desde:
-
-{1}"
-        }
+        Msg::DialogUpdateAvailableDetail => "Markion {0} está disponible.",
         Msg::DialogUpdateCheckFailedTitle => "Error al buscar actualizaciones",
         Msg::DialogUpdateCheckFailedDetail => {
             "No se pudo buscar actualizaciones:
+
+{0}"
+        }
+        Msg::DialogUpdateSaveFirstTitle => "Guarda los cambios antes de actualizar",
+        Msg::DialogUpdateSaveFirstDetail => {
+            "Guarda todos los documentos abiertos y vuelve a buscar actualizaciones."
+        }
+        Msg::DialogUpdateInstallFailedTitle => "Error de actualización automática",
+        Msg::DialogUpdateInstallFailedDetail => {
+            "Markion no pudo descargar, verificar o iniciar la actualización:
 
 {0}"
         }
@@ -3688,6 +3762,8 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusUpdateUpToDate => "Markion 已是最新版本",
         Msg::StatusUpdateAvailable => "发现新版本：{0}",
         Msg::StatusUpdateCheckFailed => "检查更新失败：{0}",
+        Msg::StatusUpdateDownloading => "正在下载并验证 Markion {0}…",
+        Msg::StatusUpdateInstallFailed => "自动更新失败：{0}",
         Msg::StatusKeyboardShortcuts => "键盘快捷键",
         Msg::StatusUndo => "已撤销",
         Msg::StatusNothingToUndo => "没有可撤销的操作",
@@ -3813,6 +3889,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "重置",
         Msg::DialogButtonRestore => "恢复",
         Msg::DialogButtonExitWithoutSaving => "不保存退出",
+        Msg::DialogButtonDownloadAndInstall => "下载并安装",
+        Msg::DialogButtonDownloadUpdate => "下载新版本",
+        Msg::DialogButtonDownloadManually => "手动下载",
+        Msg::DialogButtonLater => "稍后",
 
         Msg::DialogAboutTitle => "关于 Markion",
         Msg::DialogAboutDetail => {
@@ -3821,14 +3901,18 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogUpToDateTitle => "已是最新版本",
         Msg::DialogUpToDateDetail => "您正在使用最新版本的 Markion。",
         Msg::DialogUpdateAvailableTitle => "发现新版本",
-        Msg::DialogUpdateAvailableDetail => {
-            "Markion {0} 已发布。请从以下地址下载：
-
-{1}"
-        }
+        Msg::DialogUpdateAvailableDetail => "Markion {0} 已发布。",
         Msg::DialogUpdateCheckFailedTitle => "检查更新失败",
         Msg::DialogUpdateCheckFailedDetail => {
             "无法检查更新：
+
+{0}"
+        }
+        Msg::DialogUpdateSaveFirstTitle => "请先保存更改",
+        Msg::DialogUpdateSaveFirstDetail => "请保存所有打开的文档，然后重新检查更新。",
+        Msg::DialogUpdateInstallFailedTitle => "自动更新失败",
+        Msg::DialogUpdateInstallFailedDetail => {
+            "Markion 无法下载、验证或启动更新：
 
 {0}"
         }
@@ -4081,6 +4165,8 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusUpdateUpToDate => "Markion 已是最新版本",
         Msg::StatusUpdateAvailable => "發現新版本：{0}",
         Msg::StatusUpdateCheckFailed => "檢查更新失敗：{0}",
+        Msg::StatusUpdateDownloading => "正在下載並驗證 Markion {0}…",
+        Msg::StatusUpdateInstallFailed => "自動更新失敗：{0}",
         Msg::StatusKeyboardShortcuts => "鍵盤快速鍵",
         Msg::StatusUndo => "已復原",
         Msg::StatusNothingToUndo => "沒有可復原的動作",
@@ -4208,6 +4294,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "重設",
         Msg::DialogButtonRestore => "復原",
         Msg::DialogButtonExitWithoutSaving => "不儲存結束",
+        Msg::DialogButtonDownloadAndInstall => "下載並安裝",
+        Msg::DialogButtonDownloadUpdate => "下載新版本",
+        Msg::DialogButtonDownloadManually => "手動下載",
+        Msg::DialogButtonLater => "稍後",
 
         Msg::DialogAboutTitle => "關於 Markion",
         Msg::DialogAboutDetail => {
@@ -4216,14 +4306,18 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogUpToDateTitle => "已是最新版本",
         Msg::DialogUpToDateDetail => "您正在使用最新版本的 Markion。",
         Msg::DialogUpdateAvailableTitle => "發現新版本",
-        Msg::DialogUpdateAvailableDetail => {
-            "Markion {0} 已發布。請從以下位址下載：
-
-{1}"
-        }
+        Msg::DialogUpdateAvailableDetail => "Markion {0} 已發布。",
         Msg::DialogUpdateCheckFailedTitle => "檢查更新失敗",
         Msg::DialogUpdateCheckFailedDetail => {
             "無法檢查更新：
+
+{0}"
+        }
+        Msg::DialogUpdateSaveFirstTitle => "請先儲存變更",
+        Msg::DialogUpdateSaveFirstDetail => "請儲存所有開啟的文件，然後重新檢查更新。",
+        Msg::DialogUpdateInstallFailedTitle => "自動更新失敗",
+        Msg::DialogUpdateInstallFailedDetail => {
+            "Markion 無法下載、驗證或啟動更新：
 
 {0}"
         }
@@ -4777,6 +4871,8 @@ mod tests {
             Msg::StatusUpdateUpToDate,
             Msg::StatusUpdateAvailable,
             Msg::StatusUpdateCheckFailed,
+            Msg::StatusUpdateDownloading,
+            Msg::StatusUpdateInstallFailed,
             Msg::StatusKeyboardShortcuts,
             Msg::StatusUndo,
             Msg::StatusNothingToUndo,
@@ -4897,6 +4993,10 @@ mod tests {
             Msg::DialogButtonReset,
             Msg::DialogButtonRestore,
             Msg::DialogButtonExitWithoutSaving,
+            Msg::DialogButtonDownloadAndInstall,
+            Msg::DialogButtonDownloadUpdate,
+            Msg::DialogButtonDownloadManually,
+            Msg::DialogButtonLater,
             Msg::DialogAboutTitle,
             Msg::DialogAboutDetail,
             Msg::DialogUpToDateTitle,
@@ -4905,6 +5005,10 @@ mod tests {
             Msg::DialogUpdateAvailableDetail,
             Msg::DialogUpdateCheckFailedTitle,
             Msg::DialogUpdateCheckFailedDetail,
+            Msg::DialogUpdateSaveFirstTitle,
+            Msg::DialogUpdateSaveFirstDetail,
+            Msg::DialogUpdateInstallFailedTitle,
+            Msg::DialogUpdateInstallFailedDetail,
             Msg::DialogShortcutsTitle,
             Msg::DialogPreferencesTitle,
             Msg::DialogPreferencesDetail,

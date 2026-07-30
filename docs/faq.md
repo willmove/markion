@@ -16,7 +16,7 @@ Markion is a native desktop Markdown editor built in Rust with the [GPUI](https:
 | macOS | `aarch64-apple-darwin` | Apple Silicon native; **min macOS 11.0**; Intel Macs run via Rosetta. A universal binary is a future task. |
 | Linux | `x86_64-unknown-linux-gnu` | Built on Ubuntu 22.04; ships as `.deb` and `.AppImage` |
 
-**All releases are currently unsigned.** On first launch you will see Gatekeeper (macOS) or SmartScreen (Windows) warnings; bypass them manually to run Markion. Linux users installing the `.deb` get the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) pulled in automatically.
+**Releases are not platform code-signed.** On first launch you can still see Gatekeeper (macOS) or SmartScreen (Windows) warnings; bypass them manually to run Markion. The Windows x86_64 in-app updater separately verifies its NSIS payload with a Minisign key, which does not suppress SmartScreen. macOS and Linux update actions open the release download in the system browser. Linux users installing the `.deb` get the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) pulled in automatically.
 
 ## Markdown support
 

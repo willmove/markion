@@ -20,7 +20,7 @@ Markion 是一款使用 Rust 和 GPUI 构建的原生桌面 Markdown 编辑器�
 | Linux | `.deb` 和 AppImage | x86_64 |
 | macOS | `.app` 和 `.dmg` | Apple Silicon（arm64），macOS 11+ |
 
-当前发布版本尚未签名。Windows SmartScreen 可能要求选择“更多信息 → 仍要运行”，macOS Gatekeeper 可能要求右键应用并选择“打开”。Intel Mac 可通过 Rosetta 运行 arm64 版本；目前尚不提供通用二进制、Apple 公证和自动更新。
+当前发布版本尚未进行平台代码签名。Windows SmartScreen 可能要求选择“更多信息 → 仍要运行”，macOS Gatekeeper 可能要求右键应用并选择“打开”。带签名的 Windows x86_64 正式版本可通过“帮助 → 检查更新…”下载、验证并启动更新；macOS 与 Linux 会在浏览器中打开对应的发布文件。Intel Mac 可通过 Rosetta 运行 arm64 版本；目前尚不提供通用二进制和 Apple 公证。
 
 ## 编辑模式
 

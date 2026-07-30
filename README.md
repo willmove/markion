@@ -20,7 +20,7 @@ Download the latest build from [GitHub Releases](https://github.com/willmove/mar
 | Linux | `.deb` and AppImage | x86_64 |
 | macOS | `.app` and `.dmg` | Apple Silicon (arm64), macOS 11+ |
 
-Releases are currently unsigned. Windows SmartScreen may require **More info → Run anyway**, and macOS Gatekeeper may require right-clicking the app and choosing **Open**. Intel Macs can run the arm64 build through Rosetta; a universal binary, notarization, and automatic updates are not currently provided.
+Releases are not platform code-signed. Windows SmartScreen may require **More info → Run anyway**, and macOS Gatekeeper may require right-clicking the app and choosing **Open**. Tagged Windows x86_64 builds can download, verify, and start a signed update from **Help → Check for Updates…**; macOS and Linux open the matching release download in the browser. Intel Macs can run the arm64 build through Rosetta; a universal binary and Apple notarization are not currently provided.
 
 ## Editing modes
 
