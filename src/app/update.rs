@@ -36,6 +36,10 @@ const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/willmove/markion/rel
 /// Stable metadata asset attached to each tagged GitHub Release. The manifest
 /// points at the OSS-mirrored NSIS installer so the large download uses the
 /// domestic distribution channel while GitHub remains the version authority.
+/// Only the Windows updater path consumes it directly, so non-Windows builds
+/// (and the cross-platform unit tests that reference it) keep the constant
+/// without tripping the dead-code lint that CI's `-D warnings` rejects.
+#[cfg_attr(not(windows), allow(dead_code))]
 const SIGNED_UPDATE_MANIFEST_URL: &str =
     "https://github.com/willmove/markion/releases/latest/download/update.json";
 
