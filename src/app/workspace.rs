@@ -5,7 +5,7 @@ impl MarkionApp {
         assign_view_mode(&mut self.view_mode, view_mode);
         self.slash_commands = None;
         self.dismissed_slash_query = None;
-        self.block_menu = None;
+        self.dismiss_visual_block_menu();
         self.active_tab_mut().clear_visual_caret_affinity();
         self.active_tab_mut().clear_visual_navigation_intent();
         self.active_tab_mut().finish_undo_capture();
@@ -388,6 +388,7 @@ impl MarkionApp {
         cx: &mut Context<Self>,
     ) {
         self.active_menu = None;
+        self.dismiss_visual_block_menu();
         self.file_tree_query_focused = false;
         self.pending_name_input = None;
         self.input_marked_len = 0;
@@ -414,6 +415,7 @@ impl MarkionApp {
     ) {
         // Close any other transient focus so the prompt owns input routing.
         self.active_menu = None;
+        self.dismiss_visual_block_menu();
         self.file_tree_context_menu = None;
         self.file_tree_query_focused = false;
         self.search_focus = None;

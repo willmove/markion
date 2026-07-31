@@ -185,7 +185,7 @@ impl MarkionApp {
         self.active_tab = index;
         self.slash_commands = None;
         self.dismissed_slash_query = None;
-        self.block_menu = None;
+        self.dismiss_visual_block_menu();
         self.refresh_search_matches();
         self.sync_and_persist_session();
         cx.notify();
@@ -287,6 +287,7 @@ impl MarkionApp {
         if entries.is_empty() {
             return;
         }
+        self.dismiss_visual_block_menu();
         self.recovery_manager = Some(RecoveryManagerState { entries });
         self.status = t(self.language, Msg::StatusRecoveryAvailable).into();
         cx.notify();
@@ -482,7 +483,7 @@ impl MarkionApp {
     pub(super) fn after_document_changed(&mut self, cx: &mut Context<Self>) {
         self.slash_commands = None;
         self.dismissed_slash_query = None;
-        self.block_menu = None;
+        self.dismiss_visual_block_menu();
         let tab = self.active_tab_mut();
         tab.clear_visual_caret_affinity();
         tab.clear_visual_navigation_intent();

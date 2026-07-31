@@ -2768,82 +2768,65 @@ fn visual_block_chrome(
     let target = BlockTarget::from_block(app.active_tab().document.version(), block);
     let blocks = app.active_tab().document.visual_blocks_shared();
     let reorderable = block_can_reorder_at(&blocks, block_index);
-    let menu_open = app
-        .block_menu
-        .as_ref()
-        .is_some_and(|menu| menu.target == target);
     let before_target = target.clone();
     let after_target = target.clone();
     let drag_target = target.clone();
     let menu_target = target.clone();
+    let hover_group = format!("visual-block-row-hover-{}", block.id.as_u64());
 
     div()
         .relative()
+        .group(hover_group.clone())
+        .debug_selector(move || format!("visual-block-row-{block_index}"))
         .w_full()
-        .flex()
-        .items_start()
+        .on_mouse_up(
+            MouseButton::Right,
+            cx.listener(move |app, event: &MouseUpEvent, window, cx| {
+                cx.stop_propagation();
+                window.focus(&app.focus_handle(cx));
+                app.open_visual_block_menu(menu_target.clone(), event.position, cx);
+            }),
+        )
         .child(
             div()
-                .w(px(if reorderable { 48. } else { 28. }))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .when(owns_caret, |chrome| {
-                    chrome
-                        .when(reorderable, |chrome| {
-                            chrome.child(
-                                div()
-                                    .id("visual-block-drag-grip")
-                                    .debug_selector(|| "visual-block-drag-grip".to_string())
-                                    .w(px(22.))
-                                    .h(px(22.))
-                                    .rounded_sm()
-                                    .text_size(px(14.))
-                                    .text_color(palette.muted)
-                                    .cursor(CursorStyle::OpenHand)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .hover(move |style| style.bg(palette.surface_bg))
-                                    .child("⠿")
-                                    .on_drag(
-                                        DraggedVisualBlock {
-                                            target: drag_target,
-                                        },
-                                        move |_, _, _, cx| cx.new(|_| Empty),
-                                    ),
-                            )
-                        })
-                        .child(
-                            div()
-                                .id("visual-block-menu-button")
-                                .debug_selector(|| "visual-block-menu-button".to_string())
-                                .w(px(22.))
-                                .h(px(22.))
-                                .rounded_sm()
-                                .text_size(px(14.))
-                                .text_color(palette.muted)
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .hover(move |style| style.bg(palette.surface_bg))
-                                .child("⋮")
-                                .on_mouse_up(
-                                    MouseButton::Left,
-                                    cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                                        app.open_visual_block_menu(menu_target.clone(), cx);
-                                    }),
-                                ),
-                        )
-                }),
+                .debug_selector(move || format!("visual-block-content-{block_index}"))
+                .w_full()
+                .min_w_0()
+                .child(content),
         )
-        .child(div().min_w_0().flex_1().child(content))
         .when(reorderable, |row| {
             row.child(
                 div()
+                    .id(("visual-block-drag-grip", block.id.as_u64()))
+                    .debug_selector(move || format!("visual-block-drag-grip-{block_index}"))
+                    .absolute()
+                    .left(px(-14.))
+                    .top(px(0.))
+                    .w(px(14.))
+                    .h(px(22.))
+                    .rounded_sm()
+                    .text_size(px(12.))
+                    .text_color(palette.muted)
+                    .cursor(CursorStyle::OpenHand)
+                    .opacity(if owns_caret { 1. } else { 0. })
+                    .group_hover(hover_group, |style| style.opacity(1.))
+                    .active(|style| style.opacity(1.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .hover(move |style| style.bg(palette.surface_bg))
+                    .child("⠿")
+                    .on_drag(
+                        DraggedVisualBlock {
+                            target: drag_target,
+                        },
+                        move |_, _, _, cx| cx.new(|_| Empty),
+                    ),
+            )
+            .child(
+                div()
                     .id(("visual-block-drop-before", block.id.as_u64()))
+                    .debug_selector(move || format!("visual-block-drop-before-{block_index}"))
                     .absolute()
                     .top(px(-3.))
                     .left_0()
@@ -2863,6 +2846,7 @@ fn visual_block_chrome(
             .child(
                 div()
                     .id(("visual-block-drop-after", block.id.as_u64()))
+                    .debug_selector(move || format!("visual-block-drop-after-{block_index}"))
                     .absolute()
                     .bottom(px(-3.))
                     .left_0()
@@ -2880,119 +2864,317 @@ fn visual_block_chrome(
                     )),
             )
         })
-        .when(menu_open, |row| {
-            row.child(visual_block_menu(app.language, target, palette, cx))
+}
+
+pub(super) fn visual_block_menu(
+    language: Language,
+    state: BlockMenuState,
+    presentation: BlockMenuPresentation,
+    palette: ThemePalette,
+    max_height: Pixels,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let current_root = editing::block_menu_root_index_for_transform(presentation.current);
+    let submenu = state.submenu;
+    div()
+        .id(("visual-block-menu", state.target.block_id.as_u64()))
+        .flex()
+        .items_start()
+        .gap_1()
+        .child(
+            div()
+                .id("visual-block-menu-root-panel")
+                .debug_selector(|| "visual-block-menu-panel".to_string())
+                .w(px(202.))
+                .max_h(max_height)
+                .overflow_y_scroll()
+                .scrollbar_width(px(8.))
+                .occlude()
+                .p(px(4.))
+                .bg(palette.panel_bg)
+                .border_1()
+                .border_color(palette.border)
+                .rounded_lg()
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .child(block_menu_item_button(
+                    "visual-block-text-headings",
+                    p1_t(language, P1Msg::TextAndHeadings).to_string(),
+                    BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings),
+                    state.root_selected == 0,
+                    current_root == 0,
+                    true,
+                    Some(BlockMenuPointerTarget::Root(0)),
+                    false,
+                    palette,
+                    cx,
+                ))
+                .child(block_menu_item_button(
+                    "visual-block-lists",
+                    p1_t(language, P1Msg::Lists).to_string(),
+                    BlockMenuItem::Submenu(BlockMenuSubmenu::Lists),
+                    state.root_selected == 1,
+                    current_root == 1,
+                    true,
+                    Some(BlockMenuPointerTarget::Root(1)),
+                    false,
+                    palette,
+                    cx,
+                ))
+                .child(block_menu_item_button(
+                    visual_block_transform_element_id(10),
+                    block_transform_label(language, BlockTransform::Quote),
+                    BlockMenuItem::Transform(BlockTransform::Quote),
+                    state.root_selected == 2,
+                    presentation.current == BlockTransform::Quote,
+                    true,
+                    Some(BlockMenuPointerTarget::Root(2)),
+                    false,
+                    palette,
+                    cx,
+                ))
+                .child(block_menu_item_button(
+                    visual_block_transform_element_id(11),
+                    block_transform_label(language, BlockTransform::CodeBlock),
+                    BlockMenuItem::Transform(BlockTransform::CodeBlock),
+                    state.root_selected == 3,
+                    presentation.current == BlockTransform::CodeBlock,
+                    true,
+                    Some(BlockMenuPointerTarget::Root(3)),
+                    false,
+                    palette,
+                    cx,
+                ))
+                .child(block_menu_item_button(
+                    visual_block_transform_element_id(12),
+                    block_transform_label(language, BlockTransform::Divider),
+                    BlockMenuItem::Transform(BlockTransform::Divider),
+                    state.root_selected == 4,
+                    presentation.current == BlockTransform::Divider,
+                    true,
+                    Some(BlockMenuPointerTarget::Root(4)),
+                    false,
+                    palette,
+                    cx,
+                ))
+                .child(block_menu_item_button(
+                    visual_block_transform_element_id(13),
+                    block_transform_label(language, BlockTransform::Table),
+                    BlockMenuItem::Transform(BlockTransform::Table),
+                    state.root_selected == 5,
+                    presentation.current == BlockTransform::Table,
+                    true,
+                    Some(BlockMenuPointerTarget::Root(5)),
+                    false,
+                    palette,
+                    cx,
+                ))
+                .child(block_menu_separator(palette))
+                .child(block_menu_item_button(
+                    "visual-block-duplicate",
+                    p1_t(language, P1Msg::DuplicateBlock).to_string(),
+                    BlockMenuItem::Duplicate,
+                    state.root_selected == 6,
+                    false,
+                    presentation.can_duplicate_or_delete,
+                    Some(BlockMenuPointerTarget::Root(6)),
+                    false,
+                    palette,
+                    cx,
+                ))
+                .child(block_menu_item_button(
+                    "visual-block-move-up",
+                    p1_t(language, P1Msg::MoveUp).to_string(),
+                    BlockMenuItem::MoveUp,
+                    state.root_selected == 7,
+                    false,
+                    presentation.can_move_up,
+                    Some(BlockMenuPointerTarget::Root(7)),
+                    false,
+                    palette,
+                    cx,
+                ))
+                .child(block_menu_item_button(
+                    "visual-block-move-down",
+                    p1_t(language, P1Msg::MoveDown).to_string(),
+                    BlockMenuItem::MoveDown,
+                    state.root_selected == 8,
+                    false,
+                    presentation.can_move_down,
+                    Some(BlockMenuPointerTarget::Root(8)),
+                    false,
+                    palette,
+                    cx,
+                ))
+                .child(block_menu_separator(palette))
+                .child(block_menu_item_button(
+                    "visual-block-delete",
+                    p1_t(language, P1Msg::DeleteBlock).to_string(),
+                    BlockMenuItem::Delete,
+                    state.root_selected == 9,
+                    false,
+                    presentation.can_duplicate_or_delete,
+                    Some(BlockMenuPointerTarget::Root(9)),
+                    true,
+                    palette,
+                    cx,
+                )),
+        )
+        .when_some(submenu, |menu, submenu| {
+            menu.child(visual_block_submenu(
+                language,
+                submenu,
+                state.submenu_selected,
+                presentation,
+                palette,
+                max_height,
+                cx,
+            ))
         })
 }
 
-fn visual_block_menu(
+#[derive(Clone, Copy)]
+enum BlockMenuPointerTarget {
+    Root(usize),
+    Submenu(BlockMenuSubmenu, usize),
+}
+
+fn visual_block_submenu(
     language: Language,
-    target: BlockTarget,
+    submenu: BlockMenuSubmenu,
+    selected: usize,
+    presentation: BlockMenuPresentation,
     palette: ThemePalette,
+    max_height: Pixels,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
-    let transforms = [
-        BlockTransform::Text,
-        BlockTransform::Heading(1),
-        BlockTransform::Heading(2),
-        BlockTransform::Heading(3),
-        BlockTransform::Heading(4),
-        BlockTransform::Heading(5),
-        BlockTransform::Heading(6),
-        BlockTransform::BulletedList,
-        BlockTransform::NumberedList,
-        BlockTransform::TaskList,
-        BlockTransform::Quote,
-        BlockTransform::CodeBlock,
-        BlockTransform::Divider,
-        BlockTransform::Table,
-    ];
-    div()
-        .id(("visual-block-menu", target.block_id.as_u64()))
-        .absolute()
-        .top(px(24.))
-        .left(px(24.))
-        .w(px(220.))
-        .max_h(px(520.))
+    let mut panel = div()
+        .id("visual-block-menu-submenu-panel")
+        .debug_selector(|| "visual-block-submenu-panel".to_string())
+        .w(px(202.))
+        .max_h(max_height)
+        .overflow_y_scroll()
+        .scrollbar_width(px(8.))
         .occlude()
-        .p_2()
+        .p(px(4.))
         .bg(palette.panel_bg)
         .border_1()
         .border_color(palette.border)
         .rounded_lg()
         .shadow_lg()
         .flex()
-        .flex_col()
-        .gap_1()
+        .flex_col();
+    for (index, item) in submenu.items().iter().copied().enumerate() {
+        let BlockMenuItem::Transform(transform) = item else {
+            continue;
+        };
+        let transform_index = block_transform_index(transform);
+        panel = panel.child(block_menu_item_button(
+            visual_block_transform_element_id(transform_index),
+            block_transform_label(language, transform),
+            item,
+            selected == index,
+            presentation.current == transform,
+            true,
+            Some(BlockMenuPointerTarget::Submenu(submenu, index)),
+            false,
+            palette,
+            cx,
+        ));
+    }
+    panel
+}
+
+fn block_menu_separator(palette: ThemePalette) -> Div {
+    div().my(px(3.)).h(px(1.)).bg(palette.border)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn block_menu_item_button(
+    id: &'static str,
+    label: String,
+    item: BlockMenuItem,
+    selected: bool,
+    current: bool,
+    enabled: bool,
+    pointer_target: Option<BlockMenuPointerTarget>,
+    destructive: bool,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let trailing = match item {
+        BlockMenuItem::Submenu(_) if current => "✓  ›",
+        BlockMenuItem::Submenu(_) => "›",
+        _ if current => "✓",
+        _ => "",
+    };
+    div()
+        .id(id)
+        .debug_selector(move || {
+            if enabled {
+                id.to_string()
+            } else {
+                format!("{id}-disabled")
+            }
+        })
+        .h(px(26.))
+        .px_2()
+        .rounded_sm()
+        .text_size(px(12.))
+        .text_color(if destructive && enabled {
+            rgb(0xdc2626)
+        } else {
+            palette.text
+        })
+        .opacity(if enabled { 1. } else { 0.42 })
+        .when(enabled, |row| {
+            row.cursor_pointer()
+                .hover(move |style| style.bg(palette.surface_bg))
+        })
+        .when(selected && enabled, |row| row.bg(palette.surface_bg))
+        .flex()
+        .items_center()
+        .justify_between()
         .child(
             div()
-                .px_2()
-                .py_1()
-                .text_size(px(11.))
-                .font_weight(FontWeight::SEMIBOLD)
+                .min_w_0()
+                .when(current, |label| label.font_weight(FontWeight::SEMIBOLD))
+                .child(label),
+        )
+        .child(
+            div()
+                .ml_2()
+                .flex_none()
                 .text_color(palette.muted)
-                .child(p1_t(language, P1Msg::TurnInto)),
+                .when(current, |indicator| {
+                    indicator.debug_selector(|| "visual-block-current-indicator".to_string())
+                })
+                .child(trailing),
         )
-        .children(
-            transforms
-                .into_iter()
-                .enumerate()
-                .map(|(index, transform)| {
-                    let target = target.clone();
-                    let label = block_transform_label(language, transform);
-                    div()
-                        .id(visual_block_transform_element_id(index))
-                        .debug_selector(move || {
-                            visual_block_transform_element_id(index).to_string()
-                        })
-                        .px_2()
-                        .py_1()
-                        .rounded_sm()
-                        .text_size(px(12.))
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(palette.surface_bg))
-                        .child(label)
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                                app.transform_visual_block(target.clone(), transform, cx);
-                            }),
-                        )
+        .when(enabled, |row| {
+            row.on_mouse_move(cx.listener(
+                move |app, _: &MouseMoveEvent, _, cx| match pointer_target {
+                    Some(BlockMenuPointerTarget::Root(index)) => {
+                        app.select_visual_block_menu_root(
+                            index,
+                            matches!(item, BlockMenuItem::Submenu(_)),
+                            cx,
+                        );
+                    }
+                    Some(BlockMenuPointerTarget::Submenu(submenu, index)) => {
+                        app.select_visual_block_menu_submenu(submenu, index, cx);
+                    }
+                    None => {}
+                },
+            ))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                    app.activate_visual_block_menu_item(item, cx);
                 }),
-        )
-        .child(div().my_1().h(px(1.)).bg(palette.border))
-        .child(block_operation_button(
-            "visual-block-duplicate",
-            p1_t(language, P1Msg::DuplicateBlock),
-            target.clone(),
-            palette,
-            cx,
-            |app, target, cx| app.duplicate_visual_block(target, cx),
-        ))
-        .child(block_operation_button(
-            "visual-block-move-up",
-            p1_t(language, P1Msg::MoveUp),
-            target.clone(),
-            palette,
-            cx,
-            |app, target, cx| app.move_visual_block(target, false, cx),
-        ))
-        .child(block_operation_button(
-            "visual-block-move-down",
-            p1_t(language, P1Msg::MoveDown),
-            target.clone(),
-            palette,
-            cx,
-            |app, target, cx| app.move_visual_block(target, true, cx),
-        ))
-        .child(block_operation_button(
-            "visual-block-delete",
-            p1_t(language, P1Msg::DeleteBlock),
-            target,
-            palette,
-            cx,
-            |app, target, cx| app.delete_visual_block(target, cx),
-        ))
+            )
+        })
 }
 
 fn visual_block_transform_element_id(index: usize) -> &'static str {
@@ -3015,6 +3197,20 @@ fn visual_block_transform_element_id(index: usize) -> &'static str {
     IDS[index.min(IDS.len() - 1)]
 }
 
+fn block_transform_index(transform: BlockTransform) -> usize {
+    match transform {
+        BlockTransform::Text => 0,
+        BlockTransform::Heading(level) => usize::from(level.clamp(1, 6)),
+        BlockTransform::BulletedList => 7,
+        BlockTransform::NumberedList => 8,
+        BlockTransform::TaskList => 9,
+        BlockTransform::Quote => 10,
+        BlockTransform::CodeBlock => 11,
+        BlockTransform::Divider => 12,
+        BlockTransform::Table => 13,
+    }
+}
+
 fn block_transform_label(language: Language, transform: BlockTransform) -> String {
     match transform {
         BlockTransform::Text => p1_t(language, P1Msg::TextBlock).to_string(),
@@ -3027,31 +3223,6 @@ fn block_transform_label(language: Language, transform: BlockTransform) -> Strin
         BlockTransform::Divider => p1_t(language, P1Msg::Divider).to_string(),
         BlockTransform::Table => p1_t(language, P1Msg::Table).to_string(),
     }
-}
-
-fn block_operation_button(
-    id: &'static str,
-    label: &'static str,
-    target: BlockTarget,
-    palette: ThemePalette,
-    cx: &mut Context<MarkionApp>,
-    operation: impl Fn(&mut MarkionApp, BlockTarget, &mut Context<MarkionApp>) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(id)
-        .px_2()
-        .py_1()
-        .rounded_sm()
-        .text_size(px(12.))
-        .cursor_pointer()
-        .hover(move |style| style.bg(palette.surface_bg))
-        .child(label)
-        .on_mouse_up(
-            MouseButton::Left,
-            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                operation(app, target.clone(), cx);
-            }),
-        )
 }
 
 /// Editable link-reference definition row without Unsupported island chrome.

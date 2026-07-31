@@ -2,6 +2,7 @@ use super::*;
 
 impl MarkionApp {
     pub(super) fn show_find(&mut self, _: &ShowFind, _: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_visual_block_menu();
         self.search_visible = true;
         self.replace_visible = false;
         self.search_focus = Some(SearchField::Find);
@@ -25,6 +26,7 @@ impl MarkionApp {
     }
 
     pub(super) fn show_replace(&mut self, _: &ShowReplace, _: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_visual_block_menu();
         self.search_visible = true;
         self.replace_visible = true;
         self.search_focus = Some(SearchField::Find);
@@ -267,6 +269,7 @@ impl MarkionApp {
             self.rebind_keys(cx);
         }
         self.preferences_panel_open = true;
+        self.dismiss_visual_block_menu();
         self.file_tree_context_menu = None;
         self.preview_context_menu = None;
         self.status = t(self.language, Msg::StatusKeyboardShortcuts).into();

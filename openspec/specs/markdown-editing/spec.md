@@ -753,7 +753,7 @@ When a collapsed Visual Edit caret is on a line containing only optional indenta
 - **THEN** the palette closes without guessing a mutation
 
 ### Requirement: Visual Edit SHALL support exact block transformations and operations
-A supported focused Visual Edit block SHALL expose contextual operations to turn it into Text, Heading 1 through Heading 6, Bulleted List, Numbered List, Task List, Quote, or Code Block, and to Duplicate or Delete it. Each operation SHALL validate current document version, block identity, and exact source ownership; it SHALL perform one canonical source mutation with one undo entry and preserve unrelated bytes, line endings, dirty state, autosave/recovery behavior, tab isolation, and cache invariants.
+A supported focused Visual Edit block SHALL expose contextual operations to turn it into Text, Heading 1 through Heading 6, Bulleted List, Numbered List, Task List, Quote, or Code Block, and to Duplicate or Delete it. The contextual block-operation menu SHALL render in an overlay above all Visual Edit document rows and media, SHALL remain anchored near its invoking control within the usable viewport, and SHALL keep every command reachable when space is constrained. Showing, positioning, scrolling within, or dismissing the menu SHALL NOT change canonical source, document version, history, or derived-cache identity. Each operation SHALL validate current document version, block identity, and exact source ownership; it SHALL perform one canonical source mutation with one undo entry and preserve unrelated bytes, line endings, dirty state, autosave/recovery behavior, tab isolation, and cache invariants.
 
 #### Scenario: Heading turns into a task item
 - **WHEN** the user transforms an exactly mapped heading into a Task List block
@@ -774,6 +774,20 @@ A supported focused Visual Edit block SHALL expose contextual operations to turn
 - **WHEN** a block event carries a stale version/identity/range or the source ownership overlaps an ambiguous nested structure
 - **THEN** no source, history, document version, or cache identity changes
 - **AND** complete source editing remains available
+
+#### Scenario: Block menu overlays later visual content
+- **WHEN** the user opens a supported block's operation menu where its bounds overlap following headings, formatted prose, an image, or another Visual Edit row
+- **THEN** the complete menu background and commands paint above the overlapping document content
+- **AND** underlying document content cannot visually obscure the menu or receive pointer actions within its bounds
+
+#### Scenario: Block menu stays reachable near viewport edges
+- **WHEN** the user opens the block-operation menu with insufficient space below or beside its invoking control
+- **THEN** the menu flips or is constrained within the usable viewport
+- **AND** overflow commands remain reachable through menu-local scrolling without scrolling the document
+
+#### Scenario: Block menu dismissal is presentation-only
+- **WHEN** the user dismisses an open block-operation menu with Escape, an outside action, document scrolling, a tab or mode change, or stale-target invalidation
+- **THEN** the menu closes without changing canonical Markdown, document version, selection, history, dirty state, or derived-cache identity
 
 ### Requirement: Visual Edit SHALL support source-safe block reordering
 Supported non-overlapping Visual Edit blocks SHALL be reorderable through Move Up, Move Down, and a drag grip with before/after drop targets. All reorder paths SHALL use the same exact source-unit operation, SHALL preserve the moved block bytes and deterministic separator whitespace, and SHALL create one undo entry. Nested list items, quote-group leaves, overlapping ranges, and stale targets SHALL not expose or accept guessed reordering.

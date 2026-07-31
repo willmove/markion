@@ -44,6 +44,7 @@ impl MarkionApp {
         }
         self.preferences_panel_open = true;
         self.active_menu = None;
+        self.dismiss_visual_block_menu();
         window.focus(&self.preferences_panel_focus);
         cx.notify();
     }

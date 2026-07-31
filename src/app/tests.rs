@@ -1,6 +1,6 @@
 use super::memory::{MemoryProfile, MemoryWarmup};
 use super::*;
-use gpui::{Modifiers, TestAppContext};
+use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 
 #[test]
 fn menu_shortcut_labels_follow_platform_conventions() {
@@ -5361,14 +5361,27 @@ fn p1_visual_slash_pointer_and_block_menu_apply_exact_commands(cx: &mut TestAppC
     });
     cx.run_until_parked();
 
-    let menu = cx
-        .debug_bounds("visual-block-menu-button")
-        .expect("focused supported block should render block menu chrome");
-    cx.simulate_click(menu.center(), Modifiers::none());
+    let row = cx
+        .debug_bounds("visual-block-row-0")
+        .expect("supported block should expose row context interaction");
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: row.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    let lists = cx
+        .debug_bounds("visual-block-lists")
+        .expect("compact root menu should expose the Lists submenu");
+    cx.simulate_event(MouseMoveEvent {
+        position: lists.center(),
+        ..Default::default()
+    });
     cx.run_until_parked();
     let task = cx
         .debug_bounds("visual-block-transform-9")
-        .expect("task-list transform should be rendered");
+        .expect("task-list transform should be rendered in the Lists submenu");
     cx.simulate_click(task.center(), Modifiers::none());
     cx.run_until_parked();
     app.update(cx, |app, _| {
@@ -5387,10 +5400,749 @@ fn p1_visual_slash_pointer_and_block_menu_apply_exact_commands(cx: &mut TestAppC
         cx.notify();
     });
     cx.run_until_parked();
-    cx.debug_bounds("visual-block-menu-button")
-        .expect("exact fenced code should expose block transformations");
-    cx.debug_bounds("visual-block-drag-grip")
+    assert!(
+        cx.debug_bounds("visual-block-menu-button").is_none(),
+        "flow-neutral block chrome no longer renders an ellipsis trigger"
+    );
+    cx.debug_bounds("visual-block-drag-grip-0")
         .expect("exact fenced code should expose a separate drag grip");
+}
+
+#[gpui::test]
+fn visual_block_menu_root_overlay_outpaints_following_rows(cx: &mut TestAppContext) {
+    const SOURCE: &str = "### Level three heading\n\nA deliberately tall paragraph with *italic*, **bold**, `inline code`, and ==highlighted text== repeated across enough words to wrap through several rendered lines. This following visual content must occupy the same screen coordinates as multiple commands in the open block menu. A deliberately tall paragraph with *italic*, **bold**, `inline code`, and ==highlighted text== repeated across enough words to wrap through several rendered lines. This following visual content must occupy the same screen coordinates as multiple commands in the open block menu. A deliberately tall paragraph with *italic*, **bold**, `inline code`, and ==highlighted text== repeated across enough words to wrap through several rendered lines.\n\n#### Level four heading\n\n##### Level five heading\n\n###### Level six heading\n\n![A later image](missing-overlay-test.png)";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        let cursor = SOURCE.find("Level three").expect("fixture heading") + 1;
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let start_version = app.update(cx, |app, _| app.active_tab().document.version());
+    let row = cx
+        .debug_bounds("visual-block-row-0")
+        .expect("heading should expose a block context target");
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: row.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+
+    let overlay = cx
+        .debug_bounds("visual-block-menu-overlay")
+        .expect("block menu should be emitted through the root overlay host");
+    let panel = cx
+        .debug_bounds("visual-block-menu-panel")
+        .expect("block menu panel should be rendered");
+    assert!(
+        overlay.contains(&panel.center()),
+        "root overlay should contain the compact root panel"
+    );
+    let lists = cx
+        .debug_bounds("visual-block-lists")
+        .expect("root panel should expose Lists");
+    cx.simulate_event(MouseMoveEvent {
+        position: lists.center(),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let task = cx
+        .debug_bounds("visual-block-transform-9")
+        .expect("task-list command should be rendered inside the submenu overlay");
+    let overlay = cx
+        .debug_bounds("visual-block-menu-overlay")
+        .expect("overlay bounds should expand to include the submenu");
+    assert!(overlay.contains(&task.center()));
+
+    let overlapping_row = [
+        "visual-block-row-1",
+        "visual-block-row-2",
+        "visual-block-row-3",
+        "visual-block-row-4",
+        "visual-block-row-5",
+        "visual-block-row-6",
+        "visual-block-row-7",
+        "visual-block-row-8",
+        "visual-block-row-9",
+        "visual-block-row-10",
+    ]
+    .into_iter()
+    .filter_map(|selector| cx.debug_bounds(selector))
+    .find(|row| row.contains(&task.center()));
+    assert!(
+        overlapping_row.is_some(),
+        "fixture must place a later visual row beneath the task command"
+    );
+
+    cx.simulate_click(task.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(
+            app.active_tab()
+                .document
+                .text()
+                .starts_with("- [ ] Level three heading")
+        );
+        assert_eq!(app.active_tab().document.version(), start_version + 1);
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert!(app.block_menu.is_none());
+    });
+
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE)
+    });
+}
+
+#[gpui::test]
+fn visual_block_menu_anchor_and_overflow_stay_in_viewport(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("one\n\ntwo"))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(340.), px(260.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let target = BlockTarget::from_block(app.active_tab().document.version(), &blocks[0]);
+        app.open_visual_block_menu(target, point(px(330.), px(250.)), cx);
+    });
+    cx.run_until_parked();
+
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let panel = cx
+        .debug_bounds("visual-block-menu-panel")
+        .expect("edge-anchored menu should render");
+    assert!(f32::from(panel.left()) >= 0.0);
+    assert!(f32::from(panel.top()) >= 0.0);
+    assert!(f32::from(panel.right()) <= f32::from(viewport.width) + 0.5);
+    assert!(f32::from(panel.bottom()) <= f32::from(viewport.height) + 0.5);
+
+    let (scroll_item, scroll_offset) = app.update(cx, |app, _| {
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        (top.item_ix, top.offset_in_item)
+    });
+    cx.simulate_event(ScrollWheelEvent {
+        position: panel.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-800.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+
+    let delete = cx
+        .debug_bounds("visual-block-delete")
+        .expect("final command should remain rendered after menu-local scrolling");
+    assert!(
+        panel.contains(&delete.center()),
+        "menu-local scrolling must bring the final command inside the visible panel"
+    );
+    app.update(cx, |app, _| {
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(top.item_ix, scroll_item);
+        assert_eq!(top.offset_in_item, scroll_offset);
+        assert!(app.block_menu.is_some());
+    });
+
+    cx.simulate_click(delete.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "two");
+        assert!(app.block_menu.is_none());
+    });
+}
+
+fn assert_block_menu_presentation_state(
+    app: &MarkionApp,
+    text: &str,
+    version: u64,
+    selection: &Range<usize>,
+    undo_len: usize,
+    dirty: bool,
+    blocks: &Arc<Vec<VisualBlock>>,
+) {
+    let tab = app.active_tab();
+    assert_eq!(tab.document.text(), text);
+    assert_eq!(tab.document.version(), version);
+    assert_eq!(&tab.selected_range, selection);
+    assert_eq!(tab.undo_stack.len(), undo_len);
+    assert_eq!(tab.document.is_dirty(), dirty);
+    assert!(Arc::ptr_eq(blocks, &tab.document.visual_blocks_shared()));
+}
+
+#[gpui::test]
+fn visual_block_menu_dismissal_is_presentation_only(cx: &mut TestAppContext) {
+    const SOURCE: &str = "## heading\n\nparagraph";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 4..4;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (target, version, selection, undo_len, dirty, blocks) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        (
+            BlockTarget::from_block(tab.document.version(), &blocks[0]),
+            tab.document.version(),
+            tab.selected_range.clone(),
+            tab.undo_stack.len(),
+            tab.document.is_dirty(),
+            blocks,
+        )
+    });
+
+    let open = |app: &mut MarkionApp, cx: &mut Context<MarkionApp>| {
+        app.open_visual_block_menu(target.clone(), point(px(48.), px(120.)), cx);
+    };
+
+    app.update(cx, |app, cx| open(app, cx));
+    cx.dispatch_action(ClearFileTreeSearch);
+    app.update(cx, |app, _| {
+        assert!(app.block_menu.is_none());
+        assert_block_menu_presentation_state(
+            app, SOURCE, version, &selection, undo_len, dirty, &blocks,
+        );
+    });
+
+    app.update(cx, |app, cx| open(app, cx));
+    cx.run_until_parked();
+    let workspace = cx
+        .debug_bounds("workspace-row")
+        .expect("workspace should be rendered");
+    cx.simulate_mouse_down(
+        point(workspace.left() + px(4.), workspace.bottom() - px(4.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    app.update(cx, |app, _| {
+        assert!(app.block_menu.is_none());
+        assert_block_menu_presentation_state(
+            app, SOURCE, version, &selection, undo_len, dirty, &blocks,
+        );
+    });
+
+    app.update(cx, |app, cx| open(app, cx));
+    cx.run_until_parked();
+    let row = cx
+        .debug_bounds("visual-block-row-0")
+        .expect("focused visual row should be rendered");
+    cx.simulate_event(ScrollWheelEvent {
+        position: point(row.right() - px(4.), row.center().y),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+        ..Default::default()
+    });
+    app.update(cx, |app, _| {
+        assert!(app.block_menu.is_none());
+        assert_block_menu_presentation_state(
+            app, SOURCE, version, &selection, undo_len, dirty, &blocks,
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        open(app, cx);
+        app.set_view_mode(ViewMode::Read, cx);
+        assert!(app.block_menu.is_none());
+        app.set_view_mode(ViewMode::VisualEdit, cx);
+    });
+    app.update(cx, |app, _| {
+        assert_block_menu_presentation_state(
+            app, SOURCE, version, &selection, undo_len, dirty, &blocks,
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        open(app, cx);
+        app.switch_active_tab(0, cx);
+    });
+    app.update(cx, |app, _| {
+        assert!(app.block_menu.is_none());
+        assert_block_menu_presentation_state(
+            app, SOURCE, version, &selection, undo_len, dirty, &blocks,
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        let mut stale = target.clone();
+        stale.document_version += 1;
+        app.open_visual_block_menu(stale.clone(), point(px(48.), px(120.)), cx);
+        app.transform_visual_block(stale, BlockTransform::Heading(1), cx);
+    });
+    app.update(cx, |app, _| {
+        assert!(app.block_menu.is_none());
+        assert_block_menu_presentation_state(
+            app, SOURCE, version, &selection, undo_len, dirty, &blocks,
+        );
+    });
+}
+
+fn assert_bounds_axis_and_width_match(left: Bounds<Pixels>, right: Bounds<Pixels>) {
+    assert!(
+        (f32::from(left.left()) - f32::from(right.left())).abs() <= 0.5,
+        "left axes differ: {left:?} vs {right:?}"
+    );
+    assert!(
+        (f32::from(left.size.width) - f32::from(right.size.width)).abs() <= 0.5,
+        "available widths differ: {left:?} vs {right:?}"
+    );
+}
+
+fn test_debug_selector(selector: String) -> &'static str {
+    Box::leak(selector.into_boxed_str())
+}
+
+#[gpui::test]
+fn visual_edit_flow_neutral_rows_share_the_read_document_axis(cx: &mut TestAppContext) {
+    const SOURCE: &str = "## Heading\n\nA paragraph that remains aligned.\n\n![image](missing-flow-neutral.png)\n\n$$x^2$$";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 4..4;
+        app.view_mode = ViewMode::VisualEdit;
+        app.preview_adaptive_width = false;
+        app
+    });
+    cx.simulate_resize(size(px(1200.), px(760.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (heading, paragraph, image, formula) = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        (
+            blocks
+                .iter()
+                .position(|block| matches!(block.kind, VisualBlockKind::Heading { .. }))
+                .unwrap(),
+            blocks
+                .iter()
+                .position(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+                .unwrap(),
+            blocks
+                .iter()
+                .position(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+                .unwrap(),
+            blocks
+                .iter()
+                .position(|block| matches!(block.kind, VisualBlockKind::MathBlock { .. }))
+                .unwrap(),
+        )
+    });
+    let heading_bounds = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-block-content-{heading}"
+        )))
+        .expect("heading content bounds");
+    let paragraph_bounds = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-block-content-{paragraph}"
+        )))
+        .expect("paragraph content bounds");
+    let image_bounds = cx
+        .debug_bounds(test_debug_selector(format!("visual-document-row-{image}")))
+        .expect("image row bounds");
+    let formula_bounds = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-document-row-{formula}"
+        )))
+        .expect("formula row bounds");
+    assert_bounds_axis_and_width_match(heading_bounds, paragraph_bounds);
+    assert_bounds_axis_and_width_match(heading_bounds, image_bounds);
+    assert_bounds_axis_and_width_match(heading_bounds, formula_bounds);
+
+    app.update(cx, |app, cx| app.set_view_mode(ViewMode::Read, cx));
+    cx.run_until_parked();
+    let read_heading = cx
+        .debug_bounds("preview-block-row-0")
+        .expect("read heading row bounds");
+    let read_paragraph = cx
+        .debug_bounds("preview-block-row-1")
+        .expect("read paragraph row bounds");
+    let read_image = cx
+        .debug_bounds("preview-block-row-2")
+        .expect("read image row bounds");
+    let read_formula = cx
+        .debug_bounds("preview-block-row-3")
+        .expect("read formula row bounds");
+    assert_bounds_axis_and_width_match(read_heading, read_paragraph);
+    assert_bounds_axis_and_width_match(read_heading, read_image);
+    assert_bounds_axis_and_width_match(read_heading, read_formula);
+    assert_bounds_axis_and_width_match(heading_bounds, read_heading);
+}
+
+#[gpui::test]
+fn flow_neutral_hover_focus_and_menu_leave_wrapped_geometry_and_state_unchanged(
+    cx: &mut TestAppContext,
+) {
+    const SOURCE: &str = "A deliberately long paragraph that wraps across several visual lines without reserving a hidden operation gutter. Its content width and row height must stay fixed while chrome appears on hover, focus, or through the context menu.\n\nsecond";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        let cursor = SOURCE.find("second").unwrap() + 1;
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(560.), px(500.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let content_before = cx
+        .debug_bounds("visual-block-content-0")
+        .expect("wrapped content bounds");
+    let row_before = cx
+        .debug_bounds("visual-block-row-0")
+        .expect("wrapped row bounds");
+    let (version, selection, undo_len, dirty, blocks) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.version(),
+            tab.selected_range.clone(),
+            tab.undo_stack.len(),
+            tab.document.is_dirty(),
+            tab.document.visual_blocks_shared(),
+        )
+    });
+    cx.simulate_event(MouseMoveEvent {
+        position: row_before.center(),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        cx.debug_bounds("visual-block-content-0").unwrap(),
+        content_before
+    );
+    assert_eq!(cx.debug_bounds("visual-block-row-0").unwrap(), row_before);
+
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: row_before.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        cx.debug_bounds("visual-block-content-0").unwrap(),
+        content_before
+    );
+    assert_eq!(cx.debug_bounds("visual-block-row-0").unwrap(), row_before);
+    app.update(cx, |app, _| {
+        assert_block_menu_presentation_state(
+            app, SOURCE, version, &selection, undo_len, dirty, &blocks,
+        );
+    });
+
+    cx.dispatch_action(ClearFileTreeSearch);
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().selected_range = 1..1;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        cx.debug_bounds("visual-block-content-0").unwrap(),
+        content_before
+    );
+    assert_eq!(cx.debug_bounds("visual-block-row-0").unwrap(), row_before);
+}
+
+#[gpui::test]
+fn visual_block_context_targeting_preserves_non_caret_selection_and_rejects_unsupported(
+    cx: &mut TestAppContext,
+) {
+    const SOURCE: &str = "first\n\nsecond\n\n![image](missing-context-target.png)";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 0..5;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (second, image, selection, version, blocks) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let paragraphs = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| matches!(block.kind, VisualBlockKind::Paragraph))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        (
+            paragraphs[1],
+            blocks
+                .iter()
+                .position(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+                .unwrap(),
+            tab.selected_range.clone(),
+            tab.document.version(),
+            blocks,
+        )
+    });
+    let second_row = cx
+        .debug_bounds(test_debug_selector(format!("visual-block-row-{second}")))
+        .expect("non-caret paragraph row");
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: second_row.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let menu = app.block_menu.as_ref().expect("right-click menu");
+        assert_eq!(menu.target.block_id, blocks[second].id);
+        assert_eq!(menu.anchor, second_row.center());
+        assert_eq!(app.active_tab().selected_range, selection);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(Arc::ptr_eq(
+            &blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+    });
+    assert!(
+        cx.debug_bounds("visual-context-bold").is_none(),
+        "block menu takes presentation precedence over selection toolbar"
+    );
+
+    cx.dispatch_action(ClearFileTreeSearch);
+    let image_row = cx
+        .debug_bounds(test_debug_selector(format!("visual-document-row-{image}")))
+        .expect("unsupported image row");
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: image_row.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        assert!(app.block_menu.is_none());
+        let mut stale = BlockTarget::from_block(version, &blocks[second]);
+        stale.document_version += 1;
+        app.open_visual_block_menu(stale, image_row.center(), cx);
+        assert!(app.block_menu.is_none());
+        assert_eq!(app.active_tab().selected_range, selection);
+    });
+}
+
+#[gpui::test]
+fn visual_block_menu_keyboard_submenus_disabled_moves_and_exact_undo(cx: &mut TestAppContext) {
+    const SOURCE: &str = "one\n\ntwo\n\nthree";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_action(ShowVisualBlockContextMenu);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let menu = app.block_menu.as_ref().expect("keyboard block menu");
+        assert_eq!(menu.root_selected, 0);
+        assert!(menu.anchor.y >= app.active_tab().visual_caret_bounds.unwrap().top());
+        let model = app.block_menu_presentation().unwrap();
+        assert!(!model.can_move_up);
+        assert!(model.can_move_down);
+    });
+    assert!(
+        cx.debug_bounds("visual-block-current-indicator").is_some(),
+        "current paragraph category should be indicated"
+    );
+    cx.dispatch_action(Right);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.block_menu.as_ref().unwrap().submenu,
+            Some(BlockMenuSubmenu::TextAndHeadings)
+        );
+    });
+    cx.dispatch_action(Down);
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "# one\n\ntwo\n\nthree");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE)
+    });
+
+    cx.dispatch_action(ShowVisualBlockContextMenu);
+    app.update(cx, |app, cx| {
+        app.select_visual_block_menu_root(7, false, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-block-move-up-disabled").is_some(),
+        "first block Move Up should render disabled"
+    );
+    cx.dispatch_action(InsertNewline);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+        assert!(app.block_menu.is_some());
+    });
+    app.update(cx, |app, cx| {
+        app.select_visual_block_menu_root(8, false, cx)
+    });
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "two\n\none\n\nthree");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE)
+    });
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "- item\n\nsecond",
+        ))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 3..3;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.dispatch_action(ShowVisualBlockContextMenu);
+    cx.dispatch_action(Right);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.block_menu.as_ref().unwrap().submenu,
+            Some(BlockMenuSubmenu::Lists)
+        );
+    });
+    cx.dispatch_action(Down);
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "1. item\n\nsecond");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "- item\n\nsecond")
+    });
+}
+
+#[gpui::test]
+fn flow_neutral_drag_reorders_only_on_drop_and_keeps_one_step_undo(cx: &mut TestAppContext) {
+    const SOURCE: &str = "one\n\ntwo";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (first, second, version, selection, blocks) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let paragraphs = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| matches!(block.kind, VisualBlockKind::Paragraph))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        (
+            paragraphs[0],
+            paragraphs[1],
+            tab.document.version(),
+            tab.selected_range.clone(),
+            blocks,
+        )
+    });
+    let grip = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-block-drag-grip-{first}"
+        )))
+        .expect("flow-neutral drag grip");
+    let drop_after = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-block-drop-after-{second}"
+        )))
+        .expect("second block after-drop zone");
+    let first_content_selector = test_debug_selector(format!("visual-block-content-{first}"));
+    let second_content_selector = test_debug_selector(format!("visual-block-content-{second}"));
+    assert_eq!(
+        cx.debug_bounds(first_content_selector).unwrap().left(),
+        cx.debug_bounds(second_content_selector).unwrap().left()
+    );
+    cx.simulate_mouse_down(grip.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_event(MouseMoveEvent {
+        position: drop_after.center(),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_block_menu_presentation_state(app, SOURCE, version, &selection, 0, false, &blocks);
+    });
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: drop_after.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "two\n\none\n\n");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE)
+    });
 }
 
 #[gpui::test]

@@ -1,5 +1,51 @@
 use super::*;
 
+fn visual_block_transform(block: &VisualBlock) -> Option<BlockTransform> {
+    match &block.kind {
+        VisualBlockKind::Heading { level } => Some(BlockTransform::Heading(*level)),
+        VisualBlockKind::Paragraph | VisualBlockKind::Whitespace => Some(BlockTransform::Text),
+        VisualBlockKind::ListItem {
+            ordered, checked, ..
+        } => Some(if checked.is_some() {
+            BlockTransform::TaskList
+        } else if *ordered {
+            BlockTransform::NumberedList
+        } else {
+            BlockTransform::BulletedList
+        }),
+        VisualBlockKind::BlockQuote => Some(BlockTransform::Quote),
+        VisualBlockKind::CodeBlock { .. } => Some(BlockTransform::CodeBlock),
+        VisualBlockKind::Rule => Some(BlockTransform::Divider),
+        VisualBlockKind::Table { .. } => Some(BlockTransform::Table),
+        _ => None,
+    }
+}
+
+pub(super) fn block_menu_root_index_for_transform(transform: BlockTransform) -> usize {
+    match transform {
+        BlockTransform::Text | BlockTransform::Heading(_) => 0,
+        BlockTransform::BulletedList | BlockTransform::NumberedList | BlockTransform::TaskList => 1,
+        BlockTransform::Quote => 2,
+        BlockTransform::CodeBlock => 3,
+        BlockTransform::Divider => 4,
+        BlockTransform::Table => 5,
+    }
+}
+
+fn block_menu_submenu_current_index(
+    submenu: BlockMenuSubmenu,
+    current: Option<BlockTransform>,
+) -> usize {
+    current
+        .and_then(|current| {
+            submenu
+                .items()
+                .iter()
+                .position(|item| *item == BlockMenuItem::Transform(current))
+        })
+        .unwrap_or(0)
+}
+
 impl MarkionApp {
     pub(super) fn sync_slash_command_state(&mut self, cx: &mut Context<Self>) {
         let query = if self.block_menu.is_none()
@@ -93,15 +139,258 @@ impl MarkionApp {
         }
     }
 
-    pub(super) fn open_visual_block_menu(&mut self, target: BlockTarget, cx: &mut Context<Self>) {
-        self.block_menu = Some(BlockMenuState { target });
+    pub(super) fn open_visual_block_menu(
+        &mut self,
+        target: BlockTarget,
+        anchor: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(presentation) = self.block_menu_presentation_for_target(&target) else {
+            if self.dismiss_visual_block_menu() {
+                cx.notify();
+            }
+            return;
+        };
+        let root_selected = block_menu_root_index_for_transform(presentation.current);
+        self.block_menu = Some(BlockMenuState {
+            target,
+            anchor,
+            root_selected,
+            submenu: None,
+            submenu_selected: 0,
+        });
         self.slash_commands = None;
+        self.preview_context_menu = None;
+        self.file_tree_context_menu = None;
+        self.active_menu = None;
+        self.link_editor = None;
         cx.notify();
     }
 
-    pub(super) fn close_visual_block_menu(&mut self, cx: &mut Context<Self>) {
-        self.block_menu = None;
+    pub(super) fn show_visual_block_context_menu(
+        &mut self,
+        _: &ShowVisualBlockContextMenu,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.view_mode, ViewMode::VisualEdit) {
+            return;
+        }
+        let tab = self.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let Some(index) =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+        else {
+            return;
+        };
+        if !block_can_transform_at(&blocks, index) {
+            return;
+        }
+        let target = BlockTarget::from_block(tab.document.version(), &blocks[index]);
+        let anchor = tab
+            .visual_caret_bounds
+            .map(|bounds| point(bounds.left(), bounds.bottom()))
+            .or_else(|| {
+                tab.visual_input_bounds
+                    .map(|bounds| point(bounds.left() + px(12.), bounds.top() + px(12.)))
+            });
+        if let Some(anchor) = anchor {
+            self.open_visual_block_menu(target, anchor, cx);
+        }
+    }
+
+    pub(super) fn block_menu_presentation(&self) -> Option<BlockMenuPresentation> {
+        self.block_menu
+            .as_ref()
+            .and_then(|menu| self.block_menu_presentation_for_target(&menu.target))
+    }
+
+    fn block_menu_presentation_for_target(
+        &self,
+        target: &BlockTarget,
+    ) -> Option<BlockMenuPresentation> {
+        let tab = self.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let (index, block) = validate_block_target(tab.document.version(), &blocks, target).ok()?;
+        if !block_can_transform_at(&blocks, index) {
+            return None;
+        }
+        let current = visual_block_transform(block)?;
+        let can_duplicate_or_delete = block_can_reorder_at(&blocks, index);
+        Some(BlockMenuPresentation {
+            current,
+            can_duplicate_or_delete,
+            can_move_up: can_duplicate_or_delete
+                && adjacent_reorder_target(tab.document.version(), &blocks, target, false).is_ok(),
+            can_move_down: can_duplicate_or_delete
+                && adjacent_reorder_target(tab.document.version(), &blocks, target, true).is_ok(),
+        })
+    }
+
+    pub(super) fn select_visual_block_menu_root(
+        &mut self,
+        index: usize,
+        open_submenu: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.block_menu_presentation().map(|model| model.current);
+        let Some(state) = &mut self.block_menu else {
+            return;
+        };
+        state.root_selected = index.min(BLOCK_MENU_ROOT_ITEMS.len().saturating_sub(1));
+        let submenu = match BLOCK_MENU_ROOT_ITEMS[state.root_selected] {
+            BlockMenuItem::Submenu(submenu) if open_submenu => Some(submenu),
+            _ => None,
+        };
+        if state.submenu != submenu {
+            state.submenu = submenu;
+            state.submenu_selected = state
+                .submenu
+                .map(|submenu| block_menu_submenu_current_index(submenu, current))
+                .unwrap_or(0);
+        }
         cx.notify();
+    }
+
+    pub(super) fn select_visual_block_menu_submenu(
+        &mut self,
+        submenu: BlockMenuSubmenu,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = &mut self.block_menu else {
+            return;
+        };
+        state.submenu = Some(submenu);
+        state.submenu_selected = index.min(submenu.items().len().saturating_sub(1));
+        cx.notify();
+    }
+
+    pub(super) fn move_visual_block_menu_selection(
+        &mut self,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(presentation) = self.block_menu_presentation() else {
+            return false;
+        };
+        let Some(state) = &mut self.block_menu else {
+            return false;
+        };
+        let (items, selected) = if let Some(submenu) = state.submenu {
+            (submenu.items(), &mut state.submenu_selected)
+        } else {
+            (BLOCK_MENU_ROOT_ITEMS.as_slice(), &mut state.root_selected)
+        };
+        if items.is_empty() {
+            return true;
+        }
+        for _ in 0..items.len() {
+            *selected = if forward {
+                (*selected + 1) % items.len()
+            } else if *selected == 0 {
+                items.len() - 1
+            } else {
+                *selected - 1
+            };
+            if presentation.item_enabled(items[*selected]) {
+                break;
+            }
+        }
+        cx.notify();
+        true
+    }
+
+    pub(super) fn enter_visual_block_menu_submenu(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(state) = self.block_menu.clone() else {
+            return false;
+        };
+        if state.submenu.is_some() {
+            return true;
+        }
+        let Some(BlockMenuItem::Submenu(submenu)) =
+            BLOCK_MENU_ROOT_ITEMS.get(state.root_selected).copied()
+        else {
+            return true;
+        };
+        let current = self.block_menu_presentation().map(|model| model.current);
+        let Some(state) = &mut self.block_menu else {
+            return false;
+        };
+        state.submenu = Some(submenu);
+        state.submenu_selected = block_menu_submenu_current_index(submenu, current);
+        cx.notify();
+        true
+    }
+
+    pub(super) fn leave_visual_block_menu_submenu(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(state) = &mut self.block_menu else {
+            return false;
+        };
+        if state.submenu.take().is_some() {
+            cx.notify();
+        }
+        true
+    }
+
+    pub(super) fn confirm_visual_block_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(state) = self.block_menu.clone() else {
+            return false;
+        };
+        let item = if let Some(submenu) = state.submenu {
+            submenu.items().get(state.submenu_selected).copied()
+        } else {
+            BLOCK_MENU_ROOT_ITEMS.get(state.root_selected).copied()
+        };
+        let Some(item) = item else {
+            return true;
+        };
+        self.activate_visual_block_menu_item(item, cx);
+        true
+    }
+
+    pub(super) fn activate_visual_block_menu_item(
+        &mut self,
+        item: BlockMenuItem,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(presentation) = self.block_menu_presentation() else {
+            self.close_visual_block_menu(cx);
+            return;
+        };
+        if !presentation.item_enabled(item) {
+            return;
+        }
+        let Some(target) = self.block_menu.as_ref().map(|menu| menu.target.clone()) else {
+            return;
+        };
+        match item {
+            BlockMenuItem::Submenu(submenu) => {
+                let current = Some(presentation.current);
+                if let Some(state) = &mut self.block_menu {
+                    state.submenu = Some(submenu);
+                    state.submenu_selected = block_menu_submenu_current_index(submenu, current);
+                }
+                cx.notify();
+            }
+            BlockMenuItem::Transform(transform) => {
+                self.transform_visual_block(target, transform, cx)
+            }
+            BlockMenuItem::Duplicate => self.duplicate_visual_block(target, cx),
+            BlockMenuItem::MoveUp => self.move_visual_block(target, false, cx),
+            BlockMenuItem::MoveDown => self.move_visual_block(target, true, cx),
+            BlockMenuItem::Delete => self.delete_visual_block(target, cx),
+        }
+    }
+
+    pub(super) fn dismiss_visual_block_menu(&mut self) -> bool {
+        self.block_menu.take().is_some()
+    }
+
+    pub(super) fn close_visual_block_menu(&mut self, cx: &mut Context<Self>) {
+        if self.dismiss_visual_block_menu() {
+            cx.notify();
+        }
     }
 
     pub(super) fn transform_visual_block(
@@ -227,7 +516,7 @@ impl MarkionApp {
         tab.marked_range = None;
         self.slash_commands = None;
         self.dismissed_slash_query = None;
-        self.block_menu = None;
+        self.dismiss_visual_block_menu();
         self.status = status;
         self.after_document_changed(cx);
         cx.notify();
@@ -236,7 +525,7 @@ impl MarkionApp {
     fn report_block_edit_error(&mut self, error: BlockEditError, cx: &mut Context<Self>) {
         self.slash_commands = None;
         self.dismissed_slash_query = None;
-        self.block_menu = None;
+        self.dismiss_visual_block_menu();
         self.status = p1_t(
             self.language,
             match error {
@@ -558,6 +847,7 @@ impl MarkionApp {
     }
 
     pub(super) fn open_link_editor(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_visual_block_menu();
         let selected = self.active_tab().selected_range.clone();
         let cursor = self.active_tab().cursor_offset();
         let existing = inline_link_at(self.active_tab().document.text(), cursor);
@@ -929,6 +1219,7 @@ impl MarkionApp {
         );
         self.file_tree_context_menu = None;
         self.pending_name_input = None;
+        self.dismiss_visual_block_menu();
         self.active_menu = if self.active_menu == Some(menu) {
             None
         } else {
@@ -980,12 +1271,14 @@ impl MarkionApp {
             || self.file_tree_context_menu.is_some()
             || self.preview_context_menu.is_some()
             || self.pending_name_input.is_some()
+            || self.block_menu.is_some()
         {
             self.active_menu = None;
             self.open_recent_submenu_open = false;
             self.file_tree_context_menu = None;
             self.preview_context_menu = None;
             self.pending_name_input = None;
+            self.dismiss_visual_block_menu();
             cx.notify();
         }
     }
@@ -998,6 +1291,7 @@ impl MarkionApp {
     ) {
         self.active_menu = None;
         self.file_tree_context_menu = None;
+        self.dismiss_visual_block_menu();
         // Pane chrome and selectable runs may both handle the same right-click.
         // Prefer a resolved link over a later `None` from the pane surface.
         if let Some(existing) = &mut self.preview_context_menu {
@@ -1269,6 +1563,9 @@ impl MarkionApp {
     }
 
     pub(super) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        if self.leave_visual_block_menu_submenu(cx) {
+            return;
+        }
         let (is_empty, start) = {
             let tab = self.active_tab();
             (tab.selected_range.is_empty(), tab.selected_range.start)
@@ -1293,6 +1590,9 @@ impl MarkionApp {
     }
 
     pub(super) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        if self.enter_visual_block_menu_submenu(cx) {
+            return;
+        }
         let (is_empty, end) = {
             let tab = self.active_tab();
             (tab.selected_range.is_empty(), tab.selected_range.end)
@@ -1345,6 +1645,9 @@ impl MarkionApp {
     }
 
     pub(super) fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_visual_block_menu_selection(false, cx) {
+            return;
+        }
         self.sync_slash_command_state(cx);
         if self.move_slash_selection(false, cx) {
             return;
@@ -1366,6 +1669,9 @@ impl MarkionApp {
     }
 
     pub(super) fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_visual_block_menu_selection(true, cx) {
+            return;
+        }
         self.sync_slash_command_state(cx);
         if self.move_slash_selection(true, cx) {
             return;
@@ -1436,6 +1742,9 @@ impl MarkionApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.confirm_visual_block_menu(cx) {
+            return;
+        }
         // When the inline name prompt is open, Enter commits the name instead
         // of inserting a newline into the document.
         if self.pending_name_input.is_some() {

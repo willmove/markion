@@ -50,7 +50,7 @@ use markion::{
     normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf, reorder_block, save_app_preferences,
     save_session_state, save_theme_definition, serialize_inline_image, serialize_inline_link,
     shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at, t, tf,
-    title_from_path, transform_block,
+    title_from_path, transform_block, validate_block_target,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -101,6 +101,7 @@ actions!(
         TableMoveRowDown,
         TableAddColumn,
         TableDeleteColumn,
+        ShowVisualBlockContextMenu,
         NewDocument,
         OpenDocument,
         OpenFolder,
@@ -772,6 +773,83 @@ struct SlashCommandState {
 #[derive(Clone, Debug)]
 struct BlockMenuState {
     target: BlockTarget,
+    anchor: Point<Pixels>,
+    root_selected: usize,
+    submenu: Option<BlockMenuSubmenu>,
+    submenu_selected: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockMenuSubmenu {
+    TextAndHeadings,
+    Lists,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockMenuItem {
+    Submenu(BlockMenuSubmenu),
+    Transform(BlockTransform),
+    Duplicate,
+    MoveUp,
+    MoveDown,
+    Delete,
+}
+
+const BLOCK_MENU_ROOT_ITEMS: [BlockMenuItem; 10] = [
+    BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings),
+    BlockMenuItem::Submenu(BlockMenuSubmenu::Lists),
+    BlockMenuItem::Transform(BlockTransform::Quote),
+    BlockMenuItem::Transform(BlockTransform::CodeBlock),
+    BlockMenuItem::Transform(BlockTransform::Divider),
+    BlockMenuItem::Transform(BlockTransform::Table),
+    BlockMenuItem::Duplicate,
+    BlockMenuItem::MoveUp,
+    BlockMenuItem::MoveDown,
+    BlockMenuItem::Delete,
+];
+
+const BLOCK_MENU_TEXT_ITEMS: [BlockMenuItem; 7] = [
+    BlockMenuItem::Transform(BlockTransform::Text),
+    BlockMenuItem::Transform(BlockTransform::Heading(1)),
+    BlockMenuItem::Transform(BlockTransform::Heading(2)),
+    BlockMenuItem::Transform(BlockTransform::Heading(3)),
+    BlockMenuItem::Transform(BlockTransform::Heading(4)),
+    BlockMenuItem::Transform(BlockTransform::Heading(5)),
+    BlockMenuItem::Transform(BlockTransform::Heading(6)),
+];
+
+const BLOCK_MENU_LIST_ITEMS: [BlockMenuItem; 3] = [
+    BlockMenuItem::Transform(BlockTransform::BulletedList),
+    BlockMenuItem::Transform(BlockTransform::NumberedList),
+    BlockMenuItem::Transform(BlockTransform::TaskList),
+];
+
+impl BlockMenuSubmenu {
+    fn items(self) -> &'static [BlockMenuItem] {
+        match self {
+            Self::TextAndHeadings => &BLOCK_MENU_TEXT_ITEMS,
+            Self::Lists => &BLOCK_MENU_LIST_ITEMS,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BlockMenuPresentation {
+    current: BlockTransform,
+    can_duplicate_or_delete: bool,
+    can_move_up: bool,
+    can_move_down: bool,
+}
+
+impl BlockMenuPresentation {
+    fn item_enabled(self, item: BlockMenuItem) -> bool {
+        match item {
+            BlockMenuItem::MoveUp => self.can_move_up,
+            BlockMenuItem::MoveDown => self.can_move_down,
+            BlockMenuItem::Duplicate | BlockMenuItem::Delete => self.can_duplicate_or_delete,
+            BlockMenuItem::Submenu(_) | BlockMenuItem::Transform(_) => true,
+        }
+    }
 }
 
 fn slash_command_label(language: Language, command: SlashCommand) -> String {

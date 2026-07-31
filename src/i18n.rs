@@ -959,9 +959,11 @@ pub enum P1Msg {
     BlockDeleted,
     DragBlock,
     Close,
+    TextAndHeadings,
+    Lists,
 }
 
-const P1_EN: [&str; 37] = [
+const P1_EN: [&str; 39] = [
     "Recover documents",
     "Choose which recovery snapshots to restore or discard. Unselected snapshots stay safe on disk.",
     "Restore All",
@@ -999,8 +1001,10 @@ const P1_EN: [&str; 37] = [
     "Block deleted",
     "Drag block",
     "Close",
+    "Text and Headings",
+    "Lists",
 ];
-const P1_ZH_HANS: [&str; 37] = [
+const P1_ZH_HANS: [&str; 39] = [
     "恢复文档",
     "选择要恢复或放弃的恢复快照。未选择的快照会安全保留在磁盘上。",
     "全部恢复",
@@ -1038,8 +1042,10 @@ const P1_ZH_HANS: [&str; 37] = [
     "块已删除",
     "拖动块",
     "关闭",
+    "文本与标题",
+    "列表",
 ];
-const P1_ZH_HANT: [&str; 37] = [
+const P1_ZH_HANT: [&str; 39] = [
     "復原文件",
     "選擇要復原或捨棄的復原快照。未選取的快照會安全保留在磁碟上。",
     "全部復原",
@@ -1077,8 +1083,10 @@ const P1_ZH_HANT: [&str; 37] = [
     "區塊已刪除",
     "拖動區塊",
     "關閉",
+    "文字與標題",
+    "清單",
 ];
-const P1_JA: [&str; 37] = [
+const P1_JA: [&str; 39] = [
     "文書を復元",
     "復元または破棄するスナップショットを選択します。未選択のものはディスクに保持されます。",
     "すべて復元",
@@ -1116,8 +1124,10 @@ const P1_JA: [&str; 37] = [
     "ブロックを削除しました",
     "ブロックをドラッグ",
     "閉じる",
+    "テキストと見出し",
+    "リスト",
 ];
-const P1_FR: [&str; 37] = [
+const P1_FR: [&str; 39] = [
     "Récupérer des documents",
     "Choisissez les instantanés à restaurer ou supprimer. Les autres restent sur le disque.",
     "Tout restaurer",
@@ -1155,8 +1165,10 @@ const P1_FR: [&str; 37] = [
     "Bloc supprimé",
     "Faire glisser le bloc",
     "Fermer",
+    "Texte et titres",
+    "Listes",
 ];
-const P1_DE: [&str; 37] = [
+const P1_DE: [&str; 39] = [
     "Dokumente wiederherstellen",
     "Wählen Sie Wiederherstellungen aus. Nicht gewählte bleiben sicher auf dem Datenträger.",
     "Alle wiederherstellen",
@@ -1194,8 +1206,10 @@ const P1_DE: [&str; 37] = [
     "Block gelöscht",
     "Block ziehen",
     "Schließen",
+    "Text und Überschriften",
+    "Listen",
 ];
-const P1_ES: [&str; 37] = [
+const P1_ES: [&str; 39] = [
     "Recuperar documentos",
     "Elige qué instantáneas restaurar o descartar. Las demás permanecen seguras en el disco.",
     "Restaurar todo",
@@ -1233,6 +1247,8 @@ const P1_ES: [&str; 37] = [
     "Bloque eliminado",
     "Arrastrar bloque",
     "Cerrar",
+    "Texto y encabezados",
+    "Listas",
 ];
 
 pub fn p1_t(lang: Language, msg: P1Msg) -> &'static str {
@@ -5188,8 +5204,10 @@ mod tests {
             P1Msg::BlockDeleted,
             P1Msg::DragBlock,
             P1Msg::Close,
+            P1Msg::TextAndHeadings,
+            P1Msg::Lists,
         ];
-        assert_eq!(messages.len(), 37);
+        assert_eq!(messages.len(), 39);
         for language in Language::all() {
             for message in messages {
                 assert!(!p1_t(*language, message).trim().is_empty());

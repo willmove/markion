@@ -226,6 +226,7 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new("home", Home, None),
         KeyBinding::new("end", End, None),
         KeyBinding::new("enter", InsertNewline, None),
+        KeyBinding::new("shift-f10", ShowVisualBlockContextMenu, None),
         KeyBinding::new("tab", Indent, None),
         KeyBinding::new("shift-tab", Outdent, None),
         KeyBinding::new(eff(&menu_shortcuts::NEW_DOCUMENT), NewDocument, None),

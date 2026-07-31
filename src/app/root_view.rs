@@ -105,7 +105,11 @@ impl Render for MarkionApp {
         let visual_items_doc_dir = document_dir.clone();
         let visual_list_state = self.active_tab().visual_list.clone();
         let show_selection_toolbar = matches!(self.view_mode, ViewMode::VisualEdit)
+            && self.block_menu.is_none()
             && visual_selection_supports_contextual_format(self.active_tab(), &visual_blocks);
+        let block_menu_max_height = px((f32::from(window.viewport_size().height) - 32.0)
+            .max(120.0)
+            .min(520.0));
 
         div()
             .size_full()
@@ -211,6 +215,7 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::table_move_row_down))
             .on_action(cx.listener(Self::table_add_column))
             .on_action(cx.listener(Self::table_delete_column))
+            .on_action(cx.listener(Self::show_visual_block_context_menu))
             .flex()
             .flex_col()
             .child(
@@ -283,6 +288,7 @@ impl Render for MarkionApp {
             .child(
                 div()
                     .id("workspace-row")
+                    .debug_selector(|| "workspace-row".to_string())
                     .flex()
                     .flex_1()
                     .min_h_0()
@@ -466,6 +472,11 @@ impl Render for MarkionApp {
                                                         move |app, ix: usize, _window, cx| {
                                                             let block = &preview_items[ix];
                                                             let row = div()
+                                                                .debug_selector(move || {
+                                                                    format!(
+                                                                        "preview-block-row-{ix}"
+                                                                    )
+                                                                })
                                                                 .w_full()
                                                                 .line_height(px(typography
                                                                     .preview_row_line_height))
@@ -558,6 +569,13 @@ impl Render for MarkionApp {
             .when(self.preview_context_menu.is_some(), |root| {
                 root.child(preview_context_menu_view(self, cx))
             })
+            .when(self.block_menu.is_some(), |root| {
+                root.child(visual_block_menu_overlay_view(
+                    self,
+                    block_menu_max_height,
+                    cx,
+                ))
+            })
             .when(self.preferences_panel_open, |root| {
                 root.child(preferences_panel_view(self, cx))
             })
@@ -575,6 +593,36 @@ impl Render for MarkionApp {
                 root.child(recovery_manager_view(self, cx))
             })
     }
+}
+
+fn visual_block_menu_overlay_view(
+    app: &MarkionApp,
+    max_height: Pixels,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let menu = app
+        .block_menu
+        .as_ref()
+        .expect("block menu overlay is rendered only while its state is present");
+    let state = menu.clone();
+    let presentation = app
+        .block_menu_presentation()
+        .expect("an open block menu keeps an exact live target");
+    anchored()
+        .position(menu.anchor)
+        .offset(point(px(8.), px(8.)))
+        .child(
+            div()
+                .debug_selector(|| "visual-block-menu-overlay".to_string())
+                .child(visual_block_menu(
+                    app.language,
+                    state,
+                    presentation,
+                    app.palette(),
+                    max_height,
+                    cx,
+                )),
+        )
 }
 
 fn slash_command_palette_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
@@ -1126,6 +1174,9 @@ pub(super) fn visual_edit_surface_view(
         .relative()
         .flex_1()
         .min_h_0()
+        .on_scroll_wheel(cx.listener(|app, _, _, cx| {
+            app.close_visual_block_menu(cx);
+        }))
         .child(
             div()
                 .size_full()
@@ -1171,6 +1222,7 @@ pub(super) fn visual_edit_surface_view(
                             list_state,
                             cx.processor(move |app, ix: usize, _window, cx| {
                                 let row = div()
+                                    .debug_selector(move || format!("visual-document-row-{ix}"))
                                     .w_full()
                                     .line_height(px(typography.preview_row_line_height))
                                     .child(visual_block_view(
