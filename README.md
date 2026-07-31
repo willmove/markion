@@ -20,14 +20,14 @@ Download the latest build from [GitHub Releases](https://github.com/willmove/mar
 | Linux | `.deb` and AppImage | x86_64 |
 | macOS | `.app` and `.dmg` | Apple Silicon (arm64), macOS 11+ |
 
-Releases are not platform code-signed. Windows SmartScreen may require **More info → Run anyway**, and macOS Gatekeeper may require right-clicking the app and choosing **Open**. Tagged Windows x86_64 builds can download, verify, and start a signed update from **Help → Check for Updates…**; macOS and Linux open the matching release download in the browser. Intel Macs can run the arm64 build through Rosetta; a universal binary and Apple notarization are not currently provided.
+Releases are not platform code-signed. Windows SmartScreen may require **More info → Run anyway**, and macOS Gatekeeper may require right-clicking the app and choosing **Open**. **Help → Check for Updates…** offers an actionable update prompt on every platform: tagged Windows x86_64 NSIS installations get a cryptographically verified (cargo-packager Minisign) one-click download-and-install that refuses to start while any document has unsaved changes, while macOS and Linux open the matching release file in the system browser. Intel Macs can run the arm64 build through Rosetta; a universal binary and Apple notarization are not currently provided.
 
 ## Editing modes
 
 Markion has four view modes. Split Preview is the default.
 
 - **Edit** — a focused raw Markdown source editor.
-- **Visual Edit** — a WYSIWYG-oriented, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, inline image fields, and GFM table cells have exact direct editors. HTML, YAML front matter, registered diagrams, malformed syntax, and other ambiguous constructs keep a complete conservative source island. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
+- **Visual Edit** — a WYSIWYG-oriented, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, inline image fields, and GFM table cells have exact direct editors. HTML, YAML front matter, registered diagrams, malformed syntax, and other ambiguous constructs keep a complete conservative source island. A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code, divider, table), duplicate, move up/down, source-safe drag reorder, and delete; a selection-contextual formatting toolbar and a visual link editor perform one exact source-backed mutation per action. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
 - **Split Preview** — source and rendered preview side by side, with an optional proportional Sync scroll setting.
 - **Read** — a rendered, non-editing view centered at a readable 860 px maximum width by default; Preview adaptive width can use the full pane.
 
@@ -50,8 +50,10 @@ Switching modes preserves the active document, cursor and selection, undo histor
 - Heading commands expose H1–H5 by default, with an H1–H6 option in Preferences.
 - Find and replace supports case sensitivity, regular expressions, next/previous navigation, replace current, and replace all.
 - Source table commands can format tables and add, delete, or move rows and columns. Visual Edit tables additionally provide direct source-backed cell editing, Tab traversal, deterministic width reflow, and the same row/column operations; ordinary preview tables remain read-only.
+- A local image-resource workflow ingests clipboard images and dragged image files: Markion copies or encodes them into a document-relative asset directory with collision-resistant names, inserts portable relative Markdown links, replaces an existing image without losing its alt text or presentation metadata, exposes practical size/alignment controls, and shows an explicit missing-resource state.
 - YAML front matter is parsed and hidden from preview; `title`, `author`, and `date` feed export metadata.
-- Auto-save defaults to a five-second inactivity delay and writes recovery copies for unsaved documents.
+- Document writes are same-directory atomic replacements that preserve the existing path and dirty state when a write fails. Markion tracks the last known on-disk file identity, detects external changes before save and while a document is open, automatically reloads only clean documents, and gives dirty documents an explicit reload, overwrite, or save-copy conflict choice. A recovery manager inventories every recovery snapshot with its original path and disk relationship and supports Restore, Discard, Restore All, and Discard All without deleting unreadable or unselected data.
+- Auto-save defaults to a five-second inactivity delay and writes recovery copies for unsaved documents; restored recovery snapshots stay durable until a successful save, explicit discard, or an atomically written successor supersedes them.
 
 Rendered preview supports:
 
@@ -117,9 +119,10 @@ Source-mapped Visual Edit incrementally reuses independently parseable regions a
 
 ## Current limitations
 
-- Visual Edit is WYSIWYG-oriented while retaining canonical Markdown; unsupported, malformed, or byte-ambiguous constructs intentionally expose exact source rather than accepting a guessed rich-tree mutation.
+- Visual Edit is WYSIWYG-oriented while retaining canonical Markdown; unsupported, malformed, or byte-ambiguous constructs intentionally expose exact source rather than accepting a guessed rich-tree mutation, and block reordering is offered only when non-overlapping source boundaries are provable.
 - Math uses a readable fallback rather than KaTeX/MathJax-quality typesetting.
 - Visual Edit table cells support direct plain-text editing, but do not yet provide rich inline-formatting controls inside cells. Reference/multiline images, registered diagrams, HTML, and YAML front matter retain source-backed editing paths.
+- One-click updates install the Windows NSIS distribution after Minisign verification; macOS bundle replacement and Linux `.deb`/AppImage self-replacement remain future work, and updater authentication is not Windows Authenticode or Apple notarization.
 - Drag-and-drop file-tree moves and a full custom-theme installation UI are not implemented.
 - Image export is a basic text snapshot, and very large documents do not yet use a rope or fully incremental parsing across every derived subsystem.
 
