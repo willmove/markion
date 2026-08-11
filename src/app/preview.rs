@@ -1770,6 +1770,129 @@ pub(super) fn visual_highlight_style(
     styled.then_some(style)
 }
 
+fn overlay_highlight_style(mut base: HighlightStyle, overlay: HighlightStyle) -> HighlightStyle {
+    if overlay.color.is_some() {
+        base.color = overlay.color;
+    }
+    if overlay.font_weight.is_some() {
+        base.font_weight = overlay.font_weight;
+    }
+    if overlay.font_style.is_some() {
+        base.font_style = overlay.font_style;
+    }
+    if overlay.background_color.is_some() {
+        base.background_color = overlay.background_color;
+    }
+    if overlay.underline.is_some() {
+        base.underline = overlay.underline;
+    }
+    if overlay.strikethrough.is_some() {
+        base.strikethrough = overlay.strikethrough;
+    }
+    if overlay.fade_out.is_some() {
+        base.fade_out = overlay.fade_out;
+    }
+    base
+}
+
+/// Adds one visual overlay while preserving StyledText's contract: highlight
+/// ranges must be UTF-8 boundaries, sorted, and non-overlapping. IME marked
+/// text is an overlay on the projection's existing inline styles, so simply
+/// appending it after later bold/link runs corrupts the resulting TextRun
+/// lengths on Windows DirectWrite.
+fn overlay_visual_highlight(
+    text: &str,
+    highlights: Vec<(Range<usize>, HighlightStyle)>,
+    overlay_range: Range<usize>,
+    overlay_style: HighlightStyle,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let mut highlights = highlights
+        .into_iter()
+        .filter(|(range, _)| !range.is_empty() && text.get(range.clone()).is_some())
+        .collect::<Vec<_>>();
+    highlights.sort_by_key(|(range, _)| (range.start, range.end));
+    if overlay_range.is_empty() || text.get(overlay_range.clone()).is_none() {
+        return highlights;
+    }
+
+    let mut boundaries = vec![overlay_range.start, overlay_range.end];
+    boundaries.extend(
+        highlights
+            .iter()
+            .flat_map(|(range, _)| [range.start, range.end]),
+    );
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let mut result: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+    for pair in boundaries.windows(2) {
+        let range = pair[0]..pair[1];
+        if range.is_empty() {
+            continue;
+        }
+        let base = highlights.iter().find_map(|(highlighted, style)| {
+            (highlighted.start <= range.start && highlighted.end >= range.end).then_some(*style)
+        });
+        let overlaid = overlay_range.start <= range.start && overlay_range.end >= range.end;
+        let style = match (base, overlaid) {
+            (Some(base), true) => overlay_highlight_style(base, overlay_style),
+            (Some(base), false) => base,
+            (None, true) => overlay_style,
+            (None, false) => continue,
+        };
+        if let Some((previous, previous_style)) = result.last_mut()
+            && previous.end == range.start
+            && *previous_style == style
+        {
+            previous.end = range.end;
+        } else {
+            result.push((range, style));
+        }
+    }
+    result
+}
+
+pub(super) fn visual_projection_highlights(
+    projection: &VisualProjection,
+    marked_range: Option<&Range<usize>>,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let highlights = projection
+        .spans
+        .iter()
+        .filter_map(|span| {
+            let style = if span.source {
+                Some(HighlightStyle {
+                    color: Some(rgb(PREVIEW_INLINE_CODE_COLOR).into()),
+                    background_color: Some(rgba(PREVIEW_INLINE_CODE_BG).into()),
+                    ..Default::default()
+                })
+            } else {
+                visual_highlight_style(span.style, span.link)
+            }?;
+            Some((span.display_range.clone(), style))
+        })
+        .collect::<Vec<_>>();
+    let Some(display_range) = marked_range
+        .and_then(|range| projection.display_range_for_source_range(range.clone()))
+        .filter(|range| !range.is_empty())
+    else {
+        return highlights;
+    };
+    overlay_visual_highlight(
+        &projection.text,
+        highlights,
+        display_range,
+        HighlightStyle {
+            underline: Some(UnderlineStyle {
+                color: Some(rgb(0x2563eb).into()),
+                thickness: px(1.),
+                wavy: false,
+            }),
+            ..Default::default()
+        },
+    )
+}
+
 pub(super) fn visual_text_element(
     block: &VisualBlock,
     block_index: usize,
@@ -1786,39 +1909,7 @@ pub(super) fn visual_text_element(
         source_cursor,
         marked_range.clone(),
     );
-    let mut highlights = projection
-        .spans
-        .iter()
-        .filter_map(|span| {
-            let style = if span.source {
-                Some(HighlightStyle {
-                    color: Some(rgb(PREVIEW_INLINE_CODE_COLOR).into()),
-                    background_color: Some(rgba(PREVIEW_INLINE_CODE_BG).into()),
-                    ..Default::default()
-                })
-            } else {
-                visual_highlight_style(span.style, span.link)
-            }?;
-            Some((span.display_range.clone(), style))
-        })
-        .collect::<Vec<_>>();
-    if let Some(display_range) = marked_range
-        .as_ref()
-        .and_then(|range| projection.display_range_for_source_range(range.clone()))
-        .filter(|range| !range.is_empty())
-    {
-        highlights.push((
-            display_range,
-            HighlightStyle {
-                underline: Some(UnderlineStyle {
-                    color: Some(rgb(0x2563eb).into()),
-                    thickness: px(1.),
-                    wavy: false,
-                }),
-                ..Default::default()
-            },
-        ));
-    }
+    let highlights = visual_projection_highlights(&projection, marked_range.as_ref());
     #[cfg(test)]
     let test_projection = visual_block_is_focused(app, block).then_some((
         projection.text.clone(),
@@ -4887,19 +4978,20 @@ pub(super) fn highlight_color(kind: HighlightKind) -> Rgba {
     }
 }
 
-pub(super) fn utf16_offset_to_byte_offset(text: &str, offset: usize) -> usize {
-    let mut byte_offset = 0;
+pub(super) fn utf16_offset_to_byte_offset(text: &str, offset: usize) -> Option<usize> {
     let mut utf16_count = 0;
 
-    for ch in text.chars() {
-        if utf16_count >= offset {
-            break;
+    for (byte_offset, ch) in text.char_indices() {
+        if utf16_count == offset {
+            return Some(byte_offset);
         }
         utf16_count += ch.len_utf16();
-        byte_offset += ch.len_utf8();
+        if utf16_count > offset {
+            return None;
+        }
     }
 
-    byte_offset
+    (utf16_count == offset).then_some(text.len())
 }
 
 pub(super) fn byte_offset_to_utf16_offset(text: &str, offset: usize) -> usize {

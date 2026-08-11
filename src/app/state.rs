@@ -1015,7 +1015,7 @@ impl EditorTab {
             .unwrap_or(text.len())
     }
 
-    pub(super) fn offset_from_utf16(&self, offset: usize) -> usize {
+    pub(super) fn offset_from_utf16(&self, offset: usize) -> Option<usize> {
         utf16_offset_to_byte_offset(self.document.text(), offset)
     }
 
@@ -1027,16 +1027,40 @@ impl EditorTab {
         self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
     }
 
-    pub(super) fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Range<usize> {
-        self.offset_from_utf16(range_utf16.start)..self.offset_from_utf16(range_utf16.end)
+    pub(super) fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Option<Range<usize>> {
+        if range_utf16.start > range_utf16.end {
+            return None;
+        }
+        let start = self.offset_from_utf16(range_utf16.start)?;
+        let end = self.offset_from_utf16(range_utf16.end)?;
+        self.checked_source_range(&(start..end))
     }
 
     pub(super) fn relative_range_from_utf16(
         text: &str,
         range_utf16: &Range<usize>,
-    ) -> Range<usize> {
-        utf16_offset_to_byte_offset(text, range_utf16.start)
-            ..utf16_offset_to_byte_offset(text, range_utf16.end)
+    ) -> Option<Range<usize>> {
+        if range_utf16.start > range_utf16.end {
+            return None;
+        }
+        let start = utf16_offset_to_byte_offset(text, range_utf16.start)?;
+        let end = utf16_offset_to_byte_offset(text, range_utf16.end)?;
+        text.get(start..end).map(|_| start..end)
+    }
+
+    pub(super) fn checked_source_range(&self, range: &Range<usize>) -> Option<Range<usize>> {
+        self.document
+            .text()
+            .get(range.clone())
+            .map(|_| range.clone())
+    }
+
+    pub(super) fn safe_selected_range(&self) -> Range<usize> {
+        self.checked_source_range(&self.selected_range)
+            .unwrap_or_else(|| {
+                let caret = clamp_to_text_boundary(self.document.text(), self.selected_range.end);
+                caret..caret
+            })
     }
 }
 

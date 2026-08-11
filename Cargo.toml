@@ -4,6 +4,7 @@
 # commands and the release pipeline keep targeting it unchanged.
 [workspace]
 members = ["crates/*"]
+exclude = ["vendor/zed/crates/gpui"]
 
 # Shared metadata for workspace members (crates absorbed from Typune inherit
 # these via `version.workspace = true` / `edition.workspace = true`). The root
@@ -108,6 +109,15 @@ tempfile = "3.20"
 # Test-only base64 encoding to build RFC 2397 data-URI fixtures (already
 # vendored transitively; pinned to the resolved version).
 base64 = "0.22.1"
+
+# GPUI 0.2.2 predates the upstream Windows international-input fix from Zed
+# commit 2ead8c42fb6792095d7cb02f7b89e467421dc8a0. Keep the published crate
+# locally patched until a compatible crates.io release includes that change.
+[patch.crates-io]
+gpui = { path = "vendor/zed/crates/gpui" }
+# cc-rs's parallel feature is unified in through libgit2-sys. The local patch
+# avoids MSVC 19.44's reproducible C1056 object timestamp failures.
+cc = { path = "vendor/cc-rs" }
 
 # Process footprint counters for memory diagnostics (matches gpui's windows 0.61).
 [target.'cfg(windows)'.dependencies]

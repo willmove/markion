@@ -27,9 +27,10 @@ impl EntityInputHandler for MarkionApp {
         _cx: &mut Context<Self>,
     ) -> Option<String> {
         let tab = self.active_tab();
-        let range = tab.range_from_utf16(&range_utf16);
+        let range = tab.range_from_utf16(&range_utf16)?;
+        let text = tab.document.text().get(range.clone())?;
         actual_range.replace(tab.range_to_utf16(&range));
-        Some(tab.document.text()[range].to_string())
+        Some(text.to_string())
     }
 
     fn selected_text_range(
@@ -39,8 +40,9 @@ impl EntityInputHandler for MarkionApp {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         let tab = self.active_tab();
+        let selected_range = tab.safe_selected_range();
         Some(UTF16Selection {
-            range: tab.range_to_utf16(&tab.selected_range),
+            range: tab.range_to_utf16(&selected_range),
             reversed: tab.selection_reversed,
         })
     }
@@ -53,7 +55,8 @@ impl EntityInputHandler for MarkionApp {
         let tab = self.active_tab();
         tab.marked_range
             .as_ref()
-            .map(|range| tab.range_to_utf16(range))
+            .and_then(|range| tab.checked_source_range(range))
+            .map(|range| tab.range_to_utf16(&range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -77,12 +80,15 @@ impl EntityInputHandler for MarkionApp {
 
         let visual_edit = matches!(self.view_mode, ViewMode::VisualEdit);
         let tab = self.active_tab_mut();
-        let active_marked_range = tab.marked_range.clone();
+        let active_marked_range = tab
+            .marked_range
+            .as_ref()
+            .and_then(|range| tab.checked_source_range(range));
         let range = range_utf16
             .as_ref()
-            .map(|range_utf16| tab.range_from_utf16(range_utf16))
+            .and_then(|range_utf16| tab.range_from_utf16(range_utf16))
             .or(active_marked_range.clone())
-            .unwrap_or(tab.selected_range.clone());
+            .unwrap_or_else(|| tab.safe_selected_range());
 
         let direct_edit = visual_edit
             .then(|| {
@@ -90,7 +96,8 @@ impl EntityInputHandler for MarkionApp {
                     .direct_visual_block_edit(range.clone(), new_text)
             })
             .flatten()
-            .filter(|edit| tab.document.validate_visual_block_edit(edit));
+            .filter(|edit| tab.document.validate_visual_block_edit(edit))
+            .filter(|edit| tab.document.text().get(edit.range.clone()).is_some());
         let edit_range = direct_edit
             .as_ref()
             .map_or_else(|| range.clone(), |edit| edit.range.clone());
@@ -98,7 +105,11 @@ impl EntityInputHandler for MarkionApp {
             .as_ref()
             .map_or_else(|| new_text.to_string(), |edit| edit.replacement.clone());
 
-        let changed = tab.document.text()[edit_range.clone()] != replacement;
+        let changed = tab
+            .document
+            .text()
+            .get(edit_range.clone())
+            .is_some_and(|current| current != replacement);
         let committing_ime = active_marked_range.is_some()
             && tab
                 .undo_capture
@@ -169,9 +180,13 @@ impl EntityInputHandler for MarkionApp {
         let tab = self.active_tab_mut();
         let range = range_utf16
             .as_ref()
-            .map(|range_utf16| tab.range_from_utf16(range_utf16))
-            .or(tab.marked_range.clone())
-            .unwrap_or(tab.selected_range.clone());
+            .and_then(|range_utf16| tab.range_from_utf16(range_utf16))
+            .or_else(|| {
+                tab.marked_range
+                    .as_ref()
+                    .and_then(|range| tab.checked_source_range(range))
+            })
+            .unwrap_or_else(|| tab.safe_selected_range());
 
         let direct_edit = visual_edit
             .then(|| {
@@ -179,7 +194,8 @@ impl EntityInputHandler for MarkionApp {
                     .direct_visual_block_edit(range.clone(), new_text)
             })
             .flatten()
-            .filter(|edit| tab.document.validate_visual_block_edit(edit));
+            .filter(|edit| tab.document.validate_visual_block_edit(edit))
+            .filter(|edit| tab.document.text().get(edit.range.clone()).is_some());
         let edit_range = direct_edit
             .as_ref()
             .map_or_else(|| range.clone(), |edit| edit.range.clone());
@@ -187,7 +203,11 @@ impl EntityInputHandler for MarkionApp {
             .as_ref()
             .map_or_else(|| new_text.to_string(), |edit| edit.replacement.clone());
 
-        let changed = tab.document.text()[edit_range.clone()] != replacement;
+        let changed = tab
+            .document
+            .text()
+            .get(edit_range.clone())
+            .is_some_and(|current| current != replacement);
         if changed {
             let history_range = direct_edit
                 .as_ref()
@@ -222,7 +242,7 @@ impl EntityInputHandler for MarkionApp {
         } else {
             new_selected_range_utf16
                 .as_ref()
-                .map(|range_utf16| EditorTab::relative_range_from_utf16(new_text, range_utf16))
+                .and_then(|range_utf16| EditorTab::relative_range_from_utf16(new_text, range_utf16))
                 .map(|new_range| new_range.start + range.start..new_range.end + range.start)
                 .unwrap_or_else(|| range.start + replacement.len()..range.start + replacement.len())
         };
@@ -242,8 +262,8 @@ impl EntityInputHandler for MarkionApp {
     ) -> Option<Bounds<Pixels>> {
         let tab = self.active_tab();
         if matches!(self.view_mode, ViewMode::VisualEdit) {
-            let source_range = tab.range_from_utf16(&range_utf16);
-            if let Some((marked_range, marked_bounds)) = &tab.visual_marked_range_bounds
+            if let Some(source_range) = tab.range_from_utf16(&range_utf16)
+                && let Some((marked_range, marked_bounds)) = &tab.visual_marked_range_bounds
                 && source_range.start <= marked_range.end
                 && source_range.end >= marked_range.start
             {
@@ -258,7 +278,7 @@ impl EntityInputHandler for MarkionApp {
         if tab.last_lines.is_empty() {
             return None;
         }
-        let range = tab.range_from_utf16(&range_utf16);
+        let range = tab.range_from_utf16(&range_utf16)?;
         let line_height = tab.line_height;
         let start = tab.layout_point_for_offset(range.start, bounds, line_height)?;
         let end = tab.layout_point_for_offset(range.end, bounds, line_height)?;

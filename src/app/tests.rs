@@ -3,6 +3,83 @@ use super::*;
 use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 
 #[test]
+fn visual_pinyin_preedit_composes_sorted_utf8_highlights() {
+    let source = "**激活稀疏（Activation Sparsity）**：经过 ReLU、SiLU 这类激活函数后，一部分激活值变成 0（或接近 0）。这是**动态的**——每个 batch、每个 token 的稀疏位置都不一样，硬件必须在**运行时**现场判断哪里是 0、现场建索引、现场跳过。这一\"现场\"是激活稀疏难做的根源。";
+    let mut doc = MarkdownDocument::from_text(source);
+    let _ = doc.visual_blocks_shared();
+    let caret = source.find("（或接近 0").unwrap() + "（或接近 0".len();
+    doc.replace_range(caret..caret, "x");
+    let marked = caret..caret + 1;
+    let blocks = doc.visual_blocks_shared();
+    let block = blocks
+        .iter()
+        .find(|block| block.source_range.start <= caret && block.source_range.end >= marked.end)
+        .unwrap();
+    let projection = build_visual_projection_with_marked_range(
+        doc.text(),
+        block,
+        marked.end..marked.end,
+        marked.end,
+        Some(marked.clone()),
+    );
+    let marked_display = projection
+        .display_range_for_source_range(marked.clone())
+        .unwrap();
+    let highlights = visual_projection_highlights(&projection, Some(&marked));
+
+    assert!(
+        highlights
+            .windows(2)
+            .all(|pair| pair[0].0.end <= pair[1].0.start)
+    );
+    assert!(
+        highlights.iter().all(|(range, _)| {
+            !range.is_empty() && projection.text.get(range.clone()).is_some()
+        })
+    );
+    assert!(highlights.iter().any(|(range, style)| {
+        range.start <= marked_display.start
+            && range.end >= marked_display.end
+            && style.underline.is_some()
+    }));
+}
+
+#[test]
+fn visual_pinyin_preedit_preserves_overlapped_inline_style() {
+    let text = "动x态的".to_string();
+    let marked = "动".len().."动".len() + 1;
+    let projection = VisualProjection {
+        text: text.clone(),
+        segments: vec![markion::VisualProjectionSegment {
+            display_range: 0..text.len(),
+            source_range: 0..text.len(),
+        }],
+        spans: vec![markion::VisualProjectionSpan {
+            display_range: 0..text.len(),
+            style: InlineStyle {
+                bold: true,
+                ..Default::default()
+            },
+            link: false,
+            source: false,
+        }],
+        revealed_source_ranges: Vec::new(),
+        source_anchor: 0,
+    };
+    let marked_display = projection
+        .display_range_for_source_range(marked.clone())
+        .unwrap();
+    let highlights = visual_projection_highlights(&projection, Some(&marked));
+    let (_, marked_style) = highlights
+        .iter()
+        .find(|(range, _)| range.start <= marked_display.start && range.end >= marked_display.end)
+        .unwrap();
+
+    assert_eq!(marked_style.font_weight, Some(FontWeight::BOLD));
+    assert!(marked_style.underline.is_some());
+}
+
+#[test]
 fn menu_shortcut_labels_follow_platform_conventions() {
     assert_eq!(
         menu_shortcuts::OPEN_DOCUMENT.label(ShortcutPlatform::WindowsLinux),
@@ -1781,6 +1858,7 @@ fn shortcut_remap_persists_reloads_rejects_conflict_and_resets(cx: &mut TestAppC
                 &KeyDownEvent {
                     keystroke: gpui::Keystroke::parse("ctrl-alt-b").unwrap(),
                     is_held: false,
+                    prefer_character_input: false,
                 },
                 window,
                 cx,
@@ -1808,6 +1886,7 @@ fn shortcut_remap_persists_reloads_rejects_conflict_and_resets(cx: &mut TestAppC
                 &KeyDownEvent {
                     keystroke: gpui::Keystroke::parse("ctrl-alt-b").unwrap(),
                     is_held: false,
+                    prefer_character_input: false,
                 },
                 window,
                 cx,
@@ -1830,6 +1909,7 @@ fn shortcut_remap_persists_reloads_rejects_conflict_and_resets(cx: &mut TestAppC
                 &KeyDownEvent {
                     keystroke: gpui::Keystroke::parse("escape").unwrap(),
                     is_held: false,
+                    prefer_character_input: false,
                 },
                 window,
                 cx,
@@ -2614,6 +2694,111 @@ fn visual_edit_ime_updates_share_one_undo_and_expose_exact_bounds(cx: &mut TestA
         assert_eq!(app.active_tab().document.text(), source);
         assert!(app.active_tab_mut().apply_redo());
         assert!(app.active_tab().document.text().contains("你好e\u{301}"));
+    });
+}
+
+#[gpui::test]
+fn visual_edit_ime_rejects_stale_native_ranges_and_commits_pinyin_preedit(cx: &mut TestAppContext) {
+    let source = "前0后";
+    let cursor = "前0".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+        app.update(cx, |app, cx| {
+            let mut actual_range = Some(0..0);
+            assert_eq!(
+                EntityInputHandler::text_for_range(app, 3..1, &mut actual_range, window, cx,),
+                None
+            );
+            assert_eq!(actual_range, Some(0..0));
+
+            EntityInputHandler::replace_and_mark_text_in_range(
+                app,
+                Some((usize::MAX - 1)..usize::MAX),
+                "n",
+                Some(1..1),
+                window,
+                cx,
+            );
+            EntityInputHandler::replace_and_mark_text_in_range(
+                app,
+                Some(3..1),
+                "ni",
+                Some(2..2),
+                window,
+                cx,
+            );
+
+            let fallback = Bounds::new(point(px(48.), px(72.)), size(px(2.), px(20.)));
+            app.active_tab_mut().visual_caret_bounds = Some(fallback);
+            assert_eq!(
+                EntityInputHandler::bounds_for_range(
+                    app,
+                    (usize::MAX - 1)..usize::MAX,
+                    Bounds::default(),
+                    window,
+                    cx,
+                ),
+                Some(fallback)
+            );
+
+            EntityInputHandler::replace_text_in_range(
+                app,
+                Some((usize::MAX - 1)..usize::MAX),
+                "你",
+                window,
+                cx,
+            );
+        });
+    });
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "前0你后");
+        assert!(tab.marked_range.is_none());
+        assert!(tab.checked_source_range(&tab.selected_range).is_some());
+        assert_eq!(tab.undo_stack.len(), 1);
+
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(app.active_tab_mut().apply_redo());
+        assert_eq!(app.active_tab().document.text(), "前0你后");
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_and_mark_text_in_range(
+                app,
+                None,
+                "q",
+                Some(1..1),
+                window,
+                cx,
+            );
+            EntityInputHandler::replace_and_mark_text_in_range(
+                app,
+                None,
+                "qu",
+                Some(2..2),
+                window,
+                cx,
+            );
+            EntityInputHandler::replace_text_in_range(app, None, "", window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "前0你后");
+        assert!(tab.marked_range.is_none());
+        assert!(tab.checked_source_range(&tab.selected_range).is_some());
     });
 }
 
@@ -4388,11 +4573,22 @@ fn custom_theme_palette_uses_definition_colors() {
 #[test]
 fn ime_selected_range_is_relative_to_composition_text() {
     let composing = "😀文";
-    let range = EditorTab::relative_range_from_utf16(composing, &(2..3));
+    let range = EditorTab::relative_range_from_utf16(composing, &(2..3))
+        .expect("valid relative UTF-16 range");
 
     assert_eq!(&composing[range], "文");
-    assert_eq!(utf16_offset_to_byte_offset("a😀文", 3), "a😀".len());
+    assert_eq!(utf16_offset_to_byte_offset("a😀文", 3), Some("a😀".len()));
+    assert_eq!(utf16_offset_to_byte_offset("a😀文", 2), None);
+    assert_eq!(utf16_offset_to_byte_offset("a😀文", 5), None);
     assert_eq!(byte_offset_to_utf16_offset("a😀文", "a😀".len()), 3);
+
+    let mut tab = EditorTab::new(MarkdownDocument::from_text("a😀文"));
+    assert_eq!(tab.range_from_utf16(&(1..3)), Some(1.."a😀".len()));
+    assert_eq!(tab.range_from_utf16(&(3..1)), None);
+    assert_eq!(tab.range_from_utf16(&(2..3)), None);
+    assert_eq!(tab.range_from_utf16(&(3..8)), None);
+    tab.selected_range = 2..usize::MAX;
+    assert_eq!(tab.safe_selected_range(), "a😀文".len().."a😀文".len());
 }
 
 #[test]
