@@ -40,8 +40,20 @@ Each group is sized to a single testable commit. Preserve the per-document-versi
 
 > **Implementation note (5.5):** the full GPUI render path (`html_table_grid_view`) requires a `MarkionApp` + font/asset context that is disproportionate to stand up for a smoke test; instead `html_preview_parts_routes_table_to_table_part` asserts the `Table` part is produced, the renderer compiles cleanly, and `cargo build` confirms the GPUI `grid()` call sites type-check. The heavy render is exercised by the existing preview smoke harness at runtime.
 
-## 6. Validation
+## 7. Visual Edit rendering
 
-- [x] 6.1 `cargo build` clean (no warnings about unhandled `HtmlPreviewPart` variants).
-- [x] 6.2 `cargo test --workspace` green.
-- [x] 6.3 `openspec validate fix-html-table-rowspan-colspan` passes.
+Scope expansion: Visual Edit currently collapses every `PreviewBlock::Html` to `VisualBlockKind::Unsupported` + `VisualSourceIslandKind::Html` and draws the raw source text in a monospace box (`src/visual.rs:773`, `src/app/preview.rs:2399-2433`, `2689`). The new `HtmlPreviewPart::Table` path is never reached. These tasks make Visual Edit render HTML blocks through the same pipeline as preview, read-only.
+
+- [x] 7.1 Add `VisualBlockKind::Html { html: String }` to `src/model.rs`. It is read-only: no `editor`, no editable runs, no source-island (so the `always_source` gate at `src/app/preview.rs:2399-2411` does not fire for it).
+- [x] 7.2 In `src/visual.rs::visual_block_from_preview`, change the `PreviewBlock::Html { html, .. }` arm to emit `VisualBlockKind::Html { html: html.clone() }` with `source_island = None` (instead of `Unsupported` + `Html`). Carry the `html` string through so the view layer can call `html_preview_parts`. Also guard the `contains_html` source-island fallback in the `VisualBlock` constructor so it does not re-set the island for a rendered HTML block.
+- [x] 7.3 In `src/app/preview.rs::visual_block_view`, add a `VisualBlockKind::Html { html } =>` arm to the `match &block.kind` that reuses the existing preview HTML renderer (`html_preview_block_view`). The block is read-only and renders the same `HtmlPreviewPart` stream (Text/Image/Table) as Split Preview/Read mode. Verified the `always_source` gate no longer fires (since `source_island` is now `None`); the `focused_conservative` gate intentionally still shows the raw-source box when the block owns the caret, preserving raw-HTML editing (mirrors code-block behavior).
+- [x] 7.4 Ensure other `match VisualBlockKind` sites that must stay exhaustive compile after adding the variant. The new kind flows through `block_menu`/`block_transform` via the existing `_ => None` arm (no transform menu for read-only HTML, correct).
+- [x] 7.5 Add a unit test asserting `visual_block_from_preview` maps a `PreviewBlock::Html` to `VisualBlockKind::Html` with `source_island == None` (`visual::tests::html_block_maps_to_rendered_visual_block_not_source_island`).
+- [x] 7.6 Updated two existing tests that encoded the old source-island behavior: `lib.rs::visual_edit_renders_html_block_not_source_island` (renamed from `..._keeps_html_as_source_island`) now asserts the rendered `Html` kind; `source_mapped.rs::stable_ids_...` now locates the HTML block by `VisualBlockKind::Html` instead of `source_island == Some(Html)`.
+
+## 8. Validation (Visual Edit)
+
+- [x] 8.1 `cargo build --lib` clean, no warnings (full binary build blocked only by a running-app file lock on `markion.exe`, environmental — not a code issue; lib + all tests compile).
+- [x] 8.2 `cargo test --workspace` green (287 lib + all member crates, 0 failures).
+- [x] 8.3 `openspec validate fix-html-table-rowspan-colspan` passes.
+

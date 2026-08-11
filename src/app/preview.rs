@@ -2687,6 +2687,13 @@ pub(super) fn visual_block_view(
             }
         }
         VisualBlockKind::Unsupported => visual_source_island_view(app, block, block_index, cx),
+        VisualBlockKind::Html { html } => {
+            // Read-only rendered HTML (tables, text, images) via the same
+            // pipeline as Split Preview/Read mode — no editable runs, no
+            // source box. `source_island` is `None` for this kind, so the
+            // `always_source`/`focused_conservative` gates above are bypassed.
+            html_preview_block_view(app, html, block_index, document_dir, cx)
+        }
         VisualBlockKind::FootnoteDefinition { label } => div()
             .mb(px(typography.paragraph_spacing))
             .mt_2()

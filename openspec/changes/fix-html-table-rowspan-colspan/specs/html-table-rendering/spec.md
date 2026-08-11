@@ -6,26 +6,32 @@ Render raw HTML `<table>` blocks embedded in Markdown as visual tables in the pr
 
 ### Requirement: Raw HTML tables render as visual tables
 
-The editor SHALL detect a raw HTML `<table>...</table>` block in the document and render it in Split Preview and Read mode as a visual grid with the same borders, header emphasis, and padding as GFM pipe tables, rather than flattening its cell text into a single inline run. The rendered table SHALL be read-only in Split Preview and Read mode and SHALL NOT mutate the document text on interaction.
+The editor SHALL detect a raw HTML `<table>...</table>` block in the document and render it in Split Preview, Read mode, **and Visual Edit** as a visual grid with the same borders, header emphasis, and padding as GFM pipe tables, rather than flattening its cell text into a single inline run. The rendered table SHALL be read-only in Split Preview, Read mode, and Visual Edit and SHALL NOT mutate the document text on interaction. In Visual Edit, an HTML block SHALL be rendered through the same HTML-parts pipeline as the preview (so tables, text, and images appear) rather than as a verbatim raw-source box.
 
 Supported row-organizing elements: `<table>`, `<thead>`, `<tbody>`, `<tfoot>`, `<tr>`. Supported cell elements: `<th>` (header cell, bold/emphasized) and `<td>` (body cell). Unknown nested elements inside a cell SHALL have their inline text content rendered as the cell's text.
 
 #### Scenario: Basic HTML table renders as a grid
 
 - **WHEN** the document contains a raw HTML `<table>` with one header row and one body row
-- **THEN** Split Preview and Read mode render it as a bordered visual table
+- **THEN** Split Preview, Read mode, and Visual Edit render it as a bordered visual table
 - **AND** header cells (`<th>`) appear visually distinct from body cells (`<td>`)
 
-#### Scenario: HTML table is read-only in preview
+#### Scenario: HTML table is read-only in preview and Visual Edit
 
-- **WHEN** a raw HTML table is rendered in Split Preview or Read mode
+- **WHEN** a raw HTML table is rendered in Split Preview, Read mode, or Visual Edit
 - **THEN** the table has no editable cells, editing header, or add, delete, or move row/column controls
 - **AND** interacting with the table does not mutate the document text
+
+#### Scenario: Visual Edit renders HTML blocks instead of raw source
+
+- **WHEN** a document in Visual Edit contains a raw HTML `<table>` (or any HTML block that yields rendered parts)
+- **THEN** Visual Edit shows the rendered table (and any rendered text/image parts) rather than a verbatim source-text box
+- **AND** the block remains read-only (no source-editing affordances on the rendered view)
 
 #### Scenario: Inline formatting renders inside HTML table cells
 
 - **WHEN** an HTML table cell contains inline markup such as `**bold**`, `*italic*`, `` `code` ``, or `[text](url)` (parsed by the same inline pipeline as the rest of the document)
-- **THEN** Split Preview and Read mode render that markup as styled text rather than literal source characters
+- **THEN** Split Preview, Read mode, and Visual Edit render that markup as styled text rather than literal source characters
 
 ### Requirement: Rowspan and colspan expand the grid
 

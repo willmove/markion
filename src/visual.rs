@@ -770,9 +770,11 @@ fn visual_block_from_preview(
             },
             Some(VisualSourceIslandKind::Math),
         ),
-        PreviewBlock::Html { .. } => (
-            VisualBlockKind::Unsupported,
-            Some(VisualSourceIslandKind::Html),
+        PreviewBlock::Html { html, .. } => (
+            VisualBlockKind::Html {
+                html: html.clone(),
+            },
+            None,
         ),
         PreviewBlock::Image {
             alt, url, title, ..
@@ -832,6 +834,14 @@ fn visual_block_from_preview(
     if editor.is_some() {
         source_island = None;
     }
+    // A rendered HTML block (VisualBlockKind::Html) is shown via the
+    // HTML-parts pipeline, not as a raw-source box, so it must never carry
+    // a source island regardless of any inline-HTML detected here.
+    let source_island = if matches!(kind, VisualBlockKind::Html { .. }) {
+        None
+    } else {
+        source_island.or(contains_html.then_some(VisualSourceIslandKind::Html))
+    };
     VisualBlock {
         id: allocate_id(),
         kind,
@@ -841,7 +851,7 @@ fn visual_block_from_preview(
         marker_ranges,
         block_prefix,
         quote_context,
-        source_island: source_island.or(contains_html.then_some(VisualSourceIslandKind::Html)),
+        source_island,
         editor,
     }
 }
@@ -3189,6 +3199,47 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
                     if url == "https://github.com/willmove/markion"
             )),
             "inline link must expose a URL navigation target"
+        );
+    }
+
+    #[test]
+    fn html_block_maps_to_rendered_visual_block_not_source_island() {
+        // A raw HTML table must become a rendered VisualBlockKind::Html (not
+        // Unsupported + a source island), so Visual Edit shows the rendered
+        // grid instead of a verbatim source box.
+        let source = "<table>\n<tr><th>A</th><th>B</th></tr>\n\
+<tr><td rowspan=\"2\">x</td><td>1</td></tr>\n\
+<tr><td>2</td></tr>\n\
+</table>\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+
+        let html_block = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Html { .. }))
+            .expect("HTML block should map to VisualBlockKind::Html");
+
+        // The source island must be cleared so the `always_source` /
+        // `focused_conservative` gates in visual_block_view do not force the
+        // raw-source box when the block is unfocused.
+        assert!(
+            html_block.source_island.is_none(),
+            "HTML visual block must not carry a source island"
+        );
+        match &html_block.kind {
+            VisualBlockKind::Html { html } => {
+                assert!(html.contains("<table"));
+                assert!(html.contains("rowspan"));
+            }
+            other => panic!("expected Html kind, got {other:?}"),
+        }
+
+        // No HTML block should remain as the legacy Unsupported mapping.
+        assert!(
+            blocks
+                .iter()
+                .all(|block| !matches!(block.kind, VisualBlockKind::Unsupported)),
+            "no block should fall back to Unsupported"
         );
     }
 }

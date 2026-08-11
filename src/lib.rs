@@ -3229,17 +3229,26 @@ mod tests {
     }
 
     #[test]
-    fn visual_edit_keeps_html_as_source_island() {
+    fn visual_edit_renders_html_block_not_source_island() {
         let doc = MarkdownDocument::from_text("<p><strong>HTML</strong></p>\n\nText");
         let blocks = doc.visual_blocks();
 
-        assert!(matches!(
-            blocks.first(),
-            Some(VisualBlock {
-                source_island: Some(VisualSourceIslandKind::Html),
-                ..
-            })
-        ));
+        // Visual Edit now renders HTML blocks (text/image/table parts) via the
+        // shared HTML pipeline instead of a raw-source box. The block maps to
+        // VisualBlockKind::Html with no source island, so the rendered view is
+        // used; it falls back to the raw-source box only when focused.
+        let html_block = blocks
+            .first()
+            .expect("HTML block should be the first block");
+        assert!(
+            matches!(&html_block.kind, VisualBlockKind::Html { html } if html.contains("HTML")),
+            "expected Html kind, got {:?}",
+            html_block.kind
+        );
+        assert!(
+            html_block.source_island.is_none(),
+            "rendered HTML block must not carry a source island"
+        );
     }
 
     #[test]

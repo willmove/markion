@@ -1005,7 +1005,7 @@ mod tests {
         let child_id = child.id;
         let island_id = original
             .iter()
-            .find(|block| block.source_island == Some(crate::VisualSourceIslandKind::Html))
+            .find(|block| matches!(block.kind, crate::VisualBlockKind::Html { .. }))
             .unwrap()
             .id;
         let tail_id = original.last().unwrap().id;

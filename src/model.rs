@@ -640,6 +640,12 @@ pub enum VisualBlockKind {
         url: String,
         title: Option<String>,
     },
+    /// Raw HTML block rendered read-only through the shared HTML-parts pipeline
+    /// (so `<table>` blocks, text, and images appear). No editable runs and no
+    /// source-island — Visual Edit shows the rendered view, not a raw-source box.
+    Html {
+        html: String,
+    },
     Rule,
     Table {
         rows: Vec<Vec<RichText>>,
