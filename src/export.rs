@@ -290,6 +290,17 @@ fn render_docx_block(block: &PreviewBlock) -> String {
                     };
                     docx_paragraph(&format!("{label}: {url}"), None)
                 }
+                HtmlPreviewPart::Table { grid } => grid
+                    .rows
+                    .iter()
+                    .flat_map(|row| {
+                        row.iter()
+                            .filter(|cell| !cell.is_spacer)
+                            .map(|cell| docx_paragraph(&cell.content.text, None))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
             })
             .collect::<Vec<_>>()
             .join(""),

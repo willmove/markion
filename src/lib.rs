@@ -150,7 +150,7 @@ pub use i18n::{
     sidebar_tab_label, t, tf,
 };
 pub use math::{render_math, validate_latex};
-pub use parse::{HtmlPreviewPart, html_preview_parts, html_preview_plain_text};
+pub use parse::{HtmlPreviewPart, HtmlTableCell, HtmlTableGrid, html_preview_parts, html_preview_plain_text};
 
 pub use storage::{
     FileTree, FileTreeEntry, FileTreeEntryKind, ImportedImage, MARKDOWN_EXTENSIONS,
@@ -1528,6 +1528,27 @@ impl MarkdownDocument {
                                     ));
                                 }
                                 output.push_str("\\end{figure}\n\n");
+                            }
+                            parse::HtmlPreviewPart::Table { grid } => {
+                                // Reconstruct the table as a LaTeX tabular. Spans
+                                // are dropped (LaTeX tabular has no rowspan); each
+                                // non-spacer cell becomes a column entry.
+                                let columns = grid.columns.max(1);
+                                output.push_str(&format!(
+                                    "\\begin{{tabular}}{{|{}|}}\n\\hline\n",
+                                    "l|".repeat(columns)
+                                ));
+                                for row in &grid.rows {
+                                    let cells = row
+                                        .iter()
+                                        .filter(|cell| !cell.is_spacer)
+                                        .map(|cell| escape_latex(&cell.content.text))
+                                        .collect::<Vec<_>>()
+                                        .join(" & ");
+                                    output.push_str(&cells);
+                                    output.push_str(" \\\\\n\\hline\n");
+                                }
+                                output.push_str("\\end{tabular}\n\n");
                             }
                         }
                     }

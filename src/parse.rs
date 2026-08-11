@@ -26,6 +26,42 @@ pub enum HtmlPreviewPart {
         title: Option<String>,
         centered: bool,
     },
+    /// A raw HTML `<table>` block resolved into a row/column grid, honoring
+    /// `rowspan`/`colspan`. Produced instead of flattening the table to text.
+    Table {
+        grid: HtmlTableGrid,
+    },
+}
+
+/// A resolved HTML table ready for rendering. `rows` holds one entry per visual
+/// row; each row is an ordered list of slots (cells + spacers) whose `colspan`
+/// values sum to `columns`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HtmlTableGrid {
+    /// Total number of logical columns in the table.
+    pub columns: usize,
+    /// True if any cell declares `rowspan > 1`. The renderer uses a fixed row
+    /// height in that case so spanning cells align with the rows they cover.
+    pub has_rowspan: bool,
+    /// One `Vec` of slots per visual row, in top-to-bottom order.
+    pub rows: Vec<Vec<HtmlTableCell>>,
+}
+
+/// One slot in a resolved HTML table row. A spacer slot (`is_spacer == true`)
+/// marks columns covered by a `rowspan` started in an earlier row; it reserves
+/// horizontal width (via `colspan`) but draws nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HtmlTableCell {
+    /// Resolved inline content (bold/italic/code/links via the shared pipeline).
+    pub content: RichText,
+    /// Number of columns this slot occupies (>= 1).
+    pub colspan: usize,
+    /// Number of rows this cell spans (>= 1). 0 for spacer slots.
+    pub rowspan: usize,
+    /// True for `<th>` cells (rendered with header emphasis).
+    pub is_header: bool,
+    /// True for spacer slots covering a rowspan from above.
+    pub is_spacer: bool,
 }
 
 pub(crate) struct ListItemDraft {
@@ -555,7 +591,385 @@ pub fn html_preview_plain_text(html: &str) -> String {
 }
 
 pub fn html_preview_parts(html: &str) -> Vec<HtmlPreviewPart> {
+    // A raw HTML block whose first tag is `<table>` is routed through the
+    // dedicated table parser (honoring rowspan/colspan). Anything else — or a
+    // table we could not resolve into a grid — falls back to the flattener.
+    let trimmed_start = html.trim_start();
+    if trimmed_start.to_ascii_lowercase().starts_with("<table") {
+        if let Some(grid) = parse_html_table_grid(html) {
+            return vec![HtmlPreviewPart::Table { grid }];
+        }
+    }
     HtmlPreviewBuilder::new(html).finish()
+}
+
+/// Resolves a raw HTML `<table>...</table>` into a grid honoring `rowspan` and
+/// `colspan`. Returns `None` for non-table HTML or any structure that cannot be
+/// turned into a grid, so callers fall back to the flattener instead of
+/// panicking.
+///
+/// The grid uses browser-style placement: each `<td>`/`<th>` is dropped at the
+/// next free column in its row, skipping cells still held open by a `rowspan`
+/// from an earlier row. Spacer slots mark those held-open cells so the renderer
+/// can reserve width without drawing content.
+pub(crate) fn parse_html_table_grid(html: &str) -> Option<HtmlTableGrid> {
+    HtmlTableParser::new(html).parse()
+}
+
+struct HtmlTableParser<'a> {
+    html: &'a str,
+    index: usize,
+    /// Whether the parser is still inside a `<table>` element.
+    in_table: bool,
+    /// Whether we ever opened a `<table>` (stays true after it closes).
+    saw_table: bool,
+    /// Whether the current row is inside `<thead>` (forced header cells) —
+    /// any explicit `<th>` is a header regardless of this flag.
+    in_thead: bool,
+    /// Per-column remaining rows held open by an active rowspan. Index = column.
+    row_spans: Vec<usize>,
+    current_row: Option<Vec<HtmlTableCell>>,
+    current_cell_spans: Vec<InlineSpan>,
+    grid: HtmlTableGrid,
+    failed: bool,
+    /// Pending cell flags captured on `<td>`/`<th>` open, consumed on close.
+    pending_is_header: bool,
+    pending_colspan: usize,
+    pending_rowspan: usize,
+    /// True between a `<td>`/`<th>` opening tag and its close (or the next open).
+    cell_open: bool,
+    /// Inline style depths tracked while inside a cell.
+    bold_depth: usize,
+    italic_depth: usize,
+    code_depth: usize,
+    strike_depth: usize,
+}
+
+impl<'a> HtmlTableParser<'a> {
+    fn new(html: &'a str) -> Self {
+        Self {
+            html,
+            index: 0,
+            in_table: false,
+            saw_table: false,
+            in_thead: false,
+            row_spans: Vec::new(),
+            current_row: None,
+            current_cell_spans: Vec::new(),
+            grid: HtmlTableGrid::default(),
+            failed: false,
+            pending_is_header: false,
+            pending_colspan: 1,
+            pending_rowspan: 1,
+            cell_open: false,
+            bold_depth: 0,
+            italic_depth: 0,
+            code_depth: 0,
+            strike_depth: 0,
+        }
+    }
+
+    fn parse(mut self) -> Option<HtmlTableGrid> {
+        while self.index < self.html.len() {
+            if self.html[self.index..].starts_with('<')
+                && let Some(tag_end) = find_html_tag_end(self.html, self.index)
+            {
+                let tag = &self.html[self.index..tag_end];
+                self.handle_tag(tag);
+                self.index = tag_end;
+                if self.failed {
+                    return None;
+                }
+                continue;
+            }
+            let next_tag = self.html[self.index..]
+                .find('<')
+                .map_or(self.html.len(), |relative| self.index + relative);
+            let text = &self.html[self.index..next_tag];
+            if self.cell_open {
+                self.append_cell_text(text);
+            }
+            self.index = next_tag;
+        }
+
+        // Flush a trailing open row so unclosed tables still render their cells.
+        self.flush_row();
+        if !self.saw_table || self.grid.rows.is_empty() {
+            return None;
+        }
+        Some(self.grid)
+    }
+
+    fn handle_tag(&mut self, tag: &str) {
+        let Some(parsed) = ParsedHtmlTag::parse(tag) else {
+            return;
+        };
+        match parsed.name.as_str() {
+            "table" => {
+                if parsed.closing {
+                    self.flush_row();
+                    self.in_table = false;
+                } else if !parsed.self_closing {
+                    if self.in_table {
+                        // Nested tables are out of scope; bail to the flattener.
+                        self.failed = true;
+                    } else {
+                        self.in_table = true;
+                        self.saw_table = true;
+                    }
+                }
+            }
+            "thead" => {
+                if parsed.closing {
+                    self.in_thead = false;
+                } else if !parsed.self_closing {
+                    self.in_thead = true;
+                }
+            }
+            "tbody" | "tfoot" | "colgroup" | "caption" => {
+                // Section containers: ignored; rows inside them still parse.
+            }
+            "tr" => {
+                if parsed.closing || parsed.self_closing {
+                    self.flush_row();
+                } else {
+                    // Unclosed previous `<tr>`: flush before starting the new row.
+                    if self.current_row.is_some() {
+                        self.flush_row();
+                    }
+                    self.begin_row();
+                }
+            }
+            "td" | "th" => {
+                let is_header = parsed.name == "th" || self.in_thead;
+                if parsed.closing {
+                    self.finish_cell();
+                } else {
+                    // Tolerate an unclosed previous cell: finish it first.
+                    if self.cell_open {
+                        self.finish_cell();
+                    }
+                    let colspan = parse_span_attr(parsed.attr("colspan"));
+                    let rowspan = parse_span_attr(parsed.attr("rowspan"));
+                    self.begin_cell(is_header, colspan, rowspan);
+                    if parsed.self_closing {
+                        self.finish_cell();
+                    }
+                }
+            }
+            "br" if self.cell_open => {
+                self.append_cell_text("\n");
+            }
+            "strong" | "b" if self.cell_open => {
+                self.adjust_depth(parsed.closing, |s| &mut s.bold_depth)
+            }
+            "em" | "i" if self.cell_open => {
+                self.adjust_depth(parsed.closing, |s| &mut s.italic_depth)
+            }
+            "code" | "kbd" | "samp" if self.cell_open => {
+                self.adjust_depth(parsed.closing, |s| &mut s.code_depth)
+            }
+            "s" | "del" | "strike" if self.cell_open => {
+                self.adjust_depth(parsed.closing, |s| &mut s.strike_depth)
+            }
+            _ => {}
+        }
+    }
+
+    fn begin_row(&mut self) {
+        self.current_row = Some(Vec::new());
+        if self.row_spans.is_empty() {
+            self.row_spans.push(0);
+        }
+    }
+
+    fn begin_cell(&mut self, is_header: bool, colspan: usize, rowspan: usize) {
+        self.pending_is_header = is_header;
+        self.pending_colspan = colspan;
+        self.pending_rowspan = rowspan;
+        self.current_cell_spans.clear();
+        self.cell_open = true;
+    }
+
+    fn finish_cell(&mut self) {
+        if !self.cell_open {
+            return;
+        }
+        self.cell_open = false;
+        if self.current_row.is_none() {
+            self.current_cell_spans.clear();
+            return;
+        }
+        let colspan = self.pending_colspan.max(1);
+        let rowspan = self.pending_rowspan.max(1);
+        let is_header = self.pending_is_header;
+        let content = finish_rich_text(std::mem::take(&mut self.current_cell_spans));
+        self.place_cell(HtmlTableCell {
+            content,
+            colspan,
+            rowspan,
+            is_header,
+            is_spacer: false,
+        });
+        self.pending_is_header = false;
+        self.pending_colspan = 1;
+        self.pending_rowspan = 1;
+    }
+
+    /// Places a cell at the next free column, skipping rowspan-held columns,
+    /// and emits spacer slots for held-open columns. Decrement rowspan counters.
+    fn place_cell(&mut self, mut cell: HtmlTableCell) {
+        if cell.colspan == 0 {
+            cell.colspan = 1;
+        }
+        if cell.rowspan == 0 {
+            cell.rowspan = 1;
+        }
+        // Snapshot the columns already consumed in the current row and the
+        // rowspan-held columns, so we never hold a borrow of self across pushes.
+        let (col, spacers) = match self.current_row.as_ref() {
+            Some(row) => {
+                let used = row.iter().map(|c| c.colspan).sum::<usize>();
+                let mut advance = used;
+                let mut to_add = Vec::new();
+                while advance < self.row_spans.len() && self.row_spans[advance] > 0 {
+                    // Each held-open column gets a single-column spacer; runs of
+                    // consecutive held columns become multiple width-1 spacers,
+                    // which is visually equivalent for border alignment.
+                    to_add.push(advance);
+                    advance += 1;
+                }
+                (advance, to_add)
+            }
+            None => (0usize, Vec::new()),
+        };
+
+        let end_col = col + cell.colspan;
+        while self.row_spans.len() < end_col {
+            self.row_spans.push(0);
+        }
+        if cell.rowspan > 1 {
+            for c in col..end_col {
+                self.row_spans[c] = self.row_spans[c].max(cell.rowspan);
+            }
+            self.grid.has_rowspan = true;
+        }
+
+        let row = self
+            .current_row
+            .as_mut()
+            .expect("row in progress when placing a cell");
+        for _ in spacers {
+            row.push(HtmlTableCell {
+                content: RichText::default(),
+                colspan: 1,
+                rowspan: 0,
+                is_header: false,
+                is_spacer: true,
+            });
+        }
+        row.push(cell);
+        let new_columns = row.iter().map(|c| c.colspan).sum::<usize>();
+        if new_columns > self.grid.columns {
+            self.grid.columns = new_columns;
+        }
+    }
+
+    fn flush_row(&mut self) {
+        // First, finish a pending open cell.
+        if self.cell_open {
+            self.finish_cell();
+        }
+        if let Some(mut row) = self.current_row.take() {
+            // Top up trailing spacer slots for any remaining rowspan-held columns.
+            let mut col = row.iter().map(|c| c.colspan).sum::<usize>();
+            while col < self.row_spans.len() && self.row_spans[col] > 0 {
+                row.push(HtmlTableCell {
+                    content: RichText::default(),
+                    colspan: 1,
+                    rowspan: 0,
+                    is_header: false,
+                    is_spacer: true,
+                });
+                col += 1;
+            }
+            // Decrement rowspan counters for the row we just finished.
+            for c in 0..self.row_spans.len() {
+                if self.row_spans[c] > 0 {
+                    self.row_spans[c] -= 1;
+                }
+            }
+            if !row.is_empty() {
+                let row_columns = row.iter().map(|c| c.colspan).sum::<usize>();
+                if row_columns > self.grid.columns {
+                    self.grid.columns = row_columns;
+                }
+                self.grid.rows.push(row);
+            }
+        }
+        self.pending_is_header = false;
+        self.pending_colspan = 1;
+        self.pending_rowspan = 1;
+    }
+
+    fn append_cell_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let decoded = decode_html_entities(text);
+        let style = self.cell_style();
+        for ch in decoded.chars() {
+            if ch.is_whitespace() {
+                // Collapse runs of whitespace to a single space, mirroring HTML.
+                if self
+                    .current_cell_spans
+                    .last()
+                    .is_some_and(|span| span.math.is_none() && span.style == style && span.text.ends_with(' '))
+                {
+                    continue;
+                }
+                append_span(&mut self.current_cell_spans, " ", style, None);
+                continue;
+            }
+            let mut buf = [0u8; 4];
+            append_span(
+                &mut self.current_cell_spans,
+                ch.encode_utf8(&mut buf),
+                style,
+                None,
+            );
+        }
+    }
+
+    fn cell_style(&self) -> InlineStyle {
+        InlineStyle {
+            bold: self.bold_depth > 0,
+            italic: self.italic_depth > 0,
+            code: self.code_depth > 0,
+            strikethrough: self.strike_depth > 0,
+            ..InlineStyle::default()
+        }
+    }
+
+    /// Adjust an inline-style depth counter on opening/closing style tags,
+    /// matching the saturating add/sub used by the HTML flattener.
+    fn adjust_depth(&mut self, closing: bool, get: impl Fn(&mut Self) -> &mut usize) {
+        let depth = get(self);
+        if closing {
+            *depth = depth.saturating_sub(1);
+        } else {
+            *depth += 1;
+        }
+    }
+}
+
+/// Parses a `rowspan`/`colspan` attribute value into a `usize >= 1`. Non-numeric,
+/// zero, or negative values (per HTML spec, `0` is clamped to `1`) fall back to 1.
+fn parse_span_attr(value: Option<String>) -> usize {
+    value
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n >= 1)
+        .unwrap_or(1)
 }
 
 struct HtmlPreviewBuilder<'a> {
@@ -1356,5 +1770,230 @@ mod extended_inline_range_tests {
             vec!["~a~", "~b~"]
         );
         assert_eq!(render_extended_inline_plain(source), "ab");
+    }
+}
+
+#[cfg(test)]
+mod html_table_tests {
+    use super::{HtmlPreviewPart, html_preview_parts, parse_html_table_grid};
+
+    /// Returns `(row_index, col_index, text, colspan, rowspan, is_header)` for
+    /// every non-spacer cell in the grid, in document order.
+    fn grid_cells(grid: &super::HtmlTableGrid) -> Vec<(usize, usize, String, usize, usize, bool)> {
+        let mut out = Vec::new();
+        for (row_index, row) in grid.rows.iter().enumerate() {
+            let mut col = 0usize;
+            for cell in row {
+                if cell.is_spacer {
+                    col += cell.colspan;
+                    continue;
+                }
+                out.push((
+                    row_index,
+                    col,
+                    cell.content.text.clone(),
+                    cell.colspan,
+                    cell.rowspan,
+                    cell.is_header,
+                ));
+                col += cell.colspan;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn rowspan_three_places_cell_across_rows() {
+        // The exact table from the bug report: a `12 V` cell spans three rows.
+        let html = "<table>\n\
+<tr><th>电源接口</th><th>峰值电流</th><th>最大持续时间</th></tr>\n\
+<tr><td rowspan=\"3\">12 V</td><td>20 A</td><td>200 us</td></tr>\n\
+<tr><td>17 A</td><td>1 ms</td></tr>\n\
+<tr><td>13 A</td><td>5 ms</td></tr>\n\
+</table>";
+        let grid = parse_html_table_grid(html).expect("table should parse");
+        assert!(grid.has_rowspan);
+        assert_eq!(grid.columns, 3);
+        assert_eq!(grid.rows.len(), 4);
+
+        let cells = grid_cells(&grid);
+        // The `12 V` cell is a header-spanning body cell at row 1, column 0,
+        // colspan 1, rowspan 3.
+        let twelve = cells
+            .iter()
+            .find(|c| c.2 == "12 V")
+            .unwrap_or_else(|| panic!("12 V cell missing; got {cells:?}"));
+        assert_eq!(twelve.0, 1, "12 V is in row 1");
+        assert_eq!(twelve.1, 0, "12 V is in column 0");
+        assert_eq!(twelve.3, 1, "12 V colspan is 1");
+        assert_eq!(twelve.4, 3, "12 V rowspan is 3");
+
+        // The cells in rows 2 and 3 are shifted to columns 1 and 2.
+        let seventeen = cells.iter().find(|c| c.2 == "17 A").unwrap();
+        assert_eq!(seventeen.0, 2);
+        assert_eq!(seventeen.1, 1, "17 A shifts to column 1");
+        let one_ms = cells.iter().find(|c| c.2 == "1 ms").unwrap();
+        assert_eq!(one_ms.0, 2);
+        assert_eq!(one_ms.1, 2, "1 ms shifts to column 2");
+        let thirteen = cells.iter().find(|c| c.2 == "13 A").unwrap();
+        assert_eq!(thirteen.0, 3);
+        assert_eq!(thirteen.1, 1);
+    }
+
+    #[test]
+    fn colspan_widens_cell_across_columns() {
+        let html = "<table>\
+<tr><th>A</th><th>B</th><th>C</th></tr>\
+<tr><td colspan=\"2\">wide</td><td>x</td></tr>\
+</table>";
+        let grid = parse_html_table_grid(html).expect("table should parse");
+        assert_eq!(grid.columns, 3);
+        let cells = grid_cells(&grid);
+        let wide = cells.iter().find(|c| c.2 == "wide").unwrap();
+        assert_eq!(wide.0, 1);
+        assert_eq!(wide.1, 0);
+        assert_eq!(wide.3, 2, "wide cell colspan is 2");
+        // The trailing cell lands in column 2.
+        let x = cells.iter().find(|c| c.2 == "x").unwrap();
+        assert_eq!(x.1, 2);
+    }
+
+    #[test]
+    fn combined_rowspan_and_colspan() {
+        let html = "<table>\
+<tr><th>A</th><th>B</th><th>C</th></tr>\
+<tr><td rowspan=\"2\" colspan=\"2\">block</td><td>1</td></tr>\
+<tr><td>2</td></tr>\
+</table>";
+        let grid = parse_html_table_grid(html).expect("table should parse");
+        assert!(grid.has_rowspan);
+        let cells = grid_cells(&grid);
+        let block = cells.iter().find(|c| c.2 == "block").unwrap();
+        assert_eq!(block.1, 0);
+        assert_eq!(block.3, 2, "block colspan is 2");
+        assert_eq!(block.4, 2, "block rowspan is 2");
+        // Row 2 only has one real cell, which lands in column 2 (columns 0/1
+        // are still held by the rowspan from above).
+        let two = cells.iter().find(|c| c.2 == "2").unwrap();
+        assert_eq!(two.0, 2);
+        assert_eq!(two.1, 2);
+    }
+
+    #[test]
+    fn invalid_span_values_fall_back_to_one() {
+        let html = "<table>\
+<tr><td rowspan=\"zero\">a</td><td colspan=\"-1\">b</td></tr>\
+<tr><td>c</td><td>d</td></tr>\
+</table>";
+        let grid = parse_html_table_grid(html).expect("table should parse");
+        assert!(!grid.has_rowspan, "zero/negative spans collapse to 1");
+        let cells = grid_cells(&grid);
+        assert_eq!(cells.len(), 4);
+        // Every cell is a single-cell footprint.
+        assert!(cells.iter().all(|c| c.3 == 1 && c.4 == 1));
+    }
+
+    #[test]
+    fn non_numeric_span_falls_back_to_one() {
+        let html = "<table><tr><td rowspan=\"wide\">a</td><td>b</td></tr></table>";
+        let grid = parse_html_table_grid(html).expect("table should parse");
+        assert!(!grid.has_rowspan);
+    }
+
+    #[test]
+    fn malformed_table_returns_none_and_falls_back_to_text() {
+        // Not a table at all.
+        assert!(parse_html_table_grid("<p>hello</p>").is_none());
+        // Nested table is out of scope.
+        assert!(parse_html_table_grid("<table><table></table></table>").is_none());
+        // An empty table with no rows cannot become a grid.
+        assert!(parse_html_table_grid("<table></table>").is_none());
+
+        // A truncated-but-structured table (one open cell) is tolerated and
+        // rendered as a single-cell table rather than crashing.
+        let parts = html_preview_parts("<table><tr><td>oops");
+        assert_eq!(parts.len(), 1, "got {parts:?}");
+        assert!(matches!(parts[0], HtmlPreviewPart::Table { .. }));
+
+        // Non-table HTML always goes through the flattener.
+        let parts = html_preview_parts("<div>still text</div>");
+        assert!(parts.iter().any(|p| matches!(p, HtmlPreviewPart::Text { .. })));
+    }
+
+    #[test]
+    fn unclosed_cell_tags_are_tolerated() {
+        // No closing `</td>`/`</tr>` — browsers auto-close; we should too.
+        let html = "<table><tr><th>H1<th>H2<tr><td>a<td>b</table>";
+        let grid = parse_html_table_grid(html).expect("table should parse");
+        let texts: Vec<&str> = grid
+            .rows
+            .iter()
+            .flat_map(|row| row.iter().filter(|c| !c.is_spacer))
+            .map(|c| c.content.text.as_str())
+            .collect();
+        assert_eq!(texts, vec!["H1", "H2", "a", "b"]);
+    }
+
+    #[test]
+    fn inline_formatting_resolves_inside_cells() {
+        let html = "<table><tr><td><strong>bold</strong> and <em>it</em></td></tr></table>";
+        let grid = parse_html_table_grid(html).expect("table should parse");
+        let cell = grid.rows[0]
+            .iter()
+            .find(|c| !c.is_spacer)
+            .expect("a real cell");
+        assert_eq!(cell.content.text, "bold and it");
+        // The "bold" run carries the bold style.
+        let bold_span = cell
+            .content
+            .spans
+            .iter()
+            .find(|s| s.text.contains("bold"))
+            .expect("bold span");
+        assert!(bold_span.style.bold, "bold span should be bold");
+        let italic_span = cell
+            .content
+            .spans
+            .iter()
+            .find(|s| s.text.contains("it"))
+            .expect("italic span");
+        assert!(italic_span.style.italic, "it span should be italic");
+    }
+
+    #[test]
+    fn html_preview_parts_routes_table_to_table_part() {
+        let html = "<table><tr><th>X</th></tr><tr><td>1</td></tr></table>";
+        let parts = html_preview_parts(html);
+        assert_eq!(parts.len(), 1, "one table part expected, got {parts:?}");
+        match &parts[0] {
+            HtmlPreviewPart::Table { grid } => {
+                assert_eq!(grid.columns, 1);
+                assert_eq!(grid.rows.len(), 2);
+            }
+            other => panic!("expected Table part, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_table_html_still_uses_flattener() {
+        let parts = html_preview_parts("<p>hello <strong>world</strong></p>");
+        assert!(parts.iter().any(|p| matches!(p, HtmlPreviewPart::Text { .. })));
+        assert!(!parts.iter().any(|p| matches!(p, HtmlPreviewPart::Table { .. })));
+    }
+
+    #[test]
+    fn header_cells_are_marked() {
+        let html = "<table><tr><th>H</th></tr><tr><td>b</td></tr></table>";
+        let grid = parse_html_table_grid(html).expect("table should parse");
+        let header = grid.rows[0]
+            .iter()
+            .find(|c| !c.is_spacer)
+            .expect("header cell");
+        assert!(header.is_header);
+        let body = grid.rows[1]
+            .iter()
+            .find(|c| !c.is_spacer)
+            .expect("body cell");
+        assert!(!body.is_header);
     }
 }

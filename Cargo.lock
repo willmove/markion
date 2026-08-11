@@ -3230,7 +3230,9 @@ name = "markion"
 version = "0.1.16"
 dependencies = [
  "anyhow",
+ "base64",
  "cargo-packager-updater",
+ "data-url",
  "export",
  "font8x8",
  "gpui",

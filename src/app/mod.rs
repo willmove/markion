@@ -30,7 +30,7 @@ use markion::{
     BlockTransform, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
     DEFAULT_RENDERED_FONT_SIZE, DiskState, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
     ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind,
-    HighlightedSpan, HtmlPreviewPart, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
+    HighlightedSpan, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
     Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
     MarkdownFormat, MathLayoutStyle, Msg, P0Msg, P1Msg, PreviewBlock, RecoveryInventoryEntry,

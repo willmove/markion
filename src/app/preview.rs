@@ -2556,11 +2556,6 @@ pub(super) fn visual_block_view(
             };
             div()
                 .mb_3()
-                .p_3()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(0xcbd5e1))
-                .bg(rgb(0xf8fafc))
                 .cursor(CursorStyle::PointingHand)
                 .on_mouse_down(
                     MouseButton::Left,
@@ -2568,13 +2563,10 @@ pub(super) fn visual_block_view(
                 )
                 .child(
                     div()
-                        .bg(rgb(0xf8fafc))
-                        .p_2()
                         .flex()
                         .flex_col()
                         .items_center()
                         .justify_center()
-                        .min_h(px(96.))
                         .child(image)
                         .children(caption.map(|text| {
                             div()
@@ -4127,8 +4119,107 @@ fn html_preview_block_view(
                     .mb_2()
                     .when(centered, |style| style.flex().justify_center())
                     .child(preview_image_view(app, &url, document_dir)),
+                HtmlPreviewPart::Table { grid } => div().mb_2().child(html_table_grid_view(
+                    app,
+                    &grid,
+                    block_index,
+                    part_index,
+                    &typography,
+                    cx,
+                )),
             }
         }))
+}
+
+/// Renders a resolved HTML table grid. Uses GPUI's CSS-grid layout so that
+/// `colspan` (via `col_span`) and `rowspan` (via `row_span`) are handled
+/// natively: a spanning cell covers the rows/columns below/beside it without
+/// bespoke overlay logic. Reuses the GFM pipe-table styling (borders, header
+/// shading, table font size).
+fn html_table_grid_view(
+    app: &MarkionApp,
+    grid: &HtmlTableGrid,
+    block_index: usize,
+    part_index: usize,
+    typography: &DocumentTypographyMetrics,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let columns = grid.columns.max(1).min(u16::MAX as usize) as u16;
+    let border = rgb(0xe2e8f0);
+    let outer_border = rgb(0xcbd5e1);
+    let header_bg = rgb(0xf1f5f9);
+    let body_bg = rgb(0xffffff);
+    let font_size = typography.table_font_size;
+    let padding = 8.0f32;
+
+    // Walk the grid to assign explicit (column, row) coordinates to each
+    // non-spacer cell. The grid model already advanced past rowspan-held
+    // columns with spacer slots, so accumulating each row's col offsets while
+    // skipping spacers yields the correct CSS-grid column line for every cell.
+    let mut cell_views = Vec::new();
+    let row_count = grid.rows.len();
+    for (row_index, row) in grid.rows.iter().enumerate() {
+        let mut col: i16 = 1;
+        for (cell_index, cell) in row.iter().enumerate() {
+            if cell.is_spacer {
+                col = col.saturating_add(cell.colspan.max(1) as i16);
+                continue;
+            }
+            let colspan = cell.colspan.max(1).min(u16::MAX as usize) as u16;
+            let rowspan = cell.rowspan.max(1).min(u16::MAX as usize) as u16;
+            let col_start = col;
+            let row_start = ((row_index + 1).min(i16::MAX as usize)) as i16;
+            let is_header = cell.is_header;
+            // Internal grid lines: right border unless the cell touches the last
+            // column, bottom border unless it touches the last row. The outer
+            // container border draws the top/left/bottom/right edges.
+            let touches_last_col = col_start + colspan as i16 > columns as i16;
+            let touches_last_row = row_start as usize + rowspan as usize > row_count;
+            cell_views.push(
+                div()
+                    .col_start(col_start)
+                    .row_start(row_start)
+                    .col_span(colspan)
+                    .row_span(rowspan)
+                    .p(px(padding))
+                    .text_size(px(font_size))
+                    .when(is_header, |style| {
+                        style.font_weight(FontWeight::SEMIBOLD).bg(header_bg)
+                    })
+                    .when(!is_header, |style| style.bg(body_bg))
+                    .when(!touches_last_col, |style| {
+                        style.border_r_1().border_color(border)
+                    })
+                    .when(!touches_last_row, |style| {
+                        style.border_b_1().border_color(border)
+                    })
+                    .child(rich_text_element(
+                        app,
+                        ElementId::from((
+                            "preview-html-table-cell",
+                            ((block_index as u64) << 40)
+                                | ((part_index as u64) << 28)
+                                | (((row_index as u64) & 0xff) << 14)
+                                | ((cell_index as u64) & 0x3fff),
+                        )),
+                        &cell.content,
+                        block_index,
+                        PreviewTextRunId::HtmlText,
+                        cx,
+                    )),
+            );
+            col = col.saturating_add(colspan as i16);
+        }
+    }
+
+    div()
+        .grid()
+        .grid_cols(columns)
+        .border_1()
+        .border_color(outer_border)
+        .rounded_md()
+        .overflow_hidden()
+        .children(cell_views)
 }
 
 /// Small "Copy" button rendered in the header of every code block. Clicking it
@@ -4590,18 +4681,7 @@ pub(super) fn preview_block_view(
         }
         PreviewBlock::Image { url, .. } => div()
             .mb_3()
-            .p_3()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(0xcbd5e1))
-            .bg(rgb(0xf8fafc))
-            .child(
-                div()
-                    .rounded_md()
-                    .overflow_hidden()
-                    .bg(rgb(0xffffff))
-                    .child(preview_image_view(app, url, document_dir)),
-            ),
+            .child(preview_image_view(app, url, document_dir)),
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
         PreviewBlock::FootnoteDefinition { label, text, .. } => div()
             .mb(px(typography.paragraph_spacing))

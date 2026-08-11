@@ -60,6 +60,10 @@ tokio.workspace = true
 font8x8 = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 pulldown-cmark.workspace = true
+# Spec-compliant (RFC 2397) `data:` URI parsing for base64/URL-encoded inline
+# preview images. Already vendored transitively via gpui; pinned to the
+# resolved version so the lock does not churn.
+data-url = "0.3.2"
 # Diagram SVG is rasterized in-crate (src/app/diagram.rs) rather than through
 # `Image::from_bytes(ImageFormat::Svg, ..)`: gpui 0.2.2 uploads that path's
 # premultiplied-RGBA pixmap as BGRA without swapping channels and rasterizes it
@@ -101,6 +105,9 @@ tracing-appender.workspace = true
 [dev-dependencies]
 gpui = { version = "0.2.2", features = ["test-support"] }
 tempfile = "3.20"
+# Test-only base64 encoding to build RFC 2397 data-URI fixtures (already
+# vendored transitively; pinned to the resolved version).
+base64 = "0.22.1"
 
 # Process footprint counters for memory diagnostics (matches gpui's windows 0.61).
 [target.'cfg(windows)'.dependencies]

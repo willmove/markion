@@ -35,7 +35,14 @@ pub(super) struct PreviewImageKey {
 
 impl PreviewImageKey {
     pub(super) fn from_url(url: &str, document_dir: Option<&Path>) -> Self {
-        if is_remote_resource(url) {
+        if url.starts_with("data:") {
+            // Inline base64/URL-encoded images (RFC 2397) are decoded in
+            // process — never handed to reqwest. Use a dedicated prefix so
+            // `remote_url()` keeps meaning "safe to GET over HTTP(S)".
+            Self {
+                identity: format!("data:{}", url),
+            }
+        } else if is_remote_resource(url) {
             Self {
                 identity: format!("remote:{}", remote_image_request_url(url)),
             }
@@ -60,7 +67,17 @@ impl PreviewImageKey {
     }
 
     fn remote_url(&self) -> Option<&str> {
+        // `from_url` only emits the `remote:` prefix for non-`data:` remote
+        // resources, so a successful strip guarantees an HTTP(S)-style URL
+        // safe to feed reqwest — `data:` URIs are exposed via `data_url()`.
         self.identity.strip_prefix("remote:")
+    }
+
+    fn data_url(&self) -> Option<&str> {
+        // Identity stores the full URI verbatim under a `data:` prefix, i.e.
+        // `data:data:image/png;base64,...`. Strip once to recover the original
+        // `data:...` string for the decoder.
+        self.identity.strip_prefix("data:")
     }
 }
 
@@ -402,26 +419,30 @@ pub(super) fn probe_is_heavy(key: &PreviewImageKey) -> bool {
 }
 
 pub(super) fn load_preview_image(key: &PreviewImageKey) -> Result<PreviewImageReady, String> {
-    let bytes = if let Some(path) = key.local_path() {
-        std::fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?
+    let (bytes, is_svg) = if let Some(path) = key.local_path() {
+        let bytes =
+            std::fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+        let is_svg = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("svg"))
+            .unwrap_or(false)
+            || looks_like_svg(&bytes);
+        (bytes, is_svg)
+    } else if let Some(url) = key.data_url() {
+        let (bytes, mime_type) = decode_data_url(url)?;
+        let is_svg = mime_type
+            .map(|m| m.eq_ignore_ascii_case("image/svg+xml"))
+            .unwrap_or(false)
+            || looks_like_svg(&bytes);
+        (bytes, is_svg)
     } else if let Some(url) = key.remote_url() {
-        network::fetch_url_bytes(url).map_err(|err| err.to_string())?
+        let bytes = network::fetch_url_bytes(url).map_err(|err| err.to_string())?;
+        let is_svg = looks_like_svg(&bytes);
+        (bytes, is_svg)
     } else {
         return Err("unsupported image identity".into());
     };
-
-    let is_svg = key
-        .local_path()
-        .and_then(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("svg"))
-        })
-        .unwrap_or(false)
-        || bytes
-            .windows(4)
-            .take(64)
-            .any(|window| window == b"<svg" || window == b"<SVG");
 
     if is_svg {
         let (rgba, display_width, display_height) = rasterize_svg_bytes(&bytes)?;
@@ -431,6 +452,33 @@ pub(super) fn load_preview_image(key: &PreviewImageKey) -> Result<PreviewImageRe
         let (width, height) = rgba.dimensions();
         rgba_to_ready(rgba, width, height)
     }
+}
+
+/// Cheap leading-byte heuristic for SVG payloads, shared across the local /
+/// data-URI / remote load branches.
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    bytes
+        .windows(4)
+        .take(64)
+        .any(|window| window == b"<svg" || window == b"<SVG")
+}
+
+/// Decode an RFC 2397 `data:` URL to bytes, returning the parsed MIME type
+/// (its `type/subtype` essence, e.g. `image/png` or `image/svg+xml`) so the
+/// caller can pick the SVG rasterization path without re-probing the body.
+/// Both `;base64` and URL-encoded payloads are supported; a malformed URI
+/// yields a `String` error that flows into the missing-resource placeholder.
+fn decode_data_url(url: &str) -> Result<(Vec<u8>, Option<String>), String> {
+    let processed = data_url::DataUrl::process(url)
+        .map_err(|err| format!("invalid data URL: {err}"))?;
+    let mime_essence = {
+        let m = processed.mime_type();
+        format!("{}/{}", m.type_, m.subtype)
+    };
+    let (bytes, _fragment) = processed
+        .decode_to_vec()
+        .map_err(|err| format!("failed to decode data URL body: {err}"))?;
+    Ok((bytes, Some(mime_essence)))
 }
 
 fn rgba_to_ready(
@@ -733,6 +781,9 @@ pub(super) fn preview_image_view(app: &MarkionApp, url: &str, document_dir: Opti
             .flex()
             .items_center()
             .justify_center()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(0xcbd5e1))
             .bg(rgb(0xf1f5f9)),
         PreviewImageEntry::Error(message) => div()
             .w_full()
@@ -740,6 +791,10 @@ pub(super) fn preview_image_view(app: &MarkionApp, url: &str, document_dir: Opti
             .flex()
             .items_center()
             .justify_center()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(0xcbd5e1))
+            .bg(rgb(0xf8fafc))
             .text_color(rgb(0xb91c1c))
             .text_size(px(12.))
             .child(p0_tf(
@@ -1186,5 +1241,130 @@ mod tests {
         let ready = load_preview_image(&k).expect("decode");
         assert_eq!((ready.display_width, ready.display_height), (96, 32));
         assert_eq!((ready.width, ready.height), (96, 32));
+    }
+
+    // --- data: URI (RFC 2397) support --------------------------------------
+
+    /// Build a `;base64` data URI from raw bytes and a MIME essence.
+    fn data_url_base64(mime: &str, bytes: &[u8]) -> String {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        format!("data:{mime};base64,{}", STANDARD.encode(bytes))
+    }
+
+    /// Build a URL-encoded (non-base64) data URI from raw bytes.
+    fn data_url_urlencoded(mime: &str, bytes: &[u8]) -> String {
+        let mut body = String::new();
+        for &byte in bytes {
+            body.push_str(&format!("%{byte:02X}"));
+        }
+        format!("data:{mime},{body}")
+    }
+
+    #[test]
+    fn from_url_routes_data_uri_to_data_identity() {
+        let url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+        let k = PreviewImageKey::from_url(url, None);
+        assert_eq!(k.identity, format!("data:{url}"));
+        assert_eq!(k.data_url(), Some(url));
+        assert_eq!(k.local_path(), None);
+        assert_eq!(k.remote_url(), None);
+    }
+
+    #[test]
+    fn remote_url_never_returns_data_scheme() {
+        // A data URI must route through the `data:` identity, never `remote:`,
+        // so reqwest can never be handed a `data:` scheme.
+        let k = PreviewImageKey::from_url(
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+            None,
+        );
+        assert!(k.remote_url().is_none());
+        // Sanity: a real http(s) URL still routes to `remote:`.
+        let r = PreviewImageKey::from_url("https://example.com/a.png", None);
+        assert_eq!(r.remote_url(), Some("https://example.com/a.png"));
+    }
+
+    #[test]
+    fn identical_data_uris_share_key() {
+        let url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+        let k1 = PreviewImageKey::from_url(url, None);
+        let k2 = PreviewImageKey::from_url(url, Some(Path::new("/any/dir")));
+        assert_eq!(k1, k2, "data URIs are document-dir independent & dedupe");
+    }
+
+    #[test]
+    fn load_base64_png_data_uri() {
+        let png = {
+            let img = RgbaImage::from_pixel(48, 24, Rgba([10, 20, 30, 255]));
+            let mut buf = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut buf, image::ImageFormat::Png)
+                .expect("encode png");
+            buf.into_inner()
+        };
+        let url = data_url_base64("image/png", &png);
+        let k = PreviewImageKey::from_url(&url, None);
+        let ready = load_preview_image(&k).expect("decode data-uri png");
+        assert_eq!((ready.width, ready.height), (48, 24));
+        assert_eq!((ready.display_width, ready.display_height), (48, 24));
+        assert!(ready.byte_len > 0);
+    }
+
+    #[test]
+    fn load_base64_svg_data_uri_uses_mime_for_svg_path() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"60\" height=\"40\">\
+                   <rect width=\"60\" height=\"40\" fill=\"#3366ff\"/></svg>"
+            .as_bytes()
+            .to_vec();
+        // The base64 body starts with `PHN2...` (no leading `<svg` bytes), so
+        // the MIME type — not the byte scan — must select the SVG path.
+        let url = data_url_base64("image/svg+xml", &svg);
+        let k = PreviewImageKey::from_url(&url, None);
+        let ready = load_preview_image(&k).expect("rasterize data-uri svg");
+        assert_eq!((ready.display_width, ready.display_height), (60, 40));
+        assert_eq!(
+            (ready.width, ready.height),
+            (
+                60 * PREVIEW_SVG_SUPERSAMPLE,
+                40 * PREVIEW_SVG_SUPERSAMPLE
+            )
+        );
+    }
+
+    #[test]
+    fn load_url_encoded_data_uri_matches_base64_equivalent() {
+        let png = {
+            let img = RgbaImage::from_pixel(16, 16, Rgba([200, 100, 50, 255]));
+            let mut buf = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut buf, image::ImageFormat::Png)
+                .expect("encode png");
+            buf.into_inner()
+        };
+        let b64_key = PreviewImageKey::from_url(&data_url_base64("image/png", &png), None);
+        let url_key = PreviewImageKey::from_url(&data_url_urlencoded("image/png", &png), None);
+        let b64_ready = load_preview_image(&b64_key).expect("decode base64");
+        let url_ready = load_preview_image(&url_key).expect("decode url-encoded");
+        assert_eq!((b64_ready.width, b64_ready.height), (16, 16));
+        assert_eq!(
+            (url_ready.width, url_ready.height),
+            (b64_ready.width, b64_ready.height),
+            "non-base64 data URI decodes to the same pixels"
+        );
+    }
+
+    #[test]
+    fn malformed_data_uri_returns_err_for_placeholder() {
+        // Missing comma between header and body.
+        let k = PreviewImageKey::from_url("data:image/png;base64", None);
+        match load_preview_image(&k) {
+            Err(err) => assert!(err.contains("data URL"), "error mentions data URL: {err}"),
+            Ok(_) => panic!("no-comma data URI must not decode"),
+        }
+
+        // Truncated/invalid base64 payload.
+        let k = PreviewImageKey::from_url("data:image/png;base64,!!!!not-base64!!!!", None);
+        match load_preview_image(&k) {
+            Err(_) => {}
+            Ok(_) => panic!("invalid base64 data URI must not decode"),
+        }
     }
 }
