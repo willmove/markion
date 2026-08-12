@@ -1572,12 +1572,18 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                     let is_selected = selected_path.as_ref() == Some(&entry.path);
                     let is_collapsed = entry.kind == FileTreeEntryKind::Directory
                         && app.collapsed_tree_paths.contains(&entry.path);
-                    // Only Markdown files are collected into the tree (see
-                    // `collect_file_tree_entries`), so every File row opens a
-                    // document; Directory rows toggle their descendants.
-                    // `entry.is_markdown` is read defensively in case the
-                    // collection filter relaxes.
-                    let clickable = entry.kind == FileTreeEntryKind::File && entry.is_markdown;
+                    // The tree collects Markdown and curated plain-text files
+                    // (see `collect_file_tree_entries`); every File row opens a
+                    // document. Directory rows toggle their descendants.
+                    let clickable = entry.kind == FileTreeEntryKind::File;
+                    // Lucide glyph from path/extension via `ui::icon::icon_for`.
+                    // Markdown maps to `IconKind::Markdown`, plain-text types
+                    // (`.txt`/`.log`/`.csv`/…) fall through to `IconKind::File`;
+                    // `file_tree_icon` renders those two distinctly.
+                    let icon_kind = crate::ui::icon::icon_for(
+                        &entry.path,
+                        entry.kind == FileTreeEntryKind::Directory,
+                    );
                     let bg = if is_active {
                         palette.active_bg
                     } else if is_selected {
@@ -1619,11 +1625,11 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                                 .items_center()
                                 .gap_2()
                                 .min_w_0()
-                                .child(file_tree_entry_icon(
-                                    entry.kind,
+                                .child(crate::ui::icon::file_tree_icon(
+                                    icon_kind,
                                     !is_collapsed,
-                                    palette,
                                     text_color,
+                                    palette.active_text,
                                 ))
                                 .child(
                                     div()
@@ -1646,10 +1652,12 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                                         app.open_tree_file(path, window, cx);
                                     }
                                     FileTreeEntryKind::Directory => {
-                                        if app.collapsed_tree_paths.contains(&path) {
-                                            app.collapsed_tree_paths.remove(&path);
-                                        } else {
-                                            app.collapsed_tree_paths.insert(path.clone());
+                                        if let Some(tree) = &app.file_tree {
+                                            toggle_tree_folder(
+                                                &path,
+                                                tree,
+                                                &mut app.collapsed_tree_paths,
+                                            );
                                         }
                                         app.status =
                                             t(app.language, Msg::StatusSelectedTreeEntry).into();
@@ -1798,145 +1806,6 @@ pub(super) fn reveal_in_system_file_manager(path: &Path, select_file: bool) -> i
             path
         };
         Command::new("xdg-open").arg(target).spawn().map(|_| ())
-    }
-}
-
-pub(super) fn file_tree_entry_icon(
-    kind: FileTreeEntryKind,
-    expanded: bool,
-    palette: ThemePalette,
-    color: Rgba,
-) -> Div {
-    match kind {
-        FileTreeEntryKind::Directory if expanded => div()
-            .relative()
-            .w(px(16.))
-            .h(px(16.))
-            .flex_none()
-            // The rear cover and tab stay visible above the wider front flap.
-            .child(
-                div()
-                    .absolute()
-                    .top(px(1.))
-                    .left(px(2.))
-                    .w(px(7.))
-                    .h(px(5.))
-                    .rounded_t_xs()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.surface_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(4.))
-                    .left(px(1.))
-                    .w(px(14.))
-                    .h(px(9.))
-                    .rounded_xs()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.surface_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(4.))
-                    .left(px(3.))
-                    .w(px(5.))
-                    .h(px(1.))
-                    .bg(palette.surface_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(7.))
-                    .left(px(0.))
-                    .w(px(16.))
-                    .h(px(8.))
-                    .rounded_xs()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.panel_bg),
-            ),
-        FileTreeEntryKind::Directory => div()
-            .relative()
-            .w(px(16.))
-            .h(px(16.))
-            .flex_none()
-            .child(
-                div()
-                    .absolute()
-                    .top(px(2.))
-                    .left(px(2.))
-                    .w(px(7.))
-                    .h(px(5.))
-                    .rounded_t_xs()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.panel_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(5.))
-                    .left(px(1.))
-                    .w(px(14.))
-                    .h(px(10.))
-                    .rounded_xs()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.panel_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(5.))
-                    .left(px(3.))
-                    .w(px(5.))
-                    .h(px(1.))
-                    .bg(palette.panel_bg),
-            ),
-        FileTreeEntryKind::File => div()
-            .relative()
-            .w(px(14.))
-            .h(px(16.))
-            .flex_none()
-            .child(
-                div()
-                    .absolute()
-                    .top(px(1.))
-                    .left(px(1.))
-                    .w(px(11.))
-                    .h(px(14.))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(color)
-                    .bg(palette.surface_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(2.))
-                    .left(px(8.))
-                    .w(px(4.))
-                    .h(px(4.))
-                    .border_l_1()
-                    .border_b_1()
-                    .border_color(color)
-                    .bg(palette.panel_bg),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(5.))
-                    .left(px(3.))
-                    .text_size(px(7.))
-                    .line_height(px(7.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(color)
-                    .child("M"),
-            ),
     }
 }
 
@@ -3651,6 +3520,15 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                         palette,
                                         cx.listener(|app, _: &MouseUpEvent, _window, cx| {
                                             app.toggle_sync_scroll(cx);
+                                        }),
+                                    ))
+                                    .child(preference_boolean_row(
+                                        app.tr(Msg::PrefPanelShowHiddenFiles),
+                                        app.show_hidden_files,
+                                        app.language,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.toggle_show_hidden_files(cx);
                                         }),
                                     ))
                                     .child(preference_sidebar_row(app, palette, cx)),

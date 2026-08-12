@@ -29,7 +29,8 @@ use markion::{
     AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement, BlockTarget,
     BlockTransform, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
     DEFAULT_RENDERED_FONT_SIZE, DiskState, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
-    ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind,
+    ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind,
+    HighlightKind,
     HighlightedSpan, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
     Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
@@ -1340,6 +1341,10 @@ struct MarkionApp {
     /// When enabled and the view mode is Split, the editor and preview panes
     /// scroll together proportionally. Persisted; disabled by default.
     sync_scroll: bool,
+    /// When enabled, the file-tree panel lists hidden entries (dotfile names,
+    /// plus Windows-hidden-attribute entries on Windows). Persisted; disabled
+    /// by default. The always-excluded noise list stays excluded regardless.
+    show_hidden_files: bool,
     /// Re-entrancy guard for the render-time scroll reconciliation: prevents
     /// the offset we write to the non-driving pane from being read back on the
     /// same frame as a new driver and ping-ponging.

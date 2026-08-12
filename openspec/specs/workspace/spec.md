@@ -5,12 +5,21 @@
 Covers the file tree panel and the auto-save / crash-recovery subsystem. Drag-and-drop file moves and a UI affordance for moving entries are **not** part of this capability (the underlying move API exists but is not surfaced); they are future candidates.
 ## Requirements
 ### Requirement: File tree panel with filename filtering
-The editor SHALL provide a toggleable file tree panel whose workspace root can be established either by explicitly choosing File → Open Folder or, when opening a Markdown document outside the current workspace, from that document's parent directory. The panel SHALL display only Markdown files (`.md`/`.markdown`/`.mdown`) nested under the folders that contain them, open Markdown files on click, mark the current document, support filename filtering, and support basic create / rename / delete / refresh operations for files and folders. An explicitly selected workspace root SHALL be preserved while Markdown documents contained within it are opened. The panel SHALL NOT scan the working directory on startup while only the in-memory welcome document is open; instead it SHALL show an empty-state placeholder until a file or folder is opened. Moving entries via the UI is **not** supported. Non-Markdown files SHALL NOT appear in the tree.
+The editor SHALL provide a toggleable file tree panel whose workspace root can be established either by explicitly choosing File → Open Folder or, when opening a document outside the current workspace, from that document's parent directory. The panel SHALL display Markdown files (`.md`/`.markdown`/`.mdown`) together with a curated set of plain-text files (`.txt`, `.text`, `.log`, `.csv`, `.tsv`, `.org`, `.rst`, `.adoc`, `.asciidoc`) nested under their containing folders, SHALL list folders that exist on disk even when they contain no Markdown or plain-text files, SHALL open Markdown and plain-text files on click as UTF-8 text, mark the current document, support filename filtering, and support basic create / rename / delete / refresh operations for files and folders. Directories on a hard-coded ignore list (version-control, build-output, dependency/cache, and IDE directories) and hidden directories (whose name begins with `.`) SHALL NOT be listed. Non-text files (binaries, images, source code, etc.) SHALL NOT appear in the tree. An explicitly selected workspace root SHALL be preserved while documents contained within it are opened. The panel SHALL NOT scan the working directory on startup while only the in-memory welcome document is open; instead it SHALL show an empty-state placeholder until a file or folder is opened. Moving entries via the UI is **not** supported.
 
 #### Scenario: Workspace is scanned and displayed as Markdown-only
 - **WHEN** a workspace root is established via File → Open Folder, the File → Open dialog, the sidebar, or Save As
-- **THEN** the file tree scans the applicable root on a background executor, displays only Markdown files nested under the folders that contain them, and renders a bounded number of rows per frame
-- **AND** non-Markdown files and folders that contain no Markdown files are not listed
+- **THEN** the file tree scans the applicable root on a background executor, displays Markdown files and the curated plain-text files nested under the folders that contain them, lists folders that exist on disk even when empty, and renders a bounded number of rows per frame
+- **AND** non-text files (binaries, images, source code) and ignored or hidden directories are not listed
+
+#### Scenario: Plain-text file opens from the tree
+- **WHEN** the user clicks a curated plain-text file (e.g. `.txt`, `.log`, `.csv`) in the file tree
+- **THEN** the file opens in the editor as UTF-8 text in its own tab, or focuses an existing tab for the same path
+- **AND** the file is rendered through the existing preview pipeline
+
+#### Scenario: Empty folders are shown
+- **WHEN** a non-ignored, non-hidden directory exists on disk but contains no Markdown or plain-text files
+- **THEN** the directory is still listed in the file tree as a nesting row
 
 #### Scenario: Empty state on startup
 - **WHEN** the editor launches with the in-memory welcome document and no file or folder is open
@@ -20,7 +29,7 @@ The editor SHALL provide a toggleable file tree panel whose workspace root can b
 - **WHEN** the user chooses File → Open Folder and selects one directory
 - **THEN** that directory becomes the file-tree workspace root without replacing or modifying the active document
 - **AND** the left sidebar becomes visible on the Files tab
-- **AND** the selected directory is scanned asynchronously, including when it contains no Markdown files
+- **AND** the selected directory is scanned asynchronously, including when it contains no Markdown or plain-text files
 
 #### Scenario: Folder selection cancellation preserves state
 - **WHEN** the user cancels the Open Folder picker
@@ -33,15 +42,15 @@ The editor SHALL provide a toggleable file tree panel whose workspace root can b
 - **AND** the active document, dirty state, undo history, and derived Markdown caches remain unchanged
 
 #### Scenario: Contained documents preserve the selected root
-- **WHEN** a Markdown document inside the current workspace root is opened or focused
+- **WHEN** a document inside the current workspace root is opened or focused
 - **THEN** the current workspace root remains unchanged and the document is marked in the tree
 
 #### Scenario: External document rebases the workspace
-- **WHEN** a Markdown document outside the current workspace root is opened through an existing document-opening flow
+- **WHEN** a document outside the current workspace root is opened through an existing document-opening flow
 - **THEN** the workspace root changes to that document's parent directory and the file tree rescans it
 
 #### Scenario: Open, filter, and current-file marking
-- **WHEN** the user clicks a Markdown file, types in the filename filter, or switches documents
+- **WHEN** the user clicks a Markdown or plain-text file, types in the filename filter, or switches documents
 - **THEN** the file opens in the editor, the tree filters by filename, and the current document is marked in the tree
 
 #### Scenario: Create, rename, delete, refresh
@@ -80,4 +89,64 @@ Markion SHALL periodically compare every named open tab with its last known on-d
 - **WHEN** the destination of an open tab disappears
 - **THEN** Markion retains the in-memory document and reports the missing destination
 - **AND** no automatic save recreates it without an explicit user action
+
+### Requirement: Folder expansion reveals one level
+
+When a folder is expanded interactively (by clicking it while collapsed), the file tree SHALL reveal only that folder's immediate children — its direct subfolders and the Markdown files it directly contains. Deeper subfolders SHALL remain collapsed until individually expanded, so each click drills down exactly one further level rather than opening the whole subtree at once. Collapsing a folder SHALL hide its entire subtree. This requirement governs interactive expansion only; the initial workspace-open collapse policy and filename filtering are unaffected.
+
+#### Scenario: Expanding a collapsed folder reveals only its immediate children
+- **WHEN** the user clicks a collapsed folder that contains nested subfolders and Markdown files
+- **THEN** only that folder's direct children (immediate subfolders and the Markdown files it directly contains) become visible
+- **AND** every deeper subfolder remains collapsed and its contents stay hidden
+
+#### Scenario: Each click drills down exactly one more level
+- **WHEN** the user clicks a now-visible collapsed subfolder that was revealed by the previous expand
+- **THEN** only that subfolder's immediate children become visible
+- **AND** levels deeper than it remain collapsed
+
+#### Scenario: Collapsing a folder hides its entire subtree
+- **WHEN** the user clicks an expanded folder
+- **THEN** the folder's entire subtree is hidden, regardless of how deep individual descendants had been expanded
+
+#### Scenario: Expanding a folder that contains only direct files
+- **WHEN** the user clicks a collapsed folder that contains only Markdown files and no subfolders
+- **THEN** those direct files become visible and no deeper structure is revealed
+
+### Requirement: File tree hidden-entry visibility SHALL be preference-controlled
+
+The file tree SHALL classify a file or folder as **hidden** when its file name begins with `.` (on every platform) or, on Windows, when the entry carries the hidden file attribute. Hidden entries SHALL be omitted from the file tree when the Show-hidden-files preference is **off** (the default), and SHALL be included when the preference is **on**, subject in both states to the existing Markdown-only filter and the always-excluded build/dependency noise list. Hidden-entry visibility SHALL apply identically to files and folders — a hidden Markdown file and a hidden folder are treated the same way. The noise list (e.g. `target`, `node_modules`) SHALL remain excluded regardless of the preference.
+
+#### Scenario: Hidden entries are omitted by default
+- **WHEN** a workspace root contains a dotfile Markdown file (e.g. `.secret.md`) and a dotfile folder (e.g. `.notes/`) and the Show-hidden-files preference is off
+- **THEN** neither the dotfile file nor any entry under the dotfile folder appears in the file tree
+- **AND** non-hidden Markdown files and their ancestor folders continue to appear as before
+
+#### Scenario: Toggling the preference on reveals hidden entries
+- **WHEN** the user turns the Show-hidden-files preference on
+- **THEN** hidden Markdown files and the folders containing them appear in the tree on the next scan
+- **AND** the Markdown-only filter still excludes non-Markdown hidden files (e.g. `.env`) from the tree
+
+#### Scenario: Toggling the preference off re-hides hidden entries
+- **WHEN** the user turns the Show-hidden-files preference off after having revealed hidden entries
+- **THEN** hidden files and folders are removed from the tree on the next scan
+- **AND** the tree returns to the same visible set as the default-off state
+
+#### Scenario: The build/dependency noise list stays excluded when hidden entries are revealed
+- **WHEN** the Show-hidden-files preference is on and the workspace contains entries on the always-excluded noise list (e.g. `target/`, `node_modules/`)
+- **THEN** those noise-list entries still do not appear in the file tree
+- **AND** only OS-hidden Markdown entries (dotfile names, or Windows hidden-attribute entries) are newly revealed
+
+#### Scenario: A hidden folder and its contents are omitted together, revealed together
+- **WHEN** a hidden (dotfile) folder contains a Markdown file and the Show-hidden-files preference is off
+- **THEN** neither the hidden folder nor any of its contents appear in the tree, because the scan never enters a skipped subtree
+- **AND** when the preference is turned on, the hidden folder appears alongside its Markdown child
+
+#### Scenario: Non-hidden folders are kept regardless of their children
+- **WHEN** a non-hidden folder contains only a hidden Markdown file (and no other text/Markdown content) and the Show-hidden-files preference is off
+- **THEN** the folder still appears in the tree (folders are not content-pruned), while its hidden Markdown child stays hidden
+- **AND** when the preference is turned on, the hidden Markdown child appears under that folder
+
+#### Scenario: Hidden-entry visibility persists across restarts
+- **WHEN** the user sets the Show-hidden-files preference on, restarts the editor, and opens the same workspace
+- **THEN** hidden Markdown entries appear in the file tree without any further user action
 

@@ -21,7 +21,8 @@ pub mod theme_file;
 pub use atomic::atomic_write;
 
 pub use file_tree::{
-    FileTree, FileTreeEntry, FileTreeEntryKind, MARKDOWN_EXTENSIONS, is_markdown_path,
+    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, MARKDOWN_EXTENSIONS,
+    TEXT_EXTENSIONS, is_markdown_path, is_text_path,
 };
 pub use logging::init_logging;
 pub use preferences::{

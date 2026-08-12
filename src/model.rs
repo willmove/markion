@@ -183,6 +183,11 @@ pub struct AppPreferences {
     /// editor and rendered preview panes scroll together proportionally.
     /// Disabled by default; no effect in Edit or Read mode.
     pub sync_scroll: bool,
+    /// When enabled, the file-tree panel lists hidden entries (dotfile names
+    /// on every platform, plus Windows-hidden-attribute entries on Windows).
+    /// Disabled by default; the always-excluded build/dependency noise list
+    /// (`target`, `node_modules`, …) stays excluded regardless of this flag.
+    pub show_hidden_files: bool,
     pub sidebar_visible: bool,
     pub sidebar_tab: SidebarTab,
     /// Interface language preference code (e.g. "en", "zh"). Stored as a
@@ -222,6 +227,7 @@ impl Default for AppPreferences {
             paragraph_spacing: DEFAULT_PARAGRAPH_SPACING,
             heading_menu_max_level: DEFAULT_HEADING_MENU_MAX_LEVEL,
             sync_scroll: false,
+            show_hidden_files: false,
             sidebar_visible: true,
             sidebar_tab: SidebarTab::default(),
             language: "en".to_string(),

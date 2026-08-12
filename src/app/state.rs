@@ -1123,6 +1123,37 @@ pub(super) fn update_file_tree_collapse_state_from_scan(
     }
 }
 
+/// Toggles a file-tree folder between collapsed and expanded with strict
+/// one-level semantics.
+///
+/// When expanding a previously-collapsed folder, every descendant directory
+/// is recorded as collapsed so only the folder's immediate children become
+/// visible — each click drills down exactly one further level instead of
+/// opening the whole subtree. When collapsing a previously-expanded folder,
+/// the folder itself is recorded as collapsed and the depth-based visibility
+/// filter hides its entire subtree.
+pub(super) fn toggle_tree_folder(
+    folder: &Path,
+    tree: &FileTree,
+    collapsed_paths: &mut HashSet<PathBuf>,
+) {
+    if collapsed_paths.remove(folder) {
+        // Was collapsed → expanding: reveal only immediate children by
+        // collapsing every descendant directory.
+        for entry in &tree.entries {
+            if entry.kind == FileTreeEntryKind::Directory
+                && entry.path != folder
+                && entry.path.starts_with(folder)
+            {
+                collapsed_paths.insert(entry.path.clone());
+            }
+        }
+    } else {
+        // Was expanded → collapsing: the depth filter hides the subtree.
+        collapsed_paths.insert(folder.to_path_buf());
+    }
+}
+
 pub(super) fn open_folder_prompt_options(language: Language) -> PathPromptOptions {
     PathPromptOptions {
         files: false,

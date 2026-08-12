@@ -50,6 +50,8 @@ struct PreferencesFile {
     heading_menu_max_level: u8,
     #[serde(deserialize_with = "deserialize_bool_or_false")]
     sync_scroll: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_false")]
+    show_hidden_files: bool,
     sidebar_visible: bool,
     /// "files" or "outline"; unknown values fall back to Files like the
     /// legacy format did.
@@ -115,6 +117,7 @@ impl From<&AppPreferences> for PreferencesFile {
             paragraph_spacing: normalize_paragraph_spacing(preferences.paragraph_spacing as i64),
             heading_menu_max_level: preferences.heading_menu_max_level,
             sync_scroll: preferences.sync_scroll,
+            show_hidden_files: preferences.show_hidden_files,
             sidebar_visible: preferences.sidebar_visible,
             sidebar_tab: match preferences.sidebar_tab {
                 SidebarTab::Files => "files".to_string(),
@@ -149,6 +152,7 @@ impl From<PreferencesFile> for AppPreferences {
             paragraph_spacing: normalize_paragraph_spacing(file.paragraph_spacing as i64),
             heading_menu_max_level: normalize_heading_menu_max_level(file.heading_menu_max_level),
             sync_scroll: file.sync_scroll,
+            show_hidden_files: file.show_hidden_files,
             sidebar_visible: file.sidebar_visible,
             sidebar_tab: match file.sidebar_tab.to_ascii_lowercase().as_str() {
                 "outline" => SidebarTab::Outline,
@@ -514,6 +518,43 @@ mod tests {
         let text = "theme = \"Paper\"\nsync_scroll = \"yes\"\n";
         let parsed = parse_app_preferences(text).unwrap();
         assert!(!parsed.sync_scroll);
+    }
+
+    #[test]
+    fn show_hidden_files_defaults_to_false() {
+        assert!(!AppPreferences::default().show_hidden_files);
+    }
+
+    #[test]
+    fn show_hidden_files_round_trips_through_toml() {
+        let preferences = AppPreferences {
+            show_hidden_files: true,
+            ..AppPreferences::default()
+        };
+        let rendered = render_app_preferences(&preferences);
+        assert!(
+            rendered.contains("show_hidden_files = true"),
+            "rendered TOML should set show_hidden_files = true: {rendered}"
+        );
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert!(parsed.show_hidden_files, "parsed show_hidden_files should be true");
+    }
+
+    #[test]
+    fn missing_show_hidden_files_falls_back_to_false() {
+        // A pre-existing config.toml written before this preference existed
+        // omits the field entirely; the deserializer must treat it as false.
+        let text = "theme = \"Paper\"\nlanguage = \"en\"\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert!(!parsed.show_hidden_files);
+    }
+
+    #[test]
+    fn invalid_show_hidden_files_value_falls_back_to_false() {
+        // A corrupt/unknown value must not abort loading; it degrades to false.
+        let text = "theme = \"Paper\"\nshow_hidden_files = \"yes\"\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert!(!parsed.show_hidden_files);
     }
 
     #[test]
