@@ -1,6 +1,10 @@
 use super::memory::{MemoryProfile, MemoryWarmup};
 use super::*;
 use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
+// Only test code in this module classifies file-tree entries by kind; import it
+// here (rather than in `mod.rs`) so non-test release builds stay warning-free
+// under `-D warnings`.
+use markion::FileTreeFileKind;
 
 #[test]
 fn visual_pinyin_preedit_composes_sorted_utf8_highlights() {

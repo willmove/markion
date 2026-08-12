@@ -29,7 +29,7 @@ use markion::{
     AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement, BlockTarget,
     BlockTransform, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
     DEFAULT_RENDERED_FONT_SIZE, DiskState, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
-    ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind,
+    ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind,
     HighlightKind,
     HighlightedSpan, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
     Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
