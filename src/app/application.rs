@@ -76,6 +76,7 @@ impl MarkionApp {
             paragraph_spacing: preferences.paragraph_spacing,
             heading_menu_max_level: preferences.heading_menu_max_level,
             sync_scroll: preferences.sync_scroll,
+            show_hidden_files: preferences.show_hidden_files,
             syncing_scroll: false,
             language: Language::from_code(&preferences.language),
             check_for_updates_on_startup: preferences.check_for_updates_on_startup,
@@ -579,6 +580,7 @@ impl MarkionApp {
             self.file_tree = Some(FileTree {
                 root: root.clone(),
                 entries: Vec::new(),
+                show_hidden: false,
             });
         }
 
@@ -623,11 +625,12 @@ impl MarkionApp {
     ) {
         let requested_root = self.workspace_root.clone();
         let scan_root = requested_root.clone();
+        let show_hidden = self.show_hidden_files;
         cx.spawn(async move |this, cx| {
             // Run the filesystem traversal off the main thread.
             let scanned = cx
                 .background_executor()
-                .spawn(async move { FileTree::scan(&scan_root) })
+                .spawn(async move { FileTree::scan_with_options(&scan_root, show_hidden) })
                 .await;
             let _ = this.update(cx, |app, cx| {
                 if !scan_result_matches_workspace(&requested_root, &app.workspace_root) {
@@ -1082,6 +1085,7 @@ impl MarkionApp {
             paragraph_spacing: self.paragraph_spacing,
             heading_menu_max_level: self.heading_menu_max_level,
             sync_scroll: self.sync_scroll,
+            show_hidden_files: self.show_hidden_files,
             sidebar_visible: self.sidebar_visible,
             sidebar_tab: self.sidebar_tab,
             language: self.language.code().to_string(),

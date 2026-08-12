@@ -29,27 +29,77 @@ pub fn is_markdown_path(path: &Path) -> bool {
         })
 }
 
+/// The curated plain-text file extensions the file tree lists alongside
+/// Markdown. These are textual formats a user would reasonably want to open
+/// and edit in a writing-focused editor: notes, logs, lightweight markup, and
+/// delimited data. Like `MARKDOWN_EXTENSIONS`, comparison is case-insensitive
+/// (ASCII-lowercased). Non-text files (binaries, images, source code, …) are
+/// intentionally excluded so the tree stays low-noise.
+pub const TEXT_EXTENSIONS: &[&str] = &[
+    "txt", "text", "log", "csv", "tsv", "org", "rst", "adoc", "asciidoc",
+];
+
+/// Returns `true` when `path` has one of the curated plain-text extensions
+/// (`txt`/`text`/`log`/`csv`/…), compared case-insensitively. This governs
+/// which non-Markdown files appear in the file tree. It is intentionally
+/// separate from `is_markdown_path` (which is still the gate for the
+/// drag-and-drop open path and for marking a file as Markdown).
+pub fn is_text_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            TEXT_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        })
+}
+
+/// The category of a regular file listed in the tree. Only meaningful when
+/// `FileTreeEntry::kind == File`; directory entries carry `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileTreeFileKind {
+    Markdown,
+    Text,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileTreeEntry {
     pub path: PathBuf,
     pub name: String,
     pub depth: usize,
     pub kind: FileTreeEntryKind,
-    pub is_markdown: bool,
+    /// `None` for directories; `Some(Markdown)` or `Some(Text)` for files.
+    pub file_kind: Option<FileTreeFileKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileTree {
     pub root: PathBuf,
     pub entries: Vec<FileTreeEntry>,
+    /// Whether the scan includes hidden entries (dotfile names on every
+    /// platform, plus Windows-hidden-attribute entries on Windows). Captured
+    /// at scan time so `refresh` (called by create/rename/move/delete) keeps
+    /// the same visibility rule without the caller having to pass it back in.
+    pub show_hidden: bool,
 }
 
 impl FileTree {
     pub fn scan(root: impl AsRef<Path>) -> io::Result<Self> {
+        Self::scan_with_options(root, false)
+    }
+
+    /// Scans `root` with an explicit hidden-entry visibility rule. When
+    /// `show_hidden` is `false`, hidden files and folders are omitted (the
+    /// default, preserving the historical behavior); when `true`, they are
+    /// included subject to the Markdown/text extension filter and the
+    /// always-excluded noise list. `scan` is a thin wrapper over this.
+    pub fn scan_with_options(root: impl AsRef<Path>, show_hidden: bool) -> io::Result<Self> {
         let root = root.as_ref().to_path_buf();
         let mut entries = Vec::new();
-        collect_file_tree_entries(&root, 0, &mut entries)?;
-        Ok(Self { root, entries })
+        collect_file_tree_entries(&root, 0, &mut entries, show_hidden)?;
+        Ok(Self {
+            root,
+            entries,
+            show_hidden,
+        })
     }
 
     pub fn create_file(&mut self, parent: impl AsRef<Path>, name: &str) -> io::Result<PathBuf> {
@@ -143,10 +193,9 @@ impl FileTree {
         let path = path.as_ref();
         ensure_existing_path_within_root(&self.root, path)?;
         if path.is_dir() {
-            // `remove_dir_all` (not `remove_dir`): every folder shown in the
-            // tree is necessarily non-empty (folders with no Markdown
-            // descendant are pruned during scan), so empty-only removal would
-            // fail on any directory the user can right-click.
+            // `remove_dir_all` (not `remove_dir`): folders shown in the tree
+            // may be non-empty (the scan no longer prunes by content) and the
+            // user can right-click any directory the tree lists.
             fs::remove_dir_all(path)?;
         } else {
             fs::remove_file(path)?;
@@ -156,9 +205,8 @@ impl FileTree {
 
     pub fn refresh(&mut self) -> io::Result<()> {
         self.entries.clear();
-        // The returned bool (whether any Markdown was found) is intentionally
-        // ignored: an empty tree is a valid result for a Markdown-free root.
-        collect_file_tree_entries(&self.root, 0, &mut self.entries)?;
+        // An empty tree is a valid result for a content-free root.
+        collect_file_tree_entries(&self.root, 0, &mut self.entries, self.show_hidden)?;
         Ok(())
     }
 
@@ -245,26 +293,27 @@ fn ensure_existing_path_within_root(root: &Path, path: &Path) -> io::Result<()> 
     Ok(())
 }
 
-/// Recursively collects Markdown files (and the folders that contain them)
-/// into `entries`.
+/// Recursively collects Markdown and curated plain-text files, plus the
+/// folders that contain them, into `entries`.
 ///
-/// The tree is **Markdown-only**: regular files whose extension is not
-/// `md`/`markdown`/`mdown` are skipped entirely (they used to be collected as
-/// inert `--` rows, but the sidebar is a Markdown writing surface). Directories
-/// are kept only as nesting rows when their subtree contains at least one
-/// Markdown file — empty folders (no Markdown descendant) are pruned so the
-/// hierarchy stays focused on actual content.
-///
-/// Returns `true` when at least one Markdown file was collected anywhere under
-/// `root` (used by the caller to decide whether to keep a directory row).
+/// Regular files are classified once by extension: Markdown
+/// (`md`/`markdown`/`mdown`) or curated plain text (`txt`/`text`/`log`/…).
+/// Everything else (`.rs`, `.toml`, images, …) is skipped so the sidebar stays
+/// low-noise. Directories are kept as nesting rows whenever they exist on disk
+/// — empty folders (and folders containing only non-text files) are **not**
+/// pruned, so the tree mirrors real workspace structure. The hard-coded
+/// directory blacklist is always excluded by `should_skip_file_tree_path`, and
+/// hidden entries (dotfile names, or Windows-hidden-attribute entries) are
+/// excluded unless `show_hidden` is `true`.
 fn collect_file_tree_entries(
     root: &Path,
     depth: usize,
     entries: &mut Vec<FileTreeEntry>,
-) -> io::Result<bool> {
+    show_hidden: bool,
+) -> io::Result<()> {
     let mut children = fs::read_dir(root)?
         .filter_map(Result::ok)
-        .filter(|entry| !should_skip_file_tree_path(&entry.path()))
+        .filter(|entry| !should_skip_file_tree_path(&entry.path(), show_hidden))
         .collect::<Vec<_>>();
     children.sort_by(|a, b| {
         let a_path = a.path();
@@ -275,60 +324,57 @@ fn collect_file_tree_entries(
             .then_with(|| a.file_name().cmp(&b.file_name()))
     });
 
-    let mut found_markdown = false;
     for entry in children {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         if path.is_dir() {
-            // Tentatively record where this directory row would go. We only
-            // commit it if the subtree actually contains Markdown; otherwise
-            // the row is popped back off so empty folders never appear.
-            let row_index = entries.len();
             entries.push(FileTreeEntry {
                 path: path.clone(),
                 name: name.clone(),
                 depth,
                 kind: FileTreeEntryKind::Directory,
-                is_markdown: false,
+                file_kind: None,
             });
-            let subtree_has_markdown = collect_file_tree_entries(&path, depth + 1, entries)?;
-            if subtree_has_markdown {
-                found_markdown = true;
-            } else {
-                entries.truncate(row_index);
-            }
+            collect_file_tree_entries(&path, depth + 1, entries, show_hidden)?;
             continue;
         }
 
-        // Regular file: only Markdown files are collected. Everything else
-        // (`.rs`, `.toml`, images, …) is skipped so the sidebar is noise-free.
-        let is_markdown = is_markdown_path(&path);
-        if !is_markdown {
+        // Regular file: classify once by extension. Markdown and curated
+        // plain-text files are collected; everything else is skipped.
+        let file_kind = if is_markdown_path(&path) {
+            FileTreeFileKind::Markdown
+        } else if is_text_path(&path) {
+            FileTreeFileKind::Text
+        } else {
             continue;
-        }
+        };
 
         entries.push(FileTreeEntry {
             path: path.clone(),
             name,
             depth,
             kind: FileTreeEntryKind::File,
-            is_markdown: true,
+            file_kind: Some(file_kind),
         });
-        found_markdown = true;
     }
 
-    Ok(found_markdown)
+    Ok(())
 }
 
-fn should_skip_file_tree_path(path: &Path) -> bool {
+fn should_skip_file_tree_path(path: &Path, show_hidden: bool) -> bool {
+    is_always_excluded(path) || is_hidden_entry(path, show_hidden)
+}
+
+/// Directories that are commonly huge or irrelevant to a Markdown workspace.
+/// Skipping them keeps the file-tree scan (and the app startup) fast even when
+/// the working directory is a large repository or a home folder. This layer is
+/// always applied regardless of the show-hidden preference — these entries are
+/// treated as build/dependency noise, not OS-hidden files.
+fn is_always_excluded(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-
-    // Directories that are commonly huge or irrelevant to a Markdown workspace.
-    // Skipping them keeps the file-tree scan (and the app startup) fast even
-    // when the working directory is a large repository or a home folder.
-    let is_ignored_dir = matches!(
+    matches!(
         name,
         // Version control
         ".git" | ".hg" | ".svn" | ".bzr"
@@ -345,15 +391,41 @@ fn should_skip_file_tree_path(path: &Path) -> bool {
         | ".gradle" | ".mvn" | "bin" | "obj"
         // IDE / editor metadata
         | ".idea" | ".vscode" | ".vs"
-    );
+    )
+}
 
-    if is_ignored_dir {
+/// OS-hidden entries: dotfile names on every platform (files **and** folders),
+/// plus the Windows hidden file attribute on Windows. Gated by `show_hidden` —
+/// when the preference is on, this layer is a no-op so hidden entries pass
+/// through (still subject to `is_always_excluded` and the extension filter).
+fn is_hidden_entry(path: &Path, show_hidden: bool) -> bool {
+    if show_hidden {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if name.starts_with('.') {
         return true;
     }
-
-    // Any other hidden directory is also skipped, but only stat it when needed
-    // so we don't pay for `is_dir()` on regular hidden files.
-    name.starts_with('.') && path.is_dir()
+    // Best-effort Windows hidden-attribute check. On `metadata` failure (broken
+    // symlink, permission, …) treat the attribute as not-set; the dotfile check
+    // above still applies independently. Non-Windows builds pay nothing here.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+        if let Ok(metadata) = fs::metadata(path) {
+            if metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0 {
+                return true;
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+    }
+    false
 }
 
 fn unique_child_path(parent: &Path, preferred_name: &str) -> PathBuf {
@@ -418,46 +490,59 @@ mod tests {
     }
 
     #[test]
-    fn scan_lists_only_markdown_files() {
+    fn scan_lists_markdown_and_plain_text_files() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
 
-        // A mix of Markdown and non-Markdown files at the root and in a subfolder.
+        // A mix of Markdown, plain-text, and non-text files at the root and in a subfolder.
         write(root, "intro.md", "# Intro");
         write(root, "notes.markdown", "# Notes");
-        write(root, "ignore.txt", "not markdown");
+        write(root, "todo.txt", "- buy milk");
+        write(root, "run.csv", "a,b\n1,2");
+        write(root, "image.png", "png-bytes");
         write(root, "src/main.rs", "fn main() {}");
         write(root, "docs/guide.md", "# Guide");
+        write(root, "docs/debug.log", "trace");
 
         let tree = FileTree::scan(root).unwrap();
         let names: Vec<&str> = tree.entries.iter().map(|e| e.name.as_str()).collect();
 
-        // Markdown files present…
+        // Markdown files present.
         assert!(names.contains(&"intro.md"));
         assert!(names.contains(&"notes.markdown"));
         assert!(names.contains(&"guide.md"));
-        // Non-Markdown files are absent.
-        assert!(!names.contains(&"ignore.txt"));
+        // Curated plain-text files are now also listed.
+        assert!(names.contains(&"todo.txt"));
+        assert!(names.contains(&"run.csv"));
+        assert!(names.contains(&"debug.log"));
+        // Non-text files are still absent.
+        assert!(!names.contains(&"image.png"));
         assert!(!names.contains(&"main.rs"));
-        // Every collected file is markdown.
-        assert!(
-            tree.entries
-                .iter()
-                .filter(|e| e.kind == FileTreeEntryKind::File)
-                .all(|e| e.is_markdown)
-        );
+        // Every collected file is classified, Markdown distinguished from Text.
+        for entry in tree.entries.iter().filter(|e| e.kind == FileTreeEntryKind::File) {
+            match entry.file_kind {
+                Some(FileTreeFileKind::Markdown) => assert!(is_markdown_path(&entry.path)),
+                Some(FileTreeFileKind::Text) => assert!(is_text_path(&entry.path)),
+                None => panic!("file entry missing file_kind: {:?}", entry.path),
+            }
+        }
+        assert!(tree.entries.iter().any(|e| e.name == "intro.md"
+            && e.file_kind == Some(FileTreeFileKind::Markdown)));
+        assert!(tree.entries.iter().any(|e| e.name == "todo.txt"
+            && e.file_kind == Some(FileTreeFileKind::Text)));
     }
 
     #[test]
-    fn scan_prunes_folders_without_markdown() {
+    fn scan_keeps_empty_folders() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
 
         write(root, "keep.md", "# Keep");
-        // A folder with only non-Markdown content must not appear.
+        // An empty folder now appears (it used to be pruned).
+        fs::create_dir(root.join("empty")).unwrap();
+        // A folder whose subtree contains only non-text files also appears.
         write(root, "assets/logo.png", "png-bytes");
-        write(root, "assets/sub/deep.txt", "text");
-        // A folder that has Markdown somewhere in its subtree is kept.
+        // A folder with a Markdown descendant is kept (unchanged).
         write(root, "docs/guide.md", "# Guide");
 
         let tree = FileTree::scan(root).unwrap();
@@ -465,19 +550,149 @@ mod tests {
 
         assert!(names.contains(&"docs".to_string()));
         assert!(names.contains(&"guide.md".to_string()));
-        assert!(!names.contains(&"assets".to_string()));
+        // Empty and asset-only folders are now listed as nesting rows.
+        assert!(names.contains(&"empty".to_string()));
+        assert!(names.contains(&"assets".to_string()));
+        // The non-text file inside `assets` is still hidden.
+        assert!(!names.contains(&"logo.png".to_string()));
     }
 
     #[test]
-    fn scan_returns_empty_tree_for_markdown_free_root() {
+    fn scan_excludes_blacklisted_and_hidden_directories() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
 
-        write(root, "a.txt", "no markdown here");
-        write(root, "sub/b.rs", "fn main() {}");
+        write(root, "keep.md", "# Keep");
+        // Blacklisted build/VCS dirs and hidden dirs stay excluded even when
+        // they contain text/markdown content.
+        write(root, "target/build.log", "log");
+        write(root, ".hidden/secret.md", "# Secret");
 
         let tree = FileTree::scan(root).unwrap();
-        assert!(tree.entries.is_empty());
+        let names: Vec<String> = tree.entries.iter().map(|e| e.name.clone()).collect();
+
+        assert!(!names.contains(&"target".to_string()));
+        assert!(!names.contains(&"build.log".to_string()));
+        assert!(!names.contains(&".hidden".to_string()));
+        assert!(!names.contains(&"secret.md".to_string()));
+    }
+
+    #[test]
+    fn scan_hides_dotfile_files_unless_show_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // A dotfile Markdown file plus a regular Markdown file at the root.
+        write(root, ".secret.md", "# Secret");
+        write(root, "keep.md", "# Keep");
+
+        let hidden = FileTree::scan_with_options(root, false).unwrap();
+        let names: Vec<&str> = hidden.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&".secret.md"), "dotfile file must be hidden by default");
+        assert!(names.contains(&"keep.md"));
+
+        let shown = FileTree::scan_with_options(root, true).unwrap();
+        let names: Vec<&str> = shown.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&".secret.md"), "dotfile file must appear when show_hidden is on");
+        assert!(shown.show_hidden, "scanned tree must record the show_hidden flag");
+    }
+
+    #[test]
+    fn scan_hides_dotfile_folders_and_their_children_unless_show_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // A dotfile folder containing a Markdown file. When hidden, the whole
+        // subtree is omitted; when revealed, both the folder and the child
+        // appear (folders are not content-pruned, so the folder shows once the
+        // skip predicate lets it through).
+        write(root, ".notes/inside.md", "# Inside");
+        write(root, "keep.md", "# Keep");
+
+        let hidden = FileTree::scan_with_options(root, false).unwrap();
+        let names: Vec<&str> = hidden.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&".notes"));
+        assert!(!names.contains(&"inside.md"));
+
+        let shown = FileTree::scan_with_options(root, true).unwrap();
+        let names: Vec<&str> = shown.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&".notes"));
+        assert!(names.contains(&"inside.md"));
+    }
+
+    #[test]
+    fn scan_always_excludes_noise_list_regardless_of_show_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Noise-list directories stay excluded even when hidden entries are
+        // revealed. `target` is on the always-excluded list (not OS-hidden).
+        write(root, "target/build.log", "log");
+        write(root, "target/guide.md", "# Guide");
+        write(root, "node_modules/pkg/index.md", "# Pkg");
+        write(root, "keep.md", "# Keep");
+
+        for show_hidden in [false, true] {
+            let tree = FileTree::scan_with_options(root, show_hidden).unwrap();
+            let names: Vec<String> = tree.entries.iter().map(|e| e.name.clone()).collect();
+            assert!(!names.contains(&"target".to_string()), "target excluded (show_hidden={show_hidden})");
+            assert!(
+                !names.contains(&"node_modules".to_string()),
+                "node_modules excluded (show_hidden={show_hidden})"
+            );
+            assert!(
+                !names.iter().any(|n| n == "build.log" || n == "guide.md" || n == "index.md"),
+                "noise-list children excluded (show_hidden={show_hidden})"
+            );
+            assert!(names.contains(&"keep.md".to_string()));
+        }
+    }
+
+    #[test]
+    fn scan_keeps_markdown_text_filter_when_show_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Hidden entries still pass through the Markdown/text extension filter.
+        // A hidden non-text file (`.env`) never appears in either state; a
+        // hidden Markdown file (`.draft.md`) appears only when revealed.
+        write(root, ".env", "SECRET=1");
+        write(root, ".draft.md", "# Draft");
+        write(root, "keep.md", "# Keep");
+
+        let hidden = FileTree::scan_with_options(root, false).unwrap();
+        let names: Vec<&str> = hidden.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&".env"));
+        assert!(!names.contains(&".draft.md"));
+
+        let shown = FileTree::scan_with_options(root, true).unwrap();
+        let names: Vec<&str> = shown.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&".env"), "hidden non-text file stays excluded even when show_hidden is on");
+        assert!(names.contains(&".draft.md"));
+    }
+
+    #[test]
+    fn scan_returns_empty_tree_for_truly_empty_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // A root with only non-text files lists the folders but no file rows.
+        write(root, "sub/b.rs", "fn main() {}");
+        let tree = FileTree::scan(root).unwrap();
+        let names: Vec<String> = tree.entries.iter().map(|e| e.name.clone()).collect();
+        assert!(names.contains(&"sub".to_string()));
+        assert_eq!(
+            tree.entries
+                .iter()
+                .filter(|e| e.kind == FileTreeEntryKind::File)
+                .count(),
+            0
+        );
+
+        // A truly empty root (no children at all) yields zero entries.
+        let empty_root = tempfile::tempdir().unwrap();
+        let empty_tree = FileTree::scan(empty_root.path()).unwrap();
+        assert!(empty_tree.entries.is_empty());
     }
 
     #[test]
@@ -501,16 +716,20 @@ mod tests {
     fn delete_removes_an_empty_folder() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        // An empty folder won't appear in the scanned tree (pruned), but the
-        // delete path must still handle it for the recursive-removal guard.
+        // Empty folders now appear in the scanned tree; the delete path must
+        // still handle them (and uses `remove_dir_all`, which tolerates empty
+        // dirs as well as non-empty ones).
         write(root, "keep.md", "# Keep");
         let empty_dir = root.join("empty");
         fs::create_dir(&empty_dir).unwrap();
 
         let mut tree = FileTree::scan(root).unwrap();
+        // Sanity: the empty folder is listed before deletion.
+        assert!(tree.entries.iter().any(|e| e.path == empty_dir));
         tree.delete(&empty_dir).unwrap();
 
         assert!(!empty_dir.exists());
+        assert!(!tree.entries.iter().any(|e| e.path == empty_dir));
     }
 
     #[test]
@@ -588,6 +807,36 @@ mod tests {
         assert!(!is_markdown_path(Path::new("docs/subfolder")));
     }
 
+    /// `is_text_path` is the gate that admits curated plain-text files into the
+    /// tree (separate from `is_markdown_path`, which still governs drag-and-drop
+    /// and the Markdown classification). Checks its extension rule in isolation.
+    #[test]
+    fn is_text_path_recognises_curated_extensions_case_insensitively() {
+        for ext in ["txt", "text", "log", "csv", "tsv", "org", "rst", "adoc", "asciidoc"] {
+            assert!(is_text_path(Path::new(&format!("notes.{ext}"))), "{ext} should count");
+        }
+        // Case-insensitive (Windows filesystems are case-insensitive).
+        assert!(is_text_path(Path::new("UPPER.TXT")));
+        assert!(is_text_path(Path::new("Mixed.Csv")));
+        // Path with directories still resolves by final extension.
+        assert!(is_text_path(Path::new("docs/sub/debug.log")));
+
+        // Markdown extensions are NOT text-tree-curated here (they are handled
+        // by `is_markdown_path`); is_text_path reports false for them so the
+        // two classifications stay disjoint.
+        assert!(!is_text_path(Path::new("note.md")));
+        assert!(!is_text_path(Path::new("notes.markdown")));
+
+        // Non-text extensions.
+        assert!(!is_text_path(Path::new("image.png")));
+        assert!(!is_text_path(Path::new("code.rs")));
+        assert!(!is_text_path(Path::new("config.toml")));
+
+        // No extension.
+        assert!(!is_text_path(Path::new("README")));
+        assert!(!is_text_path(Path::new("docs/")));
+    }
+
     /// Exercises the exact drop-filter predicate the external-drag handler in
     /// `main.rs` applies — `path.is_file() && is_markdown_path(path)` — against
     /// a real temp directory. This covers the substance of the "mixed drop
@@ -601,33 +850,49 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
 
-        // A mix of drop candidates: two Markdown files, one non-Markdown file,
-        // and one directory. The OS can hand all four over in a single drag.
+        // A mix of drop candidates: two Markdown files, non-Markdown files
+        // (an image and now plain-text types), and a directory. The OS can hand
+        // all of them over in a single drag.
         let md_a = root.join("a.md");
         let md_b = root.join("b.mdown");
         let png = root.join("logo.png");
+        let txt = root.join("readme.txt");
+        let csv = root.join("data.csv");
         let folder = root.join("notes");
         fs::write(&md_a, "# A").unwrap();
         fs::write(&md_b, "# B").unwrap();
         fs::write(&png, "png-bytes").unwrap();
+        fs::write(&txt, "plain text").unwrap();
+        fs::write(&csv, "a,b\n1,2").unwrap();
         fs::create_dir(&folder).unwrap();
 
-        let dropped: Vec<PathBuf> = vec![md_a.clone(), md_b.clone(), png, folder.clone()];
+        let dropped: Vec<PathBuf> = vec![
+            md_a.clone(),
+            md_b.clone(),
+            png,
+            txt.clone(),
+            csv.clone(),
+            folder.clone(),
+        ];
 
         // The predicate the handler runs per path. Mirrors
         // `handle_external_drop` exactly so this test fails if the two drift.
+        // Drag-and-drop stays Markdown-only even though `.txt`/`.csv` now appear
+        // in (and are openable from) the file tree.
         let opened: Vec<PathBuf> = dropped
             .into_iter()
             .filter(|p| p.is_file() && is_markdown_path(p))
             .collect();
 
         assert_eq!(opened, vec![md_a, md_b]);
-        // The PNG and the directory are both skipped.
+        // The PNG, the plain-text files, and the directory are all skipped.
         assert!(
             !opened
                 .iter()
                 .any(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
         );
+        assert!(!opened.iter().any(|p| p == &txt));
+        assert!(!opened.iter().any(|p| p == &csv));
         assert!(!opened.iter().any(|p| p == &folder));
     }
 }

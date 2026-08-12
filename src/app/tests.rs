@@ -1116,55 +1116,56 @@ fn nested_file_tree_fixture(root: &Path) -> FileTree {
     let source = root.join("src");
     FileTree {
         root: root.to_path_buf(),
+        show_hidden: false,
         entries: vec![
             FileTreeEntry {
                 path: docs.clone(),
                 name: "docs".to_string(),
                 depth: 0,
                 kind: FileTreeEntryKind::Directory,
-                is_markdown: false,
+                file_kind: None,
             },
             FileTreeEntry {
                 path: guides.clone(),
                 name: "guides".to_string(),
                 depth: 1,
                 kind: FileTreeEntryKind::Directory,
-                is_markdown: false,
+                file_kind: None,
             },
             FileTreeEntry {
                 path: guides.join("intro.md"),
                 name: "intro.md".to_string(),
                 depth: 2,
                 kind: FileTreeEntryKind::File,
-                is_markdown: true,
+                file_kind: Some(FileTreeFileKind::Markdown),
             },
             FileTreeEntry {
                 path: docs.join("draft.md"),
                 name: "draft.md".to_string(),
                 depth: 1,
                 kind: FileTreeEntryKind::File,
-                is_markdown: true,
+                file_kind: Some(FileTreeFileKind::Markdown),
             },
             FileTreeEntry {
                 path: source.clone(),
                 name: "src".to_string(),
                 depth: 0,
                 kind: FileTreeEntryKind::Directory,
-                is_markdown: false,
+                file_kind: None,
             },
             FileTreeEntry {
                 path: source.join("api.md"),
                 name: "api.md".to_string(),
                 depth: 1,
                 kind: FileTreeEntryKind::File,
-                is_markdown: true,
+                file_kind: Some(FileTreeFileKind::Markdown),
             },
             FileTreeEntry {
                 path: root.join("root.md"),
                 name: "root.md".to_string(),
                 depth: 0,
                 kind: FileTreeEntryKind::File,
-                is_markdown: true,
+                file_kind: Some(FileTreeFileKind::Markdown),
             },
         ],
     }
@@ -1212,6 +1213,92 @@ fn initial_file_tree_collapse_shows_root_children_and_expands_one_branch() {
         vec!["docs", "guides", "intro.md", "draft.md", "src", "root.md"]
     );
     assert!(collapsed.contains(&root.join("src")));
+}
+
+#[test]
+fn toggle_tree_folder_expands_one_level_and_keeps_deeper_folders_collapsed() {
+    let root = PathBuf::from("workspace");
+    let tree = nested_file_tree_fixture(&root);
+    // Initial state: both depth-0 folders collapsed.
+    let mut collapsed = HashSet::from([root.join("docs"), root.join("src")]);
+
+    // Expanding `docs` reveals only its immediate children (`guides` and
+    // `draft.md`); the nested `guides` folder is recorded as collapsed so its
+    // child `intro.md` stays hidden.
+    toggle_tree_folder(&root.join("docs"), &tree, &mut collapsed);
+    assert_eq!(
+        collapsed,
+        HashSet::from([root.join("docs").join("guides"), root.join("src")])
+    );
+    assert_eq!(
+        visible_tree_entry_names(&tree, "", &collapsed),
+        vec!["docs", "guides", "draft.md", "src", "root.md"]
+    );
+}
+
+#[test]
+fn toggle_tree_folder_drills_down_one_level_at_a_time() {
+    let root = PathBuf::from("workspace");
+    let tree = nested_file_tree_fixture(&root);
+    let mut collapsed = HashSet::from([root.join("docs"), root.join("src")]);
+
+    // First click: expand `docs` (one level).
+    toggle_tree_folder(&root.join("docs"), &tree, &mut collapsed);
+    // Second click: expand the now-visible `guides` subfolder — its child
+    // `intro.md` finally appears.
+    toggle_tree_folder(
+        &root.join("docs").join("guides"),
+        &tree,
+        &mut collapsed,
+    );
+    assert_eq!(collapsed, HashSet::from([root.join("src")]));
+    assert_eq!(
+        visible_tree_entry_names(&tree, "", &collapsed),
+        vec!["docs", "guides", "intro.md", "draft.md", "src", "root.md"]
+    );
+}
+
+#[test]
+fn toggle_tree_folder_collapsing_hides_the_entire_subtree() {
+    let root = PathBuf::from("workspace");
+    let tree = nested_file_tree_fixture(&root);
+    let mut collapsed = HashSet::from([root.join("docs"), root.join("src")]);
+
+    // Expand docs, then guides — the whole docs branch is open.
+    toggle_tree_folder(&root.join("docs"), &tree, &mut collapsed);
+    toggle_tree_folder(
+        &root.join("docs").join("guides"),
+        &tree,
+        &mut collapsed,
+    );
+
+    // Collapsing `docs` hides its entire subtree regardless of how deep
+    // descendants had been expanded.
+    toggle_tree_folder(&root.join("docs"), &tree, &mut collapsed);
+    assert_eq!(
+        collapsed,
+        HashSet::from([root.join("docs"), root.join("src")])
+    );
+    assert_eq!(
+        visible_tree_entry_names(&tree, "", &collapsed),
+        vec!["docs", "src", "root.md"]
+    );
+}
+
+#[test]
+fn toggle_tree_folder_expands_file_only_folder_without_deeper_structure() {
+    let root = PathBuf::from("workspace");
+    let tree = nested_file_tree_fixture(&root);
+    let mut collapsed = HashSet::from([root.join("docs"), root.join("src")]);
+
+    // `src` contains only a direct file (`api.md`); expanding it reveals that
+    // file and nothing deeper.
+    toggle_tree_folder(&root.join("src"), &tree, &mut collapsed);
+    assert_eq!(collapsed, HashSet::from([root.join("docs")]));
+    assert_eq!(
+        visible_tree_entry_names(&tree, "", &collapsed),
+        vec!["docs", "src", "api.md", "root.md"]
+    );
 }
 
 #[test]
@@ -1295,27 +1382,28 @@ fn file_tree_visibility_hides_collapsed_descendants() {
     let notes = root.join("notes.md");
     let tree = FileTree {
         root: root.clone(),
+        show_hidden: false,
         entries: vec![
             FileTreeEntry {
                 path: docs.clone(),
                 name: "docs".to_string(),
                 depth: 0,
                 kind: FileTreeEntryKind::Directory,
-                is_markdown: false,
+                file_kind: None,
             },
             FileTreeEntry {
                 path: docs.join("draft.md"),
                 name: "draft.md".to_string(),
                 depth: 1,
                 kind: FileTreeEntryKind::File,
-                is_markdown: true,
+                file_kind: Some(FileTreeFileKind::Markdown),
             },
             FileTreeEntry {
                 path: notes,
                 name: "notes.md".to_string(),
                 depth: 0,
                 kind: FileTreeEntryKind::File,
-                is_markdown: true,
+                file_kind: Some(FileTreeFileKind::Markdown),
             },
         ],
     };

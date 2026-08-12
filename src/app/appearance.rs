@@ -298,6 +298,24 @@ impl MarkionApp {
         cx.notify();
     }
 
+    pub(super) fn toggle_show_hidden_files(&mut self, cx: &mut Context<Self>) {
+        self.show_hidden_files = !self.show_hidden_files;
+        self.status = t(
+            self.language,
+            if self.show_hidden_files {
+                Msg::StatusShowHiddenFilesOn
+            } else {
+                Msg::StatusShowHiddenFilesOff
+            },
+        )
+        .into();
+        self.persist_preferences();
+        // Re-scan under the new visibility rule so hidden entries appear or
+        // disappear on the next render, before notifying the view.
+        self.refresh_file_tree(cx);
+        cx.notify();
+    }
+
     /// Proportional scroll coupling for Split Preview + Sync scroll. See
     /// [`sync_scroll_is_active`] / [`sync_fraction`]. Runs once per render.
     ///

@@ -347,7 +347,9 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
     // parsing happens here instead of on first use).
     std::thread::spawn(markion::warm_highlighter);
 
-    Application::new().run(move |cx: &mut App| {
+    Application::new()
+        .with_assets(crate::ui::icon::IconAssets)
+        .run(move |cx: &mut App| {
         if let Err(error) = network::install_http_client(cx) {
             tracing::error!(%error, "failed to initialize HTTP client; remote images are disabled");
         }

@@ -647,10 +647,12 @@ impl MarkionApp {
                 let result = self
                     .file_tree
                     .get_or_insert_with(|| {
-                        FileTree::scan(&self.workspace_root).unwrap_or(FileTree {
-                            root: self.workspace_root.clone(),
-                            entries: Vec::new(),
-                        })
+                        FileTree::scan_with_options(&self.workspace_root, self.show_hidden_files)
+                            .unwrap_or(FileTree {
+                                root: self.workspace_root.clone(),
+                                entries: Vec::new(),
+                                show_hidden: self.show_hidden_files,
+                            })
                     })
                     .create_unique_file(&pending.parent, name);
                 match result {
@@ -667,10 +669,12 @@ impl MarkionApp {
                 let result = self
                     .file_tree
                     .get_or_insert_with(|| {
-                        FileTree::scan(&self.workspace_root).unwrap_or(FileTree {
-                            root: self.workspace_root.clone(),
-                            entries: Vec::new(),
-                        })
+                        FileTree::scan_with_options(&self.workspace_root, self.show_hidden_files)
+                            .unwrap_or(FileTree {
+                                root: self.workspace_root.clone(),
+                                entries: Vec::new(),
+                                show_hidden: self.show_hidden_files,
+                            })
                     })
                     .create_unique_directory(&pending.parent, name);
                 match result {

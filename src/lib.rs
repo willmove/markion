@@ -153,11 +153,12 @@ pub use math::{render_math, validate_latex};
 pub use parse::{HtmlPreviewPart, HtmlTableCell, HtmlTableGrid, html_preview_parts, html_preview_plain_text};
 
 pub use storage::{
-    FileTree, FileTreeEntry, FileTreeEntryKind, ImportedImage, MARKDOWN_EXTENSIONS,
-    RecoveryInventoryEntry, RecoverySourceState, delete_recovery_file, image_extension_supported,
-    import_image_bytes, import_image_file, init_logging, inspect_recovery_files, is_markdown_path,
-    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
-    load_session_state, load_theme_definition, parse_app_preferences, parse_legacy_app_preferences,
+    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, ImportedImage, MARKDOWN_EXTENSIONS,
+    RecoveryInventoryEntry, RecoverySourceState, TEXT_EXTENSIONS, delete_recovery_file,
+    image_extension_supported, import_image_bytes, import_image_file, init_logging,
+    inspect_recovery_files, is_markdown_path, is_text_path, list_recovery_files,
+    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
+    load_theme_definition, parse_app_preferences, parse_legacy_app_preferences,
     parse_session_state, parse_theme_definition, render_app_preferences, render_session_state,
     render_theme_definition, save_app_preferences, save_session_state, save_theme_definition,
 };
@@ -4772,6 +4773,7 @@ mod tests {
             paragraph_spacing: 16,
             heading_menu_max_level: EXTENDED_HEADING_MENU_MAX_LEVEL,
             sync_scroll: true,
+            show_hidden_files: true,
             sidebar_visible: false,
             sidebar_tab: SidebarTab::Outline,
             language: "zh".to_string(),
@@ -5383,7 +5385,11 @@ mod tests {
         fs::create_dir(&notes).unwrap();
         fs::write(dir.path().join("root.md"), "# Root").unwrap();
         fs::write(notes.join("child.markdown"), "# Child").unwrap();
-        fs::write(notes.join("ignored.txt"), "plain").unwrap();
+        // Plain-text siblings are now collected (classified as Text), while
+        // non-text files stay hidden.
+        fs::write(notes.join("scratch.txt"), "plain").unwrap();
+        fs::write(notes.join("trace.log"), "trace").unwrap();
+        fs::write(notes.join("logo.png"), "png-bytes").unwrap();
         fs::create_dir(dir.path().join("target")).unwrap();
         fs::write(dir.path().join("target").join("skip.md"), "# Skip").unwrap();
 
@@ -5391,13 +5397,21 @@ mod tests {
         assert!(
             tree.entries
                 .iter()
-                .any(|entry| entry.name == "root.md" && entry.is_markdown)
+                .any(|entry| entry.name == "root.md"
+                    && entry.file_kind == Some(FileTreeFileKind::Markdown))
         );
         assert!(
             tree.entries
                 .iter()
                 .any(|entry| entry.name == "child.markdown" && entry.depth == 1)
         );
+        // Plain-text files appear and are classified as Text.
+        assert!(tree.entries.iter().any(|entry| entry.name == "scratch.txt"
+            && entry.file_kind == Some(FileTreeFileKind::Text)));
+        assert!(tree.entries.iter().any(|entry| entry.name == "trace.log"
+            && entry.file_kind == Some(FileTreeFileKind::Text)));
+        // Non-text files are still not listed.
+        assert!(!tree.entries.iter().any(|entry| entry.name == "logo.png"));
         assert!(!tree.entries.iter().any(|entry| entry.name == "skip.md"));
 
         let draft = tree.create_file(&notes, "draft.md").unwrap();
@@ -5419,6 +5433,29 @@ mod tests {
         tree.delete(&folder).unwrap();
         assert!(!renamed.exists());
         assert!(!folder.exists());
+    }
+
+    /// A curated plain-text file listed in the tree opens through the same model
+    /// path as Markdown (`MarkdownDocument::open` reads raw UTF-8 bytes and does
+    /// not gate by extension), so clicking a `.txt`/`.csv` row opens it without
+    /// rejection. The GPUI click→tab flow itself needs a window harness the
+    /// codebase does not have, so the open path is verified here at the model
+    /// level (mirroring how `drop_filter_opens_only_real_markdown_files` covers
+    /// the drop predicate).
+    #[test]
+    fn markdown_document_opens_plain_text_files_as_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let txt = dir.path().join("notes.txt");
+        let csv = dir.path().join("data.csv");
+        fs::write(&txt, "hello plain text").unwrap();
+        fs::write(&csv, "a,b\n1,2").unwrap();
+
+        let txt_doc = MarkdownDocument::open(&txt).expect("plain-text file opens");
+        assert_eq!(txt_doc.text(), "hello plain text");
+        assert_eq!(txt_doc.path(), Some(txt.as_path()));
+
+        let csv_doc = MarkdownDocument::open(&csv).expect("csv file opens");
+        assert_eq!(csv_doc.text(), "a,b\n1,2");
     }
 
     #[test]
