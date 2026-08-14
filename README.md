@@ -28,7 +28,7 @@ Markion has four view modes. Split Preview is the default.
 
 - **Edit** — a focused raw Markdown source editor.
 - **Visual Edit** — a WYSIWYG-oriented, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, inline image fields, and GFM table cells have exact direct editors. HTML, YAML front matter, registered diagrams, malformed syntax, and other ambiguous constructs keep a complete conservative source island. A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code, divider, table), duplicate, move up/down, source-safe drag reorder, and delete; a selection-contextual formatting toolbar and a visual link editor perform one exact source-backed mutation per action. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
-- **Split Preview** — source and rendered preview side by side, with an optional proportional Sync scroll setting.
+- **Split Preview** — source and rendered preview side by side, with an optional source-mapped Sync scroll setting that keeps both panes on the same document location rather than scrolling by whole-document percentage.
 - **Read** — a rendered, non-editing view centered at a readable 860 px maximum width by default; Preview adaptive width can use the full pane.
 
 Switching modes preserves the active document, cursor and selection, undo history, and per-tab scroll state.
@@ -36,12 +36,16 @@ Switching modes preserves the active document, cursor and selection, undo histor
 ## Documents and workspace
 
 - Multi-tab editing with per-tab cursor, selection, scroll, undo/redo, preview, outline, and cached derived Markdown state.
-- Opening an already-open Markdown file focuses its existing tab instead of creating a duplicate.
-- **Open Folder** changes the workspace root and populates the Files sidebar with Markdown files and folders.
+- Opening an already-open Markdown or plain-text file focuses its existing tab instead of creating a duplicate.
+- **Open Folder** changes the workspace root and populates the Files sidebar with Markdown files, a curated set of plain-text files (`.txt`, `.text`, `.log`, `.csv`, `.tsv`, `.org`, `.rst`, `.adoc`/`.asciidoc`), and supported image files (`.png`, `.jpg`/`.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`/`.tiff`, `.svg`), nested under their folders; empty folders are listed too. Markdown stays visually distinguished, plain-text files open as UTF-8 text, and image files open as read-only image tabs that fit oversized images within the content area.
+- Expanding a folder reveals exactly one level of children, so deeply nested workspaces can be drilled into one level at a time.
+- A **Show hidden files/folders** preference (default off) reveals dotfile entries plus the Windows hidden-attribute flag, while always-excluded build, dependency, and VCS noise (`target`, `node_modules`, `.git`, …) stays hidden regardless.
 - Right-click file-tree menus provide open, open in new tab, create file/folder, rename, delete, reveal in the system file manager, filter, and refresh actions where applicable.
 - Files and folders can be named inline; deleting a non-empty folder requires an additional confirmation.
 - Markdown files can be dragged from the operating-system file manager into Markion.
 - The Files and Outline panels are toggleable, and sidebar and split-pane dividers are draggable.
+- The Outline panel lists the document's heading hierarchy as a collapsible tree: each heading with descendants exposes a disclosure control, outlines start fully expanded, folding is per-document and session-only, and the section containing the cursor is highlighted. Clicking a heading jumps to its source position—or to the rendered heading in Read mode.
+- The status bar keeps document identity, save state, and transient operation feedback, and adds a compact persistent context: the active document's character and word count, the caret's one-based line and column when an editing surface is present, and the current Git branch when the document or workspace belongs to a repository.
 
 ## Markdown editing and preview
 
@@ -68,7 +72,7 @@ Rendered preview supports:
 - Fourteen built-in themes: Paper, Ink, Solar, Forest, Rose, Graphite, GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light.
 - Custom themes use `.toml` files in Markion's local themes directory. Legacy `.theme` files migrate automatically when first loaded.
 - Six interface languages: English, Simplified Chinese, Japanese, French, German, and Spanish.
-- The in-app Preferences panel covers theme, language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, and heading-menu depth.
+- The in-app Preferences panel covers theme, language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, show-hidden-files, and heading-menu depth.
 - Preferences persist in `config.toml`; legacy `preferences.conf` files migrate automatically.
 
 All configuration fields are optional. The main defaults and file-only settings are:
@@ -84,6 +88,7 @@ heading_menu_max_level = 5        # 5 or 6
 sync_scroll = false
 sidebar_visible = true
 sidebar_tab = "files"             # "files" or "outline"
+show_hidden_files = false
 
 [auto_save]
 enabled = true
