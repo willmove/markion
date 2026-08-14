@@ -8574,6 +8574,113 @@ fn preview_image_cache_shares_across_tabs_and_releases_on_close(cx: &mut TestApp
     });
 }
 
+#[gpui::test]
+fn inline_html_image_claims_ride_visual_blocks(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let badge_png = dir.path().join("badge.png");
+    write_solid_png(&badge_png, 8, 8, [10, 20, 30, 255]);
+
+    let badge_md = dir.path().join("badge.md");
+    std::fs::write(
+        &badge_md,
+        "Hello <img src=\"badge.png\" alt=\"Badge\"> world\n",
+    )
+    .unwrap();
+    let plain_md = dir.path().join("plain.md");
+    std::fs::write(&plain_md, "Hello world\n").unwrap();
+
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    let badge_key = PreviewImageKey::from_url("badge.png", Some(dir.path()));
+
+    let warm_visual = |app: &mut MarkionApp, cx: &mut Context<MarkionApp>| {
+        let preview = app.active_tab().document.preview_blocks_shared();
+        let visual = app.active_tab().document.visual_blocks_shared();
+        app.active_tab_mut().sync_visual_list(&visual);
+        let active = app.active_tab;
+        app.refresh_tab_image_claims(active, &preview, &visual, Some(dir.path()), cx);
+        app.ensure_preview_images(&preview, &visual, Some(dir.path()), cx);
+    };
+
+    app.update(cx, |app, cx| {
+        let badge_doc = MarkdownDocument::open(&badge_md).expect("open badge");
+        app.replace_active_tab(badge_doc, cx);
+        warm_visual(app, cx);
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        // The inline `<img>` URL is claimed through the visual runs (the
+        // preview paragraph flattens it to text, so only Visual Edit carries
+        // the URL) and decodes to a ready entry.
+        assert_eq!(app.preview_image_cache.claim_count(&badge_key), 1);
+        assert!(matches!(
+            app.preview_image_cache.get(&badge_key),
+            Some(PreviewImageEntry::Ready(_))
+        ));
+    });
+
+    app.update(cx, |app, cx| {
+        let plain_doc = MarkdownDocument::open(&plain_md).expect("open plain");
+        app.replace_active_tab(plain_doc, cx);
+        warm_visual(app, cx);
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.preview_image_cache.claim_count(&badge_key),
+            0,
+            "claim releases once the inline HTML image leaves the document"
+        );
+    });
+}
+
+#[gpui::test]
+fn inline_html_image_renders_mixed_path_including_a_wrapped_badges(cx: &mut TestAppContext) {
+    use crate::app::preview::VISUAL_HTML_IMAGE_ATOM_BUILDS;
+
+    // Cases that previously collapsed into a whole-block HTML source island
+    // and therefore never rendered the image: a bare inline image, the README
+    // badge pattern `<a href><img></a>`, and an image mixed with a `<br>`.
+    let cases: &[&str] = &[
+        "Hello <img src=\"a.png\" alt=\"A\"> world",
+        "See <a href=\"https://example.com\"><img src=\"b.png\" alt=\"B\"></a> here",
+        "x <br> <img src=\"c.png\"> y",
+    ];
+    for source in cases {
+        let before = VISUAL_HTML_IMAGE_ATOM_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(*source))];
+            app.active_tab_mut().selected_range = 0..0;
+            app.view_mode = ViewMode::VisualEdit;
+            app
+        });
+        cx.update(|window, cx| {
+            window.focus(&app.read(cx).focus_handle);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+
+        app.update(cx, |app, _| {
+            let blocks = app.active_tab().visual_list_blocks.clone();
+            let block = blocks.first().expect("one paragraph block");
+            assert!(
+                block
+                    .editable_runs
+                    .iter()
+                    .any(|run| run.html_image.is_some()),
+                "image run present for: {source}"
+            );
+            let builds = VISUAL_HTML_IMAGE_ATOM_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(
+                builds > before,
+                "inline HTML image atom was not painted for: {source}"
+            );
+        });
+    }
+}
+
 fn write_solid_png(path: &Path, width: u32, height: u32, rgba: [u8; 4]) {
     let mut img = image::RgbaImage::new(width, height);
     for pixel in img.pixels_mut() {

@@ -19,7 +19,9 @@ Markion's Visual Edit mode is WYSIWYG-oriented, not a second rich-text document 
 | Horizontal rule | Passive rendered rule | Exact block boundary through ordinary navigation/format commands | N/A | Source coverage and navigation tests |
 | Blank lines and trailing whitespace | Passive visual row; focused exact source caret/island | Exact whitespace range | N/A | Complete source coverage, insertion/deletion, no pointer-created phantom edits |
 | Mermaid/registered diagrams | Complete source-backed fence island | Complete authored fence | Always; diagram preview is presentation-only | Registry classification, source preservation, async/cache/version isolation |
-| HTML and YAML front matter | Complete source-backed island | Complete authored block | Always | Exact source preservation, preview/export behavior |
+| Inline raw-HTML `<img>` in prose | Rendered image atom in the inline flow (same loader as preview: local/remote/data-URI) with progressive source reveal of the complete tag | Complete byte-exact `<img …>` tag | Any other inline HTML in the same block, a non-tag/partial/multi-tag slice, missing `src`, or table-cell context (cells keep flattened alt/URL text, matching Read mode) | Exact tag ranges, reveal-on-focus/restore-on-blur, no whole-block island, claim/preload/eviction parity with block-level images |
+| Raw HTML blocks (including `<img>`) | Read-only rendered view through the shared HTML-parts pipeline (text, images, tables); focused block uses a source-backed island | Complete authored block | Focus (editing affordance) or overlapping ownership | Exact source preservation, preview/export behavior, shared-pipeline parity with Read mode |
+| Other inline HTML and YAML front matter | Complete source-backed island | Complete authored block | Always | Exact source preservation, preview/export behavior |
 | Unsupported or malformed constructs | Complete conservative source island | Complete containing source range | Exact mapping cannot be proven | Lossless source-mode round-trip and no guessed mutation |
 
 ## Source-Range Invariants

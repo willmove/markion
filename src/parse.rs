@@ -11,7 +11,7 @@ use std::ops::Range;
 use pulldown_cmark::{HeadingLevel, Options};
 
 use crate::escape::escape_html_attribute;
-use crate::model::{InlineSpan, InlineStyle, MathSource, PreviewBlock, RichText};
+use crate::model::{InlineSpan, InlineStyle, MathSource, PreviewBlock, RichText, VisualHtmlImage};
 use crate::table::TableDraft;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -588,6 +588,30 @@ pub fn html_preview_plain_text(html: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Recognizes exactly one complete, non-closing raw-HTML `<img …>` tag with a
+/// non-empty `src` attribute — the narrow exact form the Visual Edit inline
+/// projection can map byte-for-byte. `source` must be a single tag slice (no
+/// surrounding content, no second tag, no inner angle brackets), so anything
+/// else — other tags, partial tags, comments, missing `src` — returns `None`
+/// and callers keep their conservative fallback.
+pub(crate) fn parse_inline_html_image(source: &str) -> Option<VisualHtmlImage> {
+    let trimmed = source.trim();
+    let inner = trimmed.strip_prefix('<')?.strip_suffix('>')?;
+    if inner.trim().is_empty() || inner.contains('<') || inner.contains('>') {
+        return None;
+    }
+    let tag = ParsedHtmlTag::parse(trimmed)?;
+    if tag.closing || tag.name != "img" {
+        return None;
+    }
+    let url = tag.attr("src").filter(|url| !url.is_empty())?;
+    Some(VisualHtmlImage {
+        alt: tag.attr("alt").unwrap_or_default(),
+        url,
+        title: tag.attr("title").filter(|title| !title.is_empty()),
+    })
 }
 
 pub fn html_preview_parts(html: &str) -> Vec<HtmlPreviewPart> {
@@ -1768,6 +1792,57 @@ mod extended_inline_range_tests {
             vec!["~a~", "~b~"]
         );
         assert_eq!(render_extended_inline_plain(source), "ab");
+    }
+}
+
+#[cfg(test)]
+mod inline_html_image_tests {
+    use super::parse_inline_html_image;
+
+    #[test]
+    fn recognizes_exact_img_tags_with_attrs() {
+        let image = parse_inline_html_image(r#"<img src="a.png" alt="A" title="T">"#).unwrap();
+        assert_eq!(image.url, "a.png");
+        assert_eq!(image.alt, "A");
+        assert_eq!(image.title.as_deref(), Some("T"));
+
+        let image = parse_inline_html_image("<img src=b.png />").unwrap();
+        assert_eq!(image.url, "b.png");
+        assert_eq!(image.alt, "");
+        assert!(image.title.is_none());
+
+        let image = parse_inline_html_image(" <IMG SRC='c.png' ALT='C'> ").unwrap();
+        assert_eq!(image.url, "c.png");
+        assert_eq!(image.alt, "C");
+        assert!(image.title.is_none());
+
+        let image = parse_inline_html_image(r#"<img src="a&amp;b.png">"#).unwrap();
+        assert_eq!(image.url, "a&b.png");
+    }
+
+    #[test]
+    fn rejects_non_exact_forms() {
+        assert!(parse_inline_html_image("<img>").is_none(), "missing src");
+        assert!(
+            parse_inline_html_image(r#"<img src="">"#).is_none(),
+            "empty src"
+        );
+        assert!(parse_inline_html_image("</img>").is_none(), "closing tag");
+        assert!(
+            parse_inline_html_image(r#"<a href="x">"#).is_none(),
+            "non-img tag"
+        );
+        assert!(
+            parse_inline_html_image(r#"<img src="a.png"><img src="b.png">"#).is_none(),
+            "two tags in one slice"
+        );
+        assert!(
+            parse_inline_html_image(r#"<img alt="a > b" src="x.png">"#).is_none(),
+            "inner angle brackets stay conservative"
+        );
+        assert!(parse_inline_html_image("text").is_none());
+        assert!(parse_inline_html_image("<!-- comment -->").is_none());
+        assert!(parse_inline_html_image("<img").is_none(), "partial tag");
     }
 }
 

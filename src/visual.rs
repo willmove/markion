@@ -281,7 +281,10 @@ pub fn build_visual_projection_with_marked_range(
         .filter(|group| {
             endpoint_is_active(
                 &group.source_range,
-                matches!(group.kind, VisualRevealKind::Math),
+                matches!(
+                    group.kind,
+                    VisualRevealKind::Math | VisualRevealKind::HtmlImage
+                ),
             )
         })
         .map(|group| group.source_range.clone())
@@ -394,7 +397,9 @@ pub fn build_visual_projection_with_marked_range(
     }
     projection
 }
-use crate::parse::{ExtendedInlineKind, extended_inline_matches, visual_markdown_options};
+use crate::parse::{
+    ExtendedInlineKind, extended_inline_matches, parse_inline_html_image, visual_markdown_options,
+};
 
 #[derive(Clone)]
 struct VisualLeaf<'a> {
@@ -815,8 +820,16 @@ fn visual_block_from_preview(
                 |prefix| prefix.end..source_range.end,
             )
     };
-    let (mut editable_runs, reveal_groups, contains_html) =
-        inline_runs(text, inline_source_range, reference_definitions);
+    let (mut editable_runs, reveal_groups, contains_non_image_html) =
+        if matches!(kind, VisualBlockKind::Html { .. }) {
+            // Rendered HTML blocks present through the HTML-parts pipeline,
+            // not the inline projection. Keeping their runs empty preserves
+            // the focused source-island affordance (the empty-runs gate in
+            // the view layer) for editing raw HTML.
+            (Vec::new(), Vec::new(), false)
+        } else {
+            inline_runs(text, inline_source_range, reference_definitions)
+        };
     append_trailing_horizontal_whitespace_run(
         text,
         &source_range,
@@ -831,11 +844,13 @@ fn visual_block_from_preview(
     }
     // A rendered HTML block (VisualBlockKind::Html) is shown via the
     // HTML-parts pipeline, not as a raw-source box, so it must never carry
-    // a source island regardless of any inline-HTML detected here.
+    // a source island regardless of any inline-HTML detected here. Prose
+    // blocks whose inline HTML is solely complete `<img>` tags render those
+    // as image atoms, so they keep their normal presentation too.
     let source_island = if matches!(kind, VisualBlockKind::Html { .. }) {
         None
     } else {
-        source_island.or(contains_html.then_some(VisualSourceIslandKind::Html))
+        source_island.or(contains_non_image_html.then_some(VisualSourceIslandKind::Html))
     };
     VisualBlock {
         id: allocate_id(),
@@ -1058,6 +1073,7 @@ fn append_trailing_horizontal_whitespace_run(
         link_target_range: None,
         navigation: None,
         math: None,
+        html_image: None,
         conservative_fallback: false,
     });
     runs.sort_by_key(|run| (run.content_range.start, run.content_range.end));
@@ -1119,7 +1135,7 @@ fn inline_runs(
     let mut candidates = Vec::new();
     let mut style = InlineStyle::default();
     let mut link_stack: Vec<(Option<Range<usize>>, String)> = Vec::new();
-    let mut contains_html = false;
+    let mut contains_non_image_html = false;
 
     for (event, relative_range) in
         Parser::new_ext(parse_input, visual_markdown_options()).into_offset_iter()
@@ -1276,10 +1292,61 @@ fn inline_runs(
                         delimiter,
                         source_range: event_range,
                     }),
+                    html_image: None,
                     conservative_fallback: false,
                 });
             }
-            Event::Html(_) | Event::InlineHtml(_) => contains_html = true,
+            // A complete inline `<img …>` tag is the one inline-HTML form the
+            // projection maps byte-for-byte: it becomes an image run revealed
+            // as its exact authored source when focused. The block-level
+            // `Html` event also carries a lone leading tag when a list item's
+            // or quote leaf's slice starts with the image, so both event
+            // kinds run through the same exact recognizer. Any other inline
+            // HTML keeps the whole-block source-island fallback.
+            Event::Html(_) | Event::InlineHtml(_) => {
+                let authored = text[event_range.clone()].to_string();
+                if let Some(image) = parse_inline_html_image(&authored) {
+                    candidates.push(RevealCandidate {
+                        kind: VisualRevealKind::HtmlImage,
+                        source_range: event_range.clone(),
+                        link_target_range: None,
+                    });
+                    runs.push(VisualInlineRun {
+                        visible_text: authored,
+                        source_range: event_range.clone(),
+                        content_range: event_range,
+                        style,
+                        link_target_range: current_link_target,
+                        navigation: current_link_nav,
+                        math: None,
+                        html_image: Some(image),
+                        conservative_fallback: false,
+                    });
+                } else {
+                    // Non-image inline HTML (e.g. `<a href=…>` wrappers,
+                    // `<br>`, `<em>…</em>`) cannot map to an inline image, so
+                    // it stays as a byte-exact source run. The run is marked
+                    // conservative so the projection shows the authored markup
+                    // verbatim instead of guessing a rendered form. A block
+                    // that mixes such runs with image runs still renders its
+                    // images (the view layer exempts image-bearing blocks
+                    // from the whole-block source-island gate).
+                    contains_non_image_html = true;
+                    if !authored.is_empty() {
+                        runs.push(VisualInlineRun {
+                            visible_text: authored,
+                            source_range: event_range.clone(),
+                            content_range: event_range,
+                            style,
+                            link_target_range: current_link_target,
+                            navigation: current_link_nav,
+                            math: None,
+                            html_image: None,
+                            conservative_fallback: true,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1290,7 +1357,7 @@ fn inline_runs(
         run.conservative_fallback = true;
         reveal_groups.clear();
     }
-    (runs, reveal_groups, contains_html)
+    (runs, reveal_groups, contains_non_image_html)
 }
 
 fn push_text_runs(
@@ -1430,6 +1497,7 @@ fn push_run(
         link_target_range,
         navigation,
         math: None,
+        html_image: None,
         conservative_fallback,
     });
 }
@@ -1526,6 +1594,7 @@ fn reveal_candidate_is_exact(
             source.starts_with("~~") && source.ends_with("~~") && source.len() >= 4
         }
         VisualRevealKind::InlineCode => source.starts_with('`') && source.ends_with('`'),
+        VisualRevealKind::HtmlImage => parse_inline_html_image(source).is_some(),
         VisualRevealKind::Math => {
             (source.starts_with("$$") && source.ends_with("$$") && source.len() >= 4)
                 || (source.starts_with('$') && source.ends_with('$') && source.len() >= 2)
@@ -3235,6 +3304,218 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
                 .iter()
                 .all(|block| !matches!(block.kind, VisualBlockKind::Unsupported)),
             "no block should fall back to Unsupported"
+        );
+    }
+
+    #[test]
+    fn visual_edit_renders_standalone_img_line_as_html_block() {
+        let doc = MarkdownDocument::from_text("<img src=\"a.png\" alt=\"A\">\n\nText");
+        let blocks = doc.visual_blocks_shared();
+
+        match &blocks[0].kind {
+            VisualBlockKind::Html { html } => assert!(html.contains("a.png")),
+            other => panic!("expected Html kind, got {other:?}"),
+        }
+        assert!(
+            blocks[0].source_island.is_none(),
+            "rendered HTML block must not carry a source island"
+        );
+    }
+
+    #[test]
+    fn visual_edit_renders_inline_html_image_as_exact_run() {
+        let source = "Hello <img src=\"badge.png\" alt=\"Badge\"> world";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = blocks.first().expect("paragraph block");
+
+        assert!(matches!(block.kind, VisualBlockKind::Paragraph));
+        assert!(
+            block.source_island.is_none(),
+            "img-only inline HTML must not island the whole block"
+        );
+
+        let tag_start = source.find("<img").expect("tag start");
+        let tag_end = source.find('>').expect("tag end") + 1;
+        let run = block
+            .editable_runs
+            .iter()
+            .find(|run| run.html_image.is_some())
+            .expect("image run");
+        assert_eq!(run.source_range, tag_start..tag_end);
+        assert_eq!(run.content_range, tag_start..tag_end);
+        assert_eq!(run.visible_text, &source[tag_start..tag_end]);
+        assert!(!run.conservative_fallback);
+        let image = run.html_image.as_ref().unwrap();
+        assert_eq!(image.url, "badge.png");
+        assert_eq!(image.alt, "Badge");
+        assert!(image.title.is_none());
+
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text.contains("Hello") && run.html_image.is_none())
+        );
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text.contains("world") && run.html_image.is_none())
+        );
+        assert!(
+            block
+                .reveal_groups
+                .iter()
+                .any(|group| group.kind == VisualRevealKind::HtmlImage
+                    && group.source_range == (tag_start..tag_end))
+        );
+    }
+
+    #[test]
+    fn visual_edit_reveals_inline_html_image_source_on_caret_entry() {
+        let source = "Hello <img src=\"badge.png\" alt=\"Badge\"> world";
+        let doc = MarkdownDocument::from_text(source);
+        let block = doc.visual_blocks_shared()[0].clone();
+        let tag_start = source.find("<img").expect("tag start");
+        let tag_end = source.find('>').expect("tag end") + 1;
+
+        let inside = tag_start + 3;
+        let projection = build_visual_projection(source, &block, inside..inside, inside);
+        assert_eq!(projection.revealed_source_ranges, vec![tag_start..tag_end]);
+        assert!(
+            projection
+                .text
+                .contains("<img src=\"badge.png\" alt=\"Badge\">")
+        );
+
+        // The caret resting right after the tag keeps the source editable,
+        // mirroring the math delimiter-group endpoint rule.
+        let projection = build_visual_projection(source, &block, tag_end..tag_end, tag_end);
+        assert_eq!(projection.revealed_source_ranges, vec![tag_start..tag_end]);
+
+        let outside = 2;
+        let projection = build_visual_projection(source, &block, outside..outside, outside);
+        assert!(projection.revealed_source_ranges.is_empty());
+        assert!(
+            projection
+                .text
+                .contains("<img src=\"badge.png\" alt=\"Badge\">"),
+            "unfocused projection keeps the authored tag as one rendered piece"
+        );
+    }
+
+    #[test]
+    fn visual_edit_inline_html_images_span_prose_contexts() {
+        let doc = MarkdownDocument::from_text("- <img src=\"dot.png\" alt=\"dot\">");
+        let blocks = doc.visual_blocks_shared();
+        assert!(matches!(blocks[0].kind, VisualBlockKind::ListItem { .. }));
+        assert!(blocks[0].source_island.is_none());
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.html_image.is_some())
+        );
+
+        let doc = MarkdownDocument::from_text("> <img src=\"q.png\" alt=\"q\">");
+        let blocks = doc.visual_blocks_shared();
+        assert!(matches!(blocks[0].kind, VisualBlockKind::Paragraph));
+        assert!(blocks[0].quote_context.is_some());
+        assert!(blocks[0].source_island.is_none());
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.html_image.is_some())
+        );
+
+        let doc = MarkdownDocument::from_text("# Title <img src=\"i.png\">");
+        let blocks = doc.visual_blocks_shared();
+        assert!(matches!(blocks[0].kind, VisualBlockKind::Heading { .. }));
+        assert!(blocks[0].source_island.is_none());
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.html_image.is_some())
+        );
+
+        // A GFM table cell shows the flattened alt text (Read-mode parity)
+        // instead of collapsing the whole table into a source island.
+        let doc = MarkdownDocument::from_text(
+            "| a | b |\n|---|---|\n| <img src=\"g.png\" alt=\"G\"> | x |",
+        );
+        let blocks = doc.visual_blocks_shared();
+        assert!(matches!(blocks[0].kind, VisualBlockKind::Table { .. }));
+        assert!(blocks[0].source_island.is_none());
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.html_image.is_some())
+        );
+        match &blocks[0].kind {
+            VisualBlockKind::Table { rows, .. } => {
+                assert_eq!(rows[1][0].text, "G");
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn visual_edit_marks_non_image_inline_html_for_conservative_runs() {
+        // Pure non-image inline HTML keeps the whole-block HTML source island
+        // (no image run to render, so the view-layer gate shows the source box).
+        let doc = MarkdownDocument::from_text("text <em>em</em> more");
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(
+            blocks[0].source_island,
+            Some(VisualSourceIslandKind::Html),
+            "pure non-image inline HTML keeps the whole-block island"
+        );
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .all(|run| run.html_image.is_none()),
+            "no image run is emitted for non-image inline HTML"
+        );
+
+        // A `<br>` next to an image marks the block as containing non-image
+        // HTML, but still emits the image run so the view layer can render it
+        // alongside the conservative source fragments.
+        let doc = MarkdownDocument::from_text("Hello <br> <img src=\"x.png\"> world");
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks[0].source_island, Some(VisualSourceIslandKind::Html));
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.html_image.is_some()),
+            "image run is still emitted when mixed with non-image inline HTML"
+        );
+
+        // The README badge pattern (`<a href><img></a>`) emits the image run
+        // plus conservative source runs for the `<a>` wrappers, so the block
+        // can render the image in the mixed path instead of collapsing to a
+        // whole-block source island.
+        let doc = MarkdownDocument::from_text("plain <a href=\"u\"><img src=\"x.png\"></a> end");
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks[0].source_island, Some(VisualSourceIslandKind::Html));
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.html_image.is_some()),
+            "a-wrapped image keeps its image run"
+        );
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.conservative_fallback && run.visible_text.contains("<a")),
+            "a-wrapped image keeps conservative source runs for the wrappers"
         );
     }
 }

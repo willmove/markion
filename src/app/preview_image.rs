@@ -786,8 +786,18 @@ fn collect_preview_image_urls(
         }
     }
     for block in visual {
-        if let VisualBlockKind::Image { url, .. } = &block.kind {
-            out.push(url.clone());
+        match &block.kind {
+            VisualBlockKind::Image { url, .. } => out.push(url.clone()),
+            // Prose blocks render inline `<img>` tags as image atoms; their
+            // URLs ride the same claim/preload/evict lifecycle as block-level
+            // images.
+            _ => {
+                for run in &block.editable_runs {
+                    if let Some(image) = &run.html_image {
+                        out.push(image.url.clone());
+                    }
+                }
+            }
         }
     }
 }

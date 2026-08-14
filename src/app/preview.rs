@@ -2144,6 +2144,89 @@ fn visual_math_atom(
         .into_any_element()
 }
 
+/// Test-only counter of inline HTML image atoms built during rendering.
+#[cfg(test)]
+pub(super) static VISUAL_HTML_IMAGE_ATOM_BUILDS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Inline raw-HTML `<img>` atom inside Visual Edit prose. Mirrors the math
+/// atom: the loaded image (or a compact alt/URL chip while pending or on
+/// error) with a selection highlight and start/end hit targets that place the
+/// caret at the authored tag's byte boundaries.
+fn visual_html_image_atom(
+    app: &MarkionApp,
+    image: &VisualHtmlImage,
+    source_range: Range<usize>,
+    document_dir: Option<&Path>,
+    cx: &mut Context<MarkionApp>,
+) -> gpui::AnyElement {
+    let selected = {
+        let selection = &app.active_tab().selected_range;
+        !selection.is_empty()
+            && selection.start < source_range.end
+            && selection.end > source_range.start
+    };
+    #[cfg(test)]
+    {
+        VISUAL_HTML_IMAGE_ATOM_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    let content = match app.preview_image_entry(&image.url, document_dir) {
+        PreviewImageEntry::Ready(ready) => {
+            // Same presentation rules as `preview_image_view`: supersampled
+            // (SVG) entries present at their intrinsic display width, plain
+            // rasters keep implicit pixel sizing.
+            let supersampled = ready.display_width != ready.width;
+            let rendered = img(ImageSource::Render(ready.image)).max_w_full();
+            if supersampled {
+                rendered
+                    .w(px(ready.display_width as f32))
+                    .into_any_element()
+            } else {
+                rendered.into_any_element()
+            }
+        }
+        PreviewImageEntry::Pending | PreviewImageEntry::Error(_) => {
+            let label = if image.alt.is_empty() {
+                image.url.as_str()
+            } else {
+                image.alt.as_str()
+            };
+            div()
+                .max_w(px(240.))
+                .overflow_x_hidden()
+                .truncate()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0xcbd5e1))
+                .bg(rgb(0xf8fafc))
+                .text_size(px(11.))
+                .text_color(rgb(0x64748b))
+                .child(label.to_string())
+                .into_any_element()
+        }
+    };
+    div()
+        .relative()
+        .flex_none()
+        .max_w_full()
+        .when(selected, |atom| atom.bg(rgba(PREVIEW_SELECTION_COLOR)))
+        .child(content)
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .left_0()
+                .flex()
+                .child(visual_math_hit_target(source_range.start, cx))
+                .child(visual_math_hit_target(source_range.end, cx)),
+        )
+        .into_any_element()
+}
+
 fn visual_projection_fragment(
     block_index: usize,
     fragment_index: usize,
@@ -2197,6 +2280,8 @@ fn visual_projection_fragment(
 /// Source-backed mixed layout for Visual Edit. A focused formula is already a
 /// source piece in `build_visual_projection`; other formulas remain image
 /// atoms while adjacent prose keeps exact visible-to-source segments.
+/// Inline raw-HTML `<img>` tags render through the same mixed layout as
+/// image atoms, and focused tags reveal their authored source.
 /// When the block has link/footnote navigation targets, the same flex-wrap
 /// layout inserts a compact clickable icon after each navigable construct.
 pub(super) fn visual_text_with_math_element(
@@ -2204,13 +2289,18 @@ pub(super) fn visual_text_with_math_element(
     block_index: usize,
     app: &MarkionApp,
     display_scale: f32,
+    document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let typography = app.typography_metrics();
     let inline_metrics = visual_inline_text_metrics(block, typography);
     let has_math = block.editable_runs.iter().any(|run| run.math.is_some());
+    let has_html_image = block
+        .editable_runs
+        .iter()
+        .any(|run| run.html_image.is_some());
     let nav_icons = visual_navigation_icons(block);
-    if !has_math && nav_icons.is_empty() {
+    if !has_math && !has_html_image && nav_icons.is_empty() {
         return visual_text_element(block, block_index, app, cx);
     }
 
@@ -2265,6 +2355,34 @@ pub(super) fn visual_text_with_math_element(
                 image,
                 math.source_range.clone(),
                 Some(inline_metrics),
+                cx,
+            ));
+            fragment_index += 1;
+            fragment_index += emit_navigation_icons_after(
+                &mut children,
+                &mut remaining_icons,
+                segment.source_range.end,
+                block_index,
+                fragment_index,
+                cx,
+            );
+            continue;
+        }
+
+        let html_image = (!projected_span.source).then(|| {
+            block
+                .editable_runs
+                .iter()
+                .find(|run| run.html_image.is_some() && run.content_range == segment.source_range)
+        });
+        if let Some(Some(run)) = html_image
+            && let Some(image) = &run.html_image
+        {
+            children.push(visual_html_image_atom(
+                app,
+                image,
+                segment.source_range.clone(),
+                document_dir,
                 cx,
             ));
             fragment_index += 1;
@@ -2605,19 +2723,30 @@ pub(super) fn visual_block_view(
     let owns_caret = visual_block_owns_caret(app, block_index);
     let is_whitespace = matches!(block.kind, VisualBlockKind::Whitespace);
     let is_reference_definition = matches!(block.kind, VisualBlockKind::ReferenceDefinition);
+    let has_html_image = block
+        .editable_runs
+        .iter()
+        .any(|run| run.html_image.is_some());
     let always_source = matches!(
         block.source_island,
         Some(
             VisualSourceIslandKind::FrontMatter
                 | VisualSourceIslandKind::Code
-                | VisualSourceIslandKind::Html
                 | VisualSourceIslandKind::Unsupported
         )
     ) || (block.editor.is_none()
         && block
             .editable_runs
             .iter()
-            .any(|run| run.conservative_fallback));
+            .any(|run| run.conservative_fallback))
+        // A prose block that carries inline HTML images renders them through
+        // the mixed text/image path; the surrounding non-image inline HTML
+        // shows as conservative source fragments in the same path. Only the
+        // HTML source-island kind is exempted here — front matter, code, and
+        // unsupported islands keep their whole-block source box even if an
+        // image run somehow appears.
+        && !matches!(block.source_island, Some(VisualSourceIslandKind::Html))
+        && !has_html_image;
     // A Whitespace row that owns the caret is ordinary inter-paragraph
     // spacing, not a code-like block. Promoting it to a source-island box
     // (border + padding + monospace + gray background) makes a normal blank
@@ -2630,6 +2759,7 @@ pub(super) fn visual_block_view(
         && !is_whitespace
         && !is_reference_definition
         && block.editor.is_none()
+        && !has_html_image
         && (block.source_island.is_some() || block.editable_runs.is_empty());
     if focused_conservative || always_source {
         let row = visual_source_island_view(app, block, block_index, cx);
@@ -2654,6 +2784,7 @@ pub(super) fn visual_block_view(
                     block_index,
                     app,
                     display_scale,
+                    document_dir,
                     cx,
                 ))
         }
@@ -2666,6 +2797,7 @@ pub(super) fn visual_block_view(
                 block_index,
                 app,
                 display_scale,
+                document_dir,
                 cx,
             )),
         VisualBlockKind::ListItem {
@@ -2718,6 +2850,7 @@ pub(super) fn visual_block_view(
                             block_index,
                             app,
                             display_scale,
+                            document_dir,
                             cx,
                         )),
                 )
@@ -2735,6 +2868,7 @@ pub(super) fn visual_block_view(
                 block_index,
                 app,
                 display_scale,
+                document_dir,
                 cx,
             )),
         VisualBlockKind::Image {
@@ -2930,6 +3064,7 @@ pub(super) fn visual_block_view(
                         block_index,
                         app,
                         display_scale,
+                        document_dir,
                         cx,
                     )),
             ),

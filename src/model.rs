@@ -683,8 +683,20 @@ pub struct VisualInlineRun {
     /// Presentation-only: never mutates canonical source.
     pub navigation: Option<VisualNavigationTarget>,
     pub math: Option<MathSource>,
+    /// Raw-HTML `<img>` tag presented as an inline image atom. The authored
+    /// tag source stays the canonical editable range; this payload is
+    /// presentation-only derived data.
+    pub html_image: Option<VisualHtmlImage>,
     /// True when the parser's visible text does not map byte-for-byte to source.
     pub conservative_fallback: bool,
+}
+
+/// Attributes of one raw-HTML `<img>` tag recognized inside prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualHtmlImage {
+    pub alt: String,
+    pub url: String,
+    pub title: Option<String>,
 }
 
 /// Destination opened or jumped to from a Visual Edit navigation icon.
@@ -705,6 +717,8 @@ pub enum VisualRevealKind {
     Superscript,
     Subscript,
     Math,
+    /// One complete raw-HTML `<img …>` tag rendered as an inline image atom.
+    HtmlImage,
 }
 
 /// Opaque, non-persisted identity of a source-backed Visual Edit block.
