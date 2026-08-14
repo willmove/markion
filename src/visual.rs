@@ -770,12 +770,7 @@ fn visual_block_from_preview(
             },
             Some(VisualSourceIslandKind::Math),
         ),
-        PreviewBlock::Html { html, .. } => (
-            VisualBlockKind::Html {
-                html: html.clone(),
-            },
-            None,
-        ),
+        PreviewBlock::Html { html, .. } => (VisualBlockKind::Html { html: html.clone() }, None),
         PreviewBlock::Image {
             alt, url, title, ..
         } => (

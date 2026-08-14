@@ -255,13 +255,13 @@ impl MarkionApp {
     ) {
         let metrics = self.typography_metrics();
         for tab in &mut self.tabs {
+            let Some(tab) = tab.document_tab_mut() else {
+                continue;
+            };
             if editor_changed {
-                tab.last_lines.clear();
-                tab.line_heights.clear();
-                tab.last_bounds = None;
+                tab.invalidate_source_layout();
                 tab.line_height = px(metrics.editor_line_height);
                 *tab.measured_height_cache.borrow_mut() = None;
-                tab.sync_scroll_editor_fraction = None;
             }
             if rendered_changed {
                 invalidate_list_measurements_around_scroll_anchor(&tab.preview_list);
@@ -271,19 +271,20 @@ impl MarkionApp {
                 tab.visual_input_bounds = None;
                 tab.visual_navigation_snapshots.clear();
                 tab.visual_navigation_snapshot_ids.clear();
-                tab.sync_scroll_preview_fraction = None;
+                tab.sync_scroll_state.invalidate_geometry();
             }
         }
     }
 
     pub(super) fn toggle_sync_scroll(&mut self, cx: &mut Context<Self>) {
         self.sync_scroll = !self.sync_scroll;
-        // Drop the cached fractions so the next Split frame reconciles from
-        // whatever the current scroll positions imply, instead of treating a
-        // pane as "unchanged" and skipping the first coupling.
+        // Seed from the current pane positions on the next Split frame; toggling
+        // the preference never yanks either pane immediately.
         for tab in &mut self.tabs {
-            tab.sync_scroll_editor_fraction = None;
-            tab.sync_scroll_preview_fraction = None;
+            let Some(tab) = tab.document_tab_mut() else {
+                continue;
+            };
+            tab.sync_scroll_state.reset();
         }
         self.status = t(
             self.language,
@@ -316,29 +317,22 @@ impl MarkionApp {
         cx.notify();
     }
 
-    /// Proportional scroll coupling for Split Preview + Sync scroll. See
-    /// [`sync_scroll_is_active`] / [`sync_fraction`]. Runs once per render.
-    ///
-    /// Reads each pane's current scroll offset and scrollable range, computes
-    /// fractions, and — when Sync scroll is active — writes the driving pane's
-    /// fraction to the other pane. The driving pane is whichever pane's
-    /// *cached* fraction no longer matches its freshly-read fraction (i.e. the
-    /// one the user/system just moved). After writing, both cached fractions
-    /// are set to the driver's fraction, so the next frame sees no change and
-    /// the write does not recur (one-frame convergence, no feedback loop).
-    ///
-    /// `syncing_scroll` guards against re-entrancy within the same frame. A
-    /// small epsilon stops sub-pixel drift from re-triggering writes.
-    pub(super) fn reconcile_sync_scroll(&mut self) {
-        if self.syncing_scroll || !sync_scroll_is_active(self.view_mode, self.sync_scroll) {
+    pub(super) fn mark_sync_scroll_driver(&mut self, driver: PaneScrollTarget) {
+        if let Some(tab) = self.active_tab_mut().document_tab_mut() {
+            tab.sync_scroll_state.mark_driver(driver);
+        }
+    }
+
+    /// Source-mapped Split Preview coupling. Each render observes the two
+    /// independent scroll states, resolves one driver, maps its top content
+    /// edge through preview block source ranges, and writes only the follower.
+    pub(super) fn reconcile_sync_scroll(&mut self, cx: &mut Context<Self>) {
+        if !sync_scroll_is_active(self.view_mode, self.sync_scroll) {
             return;
         }
-        // Borrow the active tab mutably once; we read offsets from the
-        // scroll handle / list state (which are fields on the tab) and write
-        // back to them, plus the cached fractions. `Pixels(pub(crate) f32)` is
-        // private, so the raw `f32` values come via `f32::from` (the public
-        // `impl From<Pixels> for f32`), keeping `sync_fraction` a pure f32 helper.
-        let tab = &mut self.tabs[self.active_tab];
+        let Some(tab) = self.tabs[self.active_tab].document_tab_mut() else {
+            return;
+        };
         let editor_max = f32::from(tab.editor_scroll.max_offset().height.max(px(0.)));
         let preview_max = f32::from(
             tab.preview_list
@@ -352,55 +346,226 @@ impl MarkionApp {
         let preview_offset = f32::from(-tab.preview_list.scroll_px_offset_for_scrollbar().y)
             .max(0.)
             .min(preview_max);
+        let logical_top = tab.preview_list.logical_scroll_top();
+        let preview_position = SyncPreviewPosition {
+            item_ix: logical_top.item_ix,
+            offset_in_item: f32::from(logical_top.offset_in_item),
+        };
 
-        let editor_frac = sync_fraction(editor_offset, editor_max);
-        let preview_frac = sync_fraction(preview_offset, preview_max);
+        // A newly measured/reflowed follower may normalize the target once
+        // after our render-time write. Retry that expected target once before
+        // raw-offset driver detection can mistake the normalization for input.
+        if tab.sync_scroll_state.driver_hint.is_none()
+            && !tab.sync_scroll_state.expected_follower_retried
+            && let Some(expected) = tab.sync_scroll_state.expected_follower
+        {
+            let mismatched = match expected {
+                ExpectedSyncFollower::Editor(expected_offset) => {
+                    (editor_offset - expected_offset).abs() > SYNC_SCROLL_PIXEL_EPSILON
+                }
+                ExpectedSyncFollower::Preview(expected_position) => {
+                    preview_position.item_ix != expected_position.item_ix
+                        || (preview_position.offset_in_item - expected_position.offset_in_item)
+                            .abs()
+                            > SYNC_SCROLL_PIXEL_EPSILON
+                }
+            };
+            if mismatched {
+                match expected {
+                    ExpectedSyncFollower::Editor(expected_offset) => {
+                        tab.editor_scroll
+                            .set_offset(point(px(0.), px(-expected_offset)));
+                        tab.sync_scroll_state.last_editor_offset = Some(expected_offset);
+                    }
+                    ExpectedSyncFollower::Preview(expected_position) => {
+                        tab.preview_list.scroll_to(gpui::ListOffset {
+                            item_ix: expected_position.item_ix,
+                            offset_in_item: px(expected_position.offset_in_item),
+                        });
+                        tab.sync_scroll_state.last_preview_position = Some(expected_position);
+                    }
+                }
+                tab.sync_scroll_state.expected_follower_retried = true;
+                cx.notify();
+                return;
+            }
+        }
 
-        // If neither pane has scrollable range, there is nothing to couple.
-        if editor_max <= 1. && preview_max <= 1. {
-            tab.sync_scroll_editor_fraction = Some(editor_frac);
-            tab.sync_scroll_preview_fraction = Some(preview_frac);
+        // A coarse jump to an unmeasured virtual row is refined after the row
+        // has gone through one layout. New user input cancels the pending step.
+        if tab.sync_scroll_state.driver_hint.is_some() {
+            tab.sync_scroll_state.pending_preview_refinement = None;
+        } else if let Some(pending) = tab.sync_scroll_state.pending_preview_refinement {
+            let valid = pending.version == tab.document.version()
+                && tab.preview_reflects_version == Some(pending.version)
+                && pending.item_ix < tab.preview_list_blocks.len();
+            if !valid {
+                tab.sync_scroll_state.pending_preview_refinement = None;
+            } else if let Some(bounds) = tab.preview_list.bounds_for_item(pending.item_ix) {
+                tab.sync_scroll_state.pending_preview_refinement = None;
+                if bounds.size.height > px(0.) {
+                    let offset = (f32::from(bounds.size.height) * pending.progress).max(0.);
+                    tab.preview_list.scroll_to(gpui::ListOffset {
+                        item_ix: pending.item_ix,
+                        offset_in_item: px(offset),
+                    });
+                    let actual = SyncPreviewPosition {
+                        item_ix: pending.item_ix,
+                        offset_in_item: offset,
+                    };
+                    tab.sync_scroll_state.last_editor_offset = Some(editor_offset);
+                    tab.sync_scroll_state.last_preview_position = Some(actual);
+                    tab.sync_scroll_state.expected_follower =
+                        Some(ExpectedSyncFollower::Preview(actual));
+                    tab.sync_scroll_state.expected_follower_retried = false;
+                    cx.notify();
+                    return;
+                }
+            } else {
+                // The coarse `scroll_to` makes this row the next layout's
+                // anchor. Schedule exactly that post-layout refinement frame.
+                cx.notify();
+                return;
+            }
+        }
+
+        let Some(driver) =
+            select_sync_scroll_driver(&mut tab.sync_scroll_state, editor_offset, preview_position)
+        else {
+            return;
+        };
+
+        if (driver == PaneScrollTarget::Editor && editor_max <= 1.)
+            || (driver == PaneScrollTarget::Preview && preview_max <= 1.)
+        {
+            return;
+        }
+        let version = tab.document.version();
+        if !tab.source_layout_is_current()
+            || !sync_scroll_mapping_is_current(
+                version,
+                tab.source_layout_key,
+                tab.preview_reflects_version,
+                !tab.preview_list_blocks.is_empty(),
+            )
+        {
+            tab.sync_scroll_state.deferred_driver = Some(driver);
             return;
         }
 
-        // Determine the driver: the pane whose stored fraction drifted from its
-        // current fraction. First-frame (None) seeds the cache without writing,
-        // so we don't yank a pane on the very first Split render.
-        let editor_changed = tab
-            .sync_scroll_editor_fraction
-            .is_some_and(|stored| (stored - editor_frac).abs() > SYNC_SCROLL_EPSILON);
-        let preview_changed = tab
-            .sync_scroll_preview_fraction
-            .is_some_and(|stored| (stored - preview_frac).abs() > SYNC_SCROLL_EPSILON);
-
-        // Seed caches on the first observed frame (or after a reset) without
-        // driving, so the next real change is the first to couple.
-        let needs_seed = tab
-            .sync_scroll_editor_fraction
-            .zip(tab.sync_scroll_preview_fraction)
-            .is_none();
-
-        self.syncing_scroll = true;
-        if !needs_seed && editor_changed && !preview_changed && preview_max > 1. {
-            // Editor drove: pull the preview to the editor's fraction.
-            let target = (editor_frac * preview_max).clamp(0., preview_max);
-            tab.preview_list
-                .set_offset_from_scrollbar(point(px(0.), px(-target)));
-            tab.sync_scroll_preview_fraction = Some(editor_frac);
-            tab.sync_scroll_editor_fraction = Some(editor_frac);
-        } else if !needs_seed && preview_changed && !editor_changed && editor_max > 1. {
-            // Preview drove: pull the editor to the preview's fraction.
-            let target = (preview_frac * editor_max).clamp(0., editor_max);
-            tab.editor_scroll.set_offset(point(px(0.), px(-target)));
-            tab.sync_scroll_editor_fraction = Some(preview_frac);
-            tab.sync_scroll_preview_fraction = Some(preview_frac);
-        } else {
-            // No single clear driver (both moved, or neither moved): just record
-            // the current state so a future single-pane change can be detected.
-            tab.sync_scroll_editor_fraction = Some(editor_frac);
-            tab.sync_scroll_preview_fraction = Some(preview_frac);
+        match driver {
+            PaneScrollTarget::Editor => {
+                let source_offset = if editor_offset >= editor_max - SYNC_SCROLL_PIXEL_EPSILON {
+                    tab.document.text().len()
+                } else {
+                    let Some(offset) = tab.source_offset_for_content_y(editor_offset) else {
+                        tab.sync_scroll_state.deferred_driver = Some(driver);
+                        return;
+                    };
+                    offset
+                };
+                let Some(anchor) = preview_anchor_for_source_offset(
+                    &tab.preview_list_blocks,
+                    source_offset,
+                    tab.document.text().len(),
+                ) else {
+                    return;
+                };
+                match anchor {
+                    PreviewScrollAnchor::Start => {
+                        tab.preview_list.scroll_to(gpui::ListOffset::default());
+                    }
+                    PreviewScrollAnchor::End => {
+                        tab.preview_list
+                            .set_offset_from_scrollbar(point(px(0.), px(-preview_max)));
+                    }
+                    PreviewScrollAnchor::Block { item_ix } => {
+                        let range = tab.preview_list_blocks[item_ix].source_range();
+                        let Some(start_y) = tab.source_content_y_for_offset(range.start) else {
+                            tab.sync_scroll_state.deferred_driver = Some(driver);
+                            return;
+                        };
+                        let Some(mut end_y) = tab.source_content_y_for_offset(range.end) else {
+                            tab.sync_scroll_state.deferred_driver = Some(driver);
+                            return;
+                        };
+                        end_y = end_y.max(start_y + f32::from(tab.line_height));
+                        let progress = if source_offset < range.start {
+                            0.
+                        } else {
+                            sync_interval_progress(editor_offset, start_y, end_y)
+                        };
+                        if let Some(bounds) = tab.preview_list.bounds_for_item(item_ix) {
+                            tab.preview_list.scroll_to(gpui::ListOffset {
+                                item_ix,
+                                offset_in_item: px(f32::from(bounds.size.height) * progress),
+                            });
+                        } else {
+                            tab.preview_list.scroll_to(gpui::ListOffset {
+                                item_ix,
+                                offset_in_item: px(0.),
+                            });
+                            tab.sync_scroll_state.pending_preview_refinement =
+                                Some(PendingPreviewRefinement {
+                                    version,
+                                    item_ix,
+                                    progress,
+                                });
+                        }
+                    }
+                }
+                let actual = tab.preview_list.logical_scroll_top();
+                let actual = SyncPreviewPosition {
+                    item_ix: actual.item_ix,
+                    offset_in_item: f32::from(actual.offset_in_item),
+                };
+                tab.sync_scroll_state.last_preview_position = Some(actual);
+                tab.sync_scroll_state.expected_follower =
+                    Some(ExpectedSyncFollower::Preview(actual));
+                tab.sync_scroll_state.expected_follower_retried = false;
+            }
+            PaneScrollTarget::Preview => {
+                let target = if preview_offset <= SYNC_SCROLL_PIXEL_EPSILON {
+                    0.
+                } else if preview_offset >= preview_max - SYNC_SCROLL_PIXEL_EPSILON
+                    || preview_position.item_ix >= tab.preview_list_blocks.len()
+                {
+                    editor_max
+                } else {
+                    let item_ix = preview_position.item_ix;
+                    let Some(bounds) = tab.preview_list.bounds_for_item(item_ix) else {
+                        tab.sync_scroll_state.deferred_driver = Some(driver);
+                        cx.notify();
+                        return;
+                    };
+                    let progress = sync_interval_progress(
+                        preview_position.offset_in_item,
+                        0.,
+                        f32::from(bounds.size.height),
+                    );
+                    let range = tab.preview_list_blocks[item_ix].source_range();
+                    let Some(start_y) = tab.source_content_y_for_offset(range.start) else {
+                        tab.sync_scroll_state.deferred_driver = Some(driver);
+                        return;
+                    };
+                    let Some(mut end_y) = tab.source_content_y_for_offset(range.end) else {
+                        tab.sync_scroll_state.deferred_driver = Some(driver);
+                        return;
+                    };
+                    end_y = end_y.max(start_y + f32::from(tab.line_height));
+                    sync_interpolate(start_y, end_y, progress).clamp(0., editor_max)
+                };
+                tab.editor_scroll.set_offset(point(px(0.), px(-target)));
+                let actual = f32::from(-tab.editor_scroll.offset().y)
+                    .max(0.)
+                    .min(editor_max);
+                tab.sync_scroll_state.last_editor_offset = Some(actual);
+                tab.sync_scroll_state.expected_follower =
+                    Some(ExpectedSyncFollower::Editor(actual));
+                tab.sync_scroll_state.expected_follower_retried = false;
+            }
         }
-        self.syncing_scroll = false;
+        cx.notify();
     }
 }
 

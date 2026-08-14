@@ -34,6 +34,13 @@ pub(super) struct PreviewImageKey {
 }
 
 impl PreviewImageKey {
+    pub(super) fn from_local_path(path: &Path) -> Self {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        Self {
+            identity: format!("local:{}", canonical.display()),
+        }
+    }
+
     pub(super) fn from_url(url: &str, document_dir: Option<&Path>) -> Self {
         if url.starts_with("data:") {
             // Inline base64/URL-encoded images (RFC 2397) are decoded in
@@ -55,10 +62,7 @@ impl PreviewImageKey {
             } else {
                 path
             };
-            let canonical = path.canonicalize().unwrap_or(path);
-            Self {
-                identity: format!("local:{}", canonical.display()),
-            }
+            Self::from_local_path(&path)
         }
     }
 
@@ -420,8 +424,8 @@ pub(super) fn probe_is_heavy(key: &PreviewImageKey) -> bool {
 
 pub(super) fn load_preview_image(key: &PreviewImageKey) -> Result<PreviewImageReady, String> {
     let (bytes, is_svg) = if let Some(path) = key.local_path() {
-        let bytes =
-            std::fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+        let bytes = std::fs::read(&path)
+            .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
         let is_svg = path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -469,8 +473,8 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
 /// Both `;base64` and URL-encoded payloads are supported; a malformed URI
 /// yields a `String` error that flows into the missing-resource placeholder.
 fn decode_data_url(url: &str) -> Result<(Vec<u8>, Option<String>), String> {
-    let processed = data_url::DataUrl::process(url)
-        .map_err(|err| format!("invalid data URL: {err}"))?;
+    let processed =
+        data_url::DataUrl::process(url).map_err(|err| format!("invalid data URL: {err}"))?;
     let mime_essence = {
         let m = processed.mime_type();
         format!("{}/{}", m.type_, m.subtype)
@@ -628,6 +632,32 @@ fn rasterize_svg_bytes(bytes: &[u8]) -> Result<(RgbaImage, u32, u32), String> {
 }
 
 impl MarkionApp {
+    pub(super) fn image_tab_entry(&self, key: &PreviewImageKey) -> PreviewImageEntry {
+        self.preview_image_cache
+            .get(key)
+            .unwrap_or(PreviewImageEntry::Pending)
+    }
+
+    pub(super) fn ensure_image_tab(
+        &mut self,
+        tab_index: usize,
+        key: PreviewImageKey,
+        cx: &mut Context<Self>,
+    ) {
+        if tab_index >= self.tabs.len() {
+            return;
+        }
+        let should_claim = match self.tabs[tab_index].image_mut() {
+            Some(image) if image.key == key => !std::mem::replace(&mut image.claimed, true),
+            _ => return,
+        };
+        if should_claim {
+            self.preview_image_cache.claim(key.clone());
+        }
+        let _ = self.preview_image_cache.reserve_pending(key);
+        self.schedule_pending_preview_decodes(cx);
+    }
+
     pub(super) fn preview_image_entry(
         &self,
         url: &str,
@@ -698,6 +728,9 @@ impl MarkionApp {
         if tab_index >= self.tabs.len() {
             return;
         }
+        if self.tabs[tab_index].is_image() {
+            return;
+        }
         let mut urls = Vec::new();
         collect_preview_image_urls(preview, visual, &mut urls);
         let new_keys: HashSet<PreviewImageKey> = urls
@@ -726,7 +759,7 @@ impl MarkionApp {
         if tab_index >= self.tabs.len() {
             return;
         }
-        let keys = std::mem::take(&mut self.tabs[tab_index].claimed_preview_images);
+        let keys = self.tabs[tab_index].take_image_claims();
         let dropped = self.preview_image_cache.release_all(keys.iter());
         for image in dropped {
             cx.drop_image(image, None);
@@ -1243,11 +1276,83 @@ mod tests {
         assert_eq!((ready.width, ready.height), (96, 32));
     }
 
+    #[test]
+    fn local_viewer_decodes_every_supported_raster_family() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let formats = [
+            ("PNG", image::ImageFormat::Png),
+            ("jpg", image::ImageFormat::Jpeg),
+            ("gif", image::ImageFormat::Gif),
+            ("webp", image::ImageFormat::WebP),
+            ("bmp", image::ImageFormat::Bmp),
+            ("tif", image::ImageFormat::Tiff),
+        ];
+        for (extension, format) in formats {
+            let path = dir.path().join(format!("sample.{extension}"));
+            let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                7,
+                5,
+                image::Rgb([20, 40, 60]),
+            ));
+            image
+                .save_with_format(&path, format)
+                .unwrap_or_else(|error| panic!("encode {extension}: {error}"));
+            let ready = load_preview_image(&PreviewImageKey::from_local_path(&path))
+                .unwrap_or_else(|error| panic!("decode {extension}: {error}"));
+            assert_eq!((ready.display_width, ready.display_height), (7, 5));
+        }
+
+        let svg = dir.path().join("sample.SvG");
+        std::fs::write(
+            &svg,
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="9" height="6"><rect width="9" height="6" fill="red"/></svg>"#,
+        )
+        .expect("write svg");
+        let ready =
+            load_preview_image(&PreviewImageKey::from_local_path(&svg)).expect("decode local SVG");
+        assert_eq!((ready.display_width, ready.display_height), (9, 6));
+    }
+
+    #[test]
+    fn animated_gif_uses_a_static_decoded_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("animated.gif");
+        let file = std::fs::File::create(&path).expect("gif file");
+        let mut encoder = image::codecs::gif::GifEncoder::new(file);
+        encoder
+            .encode_frames([
+                image::Frame::new(RgbaImage::from_pixel(3, 2, Rgba([255, 0, 0, 255]))),
+                image::Frame::new(RgbaImage::from_pixel(3, 2, Rgba([0, 0, 255, 255]))),
+            ])
+            .expect("encode animation");
+        let ready = load_preview_image(&PreviewImageKey::from_local_path(&path))
+            .expect("decode static presentation");
+        assert_eq!((ready.display_width, ready.display_height), (3, 2));
+    }
+
+    #[test]
+    fn local_viewer_contains_missing_corrupt_and_oversized_sources() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.png");
+        assert!(load_preview_image(&PreviewImageKey::from_local_path(&missing)).is_err());
+
+        let corrupt = dir.path().join("corrupt.svg");
+        std::fs::write(&corrupt, b"<svg not-valid").expect("write corrupt");
+        assert!(load_preview_image(&PreviewImageKey::from_local_path(&corrupt)).is_err());
+
+        let large = dir.path().join("large.png");
+        write_png(&large, PREVIEW_IMAGE_MAX_EDGE * 2, 8);
+        let ready = load_preview_image(&PreviewImageKey::from_local_path(&large))
+            .expect("downscale oversized image");
+        assert_eq!(ready.width, PREVIEW_IMAGE_MAX_EDGE);
+        assert!(ready.height >= 1);
+    }
+
     // --- data: URI (RFC 2397) support --------------------------------------
 
     /// Build a `;base64` data URI from raw bytes and a MIME essence.
     fn data_url_base64(mime: &str, bytes: &[u8]) -> String {
-        use base64::{engine::general_purpose::STANDARD, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD};
         format!("data:{mime};base64,{}", STANDARD.encode(bytes))
     }
 
@@ -1323,10 +1428,7 @@ mod tests {
         assert_eq!((ready.display_width, ready.display_height), (60, 40));
         assert_eq!(
             (ready.width, ready.height),
-            (
-                60 * PREVIEW_SVG_SUPERSAMPLE,
-                40 * PREVIEW_SVG_SUPERSAMPLE
-            )
+            (60 * PREVIEW_SVG_SUPERSAMPLE, 40 * PREVIEW_SVG_SUPERSAMPLE)
         );
     }
 

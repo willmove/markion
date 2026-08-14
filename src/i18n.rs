@@ -237,6 +237,8 @@ pub enum Msg {
     StatusJumpedToHeading,
     StatusNewDocument,
     StatusOpening,
+    StatusImageLoading,
+    StatusImageActionUnavailable,
     StatusOpeningFolder,
     StatusChoosingSaveLocation,
     StatusEditMode,
@@ -353,6 +355,18 @@ pub enum Msg {
     StatusRecentFilesCleared,
 
     // --- Status bar: dynamic (use tf) ---
+    /// {0}=branch name — persistent status-bar repository context.
+    StatusContextBranch,
+    /// {0}=Unicode-scalar character count.
+    StatusContextCharacters,
+    /// {0}=whitespace-delimited word count.
+    StatusContextWords,
+    /// {0}=one-based line, {1}=one-based Unicode-scalar column.
+    StatusContextLineColumn,
+    /// {0}=path
+    StatusUnsupportedFile,
+    /// {0}=path, {1}=error
+    StatusImageUnavailable,
     /// {0}=err — "Recovery failed: {err}"
     StatusRecoveryFailed,
     /// {0}=path — "Opened {path}"
@@ -2342,6 +2356,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::SearchProgress => "{0}/{1}",
 
         Msg::StatusReady => "Ready",
+        Msg::StatusContextBranch => "Branch {0}",
+        Msg::StatusContextCharacters => "Chars {0}",
+        Msg::StatusContextWords => "Words {0}",
+        Msg::StatusContextLineColumn => "Ln {0}, Col {1}",
         Msg::StatusRecoveryAvailable => "Recovery available",
         Msg::StatusRecoveredDocument => "Recovered unsaved document",
         Msg::StatusRecoveryDiscarded => "Recovery discarded",
@@ -2351,6 +2369,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusJumpedToHeading => "Jumped to heading",
         Msg::StatusNewDocument => "New document",
         Msg::StatusOpening => "Opening...",
+        Msg::StatusImageLoading => "Loading image…",
+        Msg::StatusImageActionUnavailable => "This action is unavailable for image tabs",
+        Msg::StatusUnsupportedFile => "Unsupported file type: {0}",
+        Msg::StatusImageUnavailable => "Image unavailable: {0} ({1})",
         Msg::StatusOpeningFolder => "Opening folder...",
         Msg::StatusChoosingSaveLocation => "Choosing save location...",
         Msg::StatusEditMode => "Source mode",
@@ -2553,7 +2575,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogResetDetail => {
             "Theme, focus mode, typewriter mode, code line-number, preview width, and sidebar settings will return to defaults."
         }
-        Msg::PromptOpenMarkdown => "Open Markdown",
+        Msg::PromptOpenMarkdown => "Open document or image",
         Msg::PromptOpenFolder => "Open Folder",
         Msg::FileTypeMarkdown => "Markdown document",
         Msg::FileTypeStyledHtml => "HTML document",
@@ -2761,6 +2783,10 @@ fn ja(msg: Msg) -> &'static str {
         Msg::SearchProgress => "{0}/{1}",
 
         Msg::StatusReady => "準備完了",
+        Msg::StatusContextBranch => "ブランチ {0}",
+        Msg::StatusContextCharacters => "文字 {0}",
+        Msg::StatusContextWords => "単語 {0}",
+        Msg::StatusContextLineColumn => "行 {0}、列 {1}",
         Msg::StatusRecoveryAvailable => "復元可能なデータがあります",
         Msg::StatusRecoveredDocument => "未保存の文書を復元しました",
         Msg::StatusRecoveryDiscarded => "復元データを破棄しました",
@@ -2770,6 +2796,10 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusJumpedToHeading => "見出しにジャンプしました",
         Msg::StatusNewDocument => "新規文書",
         Msg::StatusOpening => "開いています...",
+        Msg::StatusImageLoading => "画像を読み込んでいます…",
+        Msg::StatusImageActionUnavailable => "画像タブではこの操作を使用できません",
+        Msg::StatusUnsupportedFile => "対応していないファイル形式です: {0}",
+        Msg::StatusImageUnavailable => "画像を表示できません: {0}（{1}）",
         Msg::StatusOpeningFolder => "フォルダーを開いています...",
         Msg::StatusChoosingSaveLocation => "保存先を選択中...",
         Msg::StatusEditMode => "ソースモード",
@@ -2974,7 +3004,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogResetDetail => {
             "テーマ、集中モード、タイプライターモード、コード行番号、プレビュー幅、サイドバーの設定がデフォルトに戻ります。"
         }
-        Msg::PromptOpenMarkdown => "Markdownを開く",
+        Msg::PromptOpenMarkdown => "文書または画像を開く",
         Msg::PromptOpenFolder => "フォルダーを開く",
         Msg::FileTypeMarkdown => "Markdown文書",
         Msg::FileTypeStyledHtml => "HTML文書",
@@ -3168,6 +3198,10 @@ fn fr(msg: Msg) -> &'static str {
         Msg::SearchCaseSensitiveMark => "Aa",
         Msg::SearchProgress => "{0}/{1}",
         Msg::StatusReady => "Prêt",
+        Msg::StatusContextBranch => "Branche {0}",
+        Msg::StatusContextCharacters => "Car. {0}",
+        Msg::StatusContextWords => "Mots {0}",
+        Msg::StatusContextLineColumn => "L {0}, C {1}",
         Msg::StatusRecoveryAvailable => "Récupération disponible",
         Msg::StatusRecoveredDocument => "Document non enregistré récupéré",
         Msg::StatusRecoveryDiscarded => "Récupération abandonnée",
@@ -3177,6 +3211,10 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusJumpedToHeading => "Aller au titre",
         Msg::StatusNewDocument => "Nouveau document",
         Msg::StatusOpening => "Ouverture...",
+        Msg::StatusImageLoading => "Chargement de l’image…",
+        Msg::StatusImageActionUnavailable => "Cette action n’est pas disponible pour les images",
+        Msg::StatusUnsupportedFile => "Type de fichier non pris en charge : {0}",
+        Msg::StatusImageUnavailable => "Image indisponible : {0} ({1})",
         Msg::StatusOpeningFolder => "Ouverture du dossier...",
         Msg::StatusChoosingSaveLocation => "Choix de l'emplacement d'enregistrement...",
         Msg::StatusEditMode => "Mode source",
@@ -3387,7 +3425,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogResetDetail => {
             "Les paramètres de thème, mode concentré, mode machine à écrire, numéros de ligne, largeur d'aperçu et barre latérale seront réinitialisés."
         }
-        Msg::PromptOpenMarkdown => "Ouvrir Markdown",
+        Msg::PromptOpenMarkdown => "Ouvrir un document ou une image",
         Msg::PromptOpenFolder => "Ouvrir un dossier",
         Msg::FileTypeMarkdown => "Document Markdown",
         Msg::FileTypeStyledHtml => "Document HTML",
@@ -3579,6 +3617,10 @@ fn de(msg: Msg) -> &'static str {
         Msg::SearchCaseSensitiveMark => "Aa",
         Msg::SearchProgress => "{0}/{1}",
         Msg::StatusReady => "Bereit",
+        Msg::StatusContextBranch => "Branch {0}",
+        Msg::StatusContextCharacters => "Zeichen {0}",
+        Msg::StatusContextWords => "Wörter {0}",
+        Msg::StatusContextLineColumn => "Z. {0}, Sp. {1}",
         Msg::StatusRecoveryAvailable => "Wiederherstellung verfügbar",
         Msg::StatusRecoveredDocument => "Ungespeichertes Dokument wiederhergestellt",
         Msg::StatusRecoveryDiscarded => "Wiederherstellung verworfen",
@@ -3588,6 +3630,10 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusJumpedToHeading => "Zur Überschrift gesprungen",
         Msg::StatusNewDocument => "Neues Dokument",
         Msg::StatusOpening => "Wird geöffnet...",
+        Msg::StatusImageLoading => "Bild wird geladen…",
+        Msg::StatusImageActionUnavailable => "Diese Aktion ist für Bild-Tabs nicht verfügbar",
+        Msg::StatusUnsupportedFile => "Nicht unterstützter Dateityp: {0}",
+        Msg::StatusImageUnavailable => "Bild nicht verfügbar: {0} ({1})",
         Msg::StatusOpeningFolder => "Ordner wird geöffnet...",
         Msg::StatusChoosingSaveLocation => "Speicherort wählen...",
         Msg::StatusEditMode => "Quelltextmodus",
@@ -3794,7 +3840,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogResetDetail => {
             "Design, Fokusmodus, Schreibmaschinenmodus, Zeilennummern, Vorschaubreite und Seitenleiste werden auf die Standardwerte zurückgesetzt."
         }
-        Msg::PromptOpenMarkdown => "Markdown öffnen",
+        Msg::PromptOpenMarkdown => "Dokument oder Bild öffnen",
         Msg::PromptOpenFolder => "Ordner öffnen",
         Msg::FileTypeMarkdown => "Markdown-Dokument",
         Msg::FileTypeStyledHtml => "HTML-Dokument",
@@ -3986,6 +4032,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::SearchCaseSensitiveMark => "Aa",
         Msg::SearchProgress => "{0}/{1}",
         Msg::StatusReady => "Listo",
+        Msg::StatusContextBranch => "Rama {0}",
+        Msg::StatusContextCharacters => "Caracteres {0}",
+        Msg::StatusContextWords => "Palabras {0}",
+        Msg::StatusContextLineColumn => "Lín. {0}, Col. {1}",
         Msg::StatusRecoveryAvailable => "Recuperación disponible",
         Msg::StatusRecoveredDocument => "Documento no guardado recuperado",
         Msg::StatusRecoveryDiscarded => "Recuperación descartada",
@@ -3995,6 +4045,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusJumpedToHeading => "Saltar al encabezado",
         Msg::StatusNewDocument => "Nuevo documento",
         Msg::StatusOpening => "Abriendo...",
+        Msg::StatusImageLoading => "Cargando imagen…",
+        Msg::StatusImageActionUnavailable => "Esta acción no está disponible para imágenes",
+        Msg::StatusUnsupportedFile => "Tipo de archivo no compatible: {0}",
+        Msg::StatusImageUnavailable => "Imagen no disponible: {0} ({1})",
         Msg::StatusOpeningFolder => "Abriendo carpeta...",
         Msg::StatusChoosingSaveLocation => "Eligiendo ubicación para guardar...",
         Msg::StatusEditMode => "Modo código fuente",
@@ -4195,7 +4249,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogResetDetail => {
             "Tema, modo concentración, modo máquina de escribir, números de línea, ancho de vista previa y barra lateral volverán a los valores predeterminados."
         }
-        Msg::PromptOpenMarkdown => "Abrir Markdown",
+        Msg::PromptOpenMarkdown => "Abrir documento o imagen",
         Msg::PromptOpenFolder => "Abrir carpeta",
         Msg::FileTypeMarkdown => "Documento Markdown",
         Msg::FileTypeStyledHtml => "Documento HTML",
@@ -4394,6 +4448,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::SearchProgress => "{0}/{1}",
 
         Msg::StatusReady => "就绪",
+        Msg::StatusContextBranch => "分支 {0}",
+        Msg::StatusContextCharacters => "字符 {0}",
+        Msg::StatusContextWords => "词数 {0}",
+        Msg::StatusContextLineColumn => "行 {0}，列 {1}",
         Msg::StatusRecoveryAvailable => "有可恢复的文档",
         Msg::StatusRecoveredDocument => "已恢复未保存的文档",
         Msg::StatusRecoveryDiscarded => "已放弃恢复",
@@ -4403,6 +4461,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusJumpedToHeading => "已跳转到标题",
         Msg::StatusNewDocument => "新文档",
         Msg::StatusOpening => "正在打开…",
+        Msg::StatusImageLoading => "正在加载图片…",
+        Msg::StatusImageActionUnavailable => "图片标签页不支持此操作",
+        Msg::StatusUnsupportedFile => "不支持的文件类型：{0}",
+        Msg::StatusImageUnavailable => "图片不可用：{0}（{1}）",
         Msg::StatusOpeningFolder => "正在打开文件夹…",
         Msg::StatusChoosingSaveLocation => "正在选择保存位置…",
         Msg::StatusEditMode => "源码模式",
@@ -4599,7 +4661,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogResetDetail => {
             "主题、专注模式、打字机模式、代码行号、预览宽度以及侧边栏设置将恢复为默认值。"
         }
-        Msg::PromptOpenMarkdown => "打开 Markdown",
+        Msg::PromptOpenMarkdown => "打开文档或图片",
         Msg::PromptOpenFolder => "打开文件夹",
         Msg::FileTypeMarkdown => "Markdown 文档",
         Msg::FileTypeStyledHtml => "HTML 文档",
@@ -4800,6 +4862,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::SearchProgress => "{0}/{1}",
 
         Msg::StatusReady => "就緒",
+        Msg::StatusContextBranch => "分支 {0}",
+        Msg::StatusContextCharacters => "字元 {0}",
+        Msg::StatusContextWords => "詞數 {0}",
+        Msg::StatusContextLineColumn => "行 {0}，列 {1}",
         Msg::StatusRecoveryAvailable => "有可復原的文件",
         Msg::StatusRecoveredDocument => "已復原未儲存的文件",
         Msg::StatusRecoveryDiscarded => "已放棄復原",
@@ -4809,6 +4875,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusJumpedToHeading => "已跳至標題",
         Msg::StatusNewDocument => "新文件",
         Msg::StatusOpening => "正在開啟…",
+        Msg::StatusImageLoading => "正在載入圖片…",
+        Msg::StatusImageActionUnavailable => "圖片分頁不支援此操作",
+        Msg::StatusUnsupportedFile => "不支援的檔案類型：{0}",
+        Msg::StatusImageUnavailable => "圖片無法使用：{0}（{1}）",
         Msg::StatusOpeningFolder => "正在開啟資料夾…",
         Msg::StatusChoosingSaveLocation => "正在選擇儲存位置…",
         Msg::StatusEditMode => "原始碼模式",
@@ -5007,7 +5077,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogResetDetail => {
             "佈景主題、專注模式、打字機模式、程式碼行號、預覽寬度以及側邊欄設定將還原為預設值。"
         }
-        Msg::PromptOpenMarkdown => "開啟 Markdown",
+        Msg::PromptOpenMarkdown => "開啟文件或圖片",
         Msg::PromptOpenFolder => "開啟資料夾",
         Msg::FileTypeMarkdown => "Markdown 文件",
         Msg::FileTypeStyledHtml => "HTML 文件",
@@ -5620,6 +5690,8 @@ mod tests {
             Msg::StatusJumpedToHeading,
             Msg::StatusNewDocument,
             Msg::StatusOpening,
+            Msg::StatusImageLoading,
+            Msg::StatusImageActionUnavailable,
             Msg::StatusOpeningFolder,
             Msg::StatusChoosingSaveLocation,
             Msg::StatusEditMode,
@@ -5724,6 +5796,12 @@ mod tests {
             Msg::StatusPreferenceResetCanceled,
             Msg::StatusLanguageSet,
             Msg::StatusRecentFilesCleared,
+            Msg::StatusContextBranch,
+            Msg::StatusContextCharacters,
+            Msg::StatusContextWords,
+            Msg::StatusContextLineColumn,
+            Msg::StatusUnsupportedFile,
+            Msg::StatusImageUnavailable,
             Msg::StatusRecoveryFailed,
             Msg::StatusOpened,
             Msg::StatusOpenFailed,

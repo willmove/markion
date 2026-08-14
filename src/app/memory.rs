@@ -196,7 +196,7 @@ pub(super) trait MemoryFootprint {
 /// attribution instrument for the shaped-line site.
 pub(super) const SHAPED_LINE_STRUCTURAL_BYTES: usize = 3_200;
 
-impl MemoryFootprint for EditorTab {
+impl MemoryFootprint for DocumentTabState {
     fn memory_sites(&self) -> Vec<MemorySite> {
         let mut sites = Vec::new();
         let prefix = "tab";
@@ -295,6 +295,19 @@ impl MemoryFootprint for EditorTab {
         ));
 
         sites
+    }
+}
+
+impl MemoryFootprint for WorkspaceTab {
+    fn memory_sites(&self) -> Vec<MemorySite> {
+        match self {
+            WorkspaceTab::Document(tab) => tab.memory_sites(),
+            WorkspaceTab::Image(image) => vec![MemorySite::owned(
+                "tab.image_viewer",
+                image.presentation_memory_bytes(),
+                vec![("claimed".into(), usize::from(image.claimed))],
+            )],
+        }
     }
 }
 

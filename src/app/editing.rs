@@ -752,9 +752,8 @@ impl MarkionApp {
         self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         let tab = self.active_tab_mut();
-        let new_range = tab
-            .document
-            .apply_markdown_format(tab.selected_range.clone(), format);
+        let selected_range = tab.selected_range.clone();
+        let new_range = tab.document.apply_markdown_format(selected_range, format);
         let changed = tab.document.text() != snapshot.document.text();
         if changed {
             self.commit_undo_snapshot(snapshot);
@@ -1126,7 +1125,7 @@ impl MarkionApp {
         detail: Msg,
         on_confirm: fn(&mut Self, &mut Context<Self>),
     ) {
-        if !self.active_tab().document.is_dirty() {
+        if !self.active_tab().requires_discard_confirmation() {
             on_confirm(self, cx);
             return;
         }
@@ -1167,7 +1166,7 @@ impl MarkionApp {
         }
 
         self.active_menu = None;
-        if !self.tabs.iter().any(|t| t.document.is_dirty()) {
+        if !self.tabs.iter().any(EditorTab::is_dirty) {
             self.allow_close = true;
             self.status = t(self.language, Msg::StatusExitingMarkion).into();
             cx.notify();
@@ -2103,8 +2102,8 @@ impl MarkionApp {
         let document_bar = document_bar
             .children(self.tabs.iter().enumerate().map(|(index, tab)| {
                 let is_active = index == active;
-                let name = title_from_path(tab.document.path()).to_string();
-                let dirty = tab.document.is_dirty();
+                let name = tab.title();
+                let dirty = tab.is_dirty();
                 let label: SharedString = if dirty {
                     format!("{name} *").into()
                 } else {

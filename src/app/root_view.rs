@@ -8,7 +8,13 @@ impl Focusable for MarkionApp {
 
 impl Render for MarkionApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_slash_command_state(cx);
+        let active_is_image = self.active_tab().is_image();
+        if active_is_image {
+            self.slash_commands = None;
+            self.dismissed_slash_query = None;
+        } else {
+            self.sync_slash_command_state(cx);
+        }
         let palette = self.palette();
         let typography = self.typography_metrics();
         // The preview pane is hidden in Edit mode, so skip the full-document
@@ -17,7 +23,7 @@ impl Render for MarkionApp {
         // (~4ms at 100 KB, ~25ms at 600 KB); paying it while nothing renders it
         // is pure waste. Split/Read still parse eagerly as before.
         let preview_blocks: std::sync::Arc<Vec<PreviewBlock>> =
-            if matches!(self.view_mode, ViewMode::Edit | ViewMode::VisualEdit) {
+            if active_is_image || matches!(self.view_mode, ViewMode::Edit | ViewMode::VisualEdit) {
                 std::sync::Arc::new(Vec::new())
             } else {
                 // Debounced: mid-typing renders reuse the previous parse and a
@@ -32,7 +38,7 @@ impl Render for MarkionApp {
                 blocks
             };
         let visual_blocks: std::sync::Arc<Vec<VisualBlock>> =
-            if matches!(self.view_mode, ViewMode::VisualEdit) {
+            if !active_is_image && matches!(self.view_mode, ViewMode::VisualEdit) {
                 let blocks = self.active_tab().document.visual_blocks_shared();
                 self.active_tab_mut().sync_visual_list(&blocks);
                 if let Some(index) = self
@@ -45,43 +51,55 @@ impl Render for MarkionApp {
             } else {
                 std::sync::Arc::new(Vec::new())
             };
-        let document_dir = self
-            .active_tab()
-            .document
-            .path()
+        let document_dir = (!active_is_image)
+            .then(|| self.active_tab().document.path())
+            .flatten()
             .and_then(Path::parent)
             .map(PathBuf::from);
         let active_tab = self.active_tab;
-        self.refresh_tab_image_claims(
-            active_tab,
-            &preview_blocks,
-            &visual_blocks,
-            document_dir.as_deref(),
-            cx,
-        );
-        self.ensure_preview_images(&preview_blocks, &visual_blocks, document_dir.as_deref(), cx);
-        // Diagram cache warming needs both the preview blocks (Split/Read) and
-        // the visual blocks (Visual Edit) because Visual Edit no longer parses
-        // preview blocks — its diagram fences live only in `visual_blocks`.
-        self.ensure_diagram_renders(&preview_blocks, &visual_blocks, cx);
-        self.ensure_math_renders(
-            &preview_blocks,
-            &visual_blocks,
-            1.0,
-            window.scale_factor(),
-            palette.text,
-            cx,
-        );
-        // Proportional scroll coupling for Split Preview + Sync scroll. Runs
-        // each frame *after* the preview list is in sync with the current
-        // blocks (so max_offset reflects the real content height) and *before*
-        // the scrollbar views read offsets to draw thumbs. Detects which pane
-        // drove the latest change via per-tab cached fractions and writes only
-        // the non-driving pane, converging in one frame without a feedback loop.
-        self.reconcile_sync_scroll();
-        let title = title_from_path(self.active_tab().document.path());
-        let is_dirty = self.active_tab().document.is_dirty();
-        let dirty_marker = if is_dirty { " *" } else { "" };
+        if let Some(key) = self.active_tab().image().map(|image| image.key.clone()) {
+            self.ensure_image_tab(active_tab, key, cx);
+        } else {
+            self.refresh_tab_image_claims(
+                active_tab,
+                &preview_blocks,
+                &visual_blocks,
+                document_dir.as_deref(),
+                cx,
+            );
+            self.ensure_preview_images(
+                &preview_blocks,
+                &visual_blocks,
+                document_dir.as_deref(),
+                cx,
+            );
+            // Diagram cache warming needs both the preview blocks (Split/Read)
+            // and the visual blocks (Visual Edit).
+            self.ensure_diagram_renders(&preview_blocks, &visual_blocks, cx);
+            self.ensure_math_renders(
+                &preview_blocks,
+                &visual_blocks,
+                1.0,
+                window.scale_factor(),
+                palette.text,
+                cx,
+            );
+        }
+        // Source-mapped Split Preview coupling runs after the list reflects the
+        // current debounced blocks and before scrollbar thumbs read offsets.
+        if !active_is_image {
+            let entity = cx.entity();
+            self.active_tab()
+                .preview_list
+                .set_scroll_handler(move |_, _, cx| {
+                    entity.update(cx, |app, _| {
+                        app.mark_sync_scroll_driver(PaneScrollTarget::Preview);
+                    });
+                });
+            self.reconcile_sync_scroll(cx);
+        }
+        let title = self.active_tab().title();
+        let is_dirty = self.active_tab().is_dirty();
         let save_state = t(
             self.language,
             if is_dirty {
@@ -90,6 +108,18 @@ impl Render for MarkionApp {
                 Msg::TitleSaved
             },
         );
+        let status_feedback = if active_is_image {
+            format!("Markion - {title} | {}", self.status)
+        } else {
+            status_bar_feedback(title.as_str(), is_dirty, save_state, self.status.as_ref())
+        };
+        let LocalizedStatusBarContext {
+            characters: status_characters,
+            words: status_words,
+            caret: status_caret,
+            branch: status_branch,
+        } = self.current_status_bar_context().localized(self.language);
+        let has_status_branch = status_branch.is_some();
         let (editor_width, preview_width) =
             view_mode_pane_widths(self.view_mode, self.editor_split_ratio);
         let constrain_read_preview =
@@ -100,11 +130,25 @@ impl Render for MarkionApp {
         let preview_items_doc_dir = document_dir.clone();
         let preview_code_line_numbers = self.code_line_numbers;
         let preview_display_scale = window.scale_factor();
-        let preview_list_state = self.active_tab().preview_list.clone();
+        let preview_list_state = self
+            .active_tab()
+            .document_tab()
+            .map(|tab| tab.preview_list.clone())
+            .unwrap_or_else(|| ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)));
         let visual_items = visual_blocks.clone();
         let visual_items_doc_dir = document_dir.clone();
-        let visual_list_state = self.active_tab().visual_list.clone();
-        let show_selection_toolbar = matches!(self.view_mode, ViewMode::VisualEdit)
+        let visual_list_state = self
+            .active_tab()
+            .document_tab()
+            .map(|tab| tab.visual_list.clone())
+            .unwrap_or_else(|| ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)));
+        let editor_scroll = self
+            .active_tab()
+            .document_tab()
+            .map(|tab| tab.editor_scroll.clone())
+            .unwrap_or_else(ScrollHandle::new);
+        let show_selection_toolbar = !active_is_image
+            && matches!(self.view_mode, ViewMode::VisualEdit)
             && self.block_menu.is_none()
             && visual_selection_supports_contextual_format(self.active_tab(), &visual_blocks);
         let block_menu_max_height = px((f32::from(window.viewport_size().height) - 32.0)
@@ -122,22 +166,7 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::open_document))
             .on_action(cx.listener(Self::open_folder))
             .on_action(cx.listener(Self::clear_recent_files))
-            .on_action(cx.listener(Self::save_document))
-            .on_action(cx.listener(Self::save_document_as))
-            .on_action(cx.listener(Self::export_html))
-            .on_action(cx.listener(Self::export_plain_html))
-            .on_action(cx.listener(Self::export_pdf))
-            .on_action(cx.listener(Self::export_latex))
-            .on_action(cx.listener(Self::export_docx))
-            .on_action(cx.listener(Self::export_png))
-            .on_action(cx.listener(Self::export_jpeg))
-            .on_action(cx.listener(Self::toggle_view_mode))
-            .on_action(cx.listener(Self::set_edit_mode))
-            .on_action(cx.listener(Self::set_visual_edit_mode))
-            .on_action(cx.listener(Self::set_split_preview_mode))
-            .on_action(cx.listener(Self::set_read_mode))
             .on_action(cx.listener(Self::toggle_sidebar))
-            .on_action(cx.listener(Self::toggle_outline))
             .on_action(cx.listener(Self::toggle_file_tree))
             .on_action(cx.listener(Self::focus_file_tree_search))
             .on_action(cx.listener(Self::clear_file_tree_search))
@@ -148,17 +177,6 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::delete_tree_entry))
             .on_action(cx.listener(Self::confirm_pending_name))
             .on_action(cx.listener(Self::cycle_theme))
-            .on_action(cx.listener(Self::toggle_focus_mode))
-            .on_action(cx.listener(Self::toggle_typewriter_mode))
-            .on_action(cx.listener(Self::toggle_code_line_numbers))
-            .on_action(cx.listener(Self::show_find))
-            .on_action(cx.listener(Self::show_replace))
-            .on_action(cx.listener(Self::find_next))
-            .on_action(cx.listener(Self::find_previous))
-            .on_action(cx.listener(Self::replace_current_match))
-            .on_action(cx.listener(Self::replace_all_matches))
-            .on_action(cx.listener(Self::toggle_find_case_sensitive))
-            .on_action(cx.listener(Self::toggle_find_regex))
             .on_action(cx.listener(Self::show_shortcuts))
             .on_action(cx.listener(Self::show_preferences))
             .on_action(cx.listener(Self::reset_preferences))
@@ -171,51 +189,79 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::next_tab))
             .on_action(cx.listener(Self::prev_tab))
             .on_action(cx.listener(Self::report_memory))
-            .on_action(cx.listener(Self::backspace))
-            .on_action(cx.listener(Self::delete))
-            .on_action(cx.listener(Self::left))
-            .on_action(cx.listener(Self::right))
-            .on_action(cx.listener(Self::up))
-            .on_action(cx.listener(Self::down))
-            .on_action(cx.listener(Self::select_left))
-            .on_action(cx.listener(Self::select_right))
-            .on_action(cx.listener(Self::select_up))
-            .on_action(cx.listener(Self::select_down))
-            .on_action(cx.listener(Self::select_all))
-            .on_action(cx.listener(Self::home))
-            .on_action(cx.listener(Self::end))
-            .on_action(cx.listener(Self::insert_newline))
-            .on_action(cx.listener(Self::indent))
-            .on_action(cx.listener(Self::outdent))
-            .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(Self::cut))
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::undo))
-            .on_action(cx.listener(Self::redo))
-            .on_action(cx.listener(Self::bold))
-            .on_action(cx.listener(Self::italic))
-            .on_action(cx.listener(Self::inline_code))
-            .on_action(cx.listener(Self::insert_link))
-            .on_action(cx.listener(Self::insert_image))
-            .on_action(cx.listener(Self::heading1))
-            .on_action(cx.listener(Self::heading2))
-            .on_action(cx.listener(Self::heading3))
-            .on_action(cx.listener(Self::heading4))
-            .on_action(cx.listener(Self::heading5))
-            .on_action(cx.listener(Self::heading6))
-            .on_action(cx.listener(Self::unordered_list))
-            .on_action(cx.listener(Self::ordered_list))
-            .on_action(cx.listener(Self::task_list))
-            .on_action(cx.listener(Self::block_quote))
-            .on_action(cx.listener(Self::code_fence))
-            .on_action(cx.listener(Self::format_table))
-            .on_action(cx.listener(Self::table_add_row))
-            .on_action(cx.listener(Self::table_delete_row))
-            .on_action(cx.listener(Self::table_move_row_up))
-            .on_action(cx.listener(Self::table_move_row_down))
-            .on_action(cx.listener(Self::table_add_column))
-            .on_action(cx.listener(Self::table_delete_column))
-            .on_action(cx.listener(Self::show_visual_block_context_menu))
+            .when(!active_is_image, |root| {
+                root.on_action(cx.listener(Self::save_document))
+                    .on_action(cx.listener(Self::save_document_as))
+                    .on_action(cx.listener(Self::export_html))
+                    .on_action(cx.listener(Self::export_plain_html))
+                    .on_action(cx.listener(Self::export_pdf))
+                    .on_action(cx.listener(Self::export_latex))
+                    .on_action(cx.listener(Self::export_docx))
+                    .on_action(cx.listener(Self::export_png))
+                    .on_action(cx.listener(Self::export_jpeg))
+                    .on_action(cx.listener(Self::toggle_view_mode))
+                    .on_action(cx.listener(Self::set_edit_mode))
+                    .on_action(cx.listener(Self::set_visual_edit_mode))
+                    .on_action(cx.listener(Self::set_split_preview_mode))
+                    .on_action(cx.listener(Self::set_read_mode))
+                    .on_action(cx.listener(Self::toggle_outline))
+                    .on_action(cx.listener(Self::toggle_focus_mode))
+                    .on_action(cx.listener(Self::toggle_typewriter_mode))
+                    .on_action(cx.listener(Self::toggle_code_line_numbers))
+                    .on_action(cx.listener(Self::show_find))
+                    .on_action(cx.listener(Self::show_replace))
+                    .on_action(cx.listener(Self::find_next))
+                    .on_action(cx.listener(Self::find_previous))
+                    .on_action(cx.listener(Self::replace_current_match))
+                    .on_action(cx.listener(Self::replace_all_matches))
+                    .on_action(cx.listener(Self::toggle_find_case_sensitive))
+                    .on_action(cx.listener(Self::toggle_find_regex))
+                    .on_action(cx.listener(Self::backspace))
+                    .on_action(cx.listener(Self::delete))
+                    .on_action(cx.listener(Self::left))
+                    .on_action(cx.listener(Self::right))
+                    .on_action(cx.listener(Self::up))
+                    .on_action(cx.listener(Self::down))
+                    .on_action(cx.listener(Self::select_left))
+                    .on_action(cx.listener(Self::select_right))
+                    .on_action(cx.listener(Self::select_up))
+                    .on_action(cx.listener(Self::select_down))
+                    .on_action(cx.listener(Self::select_all))
+                    .on_action(cx.listener(Self::home))
+                    .on_action(cx.listener(Self::end))
+                    .on_action(cx.listener(Self::insert_newline))
+                    .on_action(cx.listener(Self::indent))
+                    .on_action(cx.listener(Self::outdent))
+                    .on_action(cx.listener(Self::paste))
+                    .on_action(cx.listener(Self::cut))
+                    .on_action(cx.listener(Self::copy))
+                    .on_action(cx.listener(Self::undo))
+                    .on_action(cx.listener(Self::redo))
+                    .on_action(cx.listener(Self::bold))
+                    .on_action(cx.listener(Self::italic))
+                    .on_action(cx.listener(Self::inline_code))
+                    .on_action(cx.listener(Self::insert_link))
+                    .on_action(cx.listener(Self::insert_image))
+                    .on_action(cx.listener(Self::heading1))
+                    .on_action(cx.listener(Self::heading2))
+                    .on_action(cx.listener(Self::heading3))
+                    .on_action(cx.listener(Self::heading4))
+                    .on_action(cx.listener(Self::heading5))
+                    .on_action(cx.listener(Self::heading6))
+                    .on_action(cx.listener(Self::unordered_list))
+                    .on_action(cx.listener(Self::ordered_list))
+                    .on_action(cx.listener(Self::task_list))
+                    .on_action(cx.listener(Self::block_quote))
+                    .on_action(cx.listener(Self::code_fence))
+                    .on_action(cx.listener(Self::format_table))
+                    .on_action(cx.listener(Self::table_add_row))
+                    .on_action(cx.listener(Self::table_delete_row))
+                    .on_action(cx.listener(Self::table_move_row_up))
+                    .on_action(cx.listener(Self::table_move_row_down))
+                    .on_action(cx.listener(Self::table_add_column))
+                    .on_action(cx.listener(Self::table_delete_column))
+                    .on_action(cx.listener(Self::show_visual_block_context_menu))
+            })
             .flex()
             .flex_col()
             .child(
@@ -315,7 +361,11 @@ impl Render for MarkionApp {
                             .flex()
                             .flex_col()
                             .child(self.tab_bar_view(cx))
-                            .child(
+                            .when(active_is_image, |column| {
+                                column.child(image_tab_view(self, palette, window.viewport_size()))
+                            })
+                            .when(!active_is_image, |column| {
+                                column.child(
                                 div()
                                     .id("main-content-row")
                                     .flex()
@@ -382,7 +432,12 @@ impl Render for MarkionApp {
                                             .id("editor-scroll")
                                             .overflow_y_scroll()
                                             .scrollbar_width(px(PANE_SCROLLBAR_RESERVED_WIDTH))
-                                            .track_scroll(&self.active_tab().editor_scroll)
+                                            .track_scroll(&editor_scroll)
+                                            .on_scroll_wheel(cx.listener(|app, _, _, _| {
+                                                app.mark_sync_scroll_driver(
+                                                    PaneScrollTarget::Editor,
+                                                );
+                                            }))
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(Self::on_mouse_down),
@@ -400,7 +455,7 @@ impl Render for MarkionApp {
                                     )
                                     .child(pane_scrollbar_view(
                                         PaneScrollTarget::Editor,
-                                        &self.active_tab().editor_scroll,
+                                        &editor_scroll,
                                         palette,
                                         cx,
                                     ))
@@ -467,7 +522,7 @@ impl Render for MarkionApp {
                                                 // padding on the parent surface so rows are
                                                 // actually inset from the overlay scrollbar.
                                                 list(
-                                                    preview_list_state,
+                                                    preview_list_state.clone(),
                                                     cx.processor(
                                                         move |app, ix: usize, _window, cx| {
                                                             let block = &preview_items[ix];
@@ -511,7 +566,7 @@ impl Render for MarkionApp {
                                             ),
                                     )
                                     .child(preview_list_scrollbar_view(
-                                        &self.active_tab().preview_list,
+                                        &preview_list_state,
                                         palette,
                                         cx,
                                     )),
@@ -521,7 +576,8 @@ impl Render for MarkionApp {
                                 |style| style.hidden(),
                             ),
                                     ),
-                            ),
+                                )
+                            }),
                     ),
             )
             .child(
@@ -534,16 +590,51 @@ impl Render for MarkionApp {
                     .text_color(palette.muted)
                     .flex()
                     .items_center()
-                    .child(format!(
-                        "Markion - {title}{dirty_marker} | {save_state} | {}",
-                        self.status
-                    )),
+                    .gap_3()
+                    .child(
+                        div()
+                            .debug_selector(|| "status-bar-feedback".to_string())
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .child(status_feedback),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "status-bar-context".to_string())
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .whitespace_nowrap()
+                            .when_some(status_branch, |row, branch| {
+                                row.child(
+                                    div()
+                                        .debug_selector(|| "status-bar-branch".to_string())
+                                        .max_w(px(160.))
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .child(branch),
+                                )
+                            })
+                            .when(!active_is_image, |row| {
+                                row.when(has_status_branch, |row| row.child("|"))
+                                    .child(status_characters)
+                                    .child("|")
+                                    .child(status_words)
+                                    .when_some(status_caret, |row, caret| {
+                                        row.child("|").child(caret)
+                                    })
+                            }),
+                    ),
             )
             .child(active_menu_dropdown(
                 self.active_menu,
                 self.language,
                 self.heading_menu_max_level,
                 &self.shortcut_overrides,
+                !active_is_image,
                 palette,
                 cx,
             ))
@@ -593,6 +684,91 @@ impl Render for MarkionApp {
                 root.child(recovery_manager_view(self, cx))
             })
     }
+}
+
+pub(super) fn scale_down_image_size(
+    image_width: u32,
+    image_height: u32,
+    available_width: f32,
+    available_height: f32,
+) -> (f32, f32) {
+    let image_width = image_width.max(1) as f32;
+    let image_height = image_height.max(1) as f32;
+    let scale = 1.0_f32
+        .min(available_width.max(1.0) / image_width)
+        .min(available_height.max(1.0) / image_height);
+    (image_width * scale, image_height * scale)
+}
+
+fn image_tab_view(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    viewport: Size<Pixels>,
+) -> impl IntoElement {
+    let image_tab = app
+        .active_tab()
+        .image()
+        .expect("image tab view is rendered only for image content");
+    let path = image_tab.path.display().to_string();
+    let available_width = f32::from(viewport.width) - 2.0 * PANE_OUTER_PADDING;
+    let available_height = f32::from(viewport.height)
+        - 56.0
+        - document_tab_band_height(app.tabs.len())
+        - 2.0 * PANE_OUTER_PADDING;
+    let content = match app.image_tab_entry(&image_tab.key) {
+        PreviewImageEntry::Pending => div()
+            .debug_selector(|| "image-tab-loading".to_string())
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(palette.muted)
+            .child(app.tr(Msg::StatusImageLoading).to_string()),
+        PreviewImageEntry::Ready(ready) => {
+            let (width, height) = scale_down_image_size(
+                ready.display_width,
+                ready.display_height,
+                available_width,
+                available_height,
+            );
+            div()
+                .debug_selector(|| "image-tab-ready".to_string())
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    img(ImageSource::Render(ready.image))
+                        .w(px(width))
+                        .h(px(height)),
+                )
+        }
+        PreviewImageEntry::Error(error) => div()
+            .debug_selector(|| "image-tab-error".to_string())
+            .size_full()
+            .px_6()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_center()
+            .text_color(palette.muted)
+            .child(app.trf(Msg::StatusImageUnavailable, &[&path, &error])),
+    };
+
+    div()
+        .id("image-tab-scroll")
+        .debug_selector(|| "image-tab-surface".to_string())
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .m(px(PANE_OUTER_PADDING))
+        .border_1()
+        .border_color(palette.border)
+        .bg(palette.surface_bg)
+        .overflow_x_scroll()
+        .overflow_y_scroll()
+        .track_scroll(&image_tab.scroll)
+        .child(content)
 }
 
 fn visual_block_menu_overlay_view(
@@ -1491,7 +1667,7 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
     }
 
     let app_entity = cx.entity();
-    let active_path = app.active_tab().document.path().map(Path::to_path_buf);
+    let active_path = app.active_tab().path().map(Path::to_path_buf);
     let selected_path = app.selected_tree_path.clone();
     // Cap how many rows the panel builds per frame: this view is rebuilt on
     // every keystroke, and an uncapped workspace scan can hold thousands of
@@ -1572,14 +1748,13 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                     let is_selected = selected_path.as_ref() == Some(&entry.path);
                     let is_collapsed = entry.kind == FileTreeEntryKind::Directory
                         && app.collapsed_tree_paths.contains(&entry.path);
-                    // The tree collects Markdown and curated plain-text files
-                    // (see `collect_file_tree_entries`); every File row opens a
-                    // document. Directory rows toggle their descendants.
+                    // The tree collects Markdown, curated text, and supported
+                    // image files; every file row routes to its matching
+                    // document or read-only image surface.
                     let clickable = entry.kind == FileTreeEntryKind::File;
                     // Lucide glyph from path/extension via `ui::icon::icon_for`.
-                    // Markdown maps to `IconKind::Markdown`, plain-text types
-                    // (`.txt`/`.log`/`.csv`/…) fall through to `IconKind::File`;
-                    // `file_tree_icon` renders those two distinctly.
+                    // Markdown maps to its own icon, curated text falls back to
+                    // the file icon, and supported images share the image icon.
                     let icon_kind = crate::ui::icon::icon_for(
                         &entry.path,
                         entry.kind == FileTreeEntryKind::Directory,
@@ -1811,57 +1986,108 @@ pub(super) fn reveal_in_system_file_manager(path: &Path, select_file: bool) -> i
 
 pub(super) fn outline_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let palette = app.palette();
-    let outline = app.active_tab().document.outline();
-    let current = app
-        .active_tab()
-        .document
-        .current_heading_index(app.active_tab().cursor_offset());
+    let tab = app.active_tab();
+    let outline = tab.document.outline();
+    let current = tab.document.current_heading_index(tab.cursor_offset());
+    let projection = tab.outline_projection(&outline, current);
     let app_entity = cx.entity();
 
     div().flex_1().min_h_0().flex().flex_col().child(
         div()
             .id("outline-scroll")
+            .debug_selector(|| "outline-scroll".to_string())
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .scrollbar_width(px(8.))
             .track_scroll(&app.outline_scroll)
-            .children(outline.iter().enumerate().map(|(index, heading)| {
-                let app_entity = app_entity.clone();
+            .children(projection.rows.into_iter().map(|row| {
+                let heading = &outline[row.outline_index];
+                let disclosure_app_entity = app_entity.clone();
+                let label_app_entity = app_entity.clone();
+                let index = row.outline_index;
                 let offset = heading.offset;
-                let active = current == Some(index);
                 let title = heading.title.clone();
-                let background = if active {
+                let background = if row.active {
                     palette.active_bg
                 } else {
                     palette.panel_bg
                 };
+                let text_color = if row.active {
+                    palette.active_text
+                } else {
+                    palette.text
+                };
+                let disclosure = if row.has_children {
+                    let icon = if row.collapsed {
+                        crate::ui::icon::Icon::ChevronRight
+                    } else {
+                        crate::ui::icon::Icon::ChevronDown
+                    };
+                    let key = row.key.clone();
+                    div()
+                        .debug_selector(move || format!("outline-heading-disclosure-{index}"))
+                        .size(px(OUTLINE_DISCLOSURE_SLOT_SIZE))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(palette.surface_bg))
+                        .child(crate::ui::icon::icon(
+                            icon,
+                            OUTLINE_DISCLOSURE_ICON_SIZE,
+                            text_color,
+                        ))
+                        .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                            cx.stop_propagation();
+                            let focus_handle = disclosure_app_entity.read(cx).focus_handle.clone();
+                            window.focus(&focus_handle);
+                            disclosure_app_entity.update(cx, |app, cx| {
+                                app.toggle_outline_section(key.clone(), cx);
+                            });
+                        })
+                } else {
+                    div()
+                        .debug_selector(move || {
+                            format!("outline-heading-disclosure-placeholder-{index}")
+                        })
+                        .size(px(OUTLINE_DISCLOSURE_SLOT_SIZE))
+                        .flex_none()
+                };
 
                 div()
+                    .debug_selector(move || format!("outline-heading-row-{index}"))
                     .mb(px(OUTLINE_ROW_GAP))
                     .ml(px((heading.level.saturating_sub(1) as f32) * 12.))
                     .w_full()
                     .px_2()
                     .py(px(OUTLINE_ROW_VERTICAL_PADDING))
+                    .flex()
+                    .items_center()
                     .rounded_md()
                     .bg(background)
                     .text_size(px(12.))
                     .line_height(px(OUTLINE_ROW_LINE_HEIGHT))
-                    .text_color(if active {
-                        palette.active_text
-                    } else {
-                        palette.text
-                    })
-                    .cursor_pointer()
+                    .text_color(text_color)
                     .hover(move |style| style.bg(palette.active_bg))
-                    .child(title)
-                    .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                        let focus_handle = app_entity.read(cx).focus_handle.clone();
-                        window.focus(&focus_handle);
-                        app_entity.update(cx, |app, cx| {
-                            app.jump_to_offset(offset, cx);
-                        });
-                    })
+                    .child(disclosure)
+                    .child(
+                        div()
+                            .debug_selector(move || format!("outline-heading-label-{index}"))
+                            .flex_1()
+                            .min_w_0()
+                            .cursor_pointer()
+                            .child(title)
+                            .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                                let focus_handle = label_app_entity.read(cx).focus_handle.clone();
+                                window.focus(&focus_handle);
+                                label_app_entity.update(cx, |app, cx| {
+                                    app.navigate_to_outline_heading(offset, cx);
+                                });
+                            }),
+                    )
             })),
     )
 }
@@ -1978,6 +2204,16 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
         .when(app.sidebar_visible, |container| {
             container.child(match active_tab {
                 SidebarTab::Files => file_tree_panel_body(app, cx),
+                SidebarTab::Outline if app.active_tab().is_image() => div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .px_3()
+                    .text_center()
+                    .text_size(px(12.))
+                    .text_color(palette.muted)
+                    .child(app.tr(Msg::StatusImageActionUnavailable).to_string()),
                 SidebarTab::Outline => outline_panel_body(app, cx),
             })
         })
@@ -2041,6 +2277,7 @@ pub(super) fn pane_scrollbar_view(
                                     target,
                                     thumb_grab_offset_y: event.position.y - thumb_bounds.top(),
                                 });
+                                app.mark_sync_scroll_driver(target);
                             });
                         }
                     });
@@ -2099,6 +2336,9 @@ pub(super) fn pane_scrollbar_view(
                             let percentage = (local_y / thumb_travel).clamp(0., 1.);
                             let scroll_y = max_scroll * percentage;
                             scroll_handle.set_offset(point(scroll_handle.offset().x, -scroll_y));
+                            entity.update(cx, |app, _| {
+                                app.mark_sync_scroll_driver(target);
+                            });
                             cx.notify(entity.entity_id());
                         }
                     });
@@ -2174,6 +2414,7 @@ pub(super) fn preview_list_scrollbar_view(
                                     target,
                                     thumb_grab_offset_y: event.position.y - thumb_bounds.top(),
                                 });
+                                app.mark_sync_scroll_driver(target);
                             });
                         }
                     });
@@ -2235,6 +2476,9 @@ pub(super) fn preview_list_scrollbar_view(
                             let percentage = (local_y / thumb_travel).clamp(0., 1.);
                             let scroll_y = max_scroll * percentage;
                             list_state.set_offset_from_scrollbar(point(px(0.), -scroll_y));
+                            entity.update(cx, |app, _| {
+                                app.mark_sync_scroll_driver(target);
+                            });
                             cx.notify(entity.entity_id());
                         }
                     });
@@ -2565,6 +2809,11 @@ pub(super) fn menu_muted_label(label: impl Into<SharedString>, palette: ThemePal
         .child(label.into())
 }
 
+fn image_action_unavailable_menu_row(language: Language, palette: ThemePalette) -> Div {
+    menu_muted_label(t(language, Msg::StatusImageActionUnavailable), palette)
+        .debug_selector(|| "image-document-actions-unavailable".to_string())
+}
+
 pub(super) fn menu_separator(palette: ThemePalette) -> Div {
     div().h(px(1.)).my_1().bg(palette.border)
 }
@@ -2600,6 +2849,7 @@ pub(super) fn active_menu_dropdown(
     language: Language,
     heading_menu_max_level: u8,
     shortcut_overrides: &BTreeMap<String, String>,
+    document_actions_enabled: bool,
     palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
@@ -2702,18 +2952,24 @@ pub(super) fn active_menu_dropdown(
                     app.toggle_open_recent_submenu(cx);
                 }),
             ))
-            .child(file_action_item!(
-                Msg::ItemSave,
-                save_document,
-                SaveDocument,
-                menu_shortcuts::SAVE_DOCUMENT
-            ))
-            .child(file_action_item!(
-                Msg::ItemSaveAs,
-                save_document_as,
-                SaveDocumentAs,
-                menu_shortcuts::SAVE_DOCUMENT_AS
-            ))
+            .when(document_actions_enabled, |panel| {
+                panel
+                    .child(file_action_item!(
+                        Msg::ItemSave,
+                        save_document,
+                        SaveDocument,
+                        menu_shortcuts::SAVE_DOCUMENT
+                    ))
+                    .child(file_action_item!(
+                        Msg::ItemSaveAs,
+                        save_document_as,
+                        SaveDocumentAs,
+                        menu_shortcuts::SAVE_DOCUMENT_AS
+                    ))
+            })
+            .when(!document_actions_enabled, |panel| {
+                panel.child(image_action_unavailable_menu_row(language, palette))
+            })
             .child(menu_separator(palette))
             .child(file_action_item!(Msg::ItemNewTab, new_tab, NewTab))
             .child(file_action_item!(
@@ -2759,6 +3015,9 @@ pub(super) fn active_menu_dropdown(
                 Quit,
                 menu_shortcuts::QUIT
             )),
+        AppMenu::Edit if !document_actions_enabled => {
+            panel.child(image_action_unavailable_menu_row(language, palette))
+        }
         AppMenu::Edit => panel
             .child(action_item!(
                 Msg::ItemUndo,
@@ -2792,6 +3051,28 @@ pub(super) fn active_menu_dropdown(
                 select_all,
                 SelectAll,
                 menu_shortcuts::SELECT_ALL
+            )),
+        AppMenu::View if !document_actions_enabled => panel
+            .child(image_action_unavailable_menu_row(language, palette))
+            .child(menu_separator(palette))
+            .child(action_item!(
+                Msg::ItemToggleSidebar,
+                toggle_sidebar,
+                ToggleSidebar,
+                menu_shortcuts::TOGGLE_SIDEBAR
+            ))
+            .child(action_item!(
+                Msg::ItemFiles,
+                toggle_file_tree,
+                ToggleFileTree,
+                menu_shortcuts::TOGGLE_FILE_TREE
+            ))
+            .child(menu_separator(palette))
+            .child(action_item!(
+                Msg::ItemCycleTheme,
+                cycle_theme,
+                CycleTheme,
+                menu_shortcuts::CYCLE_THEME
             )),
         AppMenu::View => panel
             .child(action_item!(
@@ -2893,6 +3174,9 @@ pub(super) fn active_menu_dropdown(
                 CycleTheme,
                 menu_shortcuts::CYCLE_THEME
             )),
+        AppMenu::Format if !document_actions_enabled => {
+            panel.child(image_action_unavailable_menu_row(language, palette))
+        }
         AppMenu::Format => {
             let with_core_headings = panel
                 .child(action_item!(
@@ -3021,6 +3305,9 @@ pub(super) fn active_menu_dropdown(
                     TableDeleteColumn,
                     menu_shortcuts::TABLE_DELETE_COLUMN
                 ))
+        }
+        AppMenu::Export if !document_actions_enabled => {
+            panel.child(image_action_unavailable_menu_row(language, palette))
         }
         AppMenu::Export => panel
             .child(action_item!(

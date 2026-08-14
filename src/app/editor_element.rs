@@ -729,13 +729,32 @@ impl Element for EditorElement {
         let lines = std::mem::take(&mut prepaint.lines);
         let line_offsets = std::mem::take(&mut prepaint.line_offsets);
         let line_heights = std::mem::take(&mut prepaint.line_heights);
-        self.app.update(cx, |app, _cx| {
+        self.app.update(cx, |app, cx| {
             let tab = app.active_tab_mut();
+            let source_layout_key = SourceLayoutKey {
+                version: tab.document.version(),
+                wrap_width: bounds.size.width,
+                line_height,
+            };
+            let layout_changed = tab.source_layout_key != Some(source_layout_key);
+            let mut line_tops = Vec::with_capacity(line_heights.len() + 1);
+            let mut top = px(0.);
+            line_tops.push(top);
+            for height in &line_heights {
+                top += *height;
+                line_tops.push(top);
+            }
             tab.last_lines = lines;
             tab.line_offsets = line_offsets;
             tab.line_heights = line_heights;
+            tab.line_tops = line_tops;
+            tab.source_layout_key = Some(source_layout_key);
             tab.last_bounds = Some(bounds);
             tab.line_height = line_height;
+            if layout_changed {
+                tab.sync_scroll_state.invalidate_geometry();
+                cx.notify();
+            }
         });
     }
 }

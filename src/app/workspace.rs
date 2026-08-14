@@ -1,8 +1,34 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OpenPathIntent {
+    ReplaceActive,
+    OpenInNewTab,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ExternalDropIntent {
+    OpenDocument,
+    ImportImage,
+    Ignore,
+}
+
+pub(super) fn classify_external_drop_path(path: &Path) -> ExternalDropIntent {
+    if is_markdown_path(path) {
+        ExternalDropIntent::OpenDocument
+    } else if image_extension_supported(path) {
+        ExternalDropIntent::ImportImage
+    } else {
+        ExternalDropIntent::Ignore
+    }
+}
+
 impl MarkionApp {
     pub(super) fn set_view_mode(&mut self, view_mode: ViewMode, cx: &mut Context<Self>) {
         assign_view_mode(&mut self.view_mode, view_mode);
+        if let Some(tab) = self.active_tab_mut().document_tab_mut() {
+            tab.sync_scroll_state.reset();
+        }
         self.slash_commands = None;
         self.dismissed_slash_query = None;
         self.dismiss_visual_block_menu();
@@ -303,28 +329,52 @@ impl MarkionApp {
     }
 
     pub(super) fn open_file_in_new_tab_from_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Err(error) = self.open_supported_path(path, OpenPathIntent::OpenInNewTab, cx) {
+            self.status = self.trf(Msg::StatusOpenFailed, &[&error]);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn open_supported_path(
+        &mut self,
+        path: PathBuf,
+        intent: OpenPathIntent,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         let display_path = path.display().to_string();
         if self.focus_existing_tab_for_path(&path, cx) {
             self.record_recent_path(&path);
             self.active_menu = None;
             self.status = self.trf(Msg::StatusOpened, &[&display_path]);
             cx.notify();
-            return;
+            return Ok(());
         }
 
-        match MarkdownDocument::open(&path) {
-            Ok(document) => {
-                self.open_in_new_tab(document, cx);
-                self.update_workspace_root_from_document(cx);
-                self.record_recent_path(&path);
-                self.active_menu = None;
-                self.status = self.trf(Msg::StatusOpened, &[&display_path]);
+        if image_extension_supported(&path) {
+            match intent {
+                OpenPathIntent::ReplaceActive => {
+                    self.replace_active_tab_with_image(path.clone(), cx)
+                }
+                OpenPathIntent::OpenInNewTab => self.open_image_in_new_tab(path.clone(), cx),
             }
-            Err(err) => {
-                self.status = self.trf(Msg::StatusOpenFailed, &[&err.to_string()]);
+        } else if is_markdown_path(&path) || is_text_path(&path) {
+            let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
+            match intent {
+                OpenPathIntent::ReplaceActive => self.replace_active_tab(document, cx),
+                OpenPathIntent::OpenInNewTab => self.open_in_new_tab(document, cx),
             }
+        } else {
+            return Err(self
+                .trf(Msg::StatusUnsupportedFile, &[&display_path])
+                .to_string());
         }
+
+        self.update_workspace_root_from_document(cx);
+        self.record_recent_path(&path);
+        self.active_menu = None;
+        self.status = self.trf(Msg::StatusOpened, &[&display_path]);
         cx.notify();
+        Ok(())
     }
 
     /// Handle files dragged in from the OS file manager and dropped onto the
@@ -348,10 +398,14 @@ impl MarkionApp {
     ) {
         let mut images = Vec::new();
         for path in dragged.paths() {
-            if path.is_file() && is_markdown_path(path) {
-                self.open_file_in_new_tab_from_path(path.clone(), cx);
-            } else if path.is_file() && image_extension_supported(path) {
-                match fs::read(path) {
+            if !path.is_file() {
+                continue;
+            }
+            match classify_external_drop_path(path) {
+                ExternalDropIntent::OpenDocument => {
+                    self.open_file_in_new_tab_from_path(path.clone(), cx)
+                }
+                ExternalDropIntent::ImportImage => match fs::read(path) {
                     Ok(bytes) => images.push(PendingImageInput {
                         stem: path
                             .file_stem()
@@ -373,7 +427,8 @@ impl MarkionApp {
                         )
                         .into();
                     }
-                }
+                },
+                ExternalDropIntent::Ignore => {}
             }
         }
         if !images.is_empty() {
@@ -695,8 +750,8 @@ impl MarkionApp {
                 };
                 // Refuse renaming the active document while it is dirty; the
                 // user should save first to avoid losing unsaved edits.
-                let needs_save = self.active_tab().document.path() == Some(target.as_path())
-                    && self.active_tab().document.is_dirty();
+                let needs_save = self.active_tab().path() == Some(target.as_path())
+                    && self.active_tab().is_dirty();
                 if needs_save {
                     self.status = t(self.language, Msg::StatusSaveBeforeRename).into();
                     cx.notify();
@@ -709,18 +764,30 @@ impl MarkionApp {
                     .and_then(|tree| tree.rename_unique(&target, name));
                 match result {
                     Ok(new_path) => {
-                        // Reload any tab whose document path was the old path
-                        // in place so the open document follows the rename.
-                        let mut to_reload: Vec<(usize, MarkdownDocument)> = Vec::new();
-                        for (i, tab) in self.tabs.iter_mut().enumerate() {
-                            if tab.document.path() == Some(target.as_path())
-                                && let Ok(document) = MarkdownDocument::open(&new_path)
-                            {
-                                to_reload.push((i, document));
+                        // Keep any open content tab attached to its renamed
+                        // filesystem path. Image claims use path identity, so
+                        // release the old key before replacing it.
+                        let matching: Vec<usize> = self
+                            .tabs
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, tab)| {
+                                (tab.path() == Some(target.as_path())).then_some(i)
+                            })
+                            .collect();
+                        for index in matching {
+                            self.release_tab_image_claims(index, cx);
+                            match &mut self.tabs[index] {
+                                WorkspaceTab::Document(tab) => {
+                                    if let Ok(document) = MarkdownDocument::open(&new_path) {
+                                        tab.document = document;
+                                    }
+                                }
+                                WorkspaceTab::Image(image) => {
+                                    image.path = new_path.clone();
+                                    image.key = PreviewImageKey::from_local_path(&new_path);
+                                }
                             }
-                        }
-                        for (i, document) in to_reload {
-                            self.tabs[i].document = document;
                         }
                         self.selected_tree_path = Some(new_path.clone());
                         self.status =
@@ -819,7 +886,7 @@ impl MarkionApp {
                     return;
                 }
 
-                let was_active = app.active_tab().document.path() == Some(path.as_path());
+                let was_active = app.active_tab().path() == Some(path.as_path());
                 let result = app
                     .file_tree
                     .as_mut()
@@ -828,22 +895,22 @@ impl MarkionApp {
                 match result {
                     Ok(()) => {
                         app.selected_tree_path = None;
-                        // Any tab whose document was the deleted file - or was
-                        // *inside* the deleted (now-removed) folder - is reset
-                        // to a fresh untitled document so the editor never shows
-                        // a stale, now-missing file.
-                        for tab in app.tabs.iter_mut() {
-                            let tab_path = tab.document.path();
-                            let inside_deleted = tab_path
-                                .map(|p| p == path.as_path() || p.starts_with(&path))
-                                .unwrap_or(false);
-                            if inside_deleted {
-                                tab.document = MarkdownDocument::new();
-                                tab.selected_range = 0..0;
-                                tab.selection_reversed = false;
-                                tab.undo_stack.clear();
-                                tab.redo_stack.clear();
-                            }
+                        // Any content tab for the deleted file (or a descendant
+                        // of a deleted folder) becomes a fresh document. This
+                        // also releases an image viewer's cache claim.
+                        let affected: Vec<usize> = app
+                            .tabs
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, tab)| {
+                                tab.path()
+                                    .is_some_and(|p| p == path.as_path() || p.starts_with(&path))
+                                    .then_some(index)
+                            })
+                            .collect();
+                        for index in affected {
+                            app.release_tab_image_claims(index, cx);
+                            app.tabs[index] = app.editor_tab_for_document(MarkdownDocument::new());
                         }
                         let _ = was_active;
                         app.status = app.trf(Msg::StatusDeleted, &[&path.display().to_string()]);

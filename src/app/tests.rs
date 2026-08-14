@@ -517,6 +517,22 @@ fn startup_open_intent_classifies_paths_and_ignores_extra_args() {
 }
 
 #[test]
+fn interactive_image_open_does_not_change_external_drop_import_semantics() {
+    assert_eq!(
+        classify_external_drop_path(Path::new("notes.md")),
+        ExternalDropIntent::OpenDocument
+    );
+    assert_eq!(
+        classify_external_drop_path(Path::new("photo.PNG")),
+        ExternalDropIntent::ImportImage
+    );
+    assert_eq!(
+        classify_external_drop_path(Path::new("notes.txt")),
+        ExternalDropIntent::Ignore
+    );
+}
+
+#[test]
 fn startup_path_resolution_preserves_absolute_paths() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path();
@@ -588,7 +604,7 @@ fn startup_application_flow_reuses_existing_open_behaviour() {
         .expect("startup intent handler");
     assert!(apply_fn.contains("self.replace_active_tab(document, cx);"));
     assert!(apply_fn.contains("self.update_workspace_root_from_document(cx);"));
-    assert!(apply_fn.contains("self.set_workspace_root(path);"));
+    assert!(apply_fn.contains("self.set_workspace_root(path, cx);"));
     assert!(apply_fn.contains("self.sidebar_visible = true;"));
     assert!(apply_fn.contains("self.sidebar_tab = SidebarTab::Files;"));
     assert!(apply_fn.contains("self.schedule_file_tree_scan(Some(display_path), cx);"));
@@ -1250,11 +1266,7 @@ fn toggle_tree_folder_drills_down_one_level_at_a_time() {
     toggle_tree_folder(&root.join("docs"), &tree, &mut collapsed);
     // Second click: expand the now-visible `guides` subfolder — its child
     // `intro.md` finally appears.
-    toggle_tree_folder(
-        &root.join("docs").join("guides"),
-        &tree,
-        &mut collapsed,
-    );
+    toggle_tree_folder(&root.join("docs").join("guides"), &tree, &mut collapsed);
     assert_eq!(collapsed, HashSet::from([root.join("src")]));
     assert_eq!(
         visible_tree_entry_names(&tree, "", &collapsed),
@@ -1270,11 +1282,7 @@ fn toggle_tree_folder_collapsing_hides_the_entire_subtree() {
 
     // Expand docs, then guides — the whole docs branch is open.
     toggle_tree_folder(&root.join("docs"), &tree, &mut collapsed);
-    toggle_tree_folder(
-        &root.join("docs").join("guides"),
-        &tree,
-        &mut collapsed,
-    );
+    toggle_tree_folder(&root.join("docs").join("guides"), &tree, &mut collapsed);
 
     // Collapsing `docs` hides its entire subtree regardless of how deep
     // descendants had been expanded.
@@ -4696,11 +4704,14 @@ fn editor_tab_new_initializes_empty_state() {
     assert!(tab.last_lines.is_empty());
     assert!(tab.line_offsets.is_empty());
     assert!(tab.line_heights.is_empty());
+    assert!(tab.line_tops.is_empty());
+    assert!(tab.source_layout_key.is_none());
     assert!(tab.last_bounds.is_none());
     assert_eq!(tab.line_height, px(24.));
     assert!(!tab.is_selecting);
     assert!(tab.last_recovery_file.is_none());
     assert_eq!(tab.autosave_generation, 0);
+    assert_eq!(tab.sync_scroll_state, SyncScrollState::default());
     assert!(tab.display_text_cache.borrow().is_none());
     assert!(tab.preview_parse_inflight.is_none());
 }
@@ -5027,6 +5038,251 @@ fn opening_existing_file_focuses_without_duplicating_or_resetting_state() {
 }
 
 #[test]
+fn image_tabs_share_path_identity_without_dirty_document_state() {
+    let path = PathBuf::from("images/Preview.PNG");
+    let tab = EditorTab::new_image(path.clone(), PreviewImageKey::from_local_path(&path));
+    assert!(tab.is_image());
+    assert!(!tab.is_dirty());
+    assert_eq!(tab.path(), Some(path.as_path()));
+    assert!(tab.document_tab().is_none());
+
+    let tabs = vec![tab];
+    assert_eq!(find_tab_with_document_path(&tabs, &path), Some(0));
+}
+
+#[test]
+fn discard_confirmation_is_scoped_to_dirty_document_tabs() {
+    let mut document = EditorTab::new(MarkdownDocument::from_text("clean"));
+    document.document.replace_range(0..0, "dirty ");
+    assert!(document.requires_discard_confirmation());
+
+    let path = PathBuf::from("preview.png");
+    let image = EditorTab::new_image(path.clone(), PreviewImageKey::from_local_path(&path));
+    assert!(!image.requires_discard_confirmation());
+}
+
+#[test]
+fn image_scale_down_fit_preserves_aspect_ratio_without_upscaling() {
+    assert_eq!(scale_down_image_size(200, 100, 100.0, 80.0), (100.0, 50.0));
+    assert_eq!(scale_down_image_size(40, 20, 100.0, 80.0), (40.0, 20.0));
+    assert_eq!(scale_down_image_size(40, 200, 100.0, 80.0), (16.0, 80.0));
+}
+
+#[gpui::test]
+fn replace_active_router_switches_between_document_and_image_content(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let image_path = dir.path().join("cover.JpEg");
+    let text_path = dir.path().join("notes.txt");
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 3, image::Rgb([10, 20, 30])))
+        .save_with_format(&image_path, image::ImageFormat::Jpeg)
+        .unwrap();
+    fs::write(&text_path, "plain text").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, cx| {
+        app.open_supported_path(image_path.clone(), OpenPathIntent::ReplaceActive, cx)
+            .unwrap();
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().is_image());
+        assert!(app.active_tab().document_tab().is_none());
+
+        app.open_supported_path(text_path.clone(), OpenPathIntent::ReplaceActive, cx)
+            .unwrap();
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().is_document());
+        assert_eq!(app.active_tab().document.text(), "plain text");
+        assert_eq!(app.active_tab().path(), Some(text_path.as_path()));
+    });
+}
+
+#[gpui::test]
+fn image_tree_and_open_recent_entry_points_share_new_tab_routing(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let tree_image = dir.path().join("tree.png");
+    let recent_image = dir.path().join("recent.png");
+    write_solid_png(&tree_image, 3, 2, [20, 30, 40, 255]);
+    write_solid_png(&recent_image, 2, 3, [40, 30, 20, 255]);
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, cx| {
+        app.open_tree_file_confirmed(tree_image.clone(), cx);
+        assert!(app.active_tab().is_image());
+        assert_eq!(app.active_tab().path(), Some(tree_image.as_path()));
+
+        app.open_recent_path(recent_image.clone(), cx);
+        assert_eq!(app.tabs.len(), 3);
+        assert!(app.active_tab().is_image());
+        assert_eq!(app.active_tab().path(), Some(recent_image.as_path()));
+        assert_eq!(
+            app.session.recent_files.first(),
+            Some(&comparable_document_path(&recent_image))
+        );
+    });
+}
+
+#[gpui::test]
+fn image_open_router_preserves_documents_deduplicates_and_releases_cache_claims(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let image_path = dir.path().join("Preview.PNG");
+    write_solid_png(&image_path, 8, 6, [20, 40, 60, 255]);
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    let (document_version, preview_cache, visual_cache, scroll_before, image_key) =
+        app.update(cx, |app, cx| {
+            app.active_tab_mut().selected_range = 3..3;
+            app.active_tab_mut().push_undo_snapshot();
+            app.active_tab()
+                .editor_scroll
+                .set_offset(point(px(0.), px(-12.)));
+            let document_version = app.active_tab().document.version();
+            let preview_cache = app.active_tab().document.preview_blocks_shared();
+            let visual_cache = app.active_tab().document.visual_blocks_shared();
+            let scroll_before = app.active_tab().editor_scroll.offset();
+
+            app.open_supported_path(image_path.clone(), OpenPathIntent::OpenInNewTab, cx)
+                .unwrap();
+            assert_eq!(app.tabs.len(), 2);
+            assert!(app.active_tab().is_image());
+            assert_eq!(app.active_tab().path(), Some(image_path.as_path()));
+            assert!(!app.active_tab().is_dirty());
+            assert_eq!(app.workspace_root, comparable_document_path(dir.path()));
+            assert_eq!(
+                app.session.recent_files.first(),
+                Some(&comparable_document_path(&image_path))
+            );
+            assert!(app.session.open_files.is_empty());
+            assert!(app.session.active_file.is_none());
+            let key = app.active_tab().image().unwrap().key.clone();
+            (
+                document_version,
+                preview_cache,
+                visual_cache,
+                scroll_before,
+                key,
+            )
+        });
+
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("image-tab-ready").is_some());
+    app.update(cx, |app, cx| {
+        assert!(matches!(
+            app.image_tab_entry(&image_key),
+            PreviewImageEntry::Ready(_)
+        ));
+        assert_eq!(app.preview_image_cache.claim_count(&image_key), 1);
+
+        app.open_supported_path(image_path.clone(), OpenPathIntent::OpenInNewTab, cx)
+            .unwrap();
+        assert_eq!(
+            app.tabs.len(),
+            2,
+            "same image path must focus, not duplicate"
+        );
+
+        app.switch_active_tab(0, cx);
+        assert_eq!(app.preview_image_cache.claim_count(&image_key), 0);
+        assert_eq!(app.active_tab().document.version(), document_version);
+        assert_eq!(app.active_tab().selected_range, 3..3);
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert_eq!(app.active_tab().editor_scroll.offset(), scroll_before);
+        assert!(Arc::ptr_eq(
+            &preview_cache,
+            &app.active_tab().document.preview_blocks_shared()
+        ));
+        assert!(Arc::ptr_eq(
+            &visual_cache,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+    });
+}
+
+#[gpui::test]
+fn corrupt_image_and_unsupported_file_are_non_destructive(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let corrupt = dir.path().join("broken.webp");
+    let unsupported = dir.path().join("archive.bin");
+    fs::write(&corrupt, b"not an image").unwrap();
+    fs::write(&unsupported, b"binary").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    app.update(cx, |app, cx| {
+        let original = app.active_tab().document.text().to_string();
+        assert!(
+            app.open_supported_path(unsupported.clone(), OpenPathIntent::OpenInNewTab, cx,)
+                .is_err()
+        );
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab().document.text(), original);
+
+        app.open_supported_path(corrupt.clone(), OpenPathIntent::OpenInNewTab, cx)
+            .unwrap();
+        assert_eq!(app.tabs.len(), 2);
+        assert!(app.active_tab().is_image());
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("image-tab-error").is_some());
+    cx.dispatch_action(CloseTab);
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().is_document());
+    });
+}
+
+#[gpui::test]
+fn image_tabs_disable_document_shortcuts_and_menus_and_close_without_a_prompt(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let image_path = dir.path().join("preview.png");
+    write_solid_png(&image_path, 5, 4, [10, 20, 30, 255]);
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    let (status_before, key) = app.update(cx, |app, cx| {
+        app.open_supported_path(image_path, OpenPathIntent::OpenInNewTab, cx)
+            .unwrap();
+        app.active_menu = Some(AppMenu::Edit);
+        cx.notify();
+        (
+            app.status.clone(),
+            app.active_tab().image().unwrap().key.clone(),
+        )
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("image-document-actions-unavailable")
+            .is_some(),
+        "document-only menu commands should be replaced by an unavailable row"
+    );
+
+    cx.dispatch_action(Undo);
+    cx.dispatch_action(ShowFind);
+    cx.dispatch_action(SaveDocument);
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().is_image());
+        assert_eq!(app.status, status_before);
+        assert!(!app.search_visible);
+        assert!(!app.active_tab().is_dirty());
+    });
+
+    cx.dispatch_action(CloseTab);
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().is_document());
+        assert_eq!(app.preview_image_cache.claim_count(&key), 0);
+    });
+}
+
+#[test]
 fn tab_vec_close_last_leaves_one_tab() {
     // Simulates the close_tab_confirmed invariant: closing the last tab
     // leaves exactly one fresh (untitled) tab rather than an empty window.
@@ -5162,6 +5418,724 @@ fn outline_row_metrics_are_compact() {
     assert_eq!(
         OUTLINE_ROW_LINE_HEIGHT + OUTLINE_ROW_VERTICAL_PADDING * 2. + OUTLINE_ROW_GAP,
         19.
+    );
+}
+
+fn outline_heading(level: u8, title: &str, offset: usize) -> markion::Heading {
+    markion::Heading {
+        level,
+        title: title.to_string(),
+        anchor: title.to_ascii_lowercase(),
+        offset,
+    }
+}
+
+#[test]
+fn outline_projection_defaults_expanded_and_handles_skipped_levels() {
+    let headings = vec![
+        outline_heading(1, "Root", 0),
+        outline_heading(3, "Skipped child", 10),
+        outline_heading(4, "Grandchild", 30),
+        outline_heading(1, "Sibling", 50),
+    ];
+
+    let projection = project_outline_rows(&headings, &HashSet::new(), Some(2));
+    assert_eq!(
+        projection
+            .rows
+            .iter()
+            .map(|row| row.outline_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+    assert!(projection.rows[0].has_children);
+    assert!(projection.rows[1].has_children);
+    assert!(!projection.rows[2].has_children);
+    assert!(!projection.rows[3].has_children);
+    assert!(projection.rows.iter().all(|row| !row.collapsed));
+    assert_eq!(
+        projection
+            .rows
+            .iter()
+            .find(|row| row.active)
+            .map(|row| row.outline_index),
+        Some(2)
+    );
+}
+
+#[test]
+fn outline_projection_preserves_nested_folds_and_visible_active_ancestor() {
+    let headings = vec![
+        outline_heading(1, "Root", 0),
+        outline_heading(2, "Branch", 10),
+        outline_heading(3, "Leaf", 20),
+        outline_heading(1, "Sibling", 30),
+    ];
+    let keys = outline_node_keys(&headings);
+    let mut collapsed = HashSet::from([keys[1].clone()]);
+
+    let nested = project_outline_rows(&headings, &collapsed, Some(2));
+    assert_eq!(
+        nested
+            .rows
+            .iter()
+            .map(|row| row.outline_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 3]
+    );
+    assert!(nested.rows[1].collapsed);
+    assert!(nested.rows[1].active);
+
+    collapsed.insert(keys[0].clone());
+    let outer = project_outline_rows(&headings, &collapsed, Some(2));
+    assert_eq!(
+        outer
+            .rows
+            .iter()
+            .map(|row| row.outline_index)
+            .collect::<Vec<_>>(),
+        vec![0, 3]
+    );
+    assert!(outer.rows[0].active);
+
+    collapsed.remove(&keys[0]);
+    let restored = project_outline_rows(&headings, &collapsed, Some(2));
+    assert_eq!(
+        restored
+            .rows
+            .iter()
+            .map(|row| row.outline_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 3]
+    );
+    assert!(restored.rows[1].collapsed);
+}
+
+#[test]
+fn outline_structural_keys_distinguish_duplicate_titles() {
+    let headings = vec![
+        outline_heading(1, "Same", 0),
+        outline_heading(2, "Same", 10),
+        outline_heading(2, "Same", 20),
+        outline_heading(1, "Same", 30),
+    ];
+    let keys = outline_node_keys(&headings);
+    let unique = keys.iter().collect::<HashSet<_>>();
+    assert_eq!(unique.len(), headings.len());
+}
+
+#[test]
+fn outline_fold_reconciliation_survives_offsets_and_drops_obsolete_keys() {
+    let original = vec![
+        outline_heading(1, "Root", 0),
+        outline_heading(2, "Child", 10),
+    ];
+    let original_keys = outline_node_keys(&original);
+    let mut collapsed = HashSet::from([original_keys[0].clone()]);
+
+    let shifted = vec![
+        outline_heading(1, "Root", 200),
+        outline_heading(2, "Child", 220),
+    ];
+    let shifted_keys = outline_node_keys(&shifted);
+    reconcile_outline_collapsed_keys(&mut collapsed, &original_keys, &shifted_keys);
+    assert_eq!(collapsed, HashSet::from([shifted_keys[0].clone()]));
+
+    let renamed = vec![
+        outline_heading(1, "Renamed", 200),
+        outline_heading(2, "Child", 220),
+    ];
+    let renamed_keys = outline_node_keys(&renamed);
+    reconcile_outline_collapsed_keys(&mut collapsed, &shifted_keys, &renamed_keys);
+    assert!(collapsed.is_empty());
+}
+
+#[test]
+fn outline_fold_reconciliation_is_conservative_for_changed_duplicates() {
+    let duplicates = vec![
+        outline_heading(1, "Same", 0),
+        outline_heading(2, "Child A", 10),
+        outline_heading(1, "Same", 30),
+        outline_heading(2, "Child B", 40),
+    ];
+    let duplicate_keys = outline_node_keys(&duplicates);
+    let mut collapsed = HashSet::from([duplicate_keys[0].clone()]);
+
+    let body_shifted = vec![
+        outline_heading(1, "Same", 100),
+        outline_heading(2, "Child A", 110),
+        outline_heading(1, "Same", 130),
+        outline_heading(2, "Child B", 140),
+    ];
+    let shifted_keys = outline_node_keys(&body_shifted);
+    reconcile_outline_collapsed_keys(&mut collapsed, &duplicate_keys, &shifted_keys);
+    assert_eq!(collapsed, HashSet::from([shifted_keys[0].clone()]));
+
+    let inserted_duplicate = vec![
+        outline_heading(1, "Same", 0),
+        outline_heading(2, "New child", 10),
+        outline_heading(1, "Same", 30),
+        outline_heading(2, "Child A", 40),
+        outline_heading(1, "Same", 60),
+        outline_heading(2, "Child B", 70),
+    ];
+    let inserted_keys = outline_node_keys(&inserted_duplicate);
+    reconcile_outline_collapsed_keys(&mut collapsed, &shifted_keys, &inserted_keys);
+    assert!(
+        collapsed.is_empty(),
+        "changed duplicate groups must unfold instead of transferring a fold"
+    );
+}
+
+#[test]
+fn outline_folding_state_is_isolated_per_document_tab() {
+    let mut tabs = vec![
+        EditorTab::new(MarkdownDocument::from_text("# First\n\n## Child\n")),
+        EditorTab::new(MarkdownDocument::from_text("# Second\n\n## Child\n")),
+    ];
+    let outlines = tabs
+        .iter()
+        .map(|tab| tab.document.outline())
+        .collect::<Vec<_>>();
+    let first_projection = tabs[0]
+        .document_tab()
+        .unwrap()
+        .outline_projection(&outlines[0], None);
+    let second_projection = tabs[1]
+        .document_tab()
+        .unwrap()
+        .outline_projection(&outlines[1], None);
+    let first_root = first_projection.rows[0].key.clone();
+    assert_eq!(
+        tabs[0]
+            .document_tab()
+            .unwrap()
+            .toggle_outline_node(first_root),
+        Some(true)
+    );
+
+    assert_eq!(
+        tabs[0]
+            .document_tab()
+            .unwrap()
+            .outline_projection(&outlines[0], None)
+            .rows
+            .len(),
+        1
+    );
+    assert_eq!(
+        tabs[1]
+            .document_tab()
+            .unwrap()
+            .outline_projection(&outlines[1], None)
+            .rows
+            .len(),
+        second_projection.rows.len()
+    );
+
+    // Returning to the first entry in the tab vector restores its own state.
+    assert_eq!(
+        tabs[0]
+            .document_tab()
+            .unwrap()
+            .outline_folding
+            .borrow()
+            .collapsed_keys()
+            .len(),
+        1
+    );
+    assert!(tabs.iter_mut().all(|tab| tab.document_tab_mut().is_some()));
+}
+
+#[test]
+fn outline_folding_does_not_mutate_document_or_derived_caches() {
+    let mut tab = EditorTab::new(MarkdownDocument::from_text("# Root\n\n## Child\n\nBody\n"));
+    tab.selected_range = 3..3;
+    tab.push_undo_snapshot();
+    let outline = tab.document.outline();
+    let preview = tab.document.preview_blocks_shared();
+    let visual = tab.document.visual_blocks_shared();
+    let text_handle = tab.shared_document_text();
+    let before_text = tab.document.text().to_string();
+    let before_version = tab.document.version();
+    let before_dirty = tab.document.is_dirty();
+    let before_selection = tab.selected_range.clone();
+    let before_undo = tab.undo_stack.len();
+    let before_redo = tab.redo_stack.len();
+
+    let projection = tab.outline_projection(&outline, Some(0));
+    assert_eq!(
+        tab.toggle_outline_node(projection.rows[0].key.clone()),
+        Some(true)
+    );
+    assert_eq!(tab.outline_projection(&outline, Some(0)).rows.len(), 1);
+
+    assert_eq!(tab.document.text(), before_text);
+    assert_eq!(tab.document.version(), before_version);
+    assert_eq!(tab.document.is_dirty(), before_dirty);
+    assert_eq!(tab.selected_range, before_selection);
+    assert_eq!(tab.undo_stack.len(), before_undo);
+    assert_eq!(tab.redo_stack.len(), before_redo);
+    assert_eq!(tab.document.outline(), outline);
+    assert!(Arc::ptr_eq(&tab.document.preview_blocks_shared(), &preview));
+    assert!(Arc::ptr_eq(&tab.document.visual_blocks_shared(), &visual));
+    assert_eq!(tab.shared_document_text().as_ptr(), text_handle.as_ptr());
+}
+
+#[gpui::test]
+fn read_mode_outline_click_scrolls_preview_and_preserves_document_state(cx: &mut TestAppContext) {
+    const TARGET_HEADING: usize = 3;
+    let source = (0..16)
+        .map(|index| {
+            format!(
+                "## Section {index}\n\n{}\n",
+                "Rendered prose before the next heading wraps across the preview. ".repeat(8)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Read;
+        app.sidebar_visible = true;
+        app.sidebar_tab = SidebarTab::Outline;
+        app.active_tab_mut().push_undo_snapshot();
+        app
+    });
+    cx.simulate_resize(size(px(1000.), px(720.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (heading_offset, preview_item_ix, version, dirty, undo_len, redo_len, preview_cache) = app
+        .update(cx, |app, _| {
+            let tab = app.active_tab();
+            let heading_offset = tab.document.outline()[TARGET_HEADING].offset;
+            let preview_item_ix =
+                preview_heading_index_for_source_offset(&tab.preview_list_blocks, heading_offset)
+                    .expect("outline heading should have an exact rendered preview row");
+            (
+                heading_offset,
+                preview_item_ix,
+                tab.document.version(),
+                tab.document.is_dirty(),
+                tab.undo_stack.len(),
+                tab.redo_stack.len(),
+                tab.document.preview_blocks_shared(),
+            )
+        });
+
+    let label = cx
+        .debug_bounds("outline-heading-label-3")
+        .expect("target outline label should be rendered");
+    cx.simulate_click(label.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.selected_range, heading_offset..heading_offset);
+        assert_eq!(
+            tab.document.current_heading_index(tab.cursor_offset()),
+            Some(TARGET_HEADING)
+        );
+        let preview_top = tab.preview_list.logical_scroll_top();
+        assert_eq!(preview_top.item_ix, preview_item_ix);
+        assert_eq!(preview_top.offset_in_item, px(0.));
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.document.is_dirty(), dirty);
+        assert_eq!(tab.undo_stack.len(), undo_len);
+        assert_eq!(tab.redo_stack.len(), redo_len);
+        assert!(Arc::ptr_eq(
+            &tab.document.preview_blocks_shared(),
+            &preview_cache
+        ));
+        assert!(tab.outline_folding.borrow().collapsed_keys().is_empty());
+        assert_eq!(
+            app.status,
+            t(app.language, Msg::StatusJumpedToHeading).to_string()
+        );
+    });
+}
+
+#[gpui::test]
+fn outline_navigation_outside_read_mode_keeps_existing_preview_position(cx: &mut TestAppContext) {
+    let source = "# One\n\nBody\n\n## Two\n\nMore\n\n### Three\n";
+    let heading_offset = source.find("## Two").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut tab = EditorTab::new(MarkdownDocument::from_text(source));
+        let preview = tab.document.preview_blocks_shared();
+        tab.sync_preview_list(&preview);
+        tab.push_undo_snapshot();
+        app.tabs = vec![tab];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let version = app.active_tab().document.version();
+        let dirty = app.active_tab().document.is_dirty();
+        let undo_len = app.active_tab().undo_stack.len();
+        let redo_len = app.active_tab().redo_stack.len();
+        for mode in [ViewMode::Edit, ViewMode::VisualEdit, ViewMode::Split] {
+            app.view_mode = mode;
+            app.active_tab_mut().visual_cursor_reveal_pending = false;
+            app.active_tab().preview_list.scroll_to(gpui::ListOffset {
+                item_ix: 1,
+                offset_in_item: px(4.),
+            });
+            let preview_top = app.active_tab().preview_list.logical_scroll_top();
+
+            app.navigate_to_outline_heading(heading_offset, cx);
+
+            let tab = app.active_tab();
+            assert_eq!(
+                tab.selected_range,
+                heading_offset..heading_offset,
+                "{mode:?}"
+            );
+            assert!(tab.visual_cursor_reveal_pending, "{mode:?}");
+            let current_preview_top = tab.preview_list.logical_scroll_top();
+            assert_eq!(current_preview_top.item_ix, preview_top.item_ix, "{mode:?}");
+            assert_eq!(
+                current_preview_top.offset_in_item, preview_top.offset_in_item,
+                "{mode:?}"
+            );
+            assert_eq!(tab.document.version(), version, "{mode:?}");
+            assert_eq!(tab.document.is_dirty(), dirty, "{mode:?}");
+            assert_eq!(tab.undo_stack.len(), undo_len, "{mode:?}");
+            assert_eq!(tab.redo_stack.len(), redo_len, "{mode:?}");
+        }
+    });
+}
+
+#[gpui::test]
+fn outline_disclosures_fold_nested_rows_without_navigation(cx: &mut TestAppContext) {
+    let source = "# Root\n\n## Branch\n\n### Leaf\n\n## Other\n\n# Sibling\n";
+    let leaf_offset = source.find("### Leaf").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut tab = EditorTab::new(MarkdownDocument::from_text(source));
+        let preview = tab.document.preview_blocks_shared();
+        tab.sync_preview_list(&preview);
+        tab.selected_range = leaf_offset..leaf_offset;
+        tab.push_undo_snapshot();
+        app.tabs = vec![tab];
+        app.view_mode = ViewMode::Edit;
+        app.sidebar_visible = true;
+        app.sidebar_tab = SidebarTab::Outline;
+        app
+    });
+    cx.simulate_resize(size(px(900.), px(600.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let branch_disclosure = cx
+        .debug_bounds("outline-heading-disclosure-1")
+        .expect("branch disclosure should render");
+    let other_placeholder = cx
+        .debug_bounds("outline-heading-disclosure-placeholder-3")
+        .expect("leaf rows keep a disclosure-sized spacer");
+    let branch_label = cx
+        .debug_bounds("outline-heading-label-1")
+        .expect("branch label should render");
+    let other_label = cx
+        .debug_bounds("outline-heading-label-3")
+        .expect("same-level leaf label should render");
+    assert_eq!(
+        branch_disclosure.size.width,
+        px(OUTLINE_DISCLOSURE_SLOT_SIZE)
+    );
+    assert_eq!(branch_disclosure.size, other_placeholder.size);
+    assert_eq!(branch_label.left(), other_label.left());
+    let branch_row = cx.debug_bounds("outline-heading-row-1").unwrap();
+    assert!(
+        f32::from(branch_row.size.height)
+            <= OUTLINE_ROW_LINE_HEIGHT + OUTLINE_ROW_VERTICAL_PADDING * 2.
+    );
+
+    let (selection, preview_top, version, dirty, undo_len, redo_len) = app.update(cx, |app, _| {
+        app.active_tab().preview_list.scroll_to(gpui::ListOffset {
+            item_ix: 2,
+            offset_in_item: px(3.),
+        });
+        let tab = app.active_tab();
+        (
+            tab.selected_range.clone(),
+            tab.preview_list.logical_scroll_top(),
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.undo_stack.len(),
+            tab.redo_stack.len(),
+        )
+    });
+
+    cx.simulate_click(branch_disclosure.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        app.update(cx, |app, _| app
+            .active_tab()
+            .outline_folding
+            .borrow()
+            .collapsed_keys()
+            .len()),
+        1,
+        "disclosure click should update the active document's folding state"
+    );
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let outline = tab.document.outline();
+        let current = tab.document.current_heading_index(tab.cursor_offset());
+        let projection = tab.outline_projection(&outline, current);
+        assert_eq!(
+            projection
+                .rows
+                .iter()
+                .find(|row| row.active)
+                .map(|row| row.outline_index),
+            Some(1),
+            "the visible collapsed branch represents its hidden active leaf"
+        );
+        assert_eq!(
+            projection
+                .rows
+                .iter()
+                .map(|row| row.outline_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 3, 4]
+        );
+    });
+
+    let root_disclosure = cx
+        .debug_bounds("outline-heading-disclosure-0")
+        .expect("root disclosure should render");
+    cx.simulate_click(root_disclosure.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let outline = tab.document.outline();
+        let projection = tab.outline_projection(&outline, Some(2));
+        assert_eq!(
+            projection
+                .rows
+                .iter()
+                .map(|row| row.outline_index)
+                .collect::<Vec<_>>(),
+            vec![0, 4]
+        );
+    });
+
+    let root_disclosure = cx
+        .debug_bounds("outline-heading-disclosure-0")
+        .expect("collapsed root disclosure should remain visible");
+    cx.simulate_click(root_disclosure.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("outline-heading-row-1").is_some());
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let outline = tab.document.outline();
+        let projection = tab.outline_projection(&outline, Some(2));
+        assert_eq!(
+            projection
+                .rows
+                .iter()
+                .map(|row| row.outline_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 3, 4],
+            "expanding the root must preserve the nested branch fold"
+        );
+    });
+
+    let branch_disclosure = cx
+        .debug_bounds("outline-heading-disclosure-1")
+        .expect("nested branch disclosure should be restored");
+    cx.simulate_click(branch_disclosure.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let outline = tab.document.outline();
+        assert_eq!(tab.outline_projection(&outline, Some(2)).rows.len(), 5);
+        let actual_preview_top = tab.preview_list.logical_scroll_top();
+        assert_eq!(tab.selected_range, selection);
+        assert_eq!(actual_preview_top.item_ix, preview_top.item_ix);
+        assert_eq!(
+            actual_preview_top.offset_in_item,
+            preview_top.offset_in_item
+        );
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.document.is_dirty(), dirty);
+        assert_eq!(tab.undo_stack.len(), undo_len);
+        assert_eq!(tab.redo_stack.len(), redo_len);
+        assert!(tab.outline_folding.borrow().collapsed_keys().is_empty());
+    });
+}
+
+#[gpui::test]
+fn outline_disclosure_state_follows_document_tab_switches(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("# First\n\n## Child\n")),
+            EditorTab::new(MarkdownDocument::from_text("# Second\n\n## Child\n")),
+        ];
+        app.active_tab = 0;
+        app.view_mode = ViewMode::Edit;
+        app.sidebar_visible = true;
+        app.sidebar_tab = SidebarTab::Outline;
+        app
+    });
+    cx.simulate_resize(size(px(900.), px(600.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let disclosure = cx
+        .debug_bounds("outline-heading-disclosure-0")
+        .expect("first document root should be collapsible");
+    cx.simulate_click(disclosure.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        assert_eq!(
+            app.tabs[0]
+                .document_tab()
+                .unwrap()
+                .outline_folding
+                .borrow()
+                .collapsed_keys()
+                .len(),
+            1
+        );
+        app.active_tab = 1;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let second = app.tabs[1].document_tab().unwrap();
+        let outline = second.document.outline();
+        assert_eq!(second.outline_projection(&outline, None).rows.len(), 2);
+        assert!(second.outline_folding.borrow().collapsed_keys().is_empty());
+    });
+
+    app.update(cx, |app, cx| {
+        app.active_tab = 0;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let first = app.tabs[0].document_tab().unwrap();
+        let outline = first.document.outline();
+        assert_eq!(first.outline_projection(&outline, None).rows.len(), 1);
+        assert_eq!(first.outline_folding.borrow().collapsed_keys().len(), 1);
+    });
+}
+
+#[gpui::test]
+fn outline_label_click_navigates_without_folding_in_editable_modes(cx: &mut TestAppContext) {
+    let source = "# One\n\nBody\n\n## Two\n\nMore\n\n### Three\n";
+    let heading_offset = source.find("## Two").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut tab = EditorTab::new(MarkdownDocument::from_text(source));
+        let preview = tab.document.preview_blocks_shared();
+        tab.sync_preview_list(&preview);
+        app.tabs = vec![tab];
+        app.sidebar_visible = true;
+        app.sidebar_tab = SidebarTab::Outline;
+        app
+    });
+    cx.simulate_resize(size(px(900.), px(600.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    for mode in [ViewMode::Edit, ViewMode::VisualEdit, ViewMode::Split] {
+        app.update(cx, |app, cx| {
+            app.view_mode = mode;
+            app.active_tab_mut().selected_range = 0..0;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let label = cx
+            .debug_bounds("outline-heading-label-1")
+            .unwrap_or_else(|| panic!("{mode:?} outline label should render"));
+        cx.simulate_click(label.center(), Modifiers::none());
+        cx.run_until_parked();
+
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert_eq!(
+                tab.selected_range,
+                heading_offset..heading_offset,
+                "{mode:?}"
+            );
+            assert!(
+                tab.outline_folding.borrow().collapsed_keys().is_empty(),
+                "{mode:?} label click must not fold"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn long_partially_folded_outline_remains_scrollable(cx: &mut TestAppContext) {
+    let mut source = String::from("# Folded\n\n");
+    for index in 0..20 {
+        source.push_str(&format!("## Hidden {index}\n\n"));
+    }
+    for index in 0..80 {
+        source.push_str(&format!("# Visible {index}\n\n"));
+    }
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Edit;
+        app.sidebar_visible = true;
+        app.sidebar_tab = SidebarTab::Outline;
+        app
+    });
+    cx.simulate_resize(size(px(700.), px(300.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let disclosure = cx
+        .debug_bounds("outline-heading-disclosure-0")
+        .expect("first branch should be collapsible");
+    cx.simulate_click(disclosure.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let outline = tab.document.outline();
+        assert_eq!(tab.outline_projection(&outline, None).rows.len(), 81);
+    });
+    assert!(cx.debug_bounds("outline-heading-row-100").is_some());
+
+    let scroll_bounds = cx
+        .debug_bounds("outline-scroll")
+        .expect("outline scroll container should render");
+    let before = app.update(cx, |app, _| app.outline_scroll.offset());
+    cx.simulate_event(ScrollWheelEvent {
+        position: scroll_bounds.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-600.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let after = app.update(cx, |app, _| app.outline_scroll.offset());
+    assert!(
+        after.y < before.y,
+        "visible outline rows should scroll vertically"
     );
 }
 
@@ -5362,41 +6336,352 @@ fn non_default_editor_font_reflows_wrapped_text_and_caret_geometry(cx: &mut Test
     });
 }
 
+#[gpui::test]
+fn source_layout_snapshot_maps_wrapped_utf8_content_bidirectionally(cx: &mut TestAppContext) {
+    let source = format!(
+        "{}\nsecond logical line with 中文 and emoji 😀",
+        "wrapped source words ".repeat(60)
+    );
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.simulate_resize(size(px(460.), px(420.)));
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(tab.source_layout_is_current());
+        assert_eq!(
+            tab.source_layout_key.map(|key| key.version),
+            Some(tab.document.version())
+        );
+        assert_eq!(tab.line_tops.len(), tab.last_lines.len() + 1);
+        assert!(tab.line_tops.windows(2).all(|pair| pair[0] <= pair[1]));
+
+        let target = source.find("中文").expect("utf8 fixture");
+        let y = tab
+            .source_content_y_for_offset(target)
+            .expect("source offset maps to content y");
+        let line_start = tab
+            .source_offset_for_content_y(y)
+            .expect("content y maps back to source");
+        assert!(source.is_char_boundary(line_start));
+        assert!(line_start <= target);
+        let round_trip_y = tab
+            .source_content_y_for_offset(line_start)
+            .expect("round-trip source y");
+        assert!((round_trip_y - y).abs() <= f32::from(tab.line_height));
+
+        assert_eq!(
+            tab.source_content_y_for_offset(usize::MAX),
+            tab.source_content_y_for_offset(source.len())
+        );
+        assert_eq!(tab.source_offset_for_content_y(-100.), Some(0));
+        assert_eq!(
+            tab.source_offset_for_content_y(f32::MAX),
+            Some(source.len())
+        );
+    });
+
+    app.update(cx, |app, cx| app.set_editor_font_size(28, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().source_layout_is_current());
+        assert_eq!(
+            app.active_tab()
+                .source_layout_key
+                .map(|key| key.line_height),
+            Some(app.active_tab().line_height)
+        );
+    });
+}
+
+#[gpui::test]
+fn source_mapped_sync_scroll_converges_without_mutating_document_state(cx: &mut TestAppContext) {
+    let source = (0..140)
+        .map(|index| match index % 5 {
+            0 => format!("## Heading {index}"),
+            1 => format!(
+                "paragraph {index} {}",
+                "with enough wrapped prose to create unequal source and preview heights ".repeat(5)
+            ),
+            2 => format!("```rust\nfn item_{index}() {{\n    println!(\"{index}\");\n}}\n```"),
+            3 => format!(
+                "| item | value |\n| --- | ---: |\n| {index} | {} |",
+                index * 10
+            ),
+            _ => format!("![image {index}](missing-sync-{index}.png)"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Split;
+        app.sync_scroll = true;
+        app
+    });
+    cx.simulate_resize(size(px(1200.), px(720.)));
+    cx.run_until_parked();
+
+    let (
+        version,
+        preview_cache,
+        text_handle,
+        highlight_probe,
+        undo_len,
+        dirty,
+        item_count,
+        target_index,
+    ) = app.update(cx, |app, _| {
+        let highlight_probe = app.highlighted_code(Some("rust"), "fn sync_probe() {}");
+        let tab = app.active_tab();
+        let blocks = tab.document.preview_blocks_shared();
+        let target_index = blocks.len() * 3 / 4;
+        (
+            tab.document.version(),
+            blocks,
+            tab.shared_document_text(),
+            highlight_probe,
+            tab.undo_stack.len(),
+            tab.document.is_dirty(),
+            tab.preview_list.item_count(),
+            target_index,
+        )
+    });
+
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        let range = tab.preview_list_blocks[target_index].source_range().clone();
+        let start_y = tab.source_content_y_for_offset(range.start).unwrap();
+        let end_y = tab.source_content_y_for_offset(range.end).unwrap();
+        let target_y = sync_interpolate(start_y, end_y.max(start_y + 1.), 0.45)
+            .min(f32::from(tab.editor_scroll.max_offset().height));
+        tab.editor_scroll.set_offset(point(px(0.), px(-target_y)));
+        tab.sync_scroll_state.mark_driver(PaneScrollTarget::Editor);
+        app.reconcile_sync_scroll(cx);
+        let coarse = app.active_tab().preview_list.logical_scroll_top();
+        assert_eq!(coarse.item_ix, target_index);
+        let pending = app
+            .active_tab()
+            .sync_scroll_state
+            .pending_preview_refinement
+            .expect("a distant virtual row should take the bounded refinement path");
+        assert!(
+            pending.progress > 0.1,
+            "fixture must exercise row refinement"
+        );
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| app.reconcile_sync_scroll(cx));
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        let top = tab.preview_list.logical_scroll_top();
+        assert_eq!(top.item_ix, target_index);
+        assert!(
+            top.offset_in_item > px(0.),
+            "refined top={top:?} bounds={:?}",
+            tab.preview_list.bounds_for_item(target_index)
+        );
+        assert!(tab.sync_scroll_state.pending_preview_refinement.is_none());
+
+        let reverse_index = target_index / 2;
+        tab.sync_scroll_state.expected_follower = None;
+        tab.sync_scroll_state.expected_follower_retried = false;
+        tab.preview_list.scroll_to(gpui::ListOffset {
+            item_ix: reverse_index,
+            offset_in_item: px(0.),
+        });
+        tab.sync_scroll_state.mark_driver(PaneScrollTarget::Preview);
+        app.reconcile_sync_scroll(cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| app.reconcile_sync_scroll(cx));
+    app.update(cx, |app, _| {
+        let highlight_after = app.highlighted_code(Some("rust"), "fn sync_probe() {}");
+        let tab = app.active_tab();
+        let reverse_index = target_index / 2;
+        let range = tab.preview_list_blocks[reverse_index].source_range();
+        let expected_y = tab.source_content_y_for_offset(range.start).unwrap();
+        let actual_y = f32::from(-tab.editor_scroll.offset().y);
+        assert!(
+            (actual_y - expected_y).abs() <= f32::from(tab.line_height) + 1.,
+            "preview->editor actual={actual_y} expected={expected_y} top={:?} bounds={:?}",
+            tab.preview_list.logical_scroll_top(),
+            (
+                tab.preview_list.bounds_for_item(reverse_index),
+                tab.sync_scroll_state,
+                tab.source_layout_is_current(),
+                tab.preview_reflects_version,
+                tab.document.version()
+            )
+        );
+
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.document.is_dirty(), dirty);
+        assert_eq!(tab.undo_stack.len(), undo_len);
+        assert!(Rc::ptr_eq(&highlight_after, &highlight_probe));
+        assert_eq!(tab.preview_list.item_count(), item_count);
+        assert!(Arc::ptr_eq(
+            &tab.document.preview_blocks_shared(),
+            &preview_cache
+        ));
+        assert_eq!(tab.shared_document_text().as_ptr(), text_handle.as_ptr());
+    });
+}
+
 #[test]
 fn any_tab_dirty_detection() {
-    // request_quit / window-close guard use tabs.iter().any(dirty).
+    // request_quit / window-close guard use the common tab dirty helper.
+    let image_path = PathBuf::from("preview.png");
     let tabs: Vec<EditorTab> = vec![
         EditorTab::new(MarkdownDocument::from_text("clean")),
         EditorTab::new(MarkdownDocument::from_text("clean2")),
+        EditorTab::new_image(
+            image_path.clone(),
+            PreviewImageKey::from_local_path(&image_path),
+        ),
     ];
     assert!(
-        !tabs.iter().any(|t| t.document.is_dirty()),
-        "freshly-created documents are not dirty"
+        !tabs.iter().any(EditorTab::is_dirty),
+        "fresh documents and images are not dirty"
     );
 }
 
-/// `sync_fraction` is the proportional coupling primitive: a pane with no
-/// scrollable range (max <= 1px) reports 0 so it never drives the other
-/// pane; otherwise it reports the clamped offset/max ratio.
 #[test]
-fn sync_fraction_clamps_and_zeros_unscrollable_panes() {
-    // No scrollable range -> 0 regardless of offset (the guard for a
-    // pane that fits its viewport).
-    assert_eq!(sync_fraction(0., 0.), 0.);
-    assert_eq!(sync_fraction(123., 1.), 0.);
-    assert_eq!(sync_fraction(50., 0.5), 0.);
+fn source_mapped_preview_anchors_bridge_gaps_and_clamp_boundaries() {
+    let blocks = vec![
+        PreviewBlock::Paragraph {
+            text: RichText::plain("first"),
+            source_range: 5..10,
+        },
+        PreviewBlock::Paragraph {
+            text: RichText::plain("second"),
+            source_range: 20..30,
+        },
+    ];
+    assert_eq!(
+        preview_anchor_for_source_offset(&blocks, 0, 40),
+        Some(PreviewScrollAnchor::Start)
+    );
+    assert_eq!(
+        preview_anchor_for_source_offset(&blocks, 3, 40),
+        Some(PreviewScrollAnchor::Start)
+    );
+    assert_eq!(
+        preview_anchor_for_source_offset(&blocks, 7, 40),
+        Some(PreviewScrollAnchor::Block { item_ix: 0 })
+    );
+    assert_eq!(
+        preview_anchor_for_source_offset(&blocks, 15, 40),
+        Some(PreviewScrollAnchor::Block { item_ix: 1 })
+    );
+    assert_eq!(
+        preview_anchor_for_source_offset(&blocks, 35, 40),
+        Some(PreviewScrollAnchor::End)
+    );
+    assert_eq!(
+        preview_anchor_for_source_offset(&blocks, 40, 40),
+        Some(PreviewScrollAnchor::End)
+    );
+    assert_eq!(preview_anchor_for_source_offset(&[], 0, 0), None);
 
-    // Mid-range offsets map to a proportional fraction.
-    assert!((sync_fraction(50., 100.) - 0.5).abs() < 1e-6);
-    assert!((sync_fraction(25., 100.) - 0.25).abs() < 1e-6);
+    assert_eq!(sync_interval_progress(5., 5., 5.), 0.);
+    assert_eq!(sync_interval_progress(-5., 0., 10.), 0.);
+    assert_eq!(sync_interval_progress(15., 0., 10.), 1.);
+    assert!((sync_interval_progress(3., 0., 12.) - 0.25).abs() < 1e-6);
+    assert!((sync_interpolate(20., 60., 0.25) - 30.).abs() < 1e-6);
+}
 
-    // Offset clamps to the top/bottom of the range.
-    assert!((sync_fraction(0., 100.) - 0.).abs() < 1e-6);
-    assert!((sync_fraction(100., 100.) - 1.).abs() < 1e-6);
-    // Overscroll past the max still reports 1.0 (clamped), not >1.
-    assert!((sync_fraction(150., 100.) - 1.).abs() < 1e-6);
-    // Negative offset (should not normally occur) clamps to 0.
-    assert!((sync_fraction(-10., 100.) - 0.).abs() < 1e-6);
+#[test]
+fn preview_heading_lookup_uses_exact_source_offsets() {
+    let source = "---\ntitle: Outline\n---\n# **Same** `code`\n\nBody\n\n# **Same** `code`\n";
+    let document = MarkdownDocument::from_text(source);
+    let blocks = document.preview_blocks_shared();
+    let outline = document.outline();
+
+    assert_eq!(outline.len(), 2);
+    assert_eq!(outline[0].title, outline[1].title);
+    assert!(outline[0].offset > 0, "front matter must shift the offset");
+    assert_eq!(
+        preview_heading_index_for_source_offset(&blocks, outline[0].offset),
+        Some(0)
+    );
+    assert_eq!(
+        preview_heading_index_for_source_offset(&blocks, outline[1].offset),
+        Some(2)
+    );
+    assert_ne!(
+        preview_heading_index_for_source_offset(&blocks, outline[0].offset),
+        preview_heading_index_for_source_offset(&blocks, outline[1].offset),
+        "duplicate rendered titles must still resolve by source identity"
+    );
+    assert_eq!(
+        preview_heading_index_for_source_offset(&blocks, outline[0].offset + 1),
+        None,
+        "an inexact or missing source offset must not guess a target"
+    );
+}
+
+#[test]
+fn sync_driver_selection_consumes_followers_and_rejects_ambiguity() {
+    let mut state = SyncScrollState::default();
+    let top = SyncPreviewPosition::default();
+    assert_eq!(select_sync_scroll_driver(&mut state, 0., top), None);
+
+    assert_eq!(
+        select_sync_scroll_driver(&mut state, 25., top),
+        Some(PaneScrollTarget::Editor)
+    );
+
+    let followed = SyncPreviewPosition {
+        item_ix: 3,
+        offset_in_item: 8.,
+    };
+    state.expected_follower = Some(ExpectedSyncFollower::Preview(followed));
+    assert_eq!(select_sync_scroll_driver(&mut state, 25., followed), None);
+
+    state.mark_driver(PaneScrollTarget::Preview);
+    let user_preview = SyncPreviewPosition {
+        item_ix: 3,
+        offset_in_item: 30.,
+    };
+    assert_eq!(
+        select_sync_scroll_driver(&mut state, 25., user_preview),
+        Some(PaneScrollTarget::Preview)
+    );
+
+    state.last_editor_offset = Some(25.);
+    state.last_preview_position = Some(user_preview);
+    assert_eq!(
+        select_sync_scroll_driver(
+            &mut state,
+            50.,
+            SyncPreviewPosition {
+                item_ix: 4,
+                offset_in_item: 0.,
+            }
+        ),
+        None,
+        "two unexplained movements must seed rather than pick a driver"
+    );
+
+    state.deferred_driver = Some(PaneScrollTarget::Editor);
+    assert_eq!(
+        select_sync_scroll_driver(
+            &mut state,
+            50.,
+            SyncPreviewPosition {
+                item_ix: 4,
+                offset_in_item: 0.,
+            }
+        ),
+        Some(PaneScrollTarget::Editor)
+    );
 }
 
 /// Coupling is active only in Split Preview (both panes visible) and only
@@ -5412,6 +6697,40 @@ fn sync_scroll_is_active_only_in_split_when_enabled() {
     assert!(!sync_scroll_is_active(ViewMode::Edit, true));
     assert!(!sync_scroll_is_active(ViewMode::VisualEdit, true));
     assert!(!sync_scroll_is_active(ViewMode::Read, true));
+}
+
+#[test]
+fn sync_scroll_mapping_requires_matching_current_versions() {
+    let current = SourceLayoutKey {
+        version: 7,
+        wrap_width: px(400.),
+        line_height: px(24.),
+    };
+    assert!(sync_scroll_mapping_is_current(
+        7,
+        Some(current),
+        Some(7),
+        true
+    ));
+    assert!(!sync_scroll_mapping_is_current(
+        8,
+        Some(current),
+        Some(8),
+        true
+    ));
+    assert!(!sync_scroll_mapping_is_current(
+        7,
+        Some(current),
+        Some(6),
+        true
+    ));
+    assert!(!sync_scroll_mapping_is_current(7, None, Some(7), true));
+    assert!(!sync_scroll_mapping_is_current(
+        7,
+        Some(current),
+        Some(7),
+        false
+    ));
 }
 
 #[test]
@@ -7306,4 +8625,321 @@ fn open_recent_menu_is_wired_in_file_dropdown() {
     assert!(submenu.contains("Msg::ItemOpenRecentEmpty"));
     assert!(submenu.contains("Msg::ItemClearRecentFiles"));
     assert!(submenu.contains("open_recent_path"));
+}
+
+#[test]
+fn status_bar_context_uses_cached_unicode_metrics_and_active_caret() {
+    let source = "α β\n第三 行🙂";
+    let line_start = source.find('第').unwrap();
+    let caret = line_start + "第三".len();
+    let mut tab = EditorTab::new(MarkdownDocument::from_text(source));
+    tab.selected_range = line_start..caret;
+
+    assert!(
+        !tab.document
+            .memory_breakdown()
+            .site("stats")
+            .unwrap()
+            .populated
+    );
+    let version = tab.document.version();
+    let forward = status_bar_context(&tab, ViewMode::Edit, Some("feature/状态栏"));
+    assert_eq!(forward.characters, source.chars().count());
+    assert_eq!(forward.words, source.split_whitespace().count());
+    assert_eq!(forward.caret, Some((2, 3)));
+    assert_eq!(forward.branch.as_deref(), Some("feature/状态栏"));
+    assert!(
+        tab.document
+            .memory_breakdown()
+            .site("stats")
+            .unwrap()
+            .populated
+    );
+
+    let repeated = status_bar_context(&tab, ViewMode::VisualEdit, Some("feature/状态栏"));
+    assert_eq!(repeated, forward);
+    assert_eq!(tab.document.version(), version);
+
+    tab.selection_reversed = true;
+    let reversed = status_bar_context(&tab, ViewMode::Split, None);
+    assert_eq!(reversed.caret, Some((2, 1)));
+    assert_eq!(reversed.branch, None);
+
+    let read = status_bar_context(&tab, ViewMode::Read, None);
+    assert_eq!(read.caret, None);
+    assert_eq!(read.characters, forward.characters);
+    assert_eq!(read.words, forward.words);
+}
+
+#[gpui::test]
+fn status_bar_context_follows_active_tab_switches(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        let mut first = EditorTab::new(MarkdownDocument::from_text("one"));
+        first.selected_range = 3..3;
+        let mut second = EditorTab::new(MarkdownDocument::from_text("two words\n三"));
+        second.selected_range = second.document.text().len()..second.document.text().len();
+        app.tabs = vec![first, second];
+        app.active_tab = 0;
+        app.view_mode = ViewMode::Edit;
+
+        let before = app.current_status_bar_context();
+        assert_eq!(
+            (before.characters, before.words, before.caret),
+            (3, 1, Some((1, 4)))
+        );
+
+        app.switch_active_tab(1, cx);
+        let after = app.current_status_bar_context();
+        assert_eq!(after.characters, "two words\n三".chars().count());
+        assert_eq!(after.words, 3);
+        assert_eq!(after.caret, Some((2, 2)));
+    });
+}
+
+fn write_symbolic_git_head(git_dir: &Path, branch: &str) {
+    fs::create_dir_all(git_dir).unwrap();
+    fs::write(git_dir.join("HEAD"), format!("ref: refs/heads/{branch}\n")).unwrap();
+}
+
+#[test]
+fn git_branch_resolver_handles_nested_repositories_and_gitdir_indirection() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("workspace");
+    let nested = root.join("notes/deep");
+    fs::create_dir_all(&nested).unwrap();
+    write_symbolic_git_head(&root.join(".git"), "main");
+
+    let ordinary = resolve_git_branch(&nested);
+    assert_eq!(ordinary.branch.as_deref(), Some("main"));
+    assert_eq!(
+        ordinary.head_path.as_deref(),
+        Some(
+            fs::canonicalize(root.join(".git"))
+                .unwrap()
+                .join("HEAD")
+                .as_path()
+        )
+    );
+
+    let nested_repo = root.join("notes");
+    write_symbolic_git_head(&nested_repo.join(".git"), "feature/nested");
+    assert_eq!(
+        resolve_git_branch(&nested).branch.as_deref(),
+        Some("feature/nested")
+    );
+
+    let worktree = temp.path().join("linked");
+    let worktree_git_dir = temp.path().join("metadata/worktrees/linked");
+    fs::create_dir_all(&worktree).unwrap();
+    write_symbolic_git_head(&worktree_git_dir, "worktree/topic");
+    fs::write(
+        worktree.join(".git"),
+        "gitdir: ../metadata/worktrees/linked\n",
+    )
+    .unwrap();
+    let linked = resolve_git_branch(&worktree);
+    assert_eq!(linked.branch.as_deref(), Some("worktree/topic"));
+    assert_eq!(
+        linked.head_path.as_deref(),
+        Some(
+            fs::canonicalize(&worktree_git_dir)
+                .unwrap()
+                .join("HEAD")
+                .as_path()
+        )
+    );
+
+    let absolute_worktree = temp.path().join("absolute-linked");
+    let absolute_git_dir = temp.path().join("absolute-metadata/worktrees/linked");
+    fs::create_dir_all(&absolute_worktree).unwrap();
+    write_symbolic_git_head(&absolute_git_dir, "worktree/absolute");
+    fs::write(
+        absolute_worktree.join(".git"),
+        format!("gitdir: {}\n", absolute_git_dir.display()),
+    )
+    .unwrap();
+    assert_eq!(
+        resolve_git_branch(&absolute_worktree).branch.as_deref(),
+        Some("worktree/absolute")
+    );
+}
+
+#[test]
+fn git_branch_resolver_fails_closed_for_detached_malformed_and_missing_repositories() {
+    let temp = tempfile::tempdir().unwrap();
+    let detached = temp.path().join("detached");
+    fs::create_dir_all(detached.join(".git")).unwrap();
+    fs::write(
+        detached.join(".git/HEAD"),
+        "0123456789abcdef0123456789abcdef01234567\n",
+    )
+    .unwrap();
+    let resolution = resolve_git_branch(&detached);
+    assert_eq!(resolution.branch, None);
+    assert_eq!(
+        resolution.head_path.as_deref(),
+        Some(
+            fs::canonicalize(detached.join(".git"))
+                .unwrap()
+                .join("HEAD")
+                .as_path()
+        )
+    );
+
+    let malformed = temp.path().join("malformed");
+    fs::create_dir_all(&malformed).unwrap();
+    fs::write(malformed.join(".git"), "not a gitdir file\n").unwrap();
+    assert_eq!(
+        resolve_git_branch(&malformed),
+        GitBranchResolution::default()
+    );
+
+    let missing = temp.path().join("missing/nested");
+    fs::create_dir_all(&missing).unwrap();
+    assert_eq!(resolve_git_branch(&missing), GitBranchResolution::default());
+}
+
+#[test]
+fn git_context_prefers_saved_document_and_rejects_stale_results() {
+    let workspace = PathBuf::from("workspace");
+    let document = PathBuf::from("nested/repository/note.md");
+    assert_eq!(
+        git_context_path(Some(&document), &workspace, true),
+        Some(PathBuf::from("nested/repository"))
+    );
+    assert_eq!(
+        git_context_path(None, &workspace, true),
+        Some(workspace.clone())
+    );
+    assert_eq!(git_context_path(None, &workspace, false), None);
+
+    let first = PathBuf::from("first");
+    let second = PathBuf::from("second");
+    let mut state = GitBranchState::default();
+    assert!(state.replace_context(Some(first.clone())));
+    let (old_generation, old_context) = state.begin_lookup().unwrap();
+    assert!(state.replace_context(Some(second.clone())));
+    assert!(!state.accept(
+        old_generation,
+        &old_context,
+        GitBranchResolution {
+            head_path: Some(PathBuf::from("first/.git/HEAD")),
+            branch: Some("stale".to_string()),
+        },
+    ));
+    assert_eq!(state.branch, None);
+
+    let (generation, context) = state.begin_lookup().unwrap();
+    assert!(state.accept(
+        generation,
+        &context,
+        GitBranchResolution {
+            head_path: Some(PathBuf::from("second/.git/HEAD")),
+            branch: Some("current".to_string()),
+        },
+    ));
+    assert_eq!(state.branch.as_deref(), Some("current"));
+}
+
+#[gpui::test]
+fn app_git_branch_cache_refreshes_in_background_and_clears_removed_repository(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    write_symbolic_git_head(&workspace.join(".git"), "main");
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, cx| app.set_workspace_root(workspace.clone(), cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.git_branch_state.branch.as_deref(), Some("main"));
+        assert!(!app.git_branch_state.lookup_in_flight);
+    });
+
+    write_symbolic_git_head(&workspace.join(".git"), "feature/refresh");
+    app.update(cx, |app, cx| app.refresh_git_branch_context(cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.git_branch_state.branch.as_deref(),
+            Some("feature/refresh")
+        );
+    });
+
+    fs::remove_dir_all(workspace.join(".git")).unwrap();
+    app.update(cx, |app, cx| app.refresh_git_branch_context(cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.git_branch_state.branch, None);
+        assert_eq!(app.git_branch_state.head_path, None);
+    });
+}
+
+#[test]
+fn localized_status_context_preserves_values_and_transient_feedback() {
+    let branch = "feature/a-very-long-分支-name-that-remains-verbatim";
+    let context = StatusBarContext {
+        characters: 42,
+        words: 7,
+        caret: Some((3, 9)),
+        branch: Some(branch.to_string()),
+    };
+    let english = context.localized(Language::En);
+    let chinese = context.localized(Language::ZhHans);
+    assert_eq!(english.characters, "Chars 42");
+    assert_eq!(english.words, "Words 7");
+    assert_eq!(english.caret.as_deref(), Some("Ln 3, Col 9"));
+    assert_eq!(
+        english.branch.as_deref(),
+        Some(format!("Branch {branch}").as_str())
+    );
+    assert_eq!(chinese.characters, "字符 42");
+    assert_eq!(chinese.words, "词数 7");
+    assert_eq!(chinese.caret.as_deref(), Some("行 3，列 9"));
+    assert!(chinese.branch.as_deref().unwrap().ends_with(branch));
+
+    for feedback in [
+        "Saved note.md",
+        "Exported note.pdf",
+        "5 matches",
+        "Save failed: denied",
+    ] {
+        let rendered = status_bar_feedback("note.md", true, "Modified", feedback);
+        assert!(rendered.contains("note.md *"));
+        assert!(rendered.ends_with(feedback));
+    }
+
+    let without_git = StatusBarContext {
+        branch: None,
+        ..context
+    }
+    .localized(Language::En);
+    assert_eq!(without_git.branch, None);
+}
+
+#[test]
+fn status_bar_layout_is_single_row_clipped_and_keeps_io_out_of_render() {
+    let root_view = include_str!("root_view.rs");
+    let status_bar = root_view
+        .split_once("status-bar-feedback")
+        .and_then(|(_, rest)| {
+            rest.split_once(".child(active_menu_dropdown")
+                .map(|(body, _)| body)
+        })
+        .expect("status bar render block");
+    assert!(status_bar.contains(".h(px(28.))") || root_view.contains(".h(px(28.))"));
+    assert!(status_bar.contains("status-bar-context"));
+    assert!(status_bar.contains(".flex_1()"));
+    assert!(status_bar.contains(".min_w_0()"));
+    assert!(status_bar.contains(".flex_shrink_0()"));
+    assert!(status_bar.contains(".whitespace_nowrap()"));
+    assert!(status_bar.contains(".max_w(px(160.))"));
+    assert!(status_bar.contains(".overflow_hidden()"));
+    assert!(!root_view.contains("resolve_git_branch"));
+
+    let status_source = include_str!("status_bar.rs");
+    assert!(status_source.contains("background_executor()"));
+    assert!(status_source.contains("Timer::after(GIT_BRANCH_REFRESH_INTERVAL)"));
 }

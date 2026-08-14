@@ -537,7 +537,10 @@ mod tests {
             "rendered TOML should set show_hidden_files = true: {rendered}"
         );
         let parsed = parse_app_preferences(&rendered).unwrap();
-        assert!(parsed.show_hidden_files, "parsed show_hidden_files should be true");
+        assert!(
+            parsed.show_hidden_files,
+            "parsed show_hidden_files should be true"
+        );
     }
 
     #[test]

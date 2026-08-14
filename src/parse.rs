@@ -921,11 +921,9 @@ impl<'a> HtmlTableParser<'a> {
         for ch in decoded.chars() {
             if ch.is_whitespace() {
                 // Collapse runs of whitespace to a single space, mirroring HTML.
-                if self
-                    .current_cell_spans
-                    .last()
-                    .is_some_and(|span| span.math.is_none() && span.style == style && span.text.ends_with(' '))
-                {
+                if self.current_cell_spans.last().is_some_and(|span| {
+                    span.math.is_none() && span.style == style && span.text.ends_with(' ')
+                }) {
                     continue;
                 }
                 append_span(&mut self.current_cell_spans, " ", style, None);
@@ -1917,7 +1915,11 @@ mod html_table_tests {
 
         // Non-table HTML always goes through the flattener.
         let parts = html_preview_parts("<div>still text</div>");
-        assert!(parts.iter().any(|p| matches!(p, HtmlPreviewPart::Text { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, HtmlPreviewPart::Text { .. }))
+        );
     }
 
     #[test]
@@ -1977,8 +1979,16 @@ mod html_table_tests {
     #[test]
     fn non_table_html_still_uses_flattener() {
         let parts = html_preview_parts("<p>hello <strong>world</strong></p>");
-        assert!(parts.iter().any(|p| matches!(p, HtmlPreviewPart::Text { .. })));
-        assert!(!parts.iter().any(|p| matches!(p, HtmlPreviewPart::Table { .. })));
+        assert!(
+            parts
+                .iter()
+                .any(|p| matches!(p, HtmlPreviewPart::Text { .. }))
+        );
+        assert!(
+            !parts
+                .iter()
+                .any(|p| matches!(p, HtmlPreviewPart::Table { .. }))
+        );
     }
 
     #[test]

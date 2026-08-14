@@ -16,6 +16,12 @@ pub struct ImportedImage {
     pub relative_url: String,
 }
 
+/// Local image extensions supported consistently by import, workspace scans,
+/// file icons, and the read-only image viewer.
+pub const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "svg",
+];
+
 pub fn image_extension_supported(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -101,20 +107,16 @@ fn imported(stored_path: PathBuf, asset_name: &str, file_name: &str) -> Imported
 }
 
 fn canonical_extension(extension: &str) -> Option<&'static str> {
-    match extension
-        .trim_start_matches('.')
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" => Some("png"),
-        "jpg" | "jpeg" => Some("jpg"),
-        "gif" => Some("gif"),
-        "webp" => Some("webp"),
-        "bmp" => Some("bmp"),
-        "tif" | "tiff" => Some("tiff"),
-        "svg" => Some("svg"),
-        _ => None,
-    }
+    let extension = extension.trim_start_matches('.').to_ascii_lowercase();
+    let supported = IMAGE_EXTENSIONS
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == extension)?;
+    Some(match supported {
+        "jpeg" => "jpg",
+        "tif" => "tiff",
+        canonical => canonical,
+    })
 }
 
 fn sanitize_stem(value: &str) -> String {
@@ -195,5 +197,20 @@ mod tests {
         let document = dir.path().join("note.md");
         assert!(import_image_bytes(&document, "image", "exe", b"x").is_err());
         assert!(import_image_bytes(&document, "image", "png", b"").is_err());
+    }
+
+    #[test]
+    fn supported_image_extensions_are_shared_and_case_insensitive() {
+        for extension in IMAGE_EXTENSIONS {
+            assert!(image_extension_supported(Path::new(&format!(
+                "asset.{extension}"
+            ))));
+            assert!(image_extension_supported(Path::new(&format!(
+                "asset.{}",
+                extension.to_ascii_uppercase()
+            ))));
+        }
+        assert!(!image_extension_supported(Path::new("asset.exe")));
+        assert!(!image_extension_supported(Path::new("asset")));
     }
 }

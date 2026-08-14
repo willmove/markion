@@ -150,13 +150,15 @@ pub use i18n::{
     sidebar_tab_label, t, tf,
 };
 pub use math::{render_math, validate_latex};
-pub use parse::{HtmlPreviewPart, HtmlTableCell, HtmlTableGrid, html_preview_parts, html_preview_plain_text};
+pub use parse::{
+    HtmlPreviewPart, HtmlTableCell, HtmlTableGrid, html_preview_parts, html_preview_plain_text,
+};
 
 pub use storage::{
-    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, ImportedImage, MARKDOWN_EXTENSIONS,
-    RecoveryInventoryEntry, RecoverySourceState, TEXT_EXTENSIONS, delete_recovery_file,
-    image_extension_supported, import_image_bytes, import_image_file, init_logging,
-    inspect_recovery_files, is_markdown_path, is_text_path, list_recovery_files,
+    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS, ImportedImage,
+    MARKDOWN_EXTENSIONS, RecoveryInventoryEntry, RecoverySourceState, TEXT_EXTENSIONS,
+    delete_recovery_file, image_extension_supported, import_image_bytes, import_image_file,
+    init_logging, inspect_recovery_files, is_markdown_path, is_text_path, list_recovery_files,
     list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
     load_theme_definition, parse_app_preferences, parse_legacy_app_preferences,
     parse_session_state, parse_theme_definition, render_app_preferences, render_session_state,
@@ -796,6 +798,12 @@ impl MarkdownDocument {
         let count = self.text.bytes().filter(|byte| *byte == b'\n').count() + 1;
         self.cached_line_count.set(Some((self.text_version, count)));
         count
+    }
+
+    /// Return the one-based logical line and Unicode-scalar column for a byte
+    /// offset, clamping invalid UTF-8 positions to the preceding boundary.
+    pub fn line_column_at(&self, offset: usize) -> (usize, usize) {
+        crate::text_util::line_column_at(&self.text, offset)
     }
 
     pub fn line_start_at(&self, byte_index: usize) -> usize {
@@ -5385,8 +5393,7 @@ mod tests {
         fs::create_dir(&notes).unwrap();
         fs::write(dir.path().join("root.md"), "# Root").unwrap();
         fs::write(notes.join("child.markdown"), "# Child").unwrap();
-        // Plain-text siblings are now collected (classified as Text), while
-        // non-text files stay hidden.
+        // Plain-text and supported-image siblings are collected.
         fs::write(notes.join("scratch.txt"), "plain").unwrap();
         fs::write(notes.join("trace.log"), "trace").unwrap();
         fs::write(notes.join("logo.png"), "png-bytes").unwrap();
@@ -5395,10 +5402,8 @@ mod tests {
 
         let mut tree = FileTree::scan(dir.path()).unwrap();
         assert!(
-            tree.entries
-                .iter()
-                .any(|entry| entry.name == "root.md"
-                    && entry.file_kind == Some(FileTreeFileKind::Markdown))
+            tree.entries.iter().any(|entry| entry.name == "root.md"
+                && entry.file_kind == Some(FileTreeFileKind::Markdown))
         );
         assert!(
             tree.entries
@@ -5406,12 +5411,18 @@ mod tests {
                 .any(|entry| entry.name == "child.markdown" && entry.depth == 1)
         );
         // Plain-text files appear and are classified as Text.
-        assert!(tree.entries.iter().any(|entry| entry.name == "scratch.txt"
-            && entry.file_kind == Some(FileTreeFileKind::Text)));
-        assert!(tree.entries.iter().any(|entry| entry.name == "trace.log"
-            && entry.file_kind == Some(FileTreeFileKind::Text)));
-        // Non-text files are still not listed.
-        assert!(!tree.entries.iter().any(|entry| entry.name == "logo.png"));
+        assert!(
+            tree.entries.iter().any(|entry| entry.name == "scratch.txt"
+                && entry.file_kind == Some(FileTreeFileKind::Text))
+        );
+        assert!(
+            tree.entries.iter().any(|entry| entry.name == "trace.log"
+                && entry.file_kind == Some(FileTreeFileKind::Text))
+        );
+        assert!(
+            tree.entries.iter().any(|entry| entry.name == "logo.png"
+                && entry.file_kind == Some(FileTreeFileKind::Image))
+        );
         assert!(!tree.entries.iter().any(|entry| entry.name == "skip.md"));
 
         let draft = tree.create_file(&notes, "draft.md").unwrap();

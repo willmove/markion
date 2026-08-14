@@ -3,6 +3,239 @@ use super::*;
 const BOUNDARY_SCAN_WINDOW: usize = 1024;
 pub(super) const SEMANTIC_UNDO_TIMEOUT: Duration = Duration::from_millis(900);
 
+/// Stable, session-local identity for one outline heading. Source offsets are
+/// deliberately excluded: inserting body text before a heading must not unfold
+/// it. The full ancestor path and duplicate ordinal distinguish equal titles.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) struct OutlineNodeKey(Vec<OutlineNodeSegment>);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct OutlineNodeSegment {
+    level: u8,
+    title: String,
+    same_named_sibling_ordinal: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct OutlineProjectedRow {
+    pub(super) outline_index: usize,
+    pub(super) key: OutlineNodeKey,
+    pub(super) has_children: bool,
+    pub(super) collapsed: bool,
+    pub(super) active: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct OutlineProjection {
+    pub(super) rows: Vec<OutlineProjectedRow>,
+}
+
+struct OutlineKeyFrame {
+    level: u8,
+    key: OutlineNodeKey,
+    child_counts: HashMap<(u8, String), usize>,
+}
+
+/// Derive semantic node keys from the cached flat outline in one forward scan.
+/// A heading's parent is the nearest preceding heading at a shallower level;
+/// skipped levels therefore need no synthetic nodes.
+pub(super) fn outline_node_keys(headings: &[markion::Heading]) -> Vec<OutlineNodeKey> {
+    let mut keys = Vec::with_capacity(headings.len());
+    let mut stack: Vec<OutlineKeyFrame> = Vec::new();
+    let mut root_counts: HashMap<(u8, String), usize> = HashMap::new();
+
+    for heading in headings {
+        while stack
+            .last()
+            .is_some_and(|ancestor| ancestor.level >= heading.level)
+        {
+            stack.pop();
+        }
+
+        let count_key = (heading.level, heading.title.clone());
+        let ordinal = if let Some(parent) = stack.last_mut() {
+            let next = parent.child_counts.entry(count_key).or_default();
+            let ordinal = *next;
+            *next += 1;
+            ordinal
+        } else {
+            let next = root_counts.entry(count_key).or_default();
+            let ordinal = *next;
+            *next += 1;
+            ordinal
+        };
+
+        let mut path = stack
+            .last()
+            .map(|parent| parent.key.0.clone())
+            .unwrap_or_default();
+        path.push(OutlineNodeSegment {
+            level: heading.level,
+            title: heading.title.clone(),
+            same_named_sibling_ordinal: ordinal,
+        });
+        let key = OutlineNodeKey(path);
+        keys.push(key.clone());
+        stack.push(OutlineKeyFrame {
+            level: heading.level,
+            key,
+            child_counts: HashMap::new(),
+        });
+    }
+
+    keys
+}
+
+struct OutlineVisibilityFrame {
+    level: u8,
+    /// First collapsed ancestor. Because every later ancestor is hidden under
+    /// it, this is also the nearest collapsed ancestor that is actually visible.
+    hidden_by: Option<usize>,
+}
+
+fn project_outline_rows_with_keys(
+    headings: &[markion::Heading],
+    keys: &[OutlineNodeKey],
+    collapsed: &HashSet<OutlineNodeKey>,
+    current: Option<usize>,
+) -> OutlineProjection {
+    debug_assert_eq!(headings.len(), keys.len());
+    let mut rows = Vec::with_capacity(headings.len());
+    let mut ancestors: Vec<OutlineVisibilityFrame> = Vec::new();
+    let mut active_representative = None;
+
+    for (index, (heading, key)) in headings.iter().zip(keys).enumerate() {
+        while ancestors
+            .last()
+            .is_some_and(|ancestor| ancestor.level >= heading.level)
+        {
+            ancestors.pop();
+        }
+
+        let hidden_by = ancestors.last().and_then(|ancestor| ancestor.hidden_by);
+        let has_children = headings
+            .get(index + 1)
+            .is_some_and(|next| next.level > heading.level);
+        let is_collapsed = has_children && collapsed.contains(key);
+
+        if current == Some(index) {
+            active_representative = Some(hidden_by.unwrap_or(index));
+        }
+        if hidden_by.is_none() {
+            rows.push(OutlineProjectedRow {
+                outline_index: index,
+                key: key.clone(),
+                has_children,
+                collapsed: is_collapsed,
+                active: false,
+            });
+        }
+
+        ancestors.push(OutlineVisibilityFrame {
+            level: heading.level,
+            hidden_by: hidden_by.or_else(|| is_collapsed.then_some(index)),
+        });
+    }
+
+    if let Some(active_index) = active_representative {
+        if let Some(row) = rows
+            .iter_mut()
+            .find(|row| row.outline_index == active_index)
+        {
+            row.active = true;
+        }
+    }
+
+    OutlineProjection { rows }
+}
+
+#[cfg(test)]
+pub(super) fn project_outline_rows(
+    headings: &[markion::Heading],
+    collapsed: &HashSet<OutlineNodeKey>,
+    current: Option<usize>,
+) -> OutlineProjection {
+    let keys = outline_node_keys(headings);
+    project_outline_rows_with_keys(headings, &keys, collapsed, current)
+}
+
+fn outline_key_is_unambiguous(key: &OutlineNodeKey, keys: &[OutlineNodeKey]) -> bool {
+    key.0.iter().enumerate().all(|(depth, segment)| {
+        keys.iter()
+            .filter(|candidate| {
+                candidate.0.len() > depth
+                    && candidate.0[..depth] == key.0[..depth]
+                    && candidate.0[depth].level == segment.level
+                    && candidate.0[depth].title == segment.title
+            })
+            .count()
+            == 1
+    })
+}
+
+/// Retain folds across body-only edits and unambiguous hierarchy changes.
+/// Ambiguous duplicate groups are kept when the structural key sequence is
+/// unchanged, but are conservatively unfolded when an edit changes that
+/// sequence so an inserted equal-title sibling cannot inherit another row's
+/// fold by ordinal.
+pub(super) fn reconcile_outline_collapsed_keys(
+    collapsed: &mut HashSet<OutlineNodeKey>,
+    previous_keys: &[OutlineNodeKey],
+    current_keys: &[OutlineNodeKey],
+) {
+    if previous_keys == current_keys {
+        return;
+    }
+
+    let live_keys: HashSet<&OutlineNodeKey> = current_keys.iter().collect();
+    collapsed.retain(|key| {
+        live_keys.contains(key)
+            && outline_key_is_unambiguous(key, previous_keys)
+            && outline_key_is_unambiguous(key, current_keys)
+    });
+}
+
+#[derive(Debug, Default)]
+pub(super) struct OutlineFoldingState {
+    observed_document_version: Option<u64>,
+    known_keys: Vec<OutlineNodeKey>,
+    collapsed: HashSet<OutlineNodeKey>,
+}
+
+impl OutlineFoldingState {
+    fn projection(
+        &mut self,
+        document_version: u64,
+        headings: &[markion::Heading],
+        current: Option<usize>,
+    ) -> OutlineProjection {
+        let keys = outline_node_keys(headings);
+        if self.observed_document_version != Some(document_version) {
+            reconcile_outline_collapsed_keys(&mut self.collapsed, &self.known_keys, &keys);
+            self.known_keys = keys.clone();
+            self.observed_document_version = Some(document_version);
+        }
+        project_outline_rows_with_keys(headings, &keys, &self.collapsed, current)
+    }
+
+    fn toggle(&mut self, key: OutlineNodeKey) -> Option<bool> {
+        if !self.known_keys.contains(&key) {
+            return None;
+        }
+        if self.collapsed.remove(&key) {
+            Some(false)
+        } else {
+            self.collapsed.insert(key);
+            Some(true)
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn collapsed_keys(&self) -> &HashSet<OutlineNodeKey> {
+        &self.collapsed
+    }
+}
+
 /// Where a grapheme scan for the cluster around `offset` may safely start:
 /// the current line start (segmentation restarts after every hard break), or
 /// the nearest char boundary [`BOUNDARY_SCAN_WINDOW`] bytes back when the
@@ -227,11 +460,106 @@ pub(super) fn compact_history_entry(older: &EditorSnapshot, newer_text: &str) ->
     }
 }
 
-/// Per-document editor state. One open document per tab; `MarkionApp` holds a
-/// `Vec<EditorTab>` + an `active_tab` index. All cursor/scroll/undo/selection
-/// state lives here so it is isolated per document. Per-window state (menus,
-/// themes, sidebar, search panel) stays on `MarkionApp`.
-pub(super) struct EditorTab {
+/// One content tab in the workspace. Documents retain the existing editor
+/// state wholesale, while image tabs carry only their read-only presentation
+/// state and can therefore never acquire document dirty/undo/recovery state.
+pub(super) enum WorkspaceTab {
+    Document(DocumentTabState),
+    Image(ImageTabState),
+}
+
+/// Presentation-only identity for the source editor geometry used by
+/// source-mapped Split Preview scrolling. The shaped lines themselves remain
+/// in `DocumentTabState`; this key prevents geometry from an older document or
+/// wrap width from being used after an edit or reflow.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct SourceLayoutKey {
+    pub(super) version: u64,
+    pub(super) wrap_width: Pixels,
+    pub(super) line_height: Pixels,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct SyncPreviewPosition {
+    pub(super) item_ix: usize,
+    pub(super) offset_in_item: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum ExpectedSyncFollower {
+    Editor(f32),
+    Preview(SyncPreviewPosition),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PendingPreviewRefinement {
+    pub(super) version: u64,
+    pub(super) item_ix: usize,
+    pub(super) progress: f32,
+}
+
+/// Per-tab observation and intent state for source-mapped scroll coupling.
+/// Scroll handles/list state remain independent; this only distinguishes user
+/// movement from the follower writes produced by reconciliation.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct SyncScrollState {
+    pub(super) last_editor_offset: Option<f32>,
+    pub(super) last_preview_position: Option<SyncPreviewPosition>,
+    pub(super) driver_hint: Option<PaneScrollTarget>,
+    pub(super) deferred_driver: Option<PaneScrollTarget>,
+    pub(super) expected_follower: Option<ExpectedSyncFollower>,
+    pub(super) expected_follower_retried: bool,
+    pub(super) pending_preview_refinement: Option<PendingPreviewRefinement>,
+}
+
+impl SyncScrollState {
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub(super) fn mark_driver(&mut self, driver: PaneScrollTarget) {
+        self.driver_hint = Some(driver);
+        self.deferred_driver = None;
+        self.expected_follower = None;
+        self.expected_follower_retried = false;
+        self.pending_preview_refinement = None;
+    }
+
+    pub(super) fn invalidate_geometry(&mut self) {
+        let deferred = self.driver_hint.or(self.deferred_driver);
+        self.last_editor_offset = None;
+        self.last_preview_position = None;
+        self.driver_hint = None;
+        self.deferred_driver = deferred;
+        self.expected_follower = None;
+        self.expected_follower_retried = false;
+        self.pending_preview_refinement = None;
+    }
+}
+
+/// Compatibility name used throughout the existing document-oriented code.
+/// The actual tab vector stores the heterogeneous [`WorkspaceTab`] sum type.
+pub(super) type EditorTab = WorkspaceTab;
+
+pub(super) struct ImageTabState {
+    pub(super) path: PathBuf,
+    pub(super) key: PreviewImageKey,
+    pub(super) scroll: ScrollHandle,
+    pub(super) claimed: bool,
+}
+
+impl ImageTabState {
+    pub(super) fn presentation_memory_bytes(&self) -> usize {
+        self.path.as_os_str().len()
+            + std::mem::size_of::<PreviewImageKey>()
+            + std::mem::size_of::<ScrollHandle>()
+            + std::mem::size_of::<bool>()
+    }
+}
+
+/// Per-document editor state. All cursor/scroll/undo/selection and derived
+/// Markdown cache state remains isolated here and is absent from image tabs.
+pub(super) struct DocumentTabState {
     pub(super) document: MarkdownDocument,
     /// Destination divergence detected after open/save. This state never
     /// rewrites the canonical in-memory Markdown by itself.
@@ -242,6 +570,9 @@ pub(super) struct EditorTab {
     pub(super) undo_capture: Option<UndoCapture>,
     pub(super) pending_text_edit_intent: Option<UndoCaptureKind>,
     pub(super) editor_scroll: ScrollHandle,
+    /// Session-only outline tree presentation. Interior mutability lets the
+    /// render path reconcile semantic keys without touching document state.
+    pub(super) outline_folding: RefCell<OutlineFoldingState>,
     /// Virtualized preview: GPUI's `list` renders only the blocks intersecting
     /// the viewport (+overdraw), so preview cost is O(visible blocks) instead of
     /// O(document). The state is intrusive and must persist across frames.
@@ -318,6 +649,11 @@ pub(super) struct EditorTab {
     pub(super) last_lines: Vec<WrappedLine>,
     pub(super) line_offsets: Vec<usize>,
     pub(super) line_heights: Vec<Pixels>,
+    /// Prefix Y positions for `last_lines`, including the trailing total.
+    /// Together with the shaped lines and offsets this is the versioned source
+    /// layout snapshot used by semantic scroll mapping.
+    pub(super) line_tops: Vec<Pixels>,
+    pub(super) source_layout_key: Option<SourceLayoutKey>,
     pub(super) last_bounds: Option<Bounds<Pixels>>,
     /// Actual line height from the last layout pass, reused by hit-testing so
     /// mouse positions line up with the painted text.
@@ -340,12 +676,7 @@ pub(super) struct EditorTab {
     /// Generation token incremented on every autosave schedule; a pending timer
     /// compares its captured generation against this to decide whether to fire.
     pub(super) autosave_generation: u64,
-    /// Last scroll fraction applied to the editor during sync reconciliation
-    /// (None until the first reconciled Split frame). Used to detect which pane
-    /// drove the latest scroll change so only the *other* pane is written.
-    pub(super) sync_scroll_editor_fraction: Option<f32>,
-    /// Last scroll fraction applied to the preview during sync reconciliation.
-    pub(super) sync_scroll_preview_fraction: Option<f32>,
+    pub(super) sync_scroll_state: SyncScrollState,
     /// Active drag/copy selection in the rendered preview for this tab.
     /// Independent of the source editor selection; never mutates the document.
     pub(super) preview_selection: Option<PreviewSelection>,
@@ -353,8 +684,135 @@ pub(super) struct EditorTab {
     pub(super) preview_is_selecting: bool,
 }
 
-impl EditorTab {
+impl WorkspaceTab {
     pub(super) fn new(document: MarkdownDocument) -> Self {
+        Self::Document(DocumentTabState::new(document))
+    }
+
+    pub(super) fn new_image(path: PathBuf, key: PreviewImageKey) -> Self {
+        Self::Image(ImageTabState {
+            path,
+            key,
+            scroll: ScrollHandle::new(),
+            claimed: false,
+        })
+    }
+
+    pub(super) fn path(&self) -> Option<&Path> {
+        match self {
+            Self::Document(tab) => tab.document.path(),
+            Self::Image(image) => Some(&image.path),
+        }
+    }
+
+    pub(super) fn title(&self) -> String {
+        title_from_path(self.path()).to_string()
+    }
+
+    pub(super) fn focus_identity(&self) -> Option<PathBuf> {
+        self.path().map(comparable_document_path)
+    }
+
+    pub(super) fn is_image(&self) -> bool {
+        matches!(self, Self::Image(_))
+    }
+
+    pub(super) fn is_document(&self) -> bool {
+        matches!(self, Self::Document(_))
+    }
+
+    pub(super) fn is_dirty(&self) -> bool {
+        self.document_tab()
+            .is_some_and(|tab| tab.document.is_dirty())
+    }
+
+    pub(super) fn requires_discard_confirmation(&self) -> bool {
+        self.is_dirty()
+    }
+
+    pub(super) fn document_tab(&self) -> Option<&DocumentTabState> {
+        match self {
+            Self::Document(tab) => Some(tab),
+            Self::Image(_) => None,
+        }
+    }
+
+    pub(super) fn document_tab_mut(&mut self) -> Option<&mut DocumentTabState> {
+        match self {
+            Self::Document(tab) => Some(tab),
+            Self::Image(_) => None,
+        }
+    }
+
+    pub(super) fn image(&self) -> Option<&ImageTabState> {
+        match self {
+            Self::Image(image) => Some(image),
+            Self::Document(_) => None,
+        }
+    }
+
+    pub(super) fn image_mut(&mut self) -> Option<&mut ImageTabState> {
+        match self {
+            Self::Image(image) => Some(image),
+            Self::Document(_) => None,
+        }
+    }
+
+    pub(super) fn enter_dormant(&mut self) -> HashSet<PreviewImageKey> {
+        match self {
+            Self::Document(tab) => tab.enter_dormant(),
+            Self::Image(image) => {
+                if std::mem::take(&mut image.claimed) {
+                    HashSet::from([image.key.clone()])
+                } else {
+                    HashSet::new()
+                }
+            }
+        }
+    }
+
+    /// Release only decoded-image cache claims, preserving every document
+    /// cache and presentation state. Used when a document is covered by an
+    /// image tab so switching back is state-neutral.
+    pub(super) fn take_image_claims(&mut self) -> HashSet<PreviewImageKey> {
+        match self {
+            Self::Document(tab) => std::mem::take(&mut tab.claimed_preview_images),
+            Self::Image(image) => {
+                if std::mem::take(&mut image.claimed) {
+                    HashSet::from([image.key.clone()])
+                } else {
+                    HashSet::new()
+                }
+            }
+        }
+    }
+
+    pub(super) fn relative_range_from_utf16(
+        text: &str,
+        range_utf16: &Range<usize>,
+    ) -> Option<Range<usize>> {
+        DocumentTabState::relative_range_from_utf16(text, range_utf16)
+    }
+}
+
+impl std::ops::Deref for WorkspaceTab {
+    type Target = DocumentTabState;
+
+    fn deref(&self) -> &Self::Target {
+        self.document_tab()
+            .expect("document-only state accessed while an image tab is active")
+    }
+}
+
+impl std::ops::DerefMut for WorkspaceTab {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.document_tab_mut()
+            .expect("document-only state accessed while an image tab is active")
+    }
+}
+
+impl DocumentTabState {
+    fn new(document: MarkdownDocument) -> Self {
         let version = document.version();
         Self {
             document,
@@ -365,6 +823,7 @@ impl EditorTab {
             undo_capture: None,
             pending_text_edit_intent: None,
             editor_scroll: ScrollHandle::new(),
+            outline_folding: RefCell::new(OutlineFoldingState::default()),
             preview_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list_blocks: std::sync::Arc::new(Vec::new()),
@@ -406,6 +865,8 @@ impl EditorTab {
             last_lines: Vec::new(),
             line_offsets: Vec::new(),
             line_heights: Vec::new(),
+            line_tops: Vec::new(),
+            source_layout_key: None,
             last_bounds: None,
             line_height: px(EDITOR_LINE_HEIGHT),
             is_selecting: false,
@@ -414,11 +875,24 @@ impl EditorTab {
             line_offsets_cache: RefCell::new(None),
             last_recovery_file: None,
             autosave_generation: 0,
-            sync_scroll_editor_fraction: None,
-            sync_scroll_preview_fraction: None,
+            sync_scroll_state: SyncScrollState::default(),
             preview_selection: None,
             preview_is_selecting: false,
         }
+    }
+
+    pub(super) fn outline_projection(
+        &self,
+        headings: &[markion::Heading],
+        current: Option<usize>,
+    ) -> OutlineProjection {
+        self.outline_folding
+            .borrow_mut()
+            .projection(self.document.version(), headings, current)
+    }
+
+    pub(super) fn toggle_outline_node(&self, key: OutlineNodeKey) -> Option<bool> {
+        self.outline_folding.borrow_mut().toggle(key)
     }
 
     /// Bring `preview_list` in line with a freshly-computed block slice.
@@ -438,6 +912,7 @@ impl EditorTab {
             self.preview_list.splice(range, count);
         }
         self.preview_list_blocks = blocks.clone();
+        self.sync_scroll_state.invalidate_geometry();
         self.preview_selection =
             invalidate_preview_selection_if_stale(self.preview_selection.take(), blocks.len());
         if self.preview_selection.is_none() {
@@ -521,10 +996,7 @@ impl EditorTab {
     /// release them from `PreviewImageCache` (same path as tab close).
     pub(super) fn enter_dormant(&mut self) -> HashSet<PreviewImageKey> {
         self.document.evict_derived_caches();
-        self.last_lines.clear();
-        self.line_offsets.clear();
-        self.line_heights.clear();
-        self.last_bounds = None;
+        self.invalidate_source_layout();
         *self.display_text_cache.borrow_mut() = None;
         *self.measured_height_cache.borrow_mut() = None;
         *self.line_offsets_cache.borrow_mut() = None;
@@ -559,7 +1031,8 @@ impl EditorTab {
             self.visual_caret_paint_count = 0;
         }
 
-        // Scroll fractions and editor_scroll are retained for reactivation.
+        // Scroll handles are retained for reactivation; observations are
+        // reseeded after the source/preview geometry is rebuilt.
         std::mem::take(&mut self.claimed_preview_images)
     }
 
@@ -570,6 +1043,7 @@ impl EditorTab {
     pub(super) fn reset_preview_list(&mut self) {
         self.preview_list.reset(0);
         self.preview_list_blocks = std::sync::Arc::new(Vec::new());
+        *self.outline_folding.borrow_mut() = OutlineFoldingState::default();
         // Reset the debounce so the replacement document parses on its next
         // render rather than waiting out a debounce window, and invalidate any
         // pending timer armed for the old document.
@@ -604,11 +1078,18 @@ impl EditorTab {
             self.visual_projection_paint_count = 0;
             self.visual_caret_paint_count = 0;
         }
-        // The replacement document's scroll ranges differ, so the cached sync
-        // fractions are stale; let the next Split frame re-derive them.
-        self.sync_scroll_editor_fraction = None;
-        self.sync_scroll_preview_fraction = None;
+        self.sync_scroll_state.reset();
         self.clear_preview_selection();
+    }
+
+    pub(super) fn invalidate_source_layout(&mut self) {
+        self.last_lines.clear();
+        self.line_offsets.clear();
+        self.line_heights.clear();
+        self.line_tops.clear();
+        self.source_layout_key = None;
+        self.last_bounds = None;
+        self.sync_scroll_state.reset();
     }
 
     pub(super) fn clear_preview_selection(&mut self) {
@@ -731,7 +1212,7 @@ impl EditorTab {
             .insert(snapshot.block_index, snapshot);
     }
 
-    pub(super) fn scroll_editor_to_offset(&self, offset: usize) {
+    pub(super) fn scroll_editor_to_offset(&mut self, offset: usize) {
         let offset = clamp_to_text_boundary(self.document.text(), offset);
         let line = self.document.text()[..offset]
             .bytes()
@@ -740,9 +1221,10 @@ impl EditorTab {
         let line_height = f32::from(self.line_height);
         self.editor_scroll
             .set_offset(point(px(0.), -px(line as f32 * line_height)));
+        self.sync_scroll_state.mark_driver(PaneScrollTarget::Editor);
     }
 
-    pub(super) fn scroll_editor_typewriter_to_offset(&self, offset: usize) {
+    pub(super) fn scroll_editor_typewriter_to_offset(&mut self, offset: usize) {
         let offset = clamp_to_text_boundary(self.document.text(), offset);
         let line = self.document.text()[..offset]
             .bytes()
@@ -752,6 +1234,7 @@ impl EditorTab {
         let line_height = f32::from(self.line_height);
         let y = (line as f32 * line_height - 10. * line_height).max(0.);
         self.editor_scroll.set_offset(point(px(0.), -px(y)));
+        self.sync_scroll_state.mark_driver(PaneScrollTarget::Editor);
     }
 
     pub(super) fn snapshot(&self) -> EditorSnapshot {
@@ -888,6 +1371,77 @@ impl EditorTab {
             }
         }
         true
+    }
+
+    pub(super) fn source_layout_is_current(&self) -> bool {
+        self.source_layout_key
+            .is_some_and(|key| key.version == self.document.version())
+            && !self.last_lines.is_empty()
+            && self.last_lines.len() == self.line_offsets.len()
+            && self.line_tops.len() == self.last_lines.len() + 1
+    }
+
+    /// Convert a source byte offset to a Y coordinate in the editor's
+    /// scrollable content space. The returned coordinate is independent of the
+    /// viewport's current scroll offset.
+    pub(super) fn source_content_y_for_offset(&self, offset: usize) -> Option<f32> {
+        if !self.source_layout_is_current() {
+            return None;
+        }
+        let text = self.document.text();
+        let clamped = clamp_to_text_boundary(text, offset.min(text.len()));
+        let line_index = self
+            .line_offsets
+            .partition_point(|start| *start <= clamped)
+            .saturating_sub(1)
+            .min(self.last_lines.len().saturating_sub(1));
+        let line_start = self.line_offsets[line_index];
+        let local_offset = clamped.saturating_sub(line_start);
+        let line_top = f32::from(self.line_tops[line_index]);
+        let line_height = f32::from(
+            self.line_heights
+                .get(line_index)
+                .copied()
+                .unwrap_or(self.line_height),
+        );
+        let local_y = self.last_lines[line_index]
+            .position_for_index(local_offset, self.line_height)
+            .map(|position| f32::from(position.y))
+            .unwrap_or(line_height);
+        Some((line_top + local_y).clamp(0., f32::from(*self.line_tops.last()?)))
+    }
+
+    /// Convert a Y coordinate in the editor's scrollable content space to the
+    /// closest valid source byte offset at the left edge of that wrapped visual
+    /// line.
+    pub(super) fn source_offset_for_content_y(&self, content_y: f32) -> Option<usize> {
+        if !self.source_layout_is_current() {
+            return None;
+        }
+        let total = f32::from(*self.line_tops.last()?);
+        let y = content_y.clamp(0., total);
+        if y <= 0. {
+            return Some(0);
+        }
+        if y >= total {
+            return Some(self.document.text().len());
+        }
+        let line_index = self
+            .line_tops
+            .partition_point(|top| f32::from(*top) <= y)
+            .saturating_sub(1)
+            .min(self.last_lines.len().saturating_sub(1));
+        let local_y = y - f32::from(self.line_tops[line_index]);
+        let local_point = point(px(0.), px(local_y));
+        let local_offset = match self.last_lines[line_index]
+            .closest_index_for_position(local_point, self.line_height)
+        {
+            Ok(offset) | Err(offset) => offset,
+        };
+        let offset = self.line_offsets[line_index]
+            .saturating_add(local_offset)
+            .min(self.document.text().len());
+        Some(clamp_to_text_boundary(self.document.text(), offset))
     }
 
     pub(super) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
@@ -1285,9 +1839,6 @@ pub(super) fn startup_open_failure_detail(path: &Path, reason: StartupOpenInvali
 
 pub(super) fn find_tab_with_document_path(tabs: &[EditorTab], path: &Path) -> Option<usize> {
     let target = comparable_document_path(path);
-    tabs.iter().position(|tab| {
-        tab.document
-            .path()
-            .is_some_and(|open_path| comparable_document_path(open_path) == target)
-    })
+    tabs.iter()
+        .position(|tab| tab.focus_identity().as_ref() == Some(&target))
 }

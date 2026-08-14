@@ -215,27 +215,57 @@ The application chrome SHALL provide visible, right-side vertical scrollbars for
 - **THEN** the visible editor or preview pane fills the remaining main workspace instead of retaining split-mode width
 
 ### Requirement: Sync scroll preference
-The editor SHALL provide a persisted "Sync scroll" preference, disabled by default, that when enabled and the active view mode is Split Preview SHALL couple the source editor and rendered preview scroll positions proportionally: scrolling either pane (mouse wheel, trackpad, or dragging that pane's scrollbar) SHALL move the other pane to the same fraction of its scrollable range, clamped to its bounds. The preference SHALL have no effect in Edit or Read mode, where only one pane is visible. The proportional coupling SHALL be based on each pane's scroll offset divided by its maximum scrollable offset, and SHALL be a no-op for a direction whose pane has no scrollable range. The coupling SHALL NOT force a Markdown reparse, reset the preview list, or disturb the per-version derived-state caches.
+The editor SHALL provide a persisted "Sync scroll" preference, disabled by default, that when enabled and the active view mode is Split Preview SHALL couple the source editor and rendered preview by document location rather than by whole-document scroll percentage. Scrolling either pane by mouse wheel, trackpad, scrollbar drag, or an existing editor navigation action SHALL establish a source-backed viewport anchor at that pane's top content edge; the other pane SHALL align the corresponding source location at its own top content edge, except where clamping at the start or end of a scrollable range prevents exact top alignment. The mapping SHALL use rendered blocks' source ranges, SHALL interpolate relative progress within a source-backed block, and SHALL deterministically bridge source gaps that have no rendered content. The preference SHALL have no effect in Edit, Visual Edit, or Read mode, where both panes are not visible.
+
+Synchronization SHALL be a no-op in a direction whose driving pane has no scrollable range or whose current preview mapping cannot identify a valid source location. When the preview list contains blocks for an older document version, synchronization SHALL NOT use those stale source ranges or force a Markdown parse; it SHALL retain the latest driving-pane intent and reconcile once the normal debounced preview update supplies a current mapping. A source-to-preview jump whose target virtual row has not been measured SHALL first reveal that row and then refine the within-row offset after layout, without falling back to whole-document percentage coupling or entering a feedback loop. Synchronization SHALL NOT reset the preview list, mutate the document, force a Markdown reparse, or disturb per-version derived-state caches.
 
 #### Scenario: Sync scroll defaults to off
 - **WHEN** the editor starts with no `sync_scroll` value in the preferences file
 - **THEN** Sync scroll is disabled and the source editor and preview panes scroll independently as before
 
-#### Scenario: Scrolling the editor moves the preview proportionally
+#### Scenario: Scrolling the editor aligns the corresponding preview content
 - **WHEN** Sync scroll is enabled, the active view mode is Split Preview, and the user scrolls the source editor pane
-- **THEN** the rendered preview pane scrolls to the same fraction of its scrollable range as the source editor's current fraction
+- **THEN** the rendered preview aligns the block and relative block position corresponding to the source location at the editor viewport anchor
+- **AND** the result is independent of unrelated differences between the panes' total scrollable heights
 
-#### Scenario: Scrolling the preview moves the editor proportionally
+#### Scenario: Scrolling the preview aligns the corresponding source content
 - **WHEN** Sync scroll is enabled, the active view mode is Split Preview, and the user scrolls the rendered preview pane
-- **THEN** the source editor pane scrolls to the same fraction of its scrollable range as the preview's current fraction
+- **THEN** the source editor aligns the source location and relative block position represented at the preview viewport anchor
+- **AND** the follower movement does not become a new preview-driving scroll on the next frame
+
+#### Scenario: Non-uniform rendered blocks do not accumulate drift
+- **WHEN** a Split Preview document contains blocks whose rendered heights differ substantially from their source heights, such as images, tables, wrapped prose, or code fences
+- **AND** the user scrolls through multiple such blocks with Sync scroll enabled
+- **THEN** each pane continues to show the same source-backed block near its viewport anchor instead of drifting according to total document percentage
+
+#### Scenario: Source positions without rendered content bridge deterministically
+- **WHEN** the editor viewport anchor falls in blank lines, link definitions, or another source interval with no independently rendered preview block
+- **THEN** the preview target is derived from the adjacent source-backed block anchors
+- **AND** continued scrolling across that interval does not jump to an unrelated document region
+
+#### Scenario: An unmeasured preview target is refined after layout
+- **WHEN** an editor-driven scrollbar jump targets a virtualized preview row that has not yet been measured
+- **THEN** the preview first reveals the source-matched row
+- **AND** after that row is measured, the preview refines its within-row offset to the source-mapped position without oscillating back to the editor pane
+
+#### Scenario: Stale preview blocks defer source-mapped reconciliation
+- **WHEN** the document version is newer than the source ranges represented by the debounced preview list
+- **AND** the user scrolls either pane with Sync scroll enabled
+- **THEN** the editor does not use the stale ranges and does not synchronously reparse Markdown
+- **AND** once current preview blocks arrive through the normal debounce path, the latest driving pane reconciles the other pane by source location
 
 #### Scenario: Sync scroll is inactive outside Split Preview
-- **WHEN** Sync scroll is enabled but the active view mode is Edit or Read
+- **WHEN** Sync scroll is enabled but the active view mode is Edit, Visual Edit, or Read
 - **THEN** scrolling the visible pane does not affect any other pane and the preference persists without error
 
 #### Scenario: A pane with no scrollable range does not drive the other
-- **WHEN** Sync scroll is enabled, the view mode is Split Preview, and one pane's content fits within its viewport (no scrollable range)
-- **THEN** scrolling that pane does not move the other pane, and the other pane may still scroll independently
+- **WHEN** Sync scroll is enabled, the view mode is Split Preview, and one pane's content fits within its viewport
+- **THEN** that pane does not move the other pane, and the other pane may still scroll independently
+
+#### Scenario: Document boundaries remain clamped
+- **WHEN** a source-mapped target would place either pane before its start or beyond its maximum scroll offset
+- **THEN** that pane is clamped to the corresponding document boundary
+- **AND** reaching the document start or end in the driving pane reaches the same boundary in the follower pane
 
 ### Requirement: Sync scroll preference persistence
 The editor SHALL persist the Sync scroll preference in the existing preferences file as an optional boolean that defaults to disabled when missing or invalid. The preference SHALL be included in preferences reset behavior, restored on launch, and migrated from a legacy `preferences.conf` file that contains a `sync_scroll` line.
@@ -293,4 +323,67 @@ The application chrome SHALL render the primary source editor, visual editor, an
 #### Scenario: Existing surface chrome and behavior are preserved
 - **WHEN** a square-corner primary document surface is rendered
 - **THEN** its active-theme background fill, border, padding, scrolling, resizing, drag-and-drop handling, and mode-specific visibility behave as before
+
+### Requirement: Persistent document context in the status bar
+The status bar SHALL retain its existing document identity, save-state, and transient operation feedback while also presenting a compact persistent context for the active tab. The persistent context SHALL include the active document's character count and word count, the one-based line and column of the active caret whenever an editing surface is present, and the current named Git branch when a repository can be resolved from the active document or workspace. Character count SHALL count Unicode scalar values, including whitespace and line breaks, and word count SHALL count contiguous non-whitespace sequences. Every new user-visible label SHALL use the active interface language. Document metrics SHALL reuse per-document-version derived state, and Git discovery or refresh SHALL NOT perform filesystem or process work on the render or typing path.
+
+#### Scenario: Active document metrics are always visible
+- **WHEN** an active tab displays a document in any view mode
+- **THEN** the persistent status context shows that document's character count and word count
+- **AND** editing the document updates both values from the new document version
+
+#### Scenario: Counts have defined Unicode and whitespace semantics
+- **WHEN** a document contains non-ASCII text, emoji, whitespace, and line breaks
+- **THEN** the character count equals the number of Unicode scalar values in the complete source
+- **AND** the word count equals the number of contiguous non-whitespace source sequences
+
+#### Scenario: Editing modes show the active caret position
+- **WHEN** the active view mode is Edit, Visual Edit, or Split Preview
+- **THEN** the persistent status context shows the active caret's one-based logical line and Unicode-scalar column
+- **AND** a non-empty selection reports the position of its active caret end rather than always reporting the selection's lower offset
+
+#### Scenario: Read mode omits caret position
+- **WHEN** the active view mode is Read and no editing caret is presented
+- **THEN** the persistent status context omits the line-and-column item
+- **AND** the character count, word count, and any available Git branch remain visible
+
+#### Scenario: Named Git branch is shown for repository-backed context
+- **WHEN** the active saved document belongs to a Git working tree with a named branch
+- **THEN** the persistent status context shows that branch name
+- **AND** the active document's nearest repository takes precedence over a broader workspace repository
+
+#### Scenario: Unsaved document uses an established workspace
+- **WHEN** the active document has no filesystem path but the user has established a workspace inside a Git working tree with a named branch
+- **THEN** the persistent status context shows the workspace repository's branch name
+
+#### Scenario: Unavailable branch is omitted without replacing feedback
+- **WHEN** neither the active document nor established workspace belongs to a Git repository, Git HEAD is detached, or repository metadata cannot be read
+- **THEN** the Git branch item is omitted
+- **AND** the status bar continues to show document metrics and existing transient operation feedback without surfacing the lookup failure as an operation error
+
+#### Scenario: Branch context follows repository changes
+- **WHEN** the active document or workspace changes, or the repository switches to another named branch while Markion remains open
+- **THEN** the persistent status context eventually refreshes to the branch for the current context
+- **AND** a stale lookup result from an earlier document or workspace is not displayed
+
+#### Scenario: Switching tabs updates all document context
+- **WHEN** the user activates a different tab
+- **THEN** counts and caret position immediately describe the newly active tab
+- **AND** the Git branch item resolves from the newly active tab or its workspace fallback
+
+#### Scenario: Persistent context coexists with transient feedback
+- **WHEN** a save, export, search, formatting, error, or other existing operation updates the transient status message
+- **THEN** that feedback remains visible in the status bar alongside the persistent document context
+- **AND** the status bar remains a single compact row without overlapping or wrapping its items
+
+#### Scenario: Context labels follow the active language
+- **WHEN** the active interface language changes
+- **THEN** the character, word, branch, line, and column labels are rendered through the localization catalog in the selected language
+- **AND** document text and the branch name are displayed verbatim rather than translated
+
+#### Scenario: Status rendering preserves typing-path caches
+- **WHEN** the document is rendered repeatedly without a text-version change, or only the caret moves
+- **THEN** the status bar reuses the cached document metrics for that version
+- **AND** caret-only changes do not invalidate Markdown-derived state
+- **AND** Git discovery and refresh do not run synchronously during rendering or text input
 

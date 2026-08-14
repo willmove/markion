@@ -20,7 +20,7 @@ use gpui::{
     FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageFormat, ImageSource,
     KeyBinding, KeyDownEvent, LayoutId, ListAlignment, ListState, Menu, MenuItem, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point,
-    PromptButton, PromptLevel, RenderImage, Rgba, ScrollHandle, SharedString, Stateful,
+    PromptButton, PromptLevel, RenderImage, Rgba, ScrollHandle, SharedString, Size, Stateful,
     StrikethroughStyle, Style, StyledText, TextLayout, TextRun, Timer, TitlebarOptions,
     UTF16Selection, UnderlineStyle, Window, WindowBounds, WindowOptions, WrappedLine, actions,
     anchored, canvas, div, fill, font, img, list, point, px, rgb, rgba, size,
@@ -29,10 +29,9 @@ use markion::{
     AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement, BlockTarget,
     BlockTransform, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
     DEFAULT_RENDERED_FONT_SIZE, DiskState, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
-    ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind,
-    HighlightKind,
-    HighlightedSpan, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
-    Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
+    ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind,
+    HighlightedSpan, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan,
+    InlineStyle, Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
     MarkdownFormat, MathLayoutStyle, Msg, P0Msg, P1Msg, PreviewBlock, RecoveryInventoryEntry,
     RecoverySourceState, RichText, SearchMatchRange, SearchOptions, SessionState, ShortcutCategory,
@@ -46,12 +45,13 @@ use markion::{
     delete_block, delete_recovery_file, diagram_backend_id, duplicate_block, highlight_code,
     html_preview_parts, html_preview_plain_text, image_extension_supported, import_image_bytes,
     import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
-    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
-    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
-    normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf, reorder_block, save_app_preferences,
-    save_session_state, save_theme_definition, serialize_inline_image, serialize_inline_link,
-    shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at, t, tf,
-    title_from_path, transform_block, validate_block_target,
+    is_text_path, list_theme_definitions, load_app_preferences, load_recovery_file,
+    load_session_state, normalize_editor_font_size, normalize_heading_menu_max_level,
+    normalize_paragraph_spacing, normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf,
+    reorder_block, save_app_preferences, save_session_state, save_theme_definition,
+    serialize_inline_image, serialize_inline_link, shortcut_catalog, sidebar_tab_label,
+    slash_command_edit, slash_query_at, t, tf, title_from_path, transform_block,
+    validate_block_target,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -974,6 +974,8 @@ const SIDEBAR_COMPACT_PADDING: f32 = 2.5;
 const OUTLINE_ROW_VERTICAL_PADDING: f32 = 1.;
 const OUTLINE_ROW_LINE_HEIGHT: f32 = 17.;
 const OUTLINE_ROW_GAP: f32 = 0.;
+const OUTLINE_DISCLOSURE_SLOT_SIZE: f32 = 16.;
+const OUTLINE_DISCLOSURE_ICON_SIZE: f32 = 12.;
 const READ_MODE_PREVIEW_MAX_WIDTH: f32 = 860.;
 const PANE_SCROLLBAR_RESERVED_WIDTH: f32 = 15.;
 const PANE_SCROLLBAR_THUMB_WIDTH: f32 = 9.;
@@ -1267,8 +1269,13 @@ mod save_dialog;
 mod search;
 mod shortcuts;
 mod state;
+mod status_bar;
 mod update;
 mod workspace;
+
+use workspace::OpenPathIntent;
+#[cfg(test)]
+use workspace::{ExternalDropIntent, classify_external_drop_path};
 
 #[cfg(test)]
 mod tests;
@@ -1284,6 +1291,7 @@ use root_view::*;
 use save_dialog::*;
 use shortcuts::sanitized_shortcut_overrides;
 use state::*;
+use status_bar::*;
 
 pub(super) fn run() {
     bootstrap::run();
@@ -1300,6 +1308,9 @@ struct MarkionApp {
     /// `active_menu` leaves File or the whole menu closes.
     open_recent_submenu_open: bool,
     status: SharedString,
+    /// Filesystem-derived Git context is cached separately from documents so
+    /// render/input never perform repository I/O and undo snapshots stay pure.
+    git_branch_state: GitBranchState,
     confirming_close: bool,
     allow_close: bool,
     preferences_path: PathBuf,
@@ -1339,16 +1350,13 @@ struct MarkionApp {
     paragraph_spacing: u16,
     heading_menu_max_level: u8,
     /// When enabled and the view mode is Split, the editor and preview panes
-    /// scroll together proportionally. Persisted; disabled by default.
+    /// follow the same source-backed document location. Persisted; disabled by
+    /// default.
     sync_scroll: bool,
     /// When enabled, the file-tree panel lists hidden entries (dotfile names,
     /// plus Windows-hidden-attribute entries on Windows). Persisted; disabled
     /// by default. The always-excluded noise list stays excluded regardless.
     show_hidden_files: bool,
-    /// Re-entrancy guard for the render-time scroll reconciliation: prevents
-    /// the offset we write to the non-driving pane from being read back on the
-    /// same frame as a new driver and ping-ponging.
-    syncing_scroll: bool,
     view_mode: ViewMode,
     workspace_root: PathBuf,
     // Draggable layout widths. Not persisted — every launch starts from the

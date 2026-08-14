@@ -180,7 +180,7 @@ pub struct AppPreferences {
     /// reference. Allowed values are `5` (default) and `6`.
     pub heading_menu_max_level: u8,
     /// When enabled and the active view mode is Split Preview, the source
-    /// editor and rendered preview panes scroll together proportionally.
+    /// editor and rendered preview panes stay aligned by Markdown source position.
     /// Disabled by default; no effect in Edit or Read mode.
     pub sync_scroll: bool,
     /// When enabled, the file-tree panel lists hidden entries (dotfile names

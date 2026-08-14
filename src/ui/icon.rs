@@ -12,7 +12,9 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use gpui::{prelude::*, px, svg, AssetSource, Rgba, SharedString, Svg};
+use gpui::{AssetSource, Rgba, SharedString, Svg, prelude::*, px, svg};
+
+use markion::image_extension_supported;
 
 /// Declares the icon set: variant name → `assets/icons/ui/<file>.svg`.
 ///
@@ -52,6 +54,8 @@ macro_rules! icon_set {
 }
 
 icon_set! {
+    ChevronRight => "chevron-right",
+    ChevronDown => "chevron-down",
     Folder => "folder",
     FolderOpen => "folder-open",
     File => "file",
@@ -146,7 +150,7 @@ pub fn icon_for(path: &Path, is_dir: bool) -> IconKind {
         "css" | "scss" | "sass" | "less" => IconKind::Css,
         "json" | "jsonc" => IconKind::Json,
         "md" | "markdown" => IconKind::Markdown,
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" => IconKind::Image,
+        _ if image_extension_supported(path) => IconKind::Image,
         "toml" | "yaml" | "yml" | "ini" => IconKind::Config,
         _ => IconKind::File,
     }
@@ -159,12 +163,7 @@ pub fn icon_for(path: &Path, is_dir: bool) -> IconKind {
 /// the caller has already derived from row state (active / selected / clickable
 /// / muted). This function intentionally does NOT apply an additional alpha:
 /// double-dimming would make file rows unreadable on muted rows.
-pub fn file_tree_icon(
-    kind: IconKind,
-    expanded: bool,
-    file_color: Rgba,
-    folder_color: Rgba,
-) -> Svg {
+pub fn file_tree_icon(kind: IconKind, expanded: bool, file_color: Rgba, folder_color: Rgba) -> Svg {
     let (glyph, tint) = match kind {
         IconKind::Folder if expanded => (Icon::FolderOpen, folder_color),
         IconKind::Folder => (Icon::Folder, folder_color),
@@ -224,7 +223,12 @@ mod tests {
         assert_eq!(icon_for(Path::new("pkg"), true), IconKind::Folder);
         assert_eq!(icon_for(Path::new("Cargo.toml"), false), IconKind::Config);
         assert_eq!(icon_for(Path::new("data.json"), false), IconKind::Json);
-        assert_eq!(icon_for(Path::new("logo.png"), false), IconKind::Image);
+        for extension in markion::IMAGE_EXTENSIONS {
+            assert_eq!(
+                icon_for(Path::new(&format!("logo.{extension}")), false),
+                IconKind::Image
+            );
+        }
         assert_eq!(icon_for(Path::new("unknown.xyz"), false), IconKind::File);
     }
 }

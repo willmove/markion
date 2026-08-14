@@ -10,7 +10,7 @@ pub(super) fn install_window_close_guard(
             let app = app_entity.read(cx);
             (
                 app.allow_close,
-                app.tabs.iter().any(|t| t.document.is_dirty()),
+                app.tabs.iter().any(EditorTab::is_dirty),
                 app.confirming_close,
                 app.language,
             )
@@ -389,6 +389,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 app.restore_session_on_startup(&startup_intent, cx);
                 app.check_recovery_on_startup(window, cx);
                 app.arm_external_file_poll(cx);
+                app.arm_git_branch_poll(cx);
                 // File-tree scanning is driven by session restore, CLI folder
                 // open, or opening a document — not by the process CWD.
                 cx.activate(true);

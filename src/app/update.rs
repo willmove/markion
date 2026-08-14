@@ -250,7 +250,7 @@ impl MarkionApp {
             return;
         }
 
-        if self.tabs.iter().any(|tab| tab.document.is_dirty()) {
+        if self.tabs.iter().any(EditorTab::is_dirty) {
             let language = self.language;
             let _ = window_handle.update(cx, |_, window, cx| {
                 std::mem::drop(window.prompt(

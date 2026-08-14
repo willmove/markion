@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::image_extension_supported;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileTreeEntryKind {
     Directory,
@@ -47,9 +49,7 @@ pub const TEXT_EXTENSIONS: &[&str] = &[
 pub fn is_text_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            TEXT_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
-        })
+        .is_some_and(|extension| TEXT_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
 }
 
 /// The category of a regular file listed in the tree. Only meaningful when
@@ -58,6 +58,7 @@ pub fn is_text_path(path: &Path) -> bool {
 pub enum FileTreeFileKind {
     Markdown,
     Text,
+    Image,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +67,7 @@ pub struct FileTreeEntry {
     pub name: String,
     pub depth: usize,
     pub kind: FileTreeEntryKind,
-    /// `None` for directories; `Some(Markdown)` or `Some(Text)` for files.
+    /// `None` for directories; a concrete supported kind for files.
     pub file_kind: Option<FileTreeFileKind>,
 }
 
@@ -297,8 +298,8 @@ fn ensure_existing_path_within_root(root: &Path, path: &Path) -> io::Result<()> 
 /// folders that contain them, into `entries`.
 ///
 /// Regular files are classified once by extension: Markdown
-/// (`md`/`markdown`/`mdown`) or curated plain text (`txt`/`text`/`log`/…).
-/// Everything else (`.rs`, `.toml`, images, …) is skipped so the sidebar stays
+/// (`md`/`markdown`/`mdown`), curated plain text (`txt`/`text`/`log`/…), or a
+/// supported image. Everything else (`.rs`, `.toml`, other binaries, …) is skipped so the sidebar stays
 /// low-noise. Directories are kept as nesting rows whenever they exist on disk
 /// — empty folders (and folders containing only non-text files) are **not**
 /// pruned, so the tree mirrors real workspace structure. The hard-coded
@@ -339,12 +340,14 @@ fn collect_file_tree_entries(
             continue;
         }
 
-        // Regular file: classify once by extension. Markdown and curated
-        // plain-text files are collected; everything else is skipped.
+        // Regular file: classify once by extension. Markdown, curated text,
+        // and supported images are collected; everything else is skipped.
         let file_kind = if is_markdown_path(&path) {
             FileTreeFileKind::Markdown
         } else if is_text_path(&path) {
             FileTreeFileKind::Text
+        } else if image_extension_supported(&path) {
+            FileTreeFileKind::Image
         } else {
             continue;
         };
@@ -494,7 +497,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
 
-        // A mix of Markdown, plain-text, and non-text files at the root and in a subfolder.
+        // A mix of Markdown, plain-text, image, and unsupported files.
         write(root, "intro.md", "# Intro");
         write(root, "notes.markdown", "# Notes");
         write(root, "todo.txt", "- buy milk");
@@ -515,21 +518,37 @@ mod tests {
         assert!(names.contains(&"todo.txt"));
         assert!(names.contains(&"run.csv"));
         assert!(names.contains(&"debug.log"));
-        // Non-text files are still absent.
-        assert!(!names.contains(&"image.png"));
+        // Supported images appear; unrelated source files remain absent.
+        assert!(names.contains(&"image.png"));
         assert!(!names.contains(&"main.rs"));
-        // Every collected file is classified, Markdown distinguished from Text.
-        for entry in tree.entries.iter().filter(|e| e.kind == FileTreeEntryKind::File) {
+        // Every collected file is classified.
+        for entry in tree
+            .entries
+            .iter()
+            .filter(|e| e.kind == FileTreeEntryKind::File)
+        {
             match entry.file_kind {
                 Some(FileTreeFileKind::Markdown) => assert!(is_markdown_path(&entry.path)),
                 Some(FileTreeFileKind::Text) => assert!(is_text_path(&entry.path)),
+                Some(FileTreeFileKind::Image) => assert!(image_extension_supported(&entry.path)),
                 None => panic!("file entry missing file_kind: {:?}", entry.path),
             }
         }
-        assert!(tree.entries.iter().any(|e| e.name == "intro.md"
-            && e.file_kind == Some(FileTreeFileKind::Markdown)));
-        assert!(tree.entries.iter().any(|e| e.name == "todo.txt"
-            && e.file_kind == Some(FileTreeFileKind::Text)));
+        assert!(
+            tree.entries
+                .iter()
+                .any(|e| e.name == "intro.md" && e.file_kind == Some(FileTreeFileKind::Markdown))
+        );
+        assert!(
+            tree.entries
+                .iter()
+                .any(|e| e.name == "todo.txt" && e.file_kind == Some(FileTreeFileKind::Text))
+        );
+        assert!(
+            tree.entries
+                .iter()
+                .any(|e| e.name == "image.png" && e.file_kind == Some(FileTreeFileKind::Image))
+        );
     }
 
     #[test]
@@ -540,8 +559,9 @@ mod tests {
         write(root, "keep.md", "# Keep");
         // An empty folder now appears (it used to be pruned).
         fs::create_dir(root.join("empty")).unwrap();
-        // A folder whose subtree contains only non-text files also appears.
+        // A folder whose subtree contains only supported images also appears.
         write(root, "assets/logo.png", "png-bytes");
+        write(root, "assets/unsupported.avif", "avif-bytes");
         // A folder with a Markdown descendant is kept (unchanged).
         write(root, "docs/guide.md", "# Guide");
 
@@ -553,8 +573,8 @@ mod tests {
         // Empty and asset-only folders are now listed as nesting rows.
         assert!(names.contains(&"empty".to_string()));
         assert!(names.contains(&"assets".to_string()));
-        // The non-text file inside `assets` is still hidden.
-        assert!(!names.contains(&"logo.png".to_string()));
+        assert!(names.contains(&"logo.png".to_string()));
+        assert!(!names.contains(&"unsupported.avif".to_string()));
     }
 
     #[test]
@@ -584,17 +604,29 @@ mod tests {
 
         // A dotfile Markdown file plus a regular Markdown file at the root.
         write(root, ".secret.md", "# Secret");
+        write(root, ".preview.png", "png");
         write(root, "keep.md", "# Keep");
 
         let hidden = FileTree::scan_with_options(root, false).unwrap();
         let names: Vec<&str> = hidden.entries.iter().map(|e| e.name.as_str()).collect();
-        assert!(!names.contains(&".secret.md"), "dotfile file must be hidden by default");
+        assert!(
+            !names.contains(&".secret.md"),
+            "dotfile file must be hidden by default"
+        );
         assert!(names.contains(&"keep.md"));
+        assert!(!names.contains(&".preview.png"));
 
         let shown = FileTree::scan_with_options(root, true).unwrap();
         let names: Vec<&str> = shown.entries.iter().map(|e| e.name.as_str()).collect();
-        assert!(names.contains(&".secret.md"), "dotfile file must appear when show_hidden is on");
-        assert!(shown.show_hidden, "scanned tree must record the show_hidden flag");
+        assert!(
+            names.contains(&".secret.md"),
+            "dotfile file must appear when show_hidden is on"
+        );
+        assert!(names.contains(&".preview.png"));
+        assert!(
+            shown.show_hidden,
+            "scanned tree must record the show_hidden flag"
+        );
     }
 
     #[test]
@@ -607,17 +639,20 @@ mod tests {
         // appear (folders are not content-pruned, so the folder shows once the
         // skip predicate lets it through).
         write(root, ".notes/inside.md", "# Inside");
+        write(root, ".notes/inside.webp", "webp");
         write(root, "keep.md", "# Keep");
 
         let hidden = FileTree::scan_with_options(root, false).unwrap();
         let names: Vec<&str> = hidden.entries.iter().map(|e| e.name.as_str()).collect();
         assert!(!names.contains(&".notes"));
         assert!(!names.contains(&"inside.md"));
+        assert!(!names.contains(&"inside.webp"));
 
         let shown = FileTree::scan_with_options(root, true).unwrap();
         let names: Vec<&str> = shown.entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&".notes"));
         assert!(names.contains(&"inside.md"));
+        assert!(names.contains(&"inside.webp"));
     }
 
     #[test]
@@ -629,19 +664,26 @@ mod tests {
         // revealed. `target` is on the always-excluded list (not OS-hidden).
         write(root, "target/build.log", "log");
         write(root, "target/guide.md", "# Guide");
+        write(root, "target/preview.png", "png");
         write(root, "node_modules/pkg/index.md", "# Pkg");
         write(root, "keep.md", "# Keep");
 
         for show_hidden in [false, true] {
             let tree = FileTree::scan_with_options(root, show_hidden).unwrap();
             let names: Vec<String> = tree.entries.iter().map(|e| e.name.clone()).collect();
-            assert!(!names.contains(&"target".to_string()), "target excluded (show_hidden={show_hidden})");
+            assert!(
+                !names.contains(&"target".to_string()),
+                "target excluded (show_hidden={show_hidden})"
+            );
             assert!(
                 !names.contains(&"node_modules".to_string()),
                 "node_modules excluded (show_hidden={show_hidden})"
             );
             assert!(
-                !names.iter().any(|n| n == "build.log" || n == "guide.md" || n == "index.md"),
+                !names.iter().any(|n| n == "build.log"
+                    || n == "guide.md"
+                    || n == "preview.png"
+                    || n == "index.md"),
                 "noise-list children excluded (show_hidden={show_hidden})"
             );
             assert!(names.contains(&"keep.md".to_string()));
@@ -667,7 +709,10 @@ mod tests {
 
         let shown = FileTree::scan_with_options(root, true).unwrap();
         let names: Vec<&str> = shown.entries.iter().map(|e| e.name.as_str()).collect();
-        assert!(!names.contains(&".env"), "hidden non-text file stays excluded even when show_hidden is on");
+        assert!(
+            !names.contains(&".env"),
+            "hidden non-text file stays excluded even when show_hidden is on"
+        );
         assert!(names.contains(&".draft.md"));
     }
 
@@ -812,8 +857,13 @@ mod tests {
     /// and the Markdown classification). Checks its extension rule in isolation.
     #[test]
     fn is_text_path_recognises_curated_extensions_case_insensitively() {
-        for ext in ["txt", "text", "log", "csv", "tsv", "org", "rst", "adoc", "asciidoc"] {
-            assert!(is_text_path(Path::new(&format!("notes.{ext}"))), "{ext} should count");
+        for ext in [
+            "txt", "text", "log", "csv", "tsv", "org", "rst", "adoc", "asciidoc",
+        ] {
+            assert!(
+                is_text_path(Path::new(&format!("notes.{ext}"))),
+                "{ext} should count"
+            );
         }
         // Case-insensitive (Windows filesystems are case-insensitive).
         assert!(is_text_path(Path::new("UPPER.TXT")));

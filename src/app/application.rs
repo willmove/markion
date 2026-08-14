@@ -50,6 +50,7 @@ impl MarkionApp {
             active_menu: None,
             open_recent_submenu_open: false,
             status: t(Language::default(), Msg::StatusReady).into(),
+            git_branch_state: GitBranchState::default(),
             confirming_close: false,
             allow_close: false,
             preferences_path,
@@ -77,7 +78,6 @@ impl MarkionApp {
             heading_menu_max_level: preferences.heading_menu_max_level,
             sync_scroll: preferences.sync_scroll,
             show_hidden_files: preferences.show_hidden_files,
-            syncing_scroll: false,
             language: Language::from_code(&preferences.language),
             check_for_updates_on_startup: preferences.check_for_updates_on_startup,
             last_update_check: preferences.last_update_check,
@@ -169,26 +169,47 @@ impl MarkionApp {
         // Selecting in another tab's preview must not leave a drag in progress
         // on the previous tab; clear the drag flag on all tabs for safety.
         for tab in &mut self.tabs {
-            tab.preview_is_selecting = false;
-            tab.clear_visual_caret_affinity();
-            tab.finish_undo_capture();
-            tab.marked_range = None;
+            if tab.is_document() {
+                tab.preview_is_selecting = false;
+                tab.clear_visual_caret_affinity();
+                tab.finish_undo_capture();
+                tab.marked_range = None;
+            }
         }
         if previous != index {
-            // Dormant the tab being left: drop derived/layout caches, keep
-            // text/selection/undo/scroll. Active tab stays warm.
-            let released_keys = self.tabs[previous].enter_dormant();
-            let dropped = self.preview_image_cache.release_all(released_keys.iter());
-            for image in dropped {
-                cx.drop_image(image, None);
+            if self.tabs[previous].is_document() && self.tabs[index].is_image() {
+                // Image viewing must not invalidate the document's derived
+                // Markdown caches. Only release its decoded-image claims.
+                self.release_tab_image_claims(previous, cx);
+            } else {
+                // Normal document-to-document dormancy keeps the existing
+                // memory policy; leaving an image releases its viewer claim.
+                let released_keys = self.tabs[previous].enter_dormant();
+                let dropped = self.preview_image_cache.release_all(released_keys.iter());
+                for image in dropped {
+                    cx.drop_image(image, None);
+                }
             }
         }
         self.active_tab = index;
         self.slash_commands = None;
         self.dismissed_slash_query = None;
         self.dismiss_visual_block_menu();
-        self.refresh_search_matches();
+        if self.active_tab().is_image() {
+            self.search_visible = false;
+            self.replace_visible = false;
+            self.search_focus = None;
+            self.link_editor = None;
+            self.preview_context_menu = None;
+        }
+        if self.active_tab().is_document() {
+            self.refresh_search_matches();
+        } else {
+            self.search_matches.clear();
+            self.current_search_index = None;
+        }
         self.sync_and_persist_session();
+        self.sync_git_branch_context(cx);
         cx.notify();
     }
 
@@ -308,8 +329,11 @@ impl MarkionApp {
         );
 
         let reusable_index = original_path.as_deref().and_then(|path| {
-            find_tab_with_document_path(&self.tabs, path)
-                .filter(|index| !self.tabs[*index].document.is_dirty())
+            find_tab_with_document_path(&self.tabs, path).filter(|index| {
+                self.tabs[*index]
+                    .document_tab()
+                    .is_some_and(|tab| !tab.document.is_dirty())
+            })
         });
         if let Some(index) = reusable_index {
             self.switch_active_tab(index, cx);
@@ -459,7 +483,7 @@ impl MarkionApp {
             }
             StartupOpenIntent::Folder(path) => {
                 let display_path = path.display().to_string();
-                self.set_workspace_root(path);
+                self.set_workspace_root(path, cx);
                 self.sidebar_visible = true;
                 self.sidebar_tab = SidebarTab::Files;
                 self.active_menu = None;
@@ -482,6 +506,9 @@ impl MarkionApp {
     }
 
     pub(super) fn after_document_changed(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab().is_image() {
+            return;
+        }
         self.slash_commands = None;
         self.dismissed_slash_query = None;
         self.dismiss_visual_block_menu();
@@ -505,6 +532,9 @@ impl MarkionApp {
 
     pub(super) fn check_external_changes(&mut self, cx: &mut Context<Self>) {
         for index in 0..self.tabs.len() {
+            if self.tabs[index].is_image() {
+                continue;
+            }
             let state = match self.tabs[index].document.check_disk_state() {
                 Ok(state) => state,
                 Err(err) => {
@@ -567,7 +597,7 @@ impl MarkionApp {
         .detach();
     }
 
-    pub(super) fn set_workspace_root(&mut self, root: PathBuf) {
+    pub(super) fn set_workspace_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         let root = comparable_document_path(&root);
         let root_changed =
             workspace_root_needs_reset(&self.workspace_root, self.file_tree.is_some(), &root);
@@ -586,10 +616,12 @@ impl MarkionApp {
 
         self.workspace_root = root;
         self.sync_and_persist_session();
+        self.sync_git_branch_context(cx);
     }
 
     pub(super) fn update_workspace_root_from_document(&mut self, cx: &mut Context<Self>) {
-        let Some(document_path) = self.active_tab().document.path().map(Path::to_path_buf) else {
+        self.sync_git_branch_context(cx);
+        let Some(document_path) = self.active_tab().path().map(Path::to_path_buf) else {
             return;
         };
         let current_root = self
@@ -606,7 +638,7 @@ impl MarkionApp {
             return;
         }
 
-        self.set_workspace_root(next_root);
+        self.set_workspace_root(next_root, cx);
         self.refresh_file_tree(cx);
     }
 
@@ -667,6 +699,9 @@ impl MarkionApp {
     }
 
     pub(super) fn discard_current_recovery_file(&mut self) {
+        if self.active_tab().is_image() {
+            return;
+        }
         if let Some(recovery) = self.active_tab_mut().last_recovery_file.take() {
             let _ = delete_recovery_file(recovery);
         }
@@ -674,7 +709,9 @@ impl MarkionApp {
 
     pub(super) fn discard_all_tab_recovery_files(&mut self) {
         for tab in &mut self.tabs {
-            if let Some(recovery) = tab.last_recovery_file.take() {
+            if tab.is_document()
+                && let Some(recovery) = tab.last_recovery_file.take()
+            {
                 let _ = delete_recovery_file(recovery);
             }
         }
@@ -684,22 +721,51 @@ impl MarkionApp {
     /// untitled tabs and crash-recovery restore; filesystem-backed opens should
     /// go through the path helpers so already-open files can reuse their tab.
     pub(super) fn open_in_new_tab(&mut self, document: MarkdownDocument, cx: &mut Context<Self>) {
+        let tab = self.editor_tab_for_document(document);
+        self.open_tab_in_new_tab(tab, cx);
+    }
+
+    pub(super) fn open_image_in_new_tab(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let tab = self.editor_tab_for_image(path);
+        self.open_tab_in_new_tab(tab, cx);
+    }
+
+    fn open_tab_in_new_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
         let previous = self.active_tab;
+        let opening_image = tab.is_image();
         // Opening a new tab leaves the previous one inactive — same dormancy
         // policy as switch_active_tab.
-        self.tabs[previous].finish_undo_capture();
-        self.tabs[previous].preview_is_selecting = false;
-        self.tabs[previous].clear_visual_caret_affinity();
-        self.tabs[previous].marked_range = None;
-        let released = self.tabs[previous].enter_dormant();
-        let dropped = self.preview_image_cache.release_all(released.iter());
-        for image in dropped {
-            cx.drop_image(image, None);
+        if self.tabs[previous].is_document() {
+            self.tabs[previous].finish_undo_capture();
+            self.tabs[previous].preview_is_selecting = false;
+            self.tabs[previous].clear_visual_caret_affinity();
+            self.tabs[previous].marked_range = None;
         }
-        let tab = self.editor_tab_for_document(document);
+        if self.tabs[previous].is_document() && opening_image {
+            self.release_tab_image_claims(previous, cx);
+        } else {
+            let released = self.tabs[previous].enter_dormant();
+            let dropped = self.preview_image_cache.release_all(released.iter());
+            for image in dropped {
+                cx.drop_image(image, None);
+            }
+        }
         self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
-        self.refresh_search_matches();
+        if self.active_tab().is_image() {
+            self.search_visible = false;
+            self.replace_visible = false;
+            self.search_focus = None;
+            self.link_editor = None;
+            self.preview_context_menu = None;
+        }
+        if self.active_tab().is_document() {
+            self.refresh_search_matches();
+        } else {
+            self.search_matches.clear();
+            self.current_search_index = None;
+        }
+        self.sync_git_branch_context(cx);
         cx.notify();
     }
 
@@ -707,6 +773,10 @@ impl MarkionApp {
         let mut tab = EditorTab::new(document);
         tab.line_height = px(self.typography_metrics().editor_line_height);
         tab
+    }
+
+    pub(super) fn editor_tab_for_image(&self, path: PathBuf) -> EditorTab {
+        EditorTab::new_image(path.clone(), PreviewImageKey::from_local_path(&path))
     }
 
     /// Replace the active tab's document in place: discard its recovery file,
@@ -717,25 +787,38 @@ impl MarkionApp {
         document: MarkdownDocument,
         cx: &mut Context<Self>,
     ) {
+        let tab = self.editor_tab_for_document(document);
+        self.replace_active_with_tab(tab, cx);
+    }
+
+    pub(super) fn replace_active_tab_with_image(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let tab = self.editor_tab_for_image(path);
+        self.replace_active_with_tab(tab, cx);
+    }
+
+    fn replace_active_with_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
         let active = self.active_tab;
         self.release_tab_image_claims(active, cx);
-        let tab = self.active_tab_mut();
-        if let Some(recovery) = tab.last_recovery_file.take() {
+        if self.tabs[active].is_document()
+            && let Some(recovery) = self.tabs[active].last_recovery_file.take()
+        {
             let _ = delete_recovery_file(recovery);
         }
-        tab.document = document;
-        tab.selected_range = 0..0;
-        tab.selection_reversed = false;
-        tab.marked_range = None;
-        tab.undo_stack.clear();
-        tab.redo_stack.clear();
-        tab.editor_scroll = ScrollHandle::new();
-        tab.reset_preview_list();
-        tab.last_lines.clear();
-        tab.line_offsets.clear();
-        tab.line_heights.clear();
-        tab.last_bounds = None;
-        self.refresh_search_matches();
+        self.tabs[active] = tab;
+        if self.active_tab().is_image() {
+            self.search_visible = false;
+            self.replace_visible = false;
+            self.search_focus = None;
+            self.link_editor = None;
+            self.preview_context_menu = None;
+        }
+        if self.active_tab().is_document() {
+            self.refresh_search_matches();
+        } else {
+            self.search_matches.clear();
+            self.current_search_index = None;
+        }
+        self.sync_git_branch_context(cx);
         cx.notify();
     }
 
@@ -873,6 +956,9 @@ impl MarkionApp {
     }
 
     pub(super) fn schedule_autosave(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab().is_image() {
+            return;
+        }
         // Bump the generation even when disabled so a pending timer from a
         // previous schedule is invalidated.
         let active_index = self.active_tab;
@@ -895,7 +981,10 @@ impl MarkionApp {
                 let Some(tab) = app.tabs.get(active_index) else {
                     return;
                 };
-                if tab.autosave_generation != generation || !tab.document.is_dirty() {
+                if tab.is_image()
+                    || tab.autosave_generation != generation
+                    || !tab.document.is_dirty()
+                {
                     return;
                 }
 
@@ -1045,14 +1134,47 @@ impl MarkionApp {
         cx.notify();
     }
 
-    pub(super) fn scroll_editor_to_offset(&self, offset: usize) {
-        self.active_tab().scroll_editor_to_offset(offset);
+    /// Navigate to an outline heading while preserving the canonical source
+    /// position used by active-section highlighting and later mode switches.
+    /// Read mode additionally moves its visible virtualized preview to the
+    /// exact heading block; all other modes retain `jump_to_offset` behavior.
+    pub(super) fn navigate_to_outline_heading(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let offset = clamp_to_text_boundary(self.active_tab().document.text(), offset);
+        self.jump_to_offset(offset, cx);
+        if !matches!(self.view_mode, ViewMode::Read) {
+            return;
+        }
+
+        let target =
+            preview_heading_index_for_source_offset(&self.active_tab().preview_list_blocks, offset);
+        if let Some(item_ix) = target {
+            self.active_tab().preview_list.scroll_to(gpui::ListOffset {
+                item_ix,
+                offset_in_item: px(0.),
+            });
+        }
     }
 
-    pub(super) fn center_cursor_if_typewriter(&self) {
+    /// Toggle one disclosure node in the active document's session-only
+    /// outline state. Image tabs deliberately have no corresponding state.
+    pub(super) fn toggle_outline_section(&mut self, key: OutlineNodeKey, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab().document_tab() else {
+            return;
+        };
+        if tab.toggle_outline_node(key).is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn scroll_editor_to_offset(&mut self, offset: usize) {
+        self.active_tab_mut().scroll_editor_to_offset(offset);
+    }
+
+    pub(super) fn center_cursor_if_typewriter(&mut self) {
         if self.typewriter_mode {
-            self.active_tab()
-                .scroll_editor_typewriter_to_offset(self.active_tab().cursor_offset());
+            let offset = self.active_tab().cursor_offset();
+            self.active_tab_mut()
+                .scroll_editor_typewriter_to_offset(offset);
         }
     }
 
@@ -1176,13 +1298,18 @@ impl MarkionApp {
     /// Snapshot open saved tabs / workspace root into `self.session` and write
     /// `session.toml`. Best-effort: failures are logged via the status bar.
     pub(super) fn sync_and_persist_session(&mut self) {
-        self.session.open_files =
-            session_open_files_from_paths(self.tabs.iter().map(|tab| tab.document.path()));
+        self.session.open_files = session_open_files_from_paths(
+            self.tabs
+                .iter()
+                .filter(|tab| tab.is_document())
+                .map(|tab| tab.document.path()),
+        );
         self.session.active_file = self
             .active_tab()
-            .document
-            .path()
-            .map(|path| comparable_document_path(path));
+            .is_document()
+            .then(|| self.active_tab().document.path())
+            .flatten()
+            .map(comparable_document_path);
         self.session.workspace_root = if self.file_tree.is_some() {
             Some(comparable_document_path(&self.workspace_root))
         } else {
@@ -1222,7 +1349,7 @@ impl MarkionApp {
 
         if open_files.is_empty() {
             if let Some(root) = workspace_root {
-                self.set_workspace_root(root);
+                self.set_workspace_root(root, cx);
                 self.schedule_file_tree_scan(None, cx);
             }
             return;
@@ -1249,7 +1376,7 @@ impl MarkionApp {
 
         if !opened_any {
             if let Some(root) = workspace_root {
-                self.set_workspace_root(root);
+                self.set_workspace_root(root, cx);
                 self.schedule_file_tree_scan(None, cx);
             }
             return;
@@ -1262,7 +1389,7 @@ impl MarkionApp {
         if let Some(root) = workspace_root {
             // Prefer the persisted workspace root when it still exists; otherwise
             // fall back to deriving the root from the active document.
-            self.set_workspace_root(root);
+            self.set_workspace_root(root, cx);
             self.schedule_file_tree_scan(None, cx);
         } else {
             self.update_workspace_root_from_document(cx);
@@ -1303,30 +1430,16 @@ impl MarkionApp {
             return;
         }
 
-        if self.focus_existing_tab_for_path(&path, cx) {
-            self.record_recent_path(&path);
-            self.active_menu = None;
-            self.open_recent_submenu_open = false;
-            self.status = self.trf(Msg::StatusOpened, &[&display_path]);
-            cx.notify();
-            return;
-        }
-
-        match MarkdownDocument::open(&path) {
-            Ok(document) => {
-                self.open_in_new_tab(document, cx);
-                self.update_workspace_root_from_document(cx);
-                self.record_recent_path(&path);
-                self.active_menu = None;
+        match self.open_supported_path(path.clone(), OpenPathIntent::OpenInNewTab, cx) {
+            Ok(()) => {
                 self.open_recent_submenu_open = false;
-                self.status = self.trf(Msg::StatusOpened, &[&display_path]);
             }
-            Err(err) => {
+            Err(error) => {
                 self.session.remove_recent(&comparable_document_path(&path));
                 self.persist_session();
                 self.active_menu = None;
                 self.open_recent_submenu_open = false;
-                self.status = self.trf(Msg::StatusOpenFailed, &[&err.to_string()]);
+                self.status = self.trf(Msg::StatusOpenFailed, &[&error]);
             }
         }
         cx.notify();

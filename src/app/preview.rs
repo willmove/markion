@@ -28,28 +28,146 @@ pub(super) fn view_mode_pane_widths(view_mode: ViewMode, split_ratio: f32) -> (f
     }
 }
 
-/// Whether proportional scroll-sync should couple the two panes this frame.
-/// Only in Split Preview (the sole mode where both panes are visible) and only
-/// when the preference is on.
+/// Whether source-mapped scroll coupling should run this frame. It is active
+/// only in Split Preview, the sole mode where both panes are visible.
 pub(super) fn sync_scroll_is_active(view_mode: ViewMode, sync_scroll: bool) -> bool {
     matches!(view_mode, ViewMode::Split) && sync_scroll
 }
 
-/// Scroll fraction in `[0,1]` for a pane, given its current scroll offset
-/// (positive pixels from the top) and its maximum scrollable offset. Returns
-/// `0.0` when the pane has no scrollable range (`max <= 1`), so a pane that
-/// fits its viewport never drives the other pane.
-pub(super) fn sync_fraction(offset: f32, max: f32) -> f32 {
-    if max <= 1. {
-        return 0.;
-    }
-    (offset / max).clamp(0., 1.)
+pub(super) fn sync_scroll_mapping_is_current(
+    document_version: u64,
+    source_layout_key: Option<SourceLayoutKey>,
+    preview_reflects_version: Option<u64>,
+    has_preview_blocks: bool,
+) -> bool {
+    source_layout_key.is_some_and(|key| key.version == document_version)
+        && preview_reflects_version == Some(document_version)
+        && has_preview_blocks
 }
 
-/// Sync coupling converges within an epsilon; comparing fractions below this
-/// threshold avoids re-writing the non-driving pane every frame (and the
-/// resulting sub-pixel fight with the user's own scroll).
-pub(super) const SYNC_SCROLL_EPSILON: f32 = 0.001;
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum PreviewScrollAnchor {
+    Start,
+    End,
+    Block { item_ix: usize },
+}
+
+pub(super) const SYNC_SCROLL_PIXEL_EPSILON: f32 = 1.0;
+
+/// Return the preview-list row for the exact outline heading source offset.
+///
+/// Outline headings and preview heading blocks are derived from the same
+/// Markdown source positions. Matching that identity avoids ambiguities from
+/// duplicate titles or generated anchors and keeps this click-time lookup free
+/// of parsing or additional cached state.
+pub(super) fn preview_heading_index_for_source_offset(
+    blocks: &[PreviewBlock],
+    heading_offset: usize,
+) -> Option<usize> {
+    blocks.iter().position(|block| {
+        matches!(
+            block,
+            PreviewBlock::Heading { source_range, .. }
+                if source_range.start == heading_offset
+        )
+    })
+}
+
+/// Find the preview row that owns `source_offset`. Gaps with no rendered row
+/// collapse to the following row boundary; leading/trailing gaps become the
+/// document boundaries.
+pub(super) fn preview_anchor_for_source_offset(
+    blocks: &[PreviewBlock],
+    source_offset: usize,
+    document_len: usize,
+) -> Option<PreviewScrollAnchor> {
+    if blocks.is_empty() {
+        return None;
+    }
+    if source_offset == 0 {
+        return Some(PreviewScrollAnchor::Start);
+    }
+    if source_offset >= document_len {
+        return Some(PreviewScrollAnchor::End);
+    }
+    if source_offset < blocks[0].source_range().start {
+        return Some(PreviewScrollAnchor::Start);
+    }
+    let item_ix = blocks.partition_point(|block| block.source_range().end <= source_offset);
+    if item_ix >= blocks.len() {
+        Some(PreviewScrollAnchor::End)
+    } else {
+        Some(PreviewScrollAnchor::Block { item_ix })
+    }
+}
+
+pub(super) fn sync_interval_progress(value: f32, start: f32, end: f32) -> f32 {
+    let extent = end - start;
+    if extent <= SYNC_SCROLL_PIXEL_EPSILON {
+        return 0.;
+    }
+    ((value - start) / extent).clamp(0., 1.)
+}
+
+pub(super) fn sync_interpolate(start: f32, end: f32, progress: f32) -> f32 {
+    start + (end - start) * progress.clamp(0., 1.)
+}
+
+fn preview_position_changed(left: SyncPreviewPosition, right: SyncPreviewPosition) -> bool {
+    left.item_ix != right.item_ix
+        || (left.offset_in_item - right.offset_in_item).abs() > SYNC_SCROLL_PIXEL_EPSILON
+}
+
+/// Resolve the current driver while consuming one expected follower write.
+/// Explicit interaction wins; a deferred driver wins over raw geometry drift;
+/// otherwise exactly one changed pane may drive.
+pub(super) fn select_sync_scroll_driver(
+    state: &mut SyncScrollState,
+    editor_offset: f32,
+    preview_position: SyncPreviewPosition,
+) -> Option<PaneScrollTarget> {
+    let explicit = state.driver_hint.take();
+    let mut suppress_editor = false;
+    let mut suppress_preview = false;
+    if let Some(expected) = state.expected_follower.take() {
+        state.expected_follower_retried = false;
+        match expected {
+            ExpectedSyncFollower::Editor(expected_offset) => {
+                suppress_editor = explicit != Some(PaneScrollTarget::Editor)
+                    || (editor_offset - expected_offset).abs() <= SYNC_SCROLL_PIXEL_EPSILON;
+            }
+            ExpectedSyncFollower::Preview(expected_position) => {
+                suppress_preview = explicit != Some(PaneScrollTarget::Preview)
+                    || !preview_position_changed(preview_position, expected_position);
+            }
+        }
+    }
+
+    let editor_changed = state
+        .last_editor_offset
+        .is_some_and(|previous| (previous - editor_offset).abs() > SYNC_SCROLL_PIXEL_EPSILON)
+        && !suppress_editor;
+    let preview_changed = state
+        .last_preview_position
+        .is_some_and(|previous| preview_position_changed(previous, preview_position))
+        && !suppress_preview;
+    let deferred = if explicit.is_none() {
+        state.deferred_driver.take()
+    } else {
+        state.deferred_driver = None;
+        None
+    };
+    let driver = explicit
+        .or(deferred)
+        .or(match (editor_changed, preview_changed) {
+            (true, false) => Some(PaneScrollTarget::Editor),
+            (false, true) => Some(PaneScrollTarget::Preview),
+            _ => None,
+        });
+    state.last_editor_offset = Some(editor_offset);
+    state.last_preview_position = Some(preview_position);
+    driver
+}
 
 /// Clamp a byte offset to a UTF-8 char boundary within `run_text`.
 pub(super) fn clamp_preview_offset(run_text: &str, offset: usize) -> usize {
@@ -4777,9 +4895,11 @@ pub(super) fn preview_block_view(
         PreviewBlock::Html { html, .. } => {
             html_preview_block_view(app, html, block_index, document_dir, cx)
         }
-        PreviewBlock::Image { url, .. } => div()
-            .mb_3()
-            .child(preview_image_view(app, url, document_dir)),
+        PreviewBlock::Image { url, .. } => {
+            div()
+                .mb_3()
+                .child(preview_image_view(app, url, document_dir))
+        }
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
         PreviewBlock::FootnoteDefinition { label, text, .. } => div()
             .mb(px(typography.paragraph_spacing))

@@ -60,41 +60,47 @@ The editor SHALL bind common formatting, file, view, and navigation operations t
 - **THEN** the shortcut is shown alongside the item label
 
 ### Requirement: Multi-document tab model
-The editor SHALL hold zero or more open documents as tabs within a single window (`tabs: Vec<EditorTab>` + an `active_tab` index), rather than a single document per window. Each tab SHALL carry its own isolated document, cursor/selection, scroll position, undo/redo history, IME composition state, layout caches, dirty flag, and autosave/recovery tracking — switching tabs SHALL NOT disturb another tab's state. Tabs for filesystem-backed documents SHALL be unique by file path within a window: when an open request targets a file that is already open in another tab, the editor SHALL focus that existing tab instead of opening a duplicate tab. A tab bar SHALL be rendered only when more than one tab is open; with a single tab the editor looks identical to the pre-tab single-document layout. Tabs are session-only: they are not persisted across launches (restarting returns to a single untitled document).
+The editor SHALL hold zero or more open content tabs within a single window (`tabs` plus an `active_tab` index), rather than a single document per window. A Markdown or curated text tab SHALL carry its own isolated document, cursor/selection, scroll position, undo/redo history, IME composition state, layout caches, dirty flag, and autosave/recovery tracking; a read-only image tab SHALL carry only the state required to identify, load, present, scroll, and close that image. Switching tabs SHALL NOT disturb another tab's state. Tabs for filesystem-backed content SHALL be unique by file path within a window: when an open request targets a file that is already open in another tab, the editor SHALL focus that existing tab instead of opening a duplicate tab. A tab bar SHALL be rendered only when more than one tab is open; with a single tab the active content surface SHALL use the same space as the pre-tab layout. Tabs are session-only: they are not persisted across launches (restarting returns to a single untitled document).
 
 #### Scenario: Opening files creates switchable tabs with isolated state
-- **WHEN** the user opens a second file (via the file tree, or the OpenInNewTab action)
-- **THEN** a new tab is appended and activated, and switching back to the first tab restores its exact cursor position, scroll offset, and undo history
+- **WHEN** the user opens a second supported file via the file tree or the Open in New Tab action
+- **THEN** a new document or image tab is appended and activated
+- **AND** switching back to the first tab restores that tab's exact content-specific state
 
 #### Scenario: Opening an already-open file focuses its existing tab
-- **WHEN** the user opens a file by path and that same file is already open in a tab
+- **WHEN** the user opens a supported file by path and that same file is already open in a tab
 - **THEN** the existing tab is activated
 - **AND** no duplicate tab is appended or replaced
-- **AND** the existing tab's document text, dirty flag, cursor/selection, undo/redo history, editor scroll position, preview scroll position, and derived Markdown caches are preserved
+- **AND** an existing document tab preserves its text, dirty flag, cursor/selection, undo/redo history, editor scroll position, preview scroll position, and derived Markdown caches
+- **AND** an existing image tab preserves its load result and presentation state
 
 #### Scenario: File→Open replaces the active tab
-- **WHEN** the user invokes File→Open and picks a file that is not already open
-- **THEN** the active tab's document is replaced (after a dirty-guard on that tab), matching the single-document behavior, rather than spawning a new tab
+- **WHEN** the user invokes File → Open and picks a supported file that is not already open
+- **THEN** the active tab's content is replaced after applying a dirty guard when that tab contains an editable document, rather than spawning a new tab
+- **AND** replacing a read-only image tab does not require a dirty confirmation
 
 #### Scenario: Tab navigation and closing
 - **WHEN** the user presses the next/previous tab shortcut (Ctrl+Tab / Ctrl+Shift+Tab) or clicks a tab / its close button
 - **THEN** the active tab switches in opening order, or the targeted tab closes; closing the last tab creates a fresh untitled document rather than closing the window
 
 #### Scenario: Closing an unsaved tab prompts for confirmation
-- **WHEN** the user closes a tab whose document has unsaved changes
+- **WHEN** the user closes a document tab whose content has unsaved changes
 - **THEN** the editor prompts for confirmation before discarding those changes
+- **AND** closing a read-only image tab never presents an unsaved-changes prompt
 
 #### Scenario: Quitting with multiple unsaved tabs
-- **WHEN** the user quits or closes the window while two or more tabs have unsaved changes
-- **THEN** the editor detects the unsaved tabs and prompts before discarding them
+- **WHEN** the user quits or closes the window while two or more document tabs have unsaved changes and any number of image tabs are open
+- **THEN** the editor detects the unsaved document tabs and prompts before discarding them
+- **AND** image tabs do not contribute to the dirty-tab count
 
 #### Scenario: Autosave targets the tab that was active when scheduled
 - **WHEN** an autosave timer fires after the user has switched tabs
-- **THEN** the autosave writes the tab whose generation was captured at schedule time, not whichever tab is now active
+- **THEN** the autosave writes the document tab whose generation was captured at schedule time, not whichever tab is now active
+- **AND** an image tab never becomes an autosave target
 
 #### Scenario: Single-tab layout is unchanged
-- **WHEN** only one tab is open
-- **THEN** no tab bar is rendered and the editor's appearance matches the pre-tab single-document layout
+- **WHEN** only one content tab is open
+- **THEN** no tab bar is rendered and the active document or image surface occupies the normal document-workspace area
 
 ### Requirement: Editor view modes
 The editor SHALL provide four mutually exclusive view modes: Edit, Visual Edit, Split Preview, and Read. Edit mode SHALL show the Markdown source editing surface without the rendered preview pane. Visual Edit mode SHALL show a single source-backed visual editing surface where common Markdown constructs render close to their preview appearance while remaining editable. Split Preview mode SHALL show the Markdown source editing surface and rendered preview pane together, preserving the current live-preview workflow. Read mode SHALL show the rendered Markdown preview without the source editing pane and SHALL NOT allow editing through the rendered preview.
@@ -196,7 +202,7 @@ The editor SHALL provide a Visual Edit mode that presents common Markdown constr
 - **AND** derived Markdown caches SHALL NOT be invalidated
 
 ### Requirement: Pane scroll state with visible scrollbars
-The editor SHALL preserve each tab's source editor and rendered preview scroll positions while exposing visible scrollbar controls for those panes. Using a scrollbar, mouse wheel, or trackpad SHALL update the same per-tab scroll state without modifying document text or derived Markdown state. When the persisted Sync scroll preference is enabled and the active view mode is Split Preview, scrolling either pane SHALL additionally update the other pane's per-tab scroll position to the same fraction of its scrollable range, clamped to its bounds; this coupling SHALL NOT merge the two panes' scroll states into a shared scroll (each pane retains its own scroll handle and the preview retains its own list state) and SHALL NOT reset the preview list or reparse the document. When Sync scroll is disabled, or the active view mode is not Split Preview, the two panes SHALL scroll independently.
+The editor SHALL preserve each tab's source editor and rendered preview scroll positions while exposing visible scrollbar controls for those panes. Using a scrollbar, mouse wheel, or trackpad SHALL update the same per-tab scroll state without modifying document text or derived Markdown state. When the persisted Sync scroll preference is enabled and the active view mode is Split Preview, scrolling either pane SHALL additionally update the other pane's per-tab scroll position so both viewport anchors represent the same source-backed document location, using rendered preview blocks' source ranges and within-block progress instead of matching whole-document scroll fractions. This coupling SHALL NOT merge the two panes' scroll states into a shared scroll: each pane SHALL retain its own scroll handle or list state, driver/follower observations SHALL remain isolated per tab, and a programmatic follower update SHALL NOT be mistaken for new user input. Synchronization SHALL NOT reset the preview list, reparse the document, mutate document text, or invalidate derived Markdown caches. When Sync scroll is disabled, when the active view mode is not Split Preview, or when no current source mapping is available, the two panes SHALL not be coupled.
 
 #### Scenario: Editor scrollbar preserves tab scroll state
 - **WHEN** the user scrolls the source editor pane by dragging its scrollbar and then switches away from and back to the tab
@@ -210,12 +216,22 @@ The editor SHALL preserve each tab's source editor and rendered preview scroll p
 - **WHEN** the user drags the editor or preview scrollbar
 - **THEN** the document text, dirty flag, undo/redo history, preview blocks, outline, stats, syntax highlighting cache, and cached text handle remain governed by the existing document-version rules
 
-#### Scenario: Sync scroll couples the panes without merging scroll state
+#### Scenario: Sync scroll couples panes by document location without merging state
 - **WHEN** Sync scroll is enabled and the active view mode is Split Preview
 - **AND** the user scrolls one of the two panes
-- **THEN** the other pane's scroll position moves to the matching fraction of its scrollable range
-- **AND** each pane still holds its own scroll handle/list state, and switching tabs still restores each tab's independent scroll positions
-- **AND** no preview list reset or Markdown reparse occurs
+- **THEN** the other pane moves to the source-backed document location represented by the driving pane's viewport anchor
+- **AND** each pane still holds its own scroll handle or list state, and switching tabs still restores each tab's independent scroll positions
+- **AND** no preview list reset, document mutation, cache invalidation, or Markdown reparse occurs
+
+#### Scenario: Local height differences do not select an unrelated block
+- **WHEN** the source and rendered representations have non-uniform local height ratios
+- **AND** Sync scroll follows a scroll across those regions
+- **THEN** the follower remains aligned to the driving pane's source-backed block and relative position rather than to the same fraction of its total scrollable range
+
+#### Scenario: Programmatic follower movement does not reverse the driver
+- **WHEN** Sync scroll writes a mapped target to the follower pane
+- **THEN** the next reconciliation treats that movement as the expected follower result
+- **AND** it does not move the original driving pane back toward the follower's previous position
 
 #### Scenario: Independent scroll resumes when Sync scroll is disabled
 - **WHEN** Sync scroll is disabled or the view mode is not Split Preview

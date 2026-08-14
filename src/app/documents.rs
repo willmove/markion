@@ -55,37 +55,14 @@ impl MarkionApp {
             let status = match receiver.await {
                 Ok(Ok(Some(paths))) => {
                     if let Some(path) = paths.into_iter().next() {
-                        let display_path = path.display().to_string();
-                        let focused_existing = this
-                            .update(cx, |app, cx| {
-                                if app.focus_existing_tab_for_path(&path, cx) {
-                                    app.record_recent_path(&path);
-                                    app.active_menu = None;
-                                    app.status = app.trf(Msg::StatusOpened, &[&display_path]);
-                                    cx.notify();
-                                    true
-                                } else {
-                                    false
-                                }
-                            })
-                            .unwrap_or(false);
-                        if focused_existing {
-                            return;
-                        }
-
-                        match MarkdownDocument::open(&path) {
-                            Ok(document) => {
-                                let _ = this.update(cx, |app, cx| {
-                                    app.replace_active_tab(document, cx);
-                                    app.active_menu = None;
-                                    app.update_workspace_root_from_document(cx);
-                                    app.record_recent_path(&path);
-                                    app.status = app.trf(Msg::StatusOpened, &[&display_path]);
-                                    cx.notify();
-                                });
-                                return;
+                        match this.update(cx, |app, cx| {
+                            app.open_supported_path(path, OpenPathIntent::ReplaceActive, cx)
+                        }) {
+                            Ok(Ok(())) => return,
+                            Ok(Err(error)) => tf(language, Msg::StatusOpenFailed, &[&error]),
+                            Err(error) => {
+                                tf(language, Msg::StatusOpenFailed, &[&error.to_string()])
                             }
-                            Err(err) => tf(language, Msg::StatusOpenFailed, &[&err.to_string()]),
                         }
                     } else {
                         t(language, Msg::StatusOpenCanceled).to_string()
@@ -119,7 +96,7 @@ impl MarkionApp {
                     if let Some(path) = paths.into_iter().next() {
                         let display_path = path.display().to_string();
                         let _ = this.update(cx, |app, cx| {
-                            app.set_workspace_root(path);
+                            app.set_workspace_root(path, cx);
                             app.sidebar_visible = true;
                             app.sidebar_tab = SidebarTab::Files;
                             app.active_menu = None;
@@ -182,37 +159,14 @@ impl MarkionApp {
             let status = match receiver.await {
                 Ok(Ok(Some(paths))) => {
                     if let Some(path) = paths.into_iter().next() {
-                        let display_path = path.display().to_string();
-                        let focused_existing = this
-                            .update(cx, |app, cx| {
-                                if app.focus_existing_tab_for_path(&path, cx) {
-                                    app.record_recent_path(&path);
-                                    app.active_menu = None;
-                                    app.status = app.trf(Msg::StatusOpened, &[&display_path]);
-                                    cx.notify();
-                                    true
-                                } else {
-                                    false
-                                }
-                            })
-                            .unwrap_or(false);
-                        if focused_existing {
-                            return;
-                        }
-
-                        match MarkdownDocument::open(&path) {
-                            Ok(document) => {
-                                let _ = this.update(cx, |app, cx| {
-                                    app.open_in_new_tab(document, cx);
-                                    app.active_menu = None;
-                                    app.update_workspace_root_from_document(cx);
-                                    app.record_recent_path(&path);
-                                    app.status = app.trf(Msg::StatusOpened, &[&display_path]);
-                                    cx.notify();
-                                });
-                                return;
+                        match this.update(cx, |app, cx| {
+                            app.open_supported_path(path, OpenPathIntent::OpenInNewTab, cx)
+                        }) {
+                            Ok(Ok(())) => return,
+                            Ok(Err(error)) => tf(language, Msg::StatusOpenFailed, &[&error]),
+                            Err(error) => {
+                                tf(language, Msg::StatusOpenFailed, &[&error.to_string()])
                             }
-                            Err(err) => tf(language, Msg::StatusOpenFailed, &[&err.to_string()]),
                         }
                     } else {
                         t(language, Msg::StatusOpenCanceled).to_string()
@@ -246,7 +200,9 @@ impl MarkionApp {
 
     pub(super) fn close_tab_confirmed(&mut self, cx: &mut Context<Self>) {
         // Discard the active tab's recovery file before removing it.
-        if let Some(recovery) = self.active_tab_mut().last_recovery_file.take() {
+        if self.active_tab().is_document()
+            && let Some(recovery) = self.active_tab_mut().last_recovery_file.take()
+        {
             let _ = delete_recovery_file(recovery);
         }
         let active = self.active_tab;
@@ -262,8 +218,14 @@ impl MarkionApp {
             }
         }
         self.active_menu = None;
-        self.refresh_search_matches();
+        if self.active_tab().is_document() {
+            self.refresh_search_matches();
+        } else {
+            self.search_matches.clear();
+            self.current_search_index = None;
+        }
         self.sync_and_persist_session();
+        self.sync_git_branch_context(cx);
         self.status = t(self.language, Msg::StatusNewDocument).into();
         cx.notify();
     }
@@ -294,6 +256,11 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.active_tab().is_image() {
+            self.status = t(self.language, Msg::StatusImageActionUnavailable).into();
+            cx.notify();
+            return;
+        }
         if self.active_tab().document.path().is_none() {
             self.save_document_as(&SaveDocumentAs, window, cx);
             return;
