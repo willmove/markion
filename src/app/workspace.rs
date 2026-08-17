@@ -335,6 +335,20 @@ impl MarkionApp {
         }
     }
 
+    /// Tab target for a non-explicit open (File → Open, file-tree click,
+    /// drag-drop, Open Recent), resolved from the persisted
+    /// open-in-current-tab preference. While the preference is on, only a
+    /// safe-to-replace active tab (image, untitled, or clean document) is
+    /// replaced in place; a dirty editable tab diverts the open to a new tab
+    /// so gestures never prompt and never discard unsaved work.
+    pub(super) fn default_open_intent(&self) -> OpenPathIntent {
+        if !self.open_in_current_tab || !self.active_tab().is_safe_to_replace() {
+            OpenPathIntent::OpenInNewTab
+        } else {
+            OpenPathIntent::ReplaceActive
+        }
+    }
+
     pub(super) fn open_supported_path(
         &mut self,
         path: PathBuf,
@@ -383,9 +397,11 @@ impl MarkionApp {
     /// into an internal drag on `Entered`, then fires `on_drop::<ExternalPaths>`
     /// on `Submit`); this handler is registered on both pane `div`s.
     ///
-    /// Each dropped path that is a Markdown file is opened in its own new tab
-    /// (reusing [`open_file_in_new_tab_from_path`], so the status bar reflects
-    /// the last opened file). Non-Markdown files and directories are skipped
+    /// The first dropped Markdown file follows the default open-target
+    /// preference (replacing a safe-to-replace active tab when the
+    /// open-in-current-tab preference is on); every subsequent one opens in
+    /// its own new tab, so a multi-file drop cannot strand earlier files by
+    /// thrashing replace. Non-Markdown files and directories are skipped
     /// silently; if nothing was opened the status bar is left untouched.
     ///
     /// A multi-file drop arrives as a single event with all paths bundled in
@@ -397,14 +413,13 @@ impl MarkionApp {
         cx: &mut Context<Self>,
     ) {
         let mut images = Vec::new();
+        let mut documents = Vec::new();
         for path in dragged.paths() {
             if !path.is_file() {
                 continue;
             }
             match classify_external_drop_path(path) {
-                ExternalDropIntent::OpenDocument => {
-                    self.open_file_in_new_tab_from_path(path.clone(), cx)
-                }
+                ExternalDropIntent::OpenDocument => documents.push(path.clone()),
                 ExternalDropIntent::ImportImage => match fs::read(path) {
                     Ok(bytes) => images.push(PendingImageInput {
                         stem: path
@@ -431,8 +446,28 @@ impl MarkionApp {
                 ExternalDropIntent::Ignore => {}
             }
         }
+        self.open_dropped_documents(&documents, cx);
         if !images.is_empty() {
             self.request_image_import(images, window, cx);
+        }
+    }
+
+    /// Open a batch of dropped Markdown paths in order: the first follows the
+    /// default open-target rule and every subsequent one appends a new tab,
+    /// so a multi-file drop cannot strand earlier files by thrashing replace.
+    pub(super) fn open_dropped_documents(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        let mut opened_any = false;
+        for path in paths {
+            let intent = if opened_any {
+                OpenPathIntent::OpenInNewTab
+            } else {
+                self.default_open_intent()
+            };
+            opened_any = true;
+            if let Err(error) = self.open_supported_path(path.clone(), intent, cx) {
+                self.status = self.trf(Msg::StatusOpenFailed, &[&error]);
+                cx.notify();
+            }
         }
     }
 

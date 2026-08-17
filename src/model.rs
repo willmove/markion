@@ -79,7 +79,7 @@ pub const DEFAULT_HEADING_MENU_MAX_LEVEL: u8 = 5;
 pub const EXTENDED_HEADING_MENU_MAX_LEVEL: u8 = 6;
 
 /// Default source-editor font size in logical pixels.
-pub const DEFAULT_EDITOR_FONT_SIZE: u16 = 15;
+pub const DEFAULT_EDITOR_FONT_SIZE: u16 = 14;
 /// Smallest supported source-editor font size in logical pixels.
 pub const MIN_EDITOR_FONT_SIZE: u16 = 10;
 /// Largest supported source-editor font size in logical pixels.
@@ -188,6 +188,12 @@ pub struct AppPreferences {
     /// Disabled by default; the always-excluded build/dependency noise list
     /// (`target`, `node_modules`, …) stays excluded regardless of this flag.
     pub show_hidden_files: bool,
+    /// When enabled, opening a supported document or image through a
+    /// non-explicit entry (File → Open, file-tree click, drag-and-drop,
+    /// Open Recent) replaces the active tab when that is safe (an image,
+    /// untitled, or clean document tab); a dirty active tab makes the open
+    /// divert to a new tab instead. Enabled by default.
+    pub open_in_current_tab: bool,
     pub sidebar_visible: bool,
     pub sidebar_tab: SidebarTab,
     /// Interface language preference code (e.g. "en", "zh"). Stored as a
@@ -228,6 +234,7 @@ impl Default for AppPreferences {
             heading_menu_max_level: DEFAULT_HEADING_MENU_MAX_LEVEL,
             sync_scroll: false,
             show_hidden_files: false,
+            open_in_current_tab: true,
             sidebar_visible: true,
             sidebar_tab: SidebarTab::default(),
             language: "en".to_string(),
@@ -633,6 +640,12 @@ pub enum VisualBlockKind {
         checked: Option<bool>,
     },
     BlockQuote,
+    /// Leading `[!NOTE]`-style marker line of a GFM alert quote. Owns exactly
+    /// the marker-line bytes with no editable runs: the marker text stays
+    /// hidden until focus reveals it through the quote marker mechanism.
+    CalloutTitle {
+        kind: AlertKind,
+    },
     CodeBlock {
         language: Option<String>,
     },
@@ -967,6 +980,17 @@ impl std::fmt::Display for RichText {
     }
 }
 
+/// GFM alert kind reported by the parser when a blockquote opens with a
+/// `[!NOTE]`-style marker line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertKind {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreviewBlock {
     Heading {
@@ -993,6 +1017,11 @@ pub enum PreviewBlock {
         /// items remain distinct so every source byte has exactly one visual
         /// owner and consumers preserve the authored block order.
         children: Vec<PreviewBlock>,
+        /// GFM alert kind when the quote opens with a `[!NOTE]`-style marker
+        /// line; `None` for plain blockquotes. The marker line is block
+        /// structure (no inline events own its bytes), so consumers must
+        /// account for it separately from `children`.
+        alert: Option<AlertKind>,
         source_range: Range<usize>,
     },
     CodeBlock {

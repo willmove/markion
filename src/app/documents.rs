@@ -29,13 +29,21 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.confirm_discard_then(
-            window,
-            cx,
-            Msg::DialogDiscardTitle,
-            Msg::DialogDiscardOpenDetail,
-            Self::open_document_confirmed,
-        );
+        // File → Open follows the default open-target preference. A dirty
+        // guard is needed only when that resolution can replace the active
+        // tab (open-in-current-tab on); the OS picker is modal, so the
+        // resolution cannot drift between this guard and the open below.
+        if self.default_open_intent() == OpenPathIntent::ReplaceActive {
+            self.confirm_discard_then(
+                window,
+                cx,
+                Msg::DialogDiscardTitle,
+                Msg::DialogDiscardOpenDetail,
+                Self::open_document_confirmed,
+            );
+        } else {
+            Self::open_document_confirmed(self, cx);
+        }
     }
 
     pub(super) fn open_document_confirmed(&mut self, cx: &mut Context<Self>) {
@@ -56,7 +64,7 @@ impl MarkionApp {
                 Ok(Ok(Some(paths))) => {
                     if let Some(path) = paths.into_iter().next() {
                         match this.update(cx, |app, cx| {
-                            app.open_supported_path(path, OpenPathIntent::ReplaceActive, cx)
+                            app.open_supported_path(path, app.default_open_intent(), cx)
                         }) {
                             Ok(Ok(())) => return,
                             Ok(Err(error)) => tf(language, Msg::StatusOpenFailed, &[&error]),

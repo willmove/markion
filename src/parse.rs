@@ -8,7 +8,7 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{HeadingLevel, Options};
+use pulldown_cmark::{BlockQuoteKind, HeadingLevel, Options};
 
 use crate::escape::escape_html_attribute;
 use crate::model::{InlineSpan, InlineStyle, MathSource, PreviewBlock, RichText, VisualHtmlImage};
@@ -395,8 +395,10 @@ pub(crate) fn push_nonempty_block(blocks: &mut Vec<PreviewBlock>, block: Preview
                 blocks.push(block);
             }
         }
-        PreviewBlock::BlockQuote { children, .. } => {
-            if !children.is_empty() {
+        PreviewBlock::BlockQuote { children, alert, .. } => {
+            // An alert quote with no body still owns its marker line, so it
+            // must survive into the block model for visual rendering.
+            if !children.is_empty() || alert.is_some() {
                 blocks.push(block);
             }
         }
@@ -1697,6 +1699,16 @@ pub(crate) fn heading_level_to_u8(level: HeadingLevel) -> u8 {
         HeadingLevel::H4 => 4,
         HeadingLevel::H5 => 5,
         HeadingLevel::H6 => 6,
+    }
+}
+
+pub(crate) fn gfm_alert_kind(kind: BlockQuoteKind) -> crate::AlertKind {
+    match kind {
+        BlockQuoteKind::Note => crate::AlertKind::Note,
+        BlockQuoteKind::Tip => crate::AlertKind::Tip,
+        BlockQuoteKind::Important => crate::AlertKind::Important,
+        BlockQuoteKind::Warning => crate::AlertKind::Warning,
+        BlockQuoteKind::Caution => crate::AlertKind::Caution,
     }
 }
 

@@ -26,8 +26,8 @@ use gpui::{
     anchored, canvas, div, fill, font, img, list, point, px, rgb, rgba, size,
 };
 use markion::{
-    AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement, BlockTarget,
-    BlockTransform, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
+    AlertKind, AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement,
+    BlockTarget, BlockTransform, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
     DEFAULT_RENDERED_FONT_SIZE, DiskState, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
     ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind,
     HighlightedSpan, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan,
@@ -981,10 +981,13 @@ const PANE_SCROLLBAR_RESERVED_WIDTH: f32 = 15.;
 const PANE_SCROLLBAR_THUMB_WIDTH: f32 = 9.;
 const PANE_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 32.;
 const PANE_SCROLLBAR_EDGE_INSET: f32 = 3.;
-/// Nominal line height (px) of the source editor. Used both when painting the
-/// editor text and by the line-based scroll helpers, so the two stay in sync;
-/// the actual per-line height is measured during layout for hit-testing.
-const EDITOR_LINE_HEIGHT: f32 = 24.;
+/// Nominal line height (px) of the source editor: 1.6x the default font size
+/// (14px), so the derived ratio in `DocumentTypographyMetrics` stays 1.6 for
+/// every size. Update together with `DEFAULT_EDITOR_FONT_SIZE`. Used both when
+/// painting the editor text and by the line-based scroll helpers, so the two
+/// stay in sync; the actual per-line height is measured during layout for
+/// hit-testing.
+const EDITOR_LINE_HEIGHT: f32 = 22.4;
 /// Line height (px) of the preview pane. Independent of the editor: the preview
 /// scrolls natively via its `ListState`, not by line-index math.
 const PREVIEW_LINE_HEIGHT: f32 = 23.;
@@ -1357,6 +1360,10 @@ struct MarkionApp {
     /// plus Windows-hidden-attribute entries on Windows). Persisted; disabled
     /// by default. The always-excluded noise list stays excluded regardless.
     show_hidden_files: bool,
+    /// When enabled, non-explicit opens (File → Open, file-tree click,
+    /// drag-drop, Open Recent) replace a safe-to-replace active tab instead
+    /// of appending a new tab. Persisted; enabled by default.
+    open_in_current_tab: bool,
     view_mode: ViewMode,
     workspace_root: PathBuf,
     // Draggable layout widths. Not persisted — every launch starts from the

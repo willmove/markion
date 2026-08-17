@@ -6,7 +6,7 @@ use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 use crate::frontmatter::split_front_matter;
 use crate::model::{
-    InlineStyle, MathDelimiter, MathLayoutStyle, MathSource, PreviewBlock, VisualBlock,
+    AlertKind, InlineStyle, MathDelimiter, MathLayoutStyle, MathSource, PreviewBlock, VisualBlock,
     VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
     VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
     VisualInlineRun, VisualNavigationTarget, VisualProjection, VisualProjectionSegment,
@@ -405,6 +405,12 @@ use crate::parse::{
 struct VisualLeaf<'a> {
     block: &'a PreviewBlock,
     quote_group: Option<Range<usize>>,
+    /// Alert kind of the enclosing quote group, when it opens with a
+    /// `[!NOTE]`-style marker line.
+    alert: Option<AlertKind>,
+    /// Body-less alert group: no preview child exists, so the leaf renders
+    /// the group's marker line itself as a callout title row.
+    marker_only: bool,
 }
 
 pub(crate) fn build_visual_blocks(
@@ -436,29 +442,49 @@ pub(crate) fn build_visual_blocks(
     // Blockquotes are containers only. Their ordered leaf children become
     // visual rows; projecting the container as well would make parent and
     // child source ranges overlap and duplicate content on screen.
-    let expanded: Vec<VisualLeaf<'_>> = preview
-        .iter()
-        .flat_map(|block| match block {
+    let mut expanded: Vec<VisualLeaf<'_>> = Vec::new();
+    for block in preview {
+        match block {
             PreviewBlock::BlockQuote {
                 children,
+                alert,
                 source_range,
-            } => children
-                .iter()
-                .map(|child| VisualLeaf {
-                    block: child,
-                    quote_group: Some(source_range.clone()),
-                })
-                .collect::<Vec<_>>(),
-            _ => vec![VisualLeaf {
+            } => {
+                if children.is_empty() && alert.is_some() {
+                    expanded.push(VisualLeaf {
+                        block,
+                        quote_group: Some(source_range.clone()),
+                        alert: *alert,
+                        marker_only: true,
+                    });
+                }
+                for child in children {
+                    expanded.push(VisualLeaf {
+                        block: child,
+                        quote_group: Some(source_range.clone()),
+                        alert: *alert,
+                        marker_only: false,
+                    });
+                }
+            }
+            _ => expanded.push(VisualLeaf {
                 block,
                 quote_group: None,
-            }],
-        })
-        .collect();
+                alert: None,
+                marker_only: false,
+            }),
+        }
+    }
 
     let mut source_ranges = expanded
         .iter()
         .map(|leaf| {
+            if leaf.marker_only {
+                return leaf
+                    .quote_group
+                    .clone()
+                    .unwrap_or_else(|| leaf.block.source_range().clone());
+            }
             let range = visual_block_source_range(text, leaf.block);
             leaf.quote_group.as_ref().map_or(range.clone(), |group| {
                 quoted_leaf_source_range(text, range, group)
@@ -495,7 +521,69 @@ pub(crate) fn build_visual_blocks(
                 .quote_group
                 .as_ref()
                 .filter(|group| gap_range.start >= group.start && gap_range.end <= group.end);
-            blocks.push(gap_block(text, gap_range, quote_group, &mut allocate_id));
+            // An alert group's leading marker line (`> [!NOTE]`) is block
+            // structure: no inline event owns its bytes, so instead of the
+            // generic gap fallback it becomes the group's callout title row.
+            // The gap containing the group start is the leading one (gaps
+            // are disjoint), and the marker line is the line holding that
+            // start — including any indentation before the `>`. Only that
+            // line belongs to the title; remaining gap lines (e.g. a bare
+            // `>` separator) keep the normal gap handling.
+            let alert_title =
+                quote_group
+                    .as_ref()
+                    .filter(|group| gap_range.contains(&group.start))
+                    .zip(leaf.alert)
+                    .map(|(group, kind)| {
+                        let marker_line_start = text[..group.start]
+                            .rfind('\n')
+                            .map_or(gap_range.start, |index| index + 1)
+                            .max(gap_range.start);
+                        let marker_line_end = text[marker_line_start..gap_range.end]
+                            .find('\n')
+                            .map_or(gap_range.end, |relative| marker_line_start + relative + 1)
+                            .min(gap_range.end);
+                        (marker_line_start..marker_line_end, kind, (*group).clone())
+                    });
+            match alert_title {
+                Some((marker_range, kind, group)) => {
+                    blocks.push(callout_title_block(
+                        text,
+                        marker_range.clone(),
+                        kind,
+                        &group,
+                        &mut allocate_id,
+                    ));
+                    if marker_range.end < gap_range.end {
+                        blocks.push(gap_block(
+                            text,
+                            marker_range.end..gap_range.end,
+                            quote_group,
+                            &mut allocate_id,
+                        ));
+                    }
+                }
+                None => {
+                    blocks.push(gap_block(text, gap_range, quote_group, &mut allocate_id));
+                }
+            }
+        }
+
+        if leaf.marker_only {
+            let kind = leaf.alert.expect("marker-only leaf carries the alert kind");
+            let group = leaf
+                .quote_group
+                .clone()
+                .unwrap_or_else(|| range.clone());
+            blocks.push(callout_title_block(
+                text,
+                range.clone(),
+                kind,
+                &group,
+                &mut allocate_id,
+            ));
+            covered_until = covered_until.max(range.end);
+            continue;
         }
 
         let quote_context = leaf.quote_group.as_ref().map(|group| {
@@ -710,6 +798,37 @@ fn gap_block(
     }
 }
 
+fn callout_title_block(
+    text: &str,
+    range: Range<usize>,
+    kind: AlertKind,
+    group: &Range<usize>,
+    allocate_id: &mut impl FnMut() -> VisualBlockId,
+) -> VisualBlock {
+    // Every byte of the marker line is structural and behaves like a quote
+    // prefix: one marker range covers `> [!NOTE]` up to (not including) the
+    // trailing newline, so any caret inside the line reveals it verbatim
+    // instead of revealing fragments. The row itself carries no editable
+    // runs; the trailing newline stays unowned like on whitespace rows.
+    let mut quote_context = quote_context_for_row(text, range.clone(), range.clone(), group.clone());
+    let line_end = text[range.clone()]
+        .find('\n')
+        .map_or(range.end, |relative| range.start + relative);
+    quote_context.marker_ranges = vec![range.start..line_end];
+    VisualBlock {
+        id: allocate_id(),
+        kind: VisualBlockKind::CalloutTitle { kind },
+        source_range: range,
+        editable_runs: Vec::new(),
+        reveal_groups: Vec::new(),
+        marker_ranges: Vec::new(),
+        block_prefix: None,
+        quote_context: Some(quote_context),
+        source_island: None,
+        editor: None,
+    }
+}
+
 fn source_island(
     range: Range<usize>,
     kind: VisualSourceIslandKind,
@@ -837,6 +956,9 @@ fn visual_block_from_preview(
         &reveal_groups,
         &mut editable_runs,
     );
+    if quote_context.is_some() {
+        synthesize_quote_softbreak_runs(text, &source_range, &mut editable_runs);
+    }
     let marker_ranges = marker_ranges(source_range.clone(), &editable_runs);
     let editor = visual_block_editor(text, block, source_range.clone());
     if editor.is_some() {
@@ -1886,6 +2008,52 @@ fn find_link_target(
         .map(|relative| event_range.start + relative..event_range.start + relative + target.len())
 }
 
+/// Quoted leaves keep later lines' `> ` markers inside the inline slice, so
+/// pulldown-cmark splits a lazy-continuation paragraph into separate blocks
+/// without emitting a soft break — the newline byte ends up unowned and the
+/// projection merges the lines. Give the first newline of each interior gap a
+/// synthetic soft-break run owning exactly that byte; the surrounding `> `
+/// bytes stay marker-hidden. Interior only: the trailing newline stays
+/// unowned like on unquoted paragraphs, and rows without a quote context
+/// already receive real soft-break events.
+fn synthesize_quote_softbreak_runs(
+    text: &str,
+    block_range: &Range<usize>,
+    runs: &mut Vec<VisualInlineRun>,
+) {
+    let mut content = runs
+        .iter()
+        .filter(|run| !run.conservative_fallback)
+        .map(|run| run.content_range.clone())
+        .collect::<Vec<_>>();
+    content.sort_by_key(|range| range.start);
+    let mut newline_ranges = Vec::new();
+    let mut cursor = block_range.start;
+    for range in &content {
+        if range.start > cursor {
+            let gap = cursor..range.start;
+            if let Some(relative) = text[gap.clone()].find('\n') {
+                newline_ranges.push(cursor + relative..cursor + relative + 1);
+            }
+        }
+        cursor = cursor.max(range.end);
+    }
+    for range in newline_ranges {
+        runs.push(VisualInlineRun {
+            visible_text: "\n".to_string(),
+            source_range: range.clone(),
+            content_range: range,
+            style: InlineStyle::default(),
+            link_target_range: None,
+            navigation: None,
+            math: None,
+            html_image: None,
+            conservative_fallback: false,
+        });
+    }
+    runs.sort_by_key(|run| run.content_range.start);
+}
+
 fn marker_ranges(block_range: Range<usize>, runs: &[VisualInlineRun]) -> Vec<Range<usize>> {
     let mut content = runs
         .iter()
@@ -1913,9 +2081,9 @@ mod tests {
 
     use super::{build_visual_projection, build_visual_projection_with_marked_range};
     use crate::{
-        MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockEditor, VisualBlockKind,
-        VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind, VisualNavigationTarget,
-        VisualQuoteGroupEdge, VisualRevealKind, VisualSourceIslandKind,
+        AlertKind, MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockEditor,
+        VisualBlockKind, VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind,
+        VisualNavigationTarget, VisualQuoteGroupEdge, VisualRevealKind, VisualSourceIslandKind,
     };
 
     #[test]
@@ -2001,6 +2169,169 @@ mod tests {
         assert!(rendered.contains("\"item\" --- long"));
         let preview_text = doc.preview_blocks()[0].plain_text();
         assert!(preview_text.contains('“') && preview_text.contains('’'));
+    }
+
+    #[test]
+    fn gfm_alert_fixture_renders_title_row_without_source_island() {
+        let source = "> [!NOTE]\n> \u{4f7f}\u{7528} GLM Coding Plan \u{65f6}\u{ff0c}\u{9700}\u{8981}\u{914d}\u{7f6e}\u{4e13}\u{5c5e}\u{7684} Coding API \u{7aef}\u{70b9} [https://open.bigmodel.cn/api/coding/paas/v4](https://open.bigmodel.cn/api/coding/paas/v4) \u{800c}\u{4e0d}\u{662f}\u{901a}\u{7528} API \u{7aef}\u{70b9}\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(
+            blocks[0].kind,
+            VisualBlockKind::CalloutTitle { kind: AlertKind::Note }
+        ));
+        assert_eq!(&source[blocks[0].source_range.clone()], "> [!NOTE]\n");
+        assert!(blocks[0].editable_runs.is_empty());
+        let quote = blocks[0].quote_context.as_ref().expect("title joins the group");
+        assert_eq!(quote.marker_ranges, vec![0..9]);
+        assert_eq!(quote.edge, VisualQuoteGroupEdge::First);
+        assert!(blocks[0].source_island.is_none());
+
+        assert!(matches!(blocks[1].kind, VisualBlockKind::Paragraph));
+        assert!(blocks[1].source_island.is_none());
+        assert_eq!(blocks[1].quote_context.as_ref().unwrap().edge, VisualQuoteGroupEdge::Last);
+
+        // Full-document byte coverage stays contiguous without overlaps.
+        assert!(blocks.windows(2).all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+
+        // The body still renders its link as one editable run.
+        assert!(blocks[1]
+            .editable_runs
+            .iter()
+            .any(|run| run.visible_text == "https://open.bigmodel.cn/api/coding/paas/v4"
+                && run.link_target_range.is_some()));
+    }
+
+    #[test]
+    fn gfm_alert_title_row_reveals_marker_line_on_focus() {
+        let source = "> [!WARNING]\n> body\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let title = &blocks[0];
+
+        // Unfocused: nothing of the structural line is projected; the view
+        // shows only the decorative label.
+        let outside = build_visual_projection(source, title, 100..100, 100);
+        assert!(outside.text.is_empty());
+
+        // Caret anywhere inside the marker line reveals it verbatim.
+        for cursor in [0, 2, 5, 8] {
+            let focused = build_visual_projection(source, title, cursor..cursor, cursor);
+            assert_eq!(focused.text, "> [!WARNING]", "cursor {cursor}");
+        }
+    }
+
+    #[test]
+    fn gfm_alert_with_separator_after_marker_splits_title_and_whitespace() {
+        let source = "> [!NOTE]\n>\n> body\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(blocks[0].kind, VisualBlockKind::CalloutTitle { .. }));
+        assert_eq!(&source[blocks[0].source_range.clone()], "> [!NOTE]\n");
+        assert!(matches!(blocks[1].kind, VisualBlockKind::Whitespace));
+        assert_eq!(&source[blocks[1].source_range.clone()], ">\n");
+        assert!(matches!(blocks[2].kind, VisualBlockKind::Paragraph));
+        assert!(blocks.windows(2).all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+    }
+
+    #[test]
+    fn body_less_alert_renders_single_title_row() {
+        let source = "> [!TIP]\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(
+            blocks[0].kind,
+            VisualBlockKind::CalloutTitle { kind: AlertKind::Tip }
+        ));
+        assert_eq!(blocks[0].source_range, 0..source.len());
+        assert_eq!(blocks[0].source_island, None);
+        assert_eq!(
+            blocks[0].quote_context.as_ref().unwrap().edge,
+            VisualQuoteGroupEdge::Only
+        );
+    }
+
+    #[test]
+    fn quoted_multiline_paragraph_keeps_softbreak() {
+        let source = "> first line\n> second line\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks.len(), 1);
+        let block = &blocks[0];
+        let cursor = block.editable_runs[0].content_range.start;
+        let projection = build_visual_projection(source, block, cursor..cursor, cursor);
+        assert_eq!(projection.text, "first line\nsecond line");
+        // Display order follows source order and every segment maps back.
+        assert!(projection
+            .segments
+            .windows(2)
+            .all(|pair| pair[0].source_range.end <= pair[1].source_range.start));
+        // The newline byte is owned by a run; only the `> ` markers and the
+        // trailing newline hide.
+        assert_eq!(block.marker_ranges, vec![0..2, 13..15, 26..27]);
+    }
+
+    #[test]
+    fn quoted_hard_break_line_still_breaks() {
+        let source = "> a  \n> b\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks.len(), 1);
+        let block = &blocks[0];
+        let cursor = block.editable_runs[0].content_range.start;
+        let projection = build_visual_projection(source, block, cursor..cursor, cursor);
+        assert_eq!(projection.text, "a\nb");
+    }
+
+    #[test]
+    fn unknown_alert_marker_stays_literal_on_own_line() {
+        let source = "> [!CUSTOM]\n> body text\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert!(blocks.iter().all(|block| matches!(
+            block.kind,
+            VisualBlockKind::Paragraph
+        )));
+        assert_eq!(blocks.len(), 1);
+        let block = &blocks[0];
+        let cursor = block.editable_runs[0].content_range.start;
+        let projection = build_visual_projection(source, block, cursor..cursor, cursor);
+        assert_eq!(projection.text, "[!CUSTOM]\nbody text");
+        assert!(block.source_island.is_none());
+    }
+
+    #[test]
+    fn marker_line_with_trailing_text_stays_literal() {
+        // `> [!NOTE] extra` is not a GFM alert upstream: it must stay plain
+        // paragraph text (on its own line once soft breaks are preserved).
+        let source = "> [!NOTE] extra\n> body\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert!(blocks.iter().all(|block| matches!(
+            block.kind,
+            VisualBlockKind::Paragraph
+        )));
+        assert_eq!(blocks.len(), 1);
+        let cursor = blocks[0].editable_runs[0].content_range.start;
+        let projection = build_visual_projection(source, &blocks[0], cursor..cursor, cursor);
+        assert_eq!(projection.text, "[!NOTE] extra\nbody");
+    }
+
+    #[test]
+    fn unquoted_multiline_paragraph_projection_is_unchanged() {
+        let source = "alpha\nbeta\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks.len(), 1);
+        let block = &blocks[0];
+        let cursor = block.editable_runs[0].content_range.start;
+        let projection = build_visual_projection(source, block, cursor..cursor, cursor);
+        assert_eq!(projection.text, "alpha\nbeta");
+        // Only the trailing newline stays structural, as before.
+        assert_eq!(block.marker_ranges, vec![source.len() - 1..source.len()]);
     }
 
     #[test]

@@ -674,6 +674,7 @@ pub(crate) fn shift_preview_block(block: &mut PreviewBlock, delta: isize) -> Opt
         PreviewBlock::BlockQuote {
             children,
             source_range,
+            ..
         } => {
             *source_range = shift_range(source_range, delta)?;
             for child in children {

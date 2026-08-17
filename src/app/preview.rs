@@ -2699,6 +2699,31 @@ pub(super) fn visual_source_range_is_focused(
     source_range.contains(&cursor) || (cursor == document_len && cursor == source_range.end)
 }
 
+/// Canonical GFM alert label, rendered bold in the callout title row. Like
+/// list bullet glyphs this is document content, not app chrome, so it stays
+/// untranslated.
+fn callout_label(kind: AlertKind) -> &'static str {
+    match kind {
+        AlertKind::Note => "Note",
+        AlertKind::Tip => "Tip",
+        AlertKind::Important => "Important",
+        AlertKind::Warning => "Warning",
+        AlertKind::Caution => "Caution",
+    }
+}
+
+/// GitHub-style alert accents; readable on both light and dark themes, like
+/// the fixed quote-decoration grays used alongside them.
+fn callout_accent_color(kind: AlertKind) -> Rgba {
+    match kind {
+        AlertKind::Note => rgb(0x0969da),
+        AlertKind::Tip => rgb(0x1a7f37),
+        AlertKind::Important => rgb(0x8250df),
+        AlertKind::Warning => rgb(0x9a6700),
+        AlertKind::Caution => rgb(0xcf222e),
+    }
+}
+
 pub(super) fn visual_block_index_for_offset(
     blocks: &[VisualBlock],
     cursor: usize,
@@ -2723,6 +2748,10 @@ pub(super) fn visual_block_view(
     let owns_caret = visual_block_owns_caret(app, block_index);
     let is_whitespace = matches!(block.kind, VisualBlockKind::Whitespace);
     let is_reference_definition = matches!(block.kind, VisualBlockKind::ReferenceDefinition);
+    // A callout title row owns only structural marker bytes; focused, it
+    // reveals them through the inline projection instead of a source-island
+    // box, so it is excluded from the conservative gate like whitespace rows.
+    let is_callout_title = matches!(block.kind, VisualBlockKind::CalloutTitle { .. });
     let has_html_image = block
         .editable_runs
         .iter()
@@ -2758,6 +2787,7 @@ pub(super) fn visual_block_view(
     let focused_conservative = owns_caret
         && !is_whitespace
         && !is_reference_definition
+        && !is_callout_title
         && block.editor.is_none()
         && !has_html_image
         && (block.source_island.is_some() || block.editable_runs.is_empty());
@@ -2936,6 +2966,41 @@ pub(super) fn visual_block_view(
                 .child(div().mt(px(5.)).h(px(1.)).bg(rgb(0xcbd5e1)))
         }
         VisualBlockKind::Table { rows, .. } => visual_table_view(app, block, block_index, rows, cx),
+        VisualBlockKind::CalloutTitle { kind } => {
+            if owns_caret {
+                // Focused, the projection reveals the authored marker line
+                // (`> [!NOTE]`) as an editable source-backed range.
+                div()
+                    .line_height(px(typography.paragraph_line_height))
+                    .text_size(px(typography.rendered_font_size))
+                    .child(visual_text_element(block, block_index, app, cx))
+            } else {
+                // Clicking the label lands the caret just inside the marker
+                // line's end, mirroring keyboard entry into the row.
+                let source_range = &block.source_range;
+                let line_end = app.active_tab().document.text()[source_range.clone()]
+                    .find('\n')
+                    .map_or(source_range.end, |relative| source_range.start + relative);
+                let click_target = if line_end > source_range.start {
+                    line_end - 1
+                } else {
+                    source_range.start
+                };
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .font_weight(FontWeight::BOLD)
+                    .text_size(px(typography.rendered_font_size))
+                    .text_color(callout_accent_color(*kind))
+                    .cursor(CursorStyle::IBeam)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |app, _, _, cx| app.move_to(click_target, cx)),
+                    )
+                    .child(callout_label(*kind))
+            }
+        }
         VisualBlockKind::Whitespace => {
             let text = app.active_tab().document.text();
             let source_range = block.source_range.clone();

@@ -114,7 +114,7 @@ Reference-style links work too: [Markion repository][markion-repo].
 "#;
 
 pub use model::{
-    AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_EDITOR_FONT_SIZE,
+    AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_EDITOR_FONT_SIZE,
     DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE,
     DocumentStats, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences,
     Footnote, FrontMatterError, Heading, HighlightKind, HighlightedSpan, InlineSpan, InlineStyle,
@@ -173,8 +173,9 @@ use table::{
 
 use parse::{
     ImageDraft, InlineStateDraft, ListItemDraft, ListLevelDraft, append_span, clean_preview_text,
-    finish_rich_text, flush_list_item, heading_level_to_u8, markdown_options, push_nonempty_block,
-    push_preview_math, push_preview_rich, render_extended_html_text_nodes, slugify,
+    finish_rich_text, flush_list_item, gfm_alert_kind, heading_level_to_u8, markdown_options,
+    push_nonempty_block, push_preview_math, push_preview_rich, render_extended_html_text_nodes,
+    slugify,
 };
 
 use diagram::collect_html_diagrams;
@@ -2032,6 +2033,7 @@ impl MarkdownDocument {
         let mut quote: Vec<InlineSpan> = Vec::new();
         let mut quote_children: Vec<PreviewBlock> = Vec::new();
         let mut quote_source_range: Option<std::ops::Range<usize>> = None;
+        let mut quote_alert: Option<AlertKind> = None;
         let mut list_stack: Vec<ListLevelDraft> = Vec::new();
         let mut list_item: Option<ListItemDraft> = None;
         let mut image: Option<ImageDraft> = None;
@@ -2122,15 +2124,15 @@ impl MarkdownDocument {
                         }
                     }
                 }
-                Event::Start(Tag::BlockQuote(_)) => {
+                Event::Start(Tag::BlockQuote(kind)) => {
                     quote_depth += 1;
                     if quote_depth == 1 {
                         quote.clear();
                         quote_children.clear();
                         quote_source_range = Some(source_range);
+                        quote_alert = kind.map(gfm_alert_kind);
                     }
-                }
-                Event::End(TagEnd::BlockQuote(_)) => {
+                }                Event::End(TagEnd::BlockQuote(_)) => {
                     if quote_depth == 1 {
                         let residual = finish_rich_text(std::mem::take(&mut quote));
                         if !residual.is_empty() {
@@ -2141,10 +2143,12 @@ impl MarkdownDocument {
                                     .unwrap_or_else(|| source_range.clone()),
                             });
                         }
+                        let alert = quote_alert.take();
                         let children = std::mem::take(&mut quote_children);
-                        if !children.is_empty() {
+                        if !children.is_empty() || alert.is_some() {
                             blocks.push(PreviewBlock::BlockQuote {
                                 children,
+                                alert,
                                 source_range: quote_source_range.take().unwrap_or(source_range),
                             });
                         } else {
@@ -3656,6 +3660,57 @@ mod tests {
     }
 
     #[test]
+    fn gfm_alert_quote_carries_alert_kind() {
+        for (source, expected) in [
+            ("> [!NOTE]\n> body\n", AlertKind::Note),
+            ("> [!TIP]\n> body\n", AlertKind::Tip),
+            ("> [!IMPORTANT]\n> body\n", AlertKind::Important),
+            ("> [!WARNING]\n> body\n", AlertKind::Warning),
+            ("> [!CAUTION]\n> body\n", AlertKind::Caution),
+            // Alert types are case-insensitive upstream.
+            ("> [!note]\n> body\n", AlertKind::Note),
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.preview_blocks();
+            assert_eq!(blocks.len(), 1, "{source:?}");
+            assert!(
+                matches!(&blocks[0], PreviewBlock::BlockQuote { alert: Some(kind), .. } if *kind == expected),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_quote_and_marker_with_trailing_text_have_no_alert() {
+        for source in ["> just a quote\n", "> [!NOTE] extra\n> body\n", "> [!CUSTOM]\n> body\n"] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.preview_blocks();
+            assert!(
+                blocks.iter().all(|block| matches!(
+                    block,
+                    PreviewBlock::BlockQuote { alert: None, .. }
+                )),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn body_less_alert_quote_is_kept() {
+        let doc = MarkdownDocument::from_text("> [!WARNING]\n");
+        let blocks = doc.preview_blocks();
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(
+            &blocks[0],
+            PreviewBlock::BlockQuote {
+                children,
+                alert: Some(AlertKind::Warning),
+                ..
+            } if children.is_empty()
+        ));
+    }
+
+    #[test]
     fn table_cells_parse_inline_formatting() {
         let doc = MarkdownDocument::from_text(
             "| Syntax | Example |\n|---|---|\n| `**bold**` | **bold** |\n| `[text](url)` | [link](https://github.com/willmove/markion) |",
@@ -4782,6 +4837,7 @@ mod tests {
             heading_menu_max_level: EXTENDED_HEADING_MENU_MAX_LEVEL,
             sync_scroll: true,
             show_hidden_files: true,
+            open_in_current_tab: false,
             sidebar_visible: false,
             sidebar_tab: SidebarTab::Outline,
             language: "zh".to_string(),

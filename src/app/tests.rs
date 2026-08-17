@@ -808,6 +808,7 @@ fn preview_blockquote_exposes_child_list_items_as_selectable_runs() {
             quoted_item("first", 1),
             quoted_item("second", 2),
         ],
+        alert: None,
         source_range: 0..0,
     };
 
@@ -4391,6 +4392,82 @@ fn visual_edit_paragraph_enter_shows_caret_not_source_island(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn visual_edit_gfm_alert_title_row_is_reachable_and_editable(cx: &mut TestAppContext) {
+    // The callout title row owns only structural marker bytes. Up from the
+    // body must land the caret inside the title row (not skip it as a dead
+    // stop), reveal `> [!NOTE]` verbatim through the projection, and accept
+    // source-backed text edits at the caret.
+    let source = "> [!NOTE]\n> body\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        // Caret at the start of the body row (offset 10, on its `>` marker).
+        app.active_tab_mut().selected_range = 10..10;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_action(Up);
+    cx.run_until_parked();
+
+    let pre_edit_cursor = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let cursor = tab.cursor_offset();
+        assert!(cursor < 10, "Up from the body must enter the title row, got {cursor}");
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index =
+            visual_block_index_for_offset(&blocks, cursor, tab.document.text().len())
+                .expect("caret owns a visual row");
+        assert!(
+            matches!(blocks[block_index].kind, VisualBlockKind::CalloutTitle { .. }),
+            "caret should own the callout title row, got {:?}",
+            blocks[block_index].kind,
+        );
+        let projection = build_visual_projection(
+            tab.document.text(),
+            &blocks[block_index],
+            cursor..cursor,
+            cursor,
+        );
+        assert_eq!(projection.text, "> [!NOTE]");
+        cursor
+    });
+
+    // The revealed marker line is a normal source-backed editable range.
+    cx.simulate_input("X");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(&tab.document.text()[pre_edit_cursor..pre_edit_cursor + 1], "X");
+        assert_eq!(tab.cursor_offset(), pre_edit_cursor + 1);
+        assert!(tab.document.is_dirty());
+        assert!(!tab.undo_stack.is_empty());
+    });
+
+    // Down from the title row returns to the body paragraph.
+    cx.dispatch_action(Down);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("Down should land on a visual row");
+        assert!(
+            matches!(blocks[block_index].kind, VisualBlockKind::Paragraph),
+            "Down from the title row should enter the body paragraph, got {:?}",
+            blocks[block_index].kind,
+        );
+    });
+}
+
+#[gpui::test]
 fn visual_edit_down_arrow_skips_blank_line_gap_to_next_block(cx: &mut TestAppContext) {
     // Down arrow moves directly between rendered content blocks: the blank-line
     // `Whitespace` gap row separating the two paragraphs is pure inter-block
@@ -4707,7 +4784,7 @@ fn editor_tab_new_initializes_empty_state() {
     assert!(tab.line_tops.is_empty());
     assert!(tab.source_layout_key.is_none());
     assert!(tab.last_bounds.is_none());
-    assert_eq!(tab.line_height, px(24.));
+    assert_eq!(tab.line_height, px(EDITOR_LINE_HEIGHT));
     assert!(!tab.is_selecting);
     assert!(tab.last_recovery_file.is_none());
     assert_eq!(tab.autosave_generation, 0);
@@ -5096,27 +5173,190 @@ fn replace_active_router_switches_between_document_and_image_content(cx: &mut Te
 }
 
 #[gpui::test]
-fn image_tree_and_open_recent_entry_points_share_new_tab_routing(cx: &mut TestAppContext) {
+fn image_tree_and_open_recent_entry_points_follow_open_target_preference(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
     let tree_image = dir.path().join("tree.png");
     let recent_image = dir.path().join("recent.png");
     write_solid_png(&tree_image, 3, 2, [20, 30, 40, 255]);
     write_solid_png(&recent_image, 2, 3, [40, 30, 20, 255]);
-    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        // Redirect persistence so toggling cannot touch the developer's real
+        // config.toml (the constructor reads it, tests share it).
+        app.preferences_path = config_dir.path().join("config.toml");
+        app.open_in_current_tab = true;
+        app
+    });
 
+    // Default preference on: the untitled welcome tab and then the read-only
+    // image tab are both safe to replace, so neither open appends a tab.
     app.update(cx, |app, cx| {
         app.open_tree_file_confirmed(tree_image.clone(), cx);
+        assert_eq!(app.tabs.len(), 1);
         assert!(app.active_tab().is_image());
         assert_eq!(app.active_tab().path(), Some(tree_image.as_path()));
 
         app.open_recent_path(recent_image.clone(), cx);
-        assert_eq!(app.tabs.len(), 3);
+        assert_eq!(app.tabs.len(), 1);
         assert!(app.active_tab().is_image());
         assert_eq!(app.active_tab().path(), Some(recent_image.as_path()));
         assert_eq!(
             app.session.recent_files.first(),
             Some(&comparable_document_path(&recent_image))
         );
+    });
+
+    // Preference off: the same entry points append tabs again, and an
+    // already-open path dedupes to its existing tab.
+    app.update(cx, |app, cx| {
+        app.toggle_open_in_current_tab(cx);
+        app.open_tree_file_confirmed(tree_image.clone(), cx);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab().path(), Some(tree_image.as_path()));
+
+        app.open_recent_path(recent_image.clone(), cx);
+        assert_eq!(app.tabs.len(), 2, "already-open paths must dedupe, not append");
+        assert_eq!(app.active_tab().path(), Some(recent_image.as_path()));
+    });
+}
+
+#[gpui::test]
+fn default_open_intent_replaces_only_safe_active_tabs(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let alpha = dir.path().join("alpha.md");
+    let beta = dir.path().join("beta.md");
+    fs::write(&alpha, "alpha").unwrap();
+    fs::write(&beta, "beta").unwrap();
+
+    // Preference on (default).
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = config_dir.path().join("config.toml");
+        app.open_in_current_tab = true;
+        app
+    });
+    app.update(cx, |app, cx| {
+        // Untitled welcome tab → replace in place.
+        assert_eq!(app.default_open_intent(), OpenPathIntent::ReplaceActive);
+        app.open_tree_file_confirmed(alpha.clone(), cx);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab().path(), Some(alpha.as_path()));
+
+        // Clean saved document → still replace.
+        assert_eq!(app.default_open_intent(), OpenPathIntent::ReplaceActive);
+        app.open_recent_path(beta.clone(), cx);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab().path(), Some(beta.as_path()));
+
+        // Dirty document → divert to a new tab, never replace.
+        app.active_tab_mut().document.set_text("edited");
+        assert!(app.active_tab().document.is_dirty());
+        assert_eq!(app.default_open_intent(), OpenPathIntent::OpenInNewTab);
+        app.open_tree_file_confirmed(alpha.clone(), cx);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab().path(), Some(alpha.as_path()));
+        assert!(app.tabs[0].document.is_dirty());
+        assert_eq!(app.tabs[0].document.text(), "edited");
+    });
+
+    // Preference off → always new tabs, even with a clean welcome tab.
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = config_dir.path().join("config.toml");
+        app.open_in_current_tab = false;
+        app
+    });
+    app.update(cx, |app, cx| {
+        assert_eq!(app.default_open_intent(), OpenPathIntent::OpenInNewTab);
+        app.open_tree_file_confirmed(alpha.clone(), cx);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab().path(), Some(alpha.as_path()));
+    });
+}
+
+#[gpui::test]
+fn gesture_open_with_dirty_tab_appends_and_preserves_work(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let dirty_path = dir.path().join("dirty.md");
+    let other = dir.path().join("other.md");
+    fs::write(&dirty_path, "saved base").unwrap();
+    fs::write(&other, "other content").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = config_dir.path().join("config.toml");
+        app.open_in_current_tab = true;
+        app
+    });
+
+    let recovery = dir.path().join("recovery-0.md");
+    app.update(cx, |app, cx| {
+        app.open_tree_file_confirmed(dirty_path.clone(), cx);
+        assert_eq!(app.tabs.len(), 1);
+        app.active_tab_mut().push_undo_snapshot();
+        app.active_tab_mut().document.set_text("unsaved edits");
+        // Simulate the autosave recovery snapshot: it must survive the open.
+        fs::write(&recovery, "recovery bytes").unwrap();
+        app.active_tab_mut().last_recovery_file = Some(recovery.clone());
+    });
+
+    app.update(cx, |app, cx| {
+        app.open_tree_file_confirmed(other.clone(), cx);
+        assert_eq!(app.tabs.len(), 2, "a dirty active tab must divert to a new tab");
+        assert_eq!(app.active_tab().path(), Some(other.as_path()));
+        let dirty = app.tabs[0].document_tab().unwrap();
+        assert_eq!(dirty.document.text(), "unsaved edits");
+        assert!(dirty.document.is_dirty());
+        assert!(!dirty.undo_stack.is_empty());
+        assert_eq!(
+            dirty.last_recovery_file.as_deref(),
+            Some(recovery.as_path()),
+            "a gesture open must never delete a dirty tab's recovery snapshot"
+        );
+    });
+}
+
+#[gpui::test]
+fn multi_file_drop_replaces_once_then_appends(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let alpha = dir.path().join("alpha.md");
+    let beta = dir.path().join("beta.md");
+    let gamma = dir.path().join("gamma.md");
+    fs::write(&alpha, "alpha").unwrap();
+    fs::write(&beta, "beta").unwrap();
+    fs::write(&gamma, "gamma").unwrap();
+
+    // Preference on: the first dropped file replaces the clean welcome tab;
+    // every subsequent one appends, leaving the last file active.
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = config_dir.path().join("config.toml");
+        app.open_in_current_tab = true;
+        app
+    });
+    app.update(cx, |app, cx| {
+        app.open_dropped_documents(&[alpha.clone(), beta.clone(), gamma.clone()], cx);
+        assert_eq!(app.tabs.len(), 3);
+        assert_eq!(app.tabs[0].path(), Some(alpha.as_path()));
+        assert_eq!(app.tabs[1].path(), Some(beta.as_path()));
+        assert_eq!(app.active_tab().path(), Some(gamma.as_path()));
+    });
+
+    // Preference off: a drop batch only appends; the welcome tab survives.
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = config_dir.path().join("config.toml");
+        app.open_in_current_tab = false;
+        app
+    });
+    app.update(cx, |app, cx| {
+        app.open_dropped_documents(&[alpha.clone(), beta.clone()], cx);
+        assert_eq!(app.tabs.len(), 3);
+        assert!(app.tabs[0].document_tab().is_some_and(|tab| tab.document.path().is_none()));
+        assert_eq!(app.active_tab().path(), Some(beta.as_path()));
     });
 }
 
@@ -6146,8 +6386,8 @@ fn document_typography_metrics_preserve_defaults_and_scale_boundaries() {
         markion::DEFAULT_RENDERED_FONT_SIZE,
         markion::DEFAULT_PARAGRAPH_SPACING,
     );
-    assert_eq!(defaults.editor_font_size, 15.);
-    assert_eq!(defaults.editor_line_height, 24.);
+    assert_eq!(defaults.editor_font_size, 14.);
+    assert_eq!(defaults.editor_line_height, 22.4);
     assert_eq!(defaults.rendered_font_size, 14.);
     assert_eq!(defaults.preview_row_line_height, 23.);
     assert_eq!(defaults.paragraph_line_height, 24.);

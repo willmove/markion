@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-08-17
+goal: Default non-explicit document opens target the current tab when it is safe
+  to replace, governed by a persisted preference

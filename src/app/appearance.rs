@@ -112,6 +112,7 @@ impl MarkionApp {
                     app.refresh_typography_measurements(true, true);
                     app.heading_menu_max_level = preferences.heading_menu_max_level;
                     app.sync_scroll = preferences.sync_scroll;
+                    app.open_in_current_tab = preferences.open_in_current_tab;
                     app.sidebar_visible = preferences.sidebar_visible;
                     app.sidebar_tab = preferences.sidebar_tab;
                     // Reset also restores the default interface language.
@@ -314,6 +315,21 @@ impl MarkionApp {
         // Re-scan under the new visibility rule so hidden entries appear or
         // disappear on the next render, before notifying the view.
         self.refresh_file_tree(cx);
+        cx.notify();
+    }
+
+    pub(super) fn toggle_open_in_current_tab(&mut self, cx: &mut Context<Self>) {
+        self.open_in_current_tab = !self.open_in_current_tab;
+        self.status = t(
+            self.language,
+            if self.open_in_current_tab {
+                Msg::StatusOpenInCurrentTabOn
+            } else {
+                Msg::StatusOpenInCurrentTabOff
+            },
+        )
+        .into();
+        self.persist_preferences();
         cx.notify();
     }
 

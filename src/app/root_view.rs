@@ -1814,17 +1814,25 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                                         .child(entry.name),
                                 ),
                         )
-                        .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                        .on_mouse_up(MouseButton::Left, move |event, window, cx| {
                             let focus_handle = left_app_entity.read(cx).focus_handle.clone();
                             window.focus(&focus_handle);
                             let path = path.clone();
+                            // Ctrl (Windows/Linux) / Cmd (macOS) + click is the
+                            // per-click escape hatch from the open-in-current-tab
+                            // preference: it always opens in a new tab.
+                            let force_new_tab = event.modifiers.secondary();
                             left_app_entity.update(cx, |app, cx| {
                                 app.selected_tree_path = Some(path.clone());
                                 app.file_tree_query_focused = false;
                                 app.input_marked_len = 0;
                                 match entry_kind {
                                     FileTreeEntryKind::File if clickable => {
-                                        app.open_tree_file(path, window, cx);
+                                        if force_new_tab {
+                                            app.open_file_in_new_tab_from_path(path, cx);
+                                        } else {
+                                            app.open_tree_file(path, window, cx);
+                                        }
                                     }
                                     FileTreeEntryKind::Directory => {
                                         if let Some(tree) = &app.file_tree {
@@ -3816,6 +3824,15 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                         palette,
                                         cx.listener(|app, _: &MouseUpEvent, _window, cx| {
                                             app.toggle_show_hidden_files(cx);
+                                        }),
+                                    ))
+                                    .child(preference_boolean_row(
+                                        app.tr(Msg::PrefPanelOpenInCurrentTab),
+                                        app.open_in_current_tab,
+                                        app.language,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.toggle_open_in_current_tab(cx);
                                         }),
                                     ))
                                     .child(preference_sidebar_row(app, palette, cx)),

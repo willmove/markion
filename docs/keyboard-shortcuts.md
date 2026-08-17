@@ -82,6 +82,7 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 | New folder in tree | Ctrl+Alt+Shift+N |
 | Rename tree entry | F2 |
 | Delete tree entry | Ctrl+Delete |
+| Open clicked file in a new tab | Ctrl+click (Cmd+click on macOS) |
 
 ## Sidebar — Outline panel
 
@@ -131,6 +132,7 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 ## Notes
 
 - The default view mode is **Split** (source + preview side by side). Cycle through Edit → Split → Read with Ctrl+Shift+V, or jump straight to a mode with Ctrl+Alt+1/2/3. Preview width in Read mode follows the "adaptive preview width" preference (File → Preferences).
+- Opening a file — from the file tree, drag-and-drop, Open Recent, or File → Open — targets the current tab when that is safe (an image tab, the untitled document, or an unmodified document) and otherwise opens a new tab, following the "Open documents in current tab" preference (File → Preferences, on by default). A dirty document is never silently replaced, and Ctrl+click in the file tree always opens a new tab.
 - Focus mode dims paragraphs outside the current one; typewriter mode keeps the cursor line vertically centered.
 - A few bindings combine `Ctrl` with an `Alt` modifier (for example Ctrl+Alt+N for "new file in tree"); on macOS these are **Cmd+Option**.
 - If a binding does not behave as expected, check whether your window manager or OS has reserved it.

@@ -726,6 +726,17 @@ impl WorkspaceTab {
             .is_some_and(|tab| tab.document.is_dirty())
     }
 
+    /// Whether replacing this tab in place discards nothing unsaved: image
+    /// tabs hold no edits, and an untitled or clean document has no dirty
+    /// work. A dirty tab's recovery snapshot must survive until the user
+    /// explicitly discards it, so dirty tabs are never silently replaced.
+    pub(super) fn is_safe_to_replace(&self) -> bool {
+        match self.document_tab() {
+            Some(tab) => tab.document.path().is_none() || !tab.document.is_dirty(),
+            None => true,
+        }
+    }
+
     pub(super) fn requires_discard_confirmation(&self) -> bool {
         self.is_dirty()
     }

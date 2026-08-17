@@ -78,6 +78,7 @@ impl MarkionApp {
             heading_menu_max_level: preferences.heading_menu_max_level,
             sync_scroll: preferences.sync_scroll,
             show_hidden_files: preferences.show_hidden_files,
+            open_in_current_tab: preferences.open_in_current_tab,
             language: Language::from_code(&preferences.language),
             check_for_updates_on_startup: preferences.check_for_updates_on_startup,
             last_update_check: preferences.last_update_check,
@@ -828,14 +829,20 @@ impl MarkionApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // With multi-document tabs, opening from the file tree creates a new
-        // tab for an unopened file rather than replacing (and risking loss of)
-        // the active document, so no dirty-guard prompt is needed here.
+        // Opening from the file tree follows the default open-target
+        // preference: a safe-to-replace active tab (image, untitled, or clean
+        // document) is replaced in place, anything else — including a dirty
+        // document — appends a new tab, so no dirty-guard prompt is ever
+        // needed here.
         self.open_tree_file_confirmed(path, cx);
     }
 
     pub(super) fn open_tree_file_confirmed(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        self.open_file_in_new_tab_from_path(path, cx);
+        let intent = self.default_open_intent();
+        if let Err(error) = self.open_supported_path(path, intent, cx) {
+            self.status = self.trf(Msg::StatusOpenFailed, &[&error]);
+            cx.notify();
+        }
     }
 
     /// The active tab's preview blocks, re-parsed only when typing has settled.
@@ -1208,6 +1215,7 @@ impl MarkionApp {
             heading_menu_max_level: self.heading_menu_max_level,
             sync_scroll: self.sync_scroll,
             show_hidden_files: self.show_hidden_files,
+            open_in_current_tab: self.open_in_current_tab,
             sidebar_visible: self.sidebar_visible,
             sidebar_tab: self.sidebar_tab,
             language: self.language.code().to_string(),
@@ -1430,7 +1438,8 @@ impl MarkionApp {
             return;
         }
 
-        match self.open_supported_path(path.clone(), OpenPathIntent::OpenInNewTab, cx) {
+        let intent = self.default_open_intent();
+        match self.open_supported_path(path.clone(), intent, cx) {
             Ok(()) => {
                 self.open_recent_submenu_open = false;
             }

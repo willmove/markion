@@ -52,6 +52,8 @@ struct PreferencesFile {
     sync_scroll: bool,
     #[serde(deserialize_with = "deserialize_bool_or_false")]
     show_hidden_files: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_true")]
+    open_in_current_tab: bool,
     sidebar_visible: bool,
     /// "files" or "outline"; unknown values fall back to Files like the
     /// legacy format did.
@@ -118,6 +120,7 @@ impl From<&AppPreferences> for PreferencesFile {
             heading_menu_max_level: preferences.heading_menu_max_level,
             sync_scroll: preferences.sync_scroll,
             show_hidden_files: preferences.show_hidden_files,
+            open_in_current_tab: preferences.open_in_current_tab,
             sidebar_visible: preferences.sidebar_visible,
             sidebar_tab: match preferences.sidebar_tab {
                 SidebarTab::Files => "files".to_string(),
@@ -153,6 +156,7 @@ impl From<PreferencesFile> for AppPreferences {
             heading_menu_max_level: normalize_heading_menu_max_level(file.heading_menu_max_level),
             sync_scroll: file.sync_scroll,
             show_hidden_files: file.show_hidden_files,
+            open_in_current_tab: file.open_in_current_tab,
             sidebar_visible: file.sidebar_visible,
             sidebar_tab: match file.sidebar_tab.to_ascii_lowercase().as_str() {
                 "outline" => SidebarTab::Outline,
@@ -306,6 +310,14 @@ where
 {
     let value = toml::Value::deserialize(deserializer)?;
     Ok(value.as_bool().unwrap_or(false))
+}
+
+fn deserialize_bool_or_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value.as_bool().unwrap_or(true))
 }
 
 fn deserialize_editor_font_size<'de, D>(deserializer: D) -> Result<u16, D::Error>
@@ -558,6 +570,47 @@ mod tests {
         let text = "theme = \"Paper\"\nshow_hidden_files = \"yes\"\n";
         let parsed = parse_app_preferences(text).unwrap();
         assert!(!parsed.show_hidden_files);
+    }
+
+    #[test]
+    fn open_in_current_tab_defaults_to_true() {
+        assert!(AppPreferences::default().open_in_current_tab);
+    }
+
+    #[test]
+    fn open_in_current_tab_round_trips_through_toml() {
+        let preferences = AppPreferences {
+            open_in_current_tab: false,
+            ..AppPreferences::default()
+        };
+        let rendered = render_app_preferences(&preferences);
+        assert!(
+            rendered.contains("open_in_current_tab = false"),
+            "rendered TOML should set open_in_current_tab = false: {rendered}"
+        );
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert!(
+            !parsed.open_in_current_tab,
+            "parsed open_in_current_tab should be false"
+        );
+    }
+
+    #[test]
+    fn missing_open_in_current_tab_falls_back_to_true() {
+        // A pre-existing config.toml written before this preference existed
+        // omits the field entirely; the deserializer must treat it as true.
+        let text = "theme = \"Paper\"\nlanguage = \"en\"\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert!(parsed.open_in_current_tab);
+    }
+
+    #[test]
+    fn invalid_open_in_current_tab_value_falls_back_to_true() {
+        // A corrupt/unknown value must not abort loading; it degrades to the
+        // default (on).
+        let text = "theme = \"Paper\"\nopen_in_current_tab = \"yes\"\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert!(parsed.open_in_current_tab);
     }
 
     #[test]

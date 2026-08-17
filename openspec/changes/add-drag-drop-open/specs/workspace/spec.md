@@ -1,16 +1,16 @@
 ## ADDED Requirements
 
 ### Requirement: Open files via drag-and-drop from the OS
-The editor SHALL accept files dragged from the operating system file manager and dropped onto the editor pane or the preview pane. On drop, the editor SHALL open each dropped path whose extension is `md`, `markdown`, or `mdown` (case-insensitive) as a new tab, with the focus following the last opened file. Non-Markdown files and directories SHALL be ignored (they SHALL NOT be opened, and SHALL NOT produce an error). The sidebar / file-tree area SHALL NOT be a drop target. This open path SHALL reuse the same Markdown-only filter and new-tab behaviour as the file-tree open flow; it introduces no new user-visible strings.
+The editor SHALL accept files dragged from the operating system file manager and dropped onto the editor pane or the preview pane. On drop, the editor SHALL open each dropped path whose extension is `md`, `markdown`, or `mdown` (case-insensitive): the first dropped file SHALL follow the application's default open-target rule (replacing the current tab when that is allowed under the Open-documents-in-current-tab preference, otherwise opening a new tab), and every subsequent dropped file SHALL open as a new tab, with the focus following the last opened file. Non-Markdown files and directories SHALL be ignored (they SHALL NOT be opened, and SHALL NOT produce an error). The sidebar / file-tree area SHALL NOT be a drop target. This open path SHALL reuse the same Markdown-only filter and default open-target rule as the file-tree open flow; it introduces no new user-visible strings.
 
 #### Scenario: Dropping a single Markdown file opens it
 - **WHEN** the user drags one Markdown file (`.md`, `.markdown`, or `.mdown`) from the OS file manager and drops it onto the editor pane or the preview pane
-- **THEN** the editor opens that file in a new tab and focuses it
+- **THEN** the editor opens that file in the tab chosen by the default open-target rule — replacing a replaceable active tab when the Open-documents-in-current-tab preference is on, otherwise opening a new tab — and focuses it
 - **AND** the status bar reports the opened path through the existing `StatusOpened` message
 
 #### Scenario: Dropping multiple Markdown files opens each in its own tab
 - **WHEN** the user drops several Markdown files at once onto the editor pane or the preview pane
-- **THEN** the editor opens each Markdown file in its own new tab
+- **THEN** the first Markdown file follows the default open-target rule and each subsequent Markdown file opens in its own new tab
 - **AND** the focus moves to the last opened file
 - **AND** the status bar reports the last opened path through the existing `StatusOpened` message
 
@@ -21,7 +21,7 @@ The editor SHALL accept files dragged from the operating system file manager and
 
 #### Scenario: Mixed drop opens only the Markdown files
 - **WHEN** the user drops a mix of Markdown and non-Markdown files at once
-- **THEN** only the Markdown files are opened, each in its own tab, with focus on the last Markdown file
+- **THEN** only the Markdown files are opened — the first per the default open-target rule, the rest in their own tabs — with focus on the last Markdown file
 - **AND** the non-Markdown files are silently ignored
 
 #### Scenario: The sidebar and file tree are not drop targets

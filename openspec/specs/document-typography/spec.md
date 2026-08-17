@@ -4,7 +4,7 @@
 TBD - created by archiving change customize-document-typography. Update Purpose after archive.
 ## Requirements
 ### Requirement: Configurable source-editor font size
-The editor SHALL use a global source-editor font-size preference, expressed in logical pixels, for Markdown source text in Edit mode and the source pane of Split Preview mode. The default SHALL be 15px, the supported range SHALL be 10–32px inclusive, and the resolved size SHALL drive source text shaping, wrapping, painting, caret placement, selection geometry, line-height calculation, scroll extents, and typewriter positioning consistently.
+The editor SHALL use a global source-editor font-size preference, expressed in logical pixels, for Markdown source text in Edit mode and the source pane of Split Preview mode. The default SHALL be 14px, the supported range SHALL be 10–32px inclusive, and the resolved size SHALL drive source text shaping, wrapping, painting, caret placement, selection geometry, line-height calculation, scroll extents, and typewriter positioning consistently.
 
 #### Scenario: Source font size applies in source surfaces
 - **WHEN** the user changes the source-editor font size while Edit mode or Split Preview mode is visible

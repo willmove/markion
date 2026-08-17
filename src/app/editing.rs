@@ -2391,6 +2391,22 @@ impl MarkionApp {
         }
     }
 
+    /// Fallback navigation target for a callout title row: its marker line
+    /// end, just inside the line. Title rows render no text runs, so the
+    /// layout snapshot other blocks rely on never exists for them.
+    fn callout_title_navigation_target(&self, block_index: usize) -> Option<usize> {
+        let tab = self.active_tab();
+        let block = tab.visual_list_blocks.get(block_index)?;
+        if !matches!(block.kind, VisualBlockKind::CalloutTitle { .. }) {
+            return None;
+        }
+        let range = &block.source_range;
+        let line_end = tab.document.text()[range.clone()]
+            .find('\n')
+            .map_or(range.end, |relative| range.start + relative);
+        (line_end > range.start).then_some(line_end - 1)
+    }
+
     pub(super) fn complete_pending_visual_navigation(&mut self, cx: &mut Context<Self>) {
         let Some(pending) = self.active_tab().pending_visual_navigation else {
             return;
@@ -2417,6 +2433,19 @@ impl MarkionApp {
             })
             .cloned()
         else {
+            // A callout title row has no rendered text runs, so no layout
+            // snapshot exists to land on. Park the caret just inside the
+            // marker line's end instead — the reveal projection then shows
+            // the authored `> [!NOTE]` verbatim.
+            if let Some(target) = self.callout_title_navigation_target(pending.target_block) {
+                self.active_tab_mut().pending_visual_navigation = None;
+                self.active_tab_mut().visual_preferred_x = Some(pending.preferred_x);
+                if pending.extend_selection {
+                    self.select_to(target, cx);
+                } else {
+                    self.move_to(target, cx);
+                }
+            }
             return;
         };
         let line = match pending.direction {
