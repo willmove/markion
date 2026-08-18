@@ -1946,9 +1946,8 @@ fn shortcut_remap_persists_reloads_rejects_conflict_and_resets(cx: &mut TestAppC
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
     app.update(cx, |app, _| {
         app.preferences_path = preferences_path.clone();
-        // MarkionApp::new loads the machine's real preferences before this test
-        // redirects persistence. Clear any user-defined bindings so the test's
-        // temporary config is a fully isolated restart/reset fixture.
+        // Tests construct from documented defaults; clear anyway so this
+        // tempfile fixture cannot inherit leftover in-memory overrides.
         app.shortcut_overrides.clear();
     });
 
@@ -6445,7 +6444,7 @@ fn typography_changes_preserve_document_caches_and_list_positions(cx: &mut TestA
         .join("\n\n");
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
-        app.preferences_path = preferences_path;
+        app.preferences_path = preferences_path.clone();
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
         app.view_mode = ViewMode::Read;
         app.active_tab_mut().selected_range = 3..7;
@@ -6542,6 +6541,10 @@ fn typography_changes_preserve_document_caches_and_list_positions(cx: &mut TestA
         assert_eq!(app.current_preferences().rendered_font_size, 20);
         assert_eq!(app.current_preferences().paragraph_spacing, 18);
     });
+    let written = std::fs::read_to_string(&preferences_path).unwrap();
+    assert!(written.contains("editor_font_size = 24"));
+    assert!(written.contains("rendered_font_size = 20"));
+    assert!(written.contains("paragraph_spacing = 18"));
 }
 
 #[gpui::test]
@@ -6551,7 +6554,7 @@ fn non_default_editor_font_reflows_wrapped_text_and_caret_geometry(cx: &mut Test
     let source = "wrap this source line ".repeat(80);
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
-        app.preferences_path = preferences_path;
+        app.preferences_path = preferences_path.clone();
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
         app.view_mode = ViewMode::Edit;
         app
@@ -6574,16 +6577,21 @@ fn non_default_editor_font_reflows_wrapped_text_and_caret_geometry(cx: &mut Test
         assert!(tab.last_bounds.is_some());
         assert!(!tab.last_lines.is_empty());
     });
+    let written = std::fs::read_to_string(&preferences_path).unwrap();
+    assert!(written.contains("editor_font_size = 32"));
 }
 
 #[gpui::test]
 fn source_layout_snapshot_maps_wrapped_utf8_content_bidirectionally(cx: &mut TestAppContext) {
+    let config_dir = tempfile::tempdir().unwrap();
+    let preferences_path = config_dir.path().join("config.toml");
     let source = format!(
         "{}\nsecond logical line with 中文 and emoji 😀",
         "wrapped source words ".repeat(60)
     );
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
+        app.preferences_path = preferences_path;
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
         app.view_mode = ViewMode::Edit;
         app
@@ -6636,6 +6644,37 @@ fn source_layout_snapshot_maps_wrapped_utf8_content_bidirectionally(cx: &mut Tes
                 .map(|key| key.line_height),
             Some(app.active_tab().line_height)
         );
+    });
+}
+
+#[gpui::test]
+fn gpui_tests_start_from_documented_preference_defaults(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, _| {
+        let prefs = app.current_preferences();
+        assert_eq!(prefs.editor_font_size, DEFAULT_EDITOR_FONT_SIZE);
+        assert_eq!(prefs.rendered_font_size, DEFAULT_RENDERED_FONT_SIZE);
+        assert_eq!(prefs.paragraph_spacing, markion::DEFAULT_PARAGRAPH_SPACING);
+        assert_eq!(prefs.theme, "Paper");
+        assert_eq!(prefs.language, "en");
+        assert_eq!(app.preferences_path, default_preferences_path());
+    });
+}
+
+#[gpui::test]
+fn preference_mutation_does_not_write_developer_config_toml(cx: &mut TestAppContext) {
+    let path = default_preferences_path();
+    let before = std::fs::read(&path).ok();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| app.set_editor_font_size(28, cx));
+    let after = std::fs::read(&path).ok();
+    assert_eq!(
+        after, before,
+        "mutating preferences in tests must not create or rewrite the developer config.toml"
+    );
+    app.update(cx, |app, _| {
+        assert_eq!(app.current_preferences().editor_font_size, 28);
+        assert_eq!(app.preferences_path, path);
     });
 }
 

@@ -10,7 +10,12 @@ impl MarkionApp {
         // background scan (scheduled by the caller) populate it once ready.
         let file_tree = None;
         let preferences_path = default_preferences_path();
-        let preferences = load_app_preferences(&preferences_path).unwrap_or_default();
+        // Unit tests must not read/write the developer's real config.toml.
+        let preferences = if cfg!(test) {
+            AppPreferences::default()
+        } else {
+            load_app_preferences(&preferences_path).unwrap_or_default()
+        };
         let session_path = default_session_path();
         // Unit tests must not read/write the developer's real session.toml.
         let session = if cfg!(test) {
@@ -1297,6 +1302,9 @@ impl MarkionApp {
     }
 
     pub(super) fn persist_preferences(&mut self) {
+        if cfg!(test) && self.preferences_path == default_preferences_path() {
+            return;
+        }
         if let Err(err) = save_app_preferences(&self.preferences_path, &self.current_preferences())
         {
             self.status = self.trf(Msg::StatusPreferencesSaveFailed, &[&err.to_string()]);
