@@ -2140,7 +2140,8 @@ impl MarkdownDocument {
                         quote_source_range = Some(source_range);
                         quote_alert = kind.map(gfm_alert_kind);
                     }
-                }                Event::End(TagEnd::BlockQuote(_)) => {
+                }
+                Event::End(TagEnd::BlockQuote(_)) => {
                     if quote_depth == 1 {
                         let residual = finish_rich_text(std::mem::take(&mut quote));
                         if !residual.is_empty() {
@@ -2331,10 +2332,10 @@ impl MarkdownDocument {
                     {
                         let table_range = table_ranges.next().unwrap_or(0..0);
                         if list_item.is_some() {
-                            item_nested_block_start = Some(
-                                item_nested_block_start
-                                    .map_or(table_range.start, |start| start.min(table_range.start)),
-                            );
+                            item_nested_block_start =
+                                Some(item_nested_block_start.map_or(table_range.start, |start| {
+                                    start.min(table_range.start)
+                                }));
                         }
                         blocks.push(PreviewBlock::Table {
                             rows: table.rows,
@@ -3724,14 +3725,17 @@ mod tests {
 
     #[test]
     fn plain_quote_and_marker_with_trailing_text_have_no_alert() {
-        for source in ["> just a quote\n", "> [!NOTE] extra\n> body\n", "> [!CUSTOM]\n> body\n"] {
+        for source in [
+            "> just a quote\n",
+            "> [!NOTE] extra\n> body\n",
+            "> [!CUSTOM]\n> body\n",
+        ] {
             let doc = MarkdownDocument::from_text(source);
             let blocks = doc.preview_blocks();
             assert!(
-                blocks.iter().all(|block| matches!(
-                    block,
-                    PreviewBlock::BlockQuote { alert: None, .. }
-                )),
+                blocks
+                    .iter()
+                    .all(|block| matches!(block, PreviewBlock::BlockQuote { alert: None, .. })),
                 "{source:?}"
             );
         }

@@ -395,7 +395,9 @@ pub(crate) fn push_nonempty_block(blocks: &mut Vec<PreviewBlock>, block: Preview
                 blocks.push(block);
             }
         }
-        PreviewBlock::BlockQuote { children, alert, .. } => {
+        PreviewBlock::BlockQuote {
+            children, alert, ..
+        } => {
             // An alert quote with no body still owns its marker line, so it
             // must survive into the block model for visual rendering.
             if !children.is_empty() || alert.is_some() {

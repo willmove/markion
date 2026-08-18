@@ -788,6 +788,85 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_image_continuation_delete_does_not_swallow_the_image() {
+        let source = "hello ![alt](url) world";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        let image = content
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+            .expect("partitioned image row");
+        let trailing = content
+            .iter()
+            .rev()
+            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .expect("trailing prose slice");
+        assert!(
+            trailing.source_range.start >= image.source_range.end,
+            "continuation must start after the image slice"
+        );
+        assert!(
+            trailing.source_range.end <= image.source_range.start
+                || trailing.source_range.start >= image.source_range.end,
+            "continuation range must not cover the image"
+        );
+
+        let target = BlockTarget::from_block(doc.version(), trailing);
+        match delete_block(doc.text(), doc.version(), &blocks, &target) {
+            Ok(edit) => {
+                assert!(
+                    edit.range.end <= image.source_range.start
+                        || edit.range.start >= image.source_range.end,
+                    "delete range {:?} swallowed image {:?}",
+                    edit.range,
+                    image.source_range
+                );
+                let mut remaining = source.to_string();
+                remaining.replace_range(edit.range, &edit.replacement);
+                assert!(
+                    remaining.contains("![alt](url)"),
+                    "deleting leftover prose must keep the image syntax, got {remaining:?}"
+                );
+            }
+            Err(BlockEditError::Ambiguous | BlockEditError::Unsupported) => {}
+            Err(other) => panic!("unexpected delete error: {other:?}"),
+        }
+
+        let adjacent = "**已订阅Google AI Pro**\n![image.png](https://example.com/a.png)";
+        let doc = MarkdownDocument::from_text(adjacent);
+        let blocks = doc.visual_blocks_shared();
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        let leading = content
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .expect("leading prose");
+        let image = content
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+            .expect("image row");
+        let target = BlockTarget::from_block(doc.version(), leading);
+        let edit = delete_block(doc.text(), doc.version(), &blocks, &target)
+            .expect("leading paragraph starts at a line boundary");
+        assert!(
+            edit.range.end <= image.source_range.start,
+            "leading delete {:?} swallowed image {:?}",
+            edit.range,
+            image.source_range
+        );
+        let mut remaining = adjacent.to_string();
+        remaining.replace_range(edit.range, &edit.replacement);
+        assert!(remaining.contains("![image.png](https://example.com/a.png)"));
+        assert!(!remaining.contains("已订阅Google AI Pro"));
+    }
+
+    #[test]
     fn stale_nested_and_ambiguous_quote_targets_are_rejected() {
         let nested = MarkdownDocument::from_text("- parent\n  - child");
         let blocks = nested.visual_blocks_shared();

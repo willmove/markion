@@ -4418,13 +4418,18 @@ fn visual_edit_gfm_alert_title_row_is_reachable_and_editable(cx: &mut TestAppCon
     let pre_edit_cursor = app.update(cx, |app, _| {
         let tab = app.active_tab();
         let cursor = tab.cursor_offset();
-        assert!(cursor < 10, "Up from the body must enter the title row, got {cursor}");
-        let blocks = tab.document.visual_blocks_shared();
-        let block_index =
-            visual_block_index_for_offset(&blocks, cursor, tab.document.text().len())
-                .expect("caret owns a visual row");
         assert!(
-            matches!(blocks[block_index].kind, VisualBlockKind::CalloutTitle { .. }),
+            cursor < 10,
+            "Up from the body must enter the title row, got {cursor}"
+        );
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index = visual_block_index_for_offset(&blocks, cursor, tab.document.text().len())
+            .expect("caret owns a visual row");
+        assert!(
+            matches!(
+                blocks[block_index].kind,
+                VisualBlockKind::CalloutTitle { .. }
+            ),
             "caret should own the callout title row, got {:?}",
             blocks[block_index].kind,
         );
@@ -4443,7 +4448,10 @@ fn visual_edit_gfm_alert_title_row_is_reachable_and_editable(cx: &mut TestAppCon
     cx.run_until_parked();
     app.update(cx, |app, _| {
         let tab = app.active_tab();
-        assert_eq!(&tab.document.text()[pre_edit_cursor..pre_edit_cursor + 1], "X");
+        assert_eq!(
+            &tab.document.text()[pre_edit_cursor..pre_edit_cursor + 1],
+            "X"
+        );
         assert_eq!(tab.cursor_offset(), pre_edit_cursor + 1);
         assert!(tab.document.is_dirty());
         assert!(!tab.undo_stack.is_empty());
@@ -5215,7 +5223,11 @@ fn image_tree_and_open_recent_entry_points_follow_open_target_preference(cx: &mu
         assert_eq!(app.active_tab().path(), Some(tree_image.as_path()));
 
         app.open_recent_path(recent_image.clone(), cx);
-        assert_eq!(app.tabs.len(), 2, "already-open paths must dedupe, not append");
+        assert_eq!(
+            app.tabs.len(),
+            2,
+            "already-open paths must dedupe, not append"
+        );
         assert_eq!(app.active_tab().path(), Some(recent_image.as_path()));
     });
 }
@@ -5303,7 +5315,11 @@ fn gesture_open_with_dirty_tab_appends_and_preserves_work(cx: &mut TestAppContex
 
     app.update(cx, |app, cx| {
         app.open_tree_file_confirmed(other.clone(), cx);
-        assert_eq!(app.tabs.len(), 2, "a dirty active tab must divert to a new tab");
+        assert_eq!(
+            app.tabs.len(),
+            2,
+            "a dirty active tab must divert to a new tab"
+        );
         assert_eq!(app.active_tab().path(), Some(other.as_path()));
         let dirty = app.tabs[0].document_tab().unwrap();
         assert_eq!(dirty.document.text(), "unsaved edits");
@@ -5354,7 +5370,11 @@ fn multi_file_drop_replaces_once_then_appends(cx: &mut TestAppContext) {
     app.update(cx, |app, cx| {
         app.open_dropped_documents(&[alpha.clone(), beta.clone()], cx);
         assert_eq!(app.tabs.len(), 3);
-        assert!(app.tabs[0].document_tab().is_some_and(|tab| tab.document.path().is_none()));
+        assert!(
+            app.tabs[0]
+                .document_tab()
+                .is_some_and(|tab| tab.document.path().is_none())
+        );
         assert_eq!(app.active_tab().path(), Some(beta.as_path()));
     });
 }

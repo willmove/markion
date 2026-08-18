@@ -513,6 +513,12 @@ pub(crate) fn build_visual_blocks(
         }
     }
 
+    // A paragraph/heading that still swallows nested Markdown images would
+    // overlap those Image leaves. Split the parent into disjoint prose
+    // slices around each contained image before the coverage loop, so the
+    // overlap guard does not force-mark the images Unsupported.
+    let (expanded, source_ranges) = partition_prose_around_nested_images(expanded, source_ranges);
+
     let mut covered_until = blocks.last().map_or(0, |block| block.source_range.end);
     for (leaf, range) in expanded.iter().zip(source_ranges) {
         if range.start > covered_until {
@@ -570,10 +576,9 @@ pub(crate) fn build_visual_blocks(
                     }
                 }
                 None => {
-                    let quote_group = leaf
-                        .quote_group
-                        .as_ref()
-                        .filter(|group| gap_range.start >= group.start && gap_range.end <= group.end);
+                    let quote_group = leaf.quote_group.as_ref().filter(|group| {
+                        gap_range.start >= group.start && gap_range.end <= group.end
+                    });
                     blocks.push(gap_block(text, gap_range, quote_group, &mut allocate_id));
                 }
             }
@@ -581,10 +586,7 @@ pub(crate) fn build_visual_blocks(
 
         if leaf.marker_only {
             let kind = leaf.alert.expect("marker-only leaf carries the alert kind");
-            let group = leaf
-                .quote_group
-                .clone()
-                .unwrap_or_else(|| range.clone());
+            let group = leaf.quote_group.clone().unwrap_or_else(|| range.clone());
             blocks.push(callout_title_block(
                 text,
                 range.clone(),
@@ -641,6 +643,76 @@ pub(crate) fn build_visual_blocks(
     }
     assign_quote_group_edges(&mut blocks);
     blocks
+}
+
+fn partition_prose_around_nested_images<'a>(
+    expanded: Vec<VisualLeaf<'a>>,
+    source_ranges: Vec<Range<usize>>,
+) -> (Vec<VisualLeaf<'a>>, Vec<Range<usize>>) {
+    let mut out_leaves = Vec::with_capacity(expanded.len());
+    let mut out_ranges = Vec::with_capacity(source_ranges.len());
+    let mut index = 0;
+    while index < expanded.len() {
+        let leaf = &expanded[index];
+        let parent_range = source_ranges[index].clone();
+        let is_prose_parent = !leaf.marker_only
+            && matches!(
+                leaf.block,
+                PreviewBlock::Paragraph { .. } | PreviewBlock::Heading { .. }
+            );
+        if !is_prose_parent {
+            out_leaves.push(leaf.clone());
+            out_ranges.push(parent_range);
+            index += 1;
+            continue;
+        }
+
+        let mut nested = Vec::new();
+        let mut look = index + 1;
+        while look < expanded.len() {
+            if !matches!(expanded[look].block, PreviewBlock::Image { .. }) {
+                break;
+            }
+            let image_range = source_ranges[look].clone();
+            if image_range.start >= parent_range.start && image_range.end <= parent_range.end {
+                nested.push((look, image_range));
+                look += 1;
+            } else {
+                break;
+            }
+        }
+
+        if nested.is_empty() {
+            out_leaves.push(leaf.clone());
+            out_ranges.push(parent_range);
+            index += 1;
+            continue;
+        }
+
+        let mut cursor = parent_range.start;
+        for (image_index, image_range) in &nested {
+            if image_range.start > cursor {
+                out_leaves.push(leaf.clone());
+                out_ranges.push(cursor..image_range.start);
+            }
+            let mut image_leaf = expanded[*image_index].clone();
+            // Images extracted from a quote are top-level preview blocks, so
+            // copy the parent's quote group onto the image row.
+            if image_leaf.quote_group.is_none() {
+                image_leaf.quote_group = leaf.quote_group.clone();
+                image_leaf.alert = leaf.alert;
+            }
+            out_leaves.push(image_leaf);
+            out_ranges.push(image_range.clone());
+            cursor = cursor.max(image_range.end);
+        }
+        if cursor < parent_range.end {
+            out_leaves.push(leaf.clone());
+            out_ranges.push(cursor..parent_range.end);
+        }
+        index = look;
+    }
+    (out_leaves, out_ranges)
 }
 
 fn quoted_leaf_source_range(
@@ -820,7 +892,8 @@ fn callout_title_block(
     // trailing newline, so any caret inside the line reveals it verbatim
     // instead of revealing fragments. The row itself carries no editable
     // runs; the trailing newline stays unowned like on whitespace rows.
-    let mut quote_context = quote_context_for_row(text, range.clone(), range.clone(), group.clone());
+    let mut quote_context =
+        quote_context_for_row(text, range.clone(), range.clone(), group.clone());
     let line_end = text[range.clone()]
         .find('\n')
         .map_or(range.end, |relative| range.start + relative);
@@ -2132,13 +2205,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        build_visual_projection, build_visual_projection_with_marked_range,
-        fenced_payload_ranges,
+        build_visual_projection, build_visual_projection_with_marked_range, fenced_payload_ranges,
     };
     use crate::{
-        AlertKind, MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockEditor,
-        VisualBlockKind, VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind,
-        VisualNavigationTarget, VisualQuoteGroupEdge, VisualRevealKind, VisualSourceIslandKind,
+        AlertKind, MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockEditor, VisualBlockKind,
+        VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind, VisualNavigationTarget,
+        VisualQuoteGroupEdge, VisualRevealKind, VisualSourceIslandKind,
     };
 
     #[test]
@@ -2234,28 +2306,38 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         assert!(matches!(
             blocks[0].kind,
-            VisualBlockKind::CalloutTitle { kind: AlertKind::Note }
+            VisualBlockKind::CalloutTitle {
+                kind: AlertKind::Note
+            }
         ));
         assert_eq!(&source[blocks[0].source_range.clone()], "> [!NOTE]\n");
         assert!(blocks[0].editable_runs.is_empty());
-        let quote = blocks[0].quote_context.as_ref().expect("title joins the group");
+        let quote = blocks[0]
+            .quote_context
+            .as_ref()
+            .expect("title joins the group");
         assert_eq!(quote.marker_ranges, vec![0..9]);
         assert_eq!(quote.edge, VisualQuoteGroupEdge::First);
         assert!(blocks[0].source_island.is_none());
 
         assert!(matches!(blocks[1].kind, VisualBlockKind::Paragraph));
         assert!(blocks[1].source_island.is_none());
-        assert_eq!(blocks[1].quote_context.as_ref().unwrap().edge, VisualQuoteGroupEdge::Last);
+        assert_eq!(
+            blocks[1].quote_context.as_ref().unwrap().edge,
+            VisualQuoteGroupEdge::Last
+        );
 
         // Full-document byte coverage stays contiguous without overlaps.
-        assert!(blocks.windows(2).all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].source_range.end == pair[1].source_range.start)
+        );
 
         // The body still renders its link as one editable run.
-        assert!(blocks[1]
-            .editable_runs
-            .iter()
-            .any(|run| run.visible_text == "https://open.bigmodel.cn/api/coding/paas/v4"
-                && run.link_target_range.is_some()));
+        assert!(blocks[1].editable_runs.iter().any(|run| run.visible_text
+            == "https://open.bigmodel.cn/api/coding/paas/v4"
+            && run.link_target_range.is_some()));
     }
 
     #[test]
@@ -2283,12 +2365,19 @@ mod tests {
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
         assert_eq!(blocks.len(), 3);
-        assert!(matches!(blocks[0].kind, VisualBlockKind::CalloutTitle { .. }));
+        assert!(matches!(
+            blocks[0].kind,
+            VisualBlockKind::CalloutTitle { .. }
+        ));
         assert_eq!(&source[blocks[0].source_range.clone()], "> [!NOTE]\n");
         assert!(matches!(blocks[1].kind, VisualBlockKind::Whitespace));
         assert_eq!(&source[blocks[1].source_range.clone()], ">\n");
         assert!(matches!(blocks[2].kind, VisualBlockKind::Paragraph));
-        assert!(blocks.windows(2).all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].source_range.end == pair[1].source_range.start)
+        );
     }
 
     #[test]
@@ -2299,7 +2388,9 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert!(matches!(
             blocks[0].kind,
-            VisualBlockKind::CalloutTitle { kind: AlertKind::Tip }
+            VisualBlockKind::CalloutTitle {
+                kind: AlertKind::Tip
+            }
         ));
         assert_eq!(blocks[0].source_range, 0..source.len());
         assert_eq!(blocks[0].source_island, None);
@@ -2327,27 +2418,38 @@ mod tests {
             );
             let title = blocks
                 .iter()
-                .position(|block| matches!(
-                    block.kind,
-                    VisualBlockKind::CalloutTitle { kind: AlertKind::Note }
-                ))
+                .position(|block| {
+                    matches!(
+                        block.kind,
+                        VisualBlockKind::CalloutTitle {
+                            kind: AlertKind::Note
+                        }
+                    )
+                })
                 .expect("callout title row exists");
             assert_eq!(
                 source[blocks[title].source_range.clone()].trim_end(),
                 "> [!NOTE]"
             );
-            assert!(matches!(blocks[title - 1].kind, VisualBlockKind::Whitespace));
+            assert!(matches!(
+                blocks[title - 1].kind,
+                VisualBlockKind::Whitespace
+            ));
             assert!(blocks[title - 1].quote_context.is_none());
-            assert!(blocks.iter().any(|block| matches!(
-                block.kind,
-                VisualBlockKind::Paragraph
-            ) && block.quote_context.is_some()));
+            assert!(
+                blocks
+                    .iter()
+                    .any(|block| matches!(block.kind, VisualBlockKind::Paragraph)
+                        && block.quote_context.is_some())
+            );
             // Full-document byte coverage stays contiguous without overlaps.
             assert_eq!(blocks.first().unwrap().source_range.start, 0);
             assert_eq!(blocks.last().unwrap().source_range.end, source.len());
-            assert!(blocks
-                .windows(2)
-                .all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+            assert!(
+                blocks
+                    .windows(2)
+                    .all(|pair| pair[0].source_range.end == pair[1].source_range.start)
+            );
         }
     }
 
@@ -2362,10 +2464,12 @@ mod tests {
         let projection = build_visual_projection(source, block, cursor..cursor, cursor);
         assert_eq!(projection.text, "first line\nsecond line");
         // Display order follows source order and every segment maps back.
-        assert!(projection
-            .segments
-            .windows(2)
-            .all(|pair| pair[0].source_range.end <= pair[1].source_range.start));
+        assert!(
+            projection
+                .segments
+                .windows(2)
+                .all(|pair| pair[0].source_range.end <= pair[1].source_range.start)
+        );
         // The newline byte is owned by a run; only the `> ` markers and the
         // trailing newline hide.
         assert_eq!(block.marker_ranges, vec![0..2, 13..15, 26..27]);
@@ -2388,10 +2492,11 @@ mod tests {
         let source = "> [!CUSTOM]\n> body text\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
-        assert!(blocks.iter().all(|block| matches!(
-            block.kind,
-            VisualBlockKind::Paragraph
-        )));
+        assert!(
+            blocks
+                .iter()
+                .all(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+        );
         assert_eq!(blocks.len(), 1);
         let block = &blocks[0];
         let cursor = block.editable_runs[0].content_range.start;
@@ -2407,10 +2512,11 @@ mod tests {
         let source = "> [!NOTE] extra\n> body\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
-        assert!(blocks.iter().all(|block| matches!(
-            block.kind,
-            VisualBlockKind::Paragraph
-        )));
+        assert!(
+            blocks
+                .iter()
+                .all(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+        );
         assert_eq!(blocks.len(), 1);
         let cursor = blocks[0].editable_runs[0].content_range.start;
         let projection = build_visual_projection(source, &blocks[0], cursor..cursor, cursor);
@@ -2980,15 +3086,16 @@ mod tests {
         // Full-document byte coverage stays contiguous without overlaps.
         assert_eq!(blocks.first().unwrap().source_range.start, 0);
         assert_eq!(blocks.last().unwrap().source_range.end, source.len());
-        assert!(blocks
-            .windows(2)
-            .all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].source_range.end == pair[1].source_range.start)
+        );
 
         // No raw-source fallback rows: every construct is owned by its renderer.
         assert!(
             blocks.iter().all(|block| {
-                !matches!(block.kind, VisualBlockKind::Unsupported)
-                    && block.source_island.is_none()
+                !matches!(block.kind, VisualBlockKind::Unsupported) && block.source_island.is_none()
             }),
             "unexpected source island: {:?}",
             blocks
@@ -3085,9 +3192,7 @@ mod tests {
         // lenient nested-list scan must not fabricate a closing fence here.
         let source = "  ```\n    ```\n";
         let fence_start = source.find("```").unwrap();
-        assert!(
-            fenced_payload_ranges(source, fence_start..source.len(), '`', '~').is_none()
-        );
+        assert!(fenced_payload_ranges(source, fence_start..source.len(), '`', '~').is_none());
         // Same guard for a column-zero unclosed fence.
         let source = "```\n    ```\n";
         assert!(fenced_payload_ranges(source, 0..source.len(), '`', '~').is_none());
@@ -3111,7 +3216,10 @@ mod tests {
                 continue;
             }
             let source_offset = projection.source_for_display(display);
-            assert!(item.source_range.contains(&source_offset) || source_offset == item.source_range.end);
+            assert!(
+                item.source_range.contains(&source_offset)
+                    || source_offset == item.source_range.end
+            );
         }
     }
 
@@ -3125,9 +3233,11 @@ mod tests {
 
         assert_eq!(blocks.first().unwrap().source_range.start, 0);
         assert_eq!(blocks.last().unwrap().source_range.end, source.len());
-        assert!(blocks
-            .windows(2)
-            .all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].source_range.end == pair[1].source_range.start)
+        );
         assert!(blocks.iter().all(|block| {
             !matches!(block.kind, VisualBlockKind::Unsupported) && block.source_island.is_none()
         }));
@@ -3137,9 +3247,11 @@ mod tests {
             .filter(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
             .collect::<Vec<_>>();
         assert_eq!(code_rows.len(), 3);
-        assert!(code_rows
-            .iter()
-            .all(|row| matches!(row.editor, Some(VisualBlockEditor::Code { .. }))));
+        assert!(
+            code_rows
+                .iter()
+                .all(|row| matches!(row.editor, Some(VisualBlockEditor::Code { .. })))
+        );
 
         let rendered = blocks
             .iter()
@@ -3527,6 +3639,167 @@ mod tests {
             );
             assert_eq!(image.source_island, Some(VisualSourceIslandKind::Image));
         }
+    }
+
+    fn assert_complete_disjoint_coverage(blocks: &[crate::VisualBlock], source: &str) {
+        assert!(!blocks.is_empty(), "expected visual rows for {source:?}");
+        assert_eq!(blocks[0].source_range.start, 0);
+        assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+        for pair in blocks.windows(2) {
+            assert!(
+                pair[0].source_range.end <= pair[1].source_range.start,
+                "overlapping visual rows {:?} then {:?}",
+                pair[0].source_range,
+                pair[1].source_range
+            );
+            assert_eq!(
+                pair[0].source_range.end, pair[1].source_range.start,
+                "gap between visual rows {:?} and {:?}",
+                pair[0].source_range, pair[1].source_range
+            );
+        }
+    }
+
+    fn content_kinds(blocks: &[crate::VisualBlock]) -> Vec<&VisualBlockKind> {
+        blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .map(|block| &block.kind)
+            .collect()
+    }
+
+    #[test]
+    fn mixed_paragraph_image_without_blank_line_partitions_without_island() {
+        let source = "**已订阅Google AI Pro**\n![image.png](https://example.com/a.png)";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        assert_complete_disjoint_coverage(&blocks, source);
+
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert_eq!(content.len(), 2, "kinds: {:?}", content_kinds(&blocks));
+        assert!(
+            matches!(content[0].kind, VisualBlockKind::Paragraph),
+            "leading row should be a paragraph, got {:?}",
+            content[0].kind
+        );
+        assert!(
+            matches!(content[1].kind, VisualBlockKind::Image { .. }),
+            "nested image should stay VisualBlockKind::Image, got {:?}",
+            content[1].kind
+        );
+        assert_ne!(
+            content[1].source_island,
+            Some(VisualSourceIslandKind::Unsupported)
+        );
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .all(|run| !run.visible_text.contains("image.png")),
+            "alt text leaked into paragraph runs: {:?}",
+            content[0].editable_runs
+        );
+    }
+
+    #[test]
+    fn same_line_and_multiple_inline_images_partition_into_disjoint_rows() {
+        let source = "hello ![alt](url) world";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        assert_complete_disjoint_coverage(&blocks, source);
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert_eq!(content.len(), 3, "kinds: {:?}", content_kinds(&blocks));
+        assert!(matches!(content[0].kind, VisualBlockKind::Paragraph));
+        assert!(matches!(content[1].kind, VisualBlockKind::Image { .. }));
+        assert!(matches!(content[2].kind, VisualBlockKind::Paragraph));
+        assert_ne!(
+            content[1].source_island,
+            Some(VisualSourceIslandKind::Unsupported)
+        );
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text.contains("hello"))
+        );
+        assert!(
+            content[2]
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text.contains("world"))
+        );
+
+        let source = "a ![one](one.png) b ![two](two.png) c";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        assert_complete_disjoint_coverage(&blocks, source);
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert_eq!(content.len(), 5, "kinds: {:?}", content_kinds(&blocks));
+        assert!(matches!(content[0].kind, VisualBlockKind::Paragraph));
+        assert!(matches!(content[1].kind, VisualBlockKind::Image { .. }));
+        assert!(matches!(content[2].kind, VisualBlockKind::Paragraph));
+        assert!(matches!(content[3].kind, VisualBlockKind::Image { .. }));
+        assert!(matches!(content[4].kind, VisualBlockKind::Paragraph));
+        assert!(
+            content
+                .iter()
+                .all(|block| { block.source_island != Some(VisualSourceIslandKind::Unsupported) })
+        );
+    }
+
+    #[test]
+    fn image_only_and_blank_line_separated_images_stay_unpartitioned() {
+        let source = "![solo](solo.png)";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        assert_complete_disjoint_coverage(&blocks, source);
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert_eq!(content.len(), 1, "kinds: {:?}", content_kinds(&blocks));
+        assert!(matches!(content[0].kind, VisualBlockKind::Image { .. }));
+
+        let source = "Intro\n\n![alt](url)";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        assert_complete_disjoint_coverage(&blocks, source);
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert_eq!(content.len(), 2, "kinds: {:?}", content_kinds(&blocks));
+        assert!(matches!(content[0].kind, VisualBlockKind::Paragraph));
+        assert!(matches!(content[1].kind, VisualBlockKind::Image { .. }));
+        assert!(content[0].source_range.end <= content[1].source_range.start);
+    }
+
+    #[test]
+    fn quoted_paragraph_with_nested_image_keeps_quote_context() {
+        let source = "> text\n> ![alt](url)";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        assert_complete_disjoint_coverage(&blocks, source);
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert!(
+            content
+                .iter()
+                .any(|block| matches!(block.kind, VisualBlockKind::Image { .. })),
+            "expected an image row, got {:?}",
+            content_kinds(&blocks)
+        );
+        assert!(content.iter().all(|block| block.quote_context.is_some()));
+        assert!(
+            content
+                .iter()
+                .all(|block| { block.source_island != Some(VisualSourceIslandKind::Unsupported) })
+        );
     }
 
     #[test]
