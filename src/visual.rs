@@ -1128,6 +1128,48 @@ fn fenced_payload_ranges(
         }
         offset += line_with_newline.len();
     }
+    if closing.is_none() {
+        // A fence nested inside a list item retains the list's indentation on
+        // its payload and closing-fence lines (pulldown-cmark reports the
+        // block range starting at the opening backticks, so the opening line
+        // passes the strict check above while the indented closing line does
+        // not). Measure the payload's common indentation and accept a closing
+        // fence at up to that depth. pulldown-cmark already fixed this block's
+        // extent, so no payload line can look like a valid closing fence.
+        // Gate on the opening fence itself being indented 4+ in the document:
+        // a top-level fence's payload line that merely looks like an indented
+        // fence (e.g. an unclosed fence) must not be misread as the closing.
+        let opening_line_indent = text[..source_range.start]
+            .rsplit('\n')
+            .next()
+            .unwrap_or("")
+            .bytes()
+            .take_while(|byte| *byte == b' ')
+            .count();
+        let payload = &source[opening_end..];
+        let payload_indent = payload
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.len() - line.trim_start_matches(' ').len())
+            .min();
+        if opening_line_indent >= 4
+            && let Some(payload_indent) = payload_indent
+            && payload_indent > 3
+        {
+            let mut offset = opening_end;
+            for line_with_newline in source[opening_end..].split_inclusive('\n') {
+                let line = line_with_newline.trim_end_matches(['\r', '\n']);
+                let trimmed = line.trim_start_matches(' ');
+                let indent = line.len() - trimmed.len();
+                let run = trimmed.chars().take_while(|ch| *ch == marker).count();
+                if indent <= payload_indent && run >= marker_len && trimmed[run..].trim().is_empty()
+                {
+                    closing = Some((offset, indent, run));
+                }
+                offset += line_with_newline.len();
+            }
+        }
+    }
     let (closing_start, closing_indent, closing_len) = closing?;
     let closing_fence = source_range.start + closing_start + closing_indent
         ..source_range.start + closing_start + closing_indent + closing_len;
@@ -2089,7 +2131,10 @@ fn marker_ranges(block_range: Range<usize>, runs: &[VisualInlineRun]) -> Vec<Ran
 mod tests {
     use std::sync::Arc;
 
-    use super::{build_visual_projection, build_visual_projection_with_marked_range};
+    use super::{
+        build_visual_projection, build_visual_projection_with_marked_range,
+        fenced_payload_ranges,
+    };
     use crate::{
         AlertKind, MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockEditor,
         VisualBlockKind, VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind,
@@ -2923,6 +2968,200 @@ mod tests {
         assert_eq!(
             projected,
             ["parent", "child", "grandchild", "ordered", "nested"]
+        );
+    }
+
+    #[test]
+    fn list_item_with_nested_fenced_code_renders_rows_without_raw_boxes() {
+        let source = "- first item with [link](https://example.com)\n    \n    ```\n    export A=1\n    ```\n    \n- second item\n    \n    ```\n    export B=2\n    ```\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+
+        // Full-document byte coverage stays contiguous without overlaps.
+        assert_eq!(blocks.first().unwrap().source_range.start, 0);
+        assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+        assert!(blocks
+            .windows(2)
+            .all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+
+        // No raw-source fallback rows: every construct is owned by its renderer.
+        assert!(
+            blocks.iter().all(|block| {
+                !matches!(block.kind, VisualBlockKind::Unsupported)
+                    && block.source_island.is_none()
+            }),
+            "unexpected source island: {:?}",
+            blocks
+                .iter()
+                .map(|block| (&block.kind, &block.source_island, &block.source_range))
+                .collect::<Vec<_>>()
+        );
+
+        let list_rows = blocks
+            .iter()
+            .filter(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(list_rows.len(), 2);
+        let code_rows = blocks
+            .iter()
+            .filter(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(code_rows.len(), 2);
+        for row in &code_rows {
+            assert!(
+                matches!(row.editor, Some(VisualBlockEditor::Code { .. })),
+                "nested fence keeps its source-backed code editor"
+            );
+        }
+
+        // Item text and code payload each project exactly once.
+        let rendered = blocks
+            .iter()
+            .map(|block| {
+                let cursor = block
+                    .editable_runs
+                    .first()
+                    .map_or(block.source_range.end, |run| run.content_range.start);
+                build_visual_projection(source, block, cursor..cursor, cursor).text
+            })
+            .collect::<String>();
+        assert_eq!(rendered.matches("first item").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("export A=1").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("second item").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("export B=2").count(), 1, "{rendered}");
+        assert!(
+            !rendered.contains("[link](https://example.com)"),
+            "link syntax stays hidden: {rendered}"
+        );
+    }
+
+    #[test]
+    fn nested_fence_with_list_indentation_resolves_editor_ranges() {
+        let source = "- item\n\n    ```sh\n    export A=1\n    ```\n";
+        let fence_start = source.find("```").unwrap();
+        let fence_end = source.rfind("```").unwrap() + 3;
+        let (payload, info, opening, closing) =
+            fenced_payload_ranges(source, fence_start..fence_end, '`', '~')
+                .expect("nested fence resolves its editor ranges");
+        assert_eq!(&source[opening], "```");
+        assert_eq!(info.map(|range| &source[range]), Some("sh"));
+        assert_eq!(&source[payload], "    export A=1\n");
+        assert_eq!(&source[closing], "```");
+    }
+
+    #[test]
+    fn nested_fence_lenient_scan_handles_edge_cases() {
+        // Blank first payload line plus payload lines that merely start with
+        // backticks: a shorter run or trailing info text is never a closing.
+        let source = "- item\n\n    ```\n    \n    ``\n    ```text\n    real\n    ```\n";
+        let fence_start = source.find("```").unwrap();
+        let fence_end = source.rfind("```").unwrap() + 3;
+        let (payload, info, opening, closing) =
+            fenced_payload_ranges(source, fence_start..fence_end, '`', '~')
+                .expect("nested fence with tricky payload");
+        assert_eq!(&source[opening], "```");
+        assert!(info.is_none());
+        assert_eq!(&source[payload], "    \n    ``\n    ```text\n    real\n");
+        assert_eq!(&source[closing], "```");
+
+        // Tilde fence nested in an ordered list (content indent three, but an
+        // author may indent deeper and pulldown-cmark still nests the fence).
+        let source = "1. item\n\n    ~~~rust\n    let x = 1;\n    ~~~\n";
+        let fence_start = source.find("~~~").unwrap();
+        let fence_end = source.rfind("~~~").unwrap() + 3;
+        let (payload, info, opening, closing) =
+            fenced_payload_ranges(source, fence_start..fence_end, '`', '~')
+                .expect("nested tilde fence");
+        assert_eq!(&source[opening], "~~~");
+        assert_eq!(info.map(|range| &source[range]), Some("rust"));
+        assert_eq!(&source[payload], "    let x = 1;\n");
+        assert_eq!(&source[closing], "~~~");
+    }
+
+    #[test]
+    fn top_level_fence_with_fence_like_payload_line_stays_unresolved() {
+        // CommonMark: a closing fence may be indented at most three spaces, so
+        // this block is unclosed and its "fence-looking" line is payload. The
+        // lenient nested-list scan must not fabricate a closing fence here.
+        let source = "  ```\n    ```\n";
+        let fence_start = source.find("```").unwrap();
+        assert!(
+            fenced_payload_ranges(source, fence_start..source.len(), '`', '~').is_none()
+        );
+        // Same guard for a column-zero unclosed fence.
+        let source = "```\n    ```\n";
+        assert!(fenced_payload_ranges(source, 0..source.len(), '`', '~').is_none());
+    }
+
+    #[test]
+    fn nested_code_partition_boundary_keeps_exact_caret_positions() {
+        let source = "- first item\n    \n    ```\n    export A=1\n    ```\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let item = &blocks[0];
+        assert!(matches!(item.kind, VisualBlockKind::ListItem { .. }));
+        // The truncated item owns its trailing whitespace line through exact
+        // runs, and every display caret in the item row round-trips to source.
+        assert!(item.source_range.end > source.find("first item").unwrap());
+        let cursor = source.find("first item").unwrap() + 3;
+        let projection = build_visual_projection(source, item, cursor..cursor, cursor);
+        assert_eq!(projection.text.trim_end(), "first item");
+        for display in 0..=projection.text.len() {
+            if !projection.text.is_char_boundary(display) {
+                continue;
+            }
+            let source_offset = projection.source_for_display(display);
+            assert!(item.source_range.contains(&source_offset) || source_offset == item.source_range.end);
+        }
+    }
+
+    #[test]
+    fn minimax_fixture_list_nested_code_renders_without_raw_boxes() {
+        // Structure reported in 大模型服务API和账号信息2026Q3.md (MiniMax
+        // section): bullets whose indented continuations hold fenced blocks.
+        let source = "### 国内版MiniMax开放平台（Token Plan）\n\n有效期至：**03/26/2027**\n对应账号：`willmove@163.com`\n\n**Token Plan API Key：**\n\n```\nsk-cp-example\n```\n\n\n- 推荐使用 Anthropic API 兼容，具体查看：[Anthropic SDK](https://platform.minimaxi.com/docs/api-reference/text-anthropic-api)\n    \n    ```\n    export ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic\n    export ANTHROPIC_API_KEY=${YOUR_API_KEY}\n    ```\n    \n- 使用 OpenAI API 兼容，具体查看：[OpenAI SDK](https://platform.minimaxi.com/docs/api-reference/text-openai-api)\n    \n    ```\n    export OPENAI_BASE_URL=https://api.minimaxi.com/v1\n    export OPENAI_API_KEY=${YOUR_API_KEY}\n    ```\n\n### 海外 MiniMax API keys\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+
+        assert_eq!(blocks.first().unwrap().source_range.start, 0);
+        assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+        assert!(blocks
+            .windows(2)
+            .all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+        assert!(blocks.iter().all(|block| {
+            !matches!(block.kind, VisualBlockKind::Unsupported) && block.source_island.is_none()
+        }));
+
+        let code_rows = blocks
+            .iter()
+            .filter(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(code_rows.len(), 3);
+        assert!(code_rows
+            .iter()
+            .all(|row| matches!(row.editor, Some(VisualBlockEditor::Code { .. }))));
+
+        let rendered = blocks
+            .iter()
+            .map(|block| {
+                let cursor = block
+                    .editable_runs
+                    .first()
+                    .map_or(block.source_range.end, |run| run.content_range.start);
+                build_visual_projection(source, block, cursor..cursor, cursor).text
+            })
+            .collect::<String>();
+        for phrase in [
+            "推荐使用 Anthropic API 兼容",
+            "export ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic",
+            "使用 OpenAI API 兼容",
+            "export OPENAI_BASE_URL=https://api.minimaxi.com/v1",
+        ] {
+            assert_eq!(rendered.matches(phrase).count(), 1, "{phrase}: {rendered}");
+        }
+        assert!(
+            !rendered.contains("[Anthropic SDK](https://platform.minimaxi.com"),
+            "link syntax stays hidden: {rendered}"
         );
     }
 

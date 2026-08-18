@@ -2036,6 +2036,14 @@ impl MarkdownDocument {
         let mut quote_alert: Option<AlertKind> = None;
         let mut list_stack: Vec<ListLevelDraft> = Vec::new();
         let mut list_item: Option<ListItemDraft> = None;
+        // While a list item draft is open, block-level constructs nested inside
+        // the item (fenced code, tables) are still pushed to the top-level block
+        // stream at their own End events. pulldown-cmark reports the item's tag
+        // range as the whole subtree, so without adjustment the flushed item
+        // would swallow the nested block's range. Track the earliest nested
+        // start and truncate the item there at flush time; the final stable
+        // sort below then restores document order for the whole stream.
+        let mut item_nested_block_start: Option<usize> = None;
         let mut image: Option<ImageDraft> = None;
         let mut code: Option<(Option<String>, String, std::ops::Range<usize>)> = None;
         let mut table: Option<TableDraft> = None;
@@ -2175,6 +2183,13 @@ impl MarkdownDocument {
                     } else {
                         &mut blocks
                     };
+                    if let Some(item) = list_item.as_mut()
+                        && let Some(nested_start) = item_nested_block_start.take()
+                        && nested_start > item.source_range.start
+                        && nested_start < item.source_range.end
+                    {
+                        item.source_range.end = nested_start;
+                    }
                     flush_list_item(target, list_item.take());
                     let index = list_stack.last_mut().and_then(|level| {
                         level.ordered.then(|| {
@@ -2198,6 +2213,12 @@ impl MarkdownDocument {
                 Event::End(TagEnd::Item) => {
                     if let Some(item) = list_item.as_mut() {
                         item.source_range = source_range;
+                        if let Some(nested_start) = item_nested_block_start.take()
+                            && nested_start > item.source_range.start
+                            && nested_start < item.source_range.end
+                        {
+                            item.source_range.end = nested_start;
+                        }
                     }
                     let target = if quote_depth > 0 {
                         &mut quote_children
@@ -2258,6 +2279,12 @@ impl MarkdownDocument {
                 }
                 Event::End(TagEnd::CodeBlock) => {
                     if let Some((language, code, code_range)) = code.take() {
+                        if list_item.is_some() {
+                            item_nested_block_start = Some(
+                                item_nested_block_start
+                                    .map_or(code_range.start, |start| start.min(code_range.start)),
+                            );
+                        }
                         let code = code.trim_end_matches('\n').to_string();
                         if language
                             .as_deref()
@@ -2302,10 +2329,17 @@ impl MarkdownDocument {
                     if let Some(table) = table.take()
                         && !table.rows.is_empty()
                     {
+                        let table_range = table_ranges.next().unwrap_or(0..0);
+                        if list_item.is_some() {
+                            item_nested_block_start = Some(
+                                item_nested_block_start
+                                    .map_or(table_range.start, |start| start.min(table_range.start)),
+                            );
+                        }
                         blocks.push(PreviewBlock::Table {
                             rows: table.rows,
                             alignments: table.alignments,
-                            source_range: table_ranges.next().unwrap_or(0..0),
+                            source_range: table_range,
                         });
                     }
                 }
@@ -2523,6 +2557,14 @@ impl MarkdownDocument {
                 _ => {}
             }
         }
+
+        // Blocks pushed at their End events arrive in event order, which for
+        // container-nested constructs (a fenced code block inside a list item)
+        // is the reverse of document order. A stable sort by source start
+        // restores document order for every consumer — preview, Visual Edit,
+        // export, and sync scroll alike. For documents without nesting the
+        // stream is already ordered, so this is a no-op there.
+        blocks.sort_by_key(|block| block.source_range().start);
 
         (blocks, headings)
     }
@@ -4535,6 +4577,34 @@ mod tests {
         assert!(source[code.expect("code")].contains("let x = 1;"));
         assert!(source[quote.expect("quote")].contains("quote"));
         assert_eq!(source[rule.expect("rule")].trim(), "---");
+    }
+
+    #[test]
+    fn list_item_with_nested_fenced_code_stays_in_document_order() {
+        let source = "- first item with [link](https://example.com)\n    \n    ```\n    export A=1\n    ```\n    \n- second item\n    \n    ```\n    export B=2\n    ```\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+
+        let kinds = blocks
+            .iter()
+            .map(|block| match block {
+                PreviewBlock::ListItem { .. } => "item",
+                PreviewBlock::CodeBlock { .. } => "code",
+                _ => "other",
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, ["item", "code", "item", "code"]);
+
+        for pair in blocks.windows(2) {
+            assert!(
+                pair[0].source_range().end <= pair[1].source_range().start,
+                "a list item's range must not swallow the nested block that follows it: {:?} then {:?}",
+                pair[0].source_range(),
+                pair[1].source_range()
+            );
+        }
+        assert_eq!(blocks[0].plain_text(), "first item with link");
+        assert_eq!(blocks[2].plain_text(), "second item");
     }
 
     #[test]
