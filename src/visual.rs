@@ -517,36 +517,42 @@ pub(crate) fn build_visual_blocks(
     for (leaf, range) in expanded.iter().zip(source_ranges) {
         if range.start > covered_until {
             let gap_range = covered_until..range.start;
-            let quote_group = leaf
-                .quote_group
-                .as_ref()
-                .filter(|group| gap_range.start >= group.start && gap_range.end <= group.end);
             // An alert group's leading marker line (`> [!NOTE]`) is block
             // structure: no inline event owns its bytes, so instead of the
             // generic gap fallback it becomes the group's callout title row.
             // The gap containing the group start is the leading one (gaps
             // are disjoint), and the marker line is the line holding that
             // start — including any indentation before the `>`. Only that
-            // line belongs to the title; remaining gap lines (e.g. a bare
-            // `>` separator) keep the normal gap handling.
-            let alert_title =
-                quote_group
-                    .as_ref()
-                    .filter(|group| gap_range.contains(&group.start))
-                    .zip(leaf.alert)
-                    .map(|(group, kind)| {
-                        let marker_line_start = text[..group.start]
-                            .rfind('\n')
-                            .map_or(gap_range.start, |index| index + 1)
-                            .max(gap_range.start);
-                        let marker_line_end = text[marker_line_start..gap_range.end]
-                            .find('\n')
-                            .map_or(gap_range.end, |relative| marker_line_start + relative + 1)
-                            .min(gap_range.end);
-                        (marker_line_start..marker_line_end, kind, (*group).clone())
-                    });
+            // line belongs to the title: lines before it (e.g. the blank
+            // line after a previous block — the gap starts at the previous
+            // block's end, which may be outside the quote group) and after
+            // it (e.g. a bare `>` separator) keep the normal gap handling.
+            let alert_title = leaf
+                .quote_group
+                .as_ref()
+                .filter(|group| gap_range.contains(&group.start))
+                .zip(leaf.alert)
+                .map(|(group, kind)| {
+                    let marker_line_start = text[..group.start]
+                        .rfind('\n')
+                        .map_or(gap_range.start, |index| index + 1)
+                        .max(gap_range.start);
+                    let marker_line_end = text[marker_line_start..gap_range.end]
+                        .find('\n')
+                        .map_or(gap_range.end, |relative| marker_line_start + relative + 1)
+                        .min(gap_range.end);
+                    (marker_line_start..marker_line_end, kind, (*group).clone())
+                });
             match alert_title {
                 Some((marker_range, kind, group)) => {
+                    if marker_range.start > gap_range.start {
+                        blocks.push(gap_block(
+                            text,
+                            gap_range.start..marker_range.start,
+                            None,
+                            &mut allocate_id,
+                        ));
+                    }
                     blocks.push(callout_title_block(
                         text,
                         marker_range.clone(),
@@ -558,12 +564,16 @@ pub(crate) fn build_visual_blocks(
                         blocks.push(gap_block(
                             text,
                             marker_range.end..gap_range.end,
-                            quote_group,
+                            Some(&group),
                             &mut allocate_id,
                         ));
                     }
                 }
                 None => {
+                    let quote_group = leaf
+                        .quote_group
+                        .as_ref()
+                        .filter(|group| gap_range.start >= group.start && gap_range.end <= group.end);
                     blocks.push(gap_block(text, gap_range, quote_group, &mut allocate_id));
                 }
             }
@@ -2252,6 +2262,48 @@ mod tests {
             blocks[0].quote_context.as_ref().unwrap().edge,
             VisualQuoteGroupEdge::Only
         );
+    }
+
+    #[test]
+    fn gfm_alert_after_paragraph_still_renders_title_row() {
+        // The gap holding the marker line starts at the previous block's end,
+        // outside the quote group — the title row must still be found.
+        for line_ending in ["\n", "\r\n"] {
+            let source = format!(
+                "intro paragraph{le}{le}> [!NOTE]{le}> body text{le}",
+                le = line_ending
+            );
+            let doc = MarkdownDocument::from_text(&source);
+            let blocks = doc.visual_blocks_shared();
+
+            assert!(
+                blocks.iter().all(|block| block.source_island.is_none()),
+                "no source islands: {blocks:?}"
+            );
+            let title = blocks
+                .iter()
+                .position(|block| matches!(
+                    block.kind,
+                    VisualBlockKind::CalloutTitle { kind: AlertKind::Note }
+                ))
+                .expect("callout title row exists");
+            assert_eq!(
+                source[blocks[title].source_range.clone()].trim_end(),
+                "> [!NOTE]"
+            );
+            assert!(matches!(blocks[title - 1].kind, VisualBlockKind::Whitespace));
+            assert!(blocks[title - 1].quote_context.is_none());
+            assert!(blocks.iter().any(|block| matches!(
+                block.kind,
+                VisualBlockKind::Paragraph
+            ) && block.quote_context.is_some()));
+            // Full-document byte coverage stays contiguous without overlaps.
+            assert_eq!(blocks.first().unwrap().source_range.start, 0);
+            assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+            assert!(blocks
+                .windows(2)
+                .all(|pair| pair[0].source_range.end == pair[1].source_range.start));
+        }
     }
 
     #[test]
