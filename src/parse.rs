@@ -618,6 +618,67 @@ pub(crate) fn parse_inline_html_image(source: &str) -> Option<VisualHtmlImage> {
     })
 }
 
+/// One style flag the supported inline-HTML subset can contribute to the
+/// Visual Edit inline projection. Each kind maps to exactly one `InlineStyle`
+/// flag; the mapping itself lives in the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InlineHtmlStyleKind {
+    Emphasis,
+    Strong,
+    Strikethrough,
+    Code,
+    Highlight,
+    Subscript,
+    Superscript,
+}
+
+/// Recognized form of one supported inline-HTML tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InlineHtmlStyleTag {
+    Open { kind: InlineHtmlStyleKind },
+    Close { kind: InlineHtmlStyleKind },
+    LineBreak,
+}
+
+/// Recognizes exactly one complete, unattributed inline-HTML tag from the
+/// narrow subset the Visual Edit inline projection can hide as a marker:
+/// the style pairs `em`/`i`, `strong`/`b`, `s`/`del`/`strike`, `code`,
+/// `mark`, `sub`, `sup` (tag names case-insensitive) and the void line-break
+/// forms `<br>`, `<br/>`, `<br />`. Like `parse_inline_html_image`, `source`
+/// must be a single tag slice. Anything else — unknown tags, tags carrying
+/// attributes, self-closing style pairs, closing `</br>` — returns `None` so
+/// callers keep the conservative fallback.
+pub(crate) fn parse_inline_html_style_tag(source: &str) -> Option<InlineHtmlStyleTag> {
+    let trimmed = source.trim();
+    let inner = trimmed.strip_prefix('<')?.strip_suffix('>')?;
+    if inner.trim().is_empty() || inner.contains('<') || inner.contains('>') {
+        return None;
+    }
+    let tag = ParsedHtmlTag::parse(trimmed)?;
+    if !tag.attrs.is_empty() {
+        return None;
+    }
+    let kind = match tag.name.as_str() {
+        "em" | "i" => InlineHtmlStyleKind::Emphasis,
+        "strong" | "b" => InlineHtmlStyleKind::Strong,
+        "s" | "del" | "strike" => InlineHtmlStyleKind::Strikethrough,
+        "code" => InlineHtmlStyleKind::Code,
+        "mark" => InlineHtmlStyleKind::Highlight,
+        "sub" => InlineHtmlStyleKind::Subscript,
+        "sup" => InlineHtmlStyleKind::Superscript,
+        "br" if !tag.closing => return Some(InlineHtmlStyleTag::LineBreak),
+        _ => return None,
+    };
+    if tag.self_closing {
+        return None;
+    }
+    Some(if tag.closing {
+        InlineHtmlStyleTag::Close { kind }
+    } else {
+        InlineHtmlStyleTag::Open { kind }
+    })
+}
+
 pub fn html_preview_parts(html: &str) -> Vec<HtmlPreviewPart> {
     // A raw HTML block whose first tag is `<table>` is routed through the
     // dedicated table parser (honoring rowspan/colspan). Anything else — or a
@@ -1857,6 +1918,83 @@ mod inline_html_image_tests {
         assert!(parse_inline_html_image("text").is_none());
         assert!(parse_inline_html_image("<!-- comment -->").is_none());
         assert!(parse_inline_html_image("<img").is_none(), "partial tag");
+    }
+}
+
+#[cfg(test)]
+mod inline_html_style_tag_tests {
+    use super::{InlineHtmlStyleKind, InlineHtmlStyleTag, parse_inline_html_style_tag};
+
+    #[test]
+    fn recognizes_supported_style_pairs() {
+        use InlineHtmlStyleKind as K;
+        use InlineHtmlStyleTag as T;
+        let cases = [
+            ("<em>", T::Open { kind: K::Emphasis }),
+            ("<i>", T::Open { kind: K::Emphasis }),
+            ("</EM>", T::Close { kind: K::Emphasis }),
+            ("<strong>", T::Open { kind: K::Strong }),
+            ("<B>", T::Open { kind: K::Strong }),
+            ("</b>", T::Close { kind: K::Strong }),
+            (
+                "<s>",
+                T::Open {
+                    kind: K::Strikethrough,
+                },
+            ),
+            (
+                "<del>",
+                T::Open {
+                    kind: K::Strikethrough,
+                },
+            ),
+            (
+                "</strike>",
+                T::Close {
+                    kind: K::Strikethrough,
+                },
+            ),
+            ("<code>", T::Open { kind: K::Code }),
+            ("</code>", T::Close { kind: K::Code }),
+            ("<mark>", T::Open { kind: K::Highlight }),
+            ("<sub>", T::Open { kind: K::Subscript }),
+            (
+                "</sup>",
+                T::Close {
+                    kind: K::Superscript,
+                },
+            ),
+            ("<br>", T::LineBreak),
+            ("<br/>", T::LineBreak),
+            ("<br />", T::LineBreak),
+            ("<BR>", T::LineBreak),
+        ];
+        for (source, expected) in cases {
+            assert_eq!(parse_inline_html_style_tag(source), Some(expected));
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_forms() {
+        let rejected = [
+            "<a>",
+            "</a>",
+            "<u>",
+            "<span>",
+            "<em class=\"x\">",
+            "<em title>",
+            "<em/>",
+            "</br>",
+            "<code class=\"l\">",
+            "text",
+            "<em",
+            "<em>x</em>",
+            "<!-- c -->",
+            "<img src=\"a.png\">",
+        ];
+        for source in rejected {
+            assert!(parse_inline_html_style_tag(source).is_none(), "{source:?}");
+        }
     }
 }
 

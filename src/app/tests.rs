@@ -2166,6 +2166,19 @@ fn pane_density_and_scrollbar_constants_stay_compact_and_usable() {
 }
 
 #[test]
+fn list_scrollbar_marks_sync_driver_only_for_preview() {
+    assert!(list_pane_scrollbar_marks_sync_driver(
+        PaneScrollTarget::Preview
+    ));
+    assert!(!list_pane_scrollbar_marks_sync_driver(
+        PaneScrollTarget::Editor
+    ));
+    assert!(!list_pane_scrollbar_marks_sync_driver(
+        PaneScrollTarget::Visual
+    ));
+}
+
+#[test]
 fn read_mode_preview_width_cap_only_applies_without_adaptive_width() {
     assert_eq!(READ_MODE_PREVIEW_MAX_WIDTH, 860.);
     // Read mode: constrained when adaptive width is off (default), full when on.
@@ -3858,6 +3871,119 @@ fn visual_edit_paints_exactly_one_caret_in_the_focused_block(cx: &mut TestAppCon
             "caret must follow focus, one caret per frame"
         );
     });
+}
+
+#[gpui::test]
+fn visual_edit_mixed_prose_keeps_authored_line_breaks(cx: &mut TestAppContext) {
+    const SOURCE: &str = "### Brave Search API Key\n\n\
+网址：[Brave Search - API](https://example.com/keys)\n\
+账户： willmove@gmail.com\n\
+API Key: `BSA2IC_xxxxxxx`\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app.preview_adaptive_width = false;
+        app
+    });
+    cx.simulate_resize(size(px(1200.), px(760.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let paragraph = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let index = blocks
+            .iter()
+            .position(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .expect("fixture should have one paragraph");
+        let cursor = blocks[index].editable_runs[0].content_range.start;
+        let projection =
+            build_visual_projection(tab.document.text(), &blocks[index], cursor..cursor, cursor);
+        assert!(
+            projection.text.contains('\n'),
+            "projection must keep soft breaks: {:?}",
+            projection.text
+        );
+        index
+    });
+
+    let line0 = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-mixed-line-{paragraph}-0"
+        )))
+        .expect("first mixed line");
+    let line1 = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-mixed-line-{paragraph}-1"
+        )))
+        .expect("second mixed line");
+    let line2 = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-mixed-line-{paragraph}-2"
+        )))
+        .expect("third mixed line");
+    assert!(
+        f32::from(line1.top()) > f32::from(line0.top()) + 1.0,
+        "account line must sit below the URL line: {line0:?} vs {line1:?}"
+    );
+    assert!(
+        f32::from(line2.top()) > f32::from(line1.top()) + 1.0,
+        "API key line must sit below the account line: {line1:?} vs {line2:?}"
+    );
+    assert!(
+        cx.debug_bounds(test_debug_selector(format!(
+            "visual-mixed-line-{paragraph}-3"
+        )))
+        .is_none(),
+        "fixture has exactly three authored lines"
+    );
+}
+
+#[gpui::test]
+fn visual_edit_single_line_mixed_prose_stays_one_row(cx: &mut TestAppContext) {
+    const SOURCE: &str = "See [Brave Search - API](https://example.com/keys) for the token.\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app.preview_adaptive_width = false;
+        app
+    });
+    cx.simulate_resize(size(px(1200.), px(760.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let paragraph = app.update(cx, |app, _| {
+        app.active_tab()
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .position(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .expect("single-line fixture should have one paragraph")
+    });
+    assert!(
+        cx.debug_bounds(test_debug_selector(format!(
+            "visual-mixed-line-{paragraph}-0"
+        )))
+        .is_some(),
+        "linked prose still uses the mixed fragment layout"
+    );
+    assert!(
+        cx.debug_bounds(test_debug_selector(format!(
+            "visual-mixed-line-{paragraph}-1"
+        )))
+        .is_none(),
+        "a single authored line must not invent a second mixed row"
+    );
 }
 
 #[gpui::test]
@@ -6998,6 +7124,136 @@ fn sync_scroll_is_active_only_in_split_when_enabled() {
     assert!(!sync_scroll_is_active(ViewMode::Read, true));
 }
 
+#[gpui::test]
+fn visual_edit_scrollbar_updates_list_without_sync_or_mutation(cx: &mut TestAppContext) {
+    let source = (0..80)
+        .map(|index| format!("paragraph {index} with enough text for a stable list row"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let second_source = (0..40)
+        .map(|index| format!("other {index} paragraph"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text(&source)),
+            EditorTab::new(MarkdownDocument::from_text(&second_source)),
+        ];
+        app.active_tab = 0;
+        app.view_mode = ViewMode::VisualEdit;
+        app.sync_scroll = true;
+        let visual = app.active_tab().document.visual_blocks_shared();
+        app.active_tab_mut().sync_visual_list(&visual);
+        let preview = app.active_tab().document.preview_blocks_shared();
+        app.active_tab_mut().sync_preview_list(&preview);
+        let _ = app.active_tab().shared_document_text();
+        app
+    });
+    cx.run_until_parked();
+
+    let (
+        version,
+        preview_cache,
+        visual_cache,
+        highlight_count,
+        undo_len,
+        preview_top_before,
+        empty_max,
+    ) = app.update(cx, |app, _| {
+        app.active_tab().preview_list.scroll_to(gpui::ListOffset {
+            item_ix: 12,
+            offset_in_item: px(2.),
+        });
+        let empty = EditorTab::new(MarkdownDocument::from_text(""));
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.preview_blocks_shared(),
+            app.active_tab().document.visual_blocks_shared(),
+            app.highlight_cache.borrow().len(),
+            app.active_tab().undo_stack.len(),
+            app.active_tab().preview_list.logical_scroll_top(),
+            empty.visual_list.max_offset_for_scrollbar().height,
+        )
+    });
+    assert!(
+        f32::from(empty_max) <= 1.,
+        "empty Visual Edit lists have no scrollable range"
+    );
+
+    app.update(cx, |app, _| {
+        let max_scroll = app
+            .active_tab()
+            .visual_list
+            .max_offset_for_scrollbar()
+            .height
+            .max(px(0.));
+        if max_scroll > px(1.) {
+            app.active_tab()
+                .visual_list
+                .set_offset_from_scrollbar(point(px(0.), px(-f32::from(max_scroll) * 0.4)));
+        } else {
+            app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+                item_ix: 20,
+                offset_in_item: px(5.),
+            });
+        }
+        app.mark_sync_scroll_driver(PaneScrollTarget::Visual);
+    });
+    cx.run_until_parked();
+
+    let visual_top = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.version(), version);
+        assert!(!tab.document.is_dirty());
+        assert_eq!(tab.undo_stack.len(), undo_len);
+        assert!(Arc::ptr_eq(
+            &tab.document.preview_blocks_shared(),
+            &preview_cache
+        ));
+        assert!(Arc::ptr_eq(
+            &tab.document.visual_blocks_shared(),
+            &visual_cache
+        ));
+        assert_eq!(app.highlight_cache.borrow().len(), highlight_count);
+        assert!(tab.sync_scroll_state.driver_hint.is_none());
+        let preview_top = tab.preview_list.logical_scroll_top();
+        assert_eq!(preview_top.item_ix, preview_top_before.item_ix);
+        assert_eq!(
+            preview_top.offset_in_item,
+            preview_top_before.offset_in_item
+        );
+        let visual_top = tab.visual_list.logical_scroll_top();
+        assert!(
+            visual_top.item_ix > 0 || visual_top.offset_in_item > px(0.),
+            "visual list must move through the scrollbar offset API"
+        );
+        visual_top
+    });
+
+    app.update(cx, |app, _| {
+        app.active_tab = 1;
+        let visual = app.active_tab().document.visual_blocks_shared();
+        app.active_tab_mut().sync_visual_list(&visual);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let other_top = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(other_top.item_ix, 0);
+        app.active_tab = 0;
+        let restored = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(restored.item_ix, visual_top.item_ix);
+        assert_eq!(restored.offset_in_item, visual_top.offset_in_item);
+        let preview_top = app.active_tab().preview_list.logical_scroll_top();
+        assert_eq!(preview_top.item_ix, preview_top_before.item_ix);
+        assert_eq!(
+            preview_top.offset_in_item,
+            preview_top_before.offset_in_item
+        );
+        assert!(app.active_tab().sync_scroll_state.driver_hint.is_none());
+    });
+}
+
 #[test]
 fn sync_scroll_mapping_requires_matching_current_versions() {
     let current = SourceLayoutKey {
@@ -8978,6 +9234,174 @@ fn inline_html_image_renders_mixed_path_including_a_wrapped_badges(cx: &mut Test
             );
         });
     }
+
+    // An unclosed `<em>` spoils the block (whole-block island / mixed path),
+    // but the image atom must survive the pairing-failure demotion and still
+    // paint.
+    let source = "bad <em>styled <img src=\"d.png\"> tail";
+    let before = VISUAL_HTML_IMAGE_ATOM_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let builds = VISUAL_HTML_IMAGE_ATOM_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            builds > before,
+            "image atom must still paint beside an unclosed tag: {source}"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_edit_renders_escapes_and_inline_html_without_source_island(cx: &mut TestAppContext) {
+    // Paragraphs whose only "unsupported" content used to be escaped
+    // punctuation or non-image inline HTML must render as styled prose with
+    // no source-island box: no island kind and no conservative run.
+    let cases: &[&str] = &[
+        r"escaped \* star and \. dot",
+        "text <em>em</em> and <strong>bold</strong> more",
+        "one<br>two<br/>three",
+        r"mixed \* escape and <em>html</em> and <br> break",
+    ];
+    for source in cases {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(*source))];
+            app.active_tab_mut().selected_range = 0..0;
+            app.view_mode = ViewMode::VisualEdit;
+            app
+        });
+        cx.update(|window, cx| {
+            window.focus(&app.read(cx).focus_handle);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            let blocks = tab.visual_list_blocks.clone();
+            let block = blocks
+                .first()
+                .unwrap_or_else(|| panic!("no block for {source}"));
+            assert!(
+                block.source_island.is_none(),
+                "paragraph must not collapse into a source island: {source}"
+            );
+            assert!(
+                block
+                    .editable_runs
+                    .iter()
+                    .all(|run| !run.conservative_fallback),
+                "every run stays rendered: {source}"
+            );
+            assert!(
+                tab.visual_caret_bounds.is_some(),
+                "caret visible for {source}"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn visual_edit_reveals_escape_and_inline_html_groups_without_version_bump(cx: &mut TestAppContext) {
+    // Moving the caret into an escape or a supported inline-HTML element
+    // reveals the authored source group in place without changing the
+    // document version or dirtying the tab.
+    for (source, caret) in [
+        (r"escaped \* star", 9),      // inside the `\*` group
+        ("text <em>em</em> more", 8), // inside the em content
+        ("one<br>two", 3),            // at the `<br>` tag start
+    ] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.active_tab_mut().selected_range = 0..0;
+            app.view_mode = ViewMode::VisualEdit;
+            app
+        });
+        cx.update(|window, cx| {
+            window.focus(&app.read(cx).focus_handle);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+
+        let version = app.update(cx, |app, _| app.active_tab().document.version());
+        app.update(cx, |app, _| {
+            app.active_tab_mut().selected_range = caret..caret;
+            app.active_tab_mut().visual_cursor_reveal_pending = true;
+        });
+        cx.run_until_parked();
+
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert_eq!(
+                tab.document.version(),
+                version,
+                "caret-only reveal must not bump the version for {source}"
+            );
+            assert!(!tab.document.is_dirty(), "reveal must not dirty {source}");
+            assert!(
+                tab.visual_caret_bounds.is_some(),
+                "revealed source still paints a caret for {source}"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn visual_edit_left_navigation_through_br_tag_keeps_valid_carets(cx: &mut TestAppContext) {
+    // `one<br>two`: the tag bytes 3..7 have no unrevealed display positions.
+    // Walking Left may enter them (keyboard navigation reveals the authored
+    // source group in place), but every stop must remain a valid, paintable
+    // caret position without mutating the document.
+    let source = "one<br>two";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let version = app.update(cx, |app, _| app.active_tab().document.version());
+    let mut previous_offset = app.update(cx, |app, _| app.active_tab().cursor_offset());
+    for _ in 0..10 {
+        cx.dispatch_action(Left);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            let offset = tab.cursor_offset();
+            assert!(
+                offset < previous_offset,
+                "Left must keep moving left (at {offset})"
+            );
+            previous_offset = offset;
+            assert!(
+                tab.visual_caret_bounds.is_some(),
+                "caret at {offset} must stay paintable, including mid-tag stops"
+            );
+            assert_eq!(tab.document.version(), version);
+            assert_eq!(tab.document.text(), source);
+        });
+    }
+    assert_eq!(
+        previous_offset, 0,
+        "ten Left presses walk past the paragraph"
+    );
 }
 
 fn write_solid_png(path: &Path, width: u32, height: u32, rgba: [u8; 4]) {

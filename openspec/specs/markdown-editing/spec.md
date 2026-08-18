@@ -202,7 +202,7 @@ The editor SHALL provide a Visual Edit mode that presents common Markdown constr
 - **AND** derived Markdown caches SHALL NOT be invalidated
 
 ### Requirement: Pane scroll state with visible scrollbars
-The editor SHALL preserve each tab's source editor and rendered preview scroll positions while exposing visible scrollbar controls for those panes. Using a scrollbar, mouse wheel, or trackpad SHALL update the same per-tab scroll state without modifying document text or derived Markdown state. When the persisted Sync scroll preference is enabled and the active view mode is Split Preview, scrolling either pane SHALL additionally update the other pane's per-tab scroll position so both viewport anchors represent the same source-backed document location, using rendered preview blocks' source ranges and within-block progress instead of matching whole-document scroll fractions. This coupling SHALL NOT merge the two panes' scroll states into a shared scroll: each pane SHALL retain its own scroll handle or list state, driver/follower observations SHALL remain isolated per tab, and a programmatic follower update SHALL NOT be mistaken for new user input. Synchronization SHALL NOT reset the preview list, reparse the document, mutate document text, or invalidate derived Markdown caches. When Sync scroll is disabled, when the active view mode is not Split Preview, or when no current source mapping is available, the two panes SHALL not be coupled.
+The editor SHALL preserve each tab's source editor, Visual Edit, and rendered preview scroll positions while exposing visible scrollbar controls for those surfaces. Using a scrollbar, mouse wheel, or trackpad SHALL update the same per-tab scroll state for the visible surface without modifying document text or derived Markdown state. Visual Edit SHALL keep its own per-tab virtualized-list scroll state, independent of the rendered preview list, even though both may represent the same document. When the persisted Sync scroll preference is enabled and the active view mode is Split Preview, scrolling either pane SHALL additionally update the other pane's per-tab scroll position so both viewport anchors represent the same source-backed document location, using rendered preview blocks' source ranges and within-block progress instead of matching whole-document scroll fractions. This coupling SHALL NOT merge the two panes' scroll states into a shared scroll: each pane SHALL retain its own scroll handle or list state, driver/follower observations SHALL remain isolated per tab, and a programmatic follower update SHALL NOT be mistaken for new user input. Synchronization SHALL NOT reset the preview list, reparse the document, mutate document text, or invalidate derived Markdown caches. When Sync scroll is disabled, when the active view mode is not Split Preview, or when no current source mapping is available, the two panes SHALL not be coupled. Scrolling Visual Edit, including by dragging its scrollbar, SHALL NOT establish a Split Preview sync-scroll driver.
 
 #### Scenario: Editor scrollbar preserves tab scroll state
 - **WHEN** the user scrolls the source editor pane by dragging its scrollbar and then switches away from and back to the tab
@@ -212,9 +212,20 @@ The editor SHALL preserve each tab's source editor and rendered preview scroll p
 - **WHEN** the user scrolls the rendered preview pane by dragging its scrollbar and then switches away from and back to the tab
 - **THEN** the rendered preview pane returns to the same scroll position
 
+#### Scenario: Visual Edit scrollbar preserves tab scroll state
+- **WHEN** the user scrolls the Visual Edit surface by dragging its scrollbar and then switches away from and back to the tab
+- **THEN** the Visual Edit surface returns to the same scroll position
+- **AND** the rendered preview scroll position for that tab is unchanged
+
 #### Scenario: Scrollbar navigation does not mutate document state
-- **WHEN** the user drags the editor or preview scrollbar
+- **WHEN** the user drags the editor, Visual Edit, or preview scrollbar
 - **THEN** the document text, dirty flag, undo/redo history, preview blocks, outline, stats, syntax highlighting cache, and cached text handle remain governed by the existing document-version rules
+
+#### Scenario: Visual Edit scrollbar does not drive Sync scroll
+- **WHEN** Sync scroll is enabled
+- **AND** the user drags the Visual Edit scrollbar or otherwise scrolls Visual Edit
+- **THEN** no Split Preview follower pane is moved
+- **AND** later entering Split Preview does not treat that Visual Edit scroll as a preview-driven sync update
 
 #### Scenario: Sync scroll couples panes by document location without merging state
 - **WHEN** Sync scroll is enabled and the active view mode is Split Preview
@@ -359,7 +370,7 @@ The editor SHALL bind `Ctrl+4` and `Ctrl+5` (platform `secondary-4/5`) to Headin
 - **THEN** the reference includes Heading 4, 5, and 6 shortcuts
 
 ### Requirement: Visual Edit inline formatting fidelity
-Visual Edit SHALL render byte-exact supported inline formatting in prose blocks without exposing its Markdown delimiters while the construct is unfocused. Supported formatting SHALL include emphasis, strong emphasis, safely nested strong/emphasis combinations, strikethrough, inline code, links, highlight, superscript, and subscript. Supported links SHALL include reference-style links (full `[text][label]`, collapsed `[label][]`, and shortcut `[label]` forms) whose definitions appear elsewhere in the document: Visual Edit SHALL resolve them against the document's link reference definitions, while definitions inside fenced code blocks SHALL NOT create links. Resolving document-scoped definitions SHALL preserve exact in-block source ranges — rendering and reveal mappings for the block's own content remain byte-identical to a full-document parse. Moving the caret or a selection endpoint into a supported formatted construct SHALL reveal one safe containing source group for precise editing without converting unrelated inline content in the same block to raw Markdown. Constructs whose source/display mapping is malformed, crossing, escaped, or otherwise ambiguous SHALL retain the conservative source-editing fallback.
+Visual Edit SHALL render byte-exact supported inline formatting in prose blocks without exposing its Markdown delimiters while the construct is unfocused. Supported formatting SHALL include emphasis, strong emphasis, safely nested strong/emphasis combinations, strikethrough, inline code, links, highlight, superscript, subscript, backslash-escaped ASCII punctuation, and exactly recognized inline HTML in the supported subset. A backslash followed by an ASCII punctuation character SHALL render as the literal punctuation character with the backslash hidden as a marker. The supported inline-HTML subset SHALL consist of the exact unattributed style pairs `<em>`/`<i>`, `<strong>`/`<b>`, `<s>`/`<del>`/`<strike>`, `<code>`, `<mark>`, `<sub>`, and `<sup>`, plus the void line-break forms `<br>`, `<br/>`, and `<br />`; their tags SHALL be hidden markers whose styling composes with Markdown formatting, and `<br>` SHALL render as an authored line break inside the inline flow. Supported links SHALL include reference-style links (full `[text][label]`, collapsed `[label][]`, and shortcut `[label]` forms) whose definitions appear elsewhere in the document: Visual Edit SHALL resolve them against the document's link reference definitions, while definitions inside fenced code blocks SHALL NOT create links. Resolving document-scoped definitions SHALL preserve exact in-block source ranges — rendering and reveal mappings for the block's own content remain byte-identical to a full-document parse. Moving the caret or a selection endpoint into a supported formatted construct — including an escaped-character group or a supported inline-HTML element — SHALL reveal one safe containing source group for precise editing without converting unrelated inline content in the same block to raw Markdown. Constructs whose source/display mapping is malformed, crossing, or otherwise ambiguous, backslash sequences or inline HTML outside the proven subset, and text whose parser-visible form cannot be reconstructed byte-exactly from the authored slice SHALL retain the conservative source-editing fallback.
 
 #### Scenario: Default inline formatting paragraph stays visual
 - **WHEN** the default welcome document is opened in Visual Edit mode and its Inline formatting paragraph is not focused
@@ -397,8 +408,45 @@ Visual Edit SHALL render byte-exact supported inline formatting in prose blocks 
 - **AND** moving the caret away hides those delimiters and restores the visual style
 - **AND** cursor-only reveal does not change the document version or invalidate cached visual blocks
 
+#### Scenario: Escaped punctuation renders as literal text
+- **WHEN** an unfocused prose block contains backslash-escaped ASCII punctuation such as `\*` or `\.`
+- **THEN** the paragraph renders as normal prose showing the literal punctuation character, not a whole-block source island
+- **AND** the backslash stays hidden while the rest of the paragraph remains rendered
+- **AND** the rendering matches Split Preview and Read mode visible text
+
+#### Scenario: Escaped construct reveals its authored group
+- **WHEN** the caret or a selection endpoint moves into an escaped-character group such as `\*` (including the escaped-backslash form `\\`)
+- **THEN** the complete authored backslash-plus-character source group is revealed for editing
+- **AND** moving the caret away hides the backslash again and restores the literal rendering without changing the document version
+
+#### Scenario: Escapes compose with Markdown formatting
+- **WHEN** a prose block contains an escape inside other supported formatting, such as `**a \* b**`
+- **THEN** the escaped character renders literally inside the styled construct with the backslash hidden
+- **AND** entering the construct reveals one safe containing source group
+
+#### Scenario: Inline HTML style pair renders with hidden tags
+- **WHEN** an unfocused prose block contains an exact unattributed pair such as `text <em>em</em> more` or `a <strong>b</strong> c`
+- **THEN** the paragraph renders as normal prose with the tagged content carrying the corresponding visual style
+- **AND** the tags stay hidden and the block does not collapse into an HTML source island
+
+#### Scenario: Inline HTML element reveals its complete source
+- **WHEN** the caret or a selection endpoint moves into content between a supported inline-HTML tag pair
+- **THEN** the complete element source — opening tag, content, and closing tag — is revealed as one group for editing
+- **AND** moving the caret away hides the tags and restores the rendered form without changing the document version
+
+#### Scenario: Inline `<br>` renders an authored line break
+- **WHEN** an unfocused prose block contains a void `<br>`, `<br/>`, or `<br />` form
+- **THEN** the paragraph renders the same stacked line-break layout it uses for authored hard breaks, without collapsing into an HTML source island
+- **AND** caret activation of the tag reveals its authored source with pointer and keyboard resolution limited to the tag's safe source boundaries
+
+#### Scenario: Unsupported inline HTML remains conservative
+- **WHEN** a prose block contains inline HTML outside the supported subset — an unknown tag, a tag carrying attributes, an unpaired or crossing tag pair, or an HTML entity such as `&amp;`
+- **THEN** Visual Edit preserves the whole-block source-backed conservative editing affordance
+- **AND** the editor does not guess a rendered-tree mutation for that content
+- **AND** inline `<img>` tags keep their existing image-atom rendering and mixed-path behavior
+
 #### Scenario: Ambiguous inline syntax remains conservative
-- **WHEN** a prose block contains escaped, malformed, crossing, or byte-inexact inline syntax that cannot be mapped safely
+- **WHEN** a prose block contains malformed, crossing, or byte-inexact inline syntax whose visible text cannot be reconstructed byte-exactly from the authored slice
 - **THEN** Visual Edit preserves a source-backed conservative editing affordance
 - **AND** the editor does not guess a rendered-tree mutation for that construct
 
@@ -905,4 +953,21 @@ In Visual Edit mode, a list item containing a nested fenced code block SHALL ren
 - **WHEN** the user edits the item text row or the nested code payload in Visual Edit
 - **THEN** the edit applies to the canonical Markdown source through the existing mutation paths
 - **AND** the other row's rendered content remains intact
+
+### Requirement: Visual Edit mixed-prose line breaks
+When Visual Edit lays out a prose row as mixed fragments (because the row contains a link or footnote navigation icon, an inline math atom, or an inline HTML image), authored soft breaks and hard breaks inside that row SHALL still start a new visual line, matching Read and Split Preview for the same source. Intra-line wrapping of long prose, progressive syntax reveal, and source-backed editing SHALL remain unchanged. Interaction-only layout grouping SHALL NOT change document version or invalidate per-version derived caches.
+
+#### Scenario: Consecutive source lines with a link stay stacked
+- **WHEN** a paragraph (or heading / list item / quoted leaf) is written as consecutive source lines with no blank separator, at least one of those lines contains a Markdown link, and Visual Edit is active
+- **THEN** each authored line renders on its own visual row rather than joining into a single line
+- **AND** the link keeps its rendered label and navigation icon on the line that owns the link
+
+#### Scenario: Hard breaks still break in mixed layout
+- **WHEN** a mixed-fragment prose row contains a Markdown hard break (two trailing spaces or a backslash before the newline)
+- **THEN** the text after that break renders on the following visual row
+
+#### Scenario: Single-line mixed prose is unchanged
+- **WHEN** a mixed-fragment prose row contains no authored line break
+- **THEN** its fragments continue to wrap as one flowing paragraph
+- **AND** navigation icons and inline atoms stay on that same flow
 

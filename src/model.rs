@@ -732,6 +732,12 @@ pub enum VisualRevealKind {
     Math,
     /// One complete raw-HTML `<img …>` tag rendered as an inline image atom.
     HtmlImage,
+    /// One backslash-escaped ASCII punctuation character (`\*`, `\\`): the
+    /// escaped character renders literally while the backslash stays hidden.
+    Escape,
+    /// One supported inline-HTML element (style pair or `<br>`): the tags stay
+    /// hidden markers while the content renders with the mapped style.
+    InlineHtml,
 }
 
 /// Opaque, non-persisted identity of a source-backed Visual Edit block.

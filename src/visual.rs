@@ -118,11 +118,23 @@ impl VisualProjection {
 
         for segment in &self.segments {
             if display > segment.display_range.start && display < segment.display_range.end {
-                let exact = segment.source_range.start + display - segment.display_range.start;
+                if segment.display_range.len() == segment.source_range.len() {
+                    let exact = segment.source_range.start + display - segment.display_range.start;
+                    return VisualBoundaryCandidates {
+                        display_offset: display,
+                        upstream_source: exact,
+                        downstream_source: exact,
+                    };
+                }
+                // Non-identity segment (a rendered atom such as `<br>` or a
+                // table cell): an interior display position has no linear
+                // source mapping, so it resolves ambiguously between the
+                // atom's source edges instead of an interpolated offset that
+                // could land mid-marker or off a UTF-8 boundary.
                 return VisualBoundaryCandidates {
                     display_offset: display,
-                    upstream_source: exact,
-                    downstream_source: exact,
+                    upstream_source: segment.source_range.start,
+                    downstream_source: segment.source_range.end,
                 };
             }
         }
@@ -398,7 +410,8 @@ pub fn build_visual_projection_with_marked_range(
     projection
 }
 use crate::parse::{
-    ExtendedInlineKind, extended_inline_matches, parse_inline_html_image, visual_markdown_options,
+    ExtendedInlineKind, InlineHtmlStyleKind, InlineHtmlStyleTag, extended_inline_matches,
+    parse_inline_html_image, parse_inline_html_style_tag, visual_markdown_options,
 };
 
 #[derive(Clone)]
@@ -1352,6 +1365,40 @@ struct RevealCandidate {
     link_target_range: Option<Range<usize>>,
 }
 
+/// Number of distinct kinds in [`InlineHtmlStyleKind`].
+const HTML_STYLE_KIND_COUNT: usize = 7;
+
+/// One open supported inline-HTML style tag awaiting its close.
+struct HtmlStyleFrame {
+    kind: InlineHtmlStyleKind,
+    open_range: Range<usize>,
+}
+
+fn html_style_index(kind: InlineHtmlStyleKind) -> usize {
+    match kind {
+        InlineHtmlStyleKind::Emphasis => 0,
+        InlineHtmlStyleKind::Strong => 1,
+        InlineHtmlStyleKind::Strikethrough => 2,
+        InlineHtmlStyleKind::Code => 3,
+        InlineHtmlStyleKind::Highlight => 4,
+        InlineHtmlStyleKind::Subscript => 5,
+        InlineHtmlStyleKind::Superscript => 6,
+    }
+}
+
+/// Composes the Markdown tag style with the open inline-HTML style depths.
+fn with_html_style(base: InlineStyle, html_depths: &[usize; HTML_STYLE_KIND_COUNT]) -> InlineStyle {
+    InlineStyle {
+        italic: base.italic || html_depths[0] > 0,
+        bold: base.bold || html_depths[1] > 0,
+        strikethrough: base.strikethrough || html_depths[2] > 0,
+        code: base.code || html_depths[3] > 0,
+        highlight: base.highlight || html_depths[4] > 0,
+        subscript: base.subscript || html_depths[5] > 0,
+        superscript: base.superscript || html_depths[6] > 0,
+    }
+}
+
 fn inline_runs(
     text: &str,
     block_range: Range<usize>,
@@ -1380,9 +1427,22 @@ fn inline_runs(
     };
     let mut runs = Vec::new();
     let mut candidates = Vec::new();
-    let mut style = InlineStyle::default();
+    let mut markdown_style = InlineStyle::default();
+    // Depth counters for supported inline-HTML style tags, kept separate from
+    // `markdown_style` so an HTML pair and a Markdown pair nesting each other
+    // (e.g. `<em>a *b* c</em>`) cannot clear each other's flags on close.
+    let mut html_depths = [0usize; HTML_STYLE_KIND_COUNT];
+    let mut html_style_stack: Vec<HtmlStyleFrame> = Vec::new();
+    let mut html_element_ranges: Vec<Range<usize>> = Vec::new();
+    let mut html_pairing_failed = false;
     let mut link_stack: Vec<(Option<Range<usize>>, String)> = Vec::new();
     let mut contains_non_image_html = false;
+    // Relative end of the last leaf (content) event. pulldown-cmark resolves
+    // `\X` escapes and merges the escaped character into the following Text
+    // event while leaving the backslash byte uncovered between events, so an
+    // uncovered one-byte `\` gap before a Text event starting with ASCII
+    // punctuation marks an escape whose character must be claimed separately.
+    let mut previous_leaf_end = 0usize;
 
     for (event, relative_range) in
         Parser::new_ext(parse_input, visual_markdown_options()).into_offset_iter()
@@ -1397,6 +1457,19 @@ fn inline_runs(
         let current_link_nav = current_link
             .as_ref()
             .map(|(_, url)| VisualNavigationTarget::Url(url.clone()));
+        let is_leaf_event = matches!(
+            event,
+            Event::Text(_)
+                | Event::Code(_)
+                | Event::SoftBreak
+                | Event::HardBreak
+                | Event::InlineMath(_)
+                | Event::DisplayMath(_)
+                | Event::Html(_)
+                | Event::InlineHtml(_)
+                | Event::FootnoteReference(_)
+        );
+        let style = with_html_style(markdown_style, &html_depths);
         match event {
             Event::Start(Tag::Strong) => {
                 candidates.push(RevealCandidate {
@@ -1404,10 +1477,10 @@ fn inline_runs(
                     source_range: event_range.clone(),
                     link_target_range: None,
                 });
-                style.bold = true;
+                markdown_style.bold = true;
             }
             Event::End(TagEnd::Strong) => {
-                style.bold = false;
+                markdown_style.bold = false;
             }
             Event::Start(Tag::Emphasis) => {
                 candidates.push(RevealCandidate {
@@ -1415,10 +1488,10 @@ fn inline_runs(
                     source_range: event_range.clone(),
                     link_target_range: None,
                 });
-                style.italic = true;
+                markdown_style.italic = true;
             }
             Event::End(TagEnd::Emphasis) => {
-                style.italic = false;
+                markdown_style.italic = false;
             }
             Event::Start(Tag::Strikethrough) => {
                 candidates.push(RevealCandidate {
@@ -1426,10 +1499,10 @@ fn inline_runs(
                     source_range: event_range.clone(),
                     link_target_range: None,
                 });
-                style.strikethrough = true;
+                markdown_style.strikethrough = true;
             }
             Event::End(TagEnd::Strikethrough) => {
-                style.strikethrough = false;
+                markdown_style.strikethrough = false;
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 // pulldown-cmark reports a collapsed reference link's
@@ -1453,16 +1526,54 @@ fn inline_runs(
             Event::End(TagEnd::Link) => {
                 link_stack.pop();
             }
-            Event::Text(visible) => push_text_runs(
-                &mut runs,
-                &mut candidates,
-                text,
-                visible.as_ref(),
-                event_range,
-                style,
-                current_link_target,
-                current_link_nav,
-            ),
+            Event::Text(visible) => {
+                let mut visible_text = visible.as_ref();
+                let mut text_start = relative_range.start;
+                // Claim a leading escaped character merged into this Text
+                // event: the backslash gap sits uncovered before the event and
+                // the first source byte is the escaped ASCII punctuation.
+                if relative_range.start == previous_leaf_end + 1
+                    && source.as_bytes().get(previous_leaf_end) == Some(&b'\\')
+                    && source
+                        .as_bytes()
+                        .get(relative_range.start)
+                        .is_some_and(|byte| byte.is_ascii_punctuation())
+                    && visible_text
+                        .starts_with(&source[relative_range.start..relative_range.start + 1])
+                {
+                    candidates.push(RevealCandidate {
+                        kind: VisualRevealKind::Escape,
+                        source_range: block_range.start + previous_leaf_end
+                            ..block_range.start + relative_range.start + 1,
+                        link_target_range: None,
+                    });
+                    push_run(
+                        &mut runs,
+                        text,
+                        &source[relative_range.start..relative_range.start + 1],
+                        block_range.start + relative_range.start
+                            ..block_range.start + relative_range.start + 1,
+                        style,
+                        current_link_target.clone(),
+                        current_link_nav.clone(),
+                        false,
+                    );
+                    visible_text = &visible_text[1..];
+                    text_start = relative_range.start + 1;
+                }
+                if text_start < relative_range.end {
+                    push_text_runs(
+                        &mut runs,
+                        &mut candidates,
+                        text,
+                        visible_text,
+                        block_range.start + text_start..block_range.start + relative_range.end,
+                        style,
+                        current_link_target,
+                        current_link_nav,
+                    );
+                }
+            }
             Event::Code(visible) => {
                 candidates.push(RevealCandidate {
                     kind: VisualRevealKind::InlineCode,
@@ -1545,11 +1656,13 @@ fn inline_runs(
             }
             // A complete inline `<img …>` tag is the one inline-HTML form the
             // projection maps byte-for-byte: it becomes an image run revealed
-            // as its exact authored source when focused. The block-level
-            // `Html` event also carries a lone leading tag when a list item's
-            // or quote leaf's slice starts with the image, so both event
-            // kinds run through the same exact recognizer. Any other inline
-            // HTML keeps the whole-block source-island fallback.
+            // as its exact authored source when focused. A narrow subset of
+            // style tags and `<br>` renders as hidden markers with styled
+            // content; anything else keeps the whole-block source-island
+            // fallback. The block-level `Html` event also carries a lone
+            // leading tag when a list item's or quote leaf's slice starts
+            // with the image, so both event kinds run through the same exact
+            // recognizers.
             Event::Html(_) | Event::InlineHtml(_) => {
                 let authored = text[event_range.clone()].to_string();
                 if let Some(image) = parse_inline_html_image(&authored) {
@@ -1569,15 +1682,80 @@ fn inline_runs(
                         html_image: Some(image),
                         conservative_fallback: false,
                     });
+                } else if let Some(tag) = parse_inline_html_style_tag(&authored) {
+                    match tag {
+                        InlineHtmlStyleTag::LineBreak => {
+                            // One display newline mapped atomically onto the
+                            // tag bytes, exactly like soft/hard breaks except
+                            // that caret resolution is boundary-only.
+                            candidates.push(RevealCandidate {
+                                kind: VisualRevealKind::InlineHtml,
+                                source_range: event_range.clone(),
+                                link_target_range: None,
+                            });
+                            runs.push(VisualInlineRun {
+                                visible_text: "\n".to_string(),
+                                source_range: event_range.clone(),
+                                content_range: event_range,
+                                style,
+                                link_target_range: current_link_target,
+                                navigation: current_link_nav,
+                                math: None,
+                                html_image: None,
+                                conservative_fallback: false,
+                            });
+                        }
+                        InlineHtmlStyleTag::Open { kind } => {
+                            html_style_stack.push(HtmlStyleFrame {
+                                kind,
+                                open_range: event_range.clone(),
+                            });
+                            html_depths[html_style_index(kind)] += 1;
+                            // The reveal candidate is registered when the
+                            // matching close arrives so it spans the complete
+                            // element source.
+                        }
+                        InlineHtmlStyleTag::Close { kind } => {
+                            if html_style_stack
+                                .last()
+                                .is_some_and(|frame| frame.kind == kind)
+                            {
+                                let frame = html_style_stack.pop().expect("checked top frame");
+                                html_depths[html_style_index(kind)] =
+                                    html_depths[html_style_index(kind)].saturating_sub(1);
+                                html_element_ranges.push(frame.open_range.start..event_range.end);
+                                candidates.push(RevealCandidate {
+                                    kind: VisualRevealKind::InlineHtml,
+                                    source_range: frame.open_range.start..event_range.end,
+                                    link_target_range: None,
+                                });
+                            } else {
+                                // A stray or crossing close spoils the block.
+                                html_pairing_failed = true;
+                                runs.push(VisualInlineRun {
+                                    visible_text: authored,
+                                    source_range: event_range.clone(),
+                                    content_range: event_range,
+                                    style,
+                                    link_target_range: current_link_target,
+                                    navigation: current_link_nav,
+                                    math: None,
+                                    html_image: None,
+                                    conservative_fallback: true,
+                                });
+                            }
+                        }
+                    }
                 } else {
-                    // Non-image inline HTML (e.g. `<a href=…>` wrappers,
-                    // `<br>`, `<em>…</em>`) cannot map to an inline image, so
-                    // it stays as a byte-exact source run. The run is marked
-                    // conservative so the projection shows the authored markup
-                    // verbatim instead of guessing a rendered form. A block
-                    // that mixes such runs with image runs still renders its
-                    // images (the view layer exempts image-bearing blocks
-                    // from the whole-block source-island gate).
+                    // Non-image inline HTML outside the supported subset (e.g.
+                    // `<a href=…>` wrappers, attributed or unknown tags)
+                    // cannot map to a rendered form, so it stays as a
+                    // byte-exact source run. The run is marked conservative so
+                    // the projection shows the authored markup verbatim
+                    // instead of guessing a rendered form. A block that mixes
+                    // such runs with image runs still renders its images (the
+                    // view layer exempts image-bearing blocks from the
+                    // whole-block source-island gate).
                     contains_non_image_html = true;
                     if !authored.is_empty() {
                         runs.push(VisualInlineRun {
@@ -1596,14 +1774,52 @@ fn inline_runs(
             }
             _ => {}
         }
+        if is_leaf_event {
+            previous_leaf_end = previous_leaf_end.max(relative_range.end.min(source.len()));
+        }
     }
-    let mut reveal_groups = build_reveal_groups(text, &block_range, &mut runs, candidates);
-    if contains_markdown_escape(source)
-        && let Some(run) = runs.first_mut()
-    {
-        run.conservative_fallback = true;
-        reveal_groups.clear();
+    // One bad tag spoils the block: a stray/crossing close or a tag left
+    // unclosed at the end of the block keeps the whole-block conservative
+    // fallback. Styled runs already emitted inside a suspect element are
+    // demoted so the mixed image path can never show a half-guessed styled
+    // form, and unclosed open-tag bytes become conservative source runs.
+    let html_pairing_failed = html_pairing_failed || !html_style_stack.is_empty();
+    if html_pairing_failed {
+        contains_non_image_html = true;
+        let suspect_ranges = html_element_ranges
+            .iter()
+            .cloned()
+            .chain(
+                html_style_stack
+                    .iter()
+                    .map(|frame| frame.open_range.start..block_range.end),
+            )
+            .collect::<Vec<_>>();
+        for run in runs.iter_mut() {
+            if run.math.is_none()
+                && run.html_image.is_none()
+                && suspect_ranges.iter().any(|range| {
+                    run.content_range.start >= range.start && run.content_range.end <= range.end
+                })
+            {
+                run.conservative_fallback = true;
+            }
+        }
+        for frame in &html_style_stack {
+            runs.push(VisualInlineRun {
+                visible_text: text[frame.open_range.clone()].to_string(),
+                source_range: frame.open_range.clone(),
+                content_range: frame.open_range.clone(),
+                style: InlineStyle::default(),
+                link_target_range: None,
+                navigation: None,
+                math: None,
+                html_image: None,
+                conservative_fallback: true,
+            });
+        }
     }
+    let reveal_groups = build_reveal_groups(text, &block_range, &mut runs, candidates);
     (runs, reveal_groups, contains_non_image_html)
 }
 
@@ -1619,6 +1835,21 @@ fn push_text_runs(
 ) {
     let event_source = &source[event_range.clone()];
     if event_source != visible {
+        if let Some(escapes) = escape_matches(event_source, visible)
+            && push_escaped_text_runs(
+                runs,
+                candidates,
+                source,
+                event_source,
+                &escapes,
+                event_range.clone(),
+                base_style,
+                link_target_range.clone(),
+                navigation.clone(),
+            )
+        {
+            return;
+        }
         push_run(
             runs,
             source,
@@ -1631,13 +1862,182 @@ fn push_text_runs(
         );
         return;
     }
+    push_identity_text_runs(
+        runs,
+        candidates,
+        source,
+        event_source,
+        event_range,
+        base_style,
+        link_target_range,
+        navigation,
+    );
+}
 
+/// Splits a text event whose parser transformation is proven to consist of
+/// backslash escapes (see `escape_matches`). Each escaped character becomes a
+/// one-byte content run plus an `Escape` reveal candidate — the backslash
+/// byte stays uncovered so `marker_ranges` hides it — and the remaining
+/// segments keep the identity handling, extended inline markers included.
+/// Extended markers compose only when every escape is disjoint from the
+/// construct or fully inside its content; any other overlap is unproven and
+/// returns `false` so the caller keeps the conservative fallback.
+fn push_escaped_text_runs(
+    runs: &mut Vec<VisualInlineRun>,
+    candidates: &mut Vec<RevealCandidate>,
+    source: &str,
+    event_source: &str,
+    escapes: &[Range<usize>],
+    event_range: Range<usize>,
+    base_style: InlineStyle,
+    link_target_range: Option<Range<usize>>,
+    navigation: Option<VisualNavigationTarget>,
+) -> bool {
+    let extended = extended_inline_matches(event_source);
+    let conflicting = extended.iter().any(|item| {
+        escapes.iter().any(|escape| {
+            let overlaps =
+                escape.start < item.source_range.end && item.source_range.start < escape.end;
+            let inside_content =
+                escape.start >= item.content_range.start && escape.end <= item.content_range.end;
+            overlaps && !inside_content
+        })
+    });
+    if conflicting {
+        return false;
+    }
+
+    let mut boundaries = vec![0, event_source.len()];
+    let mut marker_ranges = Vec::with_capacity(extended.len() * 2);
+    for item in &extended {
+        boundaries.extend([
+            item.source_range.start,
+            item.content_range.start,
+            item.content_range.end,
+            item.source_range.end,
+        ]);
+        marker_ranges.push(item.source_range.start..item.content_range.start);
+        marker_ranges.push(item.content_range.end..item.source_range.end);
+        candidates.push(RevealCandidate {
+            kind: match item.kind {
+                ExtendedInlineKind::Highlight => VisualRevealKind::Highlight,
+                ExtendedInlineKind::Superscript => VisualRevealKind::Superscript,
+                ExtendedInlineKind::Subscript => VisualRevealKind::Subscript,
+            },
+            source_range: event_range.start + item.source_range.start
+                ..event_range.start + item.source_range.end,
+            link_target_range: None,
+        });
+    }
+    for escape in escapes {
+        boundaries.extend([escape.start, escape.end]);
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    for pair in boundaries.windows(2) {
+        let local_range = pair[0]..pair[1];
+        if local_range.is_empty()
+            || marker_ranges
+                .iter()
+                .any(|marker| marker.start <= local_range.start && marker.end >= local_range.end)
+        {
+            continue;
+        }
+        let mut style = base_style;
+        for item in &extended {
+            if item.content_range.start <= local_range.start
+                && item.content_range.end >= local_range.end
+            {
+                match item.kind {
+                    ExtendedInlineKind::Highlight => style.highlight = true,
+                    ExtendedInlineKind::Superscript => style.superscript = true,
+                    ExtendedInlineKind::Subscript => style.subscript = true,
+                }
+            }
+        }
+        let escape = escapes
+            .iter()
+            .find(|escape| escape.start == local_range.start && escape.end == local_range.end);
+        let (run_source, run_range) = match escape {
+            Some(escape) => (
+                &event_source[escape.start + 1..escape.end],
+                event_range.start + escape.start + 1..event_range.start + escape.end,
+            ),
+            None => (
+                &event_source[local_range.clone()],
+                event_range.start + local_range.start..event_range.start + local_range.end,
+            ),
+        };
+        if escape.is_some() {
+            candidates.push(RevealCandidate {
+                kind: VisualRevealKind::Escape,
+                source_range: event_range.start + local_range.start
+                    ..event_range.start + local_range.end,
+                link_target_range: None,
+            });
+        }
+        push_run(
+            runs,
+            source,
+            run_source,
+            run_range,
+            style,
+            link_target_range.clone(),
+            navigation.clone(),
+            false,
+        );
+    }
+    true
+}
+
+/// Byte ranges of backslash-escaped ASCII punctuation inside an event slice,
+/// proven by reconstruction: removing one backslash before each escaped
+/// punctuation character must reproduce the parser's visible text exactly.
+/// Returns `None` when the difference cannot be explained by escapes alone
+/// (e.g. HTML entities), so the caller keeps the conservative fallback.
+fn escape_matches(event_source: &str, visible: &str) -> Option<Vec<Range<usize>>> {
+    let bytes = event_source.as_bytes();
+    let mut escapes = Vec::new();
+    let mut reconstructed = String::with_capacity(visible.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\'
+            && index + 1 < bytes.len()
+            && bytes[index + 1].is_ascii_punctuation()
+        {
+            escapes.push(index..index + 2);
+            // Escaped ASCII punctuation is one ASCII byte, so re-encoding it
+            // as `char` cannot split a multi-byte sequence.
+            reconstructed.push(bytes[index + 1] as char);
+            index += 2;
+        } else {
+            let ch = event_source[index..].chars().next()?;
+            reconstructed.push(ch);
+            index += ch.len_utf8();
+        }
+    }
+    (reconstructed == visible).then_some(escapes)
+}
+
+/// Emits an identity-mapped text slice: the slice equals its visible text, so
+/// it is pushed directly or split around extended inline markers.
+fn push_identity_text_runs(
+    runs: &mut Vec<VisualInlineRun>,
+    candidates: &mut Vec<RevealCandidate>,
+    source: &str,
+    event_source: &str,
+    event_range: Range<usize>,
+    base_style: InlineStyle,
+    link_target_range: Option<Range<usize>>,
+    navigation: Option<VisualNavigationTarget>,
+) {
     let extended = extended_inline_matches(event_source);
     if extended.is_empty() {
         push_run(
             runs,
             source,
-            visible,
+            event_source,
             event_range,
             base_style,
             link_target_range,
@@ -1707,13 +2107,6 @@ fn push_text_runs(
             false,
         );
     }
-}
-
-fn contains_markdown_escape(source: &str) -> bool {
-    source
-        .as_bytes()
-        .windows(2)
-        .any(|pair| pair[0] == b'\\' && pair[1].is_ascii_punctuation())
 }
 
 fn push_run(
@@ -1813,6 +2206,29 @@ fn build_reveal_groups(
     groups
 }
 
+/// Validates the element-pair shape of an `InlineHtml` reveal candidate: the
+/// slice must open with a supported style tag and end with the closing tag of
+/// the same kind. Content between the tags may contain anything, including
+/// nested supported pairs.
+fn inline_html_pair_is_exact(source: &str) -> bool {
+    let Some(open_end) = source.find('>') else {
+        return false;
+    };
+    let Some(InlineHtmlStyleTag::Open { kind: open_kind }) =
+        parse_inline_html_style_tag(&source[..=open_end])
+    else {
+        return false;
+    };
+    let Some(close_start) = source.rfind('<') else {
+        return false;
+    };
+    close_start > open_end
+        && matches!(
+            parse_inline_html_style_tag(&source[close_start..]),
+            Some(InlineHtmlStyleTag::Close { kind }) if kind == open_kind
+        )
+}
+
 fn reveal_candidate_is_exact(
     text: &str,
     block_range: &Range<usize>,
@@ -1842,6 +2258,17 @@ fn reveal_candidate_is_exact(
         }
         VisualRevealKind::InlineCode => source.starts_with('`') && source.ends_with('`'),
         VisualRevealKind::HtmlImage => parse_inline_html_image(source).is_some(),
+        VisualRevealKind::Escape => {
+            source.len() == 2
+                && source.as_bytes()[0] == b'\\'
+                && source.as_bytes()[1].is_ascii_punctuation()
+        }
+        VisualRevealKind::InlineHtml => {
+            matches!(
+                parse_inline_html_style_tag(source),
+                Some(InlineHtmlStyleTag::LineBreak)
+            ) || inline_html_pair_is_exact(source)
+        }
         VisualRevealKind::Math => {
             (source.starts_with("$$") && source.ends_with("$$") && source.len() >= 4)
                 || (source.starts_with('$') && source.ends_with('$') && source.len() >= 2)
@@ -2762,16 +3189,129 @@ mod tests {
     }
 
     #[test]
-    fn escaped_inline_syntax_uses_conservative_fallback() {
-        let source = r"escaped \*marker\*";
+    fn escaped_punctuation_renders_with_hidden_backslash_and_reveal_groups() {
+        let source = r"escaped \*marker\. done";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks();
-        assert!(blocks[0].reveal_groups.is_empty());
+        let block = &blocks[0];
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback),
+            "escapes must not demote the paragraph to a source island"
+        );
+        let visible: String = block
+            .editable_runs
+            .iter()
+            .map(|run| run.visible_text.as_str())
+            .collect();
+        assert_eq!(visible, "escaped *marker. done");
+        let escapes: Vec<&str> = block
+            .reveal_groups
+            .iter()
+            .filter(|group| group.kind == VisualRevealKind::Escape)
+            .map(|group| &source[group.source_range.clone()])
+            .collect();
+        assert_eq!(escapes, vec![r"\*", r"\."]);
+        // Only the backslash bytes stay hidden; every escaped character is a
+        // one-byte identity content run.
+        let markers: Vec<&str> = block
+            .marker_ranges
+            .iter()
+            .map(|range| &source[range.clone()])
+            .collect();
+        assert_eq!(markers, vec![r"\", r"\"]);
+        let star = block
+            .editable_runs
+            .iter()
+            .find(|run| run.content_range.len() == 1 && &source[run.content_range.clone()] == "*")
+            .expect("escaped star keeps a one-byte content run");
+        assert_eq!(star.source_range, star.content_range);
+    }
+
+    #[test]
+    fn escaped_backslash_and_projection_reveal_round_trip() {
+        let source = r"literal \\ and \* star";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        let visible: String = block
+            .editable_runs
+            .iter()
+            .map(|run| run.visible_text.as_str())
+            .collect();
+        assert_eq!(visible, r"literal \ and * star");
+        let escapes: Vec<&str> = block
+            .reveal_groups
+            .iter()
+            .filter(|group| group.kind == VisualRevealKind::Escape)
+            .map(|group| &source[group.source_range.clone()])
+            .collect();
+        assert_eq!(escapes, vec![r"\\", r"\*"]);
+
+        let star_byte = source.find('*').unwrap();
+        let projection =
+            build_visual_projection_with_marked_range(source, &blocks[0], 0..0, star_byte, None);
+        assert!(
+            projection
+                .revealed_source_ranges
+                .contains(&(star_byte - 1..star_byte + 1)),
+            "caret in the escaped star reveals the complete \\* group"
+        );
+
+        let projection =
+            build_visual_projection_with_marked_range(source, &blocks[0], 0..0, 0, None);
+        assert_eq!(projection.text, r"literal \ and * star");
+    }
+
+    #[test]
+    fn escapes_compose_with_strong_and_highlight() {
+        let source = r"**bold \* star** and ==mark \. dot==";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let block = &blocks[0];
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
+        let star_run = block
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text == "*")
+            .expect("escaped star renders literally");
+        assert!(star_run.style.bold, "escape inside strong keeps the style");
+        let dot_run = block
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text == ".")
+            .expect("escaped dot renders literally");
+        assert!(!dot_run.conservative_fallback);
+        // Parser-level styling (strong/emphasis/links) applies across events,
+        // but slice-level extended markers cannot span the escape gap: the
+        // `==` pair loses its highlight styling, matching Split Preview's
+        // per-event extended parsing for the same source.
+        assert!(!dot_run.style.highlight);
+        let kinds: Vec<VisualRevealKind> =
+            block.reveal_groups.iter().map(|group| group.kind).collect();
+        assert!(kinds.contains(&VisualRevealKind::Escape));
+        assert!(kinds.contains(&VisualRevealKind::Strong));
+        assert!(!kinds.contains(&VisualRevealKind::Highlight));
+    }
+
+    #[test]
+    fn entity_references_stay_conservative() {
+        let source = "fish &amp; chips";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
         assert!(
             blocks[0]
                 .editable_runs
                 .iter()
-                .any(|run| run.conservative_fallback)
+                .any(|run| run.conservative_fallback),
+            "entity transformation is not escape-proven, so it stays conservative"
         );
     }
 
@@ -4359,42 +4899,213 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
     }
 
     #[test]
-    fn visual_edit_marks_non_image_inline_html_for_conservative_runs() {
-        // Pure non-image inline HTML keeps the whole-block HTML source island
-        // (no image run to render, so the view-layer gate shows the source box).
-        let doc = MarkdownDocument::from_text("text <em>em</em> more");
+    fn inline_html_br_resolves_atomically_to_tag_boundaries() {
+        let source = "one<br>two";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let projection =
+            build_visual_projection_with_marked_range(source, &blocks[0], 0..0, 0, None);
+        assert_eq!(projection.text, "one\ntwo");
+        // The break is one display char mapped onto the tag bytes, so the
+        // boundaries on both sides resolve to the tag's source edges and no
+        // interior display position can exist.
+        let before_break = projection.boundary_candidates(3);
+        assert_eq!(before_break.upstream_source, 3);
+        assert_eq!(before_break.downstream_source, 3);
+        let after_break = projection.boundary_candidates(4);
+        assert_eq!(after_break.upstream_source, 7);
+        assert_eq!(after_break.downstream_source, 7);
+        // Mid-tag source offsets clamp to the atom's display end.
+        assert_eq!(projection.display_for_source(5), Some(4));
+        // Activating the tag boundary reveals the authored source in place.
+        let revealed = build_visual_projection_with_marked_range(source, &blocks[0], 0..0, 3, None);
+        assert_eq!(revealed.text, "one<br>two");
+    }
+
+    #[test]
+    fn visual_edit_renders_supported_inline_html_with_hidden_tags() {
+        // Pure supported style pairs render as styled prose with hidden tag
+        // markers and no whole-block HTML source island.
+        let source = "text <em>em</em> more";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        assert_eq!(block.source_island, None, "supported pairs stay visual");
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
+        let em_run = block
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text == "em")
+            .expect("tag content renders as a run");
+        assert!(em_run.style.italic);
+        assert_eq!(&source[em_run.content_range.clone()], "em");
+        let groups: Vec<(VisualRevealKind, &str)> = block
+            .reveal_groups
+            .iter()
+            .map(|group| (group.kind, &source[group.source_range.clone()]))
+            .collect();
+        assert_eq!(
+            groups,
+            vec![(VisualRevealKind::InlineHtml, "<em>em</em>")],
+            "the complete element source is one reveal group"
+        );
+        // Only the tag bytes stay hidden.
+        let markers: Vec<&str> = block
+            .marker_ranges
+            .iter()
+            .map(|range| &source[range.clone()])
+            .collect();
+        assert_eq!(markers, vec!["<em>", "</em>"]);
+        // Unfocused projection hides the tags; a caret inside the element
+        // reveals the complete authored source in place.
+        let unfocused = build_visual_projection_with_marked_range(source, block, 0..0, 0, None);
+        assert_eq!(unfocused.text, "text em more");
+        let em_byte = source.find("em>").unwrap() + 2;
+        let focused = build_visual_projection_with_marked_range(source, block, 0..0, em_byte, None);
+        assert_eq!(focused.text, "text <em>em</em> more");
+    }
+
+    #[test]
+    fn inline_html_styles_compose_with_markdown_formatting() {
+        let source = "<em>a *b* c</em> and <strong>md **bold**</strong>";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
+        let italic = |needle: &str| {
+            block
+                .editable_runs
+                .iter()
+                .find(|run| run.visible_text == needle)
+                .unwrap_or_else(|| panic!("missing run {needle}"))
+                .style
+                .italic
+        };
+        // Content after an inner Markdown pair keeps the enclosing HTML style.
+        assert!(italic("a "));
+        assert!(italic("b"));
+        assert!(italic(" c"));
+        assert!(
+            !italic(" and "),
+            "content past the closing tag drops the style"
+        );
+        // HTML strong and Markdown bold compose.
+        let bold_run = block
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text == "bold")
+            .expect("nested markdown bold run");
+        assert!(bold_run.style.bold);
+    }
+
+    #[test]
+    fn inline_html_br_renders_authored_line_break_run() {
+        let source = "one<br/>two <br> three<br />four";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        assert_eq!(block.source_island, None);
+        let breaks: Vec<&str> = block
+            .editable_runs
+            .iter()
+            .filter(|run| run.visible_text == "\n")
+            .map(|run| &source[run.content_range.clone()])
+            .collect();
+        assert_eq!(breaks, vec!["<br/>", "<br>", "<br />"]);
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
+        let br_groups = block
+            .reveal_groups
+            .iter()
+            .filter(|group| group.kind == VisualRevealKind::InlineHtml)
+            .count();
+        assert_eq!(br_groups, 3);
+    }
+
+    #[test]
+    fn visual_edit_keeps_conservative_fallback_for_unsupported_inline_html() {
+        // Pure unsupported inline HTML keeps the whole-block HTML source
+        // island (no image run to render, so the view-layer gate shows the
+        // source box).
+        let doc = MarkdownDocument::from_text("text <a href=\"u\">link</a> more");
         let blocks = doc.visual_blocks_shared();
         assert_eq!(
             blocks[0].source_island,
             Some(VisualSourceIslandKind::Html),
-            "pure non-image inline HTML keeps the whole-block island"
-        );
-        assert!(
-            blocks[0]
-                .editable_runs
-                .iter()
-                .all(|run| run.html_image.is_none()),
-            "no image run is emitted for non-image inline HTML"
+            "unsupported tags keep the whole-block island"
         );
 
-        // A `<br>` next to an image marks the block as containing non-image
-        // HTML, but still emits the image run so the view layer can render it
-        // alongside the conservative source fragments.
-        let doc = MarkdownDocument::from_text("Hello <br> <img src=\"x.png\"> world");
+        // Attributed forms of supported names are outside the subset.
+        let doc = MarkdownDocument::from_text("x <em class=\"q\">y</em> z");
         let blocks = doc.visual_blocks_shared();
         assert_eq!(blocks[0].source_island, Some(VisualSourceIslandKind::Html));
+
+        // An unclosed supported tag spoils the block and exposes the tag
+        // bytes as a conservative run.
+        let doc = MarkdownDocument::from_text("unclosed <em>em text");
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Html));
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .any(|run| run.conservative_fallback && run.visible_text == "<em>"),
+            "the unclosed tag itself stays visible as a conservative run"
+        );
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .any(|run| run.conservative_fallback && run.visible_text.contains("em text")),
+            "content inside the unclosed element is demoted"
+        );
+
+        // A stray close without an open also spoils the block.
+        let doc = MarkdownDocument::from_text("stray </strong> close");
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks[0].source_island, Some(VisualSourceIslandKind::Html));
+    }
+
+    #[test]
+    fn inline_html_image_mixed_blocks_keep_image_runs() {
+        // `<br>` and `<img>` are both supported now, so their block stays
+        // visual with both rendered.
+        let doc = MarkdownDocument::from_text("Hello <br> <img src=\"x.png\"> world");
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks[0].source_island, None);
         assert!(
             blocks[0]
                 .editable_runs
                 .iter()
                 .any(|run| run.html_image.is_some()),
-            "image run is still emitted when mixed with non-image inline HTML"
+            "the image run renders alongside the line break"
+        );
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text == "\n")
         );
 
         // The README badge pattern (`<a href><img></a>`) emits the image run
-        // plus conservative source runs for the `<a>` wrappers, so the block
-        // can render the image in the mixed path instead of collapsing to a
-        // whole-block source island.
+        // plus conservative source runs for the unsupported `<a>` wrappers,
+        // so the block can render the image in the mixed path instead of
+        // collapsing to a whole-block source island.
         let doc = MarkdownDocument::from_text("plain <a href=\"u\"><img src=\"x.png\"></a> end");
         let blocks = doc.visual_blocks_shared();
         assert_eq!(blocks[0].source_island, Some(VisualSourceIslandKind::Html));
@@ -4411,6 +5122,20 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
                 .iter()
                 .any(|run| run.conservative_fallback && run.visible_text.contains("<a")),
             "a-wrapped image keeps conservative source runs for the wrappers"
+        );
+
+        // An unclosed `<em>` before an image also spoils the block while the
+        // image run survives the demotion.
+        let doc = MarkdownDocument::from_text("bad <em>styled <img src=\"x.png\"> tail");
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Html));
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .any(|run| run.html_image.is_some()),
+            "image atoms are never demoted by the pairing failure"
         );
     }
 }

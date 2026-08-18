@@ -189,7 +189,7 @@ The editor SHALL persist the Preview adaptive width preference in the existing p
 - **THEN** Preview adaptive width is disabled
 
 ### Requirement: Dense pane chrome with draggable scrollbars
-The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane and rendered preview pane when their content exceeds the visible area. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
+The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane, Visual Edit surface, and rendered preview pane when their content exceeds the visible area. The Visual Edit scrollbar SHALL match the Read-mode preview overlay in placement and drag behavior. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
 
 #### Scenario: Large source document exposes editor scrollbar
 - **WHEN** the active document has more source lines than fit in the editor pane
@@ -200,6 +200,18 @@ The application chrome SHALL provide visible, right-side vertical scrollbars for
 - **WHEN** the active document renders more preview content than fits in the preview pane
 - **THEN** the preview pane shows a right-side vertical scrollbar
 - **AND** dragging that scrollbar changes the visible rendered content
+
+#### Scenario: Large Visual Edit document exposes a scrollbar
+- **WHEN** the active view mode is Visual Edit
+- **AND** the visual document renders more content than fits in the visible surface
+- **THEN** the Visual Edit surface shows a right-side vertical scrollbar
+- **AND** dragging that scrollbar changes the visible visual document content
+- **AND** the thumb placement and drag behavior match the Read-mode preview scrollbar
+
+#### Scenario: Short or empty Visual Edit documents hide the scrollbar
+- **WHEN** the active view mode is Visual Edit
+- **AND** the visual document fits in the visible surface or the document is empty
+- **THEN** no vertical scrollbar thumb is shown
 
 #### Scenario: Main pane chrome is compact
 - **WHEN** the editor renders the main content area

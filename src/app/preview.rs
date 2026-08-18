@@ -2284,6 +2284,23 @@ fn visual_projection_fragment(
 /// image atoms, and focused tags reveal their authored source.
 /// When the block has link/footnote navigation targets, the same flex-wrap
 /// layout inserts a compact clickable icon after each navigable construct.
+fn mixed_prose_current_line(lines: &mut Vec<Vec<gpui::AnyElement>>) -> &mut Vec<gpui::AnyElement> {
+    if lines.is_empty() {
+        lines.push(Vec::new());
+    }
+    lines
+        .last_mut()
+        .expect("mixed prose keeps at least one line")
+}
+
+fn mixed_prose_break_line(lines: &mut Vec<Vec<gpui::AnyElement>>) {
+    lines.push(Vec::new());
+}
+
+fn mixed_prose_push(lines: &mut Vec<Vec<gpui::AnyElement>>, child: gpui::AnyElement) {
+    mixed_prose_current_line(lines).push(child);
+}
+
 pub(super) fn visual_text_with_math_element(
     block: &VisualBlock,
     block_index: usize,
@@ -2329,7 +2346,7 @@ pub(super) fn visual_text_with_math_element(
     });
     #[cfg(test)]
     let mut recorded_full_projection = false;
-    let mut children = Vec::new();
+    let mut lines: Vec<Vec<gpui::AnyElement>> = vec![Vec::new()];
     let mut fragment_index = 0usize;
     let mut remaining_icons = nav_icons;
     for (segment, projected_span) in projection.segments.iter().zip(&projection.spans) {
@@ -2350,16 +2367,19 @@ pub(super) fn visual_text_with_math_element(
                 app.palette().text,
             )
         {
-            children.push(visual_math_atom(
-                app,
-                image,
-                math.source_range.clone(),
-                Some(inline_metrics),
-                cx,
-            ));
+            mixed_prose_push(
+                &mut lines,
+                visual_math_atom(
+                    app,
+                    image,
+                    math.source_range.clone(),
+                    Some(inline_metrics),
+                    cx,
+                ),
+            );
             fragment_index += 1;
             fragment_index += emit_navigation_icons_after(
-                &mut children,
+                mixed_prose_current_line(&mut lines),
                 &mut remaining_icons,
                 segment.source_range.end,
                 block_index,
@@ -2378,16 +2398,13 @@ pub(super) fn visual_text_with_math_element(
         if let Some(Some(run)) = html_image
             && let Some(image) = &run.html_image
         {
-            children.push(visual_html_image_atom(
-                app,
-                image,
-                segment.source_range.clone(),
-                document_dir,
-                cx,
-            ));
+            mixed_prose_push(
+                &mut lines,
+                visual_html_image_atom(app, image, segment.source_range.clone(), document_dir, cx),
+            );
             fragment_index += 1;
             fragment_index += emit_navigation_icons_after(
-                &mut children,
+                mixed_prose_current_line(&mut lines),
                 &mut remaining_icons,
                 segment.source_range.end,
                 block_index,
@@ -2408,90 +2425,145 @@ pub(super) fn visual_text_with_math_element(
             visual_highlight_style(projected_span.style, projected_span.link)
         };
         let can_split = visible.len() == segment.source_range.len();
-        if can_split {
-            let mut local_start = 0usize;
-            for fragment in visible.split_inclusive(char::is_whitespace) {
-                if fragment.is_empty() {
-                    continue;
-                }
-                let source_start = segment.source_range.start + local_start;
-                let source_range = source_start..source_start + fragment.len();
-                #[cfg(test)]
-                let (test_projection, test_projection_styles) = if !recorded_full_projection {
-                    recorded_full_projection = true;
-                    (
-                        focused_test_projection.clone(),
-                        focused_test_projection_styles.clone(),
-                    )
-                } else {
-                    (None, None)
-                };
-                children.push(visual_projection_fragment(
-                    block_index,
-                    fragment_index,
-                    fragment.to_string(),
-                    source_range.clone(),
-                    style.clone(),
-                    app,
-                    cx,
-                    #[cfg(test)]
-                    test_projection,
-                    #[cfg(test)]
-                    test_projection_styles,
-                ));
-                fragment_index += 1;
-                local_start += fragment.len();
-                fragment_index += emit_navigation_icons_after(
-                    &mut children,
-                    &mut remaining_icons,
-                    source_range.end,
-                    block_index,
-                    fragment_index,
-                    cx,
-                );
+        let mut local_start = 0usize;
+        for piece in visible.split_inclusive('\n') {
+            if piece.is_empty() {
+                continue;
             }
-        } else {
-            #[cfg(test)]
-            let (test_projection, test_projection_styles) = if !recorded_full_projection {
-                recorded_full_projection = true;
-                (
-                    focused_test_projection.clone(),
-                    focused_test_projection_styles.clone(),
-                )
+            let had_break = piece.ends_with('\n');
+            let content = if had_break {
+                let without_lf = piece.strip_suffix('\n').unwrap_or(piece);
+                without_lf.strip_suffix('\r').unwrap_or(without_lf)
             } else {
-                (None, None)
+                piece
             };
-            children.push(visual_projection_fragment(
-                block_index,
-                fragment_index,
-                visible.to_string(),
-                segment.source_range.clone(),
-                style,
-                app,
-                cx,
-                #[cfg(test)]
-                test_projection,
-                #[cfg(test)]
-                test_projection_styles,
-            ));
-            fragment_index += 1;
-            fragment_index += emit_navigation_icons_after(
-                &mut children,
-                &mut remaining_icons,
-                segment.source_range.end,
-                block_index,
-                fragment_index,
-                cx,
-            );
+            if !content.is_empty() {
+                if can_split {
+                    let mut content_local = 0usize;
+                    for fragment in content.split_inclusive(char::is_whitespace) {
+                        if fragment.is_empty() {
+                            continue;
+                        }
+                        let source_start = segment.source_range.start + local_start + content_local;
+                        let source_range = source_start..source_start + fragment.len();
+                        #[cfg(test)]
+                        let (test_projection, test_projection_styles) = if !recorded_full_projection
+                        {
+                            recorded_full_projection = true;
+                            (
+                                focused_test_projection.clone(),
+                                focused_test_projection_styles.clone(),
+                            )
+                        } else {
+                            (None, None)
+                        };
+                        mixed_prose_push(
+                            &mut lines,
+                            visual_projection_fragment(
+                                block_index,
+                                fragment_index,
+                                fragment.to_string(),
+                                source_range.clone(),
+                                style.clone(),
+                                app,
+                                cx,
+                                #[cfg(test)]
+                                test_projection,
+                                #[cfg(test)]
+                                test_projection_styles,
+                            ),
+                        );
+                        fragment_index += 1;
+                        content_local += fragment.len();
+                        fragment_index += emit_navigation_icons_after(
+                            mixed_prose_current_line(&mut lines),
+                            &mut remaining_icons,
+                            source_range.end,
+                            block_index,
+                            fragment_index,
+                            cx,
+                        );
+                    }
+                } else {
+                    // Non-identity segment: display byte counts cannot index
+                    // into the source range, so clamp the fragment to the
+                    // segment's source bounds (rendered atoms resolve to their
+                    // edges through `boundary_candidates`).
+                    let source_start =
+                        (segment.source_range.start + local_start).min(segment.source_range.end);
+                    let source_end = source_start
+                        .saturating_add(content.len())
+                        .min(segment.source_range.end);
+                    let source_range = source_start..source_end;
+                    #[cfg(test)]
+                    let (test_projection, test_projection_styles) = if !recorded_full_projection {
+                        recorded_full_projection = true;
+                        (
+                            focused_test_projection.clone(),
+                            focused_test_projection_styles.clone(),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                    mixed_prose_push(
+                        &mut lines,
+                        visual_projection_fragment(
+                            block_index,
+                            fragment_index,
+                            content.to_string(),
+                            source_range.clone(),
+                            style.clone(),
+                            app,
+                            cx,
+                            #[cfg(test)]
+                            test_projection,
+                            #[cfg(test)]
+                            test_projection_styles,
+                        ),
+                    );
+                    fragment_index += 1;
+                    fragment_index += emit_navigation_icons_after(
+                        mixed_prose_current_line(&mut lines),
+                        &mut remaining_icons,
+                        source_range.end,
+                        block_index,
+                        fragment_index,
+                        cx,
+                    );
+                }
+            }
+            local_start += piece.len();
+            if had_break {
+                mixed_prose_break_line(&mut lines);
+            }
         }
+        fragment_index += emit_navigation_icons_after(
+            mixed_prose_current_line(&mut lines),
+            &mut remaining_icons,
+            segment.source_range.end,
+            block_index,
+            fragment_index,
+            cx,
+        );
+    }
+
+    while lines.len() > 1 && lines.last().is_some_and(Vec::is_empty) {
+        lines.pop();
     }
 
     div()
         .w_full()
         .flex()
-        .flex_wrap()
-        .items_end()
-        .children(children)
+        .flex_col()
+        .children(lines.into_iter().enumerate().map(|(line_index, line)| {
+            div()
+                .w_full()
+                .flex()
+                .flex_wrap()
+                .items_end()
+                .debug_selector(move || format!("visual-mixed-line-{block_index}-{line_index}"))
+                .children(line)
+        }))
         .into_any_element()
 }
 

@@ -1128,6 +1128,8 @@ struct DraggedVisualBlock {
 enum PaneScrollTarget {
     Editor,
     Preview,
+    /// Visual Edit list overlay. Drag identity only; never a Sync scroll driver.
+    Visual,
 }
 
 /// Identity of a selectable plain-text run inside one preview list item.

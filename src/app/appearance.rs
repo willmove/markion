@@ -334,6 +334,9 @@ impl MarkionApp {
     }
 
     pub(super) fn mark_sync_scroll_driver(&mut self, driver: PaneScrollTarget) {
+        if !matches!(driver, PaneScrollTarget::Editor | PaneScrollTarget::Preview) {
+            return;
+        }
         if let Some(tab) = self.active_tab_mut().document_tab_mut() {
             tab.sync_scroll_state.mark_driver(driver);
         }
@@ -451,7 +454,8 @@ impl MarkionApp {
             return;
         };
 
-        if (driver == PaneScrollTarget::Editor && editor_max <= 1.)
+        if matches!(driver, PaneScrollTarget::Visual)
+            || (driver == PaneScrollTarget::Editor && editor_max <= 1.)
             || (driver == PaneScrollTarget::Preview && preview_max <= 1.)
         {
             return;
@@ -580,6 +584,7 @@ impl MarkionApp {
                     Some(ExpectedSyncFollower::Editor(actual));
                 tab.sync_scroll_state.expected_follower_retried = false;
             }
+            PaneScrollTarget::Visual => return,
         }
         cx.notify();
     }

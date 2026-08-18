@@ -1346,6 +1346,32 @@ pub(super) fn visual_edit_surface_view(
 ) -> Div {
     let is_empty = items.is_empty();
     let input_bridge = VisualInputElement { app: cx.entity() };
+    let scrollbar_list = list_state.clone();
+    let preview_row_line_height = typography.preview_row_line_height;
+    let row_processor = cx.processor(move |app, ix: usize, _window, cx| {
+        let row = div()
+            .debug_selector(move || format!("visual-document-row-{ix}"))
+            .w_full()
+            .line_height(px(preview_row_line_height))
+            .child(visual_block_view(
+                app,
+                &items[ix],
+                ix,
+                document_dir.as_deref(),
+                display_scale,
+                cx,
+            ));
+        if constrain_width {
+            div()
+                .w_full()
+                .flex()
+                .justify_center()
+                .child(row.max_w(px(READ_MODE_PREVIEW_MAX_WIDTH)))
+                .into_any_element()
+        } else {
+            row.into_any_element()
+        }
+    });
     div()
         .relative()
         .flex_1()
@@ -1394,36 +1420,10 @@ pub(super) fn visual_edit_surface_view(
                 })
                 .when(!is_empty, move |surface| {
                     surface.child(
-                        list(
-                            list_state,
-                            cx.processor(move |app, ix: usize, _window, cx| {
-                                let row = div()
-                                    .debug_selector(move || format!("visual-document-row-{ix}"))
-                                    .w_full()
-                                    .line_height(px(typography.preview_row_line_height))
-                                    .child(visual_block_view(
-                                        app,
-                                        &items[ix],
-                                        ix,
-                                        document_dir.as_deref(),
-                                        display_scale,
-                                        cx,
-                                    ));
-                                if constrain_width {
-                                    div()
-                                        .w_full()
-                                        .flex()
-                                        .justify_center()
-                                        .child(row.max_w(px(READ_MODE_PREVIEW_MAX_WIDTH)))
-                                        .into_any_element()
-                                } else {
-                                    row.into_any_element()
-                                }
-                            }),
-                        )
-                        .size_full()
-                        .pt(px(PANE_INNER_PADDING))
-                        .pb(px(PANE_INNER_PADDING)),
+                        list(list_state, row_processor)
+                            .size_full()
+                            .pt(px(PANE_INNER_PADDING))
+                            .pb(px(PANE_INNER_PADDING)),
                     )
                 }),
         )
@@ -1436,6 +1436,13 @@ pub(super) fn visual_edit_surface_view(
                 .left(px(0.))
                 .child(input_bridge),
         )
+        .child(list_pane_scrollbar_view(
+            "visual-pane-scrollbar",
+            &scrollbar_list,
+            PaneScrollTarget::Visual,
+            palette,
+            cx,
+        ))
 }
 
 pub(super) fn search_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
@@ -2236,6 +2243,7 @@ pub(super) fn pane_scrollbar_view(
     let id = match target {
         PaneScrollTarget::Editor => "editor-pane-scrollbar",
         PaneScrollTarget::Preview => "preview-pane-scrollbar",
+        PaneScrollTarget::Visual => "visual-pane-scrollbar",
     };
     let viewport_height = scroll_handle.bounds().size.height;
     let max_scroll = scroll_handle.max_offset().height.max(px(0.));
@@ -2356,7 +2364,7 @@ pub(super) fn pane_scrollbar_view(
         )
 }
 
-/// The custom-drawn overlay scrollbar for the virtualized preview `list`.
+/// The custom-drawn overlay scrollbar for a virtualized document `list`.
 ///
 /// Mirrors [`pane_scrollbar_view`] but reads geometry from [`ListState`]'s
 /// scrollbar API (`viewport_bounds`, `max_offset_for_scrollbar`,
@@ -2365,13 +2373,36 @@ pub(super) fn pane_scrollbar_view(
 /// `scrollbar_drag_started`/`_ended` calls freeze the reported content height
 /// for the duration of a drag so the thumb does not jump as off-screen blocks
 /// get measured.
+///
+/// Preview overlays pass [`PaneScrollTarget::Preview`] so Split Preview can mark
+/// a sync-scroll driver. Visual Edit passes [`PaneScrollTarget::Visual`], which
+/// is drag identity only and never records a Preview/Editor driver.
+pub(super) fn list_pane_scrollbar_marks_sync_driver(target: PaneScrollTarget) -> bool {
+    matches!(target, PaneScrollTarget::Preview)
+}
+
 pub(super) fn preview_list_scrollbar_view(
     list_state: &ListState,
     palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
-    let id = "preview-pane-scrollbar";
-    let target = PaneScrollTarget::Preview;
+    list_pane_scrollbar_view(
+        "preview-pane-scrollbar",
+        list_state,
+        PaneScrollTarget::Preview,
+        palette,
+        cx,
+    )
+}
+
+pub(super) fn list_pane_scrollbar_view(
+    id: &'static str,
+    list_state: &ListState,
+    target: PaneScrollTarget,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    let mark_sync_driver = list_pane_scrollbar_marks_sync_driver(target);
     let viewport_height = list_state.viewport_bounds().size.height;
     let max_scroll = list_state.max_offset_for_scrollbar().height.max(px(0.));
     if viewport_height <= px(0.) || max_scroll <= px(1.) {
@@ -2422,7 +2453,9 @@ pub(super) fn preview_list_scrollbar_view(
                                     target,
                                     thumb_grab_offset_y: event.position.y - thumb_bounds.top(),
                                 });
-                                app.mark_sync_scroll_driver(target);
+                                if mark_sync_driver {
+                                    app.mark_sync_scroll_driver(target);
+                                }
                             });
                         }
                     });
@@ -2485,7 +2518,9 @@ pub(super) fn preview_list_scrollbar_view(
                             let scroll_y = max_scroll * percentage;
                             list_state.set_offset_from_scrollbar(point(px(0.), -scroll_y));
                             entity.update(cx, |app, _| {
-                                app.mark_sync_scroll_driver(target);
+                                if mark_sync_driver {
+                                    app.mark_sync_scroll_driver(target);
+                                }
                             });
                             cx.notify(entity.entity_id());
                         }
