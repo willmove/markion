@@ -255,6 +255,13 @@ jobs:
   # generated `manifest.json` for mirror metadata and future clients.
   # Independent of the `release` job: a GitHub Release failure does not block
   # the mirror, and vice versa. Runs only on `v*` tags.
+  #
+  # The upload uses direct OSS REST PUTs signed with HMAC-SHA1 (curl + openssl,
+  # both preinstalled on ubuntu runners) instead of a third-party action: the
+  # previous tvrcgo/oss-action was fire-and-forget (silent no-op on empty globs,
+  # unhandled-rejection crash on any network error, 60s SDK timeout). The job
+  # then verifies that every mirrored object is publicly reachable with HTTP
+  # 200, so a "successful" job always means the mirror actually works.
   mirror-oss:
     name: Mirror installers to Aliyun OSS
     needs: [build, prepare-update]
@@ -311,19 +318,82 @@ jobs:
           PY
 
       - name: Upload installers, updater metadata, packager config, manifest, and sha256sums to Aliyun OSS
-        uses: tvrcgo/oss-action@master
-        with:
-          key-id: ${{ secrets.OSS_ACCESS_KEY_ID }}
-          key-secret: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
-          endpoint: ${{ secrets.OSS_ENDPOINT }}
-          bucket: ${{ secrets.OSS_BUCKET }}
-          assets: |
-            dist/markion_${{ env.VERSION }}_x64-setup.exe:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_x64-setup.exe
-            dist/Markion_${{ env.VERSION }}_aarch64.dmg:${{ secrets.OSS_PREFIX }}/latest/Markion_${{ env.VERSION }}_aarch64.dmg
-            dist/markion_${{ env.VERSION }}_amd64.deb:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_amd64.deb
-            dist/markion_${{ env.VERSION }}_x86_64.AppImage:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_x86_64.AppImage
-            dist/markion_${{ env.VERSION }}_x64-setup.exe.sig:${{ secrets.OSS_PREFIX }}/latest/markion_${{ env.VERSION }}_x64-setup.exe.sig
-            dist/update.json:${{ secrets.OSS_PREFIX }}/latest/update.json
-            dist/manifest.json:${{ secrets.OSS_PREFIX }}/latest/manifest.json
-            dist/sha256sums.txt:${{ secrets.OSS_PREFIX }}/latest/sha256sums.txt
-            packager.toml:${{ secrets.OSS_PREFIX }}/latest/packager.toml
+        shell: bash
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          set -euo pipefail
+          key_id="$OSS_ACCESS_KEY_ID"
+          key_secret="$OSS_ACCESS_KEY_SECRET"
+          bucket="$OSS_BUCKET"
+          endpoint="${OSS_ENDPOINT#https://}"
+          endpoint="${endpoint#http://}"
+          # Defensive normalization: a trailing slash in OSS_PREFIX must never
+          # produce double-slash object keys again (it made every mirrored URL
+          # 404 while the job still reported success).
+          prefix="${OSS_PREFIX%/}"
+          prefix_dir="${prefix}/latest"
+
+          upload() {
+            local src="$1" dest="$2"
+            local now content_type string_to_sign signature
+            now="$(date -u '+%a, %d %b %Y %H:%M:%S GMT')"
+            content_type="application/octet-stream"
+            string_to_sign="PUT\n\n${content_type}\n${now}\n/${bucket}/${dest}"
+            signature="$(printf '%b' "${string_to_sign}" | openssl dgst -sha1 -hmac "${key_secret}" -binary | base64 | tr -d '\n')"
+            curl -fsS --retry 3 --retry-delay 3 \
+              --connect-timeout 30 --max-time 600 \
+              -X PUT \
+              -H "Date: ${now}" \
+              -H "Content-Type: ${content_type}" \
+              -H "Authorization: OSS ${key_id}:${signature}" \
+              --data-binary "@${src}" \
+              "https://${bucket}.${endpoint}/${dest}" >/dev/null
+            echo "Uploaded ${dest}"
+          }
+
+          upload "dist/markion_${VERSION}_x64-setup.exe" "${prefix_dir}/markion_${VERSION}_x64-setup.exe"
+          upload "dist/Markion_${VERSION}_aarch64.dmg" "${prefix_dir}/Markion_${VERSION}_aarch64.dmg"
+          upload "dist/markion_${VERSION}_amd64.deb" "${prefix_dir}/markion_${VERSION}_amd64.deb"
+          upload "dist/markion_${VERSION}_x86_64.AppImage" "${prefix_dir}/markion_${VERSION}_x86_64.AppImage"
+          upload "dist/markion_${VERSION}_x64-setup.exe.sig" "${prefix_dir}/markion_${VERSION}_x64-setup.exe.sig"
+          upload "dist/update.json" "${prefix_dir}/update.json"
+          upload "dist/manifest.json" "${prefix_dir}/manifest.json"
+          upload "dist/sha256sums.txt" "${prefix_dir}/sha256sums.txt"
+          upload "packager.toml" "${prefix_dir}/packager.toml"
+
+      - name: Verify mirrored assets are publicly reachable
+        shell: bash
+        env:
+          OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          set -euo pipefail
+          base="${OSS_PUBLIC_BASE%/}/${OSS_PREFIX#/}/latest"
+          for f in \
+            "markion_${VERSION}_x64-setup.exe" \
+            "Markion_${VERSION}_aarch64.dmg" \
+            "markion_${VERSION}_amd64.deb" \
+            "markion_${VERSION}_x86_64.AppImage" \
+            "markion_${VERSION}_x64-setup.exe.sig" \
+            "update.json" \
+            "manifest.json" \
+            "sha256sums.txt" \
+            "packager.toml"
+          do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 30 --max-time 300 "${base}/${f}")"
+            test "${code}" = "200" || {
+              echo "Mirror verification failed: ${base}/${f} returned HTTP ${code}" >&2
+              exit 1
+            }
+            echo "Verified ${f}"
+          done
+          curl -fsSL "${base}/update.json" | grep -q "\"version\": \"${VERSION}\"" || {
+            echo "Mirror verification failed: update.json version != ${VERSION}" >&2
+            exit 1
+          }
+          echo "All mirrored assets verified at ${base}/"

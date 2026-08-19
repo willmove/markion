@@ -33,6 +33,20 @@ Minisign authenticates the updater payload; it is not Windows Authenticode signi
 
 Treat rotation as a planned migration, not a secret replacement. The current client trusts one key and the workflow verifies that the embedded public key matches the signing private key, so changing both keys in one release would strand existing clients. Before rotating, implement and test a bridge client that trusts both old and new public keys, publish that bridge while signing with the old key, and wait for it to be distributed. Only then sign subsequent releases with the new key, retaining the old key for a documented transition period.
 
+### Aliyun OSS mirror configuration
+
+The `mirror-oss` job uploads the four installers, the signed Windows updater metadata, `packager.toml`, `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/` in `OSS_BUCKET`, then verifies that every mirrored object is publicly reachable with HTTP 200 and that the mirrored `update.json` version matches the tag. A green mirror job therefore always means the mirror actually serves the release — a lesson learned when a third-party upload action silently no-op'd while reporting success.
+
+Configure these repository secrets with the exact public values; a wrong value fails only at tag time:
+
+- `OSS_ENDPOINT`: the public regional endpoint `oss-cn-heyuan.aliyuncs.com`. The internal endpoint (`oss-cn-heyuan-internal.aliyuncs.com`) resolves to RFC 6598 CGNAT addresses that GitHub-hosted runners cannot route to, so every upload times out (60s) and fails.
+- `OSS_BUCKET`: `marknice` — must match the bucket in `OSS_PUBLIC_BASE`'s hostname (`marknice.oss-cn-heyuan.aliyuncs.com`).
+- `OSS_PREFIX`: `markion-releases` — no trailing slash. A trailing slash historically produced double-slash object keys (`markion-releases//latest/...`) that 404'd at the public URLs while the upload job still reported success. The workflow now normalizes the prefix defensively and verifies the result.
+- `OSS_PUBLIC_BASE`: `https://marknice.oss-cn-heyuan.aliyuncs.com`.
+- `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET`: a RAM key with write access to the bucket. Objects inherit the bucket's default object ACL, so the bucket must be configured public-read for the mirror URLs to serve clients.
+
+The upload itself is a direct OSS REST PUT signed with HMAC-SHA1 (curl + openssl, preinstalled on ubuntu runners) — no third-party action, explicit per-file error handling, retries, and a 30s connect / 600s request timeout.
+
 Check the operating context before editing anything:
 
 ```bash
