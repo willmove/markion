@@ -27,7 +27,7 @@ Releases are not platform code-signed. Windows SmartScreen may require **More in
 Markion has four view modes. Split Preview is the default.
 
 - **Edit** — a focused raw Markdown source editor.
-- **Visual Edit** — a WYSIWYG-first, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, inline image fields, and GFM table cells have exact direct editors. Constructs whose WYSIWYG rendering is not yet implemented — decoded HTML entities, YAML front matter, indented code, and malformed or byte-ambiguous syntax — keep an exact source-backed editing affordance as a transitional measure, tracked on the WYSIWYG coverage roadmap. A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code, divider, table), duplicate, move up/down, source-safe drag reorder, and delete; a selection-contextual formatting toolbar and a visual link editor perform one exact source-backed mutation per action. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
+- **Visual Edit** — a WYSIWYG-first, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, registered diagrams (Mermaid), inline image fields, and GFM table cells have exact direct editors. Constructs whose WYSIWYG rendering is not yet implemented — decoded HTML entities, YAML front matter, indented code, and malformed or byte-ambiguous syntax — keep an exact source-backed editing affordance as a transitional measure, tracked on the WYSIWYG coverage roadmap. A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code, divider, table), duplicate, move up/down, source-safe drag reorder, and delete; a selection-contextual formatting toolbar and a visual link editor perform one exact source-backed mutation per action. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
 - **Split Preview** — source and rendered preview side by side, with an optional source-mapped Sync scroll setting that keeps both panes on the same document location rather than scrolling by whole-document percentage.
 - **Read** — a rendered, non-editing view centered at a readable 860 px maximum width by default; Preview adaptive width can use the full pane.
 
@@ -64,14 +64,15 @@ Rendered preview supports:
 - Bold, italic, strikethrough, inline code, links, highlights, superscript, subscript, footnotes, task lists, common emoji shortcodes, and automatic links.
 - Correct ordered-list start numbers, nested lists, per-depth bullets, hanging indentation, images, and embedded HTML.
 - Selectable preview text with a context menu for copying as plain text, Markdown, or HTML, plus link-address copying where applicable.
-- `$...$` inline math and `$$...$$` block math with simple validation and a readable Unicode fallback.
+- `$...$` inline math and `$$...$$` block math, typeset offline into cached SVG by an embedded RaTeX (KaTeX-compatible) engine with bundled fonts — no network access or external LaTeX install required.
+- ` ```mermaid ` fenced diagrams (flowcharts, sequence diagrams, and more) rendered to sanitized, cached SVG.
 - Syntax-highlighted fenced code using syntect and the two-face extended grammar set, with a fallback lexer and optional line numbers.
 
 ## Themes, languages, and preferences
 
 - Fourteen built-in themes: Paper, Ink, Solar, Forest, Rose, Graphite, GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light.
 - Custom themes use `.toml` files in Markion's local themes directory. On first use a `typewriter.toml` sample — including the optional `[fonts]` table (`editor`, `rendered`, `code`) that supplies font families for the Markdown source editor, rendered body text, and code surfaces whenever the user has no explicit preference — is installed there as a starting point. Legacy `.theme` files migrate automatically when first loaded.
-- Six interface languages: English, Simplified Chinese, Japanese, French, German, and Spanish.
+- Seven interface languages: English, Simplified Chinese, Traditional Chinese, Japanese, French, German, and Spanish.
 - The in-app Preferences panel covers theme, language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, show-hidden-files, heading-menu depth, and per-plane font families (source, reading, code) with a follow-theme default.
 - Preferences persist in `config.toml`; legacy `preferences.conf` files migrate automatically.
 
@@ -131,7 +132,7 @@ Source-mapped Visual Edit incrementally reuses independently parseable regions a
 ## Current limitations
 
 - Visual Edit is WYSIWYG-first while retaining canonical Markdown; constructs without a proven byte-exact rendering expose exact source as a transitional affordance (tracked on the WYSIWYG coverage roadmap) rather than accepting a guessed rich-tree mutation, and block reordering is offered only when non-overlapping source boundaries are provable.
-- Math uses a readable fallback rather than KaTeX/MathJax-quality typesetting.
+- On-screen rendering (Split/Read preview and Visual Edit) typesets math with the embedded RaTeX engine; LaTeX export keeps native `$...$`/`$$...$$` source for the reader's own toolchain, and the built-in DOCX export fallback (used only when pandoc is unavailable) still degrades formulas to a readable plain-text approximation rather than embedding typeset glyphs.
 - Visual Edit table cells support direct plain-text editing, but do not yet provide rich inline-formatting controls inside cells. Reference/multiline images, malformed tables, and decoded HTML entities in prose remain known WYSIWYG coverage roadmap gaps that keep source-backed editing paths.
 - One-click updates install the Windows NSIS distribution after Minisign verification; macOS bundle replacement and Linux `.deb`/AppImage self-replacement remain future work, and updater authentication is not Windows Authenticode or Apple notarization.
 - Drag-and-drop file-tree moves and a full custom-theme installation UI are not implemented.
