@@ -176,6 +176,18 @@ pub struct AppPreferences {
     pub rendered_font_size: u16,
     /// Bottom gap after rendered paragraph blocks in logical pixels.
     pub paragraph_spacing: u16,
+    /// Explicit font family for the Markdown source editor surface. `None`
+    /// follows the active theme's `[fonts]` editor entry, then the built-in
+    /// default (`.SystemUIFont`).
+    pub editor_font_family: Option<String>,
+    /// Explicit font family for rendered body text (Visual Edit, Split
+    /// Preview's rendered pane, Read mode). `None` follows the active theme's
+    /// `[fonts]` rendered entry, then `.SystemUIFont`.
+    pub rendered_font_family: Option<String>,
+    /// Explicit font family for code surfaces (fenced code blocks, Visual
+    /// Edit source islands, reference-definition views). `None` follows the
+    /// active theme's `[fonts]` code entry, then "JetBrains Mono".
+    pub code_font_family: Option<String>,
     /// Maximum ATX heading level exposed in the Format menu and shortcut
     /// reference. Allowed values are `5` (default) and `6`.
     pub heading_menu_max_level: u8,
@@ -231,6 +243,9 @@ impl Default for AppPreferences {
             editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
             rendered_font_size: DEFAULT_RENDERED_FONT_SIZE,
             paragraph_spacing: DEFAULT_PARAGRAPH_SPACING,
+            editor_font_family: None,
+            rendered_font_family: None,
+            code_font_family: None,
             heading_menu_max_level: DEFAULT_HEADING_MENU_MAX_LEVEL,
             sync_scroll: false,
             show_hidden_files: false,
@@ -286,11 +301,61 @@ impl Default for AutoSavePreferences {
     }
 }
 
+/// Per-slot font-family contributions a theme may carry. `None` means the
+/// theme specifies no font for that slot, so the slot falls through to the
+/// user preference or the built-in default.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThemeFonts {
+    pub editor: Option<String>,
+    pub rendered: Option<String>,
+    pub code: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeDefinition {
     pub name: String,
     pub is_dark: bool,
     pub colors: ThemeColors,
+    pub fonts: ThemeFonts,
+}
+
+impl ThemeDefinition {
+    /// Constructor for color-only themes (no font contributions) so the
+    /// built-in catalog and sample-theme writer stay terse.
+    pub fn palette(name: &str, is_dark: bool, colors: ThemeColors) -> Self {
+        Self {
+            name: name.to_string(),
+            is_dark,
+            colors,
+            fonts: ThemeFonts::default(),
+        }
+    }
+}
+
+/// Font family applied when neither a preference nor a theme names one for
+/// the source or rendered slots. gpui resolves this magic name to the
+/// platform system UI font (Segoe UI on Windows, SF Pro on macOS).
+pub const SYSTEM_UI_FONT_FAMILY: &str = ".SystemUIFont";
+
+/// Built-in default family for the code slot (fenced blocks, source islands,
+/// reference-definition views).
+pub const DEFAULT_CODE_FONT_FAMILY: &str = "JetBrains Mono";
+
+/// Resolves one font slot: an explicit preference over the active theme's
+/// contribution over the built-in default. Empty or whitespace-only values
+/// count as unset at every level.
+pub fn resolve_font_family(preference: Option<&str>, theme: Option<&str>, default: &str) -> String {
+    normalize_font_family(preference)
+        .or_else(|| normalize_font_family(theme))
+        .unwrap_or_else(|| default.to_string())
+}
+
+/// Trims a candidate family name; empty results are treated as absent.
+pub fn normalize_font_family(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -344,105 +409,105 @@ impl ThemeColors {
 pub fn builtin_theme_definitions() -> Vec<ThemeDefinition> {
     vec![
         // --- Original six built-ins (do not reorder/renumber) ---
-        ThemeDefinition {
-            name: "Paper".to_string(),
-            is_dark: false,
-            colors: ThemeColors::new(
+        ThemeDefinition::palette(
+            "Paper",
+            false,
+            ThemeColors::new(
                 0xf8fafc, 0xffffff, 0xffffff, 0x0f172a, 0x64748b, 0xdbe4ee, 0xe0ecff, 0x1d4ed8,
             ),
-        },
-        ThemeDefinition {
-            name: "Ink".to_string(),
-            is_dark: true,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "Ink",
+            true,
+            ThemeColors::new(
                 0x111827, 0x172033, 0x0f172a, 0xe5e7eb, 0x9ca3af, 0x334155, 0x1e3a8a, 0xbfdbfe,
             ),
-        },
-        ThemeDefinition {
-            name: "Solar".to_string(),
-            is_dark: false,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "Solar",
+            false,
+            ThemeColors::new(
                 0xfffbeb, 0xffffff, 0xfffdf5, 0x1f2937, 0x78716c, 0xf3d9a4, 0xfef3c7, 0x92400e,
             ),
-        },
-        ThemeDefinition {
-            name: "Forest".to_string(),
-            is_dark: false,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "Forest",
+            false,
+            ThemeColors::new(
                 0xf0fdf4, 0xffffff, 0xfafffb, 0x10231a, 0x4b6356, 0xb7ddc2, 0xd1fae5, 0x047857,
             ),
-        },
-        ThemeDefinition {
-            name: "Rose".to_string(),
-            is_dark: false,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "Rose",
+            false,
+            ThemeColors::new(
                 0xfff1f2, 0xffffff, 0xfffbfb, 0x2d1720, 0x7f5d65, 0xf5c2cc, 0xffdce5, 0xbe123c,
             ),
-        },
-        ThemeDefinition {
-            name: "Graphite".to_string(),
-            is_dark: false,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "Graphite",
+            false,
+            ThemeColors::new(
                 0xf4f4f5, 0xffffff, 0xfafafa, 0x18181b, 0x71717a, 0xd4d4d8, 0xe4e4e7, 0x3f3f46,
             ),
-        },
+        ),
         // --- Popular editor themes ---
-        ThemeDefinition {
-            name: "GitHub Light".to_string(),
-            is_dark: false,
-            colors: ThemeColors::new(
+        ThemeDefinition::palette(
+            "GitHub Light",
+            false,
+            ThemeColors::new(
                 0xffffff, 0xffffff, 0xf6f8fa, 0x24292f, 0x57606a, 0xd0d7de, 0xddf4ff, 0x0969da,
             ),
-        },
-        ThemeDefinition {
-            name: "GitHub Dark".to_string(),
-            is_dark: true,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "GitHub Dark",
+            true,
+            ThemeColors::new(
                 0x0d1117, 0x161b22, 0x21262d, 0xc9d1d9, 0x8b949e, 0x30363d, 0x1f6feb, 0x58a6ff,
             ),
-        },
-        ThemeDefinition {
-            name: "Solarized Light".to_string(),
-            is_dark: false,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "Solarized Light",
+            false,
+            ThemeColors::new(
                 0xfdf6e3, 0xeee8d5, 0xfdf6e3, 0x073642, 0x93a1a1, 0xeee8d5, 0xeee8d5, 0x268bd2,
             ),
-        },
-        ThemeDefinition {
-            name: "Solarized Dark".to_string(),
-            is_dark: true,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "Solarized Dark",
+            true,
+            ThemeColors::new(
                 0x002b36, 0x073642, 0x073642, 0x93a1a1, 0x586e75, 0x073642, 0x073642, 0x268bd2,
             ),
-        },
-        ThemeDefinition {
-            name: "One Light".to_string(),
-            is_dark: false,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "One Light",
+            false,
+            ThemeColors::new(
                 0xfafafa, 0xffffff, 0xf3f3f3, 0x383a42, 0x696c77, 0xe5e5e6, 0xe6f0ff, 0x4078f2,
             ),
-        },
-        ThemeDefinition {
-            name: "One Dark".to_string(),
-            is_dark: true,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "One Dark",
+            true,
+            ThemeColors::new(
                 0x282c34, 0x21252b, 0x2c313c, 0xabb2bf, 0x5c6370, 0x3b4048, 0x323842, 0x61afef,
             ),
-        },
-        ThemeDefinition {
-            name: "Tokyo Night".to_string(),
-            is_dark: true,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "Tokyo Night",
+            true,
+            ThemeColors::new(
                 0x1a1b26, 0x16161e, 0x1f2335, 0xc0caf5, 0x565f89, 0x2a2e44, 0x283457, 0x7aa2f7,
             ),
-        },
-        ThemeDefinition {
-            name: "Tokyo Night Light".to_string(),
-            is_dark: false,
-            colors: ThemeColors::new(
+        ),
+        ThemeDefinition::palette(
+            "Tokyo Night Light",
+            false,
+            ThemeColors::new(
                 0xd5d6db, 0xe1e2e7, 0xcbccd1, 0x343b58, 0x6172b0, 0x9699a3, 0xe1e2e7, 0x34548a,
             ),
-        },
+        ),
     ]
 }
 

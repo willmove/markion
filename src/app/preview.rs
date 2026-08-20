@@ -1436,11 +1436,12 @@ pub(super) fn inline_math_baseline_margin_from_metrics(
 
 fn inline_math_baseline_margin(
     cx: &App,
+    font_family: &SharedString,
     font_size: f32,
     line_height: f32,
     math_descent: Pixels,
 ) -> Pixels {
-    let font_id = cx.text_system().resolve_font(&font(".SystemUIFont"));
+    let font_id = cx.text_system().resolve_font(&font(font_family.clone()));
     let font_size = px(font_size);
     let line_height = px(line_height);
     let font_ascent = cx.text_system().ascent(font_id, font_size);
@@ -1500,7 +1501,13 @@ fn preview_math_atom(
     let end = math_atom_boundary(&authored_range, true);
     let metric_height = image.ascent + image.descent;
     let baseline_margin = inline_metrics.map_or(px(0.), |(font_size, line_height)| {
-        inline_math_baseline_margin(cx, font_size, line_height, image.descent)
+        inline_math_baseline_margin(
+            cx,
+            &app.resolved_font_families.rendered,
+            font_size,
+            line_height,
+            image.descent,
+        )
     });
     div()
         .relative()
@@ -2113,7 +2120,13 @@ fn visual_math_atom(
     };
     let metric_height = image.ascent + image.descent;
     let baseline_margin = inline_metrics.map_or(px(0.), |(font_size, line_height)| {
-        inline_math_baseline_margin(cx, font_size, line_height, image.descent)
+        inline_math_baseline_margin(
+            cx,
+            &app.resolved_font_families.rendered,
+            font_size,
+            line_height,
+            image.descent,
+        )
     });
     div()
         .relative()
@@ -2665,7 +2678,7 @@ pub(super) fn visual_source_island_view(
         .border_1()
         .border_color(rgb(0xcbd5e1))
         .bg(rgb(0xf8fafc))
-        .font_family("JetBrains Mono")
+        .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.source_island_font_size))
         .line_height(px(typography.source_island_line_height))
         .child(VisualEditableText {
@@ -3718,7 +3731,7 @@ pub(super) fn visual_reference_definition_view(
     div()
         .mb_1()
         .text_color(rgb(0x64748b))
-        .font_family("JetBrains Mono")
+        .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.source_island_font_size))
         .line_height(px(typography.source_island_line_height))
         .child(VisualEditableText {
@@ -3945,7 +3958,7 @@ fn visual_code_editor(
         .rounded_md()
         .bg(rgb(0x0f172a))
         .text_color(rgb(0xe2e8f0))
-        .font_family("JetBrains Mono")
+        .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
         .child(code_block_header(app, language, code.to_string(), cx))
@@ -4008,7 +4021,7 @@ fn visual_math_editor(
         .border_color(rgb(0xe2e8f0))
         .bg(rgb(0xf8fafc))
         .p_2()
-        .font_family("JetBrains Mono")
+        .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
         .child(visual_editor_field_element(
@@ -4100,7 +4113,7 @@ fn visual_diagram_editor(
         .border_color(rgb(0xe2e8f0))
         .bg(rgb(0xf8fafc))
         .p_2()
-        .font_family("JetBrains Mono")
+        .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
         .child(code_block_header(app, language, code, cx))
@@ -4775,7 +4788,7 @@ fn code_block_view(
         .rounded_md()
         .bg(rgb(0x0f172a))
         .text_color(rgb(0xe2e8f0))
-        .font_family("JetBrains Mono")
+        .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
         .child(code_block_header(

@@ -482,6 +482,7 @@ impl MarkionApp {
         self.file_tree_query_focused = false;
         self.pending_name_input = None;
         self.input_marked_len = 0;
+        self.tab_context_menu = None;
         match &target {
             FileTreeContextTarget::Workspace => self.selected_tree_path = None,
             FileTreeContextTarget::Directory(path) | FileTreeContextTarget::File(path) => {
@@ -507,6 +508,7 @@ impl MarkionApp {
         self.active_menu = None;
         self.dismiss_visual_block_menu();
         self.file_tree_context_menu = None;
+        self.tab_context_menu = None;
         self.file_tree_query_focused = false;
         self.search_focus = None;
         self.input_marked_len = 0;

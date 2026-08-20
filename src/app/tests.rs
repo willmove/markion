@@ -4,7 +4,7 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 // Only test code in this module classifies file-tree entries by kind; import it
 // here (rather than in `mod.rs`) so non-test release builds stay warning-free
 // under `-D warnings`.
-use markion::FileTreeFileKind;
+use markion::{FileTreeFileKind, ThemeFonts};
 
 #[test]
 fn visual_pinyin_preedit_composes_sorted_utf8_highlights() {
@@ -301,6 +301,15 @@ fn every_application_dropdown_uses_shortcut_aware_rows() {
         .expect("Help menu match arm");
     assert!(help_menu.contains("Msg::ItemCheckForUpdates"));
     assert!(help_menu.contains("Msg::ItemAboutMarkion"));
+    assert!(help_menu.contains("Msg::ItemReportIssue"));
+    assert!(help_menu.contains("Msg::ItemOnlineDocs"));
+    assert!(
+        help_menu.find("Msg::ItemReportIssue").unwrap()
+            < help_menu.find("Msg::ItemAboutMarkion").unwrap()
+            && help_menu.find("Msg::ItemOnlineDocs").unwrap()
+                < help_menu.find("Msg::ItemAboutMarkion").unwrap(),
+        "the external links must precede About in the Help dropdown"
+    );
     assert!(
         !help_menu.contains("Msg::ItemKeyboardShortcuts"),
         "Help must not expose the shortcut reference after it moved to Preferences"
@@ -705,6 +714,54 @@ fn workspace_root_reset_and_stale_scan_checks_are_root_aware() {
     assert!(!scan_result_matches_workspace(&first, &second));
 }
 
+#[gpui::test]
+fn workspace_tree_open_stores_paths_without_verbatim_prefix(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("vault");
+    let note = workspace.join("note.md");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(&note, "# note").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, cx| {
+        app.set_workspace_root(workspace.clone(), cx);
+        app.schedule_file_tree_scan(None, cx);
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        let root_text = app.workspace_root.display().to_string();
+        assert!(!root_text.starts_with(r"\\?\"));
+        assert!(!root_text.starts_with(r"\\?\UNC\"));
+
+        let tree = app.file_tree.as_ref().expect("file tree scanned");
+        let entry_path = tree
+            .entries
+            .iter()
+            .map(|entry| &entry.path)
+            .find(|path| path.ends_with("note.md"))
+            .expect("note entry scanned")
+            .clone();
+        let entry_text = entry_path.display().to_string();
+        assert!(!entry_text.starts_with(r"\\?\"));
+        assert!(!entry_text.starts_with(r"\\?\UNC\"));
+
+        // The tree-open flow is what Copy File Path reads from the tab; the
+        // stored path — and therefore the clipboard string — must be in
+        // normal form.
+        app.open_tree_file_confirmed(entry_path, cx);
+        let stored = app
+            .active_tab()
+            .path()
+            .expect("tab carries the opened path")
+            .display()
+            .to_string();
+        assert!(!stored.starts_with(r"\\?\"));
+        assert!(!stored.starts_with(r"\\?\UNC\"));
+        assert!(stored.ends_with("note.md"));
+    });
+}
+
 #[test]
 fn folder_scan_supports_empty_roots_and_reports_missing_roots() {
     let temp = tempfile::tempdir().unwrap();
@@ -718,6 +775,52 @@ fn folder_scan_supports_empty_roots_and_reports_missing_roots() {
     );
     assert!(tree.entries.is_empty());
     assert!(FileTree::scan(temp.path().join("missing")).is_err());
+}
+
+#[test]
+fn comparable_document_paths_carry_no_verbatim_prefix() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("note.md");
+    std::fs::write(&file, "# note").unwrap();
+
+    let text = comparable_document_path(&file).display().to_string();
+    assert!(!text.starts_with(r"\\?\"));
+    assert!(!text.starts_with(r"\\?\UNC\"));
+}
+
+#[test]
+fn comparable_document_paths_dedupe_non_canonical_inputs() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("notes");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("a.md");
+    std::fs::write(&file, "# a").unwrap();
+
+    let dotted = dir.join(".").join("a.md");
+    assert_eq!(
+        comparable_document_path(&file),
+        comparable_document_path(&dotted)
+    );
+
+    #[cfg(windows)]
+    {
+        let text = comparable_document_path(&file).display().to_string();
+        let mut chars = text.chars();
+        let first = chars.next().expect("canonical path is non-empty");
+        let flipped_case = if first.is_ascii_uppercase() {
+            first.to_ascii_lowercase()
+        } else {
+            first.to_ascii_uppercase()
+        };
+        let variant: String = std::iter::once(flipped_case)
+            .chain(chars)
+            .collect::<String>()
+            .replace('\\', "/");
+        assert_eq!(
+            comparable_document_path(&file),
+            comparable_document_path(std::path::Path::new(&variant))
+        );
+    }
 }
 
 #[test]
@@ -2052,6 +2155,259 @@ fn shortcuts_preferences_renders_in_light_and_dark_themes(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn preferences_panel_bodies_render_with_draggable_scroll_handles_on_both_tabs(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_panel_open = true;
+        app
+    });
+    cx.run_until_parked();
+
+    // General tab: tracked body renders and its handle keeps a scroll offset
+    // (clamped to the laid-out content extent, which the handle enforces).
+    app.update(cx, |app, cx| {
+        app.select_preferences_tab(PreferencesTab::General, cx);
+        assert!(app.preferences_panel_open);
+        assert_eq!(app.preferences_tab, PreferencesTab::General);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let general_y = app.update(cx, |app, _| {
+        let max = f32::from(app.preferences_general_scroll.max_offset().height).max(0.);
+        let y = px(-120f32.min(max));
+        app.preferences_general_scroll.set_offset(point(px(0.), y));
+        y
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.preferences_general_scroll.offset().y, general_y);
+    });
+
+    // Shortcuts tab: both scrollable regions render alongside each other with
+    // independent handles, and all three regions keep their offsets through a
+    // tab switch and back.
+    app.update(cx, |app, cx| {
+        app.select_preferences_tab(PreferencesTab::Shortcuts, cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let (categories_y, actions_y) = app.update(cx, |app, _| {
+        let categories_max =
+            f32::from(app.preferences_categories_scroll.max_offset().height).max(0.);
+        let categories_y = px(-40f32.min(categories_max));
+        app.preferences_categories_scroll
+            .set_offset(point(px(0.), categories_y));
+        let actions_max = f32::from(app.preferences_actions_scroll.max_offset().height).max(0.);
+        let actions_y = px(-200f32.min(actions_max));
+        app.preferences_actions_scroll
+            .set_offset(point(px(0.), actions_y));
+        (categories_y, actions_y)
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        assert_eq!(app.preferences_tab, PreferencesTab::Shortcuts);
+        app.select_preferences_tab(PreferencesTab::General, cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        app.select_preferences_tab(PreferencesTab::Shortcuts, cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.preferences_general_scroll.offset().y, general_y);
+        assert_eq!(
+            app.preferences_categories_scroll.offset().y,
+            categories_y,
+            "categories sidebar must keep its own scroll position"
+        );
+        assert_eq!(
+            app.preferences_actions_scroll.offset().y,
+            actions_y,
+            "action list must keep its own scroll position"
+        );
+    });
+}
+
+#[gpui::test]
+fn preferences_scrollbar_thumbs_drag_their_own_region(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_panel_open = true;
+        app
+    });
+    cx.run_until_parked();
+
+    // Thumb geometry mirrors pane_scrollbar_view: the thumb sits in the
+    // reserved right gutter, `edge inset` from the scrollable's top at rest.
+    // Returns (thumb center x, scrollable top y, thumb height, thumb travel,
+    // max scroll) in window coordinates.
+    let thumb_geometry = |app: &mut MarkionApp, handle: &ScrollHandle| {
+        let _ = app;
+        let bounds = handle.bounds();
+        let viewport = f32::from(bounds.size.height);
+        let max_scroll = f32::from(handle.max_offset().height).max(0.);
+        let track = viewport - 2. * PANE_SCROLLBAR_EDGE_INSET;
+        let thumb_height = (track * viewport / (viewport + max_scroll))
+            .clamp(PANE_SCROLLBAR_MIN_THUMB_HEIGHT, track);
+        let thumb_travel = (track - thumb_height).max(0.);
+        // The thumb's right edge sits 2px in from the scrollable's right edge.
+        let center_x = f32::from(bounds.right()) - 2. - PANE_SCROLLBAR_THUMB_WIDTH / 2.;
+        (
+            center_x,
+            f32::from(bounds.top()),
+            thumb_height,
+            thumb_travel,
+            max_scroll,
+        )
+    };
+
+    // General tab overflows in the default test window, so its thumb renders.
+    app.update(cx, |app, cx| {
+        app.select_preferences_tab(PreferencesTab::General, cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    let (center_x, top, thumb_height, thumb_travel, max_scroll) = app.update(cx, |app, _| {
+        thumb_geometry(app, &app.preferences_general_scroll.clone())
+    });
+    assert!(
+        max_scroll > 1.,
+        "general preferences body must overflow in the test window"
+    );
+
+    // Grab the thumb at its center and drag it halfway down its travel: the
+    // scroll offset follows proportionally.
+    let grab_y = top + PANE_SCROLLBAR_EDGE_INSET + thumb_height / 2.;
+    cx.simulate_mouse_down(
+        point(px(center_x), px(grab_y)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.pane_scrollbar_drag.as_ref().map(|drag| drag.target),
+            Some(PaneScrollTarget::PreferencesGeneral),
+            "grabbing the general thumb must start a general-target drag"
+        );
+    });
+    cx.simulate_event(MouseMoveEvent {
+        position: point(
+            px(center_x),
+            px(top + PANE_SCROLLBAR_EDGE_INSET + thumb_travel / 2. + thumb_height / 2.),
+        ),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let scrolled = f32::from(-app.preferences_general_scroll.offset().y);
+        assert!(
+            (scrolled - max_scroll / 2.).abs() < 1.,
+            "halfway thumb drag should scroll halfway: expected {}, got {scrolled}",
+            max_scroll / 2.
+        );
+    });
+
+    // Dragging above the track clamps back to the top; releasing ends the drag.
+    cx.simulate_event(MouseMoveEvent {
+        position: point(px(center_x), px(top)),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: point(px(center_x), px(top)),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.preferences_general_scroll.offset().y, px(0.));
+        assert!(app.pane_scrollbar_drag.is_none());
+    });
+
+    // Shortcuts tab: switch to the Editing category and attach a capture error
+    // to one row so the action list overflows (the default Files category fits
+    // in the fixed-height panel). The category sidebar still fits and must stay
+    // parked at the top while the action list thumb drags.
+    app.update(cx, |app, cx| {
+        app.select_preferences_tab(PreferencesTab::Shortcuts, cx);
+        app.select_shortcut_category(ShortcutCategory::Editing, cx);
+        app.shortcut_capture = Some(ShortcutCapture {
+            action_id: "bold".to_string(),
+            error: Some(ShortcutCaptureError::NotAssignable),
+        });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // The thumb's geometry reads the scroll handle laid out by the previous
+    // frame, so the first Shortcuts frame after the category switch still has
+    // the fitting geometry and paints no thumb. Render a second frame so the
+    // overflow is reflected in the painted thumb.
+    app.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let (center_x, top, thumb_height, thumb_travel, max_scroll) = app.update(cx, |app, _| {
+        thumb_geometry(app, &app.preferences_actions_scroll.clone())
+    });
+    assert!(
+        max_scroll > 1.,
+        "shortcut action list must overflow in the test window"
+    );
+
+    let grab_y = top + PANE_SCROLLBAR_EDGE_INSET + thumb_height / 2.;
+    cx.simulate_mouse_down(
+        point(px(center_x), px(grab_y)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.pane_scrollbar_drag.as_ref().map(|drag| drag.target),
+            Some(PaneScrollTarget::PreferencesShortcutActions)
+        );
+    });
+    cx.simulate_event(MouseMoveEvent {
+        position: point(
+            px(center_x),
+            px(top + PANE_SCROLLBAR_EDGE_INSET + thumb_travel / 2. + thumb_height / 2.),
+        ),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let scrolled = f32::from(-app.preferences_actions_scroll.offset().y);
+        assert!(
+            (scrolled - max_scroll / 2.).abs() < 1.,
+            "halfway thumb drag should scroll halfway: expected {}, got {scrolled}",
+            max_scroll / 2.
+        );
+        assert_eq!(
+            app.preferences_categories_scroll.offset().y,
+            px(0.),
+            "dragging the action list thumb must not move the category sidebar"
+        );
+    });
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: point(px(center_x), px(grab_y)),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.pane_scrollbar_drag.is_none());
+        app.shortcut_capture = None;
+    });
+}
+
+#[gpui::test]
 fn live_rebind_dispatches_override_and_preserves_core_and_file_tree_keys(cx: &mut TestAppContext) {
     let mut overrides = BTreeMap::new();
     overrides.insert("toggle-sidebar".to_string(), "ctrl-alt-j".to_string());
@@ -2124,6 +2480,8 @@ fn show_shortcuts_opens_preferences_on_shortcuts_tab() {
     let bootstrap_source = include_str!("bootstrap.rs");
     assert!(bootstrap_source.contains("Msg::ItemCheckForUpdates"));
     assert!(bootstrap_source.contains("Msg::ItemAboutMarkion"));
+    assert!(bootstrap_source.contains("Msg::ItemReportIssue"));
+    assert!(bootstrap_source.contains("Msg::ItemOnlineDocs"));
     assert!(
         !bootstrap_source.contains("Msg::ItemKeyboardShortcuts"),
         "the native Help menu must not expose the shortcut reference"
@@ -2176,6 +2534,43 @@ fn list_scrollbar_marks_sync_driver_only_for_preview() {
     assert!(!list_pane_scrollbar_marks_sync_driver(
         PaneScrollTarget::Visual
     ));
+    for target in [
+        PaneScrollTarget::PreferencesGeneral,
+        PaneScrollTarget::PreferencesShortcutCategories,
+        PaneScrollTarget::PreferencesShortcutActions,
+    ] {
+        assert!(
+            !list_pane_scrollbar_marks_sync_driver(target),
+            "preferences scrollbar targets must never mark a sync driver"
+        );
+    }
+}
+
+#[gpui::test]
+fn preferences_scrollbar_targets_are_no_op_for_sync_scroll(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_panel_open = true;
+        app.sync_scroll = true;
+        app
+    });
+    cx.run_until_parked();
+
+    for target in [
+        PaneScrollTarget::PreferencesGeneral,
+        PaneScrollTarget::PreferencesShortcutCategories,
+        PaneScrollTarget::PreferencesShortcutActions,
+    ] {
+        app.update(cx, |app, _| {
+            app.mark_sync_scroll_driver(target);
+            let tab = app.active_tab();
+            assert!(
+                tab.sync_scroll_state.driver_hint.is_none(),
+                "preferences scrollbar drag must not drive sync scroll"
+            );
+            assert!(tab.sync_scroll_state.deferred_driver.is_none());
+        });
+    }
 }
 
 #[test]
@@ -4873,11 +5268,139 @@ fn custom_theme_palette_uses_definition_colors() {
             active_bg: 0x616263,
             active_text: 0x717273,
         },
+        fonts: ThemeFonts::default(),
     };
     let palette = theme_palette_from_definition(&theme);
 
     assert_eq!(palette.app_bg, rgb(0x010203));
     assert_eq!(palette.active_text, rgb(0x717273));
+}
+
+#[gpui::test]
+fn font_family_change_is_presentation_only_and_invalidates_measured_height(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.resolved_font_families.editor, SYSTEM_UI_FONT_FAMILY);
+        assert_eq!(app.resolved_font_families.rendered, SYSTEM_UI_FONT_FAMILY);
+        assert_eq!(app.resolved_font_families.code, DEFAULT_CODE_FONT_FAMILY);
+    });
+
+    // Seed a measured-height cache entry as if a layout pass had run at the
+    // default family.
+    app.update(cx, |app, _| {
+        let tab = app.active_tab_mut();
+        *tab.measured_height_cache.borrow_mut() = Some((
+            MeasuredHeightKey {
+                version: tab.document.version(),
+                wrap_width: px(400.),
+                font_size: px(14.),
+                line_height: px(22.4),
+                font_family: SYSTEM_UI_FONT_FAMILY.into(),
+            },
+            px(1000.),
+        ));
+    });
+
+    app.update(cx, |app, cx| {
+        let version_before = app.active_tab().document.version();
+        let dirty_before = app.active_tab().document.is_dirty();
+        let undo_before = app.active_tab().undo_stack.len();
+
+        // A family-only change (same font size) must invalidate the cached
+        // height without touching the document.
+        app.set_font_family(FontSlot::Editor, Some("Cascadia Code".into()), cx);
+
+        assert_eq!(app.active_tab().document.version(), version_before);
+        assert_eq!(app.active_tab().document.is_dirty(), dirty_before);
+        assert_eq!(app.active_tab().undo_stack.len(), undo_before);
+        assert_eq!(app.resolved_font_families.editor, "Cascadia Code");
+        assert!(
+            app.active_tab().measured_height_cache.borrow().is_none(),
+            "a cached height measured in the old family must not survive"
+        );
+
+        // Clearing back to follow-theme restores the default family.
+        app.set_font_family(FontSlot::Editor, None, cx);
+        assert_eq!(app.resolved_font_families.editor, SYSTEM_UI_FONT_FAMILY);
+    });
+}
+
+#[gpui::test]
+fn font_picker_toggles_and_choice_applies_and_closes(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, cx| {
+        assert!(app.font_picker.is_none());
+
+        // Opening marks the slot; opening it again closes the list.
+        app.toggle_font_picker(FontSlot::Code, cx);
+        assert_eq!(app.font_picker, Some(FontSlot::Code));
+        app.toggle_font_picker(FontSlot::Code, cx);
+        assert_eq!(app.font_picker, None);
+
+        // Opening a different slot switches the open list.
+        app.toggle_font_picker(FontSlot::Editor, cx);
+        app.toggle_font_picker(FontSlot::Code, cx);
+        assert_eq!(app.font_picker, Some(FontSlot::Code));
+
+        // Choosing applies the family, persists the slot state, and closes
+        // the list.
+        app.choose_font_family(FontSlot::Code, Some("Cascadia Code".into()), cx);
+        assert_eq!(app.font_picker, None);
+        assert_eq!(app.resolved_font_families.code, "Cascadia Code");
+        assert_eq!(
+            app.code_font_family.as_deref(),
+            Some("Cascadia Code"),
+            "choosing persists the explicit preference"
+        );
+
+        // The follow-theme entry clears the override.
+        app.toggle_font_picker(FontSlot::Code, cx);
+        app.choose_font_family(FontSlot::Code, None, cx);
+        assert_eq!(app.font_picker, None);
+        assert!(app.code_font_family.is_none());
+        assert_eq!(app.resolved_font_families.code, DEFAULT_CODE_FONT_FAMILY);
+    });
+}
+
+#[gpui::test]
+fn theme_fonts_apply_only_without_explicit_preference(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, cx| {
+        let mut theme = builtin_theme_definitions().remove(0);
+        theme.name = "Typo".to_string();
+        theme.fonts = ThemeFonts {
+            editor: Some("Georgia".to_string()),
+            rendered: Some("Georgia".to_string()),
+            code: Some("Cascadia Code".to_string()),
+        };
+        app.custom_themes.push(theme);
+
+        // No explicit preferences: the theme's fonts apply per slot.
+        app.apply_theme_by_name("Typo", cx);
+        assert_eq!(app.resolved_font_families.editor, "Georgia");
+        assert_eq!(app.resolved_font_families.rendered, "Georgia");
+        assert_eq!(app.resolved_font_families.code, "Cascadia Code");
+
+        // An explicit preference beats the theme for its slot only.
+        app.set_font_family(FontSlot::Rendered, Some("Source Serif 4".into()), cx);
+        assert_eq!(app.resolved_font_families.rendered, "Source Serif 4");
+        assert_eq!(app.resolved_font_families.editor, "Georgia");
+
+        // Returning to follow-theme re-exposes the theme's font.
+        app.set_font_family(FontSlot::Rendered, None, cx);
+        assert_eq!(app.resolved_font_families.rendered, "Georgia");
+
+        // A theme without [fonts] falls back to the built-in defaults.
+        app.apply_theme_by_name("Paper", cx);
+        assert_eq!(app.resolved_font_families.editor, SYSTEM_UI_FONT_FAMILY);
+        assert_eq!(app.resolved_font_families.rendered, SYSTEM_UI_FONT_FAMILY);
+        assert_eq!(app.resolved_font_families.code, DEFAULT_CODE_FONT_FAMILY);
+    });
 }
 
 #[test]
@@ -5797,6 +6320,104 @@ fn workspace_layout_places_sidebar_beside_document_stack_and_scopes_drags() {
 }
 
 #[test]
+fn tab_bar_strip_scrolls_and_pins_actions_instead_of_clipping() {
+    let editing = include_str!("editing.rs");
+    let tab_bar = editing
+        .split_once("pub(super) fn tab_bar_view")
+        .expect("tab bar function")
+        .1
+        .split_once("pub(super) fn cursor_offset")
+        .expect("tab bar function end")
+        .0;
+
+    // The strip is a stateful horizontal scroll container driven by the
+    // app-level handle, so overflowing tabs scroll into reach instead of
+    // being clipped out of view.
+    assert!(tab_bar.contains(".id(\"tab-bar-scroll\")"));
+    assert!(tab_bar.contains(".overflow_x_scroll()"));
+    assert!(tab_bar.contains(".track_scroll(&self.tab_bar_scroll)"));
+    // Plain wheels scroll the strip only because the container scrolls on x
+    // alone; restricting the axis (or also scrolling y) would break that.
+    assert!(!tab_bar.contains("restrict_scroll_to_axis"));
+    assert!(!tab_bar.contains(".overflow_y_scroll()"));
+
+    // Tabs are width-bounded; labels truncate while the close control never
+    // shrinks out of reach.
+    assert!(tab_bar.contains(".max_w(px(DOCUMENT_TAB_MAX_WIDTH))"));
+    assert!(tab_bar.contains(".min_w(px(DOCUMENT_TAB_MIN_WIDTH))"));
+    assert!(tab_bar.contains(".flex_shrink()"));
+    assert!(tab_bar.contains("div().min_w_0().truncate()"));
+    assert!(tab_bar.contains(".flex_shrink_0()"));
+
+    // The dirty marker is a separate element, never baked into the label
+    // string where truncation would swallow it.
+    assert!(!tab_bar.contains("format!(\"{name} *\")"));
+    assert!(tab_bar.contains(".when(dirty, |tab_view|"));
+
+    // Every tab is stateful and carries the full-title/path tooltip.
+    assert!(tab_bar.contains(".id(ElementId::named_usize(\"document-tab\", index))"));
+    assert!(tab_bar.contains(".tooltip("));
+    let tooltip_view = editing
+        .split_once("struct TabTooltip")
+        .expect("tab tooltip view")
+        .1;
+    assert!(tooltip_view.contains("when_some(self.path.clone()"));
+
+    // The "+" button is attached after the scroll container, in the pinned
+    // region outside it, so it stays reachable at any scroll position.
+    let scroll_child = tab_bar
+        .find(".child(document_bar)")
+        .expect("scroll container attached to the band");
+    let new_tab_button = tab_bar
+        .find(".id(\"new-tab-button\")")
+        .expect("new tab button");
+    assert!(
+        scroll_child < new_tab_button,
+        "the \"+\" button must live outside the scroll container"
+    );
+}
+
+#[gpui::test]
+fn tab_activation_paths_request_strip_reveal_of_new_active_tab(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    // Opening a tab (the path behind File → New Tab and file opens) requests
+    // the strip to reveal the appended index.
+    app.update(cx, |app, cx| {
+        app.open_in_new_tab(MarkdownDocument::from_text("second"), cx);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab, 1);
+        assert_eq!(app.last_tab_strip_reveal, Some(1));
+    });
+
+    // Switching requests the newly active index; focusing an already-open
+    // file routes through the same path.
+    app.update(cx, |app, cx| {
+        app.open_in_new_tab(MarkdownDocument::from_text("third"), cx);
+        app.switch_active_tab(0, cx);
+        assert_eq!(app.last_tab_strip_reveal, Some(0));
+    });
+
+    // Re-selecting the active tab issues no request: an undisturbed strip
+    // must stay undisturbed.
+    app.update(cx, |app, cx| {
+        app.last_tab_strip_reveal = None;
+        app.switch_active_tab(0, cx);
+        assert_eq!(app.last_tab_strip_reveal, None);
+    });
+
+    // Closing the active tab requests the tab that takes its place.
+    app.update(cx, |app, cx| {
+        app.switch_active_tab(2, cx);
+        assert_eq!(app.last_tab_strip_reveal, Some(2));
+        app.close_tab_confirmed(cx);
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab, 1);
+        assert_eq!(app.last_tab_strip_reveal, Some(1));
+    });
+}
+
+#[test]
 fn outline_row_metrics_are_compact() {
     assert_eq!(OUTLINE_ROW_GAP, 0.);
     assert!(OUTLINE_ROW_VERTICAL_PADDING * 2. <= 2.);
@@ -6606,6 +7227,7 @@ fn typography_changes_preserve_document_caches_and_list_positions(cx: &mut TestA
                 wrap_width: px(400.),
                 font_size: px(15.),
                 line_height: px(24.),
+                font_family: SYSTEM_UI_FONT_FAMILY.into(),
             },
             px(240.),
         ));
@@ -6677,7 +7299,7 @@ fn typography_changes_preserve_document_caches_and_list_positions(cx: &mut TestA
         let tab = app.active_tab();
         assert_eq!(tab.document.version(), version);
         assert_eq!(tab.selected_range, selection);
-        if let Some((key, _)) = *tab.measured_height_cache.borrow() {
+        if let Some((key, _)) = tab.measured_height_cache.borrow().clone() {
             assert_eq!(key.version, version);
             assert_eq!(key.font_size, px(24.));
         }
@@ -9252,7 +9874,7 @@ fn inline_html_image_renders_mixed_path_including_a_wrapped_badges(cx: &mut Test
         window.activate_window();
     });
     cx.run_until_parked();
-    app.update(cx, |app, _| {
+    app.update(cx, |_app, _| {
         let builds = VISUAL_HTML_IMAGE_ATOM_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
         assert!(
             builds > before,
@@ -9772,4 +10394,484 @@ fn status_bar_layout_is_single_row_clipped_and_keeps_io_out_of_render() {
     let status_source = include_str!("status_bar.rs");
     assert!(status_source.contains("background_executor()"));
     assert!(status_source.contains("Timer::after(GIT_BRANCH_REFRESH_INTERVAL)"));
+}
+
+// --- Tab-bar context menu ---------------------------------------------------
+
+/// Only the file-backed items require the target tab to have a path; the
+/// close family must stay available on untitled tabs.
+#[test]
+fn tab_context_actions_require_path_only_for_file_backed_items() {
+    for action in [
+        TabContextAction::CloseTab,
+        TabContextAction::CloseOthers,
+        TabContextAction::CloseToTheRight,
+    ] {
+        assert!(
+            tab_context_action_enabled(action, false),
+            "{action:?} must be enabled on untitled tabs"
+        );
+    }
+    for action in [
+        TabContextAction::Rename,
+        TabContextAction::CopyPath,
+        TabContextAction::RevealInFileManager,
+    ] {
+        assert!(
+            !tab_context_action_enabled(action, false),
+            "{action:?} must be disabled on untitled tabs"
+        );
+        assert!(
+            tab_context_action_enabled(action, true),
+            "{action:?} must be enabled on file-backed tabs"
+        );
+    }
+}
+
+/// The tab strip must register both the right-click menu opener and the
+/// middle-click close companion (mirrors the structural layout tests above).
+#[test]
+fn tab_bar_registers_context_and_middle_click_handlers() {
+    let editing_source = include_str!("editing.rs");
+    let tab_bar = editing_source
+        .split_once("pub(super) fn tab_bar_view")
+        .expect("tab_bar_view")
+        .1;
+    assert!(tab_bar.contains("MouseButton::Right"));
+    assert!(tab_bar.contains("MouseButton::Middle"));
+    assert!(tab_bar.contains("show_tab_context_menu"));
+}
+
+/// Menu identity snapshot: same path + recovery id matches; a different tab
+/// state at the same index (untitled sibling or replacement) does not.
+#[test]
+fn tab_context_target_identity_distinguishes_tabs() {
+    let a = EditorTab::new(MarkdownDocument::from_text("A"));
+    let b = EditorTab::new(MarkdownDocument::from_text("B"));
+    // Same untitled shape (path None) but different recovery ids.
+    let target = TabContextTarget::capture(0, &a);
+    assert!(target.matches(&a));
+    assert!(!target.matches(&b));
+
+    // Image tabs match by path.
+    let path = PathBuf::from("img/cover.png");
+    let image = EditorTab::new_image(path.clone(), PreviewImageKey::from_local_path(&path));
+    let image_target = TabContextTarget::capture(1, &image);
+    assert!(image_target.matches(&image));
+    assert!(!image_target.matches(&a));
+}
+
+#[gpui::test]
+fn tab_context_menu_open_close_and_exclusivity(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("A")),
+            EditorTab::new(MarkdownDocument::from_text("B")),
+        ];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.show_tab_context_menu(1, Point::new(px(10.), px(10.)), cx);
+        let menu = app.tab_context_menu.as_ref().expect("menu open");
+        assert_eq!(menu.target.index, 1);
+        assert!(menu.target.path.is_none());
+
+        // Exclusivity: opening any sibling menu closes the tab menu, and the
+        // tab menu closes the siblings.
+        app.show_file_tree_context_menu(
+            FileTreeContextTarget::Workspace,
+            Point::new(px(0.), px(0.)),
+            cx,
+        );
+        assert!(app.tab_context_menu.is_none());
+        assert!(app.file_tree_context_menu.is_some());
+
+        app.show_tab_context_menu(1, Point::new(px(10.), px(10.)), cx);
+        assert!(app.file_tree_context_menu.is_none());
+        assert!(app.tab_context_menu.is_some());
+
+        app.show_preview_context_menu(Point::new(px(5.), px(5.)), None, cx);
+        assert!(app.tab_context_menu.is_none());
+        assert!(app.preview_context_menu.is_some());
+    });
+
+    // Click-away (the close_menu handler) closes the menu without dispatch.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(1, Point::new(px(10.), px(10.)), cx);
+            app.close_menu(
+                &MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: Point::new(px(0.), px(0.)),
+                    modifiers: Modifiers::none(),
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    app.update(cx, |app, _| {
+        assert!(app.tab_context_menu.is_none());
+    });
+}
+
+#[gpui::test]
+fn tab_context_close_tab_switches_then_closes_clicked_tab(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("A")),
+            EditorTab::new(MarkdownDocument::from_text("B")),
+            EditorTab::new(MarkdownDocument::from_text("C")),
+        ];
+        app
+    });
+
+    // Clean close of a background tab: no dialog, clicked tab activated then
+    // removed, active falls back to the previous neighbor.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(2, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::CloseTab, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab().document.text(), "B");
+        assert!(app.tab_context_menu.is_none());
+    });
+
+    // Dirty close asks first; Cancel keeps the tab, Discard closes it.
+    app.update(cx, |app, _| {
+        app.active_tab_mut().document.replace_range(0..0, "dirty ");
+    });
+    let (discard_label, cancel_label) = app.update(cx, |app, _| {
+        (
+            t(app.language, Msg::DialogButtonDiscard).to_string(),
+            t(app.language, Msg::DialogButtonCancel).to_string(),
+        )
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(app.active_tab, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::CloseTab, window, cx);
+        });
+    });
+    cx.simulate_prompt_answer(&cancel_label);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 2, "cancel keeps the dirty tab open");
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(app.active_tab, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::CloseTab, window, cx);
+        });
+    });
+    cx.simulate_prompt_answer(&discard_label);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab().document.text(), "A");
+    });
+}
+
+#[gpui::test]
+fn close_other_tabs_cleans_silently_keeps_dirty_behind_dialog(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        let mut dirty_c = EditorTab::new(MarkdownDocument::from_text("C"));
+        dirty_c.document.replace_range(0..0, "unsaved ");
+        let mut dirty_d = EditorTab::new(MarkdownDocument::from_text("D"));
+        dirty_d.document.replace_range(0..0, "unsaved ");
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("A")),
+            EditorTab::new(MarkdownDocument::from_text("B")),
+            dirty_c,
+            dirty_d,
+        ];
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(0, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::CloseOthers, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        // Clean sibling B closed immediately; both dirty tabs kept for the
+        // dialog; the clicked tab survived and stays active.
+        assert_eq!(app.tabs.len(), 3);
+        assert_eq!(app.active_tab().document.text(), "A");
+        assert!(
+            app.tabs
+                .iter()
+                .any(|tab| tab.document.text() == "unsaved C")
+        );
+        assert!(
+            app.tabs
+                .iter()
+                .any(|tab| tab.document.text() == "unsaved D")
+        );
+    });
+
+    let keep_label = app.update(cx, |app, _| {
+        t(app.language, Msg::DialogButtonKeepOpen).to_string()
+    });
+    cx.simulate_prompt_answer(&keep_label);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 3, "keep-open leaves the dirty tabs");
+        assert_eq!(
+            app.status,
+            t(app.language, Msg::StatusCanceled),
+            "cancel is user-visible"
+        );
+    });
+
+    let discard_label = app.update(cx, |app, _| {
+        t(app.language, Msg::DialogButtonDiscardAndCloseTabs).to_string()
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(0, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::CloseOthers, window, cx);
+        });
+    });
+    cx.simulate_prompt_answer(&discard_label);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab().document.text(), "A");
+    });
+}
+
+#[gpui::test]
+fn close_other_tabs_all_clean_closes_without_dialog(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("A")),
+            EditorTab::new(MarkdownDocument::from_text("B")),
+            EditorTab::new(MarkdownDocument::from_text("C")),
+        ];
+        app.active_tab = 2;
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(2, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::CloseOthers, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 1);
+        // Removals left of the clicked tab must follow the active index.
+        assert_eq!(app.active_tab, 0);
+        assert_eq!(app.active_tab().document.text(), "C");
+    });
+}
+
+#[gpui::test]
+fn close_tabs_to_the_right_scopes_past_the_anchor(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("A")),
+            EditorTab::new(MarkdownDocument::from_text("B")),
+            EditorTab::new(MarkdownDocument::from_text("C")),
+            EditorTab::new(MarkdownDocument::from_text("D")),
+        ];
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(1, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::CloseToTheRight, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab().document.text(), "B");
+        assert!(
+            app.tabs
+                .iter()
+                .all(|tab| matches!(tab.document.text(), "A" | "B"))
+        );
+    });
+}
+
+#[gpui::test]
+fn tab_context_menu_stale_target_cancels_instead_of_closing_the_wrong_tab(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text("A")),
+            EditorTab::new(MarkdownDocument::from_text("B")),
+            EditorTab::new(MarkdownDocument::from_text("C")),
+        ];
+        app
+    });
+
+    // Index out of range: the captured tab was removed while the menu was open.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(2, Point::new(px(10.), px(10.)), cx);
+            app.tabs.remove(2);
+            app.handle_tab_context_action(TabContextAction::CloseTab, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 2);
+        assert!(app.tab_context_menu.is_none());
+        assert_eq!(app.status, t(app.language, Msg::StatusCanceled));
+    });
+
+    // Same index, different tab state (e.g. the tab was replaced in place).
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(1, Point::new(px(10.), px(10.)), cx);
+            app.tabs[1] = EditorTab::new(MarkdownDocument::from_text("replacement"));
+            app.handle_tab_context_action(TabContextAction::CloseTab, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(
+            app.tabs[1].document.text(),
+            "replacement",
+            "identity mismatch must not close the replacement tab"
+        );
+    });
+}
+
+#[gpui::test]
+fn tab_context_rename_reuses_file_pipeline_and_refuses_dirty(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let path = root.join("doc.md");
+    fs::write(&path, "# One").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&path).unwrap()),
+            EditorTab::new(MarkdownDocument::from_text("scratch")),
+        ];
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app
+    });
+
+    // Rename on a clean file-backed tab opens the prompt prefilled with the
+    // file name and targeting the tab's path.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(0, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::Rename, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        let pending = app.pending_name_input.as_ref().expect("prompt open");
+        assert_eq!(pending.kind, PendingNameKind::Rename);
+        assert_eq!(pending.buffer, "doc.md");
+        assert_eq!(pending.target.as_deref(), Some(path.as_path()));
+        assert!(app.tab_context_menu.is_none());
+    });
+
+    // Commit: file renamed on disk, open tab re-pointed at the new path.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.pending_name_input.as_mut().unwrap().buffer = "renamed.md".to_string();
+            app.confirm_pending_name(&ConfirmPendingName, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        let new_path = root.join("renamed.md");
+        assert!(!path.exists());
+        assert!(new_path.exists());
+        assert_eq!(app.tabs[0].path(), Some(new_path.as_path()));
+        assert_eq!(app.tabs[0].document.text(), "# One");
+        assert_eq!(app.tabs.len(), 2, "the untitled sibling is untouched");
+    });
+
+    // Dirty tab refuses rename with the save-first status.
+    app.update(cx, |app, _| {
+        app.active_tab = 0;
+        app.tabs[0].document.replace_range(0..0, "dirty ");
+    });
+    let save_first = app.update(cx, |app, _| t(app.language, Msg::StatusSaveBeforeRename));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(0, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::Rename, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.status, save_first);
+        assert!(app.pending_name_input.is_none());
+    });
+}
+
+#[gpui::test]
+fn tab_context_copy_path_reports_status_and_skips_untitled(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.md");
+    fs::write(&path, "plain").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&path).unwrap()),
+            EditorTab::new(MarkdownDocument::from_text("untitled")),
+        ];
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(0, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::CopyPath, window, cx);
+        });
+    });
+    let expected = app.update(cx, |app, _| {
+        tf(
+            app.language,
+            Msg::StatusCopiedPath,
+            &[&path.display().to_string()],
+        )
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.status, expected);
+        assert!(app.tab_context_menu.is_none());
+    });
+
+    // Untitled tab: the disabled action never dispatches state changes.
+    let status_before = app.update(cx, |app, _| app.status.clone());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_tab_context_menu(1, Point::new(px(10.), px(10.)), cx);
+            app.handle_tab_context_action(TabContextAction::CopyPath, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.status, status_before);
+        assert!(app.tab_context_menu.is_none());
+    });
 }

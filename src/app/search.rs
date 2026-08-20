@@ -254,6 +254,28 @@ impl MarkionApp {
         cx.notify();
     }
 
+    pub(super) fn report_issue(
+        &mut self,
+        _: &ReportIssue,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.open_url(GITHUB_ISSUES_URL);
+        self.active_menu = None;
+        cx.notify();
+    }
+
+    pub(super) fn open_online_docs(
+        &mut self,
+        _: &OpenOnlineDocs,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.open_url(GITHUB_DOCS_URL);
+        self.active_menu = None;
+        cx.notify();
+    }
+
     pub(super) fn show_shortcuts(
         &mut self,
         _: &ShowShortcuts,
@@ -272,6 +294,7 @@ impl MarkionApp {
         self.dismiss_visual_block_menu();
         self.file_tree_context_menu = None;
         self.preview_context_menu = None;
+        self.tab_context_menu = None;
         self.status = t(self.language, Msg::StatusKeyboardShortcuts).into();
         self.active_menu = None;
         window.focus(&self.preferences_panel_focus);

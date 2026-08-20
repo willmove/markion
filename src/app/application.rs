@@ -48,7 +48,7 @@ impl MarkionApp {
                 (!name.is_empty()).then(|| name.to_string())
             })
             .unwrap_or_else(|| "Paper".to_string());
-        Self {
+        let app = Self {
             tabs: vec![initial_tab],
             active_tab: 0,
             focus_handle: cx.focus_handle(),
@@ -69,6 +69,9 @@ impl MarkionApp {
             preferences_panel_open: false,
             preferences_tab: PreferencesTab::default(),
             preferences_panel_focus: cx.focus_handle(),
+            preferences_general_scroll: ScrollHandle::new(),
+            preferences_categories_scroll: ScrollHandle::new(),
+            preferences_actions_scroll: ScrollHandle::new(),
             shortcut_platform: ShortcutPlatform::current(),
             shortcut_category: ShortcutCategory::Files,
             shortcut_overrides: sanitized_shortcut_overrides(&preferences.shortcut_overrides),
@@ -80,6 +83,12 @@ impl MarkionApp {
             editor_font_size: preferences.editor_font_size,
             rendered_font_size: preferences.rendered_font_size,
             paragraph_spacing: preferences.paragraph_spacing,
+            editor_font_family: preferences.editor_font_family,
+            rendered_font_family: preferences.rendered_font_family,
+            code_font_family: preferences.code_font_family,
+            resolved_font_families: ResolvedFontFamilies::default(),
+            font_picker: None,
+            installed_font_names: Vec::new(),
             heading_menu_max_level: preferences.heading_menu_max_level,
             sync_scroll: preferences.sync_scroll,
             show_hidden_files: preferences.show_hidden_files,
@@ -98,12 +107,16 @@ impl MarkionApp {
             file_tree_query_focused: false,
             file_tree_scroll: ScrollHandle::new(),
             outline_scroll: ScrollHandle::new(),
+            tab_bar_scroll: ScrollHandle::new(),
+            #[cfg(test)]
+            last_tab_strip_reveal: None,
             input_marked_len: 0,
             selected_tree_path: None,
             collapsed_tree_paths: HashSet::new(),
             file_tree_needs_initial_collapse: false,
             file_tree_context_menu: None,
             preview_context_menu: None,
+            tab_context_menu: None,
             pending_name_input: None,
             pending_image_import: None,
             link_editor: None,
@@ -128,7 +141,12 @@ impl MarkionApp {
             diagram_cache: DiagramCache::new(DIAGRAM_CACHE_CAPACITY),
             preview_image_cache: PreviewImageCache::new(PREVIEW_IMAGE_CACHE_CAPACITY),
             math_cache: MathCache::new(MATH_CACHE_CAPACITY),
-        }
+        };
+        // Resolve per-plane font families once from the loaded preferences
+        // and the initial theme before the first render.
+        let mut app = app;
+        app.recompute_resolved_font_families();
+        app
     }
 
     /// The currently active tab (read access).
@@ -198,6 +216,10 @@ impl MarkionApp {
             }
         }
         self.active_tab = index;
+        if previous != index {
+            self.reveal_active_tab_in_strip();
+        }
+        self.tab_context_menu = None;
         self.slash_commands = None;
         self.dismissed_slash_query = None;
         self.dismiss_visual_block_menu();
@@ -217,6 +239,18 @@ impl MarkionApp {
         self.sync_and_persist_session();
         self.sync_git_branch_context(cx);
         cx.notify();
+    }
+
+    /// Ask the tab strip to scroll the active tab fully into view with the
+    /// minimal scroll amount. GPUI's `FirstVisible` strategy makes this a
+    /// no-op when the tab is already visible, and the pending reveal is
+    /// consumed by the strip's next layout pass (callers already notify).
+    pub(super) fn reveal_active_tab_in_strip(&mut self) {
+        self.tab_bar_scroll.scroll_to_item(self.active_tab);
+        #[cfg(test)]
+        {
+            self.last_tab_strip_reveal = Some(self.active_tab);
+        }
     }
 
     pub(super) fn begin_preview_selection(
@@ -758,6 +792,7 @@ impl MarkionApp {
         }
         self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
+        self.tab_context_menu = None;
         if self.active_tab().is_image() {
             self.search_visible = false;
             self.replace_visible = false;
@@ -772,6 +807,7 @@ impl MarkionApp {
             self.current_search_index = None;
         }
         self.sync_git_branch_context(cx);
+        self.reveal_active_tab_in_strip();
         cx.notify();
     }
 
@@ -811,6 +847,8 @@ impl MarkionApp {
             let _ = delete_recovery_file(recovery);
         }
         self.tabs[active] = tab;
+        // The replaced tab no longer exists; any menu targeting it is stale.
+        self.tab_context_menu = None;
         if self.active_tab().is_image() {
             self.search_visible = false;
             self.replace_visible = false;
@@ -1217,6 +1255,9 @@ impl MarkionApp {
             editor_font_size: self.editor_font_size,
             rendered_font_size: self.rendered_font_size,
             paragraph_spacing: self.paragraph_spacing,
+            editor_font_family: self.editor_font_family.clone(),
+            rendered_font_family: self.rendered_font_family.clone(),
+            code_font_family: self.code_font_family.clone(),
             heading_menu_max_level: self.heading_menu_max_level,
             sync_scroll: self.sync_scroll,
             show_hidden_files: self.show_hidden_files,
@@ -1296,6 +1337,12 @@ impl MarkionApp {
             .cloned();
         // And the legacy `theme` enum, resolved from the built-in six only.
         self.theme = AppTheme::from_name(&resolved.name).unwrap_or(AppTheme::Paper);
+        // A new theme may carry different `[fonts]` contributions; re-resolve
+        // and invalidate typography only when an effective family changed.
+        let previous_fonts = self.resolved_font_families.clone();
+        if self.recompute_resolved_font_families() != previous_fonts {
+            self.refresh_typography_measurements(true, true);
+        }
         self.status = self.trf(Msg::StatusTheme, &[&self.theme_label()]);
         self.persist_preferences();
         cx.notify();

@@ -11,7 +11,7 @@ use std::{fs, io, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{ThemeColors, ThemeDefinition};
+use crate::model::{ThemeColors, ThemeDefinition, ThemeFonts};
 use crate::storage::preferences::parse_preference_bool;
 
 /// Fallback palette used when a TOML theme omits a `[colors]` key (or the
@@ -44,6 +44,9 @@ fn default_colors() -> ThemeColors {
 /// app_bg = "#10131a"
 /// panel_bg = "#171b24"
 /// # ... 8 keys
+///
+/// [fonts]        # optional; every key optional
+/// rendered = "Georgia"
 /// ```
 #[derive(Serialize, Deserialize)]
 struct ThemeFile {
@@ -52,6 +55,8 @@ struct ThemeFile {
     is_dark: bool,
     #[serde(default)]
     colors: ThemeColorsFile,
+    #[serde(default)]
+    fonts: ThemeFontsFile,
 }
 
 /// TOML `[colors]` sub-table. Every key defaults so partial files load.
@@ -127,6 +132,42 @@ mod color_opt {
     }
 }
 
+/// TOML `[fonts]` sub-table. Every key is optional; `None` (or an empty
+/// string) means the theme specifies no font for that slot.
+#[derive(Serialize, Deserialize, Default)]
+struct ThemeFontsFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    editor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rendered: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+}
+
+impl ThemeFontsFile {
+    fn from_model(fonts: &ThemeFonts) -> Self {
+        Self {
+            editor: normalize_theme_font(fonts.editor.as_deref()),
+            rendered: normalize_theme_font(fonts.rendered.as_deref()),
+            code: normalize_theme_font(fonts.code.as_deref()),
+        }
+    }
+
+    fn into_model(self) -> ThemeFonts {
+        ThemeFonts {
+            editor: normalize_theme_font(self.editor.as_deref()),
+            rendered: normalize_theme_font(self.rendered.as_deref()),
+            code: normalize_theme_font(self.code.as_deref()),
+        }
+    }
+}
+
+/// Empty or whitespace-only family names are treated as absent so a
+/// hand-edited partial `[fonts]` table behaves like the key being missing.
+fn normalize_theme_font(value: Option<&str>) -> Option<String> {
+    crate::model::normalize_font_family(value)
+}
+
 impl From<ThemeFile> for ThemeDefinition {
     fn from(file: ThemeFile) -> Self {
         ThemeDefinition {
@@ -142,6 +183,7 @@ impl From<ThemeFile> for ThemeDefinition {
                 active_bg: file.colors.active_bg,
                 active_text: file.colors.active_text,
             },
+            fonts: file.fonts.into_model(),
         }
     }
 }
@@ -161,6 +203,7 @@ impl From<ThemeDefinition> for ThemeFile {
                 active_bg: theme.colors.active_bg,
                 active_text: theme.colors.active_text,
             },
+            fonts: ThemeFontsFile::from_model(&theme.fonts),
         }
     }
 }
@@ -351,6 +394,8 @@ pub fn parse_legacy_theme_definition(text: &str) -> io::Result<ThemeDefinition> 
         name,
         is_dark,
         colors,
+        // The legacy key=value format never carried fonts.
+        fonts: ThemeFonts::default(),
     })
 }
 

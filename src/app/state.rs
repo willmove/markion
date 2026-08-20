@@ -252,13 +252,15 @@ pub(super) fn boundary_scan_start(text: &str, offset: usize) -> usize {
 
 /// Cache key for the editor's measured wrapped height (see
 /// `EditorTab::measured_height_cache`): the height only changes when one of
-/// these inputs does.
-#[derive(Clone, Copy, PartialEq)]
+/// these inputs does. The font family participates so switching fonts at the
+/// same size can never reuse a cached height measured in the old font.
+#[derive(Clone, PartialEq)]
 pub(super) struct MeasuredHeightKey {
     pub(super) version: u64,
     pub(super) wrap_width: Pixels,
     pub(super) font_size: Pixels,
     pub(super) line_height: Pixels,
+    pub(super) font_family: SharedString,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1635,8 +1637,14 @@ fn next_recovery_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Normal-form canonical path used as the app's single path-identity boundary
+/// (tab dedupe, workspace containment) and as the path stored on workspace
+/// roots, file-tree entries, sessions, and recent files. The result never
+/// carries the Windows verbatim `\\?\` / `\\?\UNC\` prefix unless the path
+/// genuinely requires extended-length syntax; paths that cannot be
+/// canonicalized fall back to the input unchanged.
 pub(super) fn comparable_document_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 pub(super) fn path_is_within_workspace(root: &Path, path: &Path) -> bool {

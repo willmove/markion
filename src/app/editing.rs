@@ -162,6 +162,7 @@ impl MarkionApp {
         self.slash_commands = None;
         self.preview_context_menu = None;
         self.file_tree_context_menu = None;
+        self.tab_context_menu = None;
         self.active_menu = None;
         self.link_editor = None;
         cx.notify();
@@ -1219,6 +1220,7 @@ impl MarkionApp {
         self.file_tree_context_menu = None;
         self.pending_name_input = None;
         self.dismiss_visual_block_menu();
+        self.tab_context_menu = None;
         self.active_menu = if self.active_menu == Some(menu) {
             None
         } else {
@@ -1269,6 +1271,7 @@ impl MarkionApp {
         if self.active_menu.is_some()
             || self.file_tree_context_menu.is_some()
             || self.preview_context_menu.is_some()
+            || self.tab_context_menu.is_some()
             || self.pending_name_input.is_some()
             || self.block_menu.is_some()
         {
@@ -1276,6 +1279,7 @@ impl MarkionApp {
             self.open_recent_submenu_open = false;
             self.file_tree_context_menu = None;
             self.preview_context_menu = None;
+            self.tab_context_menu = None;
             self.pending_name_input = None;
             self.dismiss_visual_block_menu();
             cx.notify();
@@ -1290,6 +1294,7 @@ impl MarkionApp {
     ) {
         self.active_menu = None;
         self.file_tree_context_menu = None;
+        self.tab_context_menu = None;
         self.dismiss_visual_block_menu();
         // Pane chrome and selectable runs may both handle the same right-click.
         // Prefer a resolved link over a later `None` from the pane surface.
@@ -1302,6 +1307,121 @@ impl MarkionApp {
             self.preview_context_menu = Some(PreviewContextMenu { position, link_url });
         }
         cx.notify();
+    }
+
+    /// Open the tab-bar context menu for the tab at `index`. The tab's
+    /// identity is captured alongside the index so a dispatch after the tab
+    /// vector mutated cancels instead of acting on the wrong tab.
+    pub(super) fn show_tab_context_menu(
+        &mut self,
+        index: usize,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let target = TabContextTarget::capture(index, tab);
+        self.active_menu = None;
+        self.file_tree_context_menu = None;
+        self.preview_context_menu = None;
+        self.dismiss_visual_block_menu();
+        self.pending_name_input = None;
+        self.tab_context_menu = Some(TabContextMenu { target, position });
+        cx.notify();
+    }
+
+    /// Dispatch a tab context-menu action. Switch-then-operate: the clicked
+    /// tab becomes active before the action runs (the `×` button idiom). The
+    /// captured target identity is re-validated first — the menu can stay
+    /// open across tab mutations, and a stale index must cancel instead of
+    /// acting on whatever tab now sits at that position.
+    pub(super) fn handle_tab_context_action(
+        &mut self,
+        action: TabContextAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = self.tab_context_menu.take() else {
+            return;
+        };
+        let target = menu.target;
+        if !self
+            .tabs
+            .get(target.index)
+            .is_some_and(|tab| target.matches(tab))
+        {
+            self.active_menu = None;
+            self.status = t(self.language, Msg::StatusCanceled).into();
+            cx.notify();
+            return;
+        }
+        let index = target.index;
+        match action {
+            TabContextAction::CloseTab => {
+                self.switch_active_tab(index, cx);
+                self.close_tab(&CloseTab, window, cx);
+            }
+            TabContextAction::CloseOthers => {
+                self.switch_active_tab(index, cx);
+                self.close_other_tabs(index, window, cx);
+            }
+            TabContextAction::CloseToTheRight => {
+                self.switch_active_tab(index, cx);
+                self.close_tabs_to_the_right(index, window, cx);
+            }
+            TabContextAction::Rename => {
+                let Some(path) = target.path.clone() else {
+                    return;
+                };
+                self.switch_active_tab(index, cx);
+                // Same rule as the file-tree rename: refuse while dirty so
+                // unsaved edits cannot be lost to a reopen from the new path.
+                if self.active_tab().is_dirty() {
+                    self.status = t(self.language, Msg::StatusSaveBeforeRename).into();
+                    cx.notify();
+                    return;
+                }
+                let parent = path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| self.workspace_root.clone());
+                let file_name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.selected_tree_path = Some(path.clone());
+                self.open_name_prompt(PendingNameKind::Rename, parent, Some(path), &file_name, cx);
+            }
+            TabContextAction::CopyPath => {
+                let Some(path) = target.path.clone() else {
+                    return;
+                };
+                let display = path.display().to_string();
+                cx.write_to_clipboard(ClipboardItem::new_string(display.clone()));
+                self.status = self.trf(Msg::StatusCopiedPath, &[&display]);
+                cx.notify();
+            }
+            TabContextAction::RevealInFileManager => {
+                let Some(path) = target.path.clone() else {
+                    return;
+                };
+                match reveal_in_system_file_manager(&path, true) {
+                    Ok(()) => {
+                        self.status = self.trf(
+                            Msg::StatusShownInFileManager,
+                            &[&path.display().to_string()],
+                        );
+                    }
+                    Err(err) => {
+                        self.status =
+                            self.trf(Msg::StatusShowInFileManagerFailed, &[&err.to_string()]);
+                    }
+                }
+                cx.notify();
+            }
+        }
     }
 
     pub(super) fn select_all_preview_text(&mut self, cx: &mut Context<Self>) {
@@ -2091,24 +2211,32 @@ impl MarkionApp {
             return div();
         }
         let active = self.active_tab;
+        // The strip scrolls horizontally instead of clipping, so tabs beyond
+        // the available width stay reachable. A plain vertical wheel over an
+        // x-only scroll container scrolls it (GPUI routes the delta for us).
         let document_bar = div()
+            .id("tab-bar-scroll")
             .h_full()
             .flex_1()
             .min_w_0()
             .px_2()
             .flex()
             .items_end()
-            .gap_1();
-        let document_bar = document_bar
-            .children(self.tabs.iter().enumerate().map(|(index, tab)| {
+            .gap_1()
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_bar_scroll);
+        let document_bar =
+            document_bar.children(self.tabs.iter().enumerate().map(|(index, tab)| {
                 let is_active = index == active;
                 let name = tab.title();
                 let dirty = tab.is_dirty();
-                let label: SharedString = if dirty {
-                    format!("{name} *").into()
-                } else {
-                    name.into()
-                };
+                let label: SharedString = name.clone().into();
+                // Tooltip data must be captured separately from the truncated
+                // label: it restores the full title (and path) on hover.
+                let tooltip_title: SharedString = name.into();
+                let tooltip_path: Option<SharedString> =
+                    tab.path().map(|path| path.display().to_string().into());
+                let tooltip_palette = palette;
                 // Theme-driven so tabs stay legible on dark palettes (the previous
                 // hard-coded light hexes rendered white tabs with light text).
                 let bg = if is_active {
@@ -2132,6 +2260,18 @@ impl MarkionApp {
                     palette.active_bg
                 };
                 div()
+                    .id(ElementId::named_usize("document-tab", index))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| TabTooltip {
+                            palette: tooltip_palette,
+                            title: tooltip_title.clone(),
+                            path: tooltip_path.clone(),
+                        })
+                        .into()
+                    })
+                    .max_w(px(DOCUMENT_TAB_MAX_WIDTH))
+                    .min_w(px(DOCUMENT_TAB_MIN_WIDTH))
+                    .flex_shrink()
                     .px_2()
                     .py_1()
                     .rounded_t_md()
@@ -2159,11 +2299,47 @@ impl MarkionApp {
                             }
                         }),
                     )
-                    .child(label)
+                    .on_mouse_up(
+                        MouseButton::Right,
+                        cx.listener(move |app, event: &MouseUpEvent, _window, cx| {
+                            if index < app.tabs.len() {
+                                app.show_tab_context_menu(index, event.position, cx);
+                            }
+                        }),
+                    )
+                    .on_mouse_up(
+                        // Middle-click closes, mirroring the browser/editor
+                        // convention: switch-then-close, exactly like `×`.
+                        MouseButton::Middle,
+                        cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                            if index < app.tabs.len() {
+                                app.switch_active_tab(index, cx);
+                                app.close_tab(&CloseTab, window, cx);
+                            }
+                        }),
+                    )
+                    .child(
+                        // Truncating wrapper bounds long titles to the tab's
+                        // maximum width; the close control and dirty marker
+                        // below are flex-shrink-0 so they survive it.
+                        div().min_w_0().truncate().child(label),
+                    )
+                    .when(dirty, |tab_view| {
+                        // Unsaved state gets its own non-shrinking element so
+                        // label truncation can never hide it.
+                        tab_view.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(10.))
+                                .text_color(text_color)
+                                .child("•"),
+                        )
+                    })
                     .child(
                         div()
                             .ml_1()
                             .px_1()
+                            .flex_shrink_0()
                             .text_size(px(11.))
                             .cursor_pointer()
                             .hover(move |style| style.bg(border))
@@ -2179,27 +2355,7 @@ impl MarkionApp {
                             )
                             .child("×"),
                     )
-            }))
-            .child(
-                // Trailing "+" opens a fresh empty tab (mirrors File → New Tab).
-                div()
-                    .id("new-tab-button")
-                    .ml_1()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .text_size(px(15.))
-                    .text_color(palette.muted)
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(palette.active_bg))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(move |app, _: &MouseUpEvent, window, cx| {
-                            app.new_tab(&NewTab, window, cx);
-                        }),
-                    )
-                    .child("+"),
-            );
+            }));
 
         div()
             .h(px(document_tab_band_height(self.tabs.len())))
@@ -2208,6 +2364,36 @@ impl MarkionApp {
             .bg(palette.panel_bg)
             .flex()
             .child(document_bar)
+            // Pinned action region outside the scroll container: the "+" must
+            // stay reachable no matter how far the strip is scrolled.
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .h_full()
+                    .flex()
+                    .items_end()
+                    .pr_2()
+                    .child(div().w(px(1.)).h(px(16.)).mb_2().mr_2().bg(palette.border))
+                    .child(
+                        // Trailing "+" opens a fresh empty tab (mirrors File → New Tab).
+                        div()
+                            .id("new-tab-button")
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_size(px(15.))
+                            .text_color(palette.muted)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(palette.active_bg))
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                                    app.new_tab(&NewTab, window, cx);
+                                }),
+                            )
+                            .child("+"),
+                    ),
+            )
     }
 
     pub(super) fn cursor_offset(&self) -> usize {
@@ -2596,5 +2782,37 @@ impl MarkionApp {
 
     pub(super) fn next_boundary(&self, offset: usize) -> usize {
         self.active_tab().next_boundary(offset)
+    }
+}
+
+/// Hover tooltip for a document tab: restores the full title (and the full
+/// path for file-backed tabs) that strip truncation may have hidden.
+struct TabTooltip {
+    palette: ThemePalette,
+    title: SharedString,
+    path: Option<SharedString>,
+}
+
+impl Render for TabTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = self.palette;
+        div()
+            .py_1()
+            .px_2()
+            .rounded_md()
+            .border_1()
+            .border_color(palette.border)
+            .bg(palette.panel_bg)
+            .text_size(px(12.))
+            .text_color(palette.active_text)
+            .child(self.title.clone())
+            .when_some(self.path.clone(), |tooltip, path| {
+                tooltip.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(palette.muted)
+                        .child(path),
+                )
+            })
     }
 }

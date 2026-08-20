@@ -3229,6 +3229,7 @@ dependencies = [
  "base64",
  "cargo-packager-updater",
  "data-url",
+ "dunce",
  "export",
  "font8x8",
  "gpui",

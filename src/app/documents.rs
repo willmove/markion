@@ -235,7 +235,140 @@ impl MarkionApp {
         self.sync_and_persist_session();
         self.sync_git_branch_context(cx);
         self.status = t(self.language, Msg::StatusNewDocument).into();
+        self.reveal_active_tab_in_strip();
         cx.notify();
+    }
+
+    /// Close the tabs identity-matched by `targets` (indexes may have shifted
+    /// since capture). Dirty tabs' recovery snapshots are discarded on the way
+    /// out — the same discard path as app exit — and the active index follows
+    /// the removals so it keeps pointing at the same tab.
+    fn remove_tabs_by_identity(&mut self, targets: &[TabContextTarget], cx: &mut Context<Self>) {
+        let indexes: Vec<usize> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| {
+                targets
+                    .iter()
+                    .any(|target| target.matches(tab))
+                    .then_some(index)
+            })
+            .collect();
+        for index in indexes.into_iter().rev() {
+            self.release_tab_image_claims(index, cx);
+            if let Some(state) = self.tabs[index].document_tab_mut()
+                && let Some(recovery) = state.last_recovery_file.take()
+            {
+                let _ = delete_recovery_file(recovery);
+            }
+            self.tabs.remove(index);
+            if index < self.active_tab {
+                self.active_tab -= 1;
+            }
+        }
+    }
+
+    /// Settle shared post-removal state for batch closes.
+    fn settle_after_batch_close(&mut self, cx: &mut Context<Self>) {
+        self.active_menu = None;
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
+        if self.active_tab().is_document() {
+            self.refresh_search_matches();
+        } else {
+            self.search_matches.clear();
+            self.current_search_index = None;
+        }
+        self.sync_and_persist_session();
+        self.sync_git_branch_context(cx);
+        cx.notify();
+    }
+
+    /// Shared body of Close Others / Close to the Right: in-scope clean tabs
+    /// close immediately and silently; dirty tabs are kept open and reported
+    /// by one summary dialog offering a discard-all confirmation. The clicked
+    /// tab (active, never in scope) always survives.
+    fn close_tabs_in_scope(
+        &mut self,
+        scope: Vec<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut clean_targets: Vec<TabContextTarget> = Vec::new();
+        let mut dirty_targets: Vec<TabContextTarget> = Vec::new();
+        for index in scope {
+            let Some(tab) = self.tabs.get(index) else {
+                continue;
+            };
+            if tab.is_dirty() {
+                dirty_targets.push(TabContextTarget::capture(index, tab));
+            } else {
+                clean_targets.push(TabContextTarget::capture(index, tab));
+            }
+        }
+        if !clean_targets.is_empty() {
+            self.remove_tabs_by_identity(&clean_targets, cx);
+            self.settle_after_batch_close(cx);
+        }
+        if dirty_targets.is_empty() {
+            return;
+        }
+        let count = dirty_targets.len().to_string();
+        let detail = tf(self.language, Msg::DialogCloseTabsDirtyDetail, &[&count]);
+        // A single aggregate prompt (not per-tab prompts): GPUI prompts are
+        // not re-entrant, and this mirrors the request_quit precedent.
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            self.tr(Msg::DialogCloseTabsDirtyTitle),
+            Some(&detail),
+            &[
+                PromptButton::ok(self.tr(Msg::DialogButtonDiscardAndCloseTabs)),
+                PromptButton::cancel(self.tr(Msg::DialogButtonKeepOpen)),
+            ],
+            cx,
+        );
+        self.status = t(self.language, Msg::StatusWaitingConfirm).into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let discard = matches!(answer.await, Ok(0));
+            let _ = this.update(cx, |app, cx| {
+                if discard {
+                    app.remove_tabs_by_identity(&dirty_targets, cx);
+                    app.settle_after_batch_close(cx);
+                } else {
+                    app.status = t(app.language, Msg::StatusCanceled).into();
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Tab context menu: close every tab except the clicked one. The clicked
+    /// tab is active when this runs (switch-then-operate).
+    pub(super) fn close_other_tabs(
+        &mut self,
+        keep: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let scope: Vec<usize> = (0..self.tabs.len())
+            .filter(|&index| index != keep)
+            .collect();
+        self.close_tabs_in_scope(scope, window, cx);
+    }
+
+    /// Tab context menu: close every tab right of the clicked one.
+    pub(super) fn close_tabs_to_the_right(
+        &mut self,
+        anchor: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let scope: Vec<usize> = ((anchor + 1)..self.tabs.len()).collect();
+        self.close_tabs_in_scope(scope, window, cx);
     }
 
     /// Action: cycle to the next tab (wraps). Bound to Ctrl+Tab.

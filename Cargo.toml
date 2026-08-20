@@ -103,6 +103,11 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 
+# Windows `Path::canonicalize` returns `\\?\`-prefixed verbatim paths; dunce
+# drops the prefix when the shortened form resolves to the same file (identity
+# on other platforms), keeping user-facing and persisted paths in normal form.
+dunce = "1.0"
+
 [dev-dependencies]
 gpui = { version = "0.2.2", features = ["test-support"] }
 tempfile = "3.20"

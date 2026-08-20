@@ -370,8 +370,9 @@ impl Element for EditorElement {
                     wrap_width: width,
                     font_size,
                     line_height,
+                    font_family: app.resolved_font_families.editor.clone(),
                 };
-                if let Some((key, height)) = *app.active_tab().measured_height_cache.borrow()
+                if let Some((key, height)) = app.active_tab().measured_height_cache.borrow().clone()
                     && key == cache_key
                 {
                     return size(width, height);

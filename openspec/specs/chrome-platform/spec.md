@@ -189,7 +189,7 @@ The editor SHALL persist the Preview adaptive width preference in the existing p
 - **THEN** Preview adaptive width is disabled
 
 ### Requirement: Dense pane chrome with draggable scrollbars
-The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane, Visual Edit surface, and rendered preview pane when their content exceeds the visible area. The Visual Edit scrollbar SHALL match the Read-mode preview overlay in placement and drag behavior. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
+The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane, Visual Edit surface, and rendered preview pane when their content exceeds the visible area. The Visual Edit scrollbar SHALL match the Read-mode preview overlay in placement and drag behavior. The Preferences panel SHALL provide the same draggable, right-side vertical scrollbars for each of its scrollable regions — the General tab body, the Shortcuts category sidebar, and the Shortcuts action list — whenever a region's content exceeds its visible area; wheel and trackpad scrolling SHALL continue to work unchanged. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
 
 #### Scenario: Large source document exposes editor scrollbar
 - **WHEN** the active document has more source lines than fit in the editor pane
@@ -212,6 +212,24 @@ The application chrome SHALL provide visible, right-side vertical scrollbars for
 - **WHEN** the active view mode is Visual Edit
 - **AND** the visual document fits in the visible surface or the document is empty
 - **THEN** no vertical scrollbar thumb is shown
+
+#### Scenario: Overflowing Preferences panel region exposes a scrollbar
+- **WHEN** the Preferences panel is open
+- **AND** a scrollable panel region (General tab body, Shortcuts category sidebar, or Shortcuts action list) contains more content than fits its visible area
+- **THEN** that region shows a right-side vertical scrollbar thumb
+- **AND** dragging the thumb with the left mouse button scrolls that region up and down
+- **AND** the thumb position reflects the region's scroll offset
+
+#### Scenario: Fitting Preferences panel content hides the scrollbar
+- **WHEN** the Preferences panel is open
+- **AND** a scrollable panel region's content fits within its visible area
+- **THEN** no vertical scrollbar thumb is shown for that region
+
+#### Scenario: Preferences panel wheel scrolling is preserved
+- **WHEN** the Preferences panel is open
+- **AND** the user scrolls a scrollable panel region with the mouse wheel or trackpad
+- **THEN** the region scrolls exactly as before the draggable scrollbar was added
+- **AND** the scrollbar thumb moves to reflect the new scroll offset
 
 #### Scenario: Main pane chrome is compact
 - **WHEN** the editor renders the main content area
@@ -398,4 +416,63 @@ The status bar SHALL retain its existing document identity, save-state, and tran
 - **THEN** the status bar reuses the cached document metrics for that version
 - **AND** caret-only changes do not invalidate Markdown-derived state
 - **AND** Git discovery and refresh do not run synchronously during rendering or text input
+
+### Requirement: Help menu external links
+
+The Help menu SHALL offer a "Report an Issue" item and an "Online Documentation" item, positioned between the update check and the About action, in both menu surfaces the application renders: the in-window menu bar dropdown and the native OS menu bar. Invoking "Report an Issue" SHALL open `https://github.com/willmove/markion/issues/new` and invoking "Online Documentation" SHALL open `https://github.com/willmove/markion#readme` — each in the system default browser via the platform shell, never inside an embedded web view, and the application SHALL keep running normally afterwards. Both items SHALL be pointer-driven with no keyboard shortcuts and no shortcut-reference entries. Invoking either item from the in-window dropdown SHALL dismiss the open menu. Both item labels SHALL be routed through the localization layer and render in the active language like every other menu item.
+
+#### Scenario: Report an Issue opens the issue tracker in the browser
+
+- **WHEN** the user chooses "Report an Issue" from the Help menu (in-window dropdown or native menu bar)
+- **THEN** the system default browser opens the project's new-issue page (`https://github.com/willmove/markion/issues/new`)
+- **AND** the application renders no embedded web content and continues running normally
+
+#### Scenario: Online Documentation opens the documentation home in the browser
+
+- **WHEN** the user chooses "Online Documentation" from the Help menu (in-window dropdown or native menu bar)
+- **THEN** the system default browser opens the project's documentation home (`https://github.com/willmove/markion#readme`)
+- **AND** the application renders no embedded web content and continues running normally
+
+#### Scenario: Invoking an external link closes the in-window dropdown
+
+- **WHEN** the user clicks either external-link item in the open in-window Help dropdown
+- **THEN** the dropdown closes and no menu item stays highlighted
+
+#### Scenario: External link labels follow the active language
+
+- **WHEN** the interface language is switched
+- **THEN** both external-link item labels re-render in the new language in the in-window menu bar and in the reinstalled native menu bar
+
+### Requirement: File paths SHALL be presented and persisted in platform-normal form
+
+File paths shown to the user, written to the clipboard, or persisted in session state SHALL be in platform-normal form — on Windows, drive-rooted paths SHALL NOT carry the extended-length verbatim prefix (`\\?\`), and network paths SHALL NOT carry the `\\?\UNC\` form (they use `\\server\share\...`). Paths attached to opened content (document tabs, image tabs), the workspace root, file-tree entries, and recent-files entries SHALL all be in normal form, so that any surface reading them — copy actions, status feedback, reveal-in-file-manager, session persistence — presents the normal form. A path that genuinely requires the extended-length syntax (e.g. longer than the classic Windows path limit) MAY retain the verbatim form, since correct file access takes precedence over cosmetic presentation.
+
+#### Scenario: Copy File Path omits the verbatim prefix
+
+- **WHEN** the user copies the path of a file that was opened from the file tree, restored from a saved session, or opened from the recent-files list on Windows
+- **THEN** the clipboard receives the drive-rooted path without the `\\?\` prefix (e.g. `C:\Workspace\Vaults\articles\AGENTS.md`)
+- **AND** the status feedback following the copy shows the same normal-form path
+
+#### Scenario: Reveal in File Manager uses a normal-form path
+
+- **WHEN** the user reveals an opened file in the system file manager on Windows
+- **THEN** the path handed to the file manager and shown in the feedback message is in normal form, without the `\\?\` prefix
+
+#### Scenario: Paths attached to opened content stay in normal form
+
+- **WHEN** a file is opened from the file tree, restored from a saved session, or opened from the recent-files list
+- **THEN** the tab's stored path and the workspace root are in normal form
+- **AND** tab dedupe and workspace-containment checks continue to treat the same file as the same file (case and symlink differences on Windows resolve to one identity)
+
+#### Scenario: Legacy verbatim session entries are healed on load
+
+- **WHEN** a session persisted by an earlier version contains `\\?\`-prefixed open-file, active-file, workspace-root, or recent-file entries
+- **THEN** loading that session converts the entries to normal form wherever the shortened path is equivalent, before any tab, workspace, or recent list is built from them
+- **AND** the next session save persists the healed normal-form paths
+
+#### Scenario: Paths requiring extended-length syntax keep working
+
+- **WHEN** a path exceeds the classic Windows path limit or otherwise requires verbatim syntax, so that removing the prefix would not yield an equivalent path
+- **THEN** the verbatim form is retained for file access rather than stripped unconditionally
+- **AND** open, save, and reveal operations on such a path continue to succeed
 

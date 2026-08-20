@@ -16,42 +16,43 @@ use gpui::prelude::*;
 use gpui::{
     App, Application, Bounds, ClickEvent, ClipboardEntry, ClipboardItem, Context, CursorStyle,
     DefiniteLength, DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler,
-    Empty, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable, FontStyle,
-    FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, ImageFormat, ImageSource,
-    KeyBinding, KeyDownEvent, LayoutId, ListAlignment, ListState, Menu, MenuItem, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point,
-    PromptButton, PromptLevel, RenderImage, Rgba, ScrollHandle, SharedString, Size, Stateful,
-    StrikethroughStyle, Style, StyledText, TextLayout, TextRun, Timer, TitlebarOptions,
-    UTF16Selection, UnderlineStyle, Window, WindowBounds, WindowOptions, WrappedLine, actions,
-    anchored, canvas, div, fill, font, img, list, point, px, rgb, rgba, size,
+    Empty, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable, Font, FontFallbacks,
+    FontFeatures, FontStyle, FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior,
+    ImageFormat, ImageSource, KeyBinding, KeyDownEvent, LayoutId, ListAlignment, ListState, Menu,
+    MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, RenderImage, Rgba, ScrollHandle,
+    SharedString, Size, Stateful, StrikethroughStyle, Style, StyledText, TextLayout, TextRun,
+    Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window, WindowBounds, WindowOptions,
+    WrappedLine, actions, anchored, canvas, div, fill, font, img, list, point, px, rgb, rgba, size,
 };
 use markion::{
     AlertKind, AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement,
-    BlockTarget, BlockTransform, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
-    DEFAULT_RENDERED_FONT_SIZE, DiskState, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
-    ExportFormat, ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind,
-    HighlightedSpan, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan,
-    InlineStyle, Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
-    MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
-    MarkdownFormat, MathLayoutStyle, Msg, P0Msg, P1Msg, PreviewBlock, RecoveryInventoryEntry,
-    RecoverySourceState, RichText, SearchMatchRange, SearchOptions, SessionState, ShortcutCategory,
-    ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery, TableEdit, ThemeColors,
-    ThemeDefinition, ViewMode, VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind,
-    VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind, VisualHtmlImage,
-    VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind,
-    adjacent_reorder_target, block_can_reorder_at, block_can_transform_at, build_visual_projection,
-    build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
-    default_preferences_path, default_recovery_dir, default_session_path, default_themes_dir,
-    delete_block, delete_recovery_file, diagram_backend_id, duplicate_block, highlight_code,
-    html_preview_parts, html_preview_plain_text, image_extension_supported, import_image_bytes,
-    import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
-    is_text_path, list_theme_definitions, load_app_preferences, load_recovery_file,
-    load_session_state, normalize_editor_font_size, normalize_heading_menu_max_level,
-    normalize_paragraph_spacing, normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf,
-    reorder_block, save_app_preferences, save_session_state, save_theme_definition,
-    serialize_inline_image, serialize_inline_link, shortcut_catalog, sidebar_tab_label,
-    slash_command_edit, slash_query_at, t, tf, title_from_path, transform_block,
-    validate_block_target,
+    BlockTarget, BlockTransform, DEFAULT_CODE_FONT_FAMILY, DEFAULT_EDITOR_FONT_SIZE,
+    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE, DiskState,
+    EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences, FileTree,
+    FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart,
+    HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle, Language,
+    MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
+    MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat,
+    MathLayoutStyle, Msg, P0Msg, P1Msg, PreviewBlock, RecoveryInventoryEntry, RecoverySourceState,
+    RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions, SessionState,
+    ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery, TableEdit,
+    ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor,
+    VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualHtmlImage, VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge,
+    VisualSourceIslandKind, adjacent_reorder_target, block_can_reorder_at, block_can_transform_at,
+    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
+    builtin_theme_definitions, default_preferences_path, default_recovery_dir,
+    default_session_path, default_themes_dir, delete_block, delete_recovery_file,
+    diagram_backend_id, duplicate_block, highlight_code, html_preview_parts,
+    html_preview_plain_text, image_extension_supported, import_image_bytes, import_image_file,
+    inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path, is_text_path,
+    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
+    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
+    normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf, reorder_block, resolve_font_family,
+    save_app_preferences, save_session_state, save_theme_definition, serialize_inline_image,
+    serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
+    t, tf, title_from_path, transform_block, validate_block_target,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -148,6 +149,8 @@ actions!(
         ShowPreferences,
         ResetPreferences,
         CheckForUpdates,
+        ReportIssue,
+        OpenOnlineDocs,
         AboutMarkion,
         Quit,
         NewTab,
@@ -166,6 +169,8 @@ const MARKION_WINDOW_TITLE: &str = "Markion";
 
 const MAX_HISTORY_LEN: usize = 200;
 const GITHUB_REPO_URL: &str = "https://github.com/willmove/markion";
+const GITHUB_ISSUES_URL: &str = "https://github.com/willmove/markion/issues/new";
+const GITHUB_DOCS_URL: &str = "https://github.com/willmove/markion#readme";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppMenu {
@@ -737,6 +742,17 @@ fn file_tree_context_action_label(action: FileTreeContextAction) -> Msg {
     }
 }
 
+fn tab_context_action_label(action: TabContextAction) -> Msg {
+    match action {
+        TabContextAction::CloseTab => Msg::ItemTabClose,
+        TabContextAction::CloseOthers => Msg::ItemTabCloseOthers,
+        TabContextAction::CloseToTheRight => Msg::ItemTabCloseToTheRight,
+        TabContextAction::Rename => Msg::ItemTabRename,
+        TabContextAction::CopyPath => Msg::ItemTabCopyPath,
+        TabContextAction::RevealInFileManager => Msg::ItemTabRevealInFileManager,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SearchField {
     Find,
@@ -1067,6 +1083,58 @@ impl DocumentTypographyMetrics {
     }
 }
 
+/// Resolved font family per document plane (preference over active-theme
+/// contribution over built-in default). Precomputed on every change so render
+/// code reads a ready value instead of re-deriving per frame.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct ResolvedFontFamilies {
+    pub(super) editor: SharedString,
+    pub(super) rendered: SharedString,
+    pub(super) code: SharedString,
+}
+
+/// One document font slot, addressed by the Preferences panel's capture input
+/// and the family setter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FontSlot {
+    Editor,
+    Rendered,
+    Code,
+}
+
+impl FontSlot {
+    /// The slot's resolved family.
+    pub(super) fn select(self, fonts: &ResolvedFontFamilies) -> &SharedString {
+        match self {
+            FontSlot::Editor => &fonts.editor,
+            FontSlot::Rendered => &fonts.rendered,
+            FontSlot::Code => &fonts.code,
+        }
+    }
+}
+
+/// Which document font slot currently has its installed-font selection list
+/// open in the Preferences panel. Only one list is open at a time.
+pub(super) type FontPicker = FontSlot;
+
+/// The code-slot font with its monospace fallback chain, so code text never
+/// degrades to a proportional family when the resolved primary is missing.
+pub(super) fn code_slot_font(family: &SharedString) -> Font {
+    Font {
+        family: family.clone(),
+        features: FontFeatures::default(),
+        fallbacks: Some(FontFallbacks::from_fonts(vec![
+            "Cascadia Code".to_string(),
+            "Consolas".to_string(),
+            "SFMono-Regular".to_string(),
+            "Menlo".to_string(),
+            "DejaVu Sans Mono".to_string(),
+        ])),
+        weight: FontWeight::default(),
+        style: FontStyle::default(),
+    }
+}
+
 impl MarkionApp {
     pub(super) fn typography_metrics(&self) -> DocumentTypographyMetrics {
         DocumentTypographyMetrics::new(
@@ -1074,6 +1142,34 @@ impl MarkionApp {
             self.rendered_font_size,
             self.paragraph_spacing,
         )
+    }
+
+    /// Recomputes the resolved per-plane families from the current font
+    /// preferences and the active theme. Returns the new values so callers
+    /// can detect an actual change and invalidate measurements only then.
+    pub(super) fn recompute_resolved_font_families(&mut self) -> ResolvedFontFamilies {
+        let theme_fonts = self.active_theme_definition().fonts;
+        self.resolved_font_families = ResolvedFontFamilies {
+            editor: resolve_font_family(
+                self.editor_font_family.as_deref(),
+                theme_fonts.editor.as_deref(),
+                SYSTEM_UI_FONT_FAMILY,
+            )
+            .into(),
+            rendered: resolve_font_family(
+                self.rendered_font_family.as_deref(),
+                theme_fonts.rendered.as_deref(),
+                SYSTEM_UI_FONT_FAMILY,
+            )
+            .into(),
+            code: resolve_font_family(
+                self.code_font_family.as_deref(),
+                theme_fonts.code.as_deref(),
+                DEFAULT_CODE_FONT_FAMILY,
+            )
+            .into(),
+        };
+        self.resolved_font_families.clone()
     }
 }
 /// Extra vertical margin (px) the preview `list` renders beyond the visible
@@ -1099,6 +1195,11 @@ const SIDEBAR_MIN_WIDTH: f32 = 150.;
 const SIDEBAR_MAX_WIDTH: f32 = 480.;
 const SIDEBAR_DIVIDER_WIDTH: f32 = 1.;
 const DOCUMENT_TAB_BAND_HEIGHT: f32 = 30.;
+/// Width bounds for one document tab in the strip. Tabs truncate their title
+/// past the max and shrink toward the min as more tabs open; once every tab
+/// is at the minimum the strip scrolls instead of shrinking further.
+const DOCUMENT_TAB_MAX_WIDTH: f32 = 220.;
+const DOCUMENT_TAB_MIN_WIDTH: f32 = 96.;
 
 fn document_tab_band_visible(tab_count: usize) -> bool {
     tab_count > 1
@@ -1130,6 +1231,12 @@ enum PaneScrollTarget {
     Preview,
     /// Visual Edit list overlay. Drag identity only; never a Sync scroll driver.
     Visual,
+    /// Preferences panel General tab body. Drag identity only.
+    PreferencesGeneral,
+    /// Preferences panel Shortcuts tab category sidebar. Drag identity only.
+    PreferencesShortcutCategories,
+    /// Preferences panel Shortcuts tab action list. Drag identity only.
+    PreferencesShortcutActions,
 }
 
 /// Identity of a selectable plain-text run inside one preview list item.
@@ -1220,6 +1327,76 @@ enum PreviewContextAction {
     SelectAll,
     CopyLinkAddress,
 }
+
+/// Right-click menu for a workspace tab-bar item (mirrors
+/// [`FileTreeContextMenu`]). Actions use switch-then-operate semantics: the
+/// clicked tab becomes active before the action runs.
+#[derive(Debug, Clone)]
+struct TabContextMenu {
+    target: TabContextTarget,
+    position: Point<Pixels>,
+}
+
+/// Identity snapshot of the tab a context menu targets, captured when the
+/// menu opens. The menu can stay open across tab mutations, so the stored
+/// index is re-validated against this identity at dispatch time; a mismatch
+/// cancels the action instead of operating on whatever tab now sits at the
+/// index. `recovery_id` is globally unique per document tab state and
+/// survives renames, distinguishing untitled tabs that share `path: None`.
+#[derive(Debug, Clone, PartialEq)]
+struct TabContextTarget {
+    index: usize,
+    path: Option<PathBuf>,
+    recovery_id: Option<u64>,
+}
+
+impl TabContextTarget {
+    fn capture(index: usize, tab: &EditorTab) -> Self {
+        Self {
+            index,
+            path: tab.path().map(Path::to_path_buf),
+            recovery_id: tab.document_tab().map(|tab| tab.recovery_id),
+        }
+    }
+
+    /// True when `tab` is still the tab this target was captured from.
+    fn matches(&self, tab: &EditorTab) -> bool {
+        if tab.path() != self.path.as_deref() {
+            return false;
+        }
+        match (tab.document_tab(), self.recovery_id) {
+            (Some(state), Some(id)) => state.recovery_id == id,
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TabContextAction {
+    CloseTab,
+    CloseOthers,
+    CloseToTheRight,
+    Rename,
+    CopyPath,
+    RevealInFileManager,
+}
+
+/// Menu items in display order; each inner slice becomes one group separated
+/// by a hairline. Grouping lives outside the action enum so the enum stays a
+/// pure dispatcher vocabulary.
+const TAB_CONTEXT_ACTION_GROUPS: &[&[TabContextAction]] = &[
+    &[
+        TabContextAction::CloseTab,
+        TabContextAction::CloseOthers,
+        TabContextAction::CloseToTheRight,
+    ],
+    &[
+        TabContextAction::Rename,
+        TabContextAction::CopyPath,
+        TabContextAction::RevealInFileManager,
+    ],
+];
 
 /// Tabs inside the Preferences panel.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1337,6 +1514,11 @@ struct MarkionApp {
     /// deliberately not persisted with editor preferences.
     preferences_tab: PreferencesTab,
     preferences_panel_focus: FocusHandle,
+    /// Scroll handles for the Preferences panel's scrollable regions, so each
+    /// region can show a draggable overlay scrollbar and keep its position.
+    preferences_general_scroll: ScrollHandle,
+    preferences_categories_scroll: ScrollHandle,
+    preferences_actions_scroll: ScrollHandle,
     shortcut_platform: ShortcutPlatform,
     shortcut_category: ShortcutCategory,
     /// Menu-action shortcut overrides loaded from `config.toml`
@@ -1353,6 +1535,21 @@ struct MarkionApp {
     editor_font_size: u16,
     rendered_font_size: u16,
     paragraph_spacing: u16,
+    /// Explicit font-family preferences. `None` follows the active theme's
+    /// `[fonts]` entry, then the built-in default.
+    editor_font_family: Option<String>,
+    rendered_font_family: Option<String>,
+    code_font_family: Option<String>,
+    /// Resolved per-plane families (preference over theme over default),
+    /// recomputed whenever a font preference or the active theme changes so
+    /// render code never re-derives per frame.
+    resolved_font_families: ResolvedFontFamilies,
+    /// Font slot whose installed-font selection list is open in the
+    /// Preferences panel, if any.
+    font_picker: Option<FontPicker>,
+    /// Installed font family names, refreshed when the Preferences panel
+    /// opens; powers the panel's advisory not-installed warning.
+    installed_font_names: Vec<String>,
     heading_menu_max_level: u8,
     /// When enabled and the view mode is Split, the editor and preview panes
     /// follow the same source-backed document location. Persisted; disabled by
@@ -1381,6 +1578,15 @@ struct MarkionApp {
     file_tree_query_focused: bool,
     file_tree_scroll: ScrollHandle,
     outline_scroll: ScrollHandle,
+    /// Horizontal scroll position of the document tab strip. Window-
+    /// presentation state: deliberately not per-tab, so switching tabs never
+    /// restores a foreign strip offset.
+    tab_bar_scroll: ScrollHandle,
+    /// Test seam: the tab index most recently requested by
+    /// `reveal_active_tab_in_strip`. GPUI's pending-reveal state is private,
+    /// so behavioral tests assert against this instead.
+    #[cfg(test)]
+    last_tab_strip_reveal: Option<usize>,
     // Byte length of the trailing IME composition inside whichever redirected
     // text field (file-tree filter / search) currently has logical focus.
     input_marked_len: usize,
@@ -1392,6 +1598,8 @@ struct MarkionApp {
     file_tree_context_menu: Option<FileTreeContextMenu>,
     /// Right-click menu for the rendered preview pane.
     preview_context_menu: Option<PreviewContextMenu>,
+    /// Right-click menu for a tab-bar item.
+    tab_context_menu: Option<TabContextMenu>,
     /// Open inline name prompt for a file-tree create/rename action; reuses
     /// the redirected-text-input path so keystrokes route into its buffer.
     pending_name_input: Option<PendingNameInput>,

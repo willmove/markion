@@ -35,9 +35,12 @@ impl MarkionApp {
     ) {
         // The Preferences panel is rendered in-app (see `preferences_panel_view`),
         // so opening it is just a flag flip. Refresh the custom-theme list so a
-        // theme file dropped into the themes dir since launch shows up.
+        // theme file dropped into the themes dir since launch shows up, and the
+        // installed-font list so the panel's advisory warning stays current.
         self.ensure_sample_custom_theme();
         self.custom_themes = list_theme_definitions(&self.themes_dir).unwrap_or_default();
+        self.installed_font_names = cx.text_system().all_font_names();
+        self.font_picker = None;
         self.preferences_tab = PreferencesTab::General;
         if self.shortcut_capture.take().is_some() {
             self.rebind_keys(cx);
@@ -49,25 +52,35 @@ impl MarkionApp {
         cx.notify();
     }
 
+    /// Installs the sample custom theme on first use: when the themes
+    /// directory does not exist yet, create it and write `typewriter.toml` —
+    /// a light palette that also demonstrates the optional `[fonts]` table
+    /// (source/editor/rendered/code font contributions). Users edit or add
+    /// files beside it to author their own themes.
     pub(super) fn ensure_sample_custom_theme(&mut self) {
         if self.themes_dir.exists() {
             return;
         }
         let sample = ThemeDefinition {
-            name: "Midnight".to_string(),
-            is_dark: true,
+            name: "Typewriter".to_string(),
+            is_dark: false,
             colors: ThemeColors {
-                app_bg: 0x10131a,
-                panel_bg: 0x171b24,
-                surface_bg: 0x0f1720,
-                text: 0xe5edf5,
-                muted: 0x91a4b7,
-                border: 0x2b3544,
-                active_bg: 0x23304a,
-                active_text: 0x9ec5ff,
+                app_bg: 0xfaf6f0,
+                panel_bg: 0xffffff,
+                surface_bg: 0xfffdf8,
+                text: 0x1f2937,
+                muted: 0x78716c,
+                border: 0xe7d8c0,
+                active_bg: 0xf5e9d5,
+                active_text: 0x92400e,
+            },
+            fonts: ThemeFonts {
+                editor: Some("Cascadia Code".to_string()),
+                rendered: Some("Georgia".to_string()),
+                code: Some("Consolas".to_string()),
             },
         };
-        let path = self.themes_dir.join("midnight.toml");
+        let path = self.themes_dir.join("typewriter.toml");
         if let Err(err) = save_theme_definition(path, &sample) {
             self.status = self.trf(Msg::StatusSampleThemeSaveFailed, &[&err.to_string()]);
         }
@@ -109,6 +122,10 @@ impl MarkionApp {
                     app.editor_font_size = preferences.editor_font_size;
                     app.rendered_font_size = preferences.rendered_font_size;
                     app.paragraph_spacing = preferences.paragraph_spacing;
+                    app.editor_font_family = None;
+                    app.rendered_font_family = None;
+                    app.code_font_family = None;
+                    app.recompute_resolved_font_families();
                     app.refresh_typography_measurements(true, true);
                     app.heading_menu_max_level = preferences.heading_menu_max_level;
                     app.sync_scroll = preferences.sync_scroll;
@@ -244,6 +261,81 @@ impl MarkionApp {
         self.status = self.trf(Msg::StatusParagraphSpacing, &[&format!("{value}px")]);
         self.persist_preferences();
         cx.notify();
+    }
+
+    /// Localized row label for one font slot (shared by panel rows and the
+    /// apply/follow-theme status messages).
+    pub(super) fn font_slot_label(&self, slot: FontSlot) -> &'static str {
+        t(
+            self.language,
+            match slot {
+                FontSlot::Editor => Msg::PrefPanelEditorFontFamily,
+                FontSlot::Rendered => Msg::PrefPanelRenderedFontFamily,
+                FontSlot::Code => Msg::PrefPanelCodeFontFamily,
+            },
+        )
+    }
+
+    /// Sets or clears one slot's explicit font-family preference. `None`
+    /// (or an empty string) returns the slot to follow-theme resolution.
+    pub(super) fn set_font_family(
+        &mut self,
+        slot: FontSlot,
+        family: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let family = markion::normalize_font_family(family.as_deref());
+        let current = match slot {
+            FontSlot::Editor => &mut self.editor_font_family,
+            FontSlot::Rendered => &mut self.rendered_font_family,
+            FontSlot::Code => &mut self.code_font_family,
+        };
+        if *current == family {
+            return;
+        }
+        *current = family;
+        let previous = self.resolved_font_families.clone();
+        let resolved = self.recompute_resolved_font_families();
+        if resolved != previous {
+            self.refresh_typography_measurements(true, true);
+            self.center_cursor_if_typewriter();
+        }
+        let resolved_name = slot.select(&resolved);
+        self.status = if resolved_name != SYSTEM_UI_FONT_FAMILY {
+            self.trf(
+                Msg::StatusFontFamilyApplied,
+                &[self.font_slot_label(slot), resolved_name],
+            )
+        } else {
+            self.trf(
+                Msg::StatusFontFamilyFollowTheme,
+                &[self.font_slot_label(slot)],
+            )
+        };
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    /// Opens (or closes, when already open for the same slot) the installed-
+    /// font selection list for one slot. Only one list is open at a time.
+    pub(super) fn toggle_font_picker(&mut self, slot: FontSlot, cx: &mut Context<Self>) {
+        self.font_picker = match self.font_picker {
+            Some(open) if open == slot => None,
+            _ => Some(slot),
+        };
+        cx.notify();
+    }
+
+    /// Chooses a family from a slot's selection list (`None` = follow theme),
+    /// applying and persisting it, then closes the list.
+    pub(super) fn choose_font_family(
+        &mut self,
+        slot: FontSlot,
+        family: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.font_picker = None;
+        self.set_font_family(slot, family, cx);
     }
 
     /// Invalidates only presentation measurements affected by typography.
@@ -584,7 +676,10 @@ impl MarkionApp {
                     Some(ExpectedSyncFollower::Editor(actual));
                 tab.sync_scroll_state.expected_follower_retried = false;
             }
-            PaneScrollTarget::Visual => return,
+            PaneScrollTarget::Visual
+            | PaneScrollTarget::PreferencesGeneral
+            | PaneScrollTarget::PreferencesShortcutCategories
+            | PaneScrollTarget::PreferencesShortcutActions => return,
         }
         cx.notify();
     }

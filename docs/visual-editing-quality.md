@@ -1,10 +1,10 @@
 # Visual Edit Support and Engineering Contract
 
-Markion's Visual Edit mode is WYSIWYG-oriented, not a second rich-text document model. `MarkdownDocument.text` remains the only persisted representation. A visual interaction is supported only when it can map to an exact, UTF-8-safe source mutation; uncertain syntax keeps a complete source-backed editing path.
+Markion's Visual Edit mode is WYSIWYG-first: rendering is the default presentation, and raw Markdown source is the canonical storage representation, not the default view. `MarkdownDocument.text` remains the only persisted representation — there is no second rich-text document model. A visual interaction is supported only when it can map to an exact, UTF-8-safe source mutation. Constructs whose WYSIWYG rendering is not yet implemented show their authored source as a **transitional editing affordance** and are tracked on the WYSIWYG coverage roadmap below — they are known gaps to close, not an accepted end state.
 
 ## Support Matrix
 
-| Construct | Normal Visual Edit presentation | Canonical editable range | Conservative fallback trigger | Required evidence |
+| Construct | Normal Visual Edit presentation | Canonical editable range | Roadmap-gap trigger (transitional source view) | Required evidence |
 |---|---|---|---|---|
 | Paragraphs, headings, list/task items | Rendered direct text; mixed-fragment rows (link/footnote icons, math atoms, HTML images) keep authored soft/hard line breaks as stacked wrap rows | Exact inline content and structural prefix ranges | Byte-inexact or crossing parser events | Projection round-trip, formatting, structural Enter/Backspace, pointer, IME, undo, mixed-layout line stacking |
 | Mixed blockquote flows (paragraph/list/task leaves) | Ordinary rendered rows inside one quote boundary; no recursive editor | One disjoint leaf range plus exact per-line quote-marker ranges and optional inner list prefix | Overlapping ownership, ambiguous marker partition, or byte-inexact inline events | Intro/list/outro order, complete non-overlapping coverage, independent prefix reveal, quoted structural editing, stable identity |
@@ -19,11 +19,43 @@ Markion's Visual Edit mode is WYSIWYG-oriented, not a second rich-text document 
 | GFM table | `VisualBlockEditor::Table`: editable header/body cells plus a caret-targeted row/column toolbar with structural boundary disabling | Logical cell owned by the canonical caret; one deterministic full-table replacement for width reflow | Unequal/ambiguous cell boundaries, malformed table, stale toolbar target, or a toolbar whose table does not own the caret | Escaped-pipe projection, UTF-8 width reflow, alignment/export preservation, traversal, toolbar cell ownership and boundary availability, multi-table isolation, IME, and one-edit undo/redo history |
 | Horizontal rule | Passive rendered rule | Exact block boundary through ordinary navigation/format commands | N/A | Source coverage and navigation tests |
 | Blank lines and trailing whitespace | Passive visual row; focused exact source caret/island | Exact whitespace range | N/A | Complete source coverage, insertion/deletion, no pointer-created phantom edits |
-| Mermaid/registered diagrams | Complete source-backed fence island | Complete authored fence | Always; diagram preview is presentation-only | Registry classification, source preservation, async/cache/version isolation |
+| Mermaid/registered diagrams | Rendered diagram image plus its source payload editor | Payload only; the complete fence is immutable metadata | Unclosed/ambiguous fence | Registry classification, source preservation, async/cache/version isolation |
 | Inline raw-HTML `<img>` in prose | Rendered image atom in the inline flow (same loader as preview: local/remote/data-URI) with progressive source reveal of the complete tag | Complete byte-exact `<img …>` tag | Unsupported inline HTML in the same block (unknown or attributed tags, stray/unclosed pairing, entities), a non-tag/partial/multi-tag slice, missing `src`, or table-cell context (cells keep flattened alt/URL text, matching Read mode) | Exact tag ranges, reveal-on-focus/restore-on-blur, no whole-block island, claim/preload/eviction parity with block-level images |
 | Raw HTML blocks (including `<img>`) | Read-only rendered view through the shared HTML-parts pipeline (text, images, tables); focused block uses a source-backed island | Complete authored block | Focus (editing affordance) or overlapping ownership | Exact source preservation, preview/export behavior, shared-pipeline parity with Read mode |
 | Other inline HTML and YAML front matter | Complete source-backed island | Complete authored block | Always (inline HTML outside the supported subset listed above, including entities and any tag the exact recognizer rejects) | Exact source preservation, preview/export behavior |
-| Unsupported or malformed constructs | Complete conservative source island | Complete containing source range | Exact mapping cannot be proven | Lossless source-mode round-trip and no guessed mutation |
+| Unsupported or malformed constructs | Transitional source view over the complete containing range | Complete containing source range | Exact mapping cannot be proven | Lossless source-mode round-trip and no guessed mutation |
+
+## WYSIWYG Coverage Classes
+
+Every user-visible construct belongs to exactly one of three classes:
+
+1. **Rendered WYSIWYG** — shown in its rendered form. Dedicated field/payload editors (fenced code, block math, diagrams, Markdown and inline-HTML images, GFM tables) are the rendered form of their constructs. Covers prose rows, headings, lists/task items, blockquote flows, GFM alerts, horizontal rules, whitespace rows, footnote definitions/references, link reference definitions, and HTML blocks (read-only shared pipeline with a focused source affordance).
+2. **Progressive-reveal WYSIWYG** — rendered by default; reveals its smallest complete source syntax group when the caret enters it. Covers emphasis, strong, strikethrough, inline code, highlight, super/subscript, links (including reference-style), inline math, backslash escapes, the supported inline-HTML subset (style pairs, `<br>`, inline `<img>`), structural prefixes, and heading attributes.
+3. **WYSIWYG coverage gap** — currently shows authored source as a transitional affordance; tracked on the roadmap below until a change closes it.
+
+The old five-class taxonomy folded its "dedicated editor" class into rendered WYSIWYG and reclassified "source island" as roadmap gaps.
+
+## WYSIWYG Coverage Roadmap
+
+Prioritized open gaps (refreshed 2026-08-19; each closes via a future change citing the `WYSIWYG coverage roadmap` requirement):
+
+| Priority | Construct | Current rendering | Target class | Effort | Implementation seam |
+|---|---|---|---|---|---|
+| 1 | Decoded HTML entities in prose (`&amp;`, `&#39;`) | Whole paragraph becomes a permanent source-island box | Progressive-reveal (reveal the authored `&…;` group on caret entry) | Medium | `src/visual.rs::push_text_runs` force-fallback arm (`:1836-1863`); mirror `escape_matches` (`:1999`) with an entity decode table; `decode_html_entity` exists in `src/parse.rs:1471` |
+| 2 | Frontmatter (YAML `---`) | Permanent FrontMatter island; TOML/JSON not detected | Rendered (document header form; collapsible YAML editor) | Medium | `src/visual.rs:445-453`; `src/frontmatter.rs:7-38`; `YamlFrontMatter` in `src/model.rs` |
+| 3 | Indented code blocks | Code island; no payload editor (fence scan requires `` ` ``/`~`) | Rendered (payload editor over the indented body) | Small | `src/visual.rs::fenced_payload_ranges` (`:1183-1185`), `visual_block_editor` |
+| 4 | Unclosed/malformed fenced code | Code island | Rendered (highlighted code, fences visible) | Small | `src/visual.rs:1164-1268` |
+| 5 | Reference-style/malformed inline images | Renders unfocused; focused → island; no field controls | Rendered | Medium | `src/inline_edit.rs:66-82` (`LinkType::Inline` only) |
+| 6 | Malformed tables (ragged rows) | Best-effort grid unfocused; island focused | Rendered | Small | `src/table.rs:182-221` |
+| 7 | Unsupported inline-HTML forms (unknown/attributed/stray tags) | Verbatim tag fragments unfocused; island focused | Progressive-reveal or inert atoms | Medium | `src/visual.rs:1732-1821` |
+| 8 | Task-list checkbox click | Glyph not interactive | Rendered (click toggles `[ ]`/`[x]`) | Small | `src/app/preview.rs:2919-2944` |
+| 9 | Angle-bracket autolinks (`<https://…>`) | Whole paragraph island (link reveal requires `[`-shaped sources) | Progressive-reveal | Small | `src/visual.rs:2276-2278`, invalidation `:2202-2205`; no dedicated test yet |
+| 10 | GFM definition lists | Not enabled; `: Def` renders as literal prose | Rendered | Small–Medium | `src/parse.rs:1738-1747` (`ENABLE_DEFINITION_LIST` absent) |
+| 11 | Empty list items (`- `) | Dropped by the parser → Unsupported gap island | Rendered (editable empty row) | Small | `src/parse.rs:112-126`, `src/lib.rs:1280-1283` |
+| 12 | Math render-failure states | Island on focus while KaTeX is Pending/Error | Rendered (payload editor until Ready) | Small | `src/app/preview.rs:3149-3151` |
+| 13 | Residual gap bytes between known blocks | Unsupported island (catch-all) | Closed construct-by-construct | — | `src/visual.rs:857-892` |
+
+Reviewed divergences (deliberate, not gaps): bare-URL autolinking and `:emoji:` conversion are Preview-only (`src/parse.rs:262-267` vs `:440-445`); inline HTML inside table cells keeps flattened text, matching Read mode.
 
 ## Source-Range Invariants
 

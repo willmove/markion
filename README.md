@@ -27,7 +27,7 @@ Releases are not platform code-signed. Windows SmartScreen may require **More in
 Markion has four view modes. Split Preview is the default.
 
 - **Edit** — a focused raw Markdown source editor.
-- **Visual Edit** — a WYSIWYG-oriented, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, inline image fields, and GFM table cells have exact direct editors. HTML, YAML front matter, registered diagrams, malformed syntax, and other ambiguous constructs keep a complete conservative source island. A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code, divider, table), duplicate, move up/down, source-safe drag reorder, and delete; a selection-contextual formatting toolbar and a visual link editor perform one exact source-backed mutation per action. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
+- **Visual Edit** — a WYSIWYG-first, source-backed surface. Prose stays rendered with progressive syntax reveal; ordinary fenced-code payloads, block math, inline image fields, and GFM table cells have exact direct editors. Constructs whose WYSIWYG rendering is not yet implemented — decoded HTML entities, YAML front matter, indented code, and malformed or byte-ambiguous syntax — keep an exact source-backed editing affordance as a transitional measure, tracked on the WYSIWYG coverage roadmap. A slash-command palette and a compact right-click block context menu offer exact block transforms (paragraph, headings, lists, quote, fenced code, divider, table), duplicate, move up/down, source-safe drag reorder, and delete; a selection-contextual formatting toolbar and a visual link editor perform one exact source-backed mutation per action. This is not a separate rich-text document model—the underlying Markdown is always the source of truth.
 - **Split Preview** — source and rendered preview side by side, with an optional source-mapped Sync scroll setting that keeps both panes on the same document location rather than scrolling by whole-document percentage.
 - **Read** — a rendered, non-editing view centered at a readable 860 px maximum width by default; Preview adaptive width can use the full pane.
 
@@ -70,9 +70,9 @@ Rendered preview supports:
 ## Themes, languages, and preferences
 
 - Fourteen built-in themes: Paper, Ink, Solar, Forest, Rose, Graphite, GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light.
-- Custom themes use `.toml` files in Markion's local themes directory. Legacy `.theme` files migrate automatically when first loaded.
+- Custom themes use `.toml` files in Markion's local themes directory. On first use a `typewriter.toml` sample — including the optional `[fonts]` table (`editor`, `rendered`, `code`) that supplies font families for the Markdown source editor, rendered body text, and code surfaces whenever the user has no explicit preference — is installed there as a starting point. Legacy `.theme` files migrate automatically when first loaded.
 - Six interface languages: English, Simplified Chinese, Japanese, French, German, and Spanish.
-- The in-app Preferences panel covers theme, language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, show-hidden-files, and heading-menu depth.
+- The in-app Preferences panel covers theme, language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, show-hidden-files, heading-menu depth, and per-plane font families (source, reading, code) with a follow-theme default.
 - Preferences persist in `config.toml`; legacy `preferences.conf` files migrate automatically.
 
 All configuration fields are optional. The main defaults and file-only settings are:
@@ -89,6 +89,12 @@ sync_scroll = false
 sidebar_visible = true
 sidebar_tab = "files"             # "files" or "outline"
 show_hidden_files = false
+
+# Optional font families per plane; absent = follow the theme, then the
+# built-in default (system UI font for source/reading, JetBrains Mono for code).
+# editor_font_family = "Cascadia Code"
+# rendered_font_family = "Georgia"
+# code_font_family = "JetBrains Mono"
 
 [auto_save]
 enabled = true
@@ -124,9 +130,9 @@ Source-mapped Visual Edit incrementally reuses independently parseable regions a
 
 ## Current limitations
 
-- Visual Edit is WYSIWYG-oriented while retaining canonical Markdown; unsupported, malformed, or byte-ambiguous constructs intentionally expose exact source rather than accepting a guessed rich-tree mutation, and block reordering is offered only when non-overlapping source boundaries are provable.
+- Visual Edit is WYSIWYG-first while retaining canonical Markdown; constructs without a proven byte-exact rendering expose exact source as a transitional affordance (tracked on the WYSIWYG coverage roadmap) rather than accepting a guessed rich-tree mutation, and block reordering is offered only when non-overlapping source boundaries are provable.
 - Math uses a readable fallback rather than KaTeX/MathJax-quality typesetting.
-- Visual Edit table cells support direct plain-text editing, but do not yet provide rich inline-formatting controls inside cells. Reference/multiline images, registered diagrams, HTML, and YAML front matter retain source-backed editing paths.
+- Visual Edit table cells support direct plain-text editing, but do not yet provide rich inline-formatting controls inside cells. Reference/multiline images, malformed tables, and decoded HTML entities in prose remain known WYSIWYG coverage roadmap gaps that keep source-backed editing paths.
 - One-click updates install the Windows NSIS distribution after Minisign verification; macOS bundle replacement and Linux `.deb`/AppImage self-replacement remain future work, and updater authentication is not Windows Authenticode or Apple notarization.
 - Drag-and-drop file-tree moves and a full custom-theme installation UI are not implemented.
 - Image export is a basic text snapshot, and very large documents do not yet use a rope or fully incremental parsing across every derived subsystem.
@@ -141,7 +147,7 @@ cargo build
 pwsh ./scripts/check-quality.ps1
 ```
 
-The quality command checks Rust formatting, the full Cargo workspace test suite, and every OpenSpec artifact in strict mode. See the [Visual Edit support and engineering contract](docs/visual-editing-quality.md) for the current support/fallback matrix, source-range invariants, parser ownership, and required evidence.
+The quality command checks Rust formatting, the full Cargo workspace test suite, and every OpenSpec artifact in strict mode. See the [Visual Edit support and engineering contract](docs/visual-editing-quality.md) for the current WYSIWYG coverage matrix and roadmap, source-range invariants, parser ownership, and required evidence.
 
 The root package is the `markion` application crate. Typune-derived, GPUI-free library crates live under `crates/*`:
 

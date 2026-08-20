@@ -172,6 +172,9 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
             items: vec![
                 MenuItem::action(t(language, Msg::ItemCheckForUpdates), CheckForUpdates),
                 MenuItem::separator(),
+                MenuItem::action(t(language, Msg::ItemReportIssue), ReportIssue),
+                MenuItem::action(t(language, Msg::ItemOnlineDocs), OpenOnlineDocs),
+                MenuItem::separator(),
                 MenuItem::action(t(language, Msg::ItemAboutMarkion), AboutMarkion),
             ],
         },

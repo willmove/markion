@@ -114,24 +114,25 @@ Reference-style links work too: [Markion repository][markion-repo].
 "#;
 
 pub use model::{
-    AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_EDITOR_FONT_SIZE,
-    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE,
-    DocumentStats, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend, ExportFormat, ExportPreferences,
-    Footnote, FrontMatterError, Heading, HighlightKind, HighlightedSpan, InlineSpan, InlineStyle,
-    MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES, MAX_RENDERED_FONT_SIZE,
-    MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownFormat,
-    MathDelimiter, MathExpression, MathLayoutStyle, MathSource, PreviewBlock, RecoveryDocument,
-    RenderedMath, ReplaceResult, RichText, SearchError, SearchMatch, SearchMatchRange,
-    SearchOptions, SessionState, SidebarTab, TableAlignment, TableEdit, TableEditResult,
-    ThemeColors, ThemeDefinition, ViewMode, VisualBlock, VisualBlockEdit, VisualBlockEditor,
-    VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
-    VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualHtmlImage, VisualInlineRun, VisualNavigationTarget, VisualProjection,
-    VisualProjectionSegment, VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge,
-    VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit,
-    VisualTableCell, YamlFrontMatter, builtin_theme_definitions, normalize_editor_font_size,
+    AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_CODE_FONT_FAMILY,
+    DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING,
+    DEFAULT_RENDERED_FONT_SIZE, DocumentStats, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
+    ExportFormat, ExportPreferences, Footnote, FrontMatterError, Heading, HighlightKind,
+    HighlightedSpan, InlineSpan, InlineStyle, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING,
+    MAX_RECENT_FILES, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
+    MIN_RENDERED_FONT_SIZE, MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle,
+    MathSource, PreviewBlock, RecoveryDocument, RenderedMath, ReplaceResult, RichText,
+    SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch, SearchMatchRange, SearchOptions, SessionState,
+    SidebarTab, TableAlignment, TableEdit, TableEditResult, ThemeColors, ThemeDefinition,
+    ThemeFonts, ViewMode, VisualBlock, VisualBlockEdit, VisualBlockEditor, VisualBlockId,
+    VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind, VisualBoundaryCandidates,
+    VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind, VisualHtmlImage,
+    VisualInlineRun, VisualNavigationTarget, VisualProjection, VisualProjectionSegment,
+    VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge, VisualRevealGroup,
+    VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit, VisualTableCell,
+    YamlFrontMatter, builtin_theme_definitions, normalize_editor_font_size, normalize_font_family,
     normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
-    touch_recent_file,
+    resolve_font_family, touch_recent_file,
 };
 pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
@@ -4908,6 +4909,9 @@ mod tests {
             editor_font_size: 18,
             rendered_font_size: 20,
             paragraph_spacing: 16,
+            editor_font_family: Some("Cascadia Code".to_string()),
+            rendered_font_family: Some("Georgia".to_string()),
+            code_font_family: None,
             heading_menu_max_level: EXTENDED_HEADING_MENU_MAX_LEVEL,
             sync_scroll: true,
             show_hidden_files: true,
@@ -5060,6 +5064,71 @@ mod tests {
         // Malformed color value.
         let err = parse_theme_definition("name = \"Bad\"\n[colors]\ntext = \"blue\"").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn theme_fonts_round_trip_and_partial_tables() {
+        // Full [fonts] table round-trips through save/load.
+        let theme = parse_theme_definition(
+            "name = \"Typewriter\"\n[fonts]\neditor = \"Cascadia Code\"\nrendered = \"Georgia\"\ncode = \"JetBrains Mono\"",
+        )
+        .unwrap();
+        assert_eq!(theme.fonts.editor.as_deref(), Some("Cascadia Code"));
+        assert_eq!(theme.fonts.rendered.as_deref(), Some("Georgia"));
+        assert_eq!(theme.fonts.code.as_deref(), Some("JetBrains Mono"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("typewriter.toml");
+        save_theme_definition(&path, &theme).unwrap();
+        assert_eq!(load_theme_definition(&path).unwrap(), theme);
+
+        // Partial table: only one key; empty values count as absent.
+        let partial =
+            parse_theme_definition("name = \"P\"\n[fonts]\nrendered = \"Georgia\"\ncode = \"  \"")
+                .unwrap();
+        assert_eq!(partial.fonts.rendered.as_deref(), Some("Georgia"));
+        assert!(partial.fonts.editor.is_none());
+        assert!(partial.fonts.code.is_none());
+
+        // No [fonts] table at all: theme loads exactly as before.
+        let without = parse_theme_definition("name = \"Bare\"").unwrap();
+        assert_eq!(without.fonts, crate::model::ThemeFonts::default());
+    }
+
+    #[test]
+    fn font_family_resolution_prefers_preference_over_theme_over_default() {
+        use crate::model::resolve_font_family;
+
+        // Preference wins over theme.
+        assert_eq!(
+            resolve_font_family(Some("Cascadia"), Some("Georgia"), ".SystemUIFont"),
+            "Cascadia"
+        );
+        // Theme applies when the preference is unset.
+        assert_eq!(
+            resolve_font_family(None, Some("Georgia"), ".SystemUIFont"),
+            "Georgia"
+        );
+        // Default applies when both are unset.
+        assert_eq!(
+            resolve_font_family(None, None, ".SystemUIFont"),
+            ".SystemUIFont"
+        );
+        // Empty/whitespace values count as unset at every level.
+        assert_eq!(
+            resolve_font_family(Some("   "), Some("  "), "JetBrains Mono"),
+            "JetBrains Mono"
+        );
+        assert_eq!(
+            resolve_font_family(Some("  "), Some("Georgia"), ".SystemUIFont"),
+            "Georgia"
+        );
+        // Values pass through verbatim after trimming, including the magic
+        // system-font name.
+        assert_eq!(
+            resolve_font_family(Some(".SystemUIFont"), None, "JetBrains Mono"),
+            ".SystemUIFont"
+        );
     }
 
     #[test]

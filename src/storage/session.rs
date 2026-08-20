@@ -3,7 +3,10 @@
 //! Keeps workspace continuity separate from [`crate::storage::preferences`]:
 //! every field is optional and defaults to an empty session.
 
-use std::{fs, io, path::Path};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +53,15 @@ impl From<&SessionState> for SessionFile {
     }
 }
 
+/// Heals paths persisted by earlier versions, which on Windows could carry
+/// the verbatim `\\?\` prefix from `std::fs::canonicalize`. `dunce::simplified`
+/// drops the prefix only when the shortened path still resolves to the same
+/// file; it is the identity on other platforms and for paths that genuinely
+/// require extended-length syntax.
+fn sanitize_persisted_path(path: PathBuf) -> PathBuf {
+    dunce::simplified(&path).to_path_buf()
+}
+
 impl From<SessionFile> for SessionState {
     fn from(file: SessionFile) -> Self {
         let mut recent_files = file
@@ -57,7 +69,7 @@ impl From<SessionFile> for SessionState {
             .into_iter()
             .map(|path| path.trim().to_string())
             .filter(|path| !path.is_empty())
-            .map(std::path::PathBuf::from)
+            .map(|path| sanitize_persisted_path(PathBuf::from(path)))
             .collect::<Vec<_>>();
         // Preserve on-disk order (most recent first) while capping length and
         // dropping later duplicates.
@@ -78,7 +90,7 @@ impl From<SessionFile> for SessionState {
             .into_iter()
             .map(|path| path.trim().to_string())
             .filter(|path| !path.is_empty())
-            .map(std::path::PathBuf::from)
+            .map(|path| sanitize_persisted_path(PathBuf::from(path)))
             .collect::<Vec<_>>();
 
         let active_file = file
@@ -86,14 +98,14 @@ impl From<SessionFile> for SessionState {
             .as_deref()
             .map(str::trim)
             .filter(|path| !path.is_empty())
-            .map(std::path::PathBuf::from);
+            .map(|path| sanitize_persisted_path(PathBuf::from(path)));
 
         let workspace_root = file
             .workspace_root
             .as_deref()
             .map(str::trim)
             .filter(|path| !path.is_empty())
-            .map(std::path::PathBuf::from);
+            .map(|path| sanitize_persisted_path(PathBuf::from(path)));
 
         Self {
             workspace_root,
@@ -224,5 +236,65 @@ recent_files = ["", "D:/recent.md"]
         assert_eq!(parsed.open_files, vec![PathBuf::from("D:/ok.md")]);
         assert!(parsed.active_file.is_none());
         assert_eq!(parsed.recent_files, vec![PathBuf::from("D:/recent.md")]);
+    }
+
+    #[test]
+    fn parse_session_state_heals_legacy_verbatim_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("vault");
+        let file = root.join("a.md");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&file, "# a").unwrap();
+
+        // What earlier versions persisted on Windows: std::fs::canonicalize's
+        // verbatim form. On other platforms this fixture is already in normal
+        // form and the test still guards the passthrough + identity checks.
+        let verbatim_root = fs::canonicalize(&root).unwrap().display().to_string();
+        let verbatim_file = fs::canonicalize(&file).unwrap().display().to_string();
+
+        let parsed = parse_session_state(&format!(
+            "workspace_root = {root}\nopen_files = [{file}]\nactive_file = {file}\nrecent_files = [{file}]\n",
+            root = toml_quote(&verbatim_root),
+            file = toml_quote(&verbatim_file),
+        ))
+        .unwrap();
+
+        for path in parsed
+            .workspace_root
+            .iter()
+            .chain(parsed.open_files.iter())
+            .chain(parsed.active_file.iter())
+            .chain(parsed.recent_files.iter())
+        {
+            let text = path.display().to_string();
+            assert!(!text.starts_with(r"\\?\"));
+            assert!(!text.starts_with(r"\\?\UNC\"));
+        }
+
+        // Healing must preserve file identity.
+        assert_eq!(
+            fs::canonicalize(parsed.workspace_root.as_ref().unwrap()).unwrap(),
+            fs::canonicalize(&root).unwrap()
+        );
+        for (healed, original) in parsed
+            .open_files
+            .iter()
+            .chain(parsed.active_file.iter())
+            .chain(parsed.recent_files.iter())
+            .zip(std::iter::repeat(&file))
+        {
+            assert_eq!(
+                fs::canonicalize(healed).unwrap(),
+                fs::canonicalize(original).unwrap()
+            );
+        }
+        assert_eq!(parsed.open_files.len(), 1);
+        assert_eq!(parsed.recent_files.len(), 1);
+    }
+
+    /// Minimal TOML basic-string quoting for single-line Windows paths
+    /// (backslashes are the only escape-relevant characters here).
+    fn toml_quote(path: &str) -> String {
+        format!("\"{}\"", path.replace('\\', "\\\\"))
     }
 }

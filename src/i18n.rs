@@ -134,6 +134,14 @@ pub enum Msg {
     ItemPreviewCopyLinkAddress,
     ItemCopyCode,
 
+    // Tab-bar context menu
+    ItemTabClose,
+    ItemTabCloseOthers,
+    ItemTabCloseToTheRight,
+    ItemTabRename,
+    ItemTabCopyPath,
+    ItemTabRevealInFileManager,
+
     // --- View menu items ---
     ItemToggleView,
     ItemEditMode,
@@ -194,6 +202,8 @@ pub enum Msg {
     ItemResetPreferences,
     ItemKeyboardShortcuts,
     ItemCheckForUpdates,
+    ItemReportIssue,
+    ItemOnlineDocs,
     ItemAboutMarkion,
 
     // --- Panel / tab labels ---
@@ -429,6 +439,8 @@ pub enum Msg {
     StatusShownInFileManager,
     /// {0}=err — "Show in system file manager failed: {err}"
     StatusShowInFileManagerFailed,
+    /// {0}=path — "Copied path: {path}"
+    StatusCopiedPath,
     /// {0}=theme label — "Theme: {theme}"
     StatusTheme,
     /// {0}=count — "{count} matches"
@@ -452,6 +464,8 @@ pub enum Msg {
     DialogButtonReset,
     DialogButtonRestore,
     DialogButtonExitWithoutSaving,
+    DialogButtonDiscardAndCloseTabs,
+    DialogButtonKeepOpen,
     DialogButtonDownloadAndInstall,
     DialogButtonDownloadUpdate,
     DialogButtonDownloadManually,
@@ -503,6 +517,10 @@ pub enum Msg {
     DialogExitTitle,
     /// Exit-without-saving detail. (static)
     DialogExitDetail,
+    /// Kept-dirty-tabs title for Close Others / Close to the Right. (static)
+    DialogCloseTabsDirtyTitle,
+    /// Kept-dirty-tabs detail. {0}=count.
+    DialogCloseTabsDirtyDetail,
     /// Delete-file prompt title.
     DialogDeleteTitle,
     /// Delete-file detail. {0}=path.
@@ -589,6 +607,24 @@ pub enum Msg {
     PrefPanelRenderedFontSize,
     /// Rendered paragraph-spacing row label.
     PrefPanelParagraphSpacing,
+    /// Source-editor font-family row label.
+    PrefPanelEditorFontFamily,
+    /// Rendered-document font-family row label.
+    PrefPanelRenderedFontFamily,
+    /// Code-surface font-family row label.
+    PrefPanelCodeFontFamily,
+    /// Font control state that follows the active theme's font. {0}=effective family name.
+    PrefPanelFontFollowTheme,
+    /// Button that clears an explicit font choice back to follow-theme.
+    PrefPanelFontFollowThemeAction,
+    /// Button that starts editing a font family.
+    PrefPanelFontChangeAction,
+    /// Advisory warning when a font family is not among installed fonts.
+    PrefPanelFontNotInstalled,
+    /// Status line after a font family was applied. {0}=slot label, {1}=family.
+    StatusFontFamilyApplied,
+    /// Status line after a slot was set back to follow-theme. {0}=slot label.
+    StatusFontFamilyFollowTheme,
     /// "Focus mode" row label in the other-settings summary.
     PrefPanelFocusMode,
     /// "Typewriter mode" row label.
@@ -2284,6 +2320,12 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemPreviewSelectAll => "Select All",
         Msg::ItemPreviewCopyLinkAddress => "Copy Link Address",
         Msg::ItemCopyCode => "Copy",
+        Msg::ItemTabClose => "Close Tab",
+        Msg::ItemTabCloseOthers => "Close Other Tabs",
+        Msg::ItemTabCloseToTheRight => "Close Tabs to the Right",
+        Msg::ItemTabRename => "Rename",
+        Msg::ItemTabCopyPath => "Copy File Path",
+        Msg::ItemTabRevealInFileManager => "Show in File Manager",
 
         Msg::ItemToggleView => "Cycle View Mode",
         Msg::ItemEditMode => "Source Mode",
@@ -2340,6 +2382,8 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "Keyboard Shortcuts",
         Msg::ItemAboutMarkion => "About Markion",
         Msg::ItemCheckForUpdates => "Check for Updates…",
+        Msg::ItemReportIssue => "Report an Issue",
+        Msg::ItemOnlineDocs => "Online Documentation",
 
         Msg::LabelEditor => "Editor",
         Msg::LabelPreview => "Preview",
@@ -2517,6 +2561,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusDeleted => "Deleted {0}",
         Msg::StatusDeleteFailed => "Delete failed: {0}",
         Msg::StatusShownInFileManager => "Shown in system file manager: {0}",
+        Msg::StatusCopiedPath => "Copied path: {0}",
         Msg::StatusShowInFileManagerFailed => "Show in system file manager failed: {0}",
         Msg::StatusTheme => "Theme: {0}",
         Msg::StatusMatches => "{0} matches",
@@ -2533,6 +2578,8 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "Reset",
         Msg::DialogButtonRestore => "Restore",
         Msg::DialogButtonExitWithoutSaving => "Exit Without Saving",
+        Msg::DialogButtonDiscardAndCloseTabs => "Discard All and Close",
+        Msg::DialogButtonKeepOpen => "Keep Open",
         Msg::DialogButtonDownloadAndInstall => "Download and Install",
         Msg::DialogButtonDownloadUpdate => "Download Update",
         Msg::DialogButtonDownloadManually => "Download Manually",
@@ -2573,6 +2620,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogDiscardOpenTreeDetail => "Open {0} without saving current changes.",
         Msg::DialogExitTitle => "Exit Markion without saving?",
         Msg::DialogExitDetail => "Unsaved changes will be lost.",
+        Msg::DialogCloseTabsDirtyTitle => "Unsaved tabs kept open",
+        Msg::DialogCloseTabsDirtyDetail => {
+            "{0} tab(s) with unsaved changes were kept open. Save and close them individually, or discard all of their changes now."
+        }
         Msg::DialogDeleteTitle => "Delete selected file tree entry?",
         Msg::DialogDeleteDetail => "Delete {0} from disk.",
         Msg::DialogDeleteFolderRecursiveTitle => "Delete folder and all contents?",
@@ -2628,6 +2679,17 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelEditorFontSize => "Source font size",
         Msg::PrefPanelRenderedFontSize => "Reading font size",
         Msg::PrefPanelParagraphSpacing => "Paragraph spacing",
+        Msg::PrefPanelEditorFontFamily => "Source font family",
+        Msg::PrefPanelRenderedFontFamily => "Reading font family",
+        Msg::PrefPanelCodeFontFamily => "Code font family",
+        Msg::PrefPanelFontFollowTheme => "Follow theme ({0})",
+        Msg::PrefPanelFontFollowThemeAction => "Follow theme",
+        Msg::PrefPanelFontChangeAction => "Change…",
+        Msg::PrefPanelFontNotInstalled => {
+            "Not installed on this machine; a fallback font will be used"
+        }
+        Msg::StatusFontFamilyApplied => "{0}: {1}",
+        Msg::StatusFontFamilyFollowTheme => "{0} follows the theme",
         Msg::PrefPanelFocusMode => "Focus mode",
         Msg::PrefPanelTypewriterMode => "Typewriter mode",
         Msg::PrefPanelCodeLineNumbers => "Code line numbers",
@@ -2714,6 +2776,12 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemPreviewSelectAll => "すべて選択",
         Msg::ItemPreviewCopyLinkAddress => "リンクアドレスをコピー",
         Msg::ItemCopyCode => "コピー",
+        Msg::ItemTabClose => "タブを閉じる",
+        Msg::ItemTabCloseOthers => "他のタブを閉じる",
+        Msg::ItemTabCloseToTheRight => "右側のタブを閉じる",
+        Msg::ItemTabRename => "名前を変更",
+        Msg::ItemTabCopyPath => "ファイルパスをコピー",
+        Msg::ItemTabRevealInFileManager => "ファイルマネージャーで表示",
 
         Msg::ItemToggleView => "表示モード切替",
         Msg::ItemEditMode => "ソースモード",
@@ -2770,6 +2838,8 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "キーボードショートカット",
         Msg::ItemAboutMarkion => "Markionについて",
         Msg::ItemCheckForUpdates => "更新を確認…",
+        Msg::ItemReportIssue => "問題を報告",
+        Msg::ItemOnlineDocs => "オンラインドキュメント",
 
         Msg::LabelEditor => "エディタ",
         Msg::LabelPreview => "プレビュー",
@@ -2947,6 +3017,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusDeleted => "{0} を削除しました",
         Msg::StatusDeleteFailed => "削除に失敗しました: {0}",
         Msg::StatusShownInFileManager => "システムのファイルマネージャーで表示: {0}",
+        Msg::StatusCopiedPath => "パスをコピーしました: {0}",
         Msg::StatusShowInFileManagerFailed => {
             "システムのファイルマネージャーでの表示に失敗しました: {0}"
         }
@@ -2965,6 +3036,8 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "リセット",
         Msg::DialogButtonRestore => "復元",
         Msg::DialogButtonExitWithoutSaving => "保存せずに終了",
+        Msg::DialogButtonDiscardAndCloseTabs => "すべて破棄して閉じる",
+        Msg::DialogButtonKeepOpen => "開いたままにする",
         Msg::DialogButtonDownloadAndInstall => "ダウンロードしてインストール",
         Msg::DialogButtonDownloadUpdate => "更新をダウンロード",
         Msg::DialogButtonDownloadManually => "手動でダウンロード",
@@ -3005,6 +3078,10 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogDiscardOpenTreeDetail => "現在の変更を保存せずに {0} を開きます。",
         Msg::DialogExitTitle => "保存せずにMarkionを終了しますか？",
         Msg::DialogExitDetail => "未保存の変更は失われます。",
+        Msg::DialogCloseTabsDirtyTitle => "未保存のタブを開いたままにしました",
+        Msg::DialogCloseTabsDirtyDetail => {
+            "未保存の変更がある {0} 個のタブを開いたままにしています。個別に保存して閉じるか、今すぐすべての変更を破棄して閉じられます。"
+        }
         Msg::DialogDeleteTitle => "選択したファイルツリーの項目を削除しますか？",
         Msg::DialogDeleteDetail => "{0} をディスクから削除します。",
         Msg::DialogDeleteFolderRecursiveTitle => "フォルダとその中身をすべて削除しますか？",
@@ -3060,6 +3137,17 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelEditorFontSize => "ソースのフォントサイズ",
         Msg::PrefPanelRenderedFontSize => "閲覧フォントサイズ",
         Msg::PrefPanelParagraphSpacing => "段落間隔",
+        Msg::PrefPanelEditorFontFamily => "ソースのフォント",
+        Msg::PrefPanelRenderedFontFamily => "閲覧フォント",
+        Msg::PrefPanelCodeFontFamily => "コードフォント",
+        Msg::PrefPanelFontFollowTheme => "テーマに従う({0})",
+        Msg::PrefPanelFontFollowThemeAction => "テーマに従う",
+        Msg::PrefPanelFontChangeAction => "変更…",
+        Msg::PrefPanelFontNotInstalled => {
+            "このコンピューターにインストールされていないため、代替フォントが使われます"
+        }
+        Msg::StatusFontFamilyApplied => "{0}:{1}",
+        Msg::StatusFontFamilyFollowTheme => "{0}はテーマに従います",
         Msg::PrefPanelFocusMode => "集中モード",
         Msg::PrefPanelTypewriterMode => "タイプライターモード",
         Msg::PrefPanelCodeLineNumbers => "コード行番号",
@@ -3139,6 +3227,12 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemPreviewSelectAll => "Tout sélectionner",
         Msg::ItemPreviewCopyLinkAddress => "Copier l'adresse du lien",
         Msg::ItemCopyCode => "Copier",
+        Msg::ItemTabClose => "Fermer l'onglet",
+        Msg::ItemTabCloseOthers => "Fermer les autres onglets",
+        Msg::ItemTabCloseToTheRight => "Fermer les onglets à droite",
+        Msg::ItemTabRename => "Renommer",
+        Msg::ItemTabCopyPath => "Copier le chemin du fichier",
+        Msg::ItemTabRevealInFileManager => "Afficher dans le gestionnaire de fichiers",
         Msg::ItemToggleView => "Changer le mode d'affichage",
         Msg::ItemEditMode => "Mode source",
         Msg::ItemVisualEditMode => "Mode édition visuelle",
@@ -3191,6 +3285,8 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "Raccourcis clavier",
         Msg::ItemAboutMarkion => "À propos de Markion",
         Msg::ItemCheckForUpdates => "Rechercher des mises à jour…",
+        Msg::ItemReportIssue => "Signaler un problème",
+        Msg::ItemOnlineDocs => "Documentation en ligne",
         Msg::LabelEditor => "Éditeur",
         Msg::LabelPreview => "Aperçu",
         Msg::LabelFiles => "Fichiers",
@@ -3365,6 +3461,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusDeleted => "{0} supprimé",
         Msg::StatusDeleteFailed => "Échec de la suppression : {0}",
         Msg::StatusShownInFileManager => "Affiché dans le gestionnaire de fichiers : {0}",
+        Msg::StatusCopiedPath => "Chemin copié : {0}",
         Msg::StatusShowInFileManagerFailed => {
             "Échec de l'affichage dans le gestionnaire de fichiers : {0}"
         }
@@ -3382,6 +3479,8 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "Réinitialiser",
         Msg::DialogButtonRestore => "Restaurer",
         Msg::DialogButtonExitWithoutSaving => "Quitter sans enregistrer",
+        Msg::DialogButtonDiscardAndCloseTabs => "Tout ignorer et fermer",
+        Msg::DialogButtonKeepOpen => "Garder ouverts",
         Msg::DialogButtonDownloadAndInstall => "Télécharger et installer",
         Msg::DialogButtonDownloadUpdate => "Télécharger la mise à jour",
         Msg::DialogButtonDownloadManually => "Télécharger manuellement",
@@ -3429,6 +3528,10 @@ fn fr(msg: Msg) -> &'static str {
         }
         Msg::DialogExitTitle => "Quitter Markion sans enregistrer ?",
         Msg::DialogExitDetail => "Les modifications non enregistrées seront perdues.",
+        Msg::DialogCloseTabsDirtyTitle => "Onglets non enregistrés conservés",
+        Msg::DialogCloseTabsDirtyDetail => {
+            "{0} onglet(s) avec des modifications non enregistrées ont été conservés ouverts. Enregistrez et fermez-les un par un, ou ignorez toutes leurs modifications maintenant."
+        }
         Msg::DialogDeleteTitle => "Supprimer l'entrée sélectionnée dans l'arborescence ?",
         Msg::DialogDeleteDetail => "Supprimer {0} du disque.",
         Msg::DialogDeleteFolderRecursiveTitle => "Supprimer le dossier et tout son contenu ?",
@@ -3480,6 +3583,17 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelEditorFontSize => "Taille de la source",
         Msg::PrefPanelRenderedFontSize => "Taille de lecture",
         Msg::PrefPanelParagraphSpacing => "Espacement des paragraphes",
+        Msg::PrefPanelEditorFontFamily => "Police de la source",
+        Msg::PrefPanelRenderedFontFamily => "Police de lecture",
+        Msg::PrefPanelCodeFontFamily => "Police du code",
+        Msg::PrefPanelFontFollowTheme => "Suivre le thème ({0})",
+        Msg::PrefPanelFontFollowThemeAction => "Suivre le thème",
+        Msg::PrefPanelFontChangeAction => "Modifier…",
+        Msg::PrefPanelFontNotInstalled => {
+            "Police non installée ; une police de secours sera utilisée"
+        }
+        Msg::StatusFontFamilyApplied => "{0} : {1}",
+        Msg::StatusFontFamilyFollowTheme => "{0} suit le thème",
         Msg::PrefPanelFocusMode => "Mode concentré",
         Msg::PrefPanelTypewriterMode => "Mode machine à écrire",
         Msg::PrefPanelCodeLineNumbers => "Numéros de ligne de code",
@@ -3561,6 +3675,12 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemPreviewSelectAll => "Alles auswählen",
         Msg::ItemPreviewCopyLinkAddress => "Linkadresse kopieren",
         Msg::ItemCopyCode => "Kopieren",
+        Msg::ItemTabClose => "Tab schließen",
+        Msg::ItemTabCloseOthers => "Andere Tabs schließen",
+        Msg::ItemTabCloseToTheRight => "Tabs rechts schließen",
+        Msg::ItemTabRename => "Umbenennen",
+        Msg::ItemTabCopyPath => "Dateipfad kopieren",
+        Msg::ItemTabRevealInFileManager => "Im Dateimanager anzeigen",
         Msg::ItemToggleView => "Ansichtsmodus wechseln",
         Msg::ItemEditMode => "Quelltextmodus",
         Msg::ItemVisualEditMode => "Visueller Bearbeitungsmodus",
@@ -3613,6 +3733,8 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "Tastenkürzel",
         Msg::ItemAboutMarkion => "Über Markion",
         Msg::ItemCheckForUpdates => "Nach Updates suchen…",
+        Msg::ItemReportIssue => "Problem melden",
+        Msg::ItemOnlineDocs => "Online-Dokumentation",
         Msg::LabelEditor => "Editor",
         Msg::LabelPreview => "Vorschau",
         Msg::LabelFiles => "Dateien",
@@ -3785,6 +3907,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusDeleted => "{0} gelöscht",
         Msg::StatusDeleteFailed => "Löschen fehlgeschlagen: {0}",
         Msg::StatusShownInFileManager => "Im Dateimanager angezeigt: {0}",
+        Msg::StatusCopiedPath => "Pfad kopiert: {0}",
         Msg::StatusShowInFileManagerFailed => "Anzeige im Dateimanager fehlgeschlagen: {0}",
         Msg::StatusTheme => "Design: {0}",
         Msg::StatusMatches => "{0} Treffer",
@@ -3800,6 +3923,8 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "Zurücksetzen",
         Msg::DialogButtonRestore => "Wiederherstellen",
         Msg::DialogButtonExitWithoutSaving => "Ohne Speichern beenden",
+        Msg::DialogButtonDiscardAndCloseTabs => "Alle verwerfen und schließen",
+        Msg::DialogButtonKeepOpen => "Offen lassen",
         Msg::DialogButtonDownloadAndInstall => "Herunterladen und installieren",
         Msg::DialogButtonDownloadUpdate => "Update herunterladen",
         Msg::DialogButtonDownloadManually => "Manuell herunterladen",
@@ -3847,6 +3972,10 @@ fn de(msg: Msg) -> &'static str {
         }
         Msg::DialogExitTitle => "Markion ohne Speichern beenden?",
         Msg::DialogExitDetail => "Ungespeicherte Änderungen gehen verloren.",
+        Msg::DialogCloseTabsDirtyTitle => "Ungespeicherte Tabs offengehalten",
+        Msg::DialogCloseTabsDirtyDetail => {
+            "{0} Tab(s) mit ungespeicherten Änderungen wurden offengehalten. Speichern und schließen Sie sie einzeln, oder verwerfen Sie jetzt alle ihre Änderungen."
+        }
         Msg::DialogDeleteTitle => "Ausgewählten Dateiansicht-Eintrag löschen?",
         Msg::DialogDeleteDetail => "{0} vom Datenträger löschen.",
         Msg::DialogDeleteFolderRecursiveTitle => "Ordner und gesamten Inhalt löschen?",
@@ -3898,6 +4027,17 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelEditorFontSize => "Quelltext-Schriftgröße",
         Msg::PrefPanelRenderedFontSize => "Leseschriftgröße",
         Msg::PrefPanelParagraphSpacing => "Absatzabstand",
+        Msg::PrefPanelEditorFontFamily => "Quellschrift",
+        Msg::PrefPanelRenderedFontFamily => "Leseschrift",
+        Msg::PrefPanelCodeFontFamily => "Codeschrift",
+        Msg::PrefPanelFontFollowTheme => "Design folgen ({0})",
+        Msg::PrefPanelFontFollowThemeAction => "Design folgen",
+        Msg::PrefPanelFontChangeAction => "Ändern…",
+        Msg::PrefPanelFontNotInstalled => {
+            "Schrift ist nicht installiert; eine Ersatzschrift wird verwendet"
+        }
+        Msg::StatusFontFamilyApplied => "{0}: {1}",
+        Msg::StatusFontFamilyFollowTheme => "{0} folgt dem Design",
         Msg::PrefPanelFocusMode => "Fokusmodus",
         Msg::PrefPanelTypewriterMode => "Schreibmaschinenmodus",
         Msg::PrefPanelCodeLineNumbers => "Code-Zeilennummern",
@@ -3979,6 +4119,12 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemPreviewSelectAll => "Seleccionar todo",
         Msg::ItemPreviewCopyLinkAddress => "Copiar dirección del enlace",
         Msg::ItemCopyCode => "Copiar",
+        Msg::ItemTabClose => "Cerrar pestaña",
+        Msg::ItemTabCloseOthers => "Cerrar las otras pestañas",
+        Msg::ItemTabCloseToTheRight => "Cerrar las pestañas a la derecha",
+        Msg::ItemTabRename => "Renombrar",
+        Msg::ItemTabCopyPath => "Copiar la ruta del archivo",
+        Msg::ItemTabRevealInFileManager => "Mostrar en el administrador de archivos",
         Msg::ItemToggleView => "Cambiar modo de vista",
         Msg::ItemEditMode => "Modo código fuente",
         Msg::ItemVisualEditMode => "Modo edición visual",
@@ -4031,6 +4177,8 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "Atajos de teclado",
         Msg::ItemAboutMarkion => "Acerca de Markion",
         Msg::ItemCheckForUpdates => "Buscar actualizaciones…",
+        Msg::ItemReportIssue => "Informar de un problema",
+        Msg::ItemOnlineDocs => "Documentación en línea",
         Msg::LabelEditor => "Editor",
         Msg::LabelPreview => "Vista previa",
         Msg::LabelFiles => "Archivos",
@@ -4203,6 +4351,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusDeleted => "{0} eliminado",
         Msg::StatusDeleteFailed => "Error al eliminar: {0}",
         Msg::StatusShownInFileManager => "Mostrado en el administrador de archivos: {0}",
+        Msg::StatusCopiedPath => "Ruta copiada: {0}",
         Msg::StatusShowInFileManagerFailed => {
             "Error al mostrar en el administrador de archivos: {0}"
         }
@@ -4220,6 +4369,8 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "Restablecer",
         Msg::DialogButtonRestore => "Restaurar",
         Msg::DialogButtonExitWithoutSaving => "Salir sin guardar",
+        Msg::DialogButtonDiscardAndCloseTabs => "Descartar todo y cerrar",
+        Msg::DialogButtonKeepOpen => "Mantener abiertas",
         Msg::DialogButtonDownloadAndInstall => "Descargar e instalar",
         Msg::DialogButtonDownloadUpdate => "Descargar actualización",
         Msg::DialogButtonDownloadManually => "Descargar manualmente",
@@ -4259,6 +4410,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogDiscardOpenTreeDetail => "Abrir {0} sin guardar los cambios actuales.",
         Msg::DialogExitTitle => "¿Salir de Markion sin guardar?",
         Msg::DialogExitDetail => "Los cambios no guardados se perderán.",
+        Msg::DialogCloseTabsDirtyTitle => "Pestañas sin guardar mantenidas abiertas",
+        Msg::DialogCloseTabsDirtyDetail => {
+            "Se mantuvieron abiertas {0} pestaña(s) con cambios sin guardar. Guárdelas y ciérrelas una por una, o descarte ahora todos sus cambios."
+        }
         Msg::DialogDeleteTitle => "¿Eliminar la entrada seleccionada del árbol de archivos?",
         Msg::DialogDeleteDetail => "Eliminar {0} del disco.",
         Msg::DialogDeleteFolderRecursiveTitle => "¿Eliminar carpeta y todo su contenido?",
@@ -4310,6 +4465,15 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelEditorFontSize => "Tamaño de fuente del código",
         Msg::PrefPanelRenderedFontSize => "Tamaño de lectura",
         Msg::PrefPanelParagraphSpacing => "Espacio entre párrafos",
+        Msg::PrefPanelEditorFontFamily => "Fuente del editor",
+        Msg::PrefPanelRenderedFontFamily => "Fuente de lectura",
+        Msg::PrefPanelCodeFontFamily => "Fuente de código",
+        Msg::PrefPanelFontFollowTheme => "Seguir el tema ({0})",
+        Msg::PrefPanelFontFollowThemeAction => "Seguir el tema",
+        Msg::PrefPanelFontChangeAction => "Cambiar…",
+        Msg::PrefPanelFontNotInstalled => "Fuente no instalada; se usará una de respaldo",
+        Msg::StatusFontFamilyApplied => "{0}: {1}",
+        Msg::StatusFontFamilyFollowTheme => "{0} sigue el tema",
         Msg::PrefPanelFocusMode => "Modo concentración",
         Msg::PrefPanelTypewriterMode => "Modo máquina de escribir",
         Msg::PrefPanelCodeLineNumbers => "Números de línea de código",
@@ -4391,6 +4555,12 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemPreviewSelectAll => "全选",
         Msg::ItemPreviewCopyLinkAddress => "复制链接地址",
         Msg::ItemCopyCode => "复制",
+        Msg::ItemTabClose => "关闭标签页",
+        Msg::ItemTabCloseOthers => "关闭其他标签页",
+        Msg::ItemTabCloseToTheRight => "关闭右侧标签页",
+        Msg::ItemTabRename => "重命名",
+        Msg::ItemTabCopyPath => "复制文件路径",
+        Msg::ItemTabRevealInFileManager => "在文件管理器中显示",
 
         Msg::ItemToggleView => "循环切换视图模式",
         Msg::ItemEditMode => "源码模式",
@@ -4447,6 +4617,8 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "键盘快捷键",
         Msg::ItemAboutMarkion => "关于 Markion",
         Msg::ItemCheckForUpdates => "检查更新…",
+        Msg::ItemReportIssue => "反馈问题",
+        Msg::ItemOnlineDocs => "在线文档",
 
         Msg::LabelEditor => "编辑器",
         Msg::LabelPreview => "预览",
@@ -4622,6 +4794,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusDeleted => "已删除 {0}",
         Msg::StatusDeleteFailed => "删除失败：{0}",
         Msg::StatusShownInFileManager => "已在系统资源管理器中显示：{0}",
+        Msg::StatusCopiedPath => "已复制路径：{0}",
         Msg::StatusShowInFileManagerFailed => "在系统资源管理器中显示失败：{0}",
         Msg::StatusTheme => "主题：{0}",
         Msg::StatusMatches => "找到 {0} 个匹配",
@@ -4638,6 +4811,8 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "重置",
         Msg::DialogButtonRestore => "恢复",
         Msg::DialogButtonExitWithoutSaving => "不保存退出",
+        Msg::DialogButtonDiscardAndCloseTabs => "全部放弃并关闭",
+        Msg::DialogButtonKeepOpen => "保持打开",
         Msg::DialogButtonDownloadAndInstall => "下载并安装",
         Msg::DialogButtonDownloadUpdate => "下载新版本",
         Msg::DialogButtonDownloadManually => "手动下载",
@@ -4676,6 +4851,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogDiscardOpenTreeDetail => "打开 {0} 而不保存当前更改。",
         Msg::DialogExitTitle => "不保存就退出 Markion？",
         Msg::DialogExitDetail => "未保存的更改将会丢失。",
+        Msg::DialogCloseTabsDirtyTitle => "已保留未保存的标签页",
+        Msg::DialogCloseTabsDirtyDetail => {
+            "已保留 {0} 个含未保存修改的标签页。可逐个保存后关闭，也可现在放弃全部修改并关闭。"
+        }
         Msg::DialogDeleteTitle => "删除选中的文件树条目？",
         Msg::DialogDeleteDetail => "从磁盘删除 {0}。",
         Msg::DialogDeleteFolderRecursiveTitle => "删除文件夹及其所有内容？",
@@ -4729,6 +4908,15 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelEditorFontSize => "源码字号",
         Msg::PrefPanelRenderedFontSize => "阅读字号",
         Msg::PrefPanelParagraphSpacing => "段落间距",
+        Msg::PrefPanelEditorFontFamily => "源码字体",
+        Msg::PrefPanelRenderedFontFamily => "阅读字体",
+        Msg::PrefPanelCodeFontFamily => "代码字体",
+        Msg::PrefPanelFontFollowTheme => "跟随主题({0})",
+        Msg::PrefPanelFontFollowThemeAction => "跟随主题",
+        Msg::PrefPanelFontChangeAction => "更改…",
+        Msg::PrefPanelFontNotInstalled => "本机未安装该字体,将使用回退字体",
+        Msg::StatusFontFamilyApplied => "{0}:{1}",
+        Msg::StatusFontFamilyFollowTheme => "{0}跟随主题",
         Msg::PrefPanelFocusMode => "专注模式",
         Msg::PrefPanelTypewriterMode => "打字机模式",
         Msg::PrefPanelCodeLineNumbers => "代码行号",
@@ -4808,6 +4996,12 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemPreviewSelectAll => "全選",
         Msg::ItemPreviewCopyLinkAddress => "複製連結地址",
         Msg::ItemCopyCode => "複製",
+        Msg::ItemTabClose => "關閉分頁",
+        Msg::ItemTabCloseOthers => "關閉其他分頁",
+        Msg::ItemTabCloseToTheRight => "關閉右側分頁",
+        Msg::ItemTabRename => "重新命名",
+        Msg::ItemTabCopyPath => "複製檔案路徑",
+        Msg::ItemTabRevealInFileManager => "在檔案管理員中顯示",
 
         Msg::ItemToggleView => "循環切換檢視模式",
         Msg::ItemEditMode => "原始碼模式",
@@ -4864,6 +5058,8 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "鍵盤快速鍵",
         Msg::ItemAboutMarkion => "關於 Markion",
         Msg::ItemCheckForUpdates => "檢查更新…",
+        Msg::ItemReportIssue => "回報問題",
+        Msg::ItemOnlineDocs => "線上文件",
 
         Msg::LabelEditor => "編輯器",
         Msg::LabelPreview => "預覽",
@@ -5041,6 +5237,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusDeleted => "已刪除 {0}",
         Msg::StatusDeleteFailed => "刪除失敗：{0}",
         Msg::StatusShownInFileManager => "已在系統檔案管理員中顯示：{0}",
+        Msg::StatusCopiedPath => "已複製路徑：{0}",
         Msg::StatusShowInFileManagerFailed => "在系統檔案管理員中顯示失敗：{0}",
         Msg::StatusTheme => "佈景主題：{0}",
         Msg::StatusMatches => "找到 {0} 個符合項目",
@@ -5057,6 +5254,8 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogButtonReset => "重設",
         Msg::DialogButtonRestore => "復原",
         Msg::DialogButtonExitWithoutSaving => "不儲存結束",
+        Msg::DialogButtonDiscardAndCloseTabs => "全部捨棄並關閉",
+        Msg::DialogButtonKeepOpen => "保持開啟",
         Msg::DialogButtonDownloadAndInstall => "下載並安裝",
         Msg::DialogButtonDownloadUpdate => "下載新版本",
         Msg::DialogButtonDownloadManually => "手動下載",
@@ -5095,6 +5294,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogDiscardOpenTreeDetail => "開啟 {0} 而不儲存目前的變更。",
         Msg::DialogExitTitle => "不儲存就結束 Markion？",
         Msg::DialogExitDetail => "未儲存的變更將會遺失。",
+        Msg::DialogCloseTabsDirtyTitle => "已保留未儲存的分頁",
+        Msg::DialogCloseTabsDirtyDetail => {
+            "已保留 {0} 個含未儲存變更的分頁。可逐個儲存後關閉，也可現在捨棄全部變更並關閉。"
+        }
         Msg::DialogDeleteTitle => "刪除選取的檔案樹項目？",
         Msg::DialogDeleteDetail => "從磁碟刪除 {0}。",
         Msg::DialogDeleteFolderRecursiveTitle => "刪除資料夾及其所有內容？",
@@ -5148,6 +5351,15 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelEditorFontSize => "原始碼字號",
         Msg::PrefPanelRenderedFontSize => "閱讀字號",
         Msg::PrefPanelParagraphSpacing => "段落間距",
+        Msg::PrefPanelEditorFontFamily => "原始碼字體",
+        Msg::PrefPanelRenderedFontFamily => "閱讀字體",
+        Msg::PrefPanelCodeFontFamily => "程式碼字體",
+        Msg::PrefPanelFontFollowTheme => "跟隨主題({0})",
+        Msg::PrefPanelFontFollowThemeAction => "跟隨主題",
+        Msg::PrefPanelFontChangeAction => "變更…",
+        Msg::PrefPanelFontNotInstalled => "本機未安裝該字體,將使用後備字體",
+        Msg::StatusFontFamilyApplied => "{0}:{1}",
+        Msg::StatusFontFamilyFollowTheme => "{0}跟隨主題",
         Msg::PrefPanelFocusMode => "專注模式",
         Msg::PrefPanelTypewriterMode => "打字機模式",
         Msg::PrefPanelCodeLineNumbers => "程式碼行號",

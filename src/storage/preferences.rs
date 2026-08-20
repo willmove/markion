@@ -46,6 +46,24 @@ struct PreferencesFile {
     rendered_font_size: u16,
     #[serde(deserialize_with = "deserialize_paragraph_spacing")]
     paragraph_spacing: u16,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_font_family"
+    )]
+    editor_font_family: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_font_family"
+    )]
+    rendered_font_family: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_font_family"
+    )]
+    code_font_family: Option<String>,
     #[serde(default = "default_heading_menu_max_level")]
     heading_menu_max_level: u8,
     #[serde(deserialize_with = "deserialize_bool_or_false")]
@@ -117,6 +135,15 @@ impl From<&AppPreferences> for PreferencesFile {
             editor_font_size: normalize_editor_font_size(preferences.editor_font_size as i64),
             rendered_font_size: normalize_rendered_font_size(preferences.rendered_font_size as i64),
             paragraph_spacing: normalize_paragraph_spacing(preferences.paragraph_spacing as i64),
+            editor_font_family: crate::model::normalize_font_family(
+                preferences.editor_font_family.as_deref(),
+            ),
+            rendered_font_family: crate::model::normalize_font_family(
+                preferences.rendered_font_family.as_deref(),
+            ),
+            code_font_family: crate::model::normalize_font_family(
+                preferences.code_font_family.as_deref(),
+            ),
             heading_menu_max_level: preferences.heading_menu_max_level,
             sync_scroll: preferences.sync_scroll,
             show_hidden_files: preferences.show_hidden_files,
@@ -153,6 +180,13 @@ impl From<PreferencesFile> for AppPreferences {
             editor_font_size: normalize_editor_font_size(file.editor_font_size as i64),
             rendered_font_size: normalize_rendered_font_size(file.rendered_font_size as i64),
             paragraph_spacing: normalize_paragraph_spacing(file.paragraph_spacing as i64),
+            editor_font_family: crate::model::normalize_font_family(
+                file.editor_font_family.as_deref(),
+            ),
+            rendered_font_family: crate::model::normalize_font_family(
+                file.rendered_font_family.as_deref(),
+            ),
+            code_font_family: crate::model::normalize_font_family(file.code_font_family.as_deref()),
             heading_menu_max_level: normalize_heading_menu_max_level(file.heading_menu_max_level),
             sync_scroll: file.sync_scroll,
             show_hidden_files: file.show_hidden_files,
@@ -358,6 +392,17 @@ where
     Ok(value.as_integer().unwrap_or(default))
 }
 
+/// Font-family preferences are free-form strings: a string value is kept
+/// (trimmed; empty treated as unset), any other value type degrades to unset
+/// rather than blocking startup.
+fn deserialize_optional_font_family<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(crate::model::normalize_font_family(value.as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +502,48 @@ mod tests {
     #[test]
     fn sync_scroll_defaults_to_false() {
         assert!(!AppPreferences::default().sync_scroll);
+    }
+
+    #[test]
+    fn font_family_preferences_round_trip_verbatim() {
+        let preferences = AppPreferences {
+            editor_font_family: Some("Cascadia Code".to_string()),
+            rendered_font_family: Some("Source Serif 4".to_string()),
+            code_font_family: Some(".SystemUIFont".to_string()),
+            ..AppPreferences::default()
+        };
+        let rendered = render_app_preferences(&preferences);
+        assert!(rendered.contains("editor_font_family = \"Cascadia Code\""));
+        assert!(rendered.contains("rendered_font_family = \"Source Serif 4\""));
+        assert!(rendered.contains("code_font_family = \".SystemUIFont\""));
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(parsed.editor_font_family.as_deref(), Some("Cascadia Code"));
+        assert_eq!(
+            parsed.rendered_font_family.as_deref(),
+            Some("Source Serif 4")
+        );
+        assert_eq!(parsed.code_font_family.as_deref(), Some(".SystemUIFont"));
+    }
+
+    #[test]
+    fn font_family_preferences_absent_empty_and_invalid_are_none() {
+        // Absent keys, empty/whitespace strings, and non-string values all
+        // mean "follow theme/default" and never block loading.
+        assert!(AppPreferences::default().editor_font_family.is_none());
+        assert!(AppPreferences::default().rendered_font_family.is_none());
+        assert!(AppPreferences::default().code_font_family.is_none());
+
+        let text = "theme = \"Paper\"\neditor_font_family = \"\"\nrendered_font_family = \"   \"\ncode_font_family = 12\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert!(parsed.editor_font_family.is_none());
+        assert!(parsed.rendered_font_family.is_none());
+        assert!(parsed.code_font_family.is_none());
+    }
+
+    #[test]
+    fn font_family_preferences_omit_keys_when_unset() {
+        let rendered = render_app_preferences(&AppPreferences::default());
+        assert!(!rendered.contains("font_family"));
     }
 
     #[test]
