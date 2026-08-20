@@ -2,7 +2,7 @@
 
 ## What is Markion?
 
-Markion is a native desktop Markdown editor built in Rust with the [GPUI](https://github.com/zed-industries/zed) GPU-accelerated UI framework. It offers three view modes — Source, Split, and Preview — plus an outline, a file-tree workspace panel, find-and-replace, focus and typewriter modes, and export to several formats.
+Markion is a native desktop Markdown editor built in Rust with the [GPUI](https://github.com/zed-industries/zed) GPU-accelerated UI framework. It offers four view modes — Edit, Visual Edit, Split, and Read — plus an outline, a file-tree workspace panel, find-and-replace, focus and typewriter modes, and export to several formats.
 
 - **License:** MIT
 - **Repository:** <https://github.com/willmove/markion>
@@ -26,6 +26,7 @@ Markion uses [`pulldown-cmark`](https://github.com/pulldown-cmark/pulldown-cmark
 - GitHub Flavored Markdown: tables, strikethrough, task lists, autolinks
 - Footnotes
 - Math formulas (`$inline$` and `$$block$$`)
+- Mermaid diagrams (` ```mermaid ` fenced code blocks — flowcharts, sequence diagrams, and more)
 - Smart punctuation (smart quotes, dashes)
 - Heading attributes
 - YAML front matter (`---` delimited, with `title` / `author` / `date` used by exports)
@@ -38,15 +39,18 @@ Markion uses [`pulldown-cmark`](https://github.com/pulldown-cmark/pulldown-cmark
 
 ## View modes
 
-Markion cycles through three modes with **Ctrl+Shift+V** (default is Split):
+Markion cycles through four modes with **Ctrl+Shift+V** (default is Split), or jumps straight to one with Ctrl+Alt+1/4/2/3:
 
-1. **Source** — raw Markdown text only.
-2. **Split** — source on the left, rendered preview on the right (default).
-3. **Preview** — rendered preview only.
+1. **Edit** (Ctrl+Alt+1) — raw Markdown source text only.
+2. **Visual Edit** (Ctrl+Alt+4) — a WYSIWYG-first, source-backed editing surface; see [README: Editing modes](../README.md#editing-modes) for what it covers.
+3. **Split** (Ctrl+Alt+2) — source on the left, rendered preview on the right (default).
+4. **Read** (Ctrl+Alt+3) — rendered preview only, non-editing.
+
+Switching modes preserves the active document, cursor/selection, undo history, and per-tab scroll state.
 
 ## Math
 
-Markion **does not** render math graphically (no KaTeX / MathJax). Formulas are validated for brace and environment balance, then displayed as a readable Unicode plain-text approximation: Greek letters (`\alpha` → α), common operators (`\sum` → ∑, `\sqrt` → √, `\times` → ×), and simple fractions (`\frac{a}{b}` → a⁄b). Nothing extra needs to be installed.
+Markion typesets math on screen (Split/Read preview and Visual Edit) with an embedded RaTeX engine (KaTeX-compatible, bundled fonts) that renders `$inline$` and `$$block$$` formulas into cached SVG — no network access and no external LaTeX install required. LaTeX export keeps the native `$...$`/`$$...$$` source for the reader's own toolchain to typeset. The built-in DOCX export fallback (used only when pandoc is unavailable) still degrades formulas to a readable Unicode plain-text approximation rather than embedding typeset glyphs.
 
 ## Export
 
@@ -134,14 +138,24 @@ Markion stores its configuration under platform-standard directories.
 The complete supported schema (all fields optional, defaults shown):
 
 ```toml
-theme = "Paper"                # built-in or custom theme name
-# custom_theme = "Midnight"   # a custom theme name (optional)
-language = "en"                # "en" or "zh"
+theme = "Paper"                   # built-in or custom theme name
+# custom_theme = "Midnight"      # a custom theme name (optional)
+language = "en"                   # en, zh-hans, zh-hant, ja, fr, de, es
 focus_mode = false
 typewriter_mode = false
 code_line_numbers = true
+preview_adaptive_width = false
+heading_menu_max_level = 5        # 5 or 6
+sync_scroll = false
 sidebar_visible = true
-sidebar_tab = "files"          # "files" or "outline"
+sidebar_tab = "files"             # "files" or "outline"
+show_hidden_files = false
+
+# Optional font families per plane; absent = follow the theme, then the
+# built-in default (system UI font for source/reading, JetBrains Mono for code).
+# editor_font_family = "Cascadia Code"
+# rendered_font_family = "Georgia"
+# code_font_family = "JetBrains Mono"
 
 [auto_save]
 enabled = true
@@ -149,15 +163,20 @@ delay_secs = 5
 
 [export]
 pdf_engine = "xelatex"
+
+# Menu-action shortcut overrides: action id -> GPUI keystroke string. Actions
+# without an entry keep their default binding. See Keyboard Shortcuts.
+# [shortcuts]
+# "toggle-sidebar" = "ctrl-alt-b"
 ```
 
 A legacy `preferences.conf` from a pre-TOML Markion build is migrated to `config.toml` on first launch and left in place.
 
-> Markion does **not** support font configuration, custom keybindings, or a toggle for footnotes. If a guide mentions `[font]`, `[keybindings]`, or `enable_footnotes`, it does not apply to Markion.
+> Font families (per source/reading/code plane) and menu-action keybindings (the `[shortcuts]` table, also editable from the Preferences panel) **are** configurable. Markion does **not** support a toggle for footnotes — footnotes are always enabled. If a guide mentions `enable_footnotes`, it does not apply to Markion.
 
 ## Large-document performance
 
-Markion caches derived document state (preview blocks, outline, statistics, syntax highlighting) per document version and shares it via `Arc`, so typing in large documents does not re-derive everything on every keystroke. The syntect grammar registry is loaded off the main thread at startup so first render stays responsive. There is no separate incremental parser or rope text buffer; the whole document is re-parsed, but memoized per version, which is sufficient for realistic note sizes.
+Markion caches derived document state (preview blocks, outline, statistics, syntax highlighting) per document version and shares it via `Arc`, so typing in large documents does not re-derive everything on every keystroke. The syntect grammar registry is loaded off the main thread at startup so first render stays responsive. Source-mapped Visual Edit incrementally reuses independently parseable regions after localized edits, falling back to a full derivation whenever Markdown context or byte ranges are uncertain; Split/Read preview derivation stays debounced and cached rather than incremental. Markion still uses a `String` buffer rather than a rope, and some semantic reads intentionally require a full parse.
 
 ## Troubleshooting
 

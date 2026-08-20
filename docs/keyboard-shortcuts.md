@@ -2,7 +2,7 @@
 
 Markion's keyboard shortcuts are registered with platform-aware modifiers. On Windows and Linux the primary modifier is **Ctrl**; on macOS it is **Cmd** (⌘). In the tables below, `Ctrl` stands for that platform modifier. Bindings that include `Alt` use **Option** (⌥) on macOS.
 
-> Shortcuts are fixed in the application; there is no in-app key-binding customization.
+> Every action below (except raw navigation/editing keys like arrows, Backspace, and Tab) can be rebound in **Preferences → Shortcuts**, or by editing the `[shortcuts]` table in `config.toml` (action id → GPUI keystroke string). The bindings shown here are the defaults.
 
 ## Notation
 
@@ -42,7 +42,7 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 | Inline code | Ctrl+E |
 | Insert link | Ctrl+K |
 | Insert image | Ctrl+Shift+I |
-| Heading 1 / 2 / 3 | Ctrl+1 / Ctrl+2 / Ctrl+3 |
+| Heading 1–6 | Ctrl+1 through Ctrl+6 |
 | Indent | Tab |
 | Outdent | Shift+Tab |
 
@@ -51,7 +51,7 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 | Action | Shortcut |
 |---|---|
 | Undo | Ctrl+Z |
-| Redo | Ctrl+Shift+Z  (or Ctrl+Y) |
+| Redo | Ctrl+Y |
 | Cut / Copy / Paste | Ctrl+X / Ctrl+C / Ctrl+V |
 | Select all | Ctrl+A |
 | Line start / end | Home / End |
@@ -60,11 +60,12 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 
 | Action | Shortcut |
 |---|---|
-| Cycle view mode (Edit → Split → Read) | Ctrl+Shift+V |
+| Cycle view mode (Edit → Visual Edit → Split → Read) | Ctrl+Shift+V |
 | Edit mode (source only) | Ctrl+Alt+1 |
+| Visual Edit mode (WYSIWYG-first, source-backed) | Ctrl+Alt+4 |
 | Split mode (source + preview) | Ctrl+Alt+2 |
 | Read mode (preview only) | Ctrl+Alt+3 |
-| Toggle sidebar | Ctrl+Alt+B |
+| Toggle sidebar | Ctrl+Shift+B |
 | Toggle focus mode | F7 |
 | Toggle typewriter mode | F8 |
 | Toggle code line numbers | Ctrl+Shift+4 |
@@ -131,7 +132,7 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 
 ## Notes
 
-- The default view mode is **Split** (source + preview side by side). Cycle through Edit → Split → Read with Ctrl+Shift+V, or jump straight to a mode with Ctrl+Alt+1/2/3. Preview width in Read mode follows the "adaptive preview width" preference (File → Preferences).
+- The default view mode is **Split** (source + preview side by side). Cycle through Edit → Visual Edit → Split → Read with Ctrl+Shift+V, or jump straight to a mode with Ctrl+Alt+1/4/2/3. Preview width in Read mode follows the "adaptive preview width" preference (File → Preferences).
 - Opening a file — from the file tree, drag-and-drop, Open Recent, or File → Open — targets the current tab when that is safe (an image tab, the untitled document, or an unmodified document) and otherwise opens a new tab, following the "Open documents in current tab" preference (File → Preferences, on by default). A dirty document is never silently replaced, and Ctrl+click in the file tree always opens a new tab.
 - Focus mode dims paragraphs outside the current one; typewriter mode keeps the cursor line vertically centered.
 - A few bindings combine `Ctrl` with an `Alt` modifier (for example Ctrl+Alt+N for "new file in tree"); on macOS these are **Cmd+Option**.
