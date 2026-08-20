@@ -20,10 +20,29 @@
 
 ## 4. Future implementation changes (NOT part of this change — listed for traceability)
 
-Each closes one or more roadmap gaps and will cite the `WYSIWYG coverage roadmap` requirement as motivation:
+Each closes one or more roadmap gaps and will cite the `WYSIWYG coverage roadmap` requirement as motivation. Refreshed 2026-08-19 against the implementation:
 
-- [ ] `fix-escaped-punctuation-wysiwyg-projection` — closes gaps 1 & 2 (escaped punctuation + entity decoding).
-- [ ] `render-inline-html-in-visual-edit` — closes gap 3 (inline HTML in prose).
-- [ ] `render-html-blocks-in-visual-edit` — closes gap 4 (standalone HTML blocks, reusing `html_preview_block_view`).
-- [ ] `render-frontmatter-form-in-visual-edit` — closes gap 5 (YAML/TOML/JSON frontmatter).
-- [ ] Secondary-gap changes (indented code, inline-dollar math block, reference images, footnote definitions, heading attributes, task-list checkbox click, GFM alerts/definition lists) — opened as picked up.
+Already closed by interim changes (removed from the roadmap):
+
+- [x] `render-visual-edit-escapes-and-inline-html` — closed escaped punctuation + supported inline-HTML subset (archived 2026-08-18; `abb0ca6`).
+- [x] `render-visual-edit-html-images` — closed inline raw-HTML `<img>` (archived 2026-08-14; `a7a23ab`).
+- [x] HTML-block rendering — closed standalone HTML blocks (`6220b33`).
+- [x] `resolve-reference-links-in-visual-edit` — closed reference-style links (archived 2026-07-21).
+- [x] `fix-visual-edit-footnotes-and-link-defs` — closed footnote definitions + link reference definitions (complete, awaiting archive).
+- [x] `fix-visual-edit-inline-markdown-images` — closed nested Markdown images in prose (`564aff2`, awaiting archive).
+- [x] Closed by existing mechanisms (no change needed): smart-punctuation substitution (disabled in the Visual Edit parser), inline-dollar math at block position (routes as inline math), heading attributes (hidden marker ranges), GFM alerts (callout rendering).
+
+Remaining roadmap gaps (candidates):
+
+- [ ] `fix-visual-edit-entity-projection` — closes primary gap 1 (decoded HTML entities in prose).
+- [ ] `render-frontmatter-form-in-visual-edit` — closes primary gap 2 (frontmatter form + TOML/JSON detection).
+- [ ] `render-indented-code-in-visual-edit` — closes primary gap 3 (indented code payload editor).
+- [ ] Secondary-gap changes (unclosed fences, reference-style images, malformed tables, unsupported inline-HTML forms, angle-bracket autolinks, task-list checkbox click, definition lists, empty list items, math render-failure states) — opened as picked up.
+
+## 5. Roadmap refresh 2026-08-19 (rebase before archive)
+
+- [x] 5.1 Verify every gap in the 2026-07-21 inventory against the current implementation (`src/visual.rs`, `src/parse.rs`, `src/app/preview.rs`, `src/table.rs`, `src/inline_edit.rs`); record closed/partial/open with file:line evidence in `design.md`.
+- [x] 5.2 Rebase the `Visual Edit inline formatting fidelity` delta on the current synced spec body so archiving cannot revert the escapes/inline-HTML/reference-link commitments synced by `2026-08-18-render-visual-edit-escapes-and-inline-html`.
+- [x] 5.3 Rewrite the `WYSIWYG coverage roadmap` delta with the remaining gaps (3 primary + secondary) and newly discovered gaps (angle-bracket autolinks, empty list items, math render-failure states).
+- [x] 5.4 Update `proposal.md`, `tasks.md` (this section), and the `Maintained Visual Edit support classification` gap enumeration to match.
+- [x] 5.5 `openspec validate commit-visual-edit-to-wysiwyg` + `openspec doctor` pass after the refresh.
