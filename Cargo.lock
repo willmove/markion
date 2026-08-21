@@ -1669,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "export"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "markdown",
@@ -3256,7 +3256,7 @@ dependencies = [
 
 [[package]]
 name = "markdown"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -3278,7 +3278,7 @@ dependencies = [
 
 [[package]]
 name = "markion"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "base64",
@@ -3319,7 +3319,7 @@ dependencies = [
 
 [[package]]
 name = "markion-diagram"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "mermaid-rs-renderer",
  "svg-hush",
@@ -7009,7 +7009,7 @@ dependencies = [
 
 [[package]]
 name = "wechat-workspace"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "axum",
  "base64",
