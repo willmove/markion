@@ -44,6 +44,19 @@ The publishing workspace SHALL be loaded from static assets bundled with Markion
 - **THEN** the workspace MAY request that authored URL for preview
 - **AND** the request is not treated as an application dependency or hidden service call
 
+### Requirement: Bundle digests are platform-independent and kept in sync
+The publishing bundle manifest SHALL record an SHA-256 digest for every bundled file, computed over canonical LF-normalized bytes for text files, and bundle verification SHALL apply the same normalization before comparing digests, so the checked-in workspace verifies identically on every platform regardless of checkout line endings. The manifest SHALL be regenerated whenever a bundled file's bytes change.
+
+#### Scenario: A CRLF checkout still verifies
+- **WHEN** a text file in the bundle is materialized with CRLF line endings, as Windows checkouts with `core.autocrlf` produce
+- **THEN** bundle verification normalizes its line endings to LF and accepts the recorded digest
+- **AND** a genuine content change to that file still fails verification
+
+#### Scenario: Manifest digests match the checked-in bytes
+- **WHEN** the maintainer regenerates the manifest with the sync command
+- **THEN** every digest equals the LF-normalized digest the verifier computes for the same file
+- **AND** the checked-in workspace passes bundle verification on every supported platform
+
 ### Requirement: Loopback sessions protect document content and local files
 The local publishing origin SHALL listen only on a loopback interface and an operating-system-selected ephemeral port. A new session SHALL require an unguessable capability that is removed from the visible browser URL after a successful claim. Document and resource responses SHALL use no-store caching, and requests without a valid, live session SHALL disclose neither document bytes nor whether a candidate local path exists. Local resource routes SHALL serve only supported regular image files within the active document's associated asset directory after canonical containment checks; traversal, absolute-path injection, symlink escape, and unrelated local-file access SHALL be rejected.
 

@@ -1,0 +1,7 @@
+# Keep the vendored MarkNice publishing workspace byte-stable across platforms:
+# text files always materialize with LF line endings regardless of core.autocrlf,
+# so bundle digests recorded in the provenance manifest verify on every platform.
+assets/marknice-workspace/** text=auto eol=lf
+assets/marknice-workspace/**/*.ttf binary
+assets/marknice-workspace/**/*.woff binary
+assets/marknice-workspace/**/*.woff2 binary

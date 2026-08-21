@@ -51,6 +51,10 @@ licenses, compatibility corpus, and digest diff before committing. Do not add
 landing/guide pages, DOCX/PDF import, proxy/OCR/OSS, analytics, hosted-update,
 or duplicate file-export code to the packaged surface.
 
+Digest generation and verification both normalize text-file line endings to LF,
+and `.gitattributes` pins `assets/marknice-workspace/**` to LF checkouts, so
+the manifest stays byte-stable regardless of `core.autocrlf` or platform.
+
 Release jobs verify the source bundle and extract every NSIS, macOS app/DMG,
 DEB, and AppImage output to verify the packaged manifest, local dependency
 closure, digests, and absence of remote runtime dependencies.

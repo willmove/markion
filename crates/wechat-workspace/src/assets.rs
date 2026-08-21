@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     env, fs, io,
     path::{Component, Path, PathBuf},
@@ -55,8 +56,8 @@ pub enum BundleError {
     MissingFile,
     #[error("the local publishing workspace contains an unlisted runtime file")]
     UnlistedFile,
-    #[error("a local publishing workspace file failed its integrity check")]
-    DigestMismatch,
+    #[error("a local publishing workspace file failed its integrity check: {path}")]
+    DigestMismatch { path: String },
     #[error("the local publishing workspace references a remote runtime dependency")]
     RemoteRuntimeDependency,
     #[error("a local publishing workspace dependency is not bundled")]
@@ -153,9 +154,16 @@ pub fn verify_bundle(root: &Path) -> Result<BundleVerification, BundleError> {
             return Err(BundleError::MissingFile);
         }
         let bytes = fs::read(&path).map_err(BundleError::Io)?;
-        let actual = format!("{:x}", Sha256::digest(&bytes));
+        let digest_input: Cow<'_, [u8]> = if is_text_extension(&relative) {
+            Cow::Owned(normalize_line_endings(&bytes))
+        } else {
+            Cow::Borrowed(bytes.as_slice())
+        };
+        let actual = format!("{:x}", Sha256::digest(digest_input.as_ref()));
         if !actual.eq_ignore_ascii_case(&file.sha256) {
-            return Err(BundleError::DigestMismatch);
+            return Err(BundleError::DigestMismatch {
+                path: file.path.clone(),
+            });
         }
         total_bytes = total_bytes.saturating_add(metadata.len());
         verify_runtime_references(root, &relative, &bytes, &listed, &manifest.files)?;
@@ -205,6 +213,41 @@ fn validate_provenance(manifest: &BundleManifest) -> Result<(), BundleError> {
         return Err(BundleError::IncompleteProvenance);
     }
     Ok(())
+}
+
+const TEXT_EXTENSIONS: &[&str] = &[
+    "html", "htm", "css", "js", "mjs", "json", "txt", "md", "map",
+];
+
+fn is_text_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| TEXT_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
+}
+
+/// Normalizes CRLF and lone CR line endings to LF so a workspace checked out
+/// with platform line endings verifies identically to its canonical LF bytes.
+/// Binary files are never normalized; callers gate this with is_text_extension.
+fn normalize_line_endings(bytes: &[u8]) -> Vec<u8> {
+    if !bytes.contains(&b'\r') {
+        return bytes.to_vec();
+    }
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' {
+            if bytes.get(index + 1) == Some(&b'\n') {
+                index += 2;
+            } else {
+                index += 1;
+            }
+            normalized.push(b'\n');
+        } else {
+            normalized.push(bytes[index]);
+            index += 1;
+        }
+    }
+    normalized
 }
 
 fn safe_relative_path(value: &str) -> Result<PathBuf, BundleError> {
@@ -486,7 +529,30 @@ mod tests {
         fs::write(temp.path().join("static/app.js"), "changed").unwrap();
         assert!(matches!(
             verify_bundle(temp.path()),
-            Err(BundleError::DigestMismatch)
+            Err(BundleError::DigestMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn verifies_text_files_after_crlf_checkout_conversion() {
+        let temp = tempfile::tempdir().unwrap();
+        create_bundle(temp.path(), r#"<script src="static/app.js"></script>"#);
+        for path in ["index.html", "static/app.js", "LICENSE.marked.txt"] {
+            let text = fs::read_to_string(temp.path().join(path)).unwrap();
+            let crlf = text.replace('\n', "\r\n");
+            fs::write(temp.path().join(path), crlf).unwrap();
+        }
+        assert!(verify_bundle(temp.path()).is_ok());
+
+        // A genuine content change must still fail even in a CRLF working tree.
+        fs::write(
+            temp.path().join("static/app.js"),
+            "window.ready = true;\r\nwindow.tampered = true;\r\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_bundle(temp.path()),
+            Err(BundleError::DigestMismatch { .. })
         ));
     }
 

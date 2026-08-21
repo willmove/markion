@@ -72,6 +72,37 @@ foreach ($file in $requiredThirdParty) {
     }
 }
 
+# Text files are hashed after normalizing CRLF and lone CR line endings to LF,
+# matching the normalization applied by the Rust bundle verifier, so a workspace
+# checked out with platform line endings verifies identically on every platform.
+$script:textExtensions = @("html", "htm", "css", "js", "mjs", "json", "txt", "md", "map")
+
+function Get-BundleFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+    $bytes = [System.IO.File]::ReadAllBytes($LiteralPath)
+    $extension = [System.IO.Path]::GetExtension($LiteralPath).TrimStart('.').ToLowerInvariant()
+    if ($script:textExtensions -contains $extension) {
+        $normalized = [System.Collections.Generic.List[byte]]::new()
+        for ($index = 0; $index -lt $bytes.Length; $index++) {
+            if ($bytes[$index] -eq 13) {
+                if (($index + 1) -lt $bytes.Length -and $bytes[$index + 1] -eq 10) { $index++ }
+                $normalized.Add(10)
+            }
+            else {
+                $normalized.Add($bytes[$index])
+            }
+        }
+        $bytes = $normalized.ToArray()
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '')
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
 $manifestPath = Join-Path $bundleRoot "bundle-manifest.json"
 $files = Get-ChildItem -LiteralPath $bundleRoot -File -Recurse |
     Where-Object { $_.FullName -ne $manifestPath } |
@@ -79,7 +110,7 @@ $files = Get-ChildItem -LiteralPath $bundleRoot -File -Recurse |
     ForEach-Object {
         [ordered]@{
             path = $_.FullName.Substring($bundleRoot.Length + 1).Replace('\', '/')
-            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            sha256 = Get-BundleFileSha256 -LiteralPath $_.FullName
         }
     }
 $manifest = [ordered]@{

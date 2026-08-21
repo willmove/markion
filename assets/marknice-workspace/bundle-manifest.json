@@ -37,7 +37,7 @@
     },
     {
       "path": "LICENSE.marknice.txt",
-      "sha256": "9e95c492ad48c0846bea9f5203000f1fc4c7698de5fcb8b884d2d368790233ac"
+      "sha256": "48e43d00c3a2ae3aff3b5ef23825064ece9efe9d8f27bd4421a2e0df35c4bd39"
     },
     {
       "path": "static/bridge.js",
@@ -61,7 +61,7 @@
     },
     {
       "path": "static/theme-runtime.js",
-      "sha256": "12b4aaec31fb7d3e7d1624e8df40900275fb705cf8b53d9348ec885494d9e959"
+      "sha256": "16f63cf8c13d9ae03dc9fae50a815b32ecda23ebcaf62afa2c7766414ef59398"
     },
     {
       "path": "static/vendor/fonts/KaTeX_AMS-Regular.ttf",
