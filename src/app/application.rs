@@ -120,6 +120,7 @@ impl MarkionApp {
             preview_context_menu: None,
             tab_context_menu: None,
             pending_name_input: None,
+            name_editor_click_away: false,
             pending_image_import: None,
             link_editor: None,
             recovery_manager: None,
@@ -1559,12 +1560,19 @@ impl MarkionApp {
     /// Insert text into the focused redirected field, first removing any
     /// trailing IME composition. `keep_marked` records the new text as the
     /// active composition (still being edited) instead of committing it.
+    /// The inline name editor is caret/selection-aware (text replaces the
+    /// selection at the caret); the other redirected fields keep their
+    /// append-only behavior.
     pub(super) fn insert_redirected_text(
         &mut self,
         text: &str,
         keep_marked: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.pending_name_input.is_some() {
+            self.insert_redirected_name_text(text, keep_marked, cx);
+            return;
+        }
         let marked = self.input_marked_len;
         let Some(target) = self.active_input_text_mut() else {
             return;
@@ -1576,11 +1584,140 @@ impl MarkionApp {
         self.after_input_changed(cx);
     }
 
+    /// Caret-aware insert into the inline name editor's buffer: the active
+    /// IME composition (which always ends at the caret) and the selection are
+    /// replaced by `text`, and the caret lands after it.
+    fn insert_redirected_name_text(
+        &mut self,
+        text: &str,
+        keep_marked: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let marked = self.input_marked_len;
+        let Some(pending) = self.pending_name_input.as_mut() else {
+            return;
+        };
+        pending.clamp_to_boundaries();
+        let composition_start = pending.cursor.saturating_sub(marked.min(pending.cursor));
+        let selection = pending.selection();
+        let start = composition_start.min(selection.start);
+        let end = pending.cursor.max(selection.end);
+        pending.buffer.replace_range(start..end, text);
+        pending.cursor = start + text.len();
+        pending.anchor = pending.cursor;
+        self.input_marked_len = if keep_marked { text.len() } else { 0 };
+        self.after_input_changed(cx);
+    }
+
+    /// Move the inline name editor's caret/selection. Routed here from the
+    /// Left/Right/Home/End/Select* action handlers while the editor is open
+    /// so those keys never reach the document caret.
+    pub(super) fn move_name_caret(&mut self, movement: NameCaretMove, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_name_input.as_mut() else {
+            return;
+        };
+        pending.clamp_to_boundaries();
+        let selection = pending.selection();
+        match movement {
+            NameCaretMove::Left => {
+                pending.cursor = if selection.is_empty() {
+                    previous_name_boundary(&pending.buffer, pending.cursor)
+                } else {
+                    selection.start
+                };
+                pending.anchor = pending.cursor;
+            }
+            NameCaretMove::Right => {
+                pending.cursor = if selection.is_empty() {
+                    next_name_boundary(&pending.buffer, pending.cursor)
+                } else {
+                    selection.end
+                };
+                pending.anchor = pending.cursor;
+            }
+            NameCaretMove::Home => {
+                pending.cursor = 0;
+                pending.anchor = 0;
+            }
+            NameCaretMove::End => {
+                let len = pending.buffer.len();
+                pending.cursor = len;
+                pending.anchor = len;
+            }
+            NameCaretMove::SelectLeft => {
+                pending.cursor = previous_name_boundary(&pending.buffer, pending.cursor);
+            }
+            NameCaretMove::SelectRight => {
+                pending.cursor = next_name_boundary(&pending.buffer, pending.cursor);
+            }
+            NameCaretMove::SelectAll => {
+                pending.anchor = 0;
+                pending.cursor = pending.buffer.len();
+            }
+        }
+        self.after_input_changed(cx);
+    }
+
+    /// Delete the selection (or the char before the caret) in the inline name
+    /// editor. When an IME composition is active it is removed instead.
+    fn pop_name_text(&mut self, cx: &mut Context<Self>) {
+        let marked = self.input_marked_len;
+        let Some(pending) = self.pending_name_input.as_mut() else {
+            return;
+        };
+        pending.clamp_to_boundaries();
+        if marked > 0 {
+            let composition_start = pending.cursor.saturating_sub(marked.min(pending.cursor));
+            pending
+                .buffer
+                .replace_range(composition_start..pending.cursor, "");
+            pending.cursor = composition_start;
+            pending.anchor = composition_start;
+            self.input_marked_len = 0;
+        } else {
+            let selection = pending.selection();
+            if selection.is_empty() {
+                let start = previous_name_boundary(&pending.buffer, pending.cursor);
+                pending.buffer.replace_range(start..pending.cursor, "");
+                pending.cursor = start;
+            } else {
+                pending.buffer.replace_range(selection.clone(), "");
+                pending.cursor = selection.start;
+            }
+            pending.anchor = pending.cursor;
+        }
+        self.after_input_changed(cx);
+    }
+
+    /// Delete the selection (or the char after the caret) in the inline name
+    /// editor — the Delete-key counterpart of `pop_name_text`.
+    fn delete_name_text_forward(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_name_input.as_mut() else {
+            return;
+        };
+        pending.clamp_to_boundaries();
+        self.input_marked_len = 0;
+        let selection = pending.selection();
+        if selection.is_empty() {
+            let end = next_name_boundary(&pending.buffer, pending.cursor);
+            pending.buffer.replace_range(pending.cursor..end, "");
+        } else {
+            pending.buffer.replace_range(selection.clone(), "");
+            pending.cursor = selection.start;
+        }
+        pending.anchor = pending.cursor;
+        self.after_input_changed(cx);
+    }
+
     pub(super) fn push_text_input(&mut self, text: &str, cx: &mut Context<Self>) {
         self.insert_redirected_text(text, false, cx);
     }
 
     pub(super) fn pop_text_input(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.pending_name_input.is_some() {
+            self.pop_name_text(cx);
+            return true;
+        }
         self.input_marked_len = 0;
         if let Some(target) = self.active_input_text_mut() {
             target.pop();
@@ -1589,6 +1726,16 @@ impl MarkionApp {
         } else {
             false
         }
+    }
+
+    /// Delete-forward variant of `pop_text_input` for the Delete key; returns
+    /// true when the inline name editor consumed the event.
+    pub(super) fn delete_text_input_forward(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.pending_name_input.is_some() {
+            self.delete_name_text_forward(cx);
+            return true;
+        }
+        false
     }
 
     pub(super) fn search_summary(&self) -> String {

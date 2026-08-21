@@ -16,18 +16,21 @@ The Files sidebar right-click context menu (introduced by the `file-tree-context
 
 ### Inline name input for create file / create folder / rename
 
-- Invoking Create File, Create Folder, or Rename from the context menu SHALL open an in-app inline name prompt instead of immediately applying a hard-coded default name.
-- The prompt reuses the existing **redirected text-input** pattern already used by the search field and the file-tree filter: a focused `Div` showing `Label: <buffer>` that captures IME keystrokes into a backing `String` via `active_input_text_mut()` / `has_text_input_focus()`.
+- Invoking Create File, Create Folder, or Rename from the context menu SHALL open an in-app inline name editor instead of immediately applying a hard-coded default name.
+- The editor reuses the existing **redirected text-input** pattern already used by the search field and the file-tree filter: keystrokes are captured into a backing `String` via `has_text_input_focus()` / the redirected insert path, so IME composition is handled identically.
+- The editor renders in place inside the Files panel - replacing the renamed row, or directly below the parent folder row for create actions. When the target row is not visible (filtered out, inside a collapsed folder, or create against the hidden root) the editor falls back to the top of the panel so it is always visible. When the Files panel itself is hidden (tab-bar Rename), it renders under the tab bar.
+- The editor is caret- and selection-aware: Rename pre-fills the buffer with the current entry name and pre-selects the base name (the extension is preserved); create actions pre-fill the default name (`untitled.md` / `New Folder`) with the whole name selected, so one stroke replaces it.
+- While the editor is open, typing replaces the selection at the caret, and Left / Right / Home / End / Shift+Arrow / Select All / Backspace / Delete edit the name buffer only - the document caret and selection SHALL NOT move (this also fixes the bug where a click in the editor pane while renaming moved the document caret and started a drag selection).
+- Clicking inside the field positions the caret (Shift+click extends the selection).
 - `Enter` SHALL commit the typed name: Create File calls `FileTree::create_unique_file`, Create Folder calls `FileTree::create_unique_directory`, Rename calls `FileTree::rename_unique` - all with the user-typed name (sanitized through the existing `sanitize_file_name` path inside `unique_child_path`).
-- `Escape` SHALL cancel the prompt without touching the filesystem.
-- An empty buffer on commit SHALL be rejected with a localized status message (no entry created).
-- Rename SHALL pre-fill the buffer with the current entry name so the user edits rather than retypes.
-- The prompt SHALL be dismissed (cancel) when the user clicks elsewhere or opens another menu, mirroring the context menu's own dismissal.
+- A left click elsewhere (below the menu bar) SHALL commit through the same pipeline as Enter (Explorer semantics), and that same click SHALL NOT also open a file or switch tabs. Opening a menu (context menu or menu bar) cancels the editor without touching the filesystem.
+- `Escape` SHALL cancel the editor without touching the filesystem.
+- An empty buffer on commit (or click-away) SHALL be rejected with a localized status message and keep the editor open for retry (no entry created).
 
 ## Non-Goals
 
 - No drag-and-drop file moves.
-- No inline in-place editing of the tree cell itself (the prompt is a dedicated focused input line, not an editable row).
+- No multi-line name editing (the buffer is a single line; Enter always commits).
 - No new file types or Markdown collection changes (the tree stays Markdown-only).
 - No changes to document parsing, derived Markdown caches, syntax-highlighting memoization, cached text handles, or undo snapshots.
 - No native OS text-entry dialog (GPUI's `window.prompt` is button-only; a native free-text dialog is out of scope).
@@ -47,8 +50,8 @@ The Files sidebar right-click context menu (introduced by the `file-tree-context
 
 - Affected code:
   - `src/storage/file_tree.rs` - `FileTree::delete` switches to `remove_dir_all`; new unit tests for file / empty-folder / non-empty-folder delete.
-  - `src/main.rs` - new `PendingNameInput` state integrated into `has_text_input_focus` / `active_input_text_mut` / `after_input_changed`; `create_tree_file` / `create_tree_folder` / `rename_tree_entry` rewritten to open the prompt and commit on Enter; `delete_tree_entry` gains a non-empty-folder second confirm; a name-prompt view is rendered (reusing the `search_field_view` styling); new Enter/Escape actions registered.
+  - `src/app/` (formerly `src/main.rs` app state) - `PendingNameInput` gains `cursor`/`anchor` caret and selection state integrated into the redirected-input path (`insert_redirected_text`, `pop_text_input`, `delete_text_input_forward`); create/rename handlers open the editor and commit on Enter or click-away; `delete_tree_entry` gains a non-empty-folder second confirm; `file_tree_rows` interleaves the editor row in the tree with a panel-top fallback, and the under-tab-bar prompt covers the hidden-panel case; Left/Right/Home/End/Select* actions route into the editor while it is open.
   - `src/i18n.rs` - new `Msg` variants (prompt labels, placeholder, empty-name warning, recursive-delete confirm title/detail) with EN + Simplified Chinese strings.
 - Affected specs: `workspace`, `ui-i18n`.
 - APIs/dependencies: no public API changes, no new dependencies.
-- Invariants: file-tree ops touch only the filesystem and app-level tree/tab state; they do NOT touch per-document derived Markdown caches, the syntax-highlighting memo, cached text handles, or undo snapshots. The bounded-row rendering of the tree is unaffected (the prompt is an overlay input, not extra rows). The redirected-text-input contract (`has_text_input_focus` guarding IME routing) is extended, not replaced.
+- Invariants: file-tree ops touch only the filesystem and app-level tree/tab state; they do NOT touch per-document derived Markdown caches, the syntax-highlighting memo, cached text handles, or undo snapshots. Bounded tree-row rendering is unaffected (the editor replaces or inserts at most one row). The redirected-text-input contract (`has_text_input_focus` guarding IME routing) is extended, not replaced.

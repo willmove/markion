@@ -31,7 +31,7 @@ The system SHALL route every user-visible UI string (menu bar titles and items, 
 
 #### Scenario: File tree name prompt is localized
 - **WHEN** the user invokes Create File, Create Folder, or Rename and the inline name prompt is shown
-- **THEN** the prompt label (e.g. "Name"), the pre-filled default name, the empty-name warning status text, and the commit/cancel behavior are presented in the active language through the i18n layer
+- **THEN** the prompt label (e.g. "Name"), the pre-filled default name, the empty-name warning status text, the commit/cancel behavior, and the caret/selection/click-away behavior are presented in the active language through the i18n layer
 
 #### Scenario: Recursive folder delete confirmation is localized
 - **WHEN** the user deletes a non-empty folder and the second confirmation dialog is shown

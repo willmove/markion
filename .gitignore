@@ -20,6 +20,7 @@
 *.iml
 /.claude/
 /.cursor/
+.workbuddy/
 .kimi/
 .kiro/
 .omp/
@@ -28,6 +29,7 @@
 .qoder/
 .zcode/
 .reasonix/
+.trae/
 *.swp
 *.swo
 *~

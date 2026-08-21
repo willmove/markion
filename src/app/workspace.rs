@@ -493,9 +493,12 @@ impl MarkionApp {
         cx.notify();
     }
 
-    /// Open the inline name prompt for a create/rename file-tree action. The
-    /// prompt captures keystrokes into its buffer via the redirected-text-input
-    /// path; Enter commits (`confirm_pending_name`), Escape cancels.
+    /// Open the inline name editor for a create/rename file-tree action. The
+    /// editor captures keystrokes into its buffer via the redirected-text-input
+    /// path; Enter commits (`confirm_pending_name`), Escape cancels, and a
+    /// click outside the field commits through the same pipeline (Explorer
+    /// semantics). The initial selection pre-selects the base name for a
+    /// rename (extension preserved) or the whole prefilled name otherwise.
     pub(super) fn open_name_prompt(
         &mut self,
         kind: PendingNameKind,
@@ -504,7 +507,7 @@ impl MarkionApp {
         prefill: &str,
         cx: &mut Context<Self>,
     ) {
-        // Close any other transient focus so the prompt owns input routing.
+        // Close any other transient focus so the editor owns input routing.
         self.active_menu = None;
         self.dismiss_visual_block_menu();
         self.file_tree_context_menu = None;
@@ -512,12 +515,8 @@ impl MarkionApp {
         self.file_tree_query_focused = false;
         self.search_focus = None;
         self.input_marked_len = 0;
-        self.pending_name_input = Some(PendingNameInput {
-            kind,
-            parent,
-            target,
-            buffer: prefill.to_string(),
-        });
+        self.name_editor_click_away = false;
+        self.pending_name_input = Some(PendingNameInput::new(kind, parent, target, prefill));
         self.status = t(self.language, Msg::StatusNamingEntry).into();
         cx.notify();
     }

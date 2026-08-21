@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::icon::IconKind;
 
 impl Focusable for MarkionApp {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -1630,23 +1631,15 @@ pub(super) fn search_field_view(
         .on_mouse_up(MouseButton::Left, listener)
 }
 
-/// Inline name prompt for a file-tree create/rename action. Reuses the
-/// redirected-text-input path: clicking the field focuses the name buffer so
-/// IME keystrokes route into `pending_name_input.buffer` instead of the
-/// document. The label is "Name" and the buffer is shown after it.
+/// Inline name editor field used when the file-tree panel is hidden (the
+/// tab-bar Rename action): a bordered single-line input with the localized
+/// "Name" label, a visible caret and selection, and click-to-position.
 pub(super) fn pending_name_prompt_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let palette = app.palette();
-    let app_entity = cx.entity();
-    let Some(pending) = &app.pending_name_input else {
+    if app.pending_name_input.is_none() {
         return div().hidden();
-    };
+    }
     let label = app.tr(Msg::FileTreeNamePromptLabel);
-    let text = if pending.buffer.is_empty() {
-        format!("{label}: ")
-    } else {
-        format!("{label}: {}", pending.buffer)
-    };
-
     div()
         .mb_2()
         .min_w(px(180.))
@@ -1655,22 +1648,403 @@ pub(super) fn pending_name_prompt_view(app: &MarkionApp, cx: &mut Context<Markio
         .py_1()
         .rounded_md()
         .border_1()
-        // The prompt is always active when shown (it captures keystrokes),
+        // The editor is always active when shown (it captures keystrokes),
         // so use the same accent blue as the active search field.
         .border_color(rgb(0x2563eb))
         .bg(palette.surface_bg)
         .text_size(px(12.))
         .text_color(palette.text)
-        .cursor_pointer()
-        .child(text)
-        .on_mouse_up(MouseButton::Left, move |_, _window, cx| {
-            // Re-assert focus if the user clicks the prompt while it is open.
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(div().text_color(palette.muted).child(label))
+        .child(name_editor_text_view(app, cx))
+}
+
+/// Whether the open inline name editor targets a row that is among the visible
+/// tree `entries`. When false, the editor renders at the top of the panel as a
+/// fallback so it always stays visible.
+fn editor_renders_in_row(app: &MarkionApp, entries: &[FileTreeEntry]) -> bool {
+    let Some(pending) = &app.pending_name_input else {
+        return false;
+    };
+    match pending.kind {
+        PendingNameKind::Rename => pending.target.as_ref().map_or(false, |target| {
+            entries.iter().any(|entry| entry.path == *target)
+        }),
+        PendingNameKind::CreateFile | PendingNameKind::CreateFolder => {
+            entries.iter().any(|entry| entry.path == pending.parent)
+        }
+    }
+}
+
+/// Map a click's x-offset (relative to the text's left edge) to a byte offset
+/// in `text`, snapping to the nearest character boundary. Uses the same
+/// per-glyph width estimate the tree uses for its content width and horizontal
+/// scroll, so the caret lands where clicks appear.
+fn name_x_to_offset(text: &str, rel_x: Pixels) -> usize {
+    let rel = f32::from(rel_x).max(0.);
+    let mut acc = 0f32;
+    let mut offset = 0usize;
+    for ch in text.chars() {
+        let w = if ch.is_ascii() { 7. } else { 12. };
+        if acc + w * 0.5 > rel {
+            break;
+        }
+        acc += w;
+        offset += ch.len_utf8();
+    }
+    offset
+}
+
+/// The editable text portion of the inline name editor: the buffer with a
+/// visible caret (when the selection is collapsed) and selection highlight
+/// (when non-empty), plus click-to-position. Captures the text element's
+/// bounds via a `canvas` overlay so a mouse-down can map its window x to a
+/// caret offset.
+fn name_editor_text_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Stateful<Div> {
+    let app_entity = cx.entity();
+    let pending = app
+        .pending_name_input
+        .as_ref()
+        .expect("name editor view requires an open prompt");
+    let buffer = pending.buffer.clone();
+    let selection = pending.selection();
+    let before = buffer.get(..selection.start).unwrap_or("").to_string();
+    let selected = buffer.get(selection.clone()).unwrap_or("").to_string();
+    let after = buffer.get(selection.end..).unwrap_or("").to_string();
+    let has_selection = !selected.is_empty();
+    let text_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
+    let bounds_for_click = text_bounds.clone();
+    let buffer_for_click = buffer.clone();
+
+    div()
+        .id("name-editor-text")
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .whitespace_nowrap()
+                .child(div().child(before))
+                .when(has_selection, |d| {
+                    d.child(div().bg(rgba(0x2563eb30)).child(selected))
+                })
+                .when(!has_selection, |d| {
+                    d.child(div().w(px(1.5)).h(px(13.)).bg(rgb(0x2563eb)))
+                })
+                .child(div().child(after)),
+        )
+        // Capture this element's bounds so a mouse-down can map its window x
+        // to a caret byte offset. Paints nothing; only the bounds matter.
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, _, _| {
+                    *text_bounds.borrow_mut() = Some(bounds);
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+        .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
+            // Clicks inside the field position the caret instead of
+            // click-away-committing (handled by the ancestor workspace-row).
+            cx.stop_propagation();
+            let offset = match bounds_for_click.borrow().as_ref() {
+                Some(bounds) => {
+                    name_x_to_offset(&buffer_for_click, event.position.x - bounds.left())
+                }
+                None => return,
+            };
             app_entity.update(cx, |app, cx| {
-                if app.pending_name_input.is_some() {
-                    app.input_marked_len = 0;
+                if let Some(pending) = app.pending_name_input.as_mut() {
+                    pending.clamp_to_boundaries();
+                    let max = pending.buffer.len();
+                    pending.cursor = offset.min(max);
+                    if event.modifiers.shift {
+                        // anchor stays; cursor extends the selection
+                    } else {
+                        pending.anchor = pending.cursor;
+                    }
                     cx.notify();
                 }
             });
+        })
+}
+
+/// An editor rendered in place of a tree row: the entry's icon plus the
+/// editable name field. Used both for in-row rename/create editing and for the
+/// panel-top fallback when the target row is not visible.
+fn name_editor_row_view(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+    depth: usize,
+    icon_kind: IconKind,
+    tree_content_width: f32,
+) -> Div {
+    let palette = app.palette();
+    let text_color = palette.active_text;
+    div()
+        .ml(px(depth as f32 * 12.))
+        .w_full()
+        .min_w(px(tree_content_width))
+        .px_2()
+        .py(px(1.))
+        .rounded_md()
+        .bg(palette.active_bg)
+        .text_size(px(12.))
+        .line_height(px(17.))
+        .text_color(text_color)
+        .flex()
+        .items_center()
+        .gap_2()
+        .min_w_0()
+        .child(crate::ui::icon::file_tree_icon(
+            icon_kind,
+            true,
+            text_color,
+            palette.active_text,
+        ))
+        .child(name_editor_text_view(app, cx))
+}
+
+/// The panel-top fallback editor (target row not visible). Renders a single
+/// editor row at depth 0 with the icon appropriate to the in-flight action.
+fn name_editor_fallback_row_view(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+    tree_content_width: f32,
+) -> Div {
+    let pending = app
+        .pending_name_input
+        .as_ref()
+        .expect("fallback editor requires an open prompt");
+    let icon_kind = match pending.kind {
+        PendingNameKind::CreateFolder => IconKind::Folder,
+        PendingNameKind::CreateFile => {
+            crate::ui::icon::icon_for(&pending.parent.join(&pending.buffer), false)
+        }
+        PendingNameKind::Rename => pending
+            .target
+            .as_ref()
+            .map(|path| crate::ui::icon::icon_for(path, path.is_dir()))
+            .unwrap_or(IconKind::File),
+    };
+    name_editor_row_view(app, cx, 0, icon_kind, tree_content_width)
+}
+
+/// Build the visible tree rows, interleaving the inline name editor in place of
+/// the renamed row (rename) or directly after the parent folder row (create).
+fn file_tree_rows(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+    entries: &[FileTreeEntry],
+    active_path: &Option<PathBuf>,
+    selected_path: &Option<PathBuf>,
+    tree_content_width: f32,
+) -> Vec<Div> {
+    let palette = app.palette();
+    let app_entity = cx.entity();
+    let pending = app.pending_name_input.as_ref();
+    let mut rows: Vec<Div> = Vec::with_capacity(entries.len() + 1);
+
+    for entry in entries {
+        let is_rename_target = pending.map_or(false, |p| {
+            p.kind == PendingNameKind::Rename && p.target.as_deref() == Some(entry.path.as_path())
+        });
+        if is_rename_target {
+            let icon_kind =
+                crate::ui::icon::icon_for(&entry.path, entry.kind == FileTreeEntryKind::Directory);
+            rows.push(name_editor_row_view(
+                app,
+                cx,
+                entry.depth,
+                icon_kind,
+                tree_content_width,
+            ));
+            continue;
+        }
+
+        rows.push(file_tree_entry_row(
+            &app_entity,
+            &palette,
+            entry,
+            active_path,
+            selected_path,
+            &app.collapsed_tree_paths,
+            tree_content_width,
+        ));
+
+        // Place the create editor directly after the parent folder row.
+        let create_here = pending.map_or(false, |p| {
+            matches!(
+                p.kind,
+                PendingNameKind::CreateFile | PendingNameKind::CreateFolder
+            ) && entry.path == p.parent
+        });
+        if create_here {
+            let pending = pending.expect("create prompt open");
+            let icon_kind = match pending.kind {
+                PendingNameKind::CreateFolder => IconKind::Folder,
+                _ => crate::ui::icon::icon_for(&pending.parent.join(&pending.buffer), false),
+            };
+            rows.push(name_editor_row_view(
+                app,
+                cx,
+                entry.depth + 1,
+                icon_kind,
+                tree_content_width,
+            ));
+        }
+    }
+
+    rows
+}
+
+/// One normal (non-editing) file-tree row: indentation, icon, label, and the
+/// left/right click handlers. Extracted from the old inline closure so the
+/// editor row can be interleaved in `file_tree_rows`.
+#[allow(clippy::too_many_arguments)]
+fn file_tree_entry_row(
+    app_entity: &Entity<MarkionApp>,
+    palette: &ThemePalette,
+    entry: &FileTreeEntry,
+    active_path: &Option<PathBuf>,
+    selected_path: &Option<PathBuf>,
+    collapsed_tree_paths: &HashSet<PathBuf>,
+    tree_content_width: f32,
+) -> Div {
+    let left_app_entity = app_entity.clone();
+    let right_app_entity = app_entity.clone();
+    let path = entry.path.clone();
+    let entry_kind = entry.kind;
+    let context_target = match entry.kind {
+        FileTreeEntryKind::Directory => FileTreeContextTarget::Directory(entry.path.clone()),
+        FileTreeEntryKind::File => FileTreeContextTarget::File(entry.path.clone()),
+    };
+    let is_active = active_path.as_ref() == Some(&entry.path);
+    let is_selected = selected_path.as_ref() == Some(&entry.path);
+    let is_collapsed =
+        entry.kind == FileTreeEntryKind::Directory && collapsed_tree_paths.contains(&entry.path);
+    let clickable = entry.kind == FileTreeEntryKind::File;
+    let icon_kind =
+        crate::ui::icon::icon_for(&entry.path, entry.kind == FileTreeEntryKind::Directory);
+    let bg = if is_active {
+        palette.active_bg
+    } else if is_selected {
+        palette.surface_bg
+    } else {
+        palette.panel_bg
+    };
+    let text_color = if is_active || is_selected {
+        palette.active_text
+    } else if clickable {
+        palette.text
+    } else {
+        palette.muted
+    };
+
+    div()
+        .mb(px(0.))
+        .ml(px(entry.depth as f32 * 12.))
+        .w_full()
+        .min_w(px(tree_content_width))
+        .px_2()
+        .py(px(1.))
+        .rounded_md()
+        .bg(bg)
+        .text_size(px(12.))
+        .line_height(px(17.))
+        .text_color(text_color)
+        .cursor_pointer()
+        .hover(move |style| {
+            if clickable || entry_kind == FileTreeEntryKind::Directory {
+                style.bg(palette.active_bg)
+            } else {
+                style
+            }
+        })
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_w_0()
+                .child(crate::ui::icon::file_tree_icon(
+                    icon_kind,
+                    !is_collapsed,
+                    text_color,
+                    palette.active_text,
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .child(entry.name.clone()),
+                ),
+        )
+        .on_mouse_up(MouseButton::Left, move |event, window, cx| {
+            // A click that click-away-committed the inline name editor — or
+            // one made while it is still open (a refused commit leaves it
+            // open) — must not open a file or toggle a folder; the click
+            // belongs to the editor, not the row.
+            let (editor_open, click_away) = {
+                let app = left_app_entity.read(cx);
+                (app.pending_name_input.is_some(), app.name_editor_click_away)
+            };
+            if editor_open || click_away {
+                left_app_entity.update(cx, |app, cx| {
+                    app.name_editor_click_away = false;
+                    cx.notify();
+                });
+                return;
+            }
+            let focus_handle = left_app_entity.read(cx).focus_handle.clone();
+            window.focus(&focus_handle);
+            let path = path.clone();
+            let force_new_tab = event.modifiers.secondary();
+            left_app_entity.update(cx, |app, cx| {
+                app.selected_tree_path = Some(path.clone());
+                app.file_tree_query_focused = false;
+                app.input_marked_len = 0;
+                match entry_kind {
+                    FileTreeEntryKind::File if clickable => {
+                        if force_new_tab {
+                            app.open_file_in_new_tab_from_path(path, cx);
+                        } else {
+                            app.open_tree_file(path, window, cx);
+                        }
+                    }
+                    FileTreeEntryKind::Directory => {
+                        if let Some(tree) = &app.file_tree {
+                            toggle_tree_folder(&path, tree, &mut app.collapsed_tree_paths);
+                        }
+                        app.status = t(app.language, Msg::StatusSelectedTreeEntry).into();
+                        cx.notify();
+                    }
+                    FileTreeEntryKind::File => {
+                        app.status = t(app.language, Msg::StatusSelectedTreeEntry).into();
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .on_mouse_up(MouseButton::Right, {
+            move |event, window, cx| {
+                cx.stop_propagation();
+                let focus_handle = right_app_entity.read(cx).focus_handle.clone();
+                window.focus(&focus_handle);
+                right_app_entity.update(cx, |app, cx| {
+                    app.show_file_tree_context_menu(context_target.clone(), event.position, cx);
+                });
+            }
         })
 }
 
@@ -1741,12 +2115,15 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                 .text_color(palette.muted)
                 .child(root_label),
         )
-        // Inline name prompt overlay for create/rename. Rendered as a focused
-        // input line above the tree (not as a tree row), so bounded-row
-        // rendering is unaffected. Reuses the redirected-text-input path.
-        .when(app.pending_name_input.is_some(), |panel| {
-            panel.child(pending_name_prompt_view(app, cx))
-        })
+        // Inline name editor for create/rename. When the target row is among
+        // the visible rows the editor renders in place inside the tree (see
+        // `file_tree_rows`); otherwise it falls back to the top of the panel so
+        // it is always visible (rename target filtered out or inside a
+        // collapsed folder, or create against the root / a hidden parent).
+        .when(
+            app.pending_name_input.is_some() && !editor_renders_in_row(app, &entries),
+            |panel| panel.child(name_editor_fallback_row_view(app, cx, tree_content_width)),
+        )
         .child(
             div()
                 .id("file-tree-scroll")
@@ -1765,148 +2142,14 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                         );
                     });
                 })
-                .children(entries.into_iter().map(move |entry| {
-                    let left_app_entity = app_entity.clone();
-                    let right_app_entity = app_entity.clone();
-                    let path = entry.path.clone();
-                    let entry_kind = entry.kind;
-                    let context_target = match entry.kind {
-                        FileTreeEntryKind::Directory => {
-                            FileTreeContextTarget::Directory(entry.path.clone())
-                        }
-                        FileTreeEntryKind::File => FileTreeContextTarget::File(entry.path.clone()),
-                    };
-                    let is_active = active_path.as_ref() == Some(&entry.path);
-                    let is_selected = selected_path.as_ref() == Some(&entry.path);
-                    let is_collapsed = entry.kind == FileTreeEntryKind::Directory
-                        && app.collapsed_tree_paths.contains(&entry.path);
-                    // The tree collects Markdown, curated text, and supported
-                    // image files; every file row routes to its matching
-                    // document or read-only image surface.
-                    let clickable = entry.kind == FileTreeEntryKind::File;
-                    // Lucide glyph from path/extension via `ui::icon::icon_for`.
-                    // Markdown maps to its own icon, curated text falls back to
-                    // the file icon, and supported images share the image icon.
-                    let icon_kind = crate::ui::icon::icon_for(
-                        &entry.path,
-                        entry.kind == FileTreeEntryKind::Directory,
-                    );
-                    let bg = if is_active {
-                        palette.active_bg
-                    } else if is_selected {
-                        palette.surface_bg
-                    } else {
-                        palette.panel_bg
-                    };
-                    let text_color = if is_active || is_selected {
-                        palette.active_text
-                    } else if clickable {
-                        palette.text
-                    } else {
-                        palette.muted
-                    };
-
-                    div()
-                        .mb(px(0.))
-                        .ml(px(entry.depth as f32 * 12.))
-                        .w_full()
-                        .min_w(px(tree_content_width))
-                        .px_2()
-                        .py(px(1.))
-                        .rounded_md()
-                        .bg(bg)
-                        .text_size(px(12.))
-                        .line_height(px(17.))
-                        .text_color(text_color)
-                        .cursor_pointer()
-                        .hover(move |style| {
-                            if clickable || entry_kind == FileTreeEntryKind::Directory {
-                                style.bg(palette.active_bg)
-                            } else {
-                                style
-                            }
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .min_w_0()
-                                .child(crate::ui::icon::file_tree_icon(
-                                    icon_kind,
-                                    !is_collapsed,
-                                    text_color,
-                                    palette.active_text,
-                                ))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .whitespace_nowrap()
-                                        .child(entry.name),
-                                ),
-                        )
-                        .on_mouse_up(MouseButton::Left, move |event, window, cx| {
-                            let focus_handle = left_app_entity.read(cx).focus_handle.clone();
-                            window.focus(&focus_handle);
-                            let path = path.clone();
-                            // Ctrl (Windows/Linux) / Cmd (macOS) + click is the
-                            // per-click escape hatch from the open-in-current-tab
-                            // preference: it always opens in a new tab.
-                            let force_new_tab = event.modifiers.secondary();
-                            left_app_entity.update(cx, |app, cx| {
-                                app.selected_tree_path = Some(path.clone());
-                                app.file_tree_query_focused = false;
-                                app.input_marked_len = 0;
-                                match entry_kind {
-                                    FileTreeEntryKind::File if clickable => {
-                                        if force_new_tab {
-                                            app.open_file_in_new_tab_from_path(path, cx);
-                                        } else {
-                                            app.open_tree_file(path, window, cx);
-                                        }
-                                    }
-                                    FileTreeEntryKind::Directory => {
-                                        if let Some(tree) = &app.file_tree {
-                                            toggle_tree_folder(
-                                                &path,
-                                                tree,
-                                                &mut app.collapsed_tree_paths,
-                                            );
-                                        }
-                                        app.status =
-                                            t(app.language, Msg::StatusSelectedTreeEntry).into();
-                                        cx.notify();
-                                    }
-                                    FileTreeEntryKind::File => {
-                                        app.status =
-                                            t(app.language, Msg::StatusSelectedTreeEntry).into();
-                                        cx.notify();
-                                    }
-                                }
-                            });
-                            if !clickable {}
-                        })
-                        .on_mouse_up(MouseButton::Right, {
-                            move |event, window, cx| {
-                                // The scroll container also handles right-clicks to
-                                // open the workspace/background menu. Without stopping
-                                // propagation here, that parent handler runs next and
-                                // immediately replaces this file/folder menu (which has
-                                // Rename/Delete) with the workspace menu (which does not).
-                                cx.stop_propagation();
-                                let focus_handle = right_app_entity.read(cx).focus_handle.clone();
-                                window.focus(&focus_handle);
-                                right_app_entity.update(cx, |app, cx| {
-                                    app.show_file_tree_context_menu(
-                                        context_target.clone(),
-                                        event.position,
-                                        cx,
-                                    );
-                                });
-                            }
-                        })
-                }))
+                .children(file_tree_rows(
+                    app,
+                    cx,
+                    &entries,
+                    &active_path,
+                    &selected_path,
+                    tree_content_width,
+                ))
                 .children((hidden_entries > 0).then(|| {
                     div()
                         .mt_1()

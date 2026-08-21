@@ -1264,24 +1264,37 @@ impl MarkionApp {
     pub(super) fn close_menu(
         &mut self,
         _: &MouseDownEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         eprintln!("[menu-debug] close_menu, active={:?}", self.active_menu);
-        if self.active_menu.is_some()
+        // Each mouse-down starts a fresh click: clear the click-away flag left
+        // over from the previous click before deciding what this click does.
+        self.name_editor_click_away = false;
+        let had_transient_ui = self.active_menu.is_some()
             || self.file_tree_context_menu.is_some()
             || self.preview_context_menu.is_some()
             || self.tab_context_menu.is_some()
-            || self.pending_name_input.is_some()
-            || self.block_menu.is_some()
-        {
+            || self.block_menu.is_some();
+        if had_transient_ui {
             self.active_menu = None;
             self.open_recent_submenu_open = false;
             self.file_tree_context_menu = None;
             self.preview_context_menu = None;
             self.tab_context_menu = None;
-            self.pending_name_input = None;
             self.dismiss_visual_block_menu();
+        }
+        // A left mouse-down anywhere below the menu bar is a click-away for
+        // the inline name editor: commit through the same pipeline as Enter
+        // (Explorer semantics) instead of silently discarding the typed name.
+        // The editor's own row stops propagation, so clicks inside the field
+        // position the caret rather than landing here. The flag lets the
+        // subsequent mouse-up (tree-row open, tab switch) consume this click.
+        if self.pending_name_input.is_some() {
+            self.confirm_pending_name(&ConfirmPendingName, window, cx);
+            self.name_editor_click_away = true;
+        }
+        if had_transient_ui || self.name_editor_click_away {
             cx.notify();
         }
     }
@@ -1682,6 +1695,10 @@ impl MarkionApp {
     }
 
     pub(super) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_name_input.is_some() {
+            self.move_name_caret(NameCaretMove::Left, cx);
+            return;
+        }
         if self.leave_visual_block_menu_submenu(cx) {
             return;
         }
@@ -1709,6 +1726,10 @@ impl MarkionApp {
     }
 
     pub(super) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_name_input.is_some() {
+            self.move_name_caret(NameCaretMove::Right, cx);
+            return;
+        }
         if self.enter_visual_block_menu_submenu(cx) {
             return;
         }
@@ -1736,6 +1757,10 @@ impl MarkionApp {
     }
 
     pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_name_input.is_some() {
+            self.move_name_caret(NameCaretMove::SelectLeft, cx);
+            return;
+        }
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && let Some(target) = self
                 .active_tab()
@@ -1750,6 +1775,10 @@ impl MarkionApp {
     }
 
     pub(super) fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_name_input.is_some() {
+            self.move_name_caret(NameCaretMove::SelectRight, cx);
+            return;
+        }
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && let Some(target) = self
                 .active_tab()
@@ -1830,12 +1859,20 @@ impl MarkionApp {
     }
 
     pub(super) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_name_input.is_some() {
+            self.move_name_caret(NameCaretMove::SelectAll, cx);
+            return;
+        }
         self.move_to(0, cx);
         let len = self.active_tab().document.text().len();
         self.select_to(len, cx);
     }
 
     pub(super) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_name_input.is_some() {
+            self.move_name_caret(NameCaretMove::Home, cx);
+            return;
+        }
         if let Some(target) = self.visual_painted_line_boundary(false) {
             self.move_to(target, cx);
             return;
@@ -1846,6 +1883,10 @@ impl MarkionApp {
     }
 
     pub(super) fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_name_input.is_some() {
+            self.move_name_caret(NameCaretMove::End, cx);
+            return;
+        }
         if let Some(target) = self.visual_painted_line_boundary(true) {
             self.move_to(target, cx);
             return;
@@ -2049,6 +2090,9 @@ impl MarkionApp {
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.delete_text_input_forward(cx) {
+            return;
+        }
         if self.pop_text_input(cx) {
             return;
         }
@@ -2163,6 +2207,13 @@ impl MarkionApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // While the inline name editor is open, a click in the editor pane is
+        // a click-away: do NOT move the document caret or start a selection.
+        // The ancestor workspace-row handler (close_menu) commits the name on
+        // the same mouse-down; this guard only needs to keep the editor inert.
+        if self.pending_name_input.is_some() {
+            return;
+        }
         // Clicking into the editor returns text-input focus to the document,
         // otherwise typed characters keep flowing into the file-tree filter
         // or search fields that last held focus.
@@ -2291,6 +2342,14 @@ impl MarkionApp {
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                            // The click that click-away-committed the inline
+                            // name editor — or one made while it is still open
+                            // (a refused commit) — must not switch tabs.
+                            if app.pending_name_input.is_some() || app.name_editor_click_away {
+                                app.name_editor_click_away = false;
+                                cx.notify();
+                                return;
+                            }
                             // The captured `index` is fixed at render time; a tab
                             // close/open since then may have shifted positions, so
                             // guard against a stale out-of-range index.

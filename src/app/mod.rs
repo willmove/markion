@@ -627,12 +627,15 @@ enum PendingNameKind {
     Rename,
 }
 
-/// In-flight inline name prompt for a file-tree create/rename action. The
+/// In-flight inline name editor for a file-tree create/rename action. The
 /// buffer is the text the user is editing; on Enter the kind decides which
-/// `FileTree` operation runs, and on Escape the prompt is dropped without
-/// touching the filesystem. The prompt reuses the app's redirected-text-input
+/// `FileTree` operation runs, and on Escape the editor is dropped without
+/// touching the filesystem. The editor reuses the app's redirected-text-input
 /// path (the same one the search field and file-tree filter use) so IME
-/// composition is handled identically.
+/// composition is handled identically. `cursor` is the caret position as a
+/// byte offset into `buffer`; `anchor` is the other end of the selection, so
+/// the selection spans `cursor..anchor` in either order and is collapsed
+/// when the two are equal.
 #[derive(Clone, Debug)]
 struct PendingNameInput {
     kind: PendingNameKind,
@@ -642,6 +645,109 @@ struct PendingNameInput {
     /// The entry being renamed; `None` for create actions.
     target: Option<PathBuf>,
     buffer: String,
+    /// Caret position (byte offset into `buffer`, always on a char boundary).
+    cursor: usize,
+    /// Selection anchor (byte offset). Shift+arrows move the cursor while the
+    /// anchor stays put; plain arrows collapse both.
+    anchor: usize,
+}
+
+impl PendingNameInput {
+    /// Build an editor for `kind` with `prefill` as the initial buffer. For
+    /// renames the base name is selected and the extension preserved, so
+    /// typing replaces the base name in one stroke; other kinds select the
+    /// whole prefilled name.
+    fn new(kind: PendingNameKind, parent: PathBuf, target: Option<PathBuf>, prefill: &str) -> Self {
+        let selected_len = match kind {
+            PendingNameKind::Rename => base_name_len(prefill),
+            PendingNameKind::CreateFile | PendingNameKind::CreateFolder => prefill.len(),
+        };
+        Self {
+            kind,
+            parent,
+            target,
+            buffer: prefill.to_string(),
+            cursor: selected_len,
+            anchor: 0,
+        }
+    }
+
+    /// The selection as an ordered, boundary-clamped byte range.
+    fn selection(&self) -> Range<usize> {
+        let len = self.buffer.len();
+        let (start, end) = if self.cursor <= self.anchor {
+            (self.cursor, self.anchor)
+        } else {
+            (self.anchor, self.cursor)
+        };
+        start.min(len)..end.min(len)
+    }
+
+    /// Clamp cursor/anchor back onto char boundaries inside the buffer (the
+    /// buffer shrinks on edits; stale offsets must never panic a slice).
+    fn clamp_to_boundaries(&mut self) {
+        let len = self.buffer.len();
+        self.cursor = self.cursor.min(len);
+        while self.cursor > 0 && !self.buffer.is_char_boundary(self.cursor) {
+            self.cursor -= 1;
+        }
+        self.anchor = self.anchor.min(len);
+        while self.anchor > 0 && !self.buffer.is_char_boundary(self.anchor) {
+            self.anchor -= 1;
+        }
+    }
+}
+
+/// Length in bytes of the base-name portion of `name` — everything before the
+/// extension separator. The final `.` of the last path component starts the
+/// extension, unless it is the first character (dotfiles like `.gitignore`
+/// have no separate base name).
+fn base_name_len(name: &str) -> usize {
+    let component = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    match component.rfind('.') {
+        Some(dot) if dot > 0 => name.len() - (component.len() - dot),
+        _ => name.len(),
+    }
+}
+
+/// Byte offset of the previous char boundary before `offset` in `s`.
+fn previous_name_boundary(s: &str, offset: usize) -> usize {
+    let mut i = offset.min(s.len());
+    if i == 0 {
+        return 0;
+    }
+    i -= 1;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Byte offset of the next char boundary after `offset` in `s`.
+fn next_name_boundary(s: &str, offset: usize) -> usize {
+    let mut i = offset.min(s.len());
+    if i >= s.len() {
+        return s.len();
+    }
+    i += 1;
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
+}
+
+/// Directions the inline name editor's caret can move. Shared by the Left /
+/// Right / Home / End / Select* action handlers so every redirected key
+/// mutates the name buffer instead of the document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NameCaretMove {
+    Left,
+    Right,
+    Home,
+    End,
+    SelectLeft,
+    SelectRight,
+    SelectAll,
 }
 
 #[derive(Clone, Debug)]
@@ -1606,9 +1712,14 @@ struct MarkionApp {
     preview_context_menu: Option<PreviewContextMenu>,
     /// Right-click menu for a tab-bar item.
     tab_context_menu: Option<TabContextMenu>,
-    /// Open inline name prompt for a file-tree create/rename action; reuses
+    /// Open inline name editor for a file-tree create/rename action; reuses
     /// the redirected-text-input path so keystrokes route into its buffer.
     pending_name_input: Option<PendingNameInput>,
+    /// True between the mouse-down that click-away-committed the inline name
+    /// editor and the mouse-up that consumes the same click. Tree-row and
+    /// tab-strip mouse-up handlers check it so the click that committed a
+    /// rename does not also open a file or switch tabs.
+    name_editor_click_away: bool,
     /// Image bytes waiting for a durable Markdown base path. Set when an image
     /// is pasted/dropped into an untitled tab and consumed after Save As.
     pending_image_import: Option<Vec<PendingImageInput>>,

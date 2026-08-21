@@ -1678,61 +1678,101 @@ fn file_tree_name_prompt_commit_uses_typed_name() {
     assert!(!tree.entries.iter().any(|e| e.path == created));
 }
 
-/// The prompt must be pre-filled with a sensible default per kind so the
-/// existing defaults remain one Enter away. This pins the pre-fill contract
-/// that `open_name_prompt` / the context-menu branches rely on.
+/// The editor must be pre-filled with a sensible default per kind so the
+/// existing defaults remain one Enter away. This pins the pre-fill and
+/// initial-selection contracts that `PendingNameInput::new` (used by
+/// `open_name_prompt` / the context-menu branches) provides.
 #[test]
 fn pending_name_input_prefill_matches_kind_defaults() {
     let root = PathBuf::from("workspace");
-    let create_file = PendingNameInput {
-        kind: PendingNameKind::CreateFile,
-        parent: root.clone(),
-        target: None,
-        buffer: "untitled.md".to_string(),
-    };
+    let create_file = PendingNameInput::new(
+        PendingNameKind::CreateFile,
+        root.clone(),
+        None,
+        "untitled.md",
+    );
     assert_eq!(create_file.kind, PendingNameKind::CreateFile);
     assert_eq!(create_file.buffer, "untitled.md");
     assert!(create_file.target.is_none());
+    // Create kinds select the whole prefilled name: one stroke replaces it.
+    assert_eq!(create_file.selection(), 0.."untitled.md".len());
 
-    let create_folder = PendingNameInput {
-        kind: PendingNameKind::CreateFolder,
-        parent: root.clone(),
-        target: None,
-        buffer: "New Folder".to_string(),
-    };
+    let create_folder = PendingNameInput::new(
+        PendingNameKind::CreateFolder,
+        root.clone(),
+        None,
+        "New Folder",
+    );
     assert_eq!(create_folder.kind, PendingNameKind::CreateFolder);
     assert_eq!(create_folder.buffer, "New Folder");
+    assert_eq!(create_folder.selection(), 0.."New Folder".len());
 
     let note = root.join("note.md");
-    let rename = PendingNameInput {
-        kind: PendingNameKind::Rename,
-        parent: root.clone(),
-        target: Some(note.clone()),
-        buffer: "note.md".to_string(),
-    };
+    let rename = PendingNameInput::new(
+        PendingNameKind::Rename,
+        root.clone(),
+        Some(note.clone()),
+        "note.md",
+    );
     assert_eq!(rename.kind, PendingNameKind::Rename);
     assert_eq!(rename.target, Some(note));
     assert_eq!(rename.buffer, "note.md");
+    // Rename pre-selects the base name and preserves the extension.
+    assert_eq!(rename.selection(), 0..4);
+
+    // Multi-dot and dotfile policies.
+    let archive =
+        PendingNameInput::new(PendingNameKind::Rename, root.clone(), None, "report.v2.md");
+    assert_eq!(archive.selection(), 0.."report.v2".len());
+    let dotfile = PendingNameInput::new(PendingNameKind::Rename, root.clone(), None, ".gitignore");
+    assert_eq!(dotfile.selection(), 0..".gitignore".len());
 }
 
-/// `has_text_input_focus` must consider a pending name prompt as focused so
-/// IME keystrokes route into the prompt buffer instead of the document.
+/// `has_text_input_focus` must consider a pending name editor as focused so
+/// IME keystrokes route into the editor buffer instead of the document.
 #[test]
 fn has_text_input_focus_includes_pending_name_prompt() {
     // The app-level field can't be constructed without a GPUI context, so
     // validate the routing predicate directly against the pending-input
     // presence: the trio (has_text_input_focus / active_input_text_mut /
     // after_input_changed) all key off `pending_name_input.is_some()`.
-    let pending = Some(PendingNameInput {
-        kind: PendingNameKind::CreateFile,
-        parent: PathBuf::from("workspace"),
-        target: None,
-        buffer: String::new(),
-    });
+    let pending = Some(PendingNameInput::new(
+        PendingNameKind::CreateFile,
+        PathBuf::from("workspace"),
+        None,
+        "",
+    ));
     assert!(pending.is_some());
     // A non-pending state must be treated as unfocused for the name buffer.
     let none: Option<PendingNameInput> = None;
     assert!(none.is_none());
+}
+
+/// Character-boundary helpers used by the name editor's caret movement. CJK
+/// names are multi-byte, so every caret move must land on a char boundary.
+#[test]
+fn name_caret_helpers_move_across_char_boundaries() {
+    let s = "中a文b.md";
+    // Byte layout: 中(3) a(1) 文(3) b(1) .(1) m(1) d(1)
+    let mut i = previous_name_boundary(s, 4);
+    assert_eq!(i, 3, "before 'a' is the start of 'a'");
+    i = previous_name_boundary(s, 3);
+    assert_eq!(i, 0, "before '中' is 0");
+    i = next_name_boundary(s, 0);
+    assert_eq!(i, 3, "after '中' skips its bytes");
+    i = next_name_boundary(s, 4);
+    assert_eq!(i, 7, "after '文' skips its bytes (文 spans 4..7)");
+
+    // base_name_len: extension preserved on multi-dot names, dotfiles whole.
+    assert_eq!(base_name_len("report.md"), "report".len());
+    assert_eq!(base_name_len("report.v2.md"), "report.v2".len());
+    assert_eq!(base_name_len(".gitignore"), ".gitignore".len());
+    assert_eq!(base_name_len("noext"), "noext".len());
+    // Directory separators are handled by the caller (rename prefill is the
+    // final path component from `file_name()`), so they never reach here as
+    // part of the base name; the helper itself only splits at the extension
+    // dot. A backslash inside a name is therefore ordinary name content.
+    assert_eq!(base_name_len("a\\b.md"), "a\\b".len());
 }
 
 /// `dir_is_non_empty` decides whether deleting a folder needs a second
@@ -10937,5 +10977,334 @@ fn tab_context_copy_path_reports_status_and_skips_untitled(cx: &mut TestAppConte
     app.update(cx, |app, _| {
         assert_eq!(app.status, status_before);
         assert!(app.tab_context_menu.is_none());
+    });
+}
+
+/// The inline name editor must keep the document inert: while it is open, a
+/// mouse-down in the editor pane must neither move the document caret nor
+/// start a selection (the old behavior moved the caret and dragged a
+/// selection — the reported "rename moves the source caret" bug).
+#[gpui::test]
+fn name_editor_open_click_in_editor_pane_leaves_document_untouched(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("hello world"))];
+        app
+    });
+    // Park the caret at a known offset and open the editor.
+    app.update(cx, |app, _| {
+        app.active_tab_mut().selected_range = 3..3;
+        app.pending_name_input = Some(PendingNameInput::new(
+            PendingNameKind::Rename,
+            PathBuf::from("w"),
+            None,
+            "hello.md",
+        ));
+    });
+
+    // Click + drag in the editor pane with the editor open.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.on_mouse_down(
+                &MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: point(px(40.), px(20.)),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                window,
+                cx,
+            );
+            app.on_mouse_move(
+                &MouseMoveEvent {
+                    position: point(px(120.), px(30.)),
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Default::default(),
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, 3..3, "caret unmoved");
+        assert!(!app.active_tab().is_selecting, "no drag selection");
+    });
+}
+
+/// Click-away commit: a mouse-down that lands below the menu bar (the
+/// workspace-row close_menu handler) commits the typed name through the same
+/// pipeline as Enter, and flags the click so the following tree-row mouse-up
+/// does not also open a file.
+#[gpui::test]
+fn name_editor_click_away_commits_and_guards_the_following_mouse_up(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let path = root.join("doc.md");
+    fs::write(&path, "# One").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.selected_tree_path = Some(path.clone());
+        app
+    });
+
+    // Open the rename editor and type a replacement for the selected base name.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.rename_tree_entry(&RenameTreeEntry, window, cx);
+        });
+    });
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.push_text_input("renamed", cx);
+        });
+    });
+    // Click away: the simulated workspace-row mouse-down commits the name.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.close_menu(
+                &MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: point(px(300.), px(300.)),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    app.update(cx, |app, _| {
+        assert!(app.pending_name_input.is_none(), "editor committed");
+        assert!(app.name_editor_click_away, "click flagged for mouse-up");
+        let new_path = root.join("renamed.md");
+        assert!(new_path.exists(), "file renamed on disk");
+        assert!(!path.exists());
+        assert_eq!(app.tabs[0].path(), Some(new_path.as_path()));
+    });
+
+    // The mouse-up that closes the click clears the flag without side effects.
+    app.update(cx, |app, _| {
+        app.name_editor_click_away = false;
+    });
+}
+
+/// A refused commit (empty buffer) must leave the editor open for retry
+/// instead of discarding it — the old behavior silently killed the prompt.
+#[gpui::test]
+fn name_editor_refused_commit_keeps_editor_open(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let path = root.join("doc.md");
+    fs::write(&path, "# One").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.selected_tree_path = Some(path.clone());
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.rename_tree_entry(&RenameTreeEntry, window, cx);
+        });
+    });
+    // Delete the whole name (base selected + extension), then click away.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.move_name_caret(NameCaretMove::SelectAll, cx);
+            app.pop_text_input(cx);
+        });
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.close_menu(
+                &MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: point(px(300.), px(300.)),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    app.update(cx, |app, _| {
+        assert!(
+            app.pending_name_input.is_some(),
+            "empty name keeps editor open"
+        );
+        assert_eq!(app.status, t(app.language, Msg::StatusNameRequired));
+        assert!(path.exists(), "filesystem untouched");
+    });
+}
+
+/// Typed characters replace the selected base name in one stroke, and arrow
+/// keys move the name editor's caret instead of the document caret.
+#[gpui::test]
+fn name_editor_selection_replace_and_arrow_keys_stay_in_buffer(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("document text"))];
+        app
+    });
+    app.update(cx, |app, _| {
+        app.active_tab_mut().selected_range = 2..2;
+        app.pending_name_input = Some(PendingNameInput::new(
+            PendingNameKind::Rename,
+            PathBuf::from("w"),
+            None,
+            "report.md",
+        ));
+    });
+
+    // The rename editor pre-selects the base name: typing replaces it.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.push_text_input("notes", cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        let pending = app.pending_name_input.as_ref().unwrap();
+        assert_eq!(pending.buffer, "notes.md");
+        // Caret sits right after the inserted replacement text.
+        assert_eq!(pending.selection(), "notes".len().."notes".len());
+    });
+
+    // Arrow keys move the buffer caret; the document caret stays put.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.left(&Left, window, cx);
+            app.left(&Left, window, cx);
+            app.right(&Right, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        let pending = app.pending_name_input.as_ref().unwrap();
+        assert_eq!(pending.cursor, "notes".len() - 1, "two lefts, one right");
+        assert_eq!(
+            app.active_tab().selected_range,
+            2..2,
+            "document caret unmoved"
+        );
+    });
+
+    // Shift+left extends the selection inside the buffer only.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.select_left(&SelectLeft, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        let pending = app.pending_name_input.as_ref().unwrap();
+        assert_eq!(pending.selection(), "notes".len() - 2.."notes".len() - 1);
+        assert_eq!(app.active_tab().selected_range, 2..2);
+    });
+
+    // Home/End clamp within the buffer; document untouched.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.home(&Home, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.pending_name_input.as_ref().unwrap().cursor, 0);
+        assert_eq!(app.active_tab().selected_range, 2..2);
+    });
+
+    // Backspace deletes at the buffer caret, not in the document.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.backspace(&Backspace, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        let pending = app.pending_name_input.as_ref().unwrap();
+        assert_eq!(pending.buffer, "notes.md");
+        assert_eq!(pending.cursor, 0);
+        assert_eq!(app.active_tab().document.text(), "document text");
+    });
+}
+
+/// IME composition over the pre-selected base name: the marked text replaces
+/// the selection, and the composition is removed (not duplicated) when the
+/// user keeps typing through the redirected path.
+#[gpui::test]
+fn name_editor_ime_composition_over_selection(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("x"))];
+        app
+    });
+    app.update(cx, |app, _| {
+        app.pending_name_input = Some(PendingNameInput::new(
+            PendingNameKind::Rename,
+            PathBuf::from("w"),
+            None,
+            "report.md",
+        ));
+    });
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            // IME composition events each carry the full current composition
+            // string (platform contract); the redirected path strips the
+            // previous composition before inserting the new one.
+            app.insert_redirected_text("笔", true, cx);
+            app.insert_redirected_text("笔记", true, cx);
+            app.insert_redirected_text("笔记本", false, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        let pending = app.pending_name_input.as_ref().unwrap();
+        assert_eq!(pending.buffer, "笔记本.md");
+        assert_eq!(pending.cursor, "笔记本".len(), "caret after composition");
+        assert_eq!(pending.selection(), pending.cursor..pending.cursor);
+    });
+}
+
+/// Escape still cancels the editor outright — no commit, filesystem untouched.
+#[gpui::test]
+fn name_editor_escape_cancels_without_touching_disk(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let path = root.join("doc.md");
+    fs::write(&path, "# One").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.selected_tree_path = Some(path.clone());
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.rename_tree_entry(&RenameTreeEntry, window, cx);
+            app.push_text_input("typed", cx);
+        });
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.clear_file_tree_search(&ClearFileTreeSearch, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert!(app.pending_name_input.is_none(), "Escape closed the editor");
+        assert!(path.exists(), "original file untouched");
+        assert!(!root.join("typed.md").exists());
     });
 }

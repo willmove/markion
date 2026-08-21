@@ -17,7 +17,7 @@ GPUI has no native text-input element, and `window.prompt` is button-only (Ok/Ca
 
 **Non-Goals:**
 
-- In-place tree-cell editing (the prompt is a dedicated input line, not an editable row).
+- Multi-line name editing (the buffer is a single line; Enter always commits).
 - Native OS free-text dialog.
 - Any change to Markdown caches, syntax highlighting, text handles, or undo.
 
@@ -33,18 +33,18 @@ struct PendingNameInput {
     parent: PathBuf,            // dir to create in (for create); target dir (for rename, = target.parent())
     target: Option<PathBuf>,    // the entry being renamed (None for create)
     buffer: String,
+    cursor: usize,              // caret position (byte offset, always on a char boundary)
+    anchor: usize,              // selection anchor; selection spans cursor..anchor in either order
 }
 ```
 
 Integrate it into the existing input-routing trio exactly like `file_tree_query_focused`:
 
 - `has_text_input_focus()` -> `self.pending_name_input.is_some() || file_tree_query_focused || search_focus.is_some()`.
-- `active_input_text_mut()` -> if `pending_name_input.is_some()`, return `&mut pending_name_input.buffer`.
+- the redirected insert/delete paths -> while a name is pending, inserts are caret- and selection-aware: the active IME composition (which always ends at the caret) and the selection are replaced by the inserted text, and the caret lands after it. Backspace removes the composition, else the selection, else the char before the caret; Delete is the forward counterpart. All offsets clamp to char boundaries so CJK names never panic a slice.
 - `after_input_changed()` -> when a name is pending, set status to a "typing name" hint (no tree re-filter).
 
-Rationale: the search/filter inputs already prove this works with IME (composition, marked text, backspace via `pop_text_input`). Reusing it avoids a new input subsystem and keeps the prompt themeable/localizable.
-
-Alternative considered: a separate GPUI input element. Rejected - none exists in this codebase and the redirected-input path is already IME-correct.
+Rationale: the search/filter inputs already prove the redirected path works with IME (composition, marked text, backspace via `pop_text_input`). Reusing it avoids a new input subsystem and keeps the editor themeable/localizable. Extending it with caret/selection state gives real single-line editing (select-to-replace, arrow-key caret movement) without introducing a GPUI input element.
 
 ### 2. Commit / cancel via dedicated actions, not the context-menu handler
 
@@ -65,13 +65,13 @@ Rationale: the context-menu action handler (`handle_file_tree_context_action`) c
 
 Alternative considered: perform the FS op in the menu handler with a default name. Rejected - that is the current broken behavior.
 
-### 3. Pre-fill rename, default-suggest create
+### 3. Pre-fill rename, default-suggest create, pre-select for one-stroke replace
 
-- Rename: pre-fill `buffer` with the current entry's file name (so the user edits in place).
-- Create File: pre-fill with `untitled.md` (the current default) so Enter-without-typing preserves today's behavior.
-- Create Folder: pre-fill with `New Folder`.
+- Rename: pre-fill `buffer` with the current entry's file name (so the user edits in place) and pre-select the base name (`base_name_len`: everything before the last extension dot of the final component, dotfiles select the whole name) so typing replaces the base while the extension is preserved.
+- Create File: pre-fill with `untitled.md` (the current default), whole name selected, so Enter-without-typing preserves today's behavior and typing replaces it in one stroke.
+- Create Folder: pre-fill with `New Folder`, whole name selected.
 
-This keeps the prompt a convenience, not a regression: the existing defaults are still one Enter away.
+This keeps the editor a convenience, not a regression: the existing defaults are still one Enter away.
 
 ### 4. Recursive folder delete + second confirm
 
@@ -99,11 +99,13 @@ Rationale: recursive delete is irreversible; the second confirm specifically cal
 
 Alternative considered: always one confirm with dynamic wording. Rejected - the user explicitly chose a two-step confirm for non-empty folders.
 
-### 5. Prompt rendering and dismissal
+### 5. Editor rendering, keyboard routing, and dismissal
 
-Render the prompt as an overlay anchored in the Files panel (near the top, like the search panel) when `pending_name_input.is_some()`, reusing `search_field_view` styling (`Label: <buffer>`, blue border when active). It is not a row in the tree, so bounded-row rendering is unaffected.
+**Placement.** Render the editor inside the tree: `file_tree_rows` replaces the renamed row with the editor row, and inserts the create editor directly after the parent folder row (one depth deeper). When the target row is not among the visible rows (rename target filtered out or inside a collapsed folder, create against a hidden root), fall back to a single editor row at the top of the panel so the editor is always visible. When the Files panel itself is hidden (tab-bar Rename with the sidebar closed or on Outline), render the labeled prompt under the tab bar. The editor row reuses the normal row chrome (indent, icon, sizing); at most one extra row is ever inserted, so bounded-row rendering stays bounded.
 
-Dismissal mirrors the context menu: `close_menu` / click-outside / opening another menu / Escape cancels the prompt. `toggle_menu` and `show_file_tree_context_menu` already clear related transient state; extend them to clear `pending_name_input` too.
+**Editing surface.** The editable field shows the buffer with a visible caret (collapsed selection) or selection highlight (non-empty), and a mouse-down inside the field positions the caret at the clicked character (Shift+click extends the selection), mapped with the same per-glyph width estimate the tree uses elsewhere. Left/Right/Home/End/Shift+Arrows/Select All route through `move_name_caret` (`NameCaretMove`) while the editor is open, and Backspace/Delete go through the caret-aware pop/delete-forward paths - none of them reach the document caret. While the editor is open, a click in the editor pane neither moves the document caret nor starts a drag selection (fixes the "rename moves the source caret" bug); the same mouse-down commits the name via the ancestor workspace-row handler.
+
+**Commit / cancel / click-away.** Enter commits (section 2). A left mouse-down anywhere below the menu bar commits through the same pipeline (Explorer semantics): the workspace-row `close_menu` handler calls `confirm_pending_name` and sets `name_editor_click_away`, which the tree-row and tab-strip mouse-up handlers consume so the committing click does not also open a file or switch tabs. A refused commit (empty buffer) keeps the editor open, and mouse-ups while it is still open are likewise consumed. Opening a context menu or toggling the menu bar cancels the editor outright (the pre-existing dismissal paths clear `pending_name_input`); Escape cancels via the `cancel_pending_input_or_search` dispatcher.
 
 ## Risks / Trade-offs
 
@@ -121,4 +123,4 @@ File-tree operations (create/rename/delete) operate on the filesystem and app-le
 - the cached text handle per version,
 - undo snapshots (undo is per-document-text, untouched by file-tree renames; a renamed-and-reloaded tab gets a fresh undo stack, same as today).
 
-The redirected-input extension adds one more buffer (`pending_name_input.buffer`) to the IME routing guard; it does not change the document-editing IME path. Bounded tree-row rendering is unchanged (the prompt is an overlay).
+The redirected-input extension upgrades one more buffer (`pending_name_input.buffer`) from append-only to caret/selection-aware editing inside the IME routing guard; it does not change the document-editing IME path. Bounded tree-row rendering is unchanged in spirit (the editor replaces or inserts at most one row).
