@@ -111,6 +111,7 @@ pdf_engine = "xelatex"
 
 Markion 可导出为：
 
+- 用于准备微信富文本内容的本地 MarkNice 工作区
 - Markdown
 - 带样式 HTML 和纯 HTML
 - LaTeX
@@ -119,6 +120,8 @@ Markion 可导出为：
 - PNG 和 JPEG 文本快照
 
 PDF 和 DOCX 会优先尝试已整合的 Typune/pandoc 导出引擎。如果 pandoc 或选定的 PDF 引擎不可用，Markion 会回退到较简单的内置写入器，并在状态栏中说明所用后端。安装 pandoc 和合适的 PDF 引擎可获得更丰富的输出。PNG/JPEG 和内置 PDF 输出有意保持为基础文本快照。
+
+选择 **导出 → 发布到微信公众号（MarkNice）** 可在默认浏览器中将当前内存文档打开到一个私有的本地回环工作区。内置主题、渲染器、数学字体和应用脚本全部离线可用。浏览器中的编辑仅保留在该标签页内，永远不会写回 Markion。托管的本地图可以预览，但复制时会显式排除它们，因为本地 blob 无法发布到微信；远程图片仍可能访问其原始主机。如果剪贴板权限或两小时会话过期，请重新授权或从 Markion 重新启动。
 
 ## 性能
 
@@ -148,7 +151,7 @@ cargo build
 pwsh ./scripts/check-quality.ps1
 ```
 
-质量命令会检查 Rust 格式、完整 Cargo workspace 测试套件，以及严格模式下的所有 OpenSpec 工件。当前 WYSIWYG 覆盖矩阵与路线图、源码范围不变量、解析器职责与所需证据详见[可视化编辑支持与工程契约](docs/visual-editing-quality.md)。
+质量命令会检查 Rust 格式与代码检查（lint）、完整 Cargo workspace 测试套件、固定的 MarkNice bundle，以及严格模式下的所有 OpenSpec 工件。另请参阅[本地 MarkNice 工作区指南](docs/marknice-workspace.md)与[可视化编辑支持与工程契约](docs/visual-editing-quality.md)。
 
 根包是 `markion` 应用 crate。源自 Typune 且不依赖 GPUI 的库 crate 位于 `crates/*`：
 
