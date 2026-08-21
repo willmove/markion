@@ -93,6 +93,9 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
+      - name: Verify pinned MarkNice workspace source
+        run: cargo run --release -p wechat-workspace --bin verify-bundle -- assets/marknice-workspace
+
       # Source installation matches the proven Medor workflow and avoids
       # cargo-packager config auto-detection issues seen with prebuilt binaries.
       - name: Install cargo-packager
@@ -100,6 +103,13 @@ jobs:
 
       - name: Package (${{ matrix.formats }})
         run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }}
+
+      - name: Verify packaged MarkNice workspace (${{ matrix.formats }})
+        shell: pwsh
+        run: |
+          '${{ matrix.formats }}'.Split(',') | ForEach-Object {
+            ./scripts/verify-packaged-workspace.ps1 -Format $_ -ArtifactsRoot dist
+          }
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

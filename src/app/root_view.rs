@@ -199,6 +199,7 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::export_docx))
                     .on_action(cx.listener(Self::export_png))
                     .on_action(cx.listener(Self::export_jpeg))
+                    .on_action(cx.listener(Self::publish_wechat))
                     .on_action(cx.listener(Self::toggle_view_mode))
                     .on_action(cx.listener(Self::set_edit_mode))
                     .on_action(cx.listener(Self::set_visual_edit_mode))
@@ -3454,6 +3455,12 @@ pub(super) fn active_menu_dropdown(
             panel.child(image_action_unavailable_menu_row(language, palette))
         }
         AppMenu::Export => panel
+            .child(action_item!(
+                Msg::ItemPublishWechat,
+                publish_wechat,
+                PublishWechat
+            ))
+            .child(menu_separator(palette))
             .child(action_item!(
                 Msg::ItemExportHtml,
                 export_html,

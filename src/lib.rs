@@ -26,6 +26,7 @@ mod math;
 pub mod model;
 mod parse;
 mod paths;
+mod publishing;
 mod render;
 mod source_mapped;
 mod storage;
@@ -154,14 +155,15 @@ pub use math::{render_math, validate_latex};
 pub use parse::{
     HtmlPreviewPart, HtmlTableCell, HtmlTableGrid, html_preview_parts, html_preview_plain_text,
 };
+pub use publishing::build_publishing_snapshot;
 
 pub use storage::{
     FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS, ImportedImage,
     MARKDOWN_EXTENSIONS, RecoveryInventoryEntry, RecoverySourceState, TEXT_EXTENSIONS,
-    delete_recovery_file, image_extension_supported, import_image_bytes, import_image_file,
-    init_logging, inspect_recovery_files, is_markdown_path, is_text_path, list_recovery_files,
-    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
-    load_theme_definition, parse_app_preferences, parse_legacy_app_preferences,
+    delete_recovery_file, document_asset_dir, image_extension_supported, import_image_bytes,
+    import_image_file, init_logging, inspect_recovery_files, is_markdown_path, is_text_path,
+    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
+    load_session_state, load_theme_definition, parse_app_preferences, parse_legacy_app_preferences,
     parse_session_state, parse_theme_definition, render_app_preferences, render_session_state,
     render_theme_definition, save_app_preferences, save_session_state, save_theme_definition,
 };
@@ -783,6 +785,32 @@ impl MarkdownDocument {
             && cached.version == self.text_version
         {
             image_refs_from_visual(&cached.value, &mut urls);
+        }
+        urls.sort();
+        urls.dedup();
+        urls
+    }
+
+    /// Authored image destinations in the current document, collected through
+    /// the same pulldown-cmark options and raw-HTML image semantics used by
+    /// Markion's preview. This explicit export-time scan is intentionally not
+    /// stored in or wired to the per-keystroke derived caches.
+    pub fn publishing_image_references(&self) -> Vec<String> {
+        let mut urls = Vec::new();
+        for event in Parser::new_ext(self.body_text(), markdown_options()) {
+            match event {
+                Event::Start(Tag::Image { dest_url, .. }) => urls.push(dest_url.to_string()),
+                Event::Html(html) | Event::InlineHtml(html) => {
+                    urls.extend(html_preview_parts(&html).into_iter().filter_map(|part| {
+                        if let HtmlPreviewPart::Image { url, .. } = part {
+                            Some(url)
+                        } else {
+                            None
+                        }
+                    }));
+                }
+                _ => {}
+            }
         }
         urls.sort();
         urls.dedup();

@@ -8,6 +8,19 @@ use gpui::{
 
 static HTTP_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
+pub(super) fn runtime_handle() -> tokio::runtime::Handle {
+    HTTP_RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .expect("failed to initialize Markion HTTP runtime")
+        })
+        .handle()
+        .clone()
+}
+
 pub(super) struct MarkionHttpClient {
     client: reqwest::Client,
     handle: tokio::runtime::Handle,
@@ -25,17 +38,11 @@ impl MarkionHttpClient {
             .user_agent(user_agent.clone())
             .build()
             .context("building Markion HTTP client")?;
-        let runtime = HTTP_RUNTIME.get_or_init(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .expect("failed to initialize Markion HTTP runtime")
-        });
+        let handle = runtime_handle();
 
         Ok(Self {
             client,
-            handle: runtime.handle().clone(),
+            handle,
             user_agent,
         })
     }
@@ -122,14 +129,7 @@ pub(super) fn install_http_client(cx: &mut App) -> Result<()> {
 /// Used by the Markdown preview-image cache so decode work can run off the UI
 /// thread without depending on GPUI's asset loader.
 pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>> {
-    let runtime = HTTP_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .expect("failed to initialize Markion HTTP runtime")
-    });
-    runtime.block_on(async {
+    runtime_handle().block_on(async {
         let client = reqwest::Client::builder()
             .use_rustls_tls()
             .connect_timeout(Duration::from_secs(15))

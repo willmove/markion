@@ -55,6 +55,8 @@ impl MarkionApp {
             active_menu: None,
             open_recent_submenu_open: false,
             status: t(Language::default(), Msg::StatusReady).into(),
+            publishing_service: None,
+            browser_launcher: Arc::new(publishing::DefaultBrowserLauncher),
             git_branch_state: GitBranchState::default(),
             confirming_close: false,
             allow_close: false,

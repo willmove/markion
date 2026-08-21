@@ -6,6 +6,70 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 // under `-D warnings`.
 use markion::{FileTreeFileKind, ThemeFonts};
 
+#[gpui::test]
+fn publishing_snapshot_preserves_gpui_tab_and_document_state(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, _| {
+        app.view_mode = ViewMode::Read;
+        let tab = app.active_tab_mut();
+        tab.document.insert(0, "# Draft\n\nSelected text");
+        tab.selected_range = 2..7;
+    });
+
+    app.update(cx, |app, _| {
+        let active_index = app.active_tab;
+        let tab = app.active_tab();
+        let text = tab.document.text().to_owned();
+        let selected_range = tab.selected_range.clone();
+        let version = tab.document.version();
+        let dirty = tab.document.is_dirty();
+        let visual = tab.document.visual_blocks_shared();
+        let preview = tab.document.preview_blocks_shared();
+
+        let snapshot = build_publishing_snapshot(&tab.document, app.language.code());
+
+        assert_eq!(snapshot.markdown.as_ref(), text);
+        assert_eq!(app.active_tab, active_index);
+        assert_eq!(app.view_mode, ViewMode::Read);
+        assert_eq!(app.active_tab().selected_range, selected_range);
+        assert_eq!(app.active_tab().document.text(), text);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert_eq!(app.active_tab().document.is_dirty(), dirty);
+        assert!(Arc::ptr_eq(
+            &preview,
+            &app.active_tab().document.preview_blocks_shared()
+        ));
+        assert!(Arc::ptr_eq(
+            &visual,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+    });
+}
+
+#[test]
+fn publishing_action_and_statuses_are_localized_for_every_language() {
+    for language in [
+        Language::En,
+        Language::ZhHans,
+        Language::ZhHant,
+        Language::Ja,
+        Language::Fr,
+        Language::De,
+        Language::Es,
+    ] {
+        for message in [
+            Msg::ItemPublishWechat,
+            Msg::StatusPublishingOpening,
+            Msg::StatusPublishingOpened,
+        ] {
+            assert!(!t(language, message).trim().is_empty());
+        }
+        assert!(!tf(language, Msg::StatusPublishSetupFailed, &["setup"]).contains("{0}"));
+        assert!(!tf(language, Msg::StatusPublishLaunchFailed, &["launch"]).contains("{0}"));
+    }
+}
+
 #[test]
 fn visual_pinyin_preedit_composes_sorted_utf8_highlights() {
     let source = "**激活稀疏（Activation Sparsity）**：经过 ReLU、SiLU 这类激活函数后，一部分激活值变成 0（或接近 0）。这是**动态的**——每个 batch、每个 token 的稀疏位置都不一样，硬件必须在**运行时**现场判断哪里是 0、现场建索引、现场跳过。这一\"现场\"是激活稀疏难做的根源。";

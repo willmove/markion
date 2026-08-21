@@ -34,8 +34,8 @@ pub use recovery::{
     list_recovery_files, load_recovery_file,
 };
 pub use resources::{
-    IMAGE_EXTENSIONS, ImportedImage, image_extension_supported, import_image_bytes,
-    import_image_file,
+    IMAGE_EXTENSIONS, ImportedImage, document_asset_dir, image_extension_supported,
+    import_image_bytes, import_image_file,
 };
 pub use session::{
     load_session_state, parse_session_state, render_session_state, save_session_state,

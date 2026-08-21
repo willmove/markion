@@ -111,6 +111,7 @@ Configuration, recovery files, themes, and rotating diagnostic logs use platform
 
 Markion exports to:
 
+- A local MarkNice workspace for preparing rich content for WeChat
 - Markdown
 - Styled HTML and plain HTML
 - LaTeX
@@ -119,6 +120,15 @@ Markion exports to:
 - PNG and JPEG text snapshots
 
 PDF and DOCX try the absorbed Typune/pandoc export engine first. If pandoc or the selected PDF engine is unavailable, Markion falls back to a simpler built-in writer and reports the backend in the status bar. Installing pandoc and a suitable PDF engine produces richer output. PNG/JPEG and built-in PDF output are intentionally basic text snapshots.
+
+Choose **Export → Publish for WeChat (MarkNice)** to open the active in-memory
+document in a private loopback workspace in your default browser. The bundled
+themes, renderer, math fonts, and application scripts work offline. Browser
+edits stay in that tab and never write back to Markion. Managed local images
+can be previewed, but copying requires explicitly omitting them because a local
+blob cannot be published by WeChat; remote images may still contact their
+authored hosts. If clipboard permission or the two-hour session expires, allow
+the permission or relaunch from Markion.
 
 ## Performance
 
@@ -148,7 +158,10 @@ cargo build
 pwsh ./scripts/check-quality.ps1
 ```
 
-The quality command checks Rust formatting, the full Cargo workspace test suite, and every OpenSpec artifact in strict mode. See the [Visual Edit support and engineering contract](docs/visual-editing-quality.md) for the current WYSIWYG coverage matrix and roadmap, source-range invariants, parser ownership, and required evidence.
+The quality command checks Rust formatting and lints, the full Cargo workspace
+test suite, the pinned MarkNice bundle, and every OpenSpec artifact in strict
+mode. See the [local MarkNice workspace guide](docs/marknice-workspace.md) and
+the [Visual Edit support and engineering contract](docs/visual-editing-quality.md).
 
 The root package is the `markion` application crate. Typune-derived, GPUI-free library crates live under `crates/*`:
 

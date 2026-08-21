@@ -121,6 +121,7 @@ Run the complete workspace suite and inspect the release-only diff:
 
 ```bash
 cargo test --workspace
+cargo run -p wechat-workspace --bin verify-bundle -- assets/marknice-workspace
 git diff --check
 git status --short --branch
 git diff -- Cargo.toml Cargo.lock packager.toml
@@ -158,6 +159,11 @@ All of these jobs must succeed:
 - Sign the Windows updater and build metadata.
 - Publish GitHub Release.
 - Mirror installers to Aliyun OSS.
+
+Each native build also extracts every generated package and verifies its
+packaged `assets/marknice-workspace` manifest before upload. Complete the manual
+browser and WeChat matrix in `docs/marknice-workspace-release-evidence.md`; a
+release with pending rows is not ready to publish.
 
 If the workflow fails, inspect it with `gh run view <tag-run-id> --log-failed`. Do not report the release as complete. If the public tag already exists, preserve it and either fix forward or ask the maintainer how to proceed.
 

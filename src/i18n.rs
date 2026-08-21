@@ -196,6 +196,7 @@ pub enum Msg {
     ItemExportDocx,
     ItemExportPng,
     ItemExportJpeg,
+    ItemPublishWechat,
 
     // --- Help menu items ---
     ItemPreferences,
@@ -367,6 +368,8 @@ pub enum Msg {
     StatusPreferenceResetCanceled,
     StatusLanguageSet,
     StatusRecentFilesCleared,
+    StatusPublishingOpening,
+    StatusPublishingOpened,
 
     // --- Status bar: dynamic (use tf) ---
     /// {0}=branch name — persistent status-bar repository context.
@@ -421,6 +424,10 @@ pub enum Msg {
     StatusExportedBuiltin,
     /// {0}=err — "Export failed: {err}"
     StatusExportFailed,
+    /// {0}=err — local publishing workspace setup/start failure.
+    StatusPublishSetupFailed,
+    /// {0}=err — default-browser dispatch failure.
+    StatusPublishLaunchFailed,
     /// {0}=path — "Created {path}"
     StatusCreated,
     /// {0}=err — "Create file failed: {err}"
@@ -2376,6 +2383,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemExportDocx => "Export DOCX",
         Msg::ItemExportPng => "Export PNG",
         Msg::ItemExportJpeg => "Export JPEG",
+        Msg::ItemPublishWechat => "Publish for WeChat (MarkNice)",
 
         Msg::ItemPreferences => "Preferences",
         Msg::ItemResetPreferences => "Reset Preferences",
@@ -2553,6 +2561,10 @@ fn en(msg: Msg) -> &'static str {
             "Exported {0} (built-in writer — install pandoc for richer output)"
         }
         Msg::StatusExportFailed => "Export failed: {0}",
+        Msg::StatusPublishingOpening => "Opening the local WeChat publishing workspace…",
+        Msg::StatusPublishingOpened => "Opened the local WeChat publishing workspace",
+        Msg::StatusPublishSetupFailed => "Publishing workspace setup failed: {0}",
+        Msg::StatusPublishLaunchFailed => "Could not open the default browser: {0}",
         Msg::StatusCreated => "Created {0}",
         Msg::StatusCreateFileFailed => "Create file failed: {0}",
         Msg::StatusCreateFolderFailed => "Create folder failed: {0}",
@@ -2832,6 +2844,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemExportDocx => "DOCX出力",
         Msg::ItemExportPng => "PNG出力",
         Msg::ItemExportJpeg => "JPEG出力",
+        Msg::ItemPublishWechat => "WeChat向けに公開（MarkNice）",
 
         Msg::ItemPreferences => "設定",
         Msg::ItemResetPreferences => "設定をリセット",
@@ -3009,6 +3022,10 @@ fn ja(msg: Msg) -> &'static str {
             "{0} を出力しました（内蔵ライター — pandocをインストールするとより高品質な出力が可能です）"
         }
         Msg::StatusExportFailed => "エクスポートに失敗しました: {0}",
+        Msg::StatusPublishingOpening => "ローカルWeChat公開ワークスペースを開いています…",
+        Msg::StatusPublishingOpened => "ローカルWeChat公開ワークスペースを開きました",
+        Msg::StatusPublishSetupFailed => "公開ワークスペースの準備に失敗しました: {0}",
+        Msg::StatusPublishLaunchFailed => "既定のブラウザーを開けませんでした: {0}",
         Msg::StatusCreated => "{0} を作成しました",
         Msg::StatusCreateFileFailed => "ファイルの作成に失敗しました: {0}",
         Msg::StatusCreateFolderFailed => "フォルダの作成に失敗しました: {0}",
@@ -3280,6 +3297,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemExportDocx => "Exporter en DOCX",
         Msg::ItemExportPng => "Exporter en PNG",
         Msg::ItemExportJpeg => "Exporter en JPEG",
+        Msg::ItemPublishWechat => "Publier pour WeChat (MarkNice)",
         Msg::ItemPreferences => "Préférences",
         Msg::ItemResetPreferences => "Réinitialiser les préférences",
         Msg::ItemKeyboardShortcuts => "Raccourcis clavier",
@@ -3453,6 +3471,10 @@ fn fr(msg: Msg) -> &'static str {
             "{0} exporté (convertisseur intégré — installez pandoc pour un meilleur rendu)"
         }
         Msg::StatusExportFailed => "Échec de l'exportation : {0}",
+        Msg::StatusPublishingOpening => "Ouverture de l’espace local de publication WeChat…",
+        Msg::StatusPublishingOpened => "Espace local de publication WeChat ouvert",
+        Msg::StatusPublishSetupFailed => "Échec de la préparation de l’espace de publication : {0}",
+        Msg::StatusPublishLaunchFailed => "Impossible d’ouvrir le navigateur par défaut : {0}",
         Msg::StatusCreated => "{0} créé",
         Msg::StatusCreateFileFailed => "Échec de la création du fichier : {0}",
         Msg::StatusCreateFolderFailed => "Échec de la création du dossier : {0}",
@@ -3728,6 +3750,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemExportDocx => "DOCX exportieren",
         Msg::ItemExportPng => "PNG exportieren",
         Msg::ItemExportJpeg => "JPEG exportieren",
+        Msg::ItemPublishWechat => "Für WeChat veröffentlichen (MarkNice)",
         Msg::ItemPreferences => "Einstellungen",
         Msg::ItemResetPreferences => "Einstellungen zurücksetzen",
         Msg::ItemKeyboardShortcuts => "Tastenkürzel",
@@ -3899,6 +3922,12 @@ fn de(msg: Msg) -> &'static str {
             "{0} exportiert (integrierter Konverter — installiere pandoc für bessere Ausgabe)"
         }
         Msg::StatusExportFailed => "Export fehlgeschlagen: {0}",
+        Msg::StatusPublishingOpening => "Lokaler WeChat-Veröffentlichungsbereich wird geöffnet…",
+        Msg::StatusPublishingOpened => "Lokaler WeChat-Veröffentlichungsbereich geöffnet",
+        Msg::StatusPublishSetupFailed => {
+            "Einrichten des Veröffentlichungsbereichs fehlgeschlagen: {0}"
+        }
+        Msg::StatusPublishLaunchFailed => "Standardbrowser konnte nicht geöffnet werden: {0}",
         Msg::StatusCreated => "{0} erstellt",
         Msg::StatusCreateFileFailed => "Dateierstellung fehlgeschlagen: {0}",
         Msg::StatusCreateFolderFailed => "Ordnererstellung fehlgeschlagen: {0}",
@@ -4172,6 +4201,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemExportDocx => "Exportar DOCX",
         Msg::ItemExportPng => "Exportar PNG",
         Msg::ItemExportJpeg => "Exportar JPEG",
+        Msg::ItemPublishWechat => "Publicar para WeChat (MarkNice)",
         Msg::ItemPreferences => "Preferencias",
         Msg::ItemResetPreferences => "Restablecer preferencias",
         Msg::ItemKeyboardShortcuts => "Atajos de teclado",
@@ -4343,6 +4373,10 @@ fn es(msg: Msg) -> &'static str {
             "{0} exportado (conversor integrado — instale pandoc para una salida más rica)"
         }
         Msg::StatusExportFailed => "Error de exportación: {0}",
+        Msg::StatusPublishingOpening => "Abriendo el espacio local de publicación de WeChat…",
+        Msg::StatusPublishingOpened => "Espacio local de publicación de WeChat abierto",
+        Msg::StatusPublishSetupFailed => "Error al preparar el espacio de publicación: {0}",
+        Msg::StatusPublishLaunchFailed => "No se pudo abrir el navegador predeterminado: {0}",
         Msg::StatusCreated => "{0} creado",
         Msg::StatusCreateFileFailed => "Error al crear archivo: {0}",
         Msg::StatusCreateFolderFailed => "Error al crear carpeta: {0}",
@@ -4611,6 +4645,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemExportDocx => "导出 DOCX",
         Msg::ItemExportPng => "导出 PNG",
         Msg::ItemExportJpeg => "导出 JPEG",
+        Msg::ItemPublishWechat => "发布到微信公众号（MarkNice）",
 
         Msg::ItemPreferences => "首选项",
         Msg::ItemResetPreferences => "重置首选项",
@@ -4786,6 +4821,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusExportedEngine => "已导出 {0}（pandoc 引擎）",
         Msg::StatusExportedBuiltin => "已导出 {0}（内置简易导出——安装 pandoc 可获得更高质量）",
         Msg::StatusExportFailed => "导出失败：{0}",
+        Msg::StatusPublishingOpening => "正在打开本地微信公众号发布工作区…",
+        Msg::StatusPublishingOpened => "已打开本地微信公众号发布工作区",
+        Msg::StatusPublishSetupFailed => "发布工作区初始化失败：{0}",
+        Msg::StatusPublishLaunchFailed => "无法打开默认浏览器：{0}",
         Msg::StatusCreated => "已创建 {0}",
         Msg::StatusCreateFileFailed => "创建文件失败：{0}",
         Msg::StatusCreateFolderFailed => "创建文件夹失败：{0}",
@@ -5052,6 +5091,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemExportDocx => "匯出 DOCX",
         Msg::ItemExportPng => "匯出 PNG",
         Msg::ItemExportJpeg => "匯出 JPEG",
+        Msg::ItemPublishWechat => "發佈到微信公眾號（MarkNice）",
 
         Msg::ItemPreferences => "偏好設定",
         Msg::ItemResetPreferences => "重設偏好設定",
@@ -5229,6 +5269,10 @@ fn zh_hant(msg: Msg) -> &'static str {
             "已匯出 {0}（內建簡易匯出——安裝 pandoc 可獲得更高品質的輸出）"
         }
         Msg::StatusExportFailed => "匯出失敗：{0}",
+        Msg::StatusPublishingOpening => "正在開啟本機微信公眾號發佈工作區…",
+        Msg::StatusPublishingOpened => "已開啟本機微信公眾號發佈工作區",
+        Msg::StatusPublishSetupFailed => "發佈工作區初始化失敗：{0}",
+        Msg::StatusPublishLaunchFailed => "無法開啟預設瀏覽器：{0}",
         Msg::StatusCreated => "已建立 {0}",
         Msg::StatusCreateFileFailed => "建立檔案失敗：{0}",
         Msg::StatusCreateFolderFailed => "建立資料夾失敗：{0}",

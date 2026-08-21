@@ -13,23 +13,21 @@
 # --- Node toolchain (icon-generation scripts) ---
 /node_modules/
 
-# --- IDE / editor ---
+# --- IDE / editor / AI assistant / agent tooling ---
 /.vscode/
 /.idea/
 /.codex/
-/.reasonix/
 *.iml
-
-# --- AI assistant / agent tooling ---
 /.claude/
 /.cursor/
-/.kimi/
-/.kiro/
-/.omp/
-/.opencode/
-/.pi/
-/.qoder/
-/.zcode/
+.kimi/
+.kiro/
+.omp/
+.opencode/
+.pi/
+.qoder/
+.zcode/
+.reasonix/
 *.swp
 *.swo
 *~

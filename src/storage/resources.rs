@@ -28,6 +28,22 @@ pub fn image_extension_supported(path: &Path) -> bool {
         .is_some_and(|extension| canonical_extension(extension).is_some())
 }
 
+/// Returns the stable managed-image directory associated with a saved
+/// document. The directory is not created by this observational helper.
+pub fn document_asset_dir(document_path: &Path) -> PathBuf {
+    let parent = document_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let document_stem = document_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(sanitize_stem)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "document".into());
+    parent.join(format!("{document_stem}.assets"))
+}
+
 pub fn import_image_file(document_path: &Path, source_path: &Path) -> io::Result<ImportedImage> {
     let extension = source_path
         .extension()
@@ -56,18 +72,12 @@ pub fn import_image_bytes(
             "image is empty",
         ));
     }
-    let parent = document_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let document_stem = document_path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(sanitize_stem)
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or_else(|| "document".into());
-    let asset_name = format!("{document_stem}.assets");
-    let asset_dir = parent.join(&asset_name);
+    let asset_dir = document_asset_dir(document_path);
+    let asset_name = asset_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document.assets")
+        .to_owned();
     fs::create_dir_all(&asset_dir)?;
 
     let stem = sanitize_stem(suggested_stem);

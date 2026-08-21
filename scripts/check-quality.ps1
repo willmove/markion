@@ -19,7 +19,11 @@ $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
     Invoke-Gate "Rust formatting" { cargo fmt --all -- --check }
+    Invoke-Gate "Rust lints" { cargo clippy --workspace }
     Invoke-Gate "Cargo workspace tests" { cargo test --workspace }
+    Invoke-Gate "Pinned MarkNice workspace" {
+        cargo run -p wechat-workspace --bin verify-bundle -- assets/marknice-workspace
+    }
     Invoke-Gate "Strict OpenSpec validation" {
         openspec validate --all --strict --no-interactive
     }

@@ -20,7 +20,7 @@ edition = "2024"
 pulldown-cmark = "0.13"
 tree-sitter = "0.22"
 syntect = "5.2"
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 anyhow = "1.0"
@@ -31,6 +31,12 @@ tracing-appender = "0.2"
 toml = "0.8"
 regex = "1.10"
 tokio = { version = "1.36", features = ["full"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+base64 = "0.22"
+getrandom = "0.3"
+mime_guess = "2.0"
+percent-encoding = "2.3"
+sha2 = "0.10"
 proptest = "1.4"
 # bat's curated extended syntax set for syntect (TypeScript, TOML, Kotlin,
 # Swift, Dockerfile, PowerShell, ... — closes the modern-language gap in
@@ -61,6 +67,7 @@ tokio.workspace = true
 font8x8 = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 pulldown-cmark.workspace = true
+percent-encoding.workspace = true
 # Spec-compliant (RFC 2397) `data:` URI parsing for base64/URL-encoded inline
 # preview images. Already vendored transitively via gpui; pinned to the
 # resolved version so the lock does not churn.
@@ -86,6 +93,7 @@ unicode-segmentation = "1.12"
 typune-markdown = { package = "markdown", path = "crates/markdown" }
 typune-export = { package = "export", path = "crates/export" }
 markion-diagram = { path = "crates/diagram", features = ["mermaid"] }
+wechat-workspace = { path = "crates/wechat-workspace" }
 # Drives syntect scope parsing directly in src/highlight.rs (colors keep coming
 # from Markion's theme-mapped token classes, not syntect themes). two-face
 # supplies the extended grammar set the registry is built from.

@@ -41,10 +41,10 @@ use markion::{
     VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
     VisualHtmlImage, VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge,
     VisualSourceIslandKind, adjacent_reorder_target, block_can_reorder_at, block_can_transform_at,
-    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
-    builtin_theme_definitions, default_preferences_path, default_recovery_dir,
-    default_session_path, default_themes_dir, delete_block, delete_recovery_file,
-    diagram_backend_id, duplicate_block, highlight_code, html_preview_parts,
+    build_publishing_snapshot, build_visual_projection, build_visual_projection_with_marked_range,
+    builtin_diagram_registry, builtin_theme_definitions, default_preferences_path,
+    default_recovery_dir, default_session_path, default_themes_dir, delete_block,
+    delete_recovery_file, diagram_backend_id, duplicate_block, highlight_code, html_preview_parts,
     html_preview_plain_text, image_extension_supported, import_image_bytes, import_image_file,
     inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path, is_text_path,
     list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
@@ -117,6 +117,7 @@ actions!(
         ExportDocx,
         ExportPng,
         ExportJpeg,
+        PublishWechat,
         ToggleViewMode,
         SetEditMode,
         SetVisualEditMode,
@@ -1446,6 +1447,7 @@ mod network;
 mod preview;
 mod preview_image;
 mod process_memory;
+mod publishing;
 mod root_view;
 mod save_dialog;
 mod search;
@@ -1490,6 +1492,10 @@ struct MarkionApp {
     /// `active_menu` leaves File or the whole menu closes.
     open_recent_submenu_open: bool,
     status: SharedString,
+    /// Process-owned, lazily created loopback publishing service. `None`
+    /// keeps ordinary startup/editing entirely free of bundle and socket work.
+    publishing_service: Option<wechat_workspace::WorkspaceService>,
+    browser_launcher: Arc<dyn publishing::BrowserLauncher>,
     /// Filesystem-derived Git context is cached separately from documents so
     /// render/input never perform repository I/O and undo snapshots stay pure.
     git_branch_state: GitBranchState,

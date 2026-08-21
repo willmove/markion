@@ -18,3 +18,12 @@ license text are included in the `ratex-katex-fonts` crate source published on
 crates.io and at https://github.com/erweixin/RaTeX.
 
 No font files are modified by Markion.
+
+## Local MarkNice publishing workspace
+
+The packaged browser workspace is derived from MarkNice commit
+`c009c1ec7e7c92f89afa5a32edcb126b5296bda7` and is distributed under the MIT
+License. It includes pinned browser builds of marked 15.0.12 (MIT) and KaTeX
+0.16.11 (MIT), including KaTeX's bundled fonts. Exact provenance, SHA-256
+digests, and complete license texts are shipped in
+`assets/marknice-workspace/`.
