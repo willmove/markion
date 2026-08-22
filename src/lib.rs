@@ -117,8 +117,9 @@ Reference-style links work too: [Markion repository][markion-repo].
 pub use model::{
     AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_CODE_FONT_FAMILY,
     DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING,
-    DEFAULT_RENDERED_FONT_SIZE, DocumentStats, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackend,
-    ExportFormat, ExportPreferences, Footnote, FrontMatterError, Heading, HighlightKind,
+    DEFAULT_RENDERED_FONT_SIZE, DocumentStats, DocxExportOptions, DocxImagePolicy, DocxPageSize,
+    EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory, ExportBackend, ExportFormat,
+    ExportOutcome, ExportPreferences, Footnote, FrontMatterError, Heading, HighlightKind,
     HighlightedSpan, InlineSpan, InlineStyle, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING,
     MAX_RECENT_FILES, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
     MIN_RENDERED_FONT_SIZE, MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle,
@@ -187,6 +188,7 @@ use render::{
     latex_listing_language, push_latex_list_item, render_latex_rich_text, render_latex_table,
 };
 
+pub use export::{backend_status_msg, pandoc_available};
 use export::{write_docx, write_image_snapshot, write_pdf};
 
 use frontmatter::{parse_front_matter, split_front_matter};
@@ -478,65 +480,82 @@ impl MarkdownDocument {
         format: ExportFormat,
     ) -> io::Result<ExportBackend> {
         self.export_to_with(path, format, &ExportPreferences::default())
+            .map(|outcome| outcome.backend)
     }
 
     /// Exports with explicit export settings (the app passes the `[export]`
     /// config values). Returns which backend produced the file: PDF/DOCX try
     /// the Typune pandoc engine first and fall back to the built-in writers
     /// on any failure, so export never needs external tools; every other
-    /// format is always built-in.
+    /// format is always built-in. When the engine was attempted and failed,
+    /// the outcome carries the failure category for status-bar disclosure.
     pub fn export_to_with(
         &self,
         path: impl AsRef<Path>,
         format: ExportFormat,
         settings: &ExportPreferences,
-    ) -> io::Result<ExportBackend> {
+    ) -> io::Result<ExportOutcome> {
         let path = path.as_ref();
+        let engine_ok = || ExportOutcome {
+            backend: ExportBackend::PandocEngine,
+            engine_failure: None,
+        };
+        let builtin = |engine_failure| ExportOutcome {
+            backend: ExportBackend::BuiltIn,
+            engine_failure,
+        };
         match format {
             ExportFormat::Markdown => {
                 atomic_write(path, self.text.as_bytes())?;
-                Ok(ExportBackend::BuiltIn)
+                Ok(builtin(None))
             }
             ExportFormat::Html => {
                 fs::write(path, self.render_html_document())?;
-                Ok(ExportBackend::BuiltIn)
+                Ok(builtin(None))
             }
             ExportFormat::PlainHtml => {
                 fs::write(path, self.render_plain_html_document())?;
-                Ok(ExportBackend::BuiltIn)
+                Ok(builtin(None))
             }
-            ExportFormat::Pdf => match export::engine_pdf(&self.text, &settings.pdf_engine) {
-                Some(bytes) => {
+            ExportFormat::Pdf => match export::engine_pdf(
+                &self.text,
+                &settings.pdf_engine,
+                settings.pandoc_path.as_deref(),
+            ) {
+                Ok(bytes) => {
                     fs::write(path, bytes)?;
-                    Ok(ExportBackend::PandocEngine)
+                    Ok(engine_ok())
                 }
-                None => {
+                Err(failure) => {
                     let mut file = fs::File::create(path)?;
                     write_pdf(&mut file, &self.plain_text_preview())?;
-                    Ok(ExportBackend::BuiltIn)
+                    Ok(builtin(Some(failure)))
                 }
             },
             ExportFormat::Latex => {
                 fs::write(path, self.render_latex_document())?;
-                Ok(ExportBackend::BuiltIn)
+                Ok(builtin(None))
             }
-            ExportFormat::Docx => match export::engine_docx(&self.text) {
-                Some(bytes) => {
-                    fs::write(path, bytes)?;
-                    Ok(ExportBackend::PandocEngine)
+            ExportFormat::Docx => {
+                match export::engine_docx(&self.text, settings, self.path().and_then(Path::parent))
+                {
+                    Ok(bytes) => {
+                        fs::write(path, bytes)?;
+                        Ok(engine_ok())
+                    }
+                    Err(failure) => {
+                        write_docx(path, self, &settings.docx)?;
+                        Ok(builtin(Some(failure)))
+                    }
                 }
-                None => {
-                    write_docx(path, self)?;
-                    Ok(ExportBackend::BuiltIn)
-                }
-            },
+            }
             ExportFormat::Png => {
                 write_image_snapshot(path, &self.plain_text_preview(), image::ImageFormat::Png)?;
-                Ok(ExportBackend::BuiltIn)
+                Ok(builtin(None))
             }
             ExportFormat::Jpeg => {
                 write_image_snapshot(path, &self.plain_text_preview(), image::ImageFormat::Jpeg)?;
-                Ok(ExportBackend::BuiltIn)
+                Ok(builtin(None))
             }
         }
     }
@@ -3418,23 +3437,33 @@ mod tests {
         );
 
         // Exercise the built-in fallback writer directly: `export_to` prefers
-        // the pandoc engine when pandoc is installed, whose deflate-compressed
-        // package would hide these XML markers from raw-byte inspection.
-        export::write_docx(&docx, &doc).unwrap();
+        // the pandoc engine when pandoc is installed. Package entries are
+        // deflate-compressed, so assertions read them through the
+        // decompressing `read_zip_entry` helper.
+        export::write_docx(&docx, &doc, &DocxExportOptions::default()).unwrap();
         let bytes = fs::read(docx).unwrap();
-        let package = String::from_utf8_lossy(&bytes);
+        let package_names = String::from_utf8_lossy(&bytes);
+        let part = |name: &str| {
+            String::from_utf8(
+                export::read_zip_entry(&bytes, name)
+                    .unwrap_or_else(|| panic!("missing part {name}")),
+            )
+            .unwrap()
+        };
 
         assert!(bytes.starts_with(b"PK\x03\x04"));
-        assert!(package.contains("[Content_Types].xml"));
-        assert!(package.contains("word/document.xml"));
-        assert!(package.contains("<dc:title>Research Note</dc:title>"));
-        assert!(package.contains("<dc:creator>Ada</dc:creator>"));
-        assert!(package.contains("<w:pStyle w:val=\"Heading1\"/>"));
-        assert!(package.contains("Body &amp; details"));
-        assert!(package.contains("fn main() {}"));
-        assert!(package.contains("Math: a^2 + b^2"));
-        assert!(package.contains("<w:tbl>"));
-        assert!(package.contains("<w:t xml:space=\"preserve\">Ada</w:t>"));
+        assert!(package_names.contains("[Content_Types].xml"));
+        assert!(package_names.contains("word/document.xml"));
+        let core = part("docProps/core.xml");
+        assert!(core.contains("<dc:title>Research Note</dc:title>"));
+        assert!(core.contains("<dc:creator>Ada</dc:creator>"));
+        let document_xml = part("word/document.xml");
+        assert!(document_xml.contains("<w:pStyle w:val=\"Heading1\"/>"));
+        assert!(document_xml.contains("Body &amp; details"));
+        assert!(document_xml.contains("fn main() {}"));
+        assert!(document_xml.contains("<m:oMathPara>"));
+        assert!(document_xml.contains("<w:tbl>"));
+        assert!(document_xml.contains("<w:t xml:space=\"preserve\">Ada</w:t>"));
     }
 
     #[test]
@@ -3443,15 +3472,99 @@ mod tests {
         let docx = dir.path().join("quote.docx");
         let doc = MarkdownDocument::from_text("> intro\n>\n> 1. first\n> 2. second\n>\n> outro\n");
 
-        export::write_docx(&docx, &doc).unwrap();
-        let package = String::from_utf8_lossy(&fs::read(docx).unwrap()).into_owned();
+        export::write_docx(&docx, &doc, &DocxExportOptions::default()).unwrap();
+        let bytes = fs::read(docx).unwrap();
+        let document_xml = String::from_utf8(
+            export::read_zip_entry(&bytes, "word/document.xml")
+                .expect("document.xml part")
+                .to_vec(),
+        )
+        .unwrap();
 
-        assert!(package.contains("&gt; intro"));
-        assert!(package.contains("&gt; 1. first"));
-        assert!(package.contains("&gt; 2. second"));
-        assert!(package.contains("&gt; outro"));
-        assert!(package.find("&gt; intro") < package.find("&gt; 1. first"));
-        assert!(package.find("&gt; 2. second") < package.find("&gt; outro"));
+        // Quoted content uses the Quote paragraph style, and quoted ordered
+        // items become real numbered paragraphs instead of literal markers.
+        assert!(document_xml.contains("<w:pStyle w:val=\"Quote\"/>"));
+        assert!(document_xml.contains("<w:numPr>"));
+        assert!(!document_xml.contains("&gt; intro"));
+        assert!(!document_xml.contains(">1. first</w:t>"));
+        assert!(document_xml.find("intro") < document_xml.find("first"));
+        assert!(document_xml.find("second") < document_xml.find("outro"));
+    }
+
+    #[test]
+    fn docx_fallback_package_is_complete_and_styles_resolve() {
+        let doc = MarkdownDocument::from_text(
+            "# H1\n\n#### H4\n\n##### H5\n\n###### H6\n\nBody with [a link](https://example.com)\n",
+        );
+        let bytes = export::build_docx_bytes(&doc, &DocxExportOptions::default()).unwrap();
+
+        const PARTS: [&str; 10] = [
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "docProps/core.xml",
+            "word/document.xml",
+            "word/_rels/document.xml.rels",
+            "word/styles.xml",
+            "word/numbering.xml",
+            "word/settings.xml",
+            "word/fontTable.xml",
+            "word/theme/theme1.xml",
+        ];
+        for part in PARTS {
+            assert!(
+                export::read_zip_entry(&bytes, part).is_some(),
+                "missing package part {part}"
+            );
+        }
+
+        let document_xml = String::from_utf8(
+            export::read_zip_entry(&bytes, "word/document.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let styles_xml = String::from_utf8(
+            export::read_zip_entry(&bytes, "word/styles.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        // H4/H5/H6 map to distinct styles (no collapse into Heading4).
+        for heading in ["Heading1", "Heading4", "Heading5", "Heading6"] {
+            assert!(
+                document_xml.contains(&format!("<w:pStyle w:val=\"{heading}\"/>")),
+                "{heading} missing from document.xml"
+            );
+        }
+
+        // Every pStyle referenced by the document resolves to a style def.
+        let mut rest = document_xml.as_str();
+        while let Some(start) = rest.find("<w:pStyle w:val=\"") {
+            let value_start = start + "<w:pStyle w:val=\"".len();
+            let value_end = rest[value_start..].find('"').unwrap() + value_start;
+            let style = &rest[value_start..value_end];
+            assert!(
+                styles_xml.contains(&format!("w:styleId=\"{style}\"")),
+                "style {style} referenced but not defined in styles.xml"
+            );
+            rest = &rest[value_end..];
+        }
+
+        // A4 page setup with 1440-twip margins.
+        assert!(document_xml.contains("<w:pgSz w:w=\"11906\" w:h=\"16838\"/>"));
+        assert!(document_xml.contains("w:top=\"1440\""));
+
+        // The link keeps its target through an external relationship.
+        let rels = String::from_utf8(
+            export::read_zip_entry(&bytes, "word/_rels/document.xml.rels")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(document_xml.contains("<w:hyperlink r:id=\""));
+        assert!(rels.contains("Target=\"https://example.com\""));
+        assert!(rels.contains("TargetMode=\"External\""));
     }
 
     #[test]
@@ -4955,6 +5068,7 @@ mod tests {
             },
             export: ExportPreferences {
                 pdf_engine: "tectonic".to_string(),
+                ..ExportPreferences::default()
             },
             shortcut_overrides: std::collections::BTreeMap::new(),
         };

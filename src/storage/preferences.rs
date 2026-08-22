@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     AppPreferences, AutoSavePreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_PARAGRAPH_SPACING,
-    DEFAULT_RENDERED_FONT_SIZE, ExportPreferences, SidebarTab, normalize_editor_font_size,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy, DocxPageSize,
+    ExportPreferences, SidebarTab, normalize_editor_font_size, normalize_heading_menu_max_level,
+    normalize_paragraph_spacing, normalize_rendered_font_size,
 };
 
 /// File name of the retired `key=value` preferences format, looked for next
@@ -94,12 +95,72 @@ struct AutoSaveFile {
 #[serde(default)]
 struct ExportFile {
     pdf_engine: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    pandoc_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    reference_doc: Option<String>,
+    docx: DocxExportFile,
+}
+
+/// [export.docx] table: last-used DOCX export options.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct DocxExportFile {
+    /// "a4" | "letter" | "legal"; unknown values fall back to A4.
+    page_size: String,
+    #[serde(deserialize_with = "deserialize_bool_or_false")]
+    toc: bool,
+    /// "embed" | "text-fallback"; unknown values fall back to embed.
+    image_policy: String,
+}
+
+impl Default for DocxExportFile {
+    fn default() -> Self {
+        let defaults = DocxExportOptions::default();
+        Self {
+            page_size: defaults.page_size.config_value().to_string(),
+            toc: defaults.toc,
+            image_policy: defaults.image_policy.config_value().to_string(),
+        }
+    }
+}
+
+impl From<&DocxExportOptions> for DocxExportFile {
+    fn from(options: &DocxExportOptions) -> Self {
+        Self {
+            page_size: options.page_size.config_value().to_string(),
+            toc: options.toc,
+            image_policy: options.image_policy.config_value().to_string(),
+        }
+    }
+}
+
+impl From<DocxExportFile> for DocxExportOptions {
+    fn from(file: DocxExportFile) -> Self {
+        Self {
+            page_size: DocxPageSize::from_config(&file.page_size),
+            toc: file.toc,
+            image_policy: DocxImagePolicy::from_config(&file.image_policy),
+        }
+    }
 }
 
 impl Default for ExportFile {
     fn default() -> Self {
+        let defaults = ExportPreferences::default();
         Self {
-            pdf_engine: ExportPreferences::default().pdf_engine,
+            pdf_engine: defaults.pdf_engine,
+            pandoc_path: defaults.pandoc_path,
+            reference_doc: defaults.reference_doc,
+            docx: DocxExportFile::default(),
         }
     }
 }
@@ -159,6 +220,9 @@ impl From<&AppPreferences> for PreferencesFile {
             },
             export: ExportFile {
                 pdf_engine: preferences.export.pdf_engine.clone(),
+                pandoc_path: preferences.export.pandoc_path.clone(),
+                reference_doc: preferences.export.reference_doc.clone(),
+                docx: DocxExportFile::from(&preferences.export.docx),
             },
             shortcuts: preferences.shortcut_overrides.clone(),
         }
@@ -209,6 +273,9 @@ impl From<PreferencesFile> for AppPreferences {
                         engine
                     }
                 },
+                pandoc_path: file.export.pandoc_path,
+                reference_doc: file.export.reference_doc,
+                docx: file.export.docx.into(),
             },
             shortcut_overrides: file.shortcuts,
         }
@@ -396,6 +463,17 @@ where
 /// (trimmed; empty treated as unset), any other value type degrades to unset
 /// rather than blocking startup.
 fn deserialize_optional_font_family<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(crate::model::normalize_font_family(value.as_str()))
+}
+
+/// Path-like config strings (`export.pandoc_path`, `export.reference_doc`):
+/// a string value is kept (trimmed; empty treated as unset), any other value
+/// type degrades to unset rather than blocking startup.
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -710,5 +788,107 @@ mod tests {
         // And a legacy file without the field keeps the default.
         let parsed_without = parse_legacy_app_preferences("theme = Paper\n").unwrap();
         assert!(!parsed_without.sync_scroll);
+    }
+
+    #[test]
+    fn export_paths_parse_from_config() {
+        let text = "[export]\npdf_engine = \"tectonic\"\npandoc_path = \"/opt/pandoc/bin/pandoc\"\nreference_doc = \"templates/my-reference.docx\"\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert_eq!(parsed.export.pdf_engine, "tectonic");
+        assert_eq!(
+            parsed.export.pandoc_path.as_deref(),
+            Some("/opt/pandoc/bin/pandoc")
+        );
+        assert_eq!(
+            parsed.export.reference_doc.as_deref(),
+            Some("templates/my-reference.docx")
+        );
+    }
+
+    #[test]
+    fn export_paths_default_to_none_when_missing_or_blank() {
+        // Pre-existing config.toml without the keys keeps the defaults.
+        let parsed = parse_app_preferences("[export]\npdf_engine = \"pdfroff\"\n").unwrap();
+        assert_eq!(parsed.export.pdf_engine, "pdfroff");
+        assert!(parsed.export.pandoc_path.is_none());
+        assert!(parsed.export.reference_doc.is_none());
+
+        // Blank or wrongly-typed values degrade to unset.
+        let parsed =
+            parse_app_preferences("[export]\npandoc_path = \"   \"\nreference_doc = 12\n").unwrap();
+        assert!(parsed.export.pandoc_path.is_none());
+        assert!(parsed.export.reference_doc.is_none());
+    }
+
+    #[test]
+    fn export_paths_round_trip_and_omit_when_unset() {
+        let defaults = render_app_preferences(&AppPreferences::default());
+        assert!(!defaults.contains("pandoc_path"));
+        assert!(!defaults.contains("reference_doc"));
+
+        let mut preferences = AppPreferences::default();
+        preferences.export.pandoc_path = Some("C:\\tools\\pandoc.exe".to_string());
+        preferences.export.reference_doc = Some("ref.docx".to_string());
+        let rendered = render_app_preferences(&preferences);
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(
+            parsed.export.pandoc_path.as_deref(),
+            Some("C:\\tools\\pandoc.exe")
+        );
+        assert_eq!(parsed.export.reference_doc.as_deref(), Some("ref.docx"));
+    }
+
+    #[test]
+    fn docx_export_options_default_to_current_behavior() {
+        let defaults = AppPreferences::default().export.docx;
+        assert_eq!(defaults.page_size, DocxPageSize::A4);
+        assert!(!defaults.toc);
+        assert_eq!(defaults.image_policy, DocxImagePolicy::Embed);
+
+        // A pre-existing config.toml without [export.docx] keeps the defaults.
+        let parsed = parse_app_preferences("[export]\npdf_engine = \"pdfroff\"\n").unwrap();
+        assert_eq!(parsed.export.docx, DocxExportOptions::default());
+    }
+
+    #[test]
+    fn docx_export_options_parse_from_config() {
+        let text =
+            "[export.docx]\npage_size = \"letter\"\ntoc = true\nimage_policy = \"text-fallback\"\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert_eq!(parsed.export.docx.page_size, DocxPageSize::Letter);
+        assert!(parsed.export.docx.toc);
+        assert_eq!(
+            parsed.export.docx.image_policy,
+            DocxImagePolicy::TextFallback
+        );
+    }
+
+    #[test]
+    fn docx_export_options_tolerate_unknown_values() {
+        let text = "[export.docx]\npage_size = \"tabloid\"\ntoc = \"yes\"\nimage_policy = 12\n";
+        // Non-string image_policy would fail deserialization, so use a string
+        // with an unknown token instead.
+        let text = text.replace("image_policy = 12", "image_policy = \"mystery\"");
+        let parsed = parse_app_preferences(&text).unwrap();
+        assert_eq!(parsed.export.docx.page_size, DocxPageSize::A4);
+        assert!(!parsed.export.docx.toc);
+        assert_eq!(parsed.export.docx.image_policy, DocxImagePolicy::Embed);
+    }
+
+    #[test]
+    fn docx_export_options_round_trip() {
+        let mut preferences = AppPreferences::default();
+        preferences.export.docx = DocxExportOptions {
+            page_size: DocxPageSize::Legal,
+            toc: true,
+            image_policy: DocxImagePolicy::TextFallback,
+        };
+        let rendered = render_app_preferences(&preferences);
+        assert!(rendered.contains("[export.docx]"));
+        assert!(rendered.contains("page_size = \"legal\""));
+        assert!(rendered.contains("toc = true"));
+        assert!(rendered.contains("image_policy = \"text-fallback\""));
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(parsed.export.docx, preferences.export.docx);
     }
 }

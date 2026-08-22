@@ -5,7 +5,7 @@
 Covers the multi-format export engine and YAML front matter metadata handling. The exports range from full-fidelity (HTML, DOCX, LaTeX) to deliberately limited (a simple single-page text PDF and basic text-snapshot PNG/JPEG). Rich image export fidelity is **not** part of this capability — it is a future candidate.
 ## Requirements
 ### Requirement: Multi-format document export
-The export engine SHALL export the document to Markdown, styled HTML, plain HTML, LaTeX, DOCX, PDF, and basic PNG/JPEG text snapshots, prompting the user for an output path and suggesting a filename based on the current document. For PDF and DOCX, the editor SHALL first attempt the absorbed Typune export engine (pandoc subprocess, with the PDF engine taken from the `[export] pdf_engine` config value, default `xelatex`); if the external tool is unavailable or the conversion fails, it SHALL silently fall back to the built-in simple implementations so export always succeeds without external dependencies. The status bar message for a successful PDF/DOCX export SHALL disclose which backend produced the file — the pandoc engine, or the built-in writer together with a hint that installing pandoc yields richer output. Export failures SHALL be reported with user-facing status messages.
+The export engine SHALL export the document to Markdown, styled HTML, plain HTML, LaTeX, DOCX, PDF, and basic PNG/JPEG text snapshots, prompting the user for an output path and suggesting a filename based on the current document. For PDF and DOCX, the editor SHALL first attempt the absorbed Typune export engine (pandoc subprocess, with the PDF engine taken from the `[export] pdf_engine` config value, default `xelatex`); if the external tool is unavailable or the conversion fails, it SHALL silently fall back to the built-in simple implementations so export always succeeds without external dependencies. The status bar message for a successful PDF/DOCX export SHALL disclose which backend produced the file — the pandoc engine, or the built-in writer together with a hint that installing pandoc yields richer output. When the pandoc engine fails and the fallback is used, the status message SHALL additionally indicate the failure category (pandoc not found vs. conversion error). Export failures SHALL be reported with user-facing status messages.
 
 #### Scenario: Engine-produced export is disclosed
 - **WHEN** the user exports to PDF or DOCX and the pandoc engine succeeds
@@ -14,6 +14,10 @@ The export engine SHALL export the document to Markdown, styled HTML, plain HTML
 #### Scenario: Built-in fallback is disclosed with a hint
 - **WHEN** the user exports to PDF or DOCX and the editor falls back to the built-in writer
 - **THEN** the status message names the output path, indicates the built-in writer was used, and hints that installing pandoc improves output quality
+
+#### Scenario: Engine failure category is disclosed
+- **WHEN** the pandoc engine fails (binary missing or conversion error) and the fallback produces the file
+- **THEN** the status message indicates which failure category occurred
 
 #### Scenario: PDF engine is configurable via the config file
 - **WHEN** `[export] pdf_engine` is set in `config.toml` (e.g. `"pdfroff"`, `"tectonic"`)
@@ -123,4 +127,165 @@ The built-in styled and plain HTML exporters SHALL render valid inline and displ
 #### Scenario: Other export formats keep current behavior
 - **WHEN** a document with math is exported to Markdown, LaTeX, DOCX, PDF, PNG, or JPEG
 - **THEN** that format follows its pre-existing source-preserving, Unicode fallback, pandoc, or text-snapshot behavior rather than claiming the new static-SVG path
+
+### Requirement: Built-in DOCX fallback package completeness
+The built-in DOCX writer SHALL emit a structurally complete OOXML package in which every style, numbering, and relationship reference resolves. The package SHALL include `word/styles.xml` (with `docDefaults` and paragraph/character styles for Normal, Title, Heading1 through Heading6, Quote, and code), `word/numbering.xml`, `word/theme/theme1.xml`, `word/settings.xml`, and `word/fontTable.xml`, in addition to the existing content-types, relationships, core-properties, and document parts. Headings at every Markdown level (H1–H6) SHALL map to their own distinct heading style.
+
+#### Scenario: All style references resolve
+- **WHEN** a document containing headings H1–H6 is exported via the built-in DOCX writer
+- **THEN** the package contains `word/styles.xml` defining Heading1 through Heading6 and Normal
+- **AND** every `w:pStyle` value used in `word/document.xml` is defined in `word/styles.xml`
+
+#### Scenario: Six distinct heading levels
+- **WHEN** a document contains headings from `#` through `######`
+- **THEN** `word/document.xml` references six distinct styles Heading1–Heading6 with no collapse of deeper levels
+
+#### Scenario: Front matter title uses a Title style
+- **WHEN** the document front matter provides a title
+- **THEN** the exported document opens with a Title-styled paragraph and the title is still written to `docProps/core.xml`
+
+### Requirement: Built-in DOCX fallback inline fidelity
+The built-in DOCX writer SHALL preserve resolved inline styling by consuming the rich-text spans already computed for preview. Bold, italic, strikethrough, highlight, superscript, subscript, and inline code SHALL map to the corresponding `w:rPr` properties (with `w:highlight` for highlight and `w:vertAlign` for super/subscript), and links SHALL be emitted as real `w:hyperlink` elements backed by external relationships in `word/_rels/document.xml.rels` so the target URL survives. Inline code SHALL use a monospace font declaration.
+
+#### Scenario: Inline styles are preserved
+- **WHEN** a paragraph contains bold, italic, strikethrough, highlight, superscript, subscript, and inline code spans
+- **THEN** `word/document.xml` carries `w:b`, `w:i`, `w:strike`, `w:highlight`, `w:vertAlign` (superscript/subscript), and a monospace `w:rFonts` run respectively, rather than flattening to plain text
+
+#### Scenario: Links keep their targets
+- **WHEN** a paragraph contains `[label](https://example.com)`
+- **THEN** the document contains a `w:hyperlink` for `label` whose relationship in `word/_rels/document.xml.rels` targets `https://example.com`
+
+#### Scenario: Nested inline styles compose
+- **WHEN** a span carries multiple styles (e.g. bold italic)
+- **THEN** the run carries all corresponding `w:rPr` properties simultaneously
+
+### Requirement: Built-in DOCX fallback structural lists
+The built-in DOCX writer SHALL render unordered, ordered, and task lists as real Word list paragraphs. `word/numbering.xml` SHALL define abstract bullet and decimal numbering formats; list items SHALL reference them via `w:numPr` with `w:ilvl` reflecting the item's nesting depth, so nested lists keep their hierarchy and remain editable in Word. Task-list items SHALL keep a checked/unchecked marker prefix until Word checkbox content controls are adopted.
+
+#### Scenario: Nested lists keep depth
+- **WHEN** a document contains a bullet list nested two levels deep
+- **THEN** items at each depth reference the numbering definition with the matching `w:ilvl` and render with increasing indentation in Word
+
+#### Scenario: Ordered lists are auto-numbered
+- **WHEN** a document contains an ordered list
+- **THEN** items use a decimal `w:numFmt` and no literal `1. ` text is emitted for the marker
+
+### Requirement: Built-in DOCX fallback typography and page setup
+The built-in DOCX writer SHALL declare east-asian fonts for CJK text. `docDefaults` and the heading styles SHALL carry `w:rFonts` with an `w:eastAsia` attribute (body, heading, and code styles each with a sensible default), so Chinese text renders with a controlled font instead of Word fallback heuristics. The default page setup SHALL be A4 with 2.54 cm margins instead of hard-coded US Letter.
+
+#### Scenario: CJK fonts are declared
+- **WHEN** any document is exported via the built-in DOCX writer
+- **THEN** `word/styles.xml` `docDefaults` and heading styles carry `w:rFonts` `w:eastAsia` declarations
+
+#### Scenario: Default page is A4
+- **WHEN** a document is exported with default options
+- **THEN** `w:sectPr` in `word/document.xml` specifies A4 dimensions (11906×16838 twips) and 1440-twip margins
+
+### Requirement: Built-in DOCX fallback embeds local images
+The built-in DOCX writer SHALL embed local image files into the package. A Markdown image whose source resolves to an existing local file (relative paths resolved against the document's directory) SHALL be copied into `word/media/` with a unique name, declared in `[Content_Types].xml`, and referenced from `word/document.xml` as a `w:drawing` sized in EMUs so that images wider than the text column are scaled down to fit while narrower images keep their natural pixel size (at 96 DPI). The image's alt text SHALL be preserved as the drawing's description. Remote (`http(s)`) and data-URI images SHALL keep the existing text fallback.
+
+#### Scenario: Local image is embedded
+- **WHEN** a document references `![diagram](images/diagram.png)` and the file exists relative to the document
+- **THEN** the package contains `word/media/` with the image bytes, a relationship, a content-type entry for the extension, and a `w:drawing` in the document flow
+
+#### Scenario: Oversized image is scaled to the column
+- **WHEN** an embedded image's natural width at 96 DPI exceeds the text column width
+- **THEN** the `wp:extent` scales it down proportionally to fit the column
+
+#### Scenario: Missing or remote images keep the text fallback
+- **WHEN** an image source is remote, a data URI, or a local path that does not exist
+- **THEN** the writer emits the existing `alt: url` text paragraph and the export still succeeds
+
+### Requirement: Built-in DOCX fallback table fidelity
+The built-in DOCX writer SHALL render tables with a bold header row marked `w:tblHeader` (repeat as header on page breaks), per-column horizontal alignment (`w:jc`) derived from the parsed Markdown separator row, preserved inline styles within cells, and a table width fitted to the text column with proportional column widths. Raw HTML `<table>` blocks SHALL be parsed into the same table structure rather than flattening each cell into a scattered paragraph.
+
+#### Scenario: Header row repeats and is bold
+- **WHEN** a table is exported via the built-in writer
+- **THEN** the first `w:tr` carries `w:tblHeader` and its runs carry `w:b`
+
+#### Scenario: Column alignment follows the separator row
+- **WHEN** a table declares `|:--|:-:|--:|`
+- **THEN** the columns render left/center/right aligned via `w:jc` in their cells
+
+#### Scenario: HTML table keeps its structure
+- **WHEN** the document contains a raw `<table>` block
+- **THEN** the export contains a real `w:tbl` with the parsed rows and cells instead of one paragraph per cell
+
+### Requirement: Built-in DOCX fallback renders math as OMML
+The built-in DOCX writer SHALL convert inline and display math into OMML (`m:oMath` / `m:oMathPara`) so equations open as native editable Word equations. When a formula cannot be converted, the math zone SHALL contain the authored LaTeX source as its text (not a Unicode approximation, and without a `Math: ` prefix), and the export SHALL still succeed.
+
+#### Scenario: Display math becomes a native equation
+- **WHEN** a document contains a `$$`-fenced formula
+- **THEN** `word/document.xml` contains an `m:oMathPara` representing the formula
+
+#### Scenario: Unconvertible math preserves its source
+- **WHEN** a formula uses constructs the converter does not support
+- **THEN** the math zone text is the byte-identical authored LaTeX and the export succeeds
+
+### Requirement: Built-in DOCX fallback footnotes, rules, and alerts
+The built-in DOCX writer SHALL emit real footnotes: `word/footnotes.xml` carries the definitions and the body carries `w:footnoteReference` marks, so references and definitions stay linked in Word. Horizontal rules SHALL render as a paragraph with a bottom border rather than literal `----------` text. GFM alert blockquotes SHALL render as styled callout paragraphs (accented left border with a bold kind label) rather than `> `-prefixed text.
+
+#### Scenario: Footnote reference links to its definition
+- **WHEN** a document contains `[^a]` and its definition
+- **THEN** the body carries a `w:footnoteReference w:id` and `word/footnotes.xml` contains the matching `w:footnote`
+
+#### Scenario: Horizontal rule is a border
+- **WHEN** the document contains `---` as a thematic break
+- **THEN** the export contains a paragraph with `w:pBdr` bottom border and no literal dash text
+
+#### Scenario: GFM alert renders as a callout
+- **WHEN** the document contains `> [!WARNING]` with a body
+- **THEN** the export renders a bold kind label and the body with callout-style borders/indentation
+
+### Requirement: DOCX package is deflate-compressed
+The built-in DOCX writer SHALL compress package entries with deflate instead of storing them uncompressed.
+
+#### Scenario: Package entries are compressed
+- **WHEN** any document is exported via the built-in writer
+- **THEN** the ZIP local file headers use compression method 8 (deflate) and the package opens correctly in Word
+
+### Requirement: Pandoc engine styling and resources
+The DOCX pandoc engine path SHALL style its output through a reference document: a bundled default reference docx with CJK-friendly typography is used unless `[export] reference_doc` in `config.toml` points to a user-supplied file. The engine invocation SHALL pass `--resource-path` set to the current document's directory so relative image paths resolve, SHALL enable the pandoc Markdown extensions corresponding to Markion's extended inline syntax (at minimum `mark`, `superscript`, `subscript`), and SHALL apply a code `--highlight-style`. A table of contents (`--toc`) SHALL be emitted when the export options request it (default off).
+
+#### Scenario: Bundled reference doc styles the output
+- **WHEN** pandoc is available and no `reference_doc` is configured
+- **THEN** the DOCX pandoc invocation includes `--reference-doc` pointing at the bundled template
+
+#### Scenario: User reference doc overrides the bundled one
+- **WHEN** `[export] reference_doc` names an existing file
+- **THEN** the invocation uses that file instead of the bundled template
+
+#### Scenario: Relative images resolve on the engine path
+- **WHEN** the document references a relative image path and the pandoc engine runs
+- **THEN** the invocation includes `--resource-path` containing the document's directory
+
+#### Scenario: Extended inline syntax is enabled for pandoc
+- **WHEN** the document contains `==highlight==`, `^superscript^`, or `~subscript~`
+- **THEN** the pandoc invocation enables the `mark`, `superscript`, and `subscript` extensions so the engine output preserves them
+
+### Requirement: Configurable pandoc binary path
+The pandoc binary location SHALL be configurable via `[export] pandoc_path` in `config.toml`. When unset, the engine locates `pandoc` on the system PATH as today.
+
+#### Scenario: Configured pandoc path is used
+- **WHEN** `[export] pandoc_path` names an executable
+- **THEN** the DOCX/PDF engine invocations use that executable instead of a PATH lookup
+
+### Requirement: User-facing DOCX export options
+The DOCX export flow SHALL offer user-facing options before writing the file: page size (A4, Letter, Legal), table of contents on the pandoc engine path (default off), and image embedding policy (embed local images vs. text fallback, default embed). Both the pandoc engine path and the built-in fallback SHALL honor the applicable options. The last-used DOCX export options SHALL persist across sessions via the `[export.docx]` config section.
+
+#### Scenario: Options reach the engine path
+- **WHEN** the user exports to DOCX with the pandoc engine available and has enabled the table of contents
+- **THEN** the pandoc invocation includes `--toc`
+
+#### Scenario: Options reach the fallback path
+- **WHEN** the user exports to DOCX via the built-in fallback with Letter page size selected
+- **THEN** the fallback writer's `w:sectPr` uses Letter dimensions instead of the A4 default
+
+#### Scenario: Image policy is honored
+- **WHEN** the user selects the text-fallback image policy
+- **THEN** local images export as `alt: url` text on both backends instead of being embedded
+
+#### Scenario: Options persist across sessions
+- **WHEN** the user changes a DOCX export option and later restarts the app
+- **THEN** the export dialog presents the previously used options
 

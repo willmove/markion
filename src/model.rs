@@ -267,14 +267,104 @@ pub struct ExportPreferences {
     /// Pandoc PDF engine used by the engine-first PDF export path
     /// (`--pdf-engine=`), e.g. "xelatex", "pdfroff", "tectonic".
     pub pdf_engine: String,
+    /// Explicit pandoc binary path for the engine-first PDF/DOCX export paths.
+    /// `None` locates `pandoc` on the system PATH.
+    pub pandoc_path: Option<String>,
+    /// User-supplied pandoc `--reference-doc` for engine-first DOCX export.
+    /// `None` (or a path that does not exist) uses the bundled template.
+    pub reference_doc: Option<String>,
+    /// Last-used DOCX export options ([export.docx] table), re-presented by
+    /// the export dialog on the next run.
+    pub docx: DocxExportOptions,
 }
 
 impl Default for ExportPreferences {
     fn default() -> Self {
         Self {
             pdf_engine: "xelatex".to_string(),
+            pandoc_path: None,
+            reference_doc: None,
+            docx: DocxExportOptions::default(),
         }
     }
+}
+
+/// Page size for DOCX export. The built-in writer renders the matching
+/// `w:pgSz` dimensions; the pandoc engine maps it to `-V papersize=`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DocxPageSize {
+    #[default]
+    A4,
+    Letter,
+    Legal,
+}
+
+impl DocxPageSize {
+    /// (width, height) in twips; Letter/Legal share the 8.5in width.
+    pub fn dimensions_twips(self) -> (u32, u32) {
+        match self {
+            Self::A4 => (11906, 16838),
+            Self::Letter => (12240, 15840),
+            Self::Legal => (12240, 20160),
+        }
+    }
+
+    /// Config-file token ([export.docx] `page_size`).
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::A4 => "a4",
+            Self::Letter => "letter",
+            Self::Legal => "legal",
+        }
+    }
+
+    /// Parses a config token; unknown values fall back to A4.
+    pub fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "letter" => Self::Letter,
+            "legal" => Self::Legal,
+            _ => Self::A4,
+        }
+    }
+}
+
+/// How local images are handled on DOCX export.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DocxImagePolicy {
+    /// Embed local images into the package (default).
+    #[default]
+    Embed,
+    /// Export local images as `alt: url` text instead of embedding them.
+    TextFallback,
+}
+
+impl DocxImagePolicy {
+    /// Config-file token ([export.docx] `image_policy`).
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Embed => "embed",
+            Self::TextFallback => "text-fallback",
+        }
+    }
+
+    /// Parses a config token; unknown values fall back to Embed.
+    pub fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "text-fallback" | "text_fallback" | "text" => Self::TextFallback,
+            _ => Self::Embed,
+        }
+    }
+}
+
+/// User-facing DOCX export options, persisted as the last-used choices.
+/// `toc` applies only to the pandoc engine path; page size and image policy
+/// are honored by both backends.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DocxExportOptions {
+    pub page_size: DocxPageSize,
+    /// Table of contents (pandoc engine only; the built-in writer ignores it).
+    pub toc: bool,
+    pub image_policy: DocxImagePolicy,
 }
 
 /// Which implementation produced an export artifact — the absorbed Typune
@@ -283,6 +373,26 @@ impl Default for ExportPreferences {
 pub enum ExportBackend {
     PandocEngine,
     BuiltIn,
+}
+
+/// Why the pandoc engine failed before the built-in writer produced the file.
+/// Disclosed on the status bar so a fallback export names the cause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineFailureCategory {
+    /// The pandoc binary could not be found/launched.
+    BinaryMissing,
+    /// Pandoc (or the engine parser) ran but the conversion failed.
+    ConversionError,
+}
+
+/// Outcome of a completed export: which backend produced the file and, when a
+/// pandoc-eligible format fell back to the built-in writer, why the engine
+/// failed. `engine_failure` is `None` when the engine ran or was not
+/// applicable to the format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportOutcome {
+    pub backend: ExportBackend,
+    pub engine_failure: Option<EngineFailureCategory>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

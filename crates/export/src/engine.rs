@@ -75,6 +75,13 @@ pub struct ExportOptions {
     pub embed_images: bool,
     /// Optional document title override.
     pub title_override: Option<String>,
+    /// Optional pandoc `--reference-doc` path (DOCX styling template).
+    pub reference_doc: Option<PathBuf>,
+    /// Optional pandoc `--resource-path` directory (used to resolve relative
+    /// image paths, typically the exported document's directory).
+    pub resource_path: Option<PathBuf>,
+    /// Whether to emit a table of contents (`--toc`). Defaults to off.
+    pub toc: bool,
 }
 
 impl Default for ExportOptions {
@@ -87,6 +94,9 @@ impl Default for ExportOptions {
             page_size: PageSize::A4,
             embed_images: false,
             title_override: None,
+            reference_doc: None,
+            resource_path: None,
+            toc: false,
         }
     }
 }
@@ -381,6 +391,9 @@ mod tests {
         assert_eq!(opts.page_size, PageSize::A4);
         assert!(!opts.embed_images);
         assert!(opts.title_override.is_none());
+        assert!(opts.reference_doc.is_none());
+        assert!(opts.resource_path.is_none());
+        assert!(!opts.toc);
     }
 
     #[test]

@@ -76,6 +76,23 @@ You can change the PDF engine via the config file:
 pdf_engine = "xelatex"   # alternatives: "pdfroff", "tectonic", ...
 ```
 
+**DOCX export options.** File → Export → DOCX opens a short options step before the save dialog: page size (A4 / Letter / Legal), table of contents (offered only when the pandoc engine is available — the built-in writer ignores it), and image policy (embed local images into the document, or export them as `alt: url` text). Both backends honor the page size and image policy; the table of contents is emitted only by the pandoc engine (`--toc`). After a successful export the choices are remembered as the defaults for the next run, persisted in the config file:
+
+```toml
+[export.docx]
+page_size = "a4"              # "a4" | "letter" | "legal"
+toc = false                   # table of contents (pandoc engine only)
+image_policy = "embed"        # "embed" | "text-fallback"
+```
+
+Two more DOCX-related keys live in the `[export]` section: `pandoc_path` (explicit pandoc binary; unset = system `PATH`) and `reference_doc` (a pandoc `--reference-doc` styling template; unset or missing files fall back to the bundled template):
+
+```toml
+[export]
+pandoc_path = "C:/tools/pandoc.exe"       # optional
+reference_doc = "templates/my-style.docx" # optional
+```
+
 The built-in PDF/PNG/JPEG paths are deliberately basic (text snapshots). For high-quality output, install pandoc plus a LaTeX engine (e.g. `xelatex` from TeX Live / MiKTeX, or `pdfroff` from groff).
 
 YAML front matter `title` / `author` / `date` feed into export metadata: HTML `<meta>` tags, DOCX document properties, and the LaTeX preamble.

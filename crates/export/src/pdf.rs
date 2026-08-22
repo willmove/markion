@@ -151,7 +151,7 @@ impl Exporter for PdfExporter {
             .spawn()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    ExportError::GenerationError(format!(
+                    ExportError::ToolNotFound(format!(
                         "pandoc not found at '{}'. Please install pandoc: https://pandoc.org/installing.html",
                         self.pandoc_path.display()
                     ))
@@ -448,10 +448,10 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            ExportError::GenerationError(msg) => {
+            ExportError::ToolNotFound(msg) => {
                 assert!(msg.contains("pandoc not found"));
             }
-            other => panic!("Expected GenerationError, got: {:?}", other),
+            other => panic!("Expected ToolNotFound, got: {:?}", other),
         }
     }
 

@@ -45,11 +45,31 @@ impl DocxExporter {
 
     /// Build the pandoc command arguments for DOCX conversion.
     fn build_args(&self, options: &ExportOptions) -> Vec<String> {
+        // The extension list keeps pandoc aligned with Markion's extended
+        // inline syntax: `==mark==`, `^superscript^`, `~subscript~`.
         let mut args = vec![
-            "--from=markdown".to_string(),
+            "--from=markdown+mark+superscript+subscript".to_string(),
             "--to=docx".to_string(),
             "--output=-".to_string(),
         ];
+
+        // Styling template (bundled default or user-supplied via config).
+        if let Some(ref reference_doc) = options.reference_doc {
+            args.push(format!("--reference-doc={}", reference_doc.display()));
+        }
+
+        // Resolve relative resource paths (e.g. images) against the
+        // document's directory.
+        if let Some(ref resource_path) = options.resource_path {
+            args.push(format!("--resource-path={}", resource_path.display()));
+        }
+
+        // Syntax highlighting for fenced code blocks (pandoc built-in theme).
+        args.push("--highlight-style=tango".to_string());
+
+        if options.toc {
+            args.push("--toc".to_string());
+        }
 
         // Page size via pandoc variable
         match options.page_size {
@@ -115,9 +135,10 @@ impl Exporter for DocxExporter {
             .spawn()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    ExportError::GenerationError(
-                        "pandoc not found. Please install pandoc to export DOCX files.".into(),
-                    )
+                    ExportError::ToolNotFound(format!(
+                        "pandoc not found at '{}'. Please install pandoc to export DOCX files.",
+                        self.pandoc_path.display()
+                    ))
                 } else {
                     ExportError::Io(e)
                 }
@@ -175,10 +196,85 @@ mod tests {
         let options = default_options();
         let args = exporter.build_args(&options);
 
-        assert!(args.contains(&"--from=markdown".to_string()));
+        assert!(args.contains(&"--from=markdown+mark+superscript+subscript".to_string()));
         assert!(args.contains(&"--to=docx".to_string()));
         assert!(args.contains(&"--output=-".to_string()));
         assert!(args.contains(&"papersize=a4".to_string()));
+        assert!(args.contains(&"--highlight-style=tango".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_enables_extended_inline_syntax() {
+        let exporter = DocxExporter::new();
+        let args = exporter.build_args(&default_options());
+        let from = args
+            .iter()
+            .find(|arg| arg.starts_with("--from="))
+            .expect("missing --from argument");
+        for extension in ["mark", "superscript", "subscript"] {
+            assert!(
+                from.contains(&format!("+{extension}")),
+                "--from should enable the {extension} extension: {from}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_args_reference_doc() {
+        let exporter = DocxExporter::new();
+        let mut options = default_options();
+        options.reference_doc = Some(PathBuf::from("assets/templates/reference.docx"));
+        let args = exporter.build_args(&options);
+
+        assert!(args.contains(&"--reference-doc=assets/templates/reference.docx".to_string()));
+
+        // Unset: no reference-doc argument at all.
+        let args = exporter.build_args(&default_options());
+        assert!(!args.iter().any(|arg| arg.starts_with("--reference-doc")));
+    }
+
+    #[test]
+    fn test_build_args_resource_path() {
+        let exporter = DocxExporter::new();
+        let mut options = default_options();
+        options.resource_path = Some(PathBuf::from("/docs"));
+        let args = exporter.build_args(&options);
+
+        assert!(args.contains(&"--resource-path=/docs".to_string()));
+
+        let args = exporter.build_args(&default_options());
+        assert!(!args.iter().any(|arg| arg.starts_with("--resource-path")));
+    }
+
+    #[test]
+    fn test_build_args_toc_opt_in() {
+        let exporter = DocxExporter::new();
+
+        let args = exporter.build_args(&default_options());
+        assert!(!args.contains(&"--toc".to_string()));
+
+        let mut options = default_options();
+        options.toc = true;
+        let args = exporter.build_args(&options);
+        assert!(args.contains(&"--toc".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_option_combination() {
+        let exporter = DocxExporter::new();
+        let mut options = default_options();
+        options.reference_doc = Some(PathBuf::from("ref.docx"));
+        options.resource_path = Some(PathBuf::from("."));
+        options.toc = true;
+        options.page_size = PageSize::Letter;
+        let args = exporter.build_args(&options);
+
+        assert!(args.contains(&"--from=markdown+mark+superscript+subscript".to_string()));
+        assert!(args.contains(&"--reference-doc=ref.docx".to_string()));
+        assert!(args.contains(&"--resource-path=.".to_string()));
+        assert!(args.contains(&"--highlight-style=tango".to_string()));
+        assert!(args.contains(&"--toc".to_string()));
+        assert!(args.contains(&"papersize=letter".to_string()));
     }
 
     #[test]
@@ -243,6 +339,10 @@ mod tests {
         assert!(result.is_err());
 
         let err = result.unwrap_err();
+        assert!(
+            matches!(err, ExportError::ToolNotFound(_)),
+            "Expected ToolNotFound, got: {err:?}"
+        );
         let err_msg = format!("{}", err);
         assert!(
             err_msg.contains("pandoc")

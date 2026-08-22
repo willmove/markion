@@ -11,6 +11,11 @@ pub enum ExportError {
     #[error("Export generation failed: {0}")]
     GenerationError(String),
 
+    /// A required external tool (e.g. pandoc) could not be found or launched.
+    /// The message names the missing tool/binary path.
+    #[error("External tool not found: {0}")]
+    ToolNotFound(String),
+
     #[error("Template error: {0}")]
     TemplateError(String),
 
@@ -37,6 +42,9 @@ impl ExportError {
                 } else {
                     "Export generation failed. Try exporting as HTML instead."
                 }
+            }
+            ExportError::ToolNotFound(_) => {
+                "A required external tool (e.g. pandoc) was not found. Please install it or use the built-in exporter."
             }
             ExportError::TemplateError(_) => {
                 "Export template error. Check your template configuration."
@@ -208,6 +216,15 @@ mod tests {
         assert_eq!(
             err.user_friendly_message(),
             "Export generation failed. Try exporting as HTML instead."
+        );
+    }
+
+    #[test]
+    fn user_friendly_message_tool_not_found() {
+        let err = ExportError::ToolNotFound("pandoc not found".into());
+        assert_eq!(
+            err.user_friendly_message(),
+            "A required external tool (e.g. pandoc) was not found. Please install it or use the built-in exporter."
         );
     }
 
