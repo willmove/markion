@@ -10,7 +10,7 @@ exclude = ["vendor/zed/crates/gpui"]
 # these via `version.workspace = true` / `edition.workspace = true`). The root
 # markion package declares its own values explicitly and does not inherit.
 [workspace.package]
-version = "0.1.24"
+version = "0.2.1"
 edition = "2024"
 
 # Dependencies referenced by member crates via `.workspace = true`. Versions
@@ -50,7 +50,7 @@ ratex-types = "=0.1.13"
 
 [package]
 name = "markion"
-version = "0.1.24"
+version = "0.2.1"
 edition = "2024"
 description = "A Rust + GPUI Markdown editor."
 license = "MIT"
