@@ -9,9 +9,14 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      mirror_tag:
+        description: Existing stable tag whose published assets should be mirrored to OSS
+        required: false
+        type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.mirror_tag || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -21,6 +26,7 @@ env:
 jobs:
   build:
     name: Build & package (${{ matrix.os }})
+    if: github.event_name != 'workflow_dispatch' || inputs.mirror_tag == ''
     strategy:
       fail-fast: false
       matrix:
@@ -275,25 +281,63 @@ jobs:
   mirror-oss:
     name: Mirror installers to Aliyun OSS
     needs: [build, prepare-update]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      ${{
+        always() &&
+        (
+          (startsWith(github.ref, 'refs/tags/v') &&
+            needs.build.result == 'success' &&
+            needs.prepare-update.result == 'success') ||
+          (github.event_name == 'workflow_dispatch' && inputs.mirror_tag != '')
+        )
+      }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.mirror_tag || github.ref }}
+
+      - name: Derive release tag and version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.mirror_tag || github.ref_name }}
+        run: |
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a stable vMAJOR.MINOR.PATCH tag, got: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+          echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
 
       - name: Download all artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
+      - name: Download published release assets for mirror repair
+        if: github.event_name == 'workflow_dispatch' && inputs.mirror_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir dist \
+            --pattern "markion_${VERSION}_x64-setup.exe" \
+            --pattern "Markion_${VERSION}_aarch64.dmg" \
+            --pattern "markion_${VERSION}_amd64.deb" \
+            --pattern "markion_${VERSION}_x86_64.AppImage" \
+            --pattern "markion_${VERSION}_x64-setup.exe.sig" \
+            --pattern "update.json"
+
       - name: List artifacts to mirror
         run: ls -laR dist
-
-      - name: Derive version without leading v
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Compute SHA-256 digests for each installer
         run: |
@@ -306,11 +350,13 @@ jobs:
         env:
           OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
           OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+          RELEASE_TAG: ${{ inputs.mirror_tag || github.ref_name }}
         run: |
           python3 - <<'PY'
           import json, os, pathlib, datetime
           base = os.environ["OSS_PUBLIC_BASE"].rstrip("/") + "/" + os.environ["OSS_PREFIX"].rstrip("/") + "/latest"
-          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          release_tag = os.environ["RELEASE_TAG"]
+          version = release_tag.lstrip("v")
           assets = {
               "windows-x86_64": f"markion_{version}_x64-setup.exe",
               "macos-aarch64":  f"Markion_{version}_aarch64.dmg",
@@ -319,7 +365,7 @@ jobs:
           }
           out = {
               "version": version,
-              "tag": os.environ["GITHUB_REF_NAME"],
+              "tag": release_tag,
               "pub_date": datetime.datetime.utcnow().isoformat() + "Z",
               "assets": {k: {"filename": v} for k, v in assets.items()},
           }
@@ -350,20 +396,46 @@ jobs:
 
           upload() {
             local src="$1" dest="$2"
-            local now content_type string_to_sign signature
-            now="$(date -u '+%a, %d %b %Y %H:%M:%S GMT')"
+            local url="https://${bucket}.${endpoint}/${dest}"
+            local local_md5 remote_etag
+            local now content_type string_to_sign signature attempt
+
+            # A repair run can resume a failed mirror without re-uploading
+            # objects that OSS already has byte-for-byte.
+            local_md5="$(md5sum "${src}" | awk '{print tolower($1)}')"
+            remote_etag="$(curl -fsSI --connect-timeout 30 --max-time 300 "${url}" 2>/dev/null \
+              | tr -d '\r' \
+              | awk -F': *' 'tolower($1) == "etag" {gsub(/"/, "", $2); print tolower($2)}' \
+              | tail -n 1 || true)"
+            if [[ -n "${remote_etag}" && "${remote_etag}" == "${local_md5}" ]]; then
+              echo "Already mirrored ${dest}"
+              return 0
+            fi
+
             content_type="application/octet-stream"
-            string_to_sign="PUT\n\n${content_type}\n${now}\n/${bucket}/${dest}"
-            signature="$(printf '%b' "${string_to_sign}" | openssl dgst -sha1 -hmac "${key_secret}" -binary | base64 | tr -d '\n')"
-            curl -fsS --retry 3 --retry-delay 3 \
-              --connect-timeout 30 --max-time 600 \
-              -X PUT \
-              -H "Date: ${now}" \
-              -H "Content-Type: ${content_type}" \
-              -H "Authorization: OSS ${key_id}:${signature}" \
-              --data-binary "@${src}" \
-              "https://${bucket}.${endpoint}/${dest}" >/dev/null
-            echo "Uploaded ${dest}"
+            for attempt in 1 2 3 4; do
+              # Recompute the Date and signature on every retry so a slow
+              # upload cannot leave later attempts with expired credentials.
+              now="$(date -u '+%a, %d %b %Y %H:%M:%S GMT')"
+              string_to_sign="PUT\n\n${content_type}\n${now}\n/${bucket}/${dest}"
+              signature="$(printf '%b' "${string_to_sign}" | openssl dgst -sha1 -hmac "${key_secret}" -binary | base64 | tr -d '\n')"
+              if curl -fsS \
+                --connect-timeout 30 --max-time 1800 \
+                -X PUT \
+                -H "Date: ${now}" \
+                -H "Content-Type: ${content_type}" \
+                -H "Authorization: OSS ${key_id}:${signature}" \
+                --data-binary "@${src}" \
+                "${url}" >/dev/null
+              then
+                echo "Uploaded ${dest}"
+                return 0
+              fi
+              echo "Upload attempt ${attempt} failed for ${dest}" >&2
+              sleep 3
+            done
+            echo "Failed to upload ${dest} after 4 attempts" >&2
+            return 1
           }
 
           upload "dist/markion_${VERSION}_x64-setup.exe" "${prefix_dir}/markion_${VERSION}_x64-setup.exe"

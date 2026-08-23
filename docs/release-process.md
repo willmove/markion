@@ -45,7 +45,7 @@ Configure these repository secrets with the exact public values; a wrong value f
 - `OSS_PUBLIC_BASE`: `https://marknice.oss-cn-heyuan.aliyuncs.com`.
 - `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET`: a RAM key with write access to the bucket. Objects inherit the bucket's default object ACL, so the bucket must be configured public-read for the mirror URLs to serve clients.
 
-The upload itself is a direct OSS REST PUT signed with HMAC-SHA1 (curl + openssl, preinstalled on ubuntu runners) — no third-party action, explicit per-file error handling, retries, and a 30s connect / 600s request timeout.
+The upload itself is a direct OSS REST PUT signed with HMAC-SHA1 (curl + openssl, preinstalled on ubuntu runners) — no third-party action, explicit per-file error handling, retries with freshly computed signatures, and a 30s connect / 1800s per-attempt request timeout. A manually dispatched workflow with `mirror_tag=vX.Y.Z` repairs the mirror from an already-published stable release without moving or recreating its public tag.
 
 Check the operating context before editing anything:
 
@@ -165,7 +165,7 @@ packaged `assets/marknice-workspace` manifest before upload. Complete the manual
 browser and WeChat matrix in `docs/marknice-workspace-release-evidence.md`; a
 release with pending rows is not ready to publish.
 
-If the workflow fails, inspect it with `gh run view <tag-run-id> --log-failed`. Do not report the release as complete. If the public tag already exists, preserve it and either fix forward or ask the maintainer how to proceed.
+If the workflow fails, inspect it with `gh run view <tag-run-id> --log-failed`. Do not report the release as complete. If the public tag already exists, preserve it and either fix forward or ask the maintainer how to proceed. If only `mirror-oss` failed after the GitHub assets were published, fix the cause on `main`, then run `gh workflow run release.yml --ref main -f mirror_tag=vX.Y.Z`; monitor that repair run and verify the public mirror before continuing.
 
 The tag-only `prepare-update` job signs the exact Windows NSIS installer and produces `update.json`. Both `release` and `mirror-oss` depend on that prepared metadata but not on each other, so a GitHub Release failure does not block the mirror and vice versa. The mirror uploads the four installers, the Windows installer `.sig`, `update.json`, `packager.toml`, a generated `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/`. A signing, publication, or mirror failure is an incomplete release—correct or retry it before reporting completion.
 
