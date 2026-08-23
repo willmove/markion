@@ -8,22 +8,24 @@
 
 use std::{
     env, fs,
-    io::{self, Write},
+    io,
     path::{Path, PathBuf},
 };
 
+use markion_pdf::{Block as PdfBlock, Cell as PdfCell, ImageData as PdfImageData, ListMarker, PdfDocument, PdfMetadata, PdfOptions, Rgb, Run as PdfRun, Style as PdfStyle};
 use percent_encoding::percent_decode_str;
 use typune_export::{DocxExporter, ExportError, ExportOptions, Exporter, PdfExporter};
-use typune_markdown::Parser;
+use typune_markdown::{MathRenderer, Parser};
 
 use crate::MarkdownDocument;
 use crate::escape::escape_xml_text;
+use crate::highlight::highlight_code;
 use crate::i18n::Msg;
 use crate::math::tex_to_omml;
 use crate::model::{
     AlertKind, DocxExportOptions, DocxImagePolicy, DocxPageSize, EngineFailureCategory,
-    ExportBackend, ExportPreferences, InlineSpan, InlineStyle, PreviewBlock, RichText,
-    TableAlignment,
+    ExportBackend, ExportFormat, ExportPreferences, HighlightKind, InlineSpan, InlineStyle,
+    PdfExportOptions, PdfPageSize, PreviewBlock, RichText, TableAlignment,
 };
 use crate::parse::{HtmlPreviewPart, HtmlTableGrid, html_preview_parts};
 
@@ -61,16 +63,567 @@ fn engine_export(
 
 pub(crate) fn engine_pdf(
     source: &str,
-    pdf_engine: &str,
-    pandoc_path: Option<&str>,
+    settings: &ExportPreferences,
+    document_dir: Option<&Path>,
 ) -> Result<Vec<u8>, EngineFailureCategory> {
-    let exporter = match pandoc_path.map(str::trim).filter(|path| !path.is_empty()) {
-        Some(path) => {
-            PdfExporter::with_pandoc_path(PathBuf::from(path)).with_pdf_engine(pdf_engine)
-        }
-        None => PdfExporter::new().with_pdf_engine(pdf_engine),
+    let exporter = match settings
+        .pandoc_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        Some(path) => PdfExporter::with_pandoc_path(PathBuf::from(path)),
+        None => PdfExporter::new(),
+    }
+    .with_pdf_engine(&settings.pdf_engine)
+    .with_mainfont(settings.pdf_mainfont.as_deref())
+    .with_cjk_font(settings.pdf_cjk_font.as_deref());
+    let options = ExportOptions {
+        page_size: match settings.pdf.page_size {
+            PdfPageSize::A4 => typune_export::PageSize::A4,
+            PdfPageSize::Letter => typune_export::PageSize::Letter,
+            PdfPageSize::Legal => typune_export::PageSize::Legal,
+        },
+        toc: settings.pdf.toc,
+        resource_path: document_dir.map(Path::to_path_buf),
+        ..ExportOptions::default()
     };
-    engine_export(source, &exporter, &ExportOptions::default())
+    engine_export(source, &exporter, &options)
+}
+
+// --- Built-in PDF IR builder -------------------------------------------------
+
+/// Builds the `markion_pdf` layout IR from the cached preview blocks.
+///
+/// Mirrors `render_docx_document_xml`: walks `preview_blocks_shared()` once,
+/// resolves local images against `base_dir`, converts every `PreviewBlock`
+/// variant into the corresponding `PdfBlock`, and collects footnote bodies into
+/// `PdfDocument::footnotes` so inline references can resolve to 1-based ids.
+pub fn build_pdf_ir(
+    document: &MarkdownDocument,
+    options: &PdfExportOptions,
+    base_dir: Option<&Path>,
+) -> PdfDocument {
+    let metadata = document.front_matter().ok().flatten();
+    let title = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.title.as_deref())
+        .or_else(|| document.path().and_then(Path::file_stem).and_then(|stem| stem.to_str()))
+        .map(str::to_string);
+    let author = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.author.as_deref())
+        .map(str::to_string);
+    let date = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.date.as_deref())
+        .map(str::to_string);
+
+    let (page_width_mm, page_height_mm) = options.page_size.dimensions_mm();
+    let pdf_options = PdfOptions {
+        page_width_mm,
+        page_height_mm,
+        margin_mm: options.margin_mm as f32,
+        toc: options.toc,
+        page_numbers: options.page_numbers,
+    };
+
+    let blocks = document.preview_blocks_shared();
+    let base_dir = base_dir.map(Path::to_path_buf);
+
+    // Collect footnote definition labels in document order so in-text
+    // superscript references can map to 1-based ids.
+    let mut footnote_labels: Vec<String> = Vec::new();
+    for block in blocks.iter() {
+        if let PreviewBlock::FootnoteDefinition { label, .. } = block {
+            footnote_labels.push(label.clone());
+        }
+    }
+
+    let mut pdf_blocks: Vec<PdfBlock> = Vec::new();
+    let mut footnotes: Vec<Vec<PdfRun>> = Vec::new();
+    for block in blocks.iter() {
+        match block {
+            PreviewBlock::FootnoteDefinition { text, .. } => {
+                footnotes.push(pdf_runs(text, &footnote_labels));
+            }
+            other => {
+                pdf_blocks.extend(pdf_blocks_from_preview_block(other, &base_dir, &footnote_labels));
+            }
+        }
+    }
+
+    PdfDocument {
+        metadata: PdfMetadata { title, author, date },
+        options: pdf_options,
+        blocks: pdf_blocks,
+        footnotes,
+    }
+}
+
+fn pdf_blocks_from_preview_block(
+    block: &PreviewBlock,
+    base_dir: &Option<PathBuf>,
+    footnotes: &[String],
+) -> Vec<PdfBlock> {
+    match block {
+        PreviewBlock::Html { html, .. } => pdf_html_blocks(html, base_dir, footnotes),
+        _ => pdf_single_block(block, base_dir, footnotes).into_iter().collect(),
+    }
+}
+
+fn pdf_single_block(
+    block: &PreviewBlock,
+    base_dir: &Option<PathBuf>,
+    footnotes: &[String],
+) -> Option<PdfBlock> {
+    match block {
+        PreviewBlock::Heading { level, text, .. } => Some(PdfBlock::Heading {
+            level: *level,
+            content: pdf_runs(text, footnotes),
+        }),
+        PreviewBlock::Paragraph { text, .. } => Some(PdfBlock::Paragraph {
+            content: pdf_runs(text, footnotes),
+        }),
+        PreviewBlock::ListItem {
+            level,
+            ordered,
+            index,
+            checked,
+            text,
+            ..
+        } => {
+            let indent_level = (*level).saturating_sub(1).min(u8::MAX as usize) as u8;
+            let marker = match checked {
+                Some(done) => ListMarker::Task { checked: *done },
+                None if *ordered => ListMarker::Number(index.unwrap_or(1)),
+                None => ListMarker::Bullet,
+            };
+            Some(PdfBlock::ListItem {
+                indent_level,
+                marker,
+                content: pdf_runs(text, footnotes),
+            })
+        }
+        PreviewBlock::BlockQuote {
+            children, alert, ..
+        } => {
+            let children: Vec<PdfBlock> = children
+                .iter()
+                .flat_map(|child| pdf_blocks_from_preview_block(child, base_dir, footnotes))
+                .collect();
+            if let Some(kind) = alert {
+                Some(PdfBlock::Alert {
+                    kind: pdf_alert_kind(*kind),
+                    children,
+                })
+            } else {
+                Some(PdfBlock::Quote { children })
+            }
+        }
+        PreviewBlock::CodeBlock { language, code, .. } => Some(PdfBlock::CodeBlock {
+            language: language.clone(),
+            lines: pdf_code_lines(code, language.as_deref()),
+        }),
+        PreviewBlock::MathBlock { latex, authored, .. } => Some(pdf_math_block(latex, authored)),
+        PreviewBlock::Image { alt, url, .. } => {
+            pdf_image_block(alt, url, base_dir).or_else(|| Some(pdf_image_fallback_block(alt, url)))
+        }
+        PreviewBlock::Rule { .. } => Some(PdfBlock::Rule),
+        PreviewBlock::Table {
+            rows, alignments, ..
+        } => pdf_table_block(rows, alignments, footnotes),
+        PreviewBlock::FootnoteDefinition { .. } => None,
+        PreviewBlock::Html { .. } => unreachable!("Html blocks are handled by pdf_blocks_from_preview_block"),
+    }
+}
+
+fn pdf_html_blocks(
+    html: &str,
+    base_dir: &Option<PathBuf>,
+    footnotes: &[String],
+) -> Vec<PdfBlock> {
+    let mut blocks = Vec::new();
+    for part in html_preview_parts(html) {
+        match part {
+            HtmlPreviewPart::Text { text, .. } => {
+                if !text.is_empty() {
+                    blocks.push(PdfBlock::Paragraph {
+                        content: pdf_runs(&text, footnotes),
+                    });
+                }
+            }
+            HtmlPreviewPart::Image { alt, url, .. } => {
+                if let Some(block) = pdf_image_block(&alt, &url, base_dir) {
+                    blocks.push(block);
+                } else {
+                    blocks.push(pdf_image_fallback_block(&alt, &url));
+                }
+            }
+            HtmlPreviewPart::Table { grid } => {
+                if let Some(block) = pdf_html_table_block(&grid, footnotes) {
+                    blocks.push(block);
+                }
+            }
+        }
+    }
+    blocks
+}
+
+fn pdf_image_fallback_block(alt: &str, url: &str) -> PdfBlock {
+    let label = if alt.is_empty() { "Image" } else { alt };
+    PdfBlock::Paragraph {
+        content: vec![PdfRun {
+            text: format!("{label}: {url}"),
+            ..PdfRun::default()
+        }],
+    }
+}
+
+fn pdf_table_block(
+    rows: &[Vec<RichText>],
+    alignments: &[TableAlignment],
+    footnotes: &[String],
+) -> Option<PdfBlock> {
+    if rows.is_empty() {
+        return None;
+    }
+    let mut row_iter = rows.iter();
+    let header = row_iter
+        .next()?
+        .iter()
+        .map(|cell| PdfCell {
+            content: pdf_runs(cell, footnotes),
+        })
+        .collect();
+    let body_rows = row_iter
+        .map(|row| {
+            row.iter()
+                .map(|cell| PdfCell {
+                    content: pdf_runs(cell, footnotes),
+                })
+                .collect()
+        })
+        .collect();
+    Some(PdfBlock::Table {
+        header,
+        rows: body_rows,
+        alignments: alignments.iter().map(pdf_alignment).collect(),
+    })
+}
+
+fn pdf_html_table_block(grid: &HtmlTableGrid, footnotes: &[String]) -> Option<PdfBlock> {
+    if grid.rows.is_empty() {
+        return None;
+    }
+    let columns = grid.columns.max(1);
+    let mut row_iter = grid.rows.iter();
+    let first_row = row_iter.next().unwrap();
+    let first_is_header = first_row.iter().any(|cell| cell.is_header);
+    let (header, rows) = if first_is_header {
+        let header = first_row
+            .iter()
+            .map(|cell| PdfCell {
+                content: pdf_runs(&cell.content, footnotes),
+            })
+            .collect();
+        let rows = row_iter
+            .map(|row| {
+                row.iter()
+                    .map(|cell| PdfCell {
+                        content: pdf_runs(&cell.content, footnotes),
+                    })
+                    .collect()
+            })
+            .collect();
+        (header, rows)
+    } else {
+        let header = vec![PdfCell::default(); columns];
+        let mut rows: Vec<Vec<PdfCell>> = vec![first_row
+            .iter()
+            .map(|cell| PdfCell {
+                content: pdf_runs(&cell.content, footnotes),
+            })
+            .collect()];
+        rows.extend(row_iter.map(|row| {
+            row.iter()
+                .map(|cell| PdfCell {
+                    content: pdf_runs(&cell.content, footnotes),
+                })
+                .collect()
+        }));
+        (header, rows)
+    };
+    Some(PdfBlock::Table {
+        header,
+        rows,
+        alignments: vec![markion_pdf::Alignment::Left; columns],
+    })
+}
+
+fn pdf_alignment(alignment: &TableAlignment) -> markion_pdf::Alignment {
+    match alignment {
+        TableAlignment::Left => markion_pdf::Alignment::Left,
+        TableAlignment::Center => markion_pdf::Alignment::Center,
+        TableAlignment::Right => markion_pdf::Alignment::Right,
+        TableAlignment::Default => markion_pdf::Alignment::Left,
+    }
+}
+
+fn pdf_alert_kind(kind: AlertKind) -> markion_pdf::AlertKind {
+    match kind {
+        AlertKind::Note => markion_pdf::AlertKind::Note,
+        AlertKind::Tip => markion_pdf::AlertKind::Tip,
+        AlertKind::Important => markion_pdf::AlertKind::Important,
+        AlertKind::Warning => markion_pdf::AlertKind::Warning,
+        AlertKind::Caution => markion_pdf::AlertKind::Caution,
+    }
+}
+
+fn pdf_runs(rich: &RichText, footnotes: &[String]) -> Vec<PdfRun> {
+    if rich.spans.is_empty() {
+        if rich.text.is_empty() {
+            return Vec::new();
+        }
+        return vec![PdfRun {
+            text: rich.text.clone(),
+            ..PdfRun::default()
+        }];
+    }
+    rich.spans
+        .iter()
+        .filter_map(|span| pdf_run(span, footnotes))
+        .collect()
+}
+
+fn pdf_run(span: &InlineSpan, footnotes: &[String]) -> Option<PdfRun> {
+    if let Some(math) = &span.math {
+        // The IR has no inline image container, so inline math is preserved as
+        // a code-styled run. Display math blocks are rendered to SVG images.
+        return Some(PdfRun {
+            text: math.authored.clone(),
+            style: PdfStyle {
+                code: true,
+                ..PdfStyle::default()
+            },
+            ..PdfRun::default()
+        });
+    }
+    if span.text.is_empty() {
+        return None;
+    }
+    if span.style.superscript {
+        if let Some(id) = footnote_id(&span.text, footnotes) {
+            return Some(PdfRun {
+                text: span.text.clone(),
+                style: PdfStyle {
+                    superscript: true,
+                    ..PdfStyle::default()
+                },
+                footnote: Some(id),
+                ..PdfRun::default()
+            });
+        }
+    }
+    Some(PdfRun {
+        text: span.text.clone(),
+        style: pdf_style(&span.style),
+        link: span.link.clone(),
+        ..PdfRun::default()
+    })
+}
+
+fn footnote_id(label: &str, footnotes: &[String]) -> Option<u32> {
+    footnotes
+        .iter()
+        .position(|known| known == label)
+        .map(|index| index as u32 + 1)
+}
+
+fn pdf_style(style: &InlineStyle) -> PdfStyle {
+    PdfStyle {
+        bold: style.bold,
+        italic: style.italic,
+        strikethrough: style.strikethrough,
+        highlight: style.highlight,
+        superscript: style.superscript,
+        subscript: style.subscript,
+        code: style.code,
+        color: None,
+    }
+}
+
+fn pdf_code_lines(code: &str, language: Option<&str>) -> Vec<Vec<PdfRun>> {
+    let highlighted = highlight_code(code, language);
+    highlighted
+        .into_iter()
+        .map(|line| {
+            line.into_iter()
+                .map(|span| PdfRun {
+                    text: span.text,
+                    style: PdfStyle {
+                        code: true,
+                        color: pdf_highlight_color(span.kind),
+                        ..PdfStyle::default()
+                    },
+                    ..PdfRun::default()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn pdf_highlight_color(kind: HighlightKind) -> Option<Rgb> {
+    // Light-theme palette so exported code stays readable on white paper.
+    match kind {
+        HighlightKind::Plain => None,
+        HighlightKind::Keyword => Some(Rgb(0xcf, 0x22, 0x2e)),
+        HighlightKind::String => Some(Rgb(0x0f, 0x76, 0x2b)),
+        HighlightKind::Number => Some(Rgb(0x09, 0x55, 0xa5)),
+        HighlightKind::Comment => Some(Rgb(0x6e, 0x77, 0x80)),
+        HighlightKind::Type => Some(Rgb(0x00, 0x70, 0x90)),
+    }
+}
+
+fn pdf_math_block(latex: &str, authored: &str) -> PdfBlock {
+    match MathRenderer::new().render_block(latex) {
+        Ok(rendered) => {
+            let width_px = rendered.dimensions.width.round() as u32;
+            let height_px = rendered.dimensions.height.round() as u32;
+            PdfBlock::Image {
+                data: PdfImageData::Svg(rendered.svg),
+                alt: authored.to_string(),
+                width_px,
+                height_px,
+            }
+        }
+        Err(_) => PdfBlock::CodeBlock {
+            language: Some("latex".to_string()),
+            lines: vec![vec![PdfRun {
+                text: authored.to_string(),
+                style: PdfStyle {
+                    code: true,
+                    ..PdfStyle::default()
+                },
+                ..PdfRun::default()
+            }]],
+        },
+    }
+}
+
+fn pdf_image_block(alt: &str, url: &str, base_dir: &Option<PathBuf>) -> Option<PdfBlock> {
+    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:") {
+        return None;
+    }
+    let decoded = percent_decode_str(url).decode_utf8().ok()?;
+    let path = base_dir.as_ref()?.join(decoded.as_ref());
+    let bytes = fs::read(&path).ok()?;
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let (data, width_px, height_px) = match ext.as_str() {
+        "png" => {
+            let (w, h) = image_dimensions_png(&bytes)?;
+            (PdfImageData::Png(bytes), w, h)
+        }
+        "jpg" | "jpeg" => {
+            let (w, h) = image_dimensions_jpeg(&bytes)?;
+            (PdfImageData::Jpeg(bytes), w, h)
+        }
+        "svg" => {
+            let svg = String::from_utf8(bytes).ok()?;
+            let (w, h) = svg_dimensions(&svg).unwrap_or((300, 100));
+            (PdfImageData::Svg(svg), w, h)
+        }
+        _ => return None,
+    };
+    Some(PdfBlock::Image {
+        data,
+        alt: alt.to_string(),
+        width_px,
+        height_px,
+    })
+}
+
+fn image_dimensions_png(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() >= 24 && bytes[..8] == *b"\x89PNG\r\n\x1a\n" && bytes[12..16] == *b"IHDR" {
+        let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+        let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+        return Some((width, height));
+    }
+    None
+}
+
+fn image_dimensions_jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() >= 4 && bytes[0] == 0xff && bytes[1] == 0xd8 {
+        let mut cursor = 2usize;
+        while cursor + 9 < bytes.len() {
+            if bytes[cursor] != 0xff {
+                cursor += 1;
+                continue;
+            }
+            let marker = bytes[cursor + 1];
+            if matches!(marker, 0xc0..=0xcf) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) {
+                let height = u16::from_be_bytes(bytes[cursor + 5..cursor + 7].try_into().ok()?);
+                let width = u16::from_be_bytes(bytes[cursor + 7..cursor + 9].try_into().ok()?);
+                return Some((u32::from(width), u32::from(height)));
+            }
+            let length =
+                u16::from_be_bytes(bytes[cursor + 2..cursor + 4].try_into().ok()?) as usize;
+            if length < 2 {
+                return None;
+            }
+            cursor += 2 + length;
+        }
+    }
+    None
+}
+
+fn svg_dimensions(svg: &str) -> Option<(u32, u32)> {
+    let start = svg.find("<svg").or_else(|| svg.find("<SVG"))?;
+    let tag_end = svg[start..].find('>')? + start;
+    let tag = &svg[start..=tag_end];
+    let lower = tag.to_ascii_lowercase();
+
+    if let (Some(width), Some(height)) = (
+        extract_svg_attr(&lower, "width").and_then(|v| parse_svg_length(&v)),
+        extract_svg_attr(&lower, "height").and_then(|v| parse_svg_length(&v)),
+    ) {
+        if width > 0.0 && height > 0.0 {
+            return Some((width as u32, height as u32));
+        }
+    }
+
+    if let Some(viewbox) = extract_svg_attr(&lower, "viewbox") {
+        let parts: Vec<&str> = viewbox.split_whitespace().collect();
+        if parts.len() >= 4 {
+            let w: f32 = parts[2].parse().ok()?;
+            let h: f32 = parts[3].parse().ok()?;
+            if w > 0.0 && h > 0.0 {
+                return Some((w as u32, h as u32));
+            }
+        }
+    }
+
+    Some((300, 100))
+}
+
+fn extract_svg_attr(tag_lower: &str, name: &str) -> Option<String> {
+    let prefix = format!("{}=\"", name);
+    let start = tag_lower.find(&prefix)? + prefix.len();
+    let end = tag_lower[start..].find('"')?;
+    Some(tag_lower[start..start + end].to_string())
+}
+
+fn parse_svg_length(value: &str) -> Option<f32> {
+    let value = value.trim();
+    let numeric: String = value
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+        .collect();
+    numeric.parse().ok().filter(|v: &f32| *v > 0.0)
 }
 
 /// Bundled pandoc reference document used to style engine-produced DOCX files.
@@ -195,73 +748,26 @@ pub fn pandoc_available(pandoc_path: Option<&str>) -> bool {
 
 /// Status-bar message for a completed PDF/DOCX export, disclosing the backend
 /// and, when the built-in writer took over, the engine failure category.
+///
+/// `format` distinguishes PDF (built-in is the rich default, disclosed
+/// neutrally) from DOCX (the built-in writer still prompts that installing
+/// pandoc yields richer output).
 pub fn backend_status_msg(
     backend: ExportBackend,
+    format: ExportFormat,
     engine_failure: Option<EngineFailureCategory>,
 ) -> Msg {
-    match (backend, engine_failure) {
-        (ExportBackend::PandocEngine, _) => Msg::StatusExportedEngine,
-        (ExportBackend::BuiltIn, Some(EngineFailureCategory::BinaryMissing)) => {
+    match (backend, format, engine_failure) {
+        (ExportBackend::PandocEngine, _, _) => Msg::StatusExportedEngine,
+        (ExportBackend::BuiltIn, ExportFormat::Docx, None) => Msg::StatusExportedDocxBuiltin,
+        (ExportBackend::BuiltIn, _, None) => Msg::StatusExportedBuiltin,
+        (ExportBackend::BuiltIn, _, Some(EngineFailureCategory::BinaryMissing)) => {
             Msg::StatusExportedBuiltinPandocMissing
         }
-        (ExportBackend::BuiltIn, Some(EngineFailureCategory::ConversionError)) => {
+        (ExportBackend::BuiltIn, _, Some(EngineFailureCategory::ConversionError)) => {
             Msg::StatusExportedBuiltinConversionFailed
         }
-        (ExportBackend::BuiltIn, None) => Msg::StatusExportedBuiltin,
     }
-}
-
-fn plain_pdf_text(text: &str) -> String {
-    text.chars()
-        .map(|ch| match ch {
-            '(' | ')' | '\\' => format!("\\{ch}"),
-            '\n' | '\r' => " ".to_string(),
-            ch if ch.is_ascii_graphic() || ch == ' ' => ch.to_string(),
-            _ => "?".to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join("")
-}
-
-pub(crate) fn write_pdf(mut writer: impl Write, text: &str) -> io::Result<()> {
-    let lines = wrap_text(text, 82);
-    let mut stream = String::from("BT\n/F1 11 Tf\n50 792 Td\n14 TL\n");
-    for line in lines.iter().take(52) {
-        stream.push_str(&format!("({}) Tj\nT*\n", plain_pdf_text(line)));
-    }
-    stream.push_str("ET\n");
-
-    let objects = [
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
-        format!("<< /Length {} >>\nstream\n{}endstream", stream.len(), stream),
-    ];
-
-    let mut buffer = Vec::new();
-    buffer.extend_from_slice(b"%PDF-1.4\n");
-    let mut offsets = vec![0usize];
-    for (index, object) in objects.iter().enumerate() {
-        offsets.push(buffer.len());
-        buffer.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, object).as_bytes());
-    }
-    let xref_start = buffer.len();
-    buffer.extend_from_slice(
-        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
-    );
-    for offset in offsets.iter().skip(1) {
-        buffer.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-    }
-    buffer.extend_from_slice(
-        format!(
-            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
-            objects.len() + 1,
-            xref_start
-        )
-        .as_bytes(),
-    );
-    writer.write_all(&buffer)
 }
 
 // --- Built-in DOCX fallback --------------------------------------------------
@@ -2024,6 +2530,7 @@ pub(crate) fn read_zip_entry(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use markion_pdf;
     use crate::MarkdownDocument;
 
     fn docx_parts(document: &MarkdownDocument) -> Vec<u8> {
@@ -2630,18 +3137,23 @@ mod tests {
     }
 
     #[test]
-    fn backend_status_msg_discloses_backend_and_failure_category() {
+    fn backend_status_msg_discloses_backend_format_and_failure_category() {
         assert_eq!(
-            backend_status_msg(ExportBackend::PandocEngine, None),
+            backend_status_msg(ExportBackend::PandocEngine, ExportFormat::Pdf, None),
             Msg::StatusExportedEngine
         );
         assert_eq!(
-            backend_status_msg(ExportBackend::BuiltIn, None),
+            backend_status_msg(ExportBackend::BuiltIn, ExportFormat::Pdf, None),
             Msg::StatusExportedBuiltin
+        );
+        assert_eq!(
+            backend_status_msg(ExportBackend::BuiltIn, ExportFormat::Docx, None),
+            Msg::StatusExportedDocxBuiltin
         );
         assert_eq!(
             backend_status_msg(
                 ExportBackend::BuiltIn,
+                ExportFormat::Pdf,
                 Some(EngineFailureCategory::BinaryMissing)
             ),
             Msg::StatusExportedBuiltinPandocMissing
@@ -2649,6 +3161,7 @@ mod tests {
         assert_eq!(
             backend_status_msg(
                 ExportBackend::BuiltIn,
+                ExportFormat::Docx,
                 Some(EngineFailureCategory::ConversionError)
             ),
             Msg::StatusExportedBuiltinConversionFailed
@@ -2677,5 +3190,38 @@ mod tests {
         // Blank values behave like unset.
         let resolved = resolve_reference_doc(Some("   "));
         assert_eq!(resolved.as_deref(), Some(bundled.as_path()));
+    }
+
+    #[test]
+    fn pdf_fallback_renders_cjk_rich_fixture() {
+        // Render the built-in PDF fallback for a mixed CJK/Latin document with
+        // headings, lists, a table, a code block, and a math block. This guards
+        // the deleted `plain_pdf_text` "?" substitution and confirms the IR
+        // builder and markion-pdf layout engine produce a real document.
+        let doc = MarkdownDocument::from_text(
+            "# 标题 (Title)\n\nMixed CJK and Latin paragraph with **bold** and *italic*.\n\n- 第一项\n- 第二项\n\n| Name | 值 |\n|---|---|\n| Ada | 十 |\n| Bob | 百 |\n\n```rust\nfn main() { println!(\"hello\"); }\n```\n\n$$\nE = mc^2\n$$\n",
+        );
+        let ir = build_pdf_ir(&doc, &PdfExportOptions::default(), None);
+        let bytes = markion_pdf::render(&ir).expect("built-in PDF render should succeed");
+        assert!(
+            bytes.starts_with(b"%PDF-"),
+            "rendered output should be a PDF file"
+        );
+        assert!(
+            bytes.len() > 1024,
+            "rendered PDF should contain real content, not a minimal placeholder"
+        );
+        let text = String::from_utf8_lossy(&bytes);
+        let page_count = text
+            .split("/Count")
+            .nth(1)
+            .and_then(|s| {
+                s.trim_start()
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+            })
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        assert!(page_count >= 1, "PDF should contain at least one page");
     }
 }

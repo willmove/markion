@@ -97,6 +97,7 @@ miniz_oxide = "0.8"
 typune-markdown = { package = "markdown", path = "crates/markdown" }
 typune-export = { package = "export", path = "crates/export" }
 markion-diagram = { path = "crates/diagram", features = ["mermaid"] }
+markion-pdf = { path = "crates/pdf" }
 wechat-workspace = { path = "crates/wechat-workspace" }
 # Drives syntect scope parsing directly in src/highlight.rs (colors keep coming
 # from Markion's theme-mapped token classes, not syntect themes). two-face
@@ -181,6 +182,11 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.export]
+opt-level = 2
+
+# markion-pdf shapes text and subsets fonts on the export path; unoptimized
+# debug builds would make PDF export take seconds per page.
+[profile.dev.package.markion-pdf]
 opt-level = 2
 
 [profile.dev.package.markion-diagram]

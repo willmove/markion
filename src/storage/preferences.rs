@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     AppPreferences, AutoSavePreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_PARAGRAPH_SPACING,
     DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy, DocxPageSize,
-    ExportPreferences, SidebarTab, normalize_editor_font_size, normalize_heading_menu_max_level,
+    ExportPreferences, PdfExportOptions, PdfPageSize, SidebarTab, normalize_editor_font_size, normalize_heading_menu_max_level,
     normalize_paragraph_spacing, normalize_rendered_font_size,
 };
 
@@ -107,7 +107,69 @@ struct ExportFile {
         deserialize_with = "deserialize_optional_string"
     )]
     reference_doc: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    pdf_mainfont: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    pdf_cjk_font: Option<String>,
+    pdf: PdfExportFile,
     docx: DocxExportFile,
+}
+
+/// [export.pdf] table: last-used PDF export options.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct PdfExportFile {
+    /// "a4" | "letter" | "legal"; unknown values fall back to A4.
+    page_size: String,
+    /// Page margin in millimetres; non-numeric values fall back to the default.
+    #[serde(deserialize_with = "deserialize_pdf_margin_mm")]
+    margin_mm: u32,
+    #[serde(deserialize_with = "deserialize_bool_or_false")]
+    toc: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_true")]
+    page_numbers: bool,
+}
+
+impl Default for PdfExportFile {
+    fn default() -> Self {
+        let defaults = PdfExportOptions::default();
+        Self {
+            page_size: defaults.page_size.config_value().to_string(),
+            margin_mm: defaults.margin_mm,
+            toc: defaults.toc,
+            page_numbers: defaults.page_numbers,
+        }
+    }
+}
+
+impl From<&PdfExportOptions> for PdfExportFile {
+    fn from(options: &PdfExportOptions) -> Self {
+        Self {
+            page_size: options.page_size.config_value().to_string(),
+            margin_mm: options.margin_mm,
+            toc: options.toc,
+            page_numbers: options.page_numbers,
+        }
+    }
+}
+
+impl From<PdfExportFile> for PdfExportOptions {
+    fn from(file: PdfExportFile) -> Self {
+        Self {
+            page_size: PdfPageSize::from_config(&file.page_size),
+            margin_mm: file.margin_mm,
+            toc: file.toc,
+            page_numbers: file.page_numbers,
+        }
+    }
 }
 
 /// [export.docx] table: last-used DOCX export options.
@@ -160,6 +222,9 @@ impl Default for ExportFile {
             pdf_engine: defaults.pdf_engine,
             pandoc_path: defaults.pandoc_path,
             reference_doc: defaults.reference_doc,
+            pdf_mainfont: defaults.pdf_mainfont,
+            pdf_cjk_font: defaults.pdf_cjk_font,
+            pdf: PdfExportFile::default(),
             docx: DocxExportFile::default(),
         }
     }
@@ -222,6 +287,9 @@ impl From<&AppPreferences> for PreferencesFile {
                 pdf_engine: preferences.export.pdf_engine.clone(),
                 pandoc_path: preferences.export.pandoc_path.clone(),
                 reference_doc: preferences.export.reference_doc.clone(),
+                pdf_mainfont: preferences.export.pdf_mainfont.clone(),
+                pdf_cjk_font: preferences.export.pdf_cjk_font.clone(),
+                pdf: PdfExportFile::from(&preferences.export.pdf),
                 docx: DocxExportFile::from(&preferences.export.docx),
             },
             shortcuts: preferences.shortcut_overrides.clone(),
@@ -275,6 +343,9 @@ impl From<PreferencesFile> for AppPreferences {
                 },
                 pandoc_path: file.export.pandoc_path,
                 reference_doc: file.export.reference_doc,
+                pdf_mainfont: file.export.pdf_mainfont,
+                pdf_cjk_font: file.export.pdf_cjk_font,
+                pdf: file.export.pdf.into(),
                 docx: file.export.docx.into(),
             },
             shortcut_overrides: file.shortcuts,
@@ -419,6 +490,14 @@ where
 {
     let value = toml::Value::deserialize(deserializer)?;
     Ok(value.as_bool().unwrap_or(true))
+}
+
+fn deserialize_pdf_margin_mm<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let parsed = deserialize_integer_or(deserializer, i64::from(crate::model::DEFAULT_PDF_MARGIN_MM))?;
+    Ok(u32::try_from(parsed).unwrap_or(crate::model::DEFAULT_PDF_MARGIN_MM))
 }
 
 fn deserialize_editor_font_size<'de, D>(deserializer: D) -> Result<u16, D::Error>
@@ -890,5 +969,71 @@ mod tests {
         assert!(rendered.contains("image_policy = \"text-fallback\""));
         let parsed = parse_app_preferences(&rendered).unwrap();
         assert_eq!(parsed.export.docx, preferences.export.docx);
+    }
+
+    #[test]
+    fn pdf_export_options_default_to_current_behavior() {
+        let defaults = AppPreferences::default().export.pdf;
+        assert_eq!(defaults.page_size, PdfPageSize::A4);
+        assert_eq!(defaults.margin_mm, crate::model::DEFAULT_PDF_MARGIN_MM);
+        assert!(!defaults.toc);
+        assert!(defaults.page_numbers);
+
+        // A pre-existing config.toml without [export.pdf] keeps the defaults.
+        let parsed = parse_app_preferences("[export]\npdf_engine = \"pdfroff\"\n").unwrap();
+        assert_eq!(parsed.export.pdf, PdfExportOptions::default());
+        assert!(parsed.export.pdf_mainfont.is_none());
+        assert!(parsed.export.pdf_cjk_font.is_none());
+    }
+
+    #[test]
+    fn pdf_export_options_parse_from_config() {
+        let text = "[export.pdf]\npage_size = \"letter\"\nmargin_mm = 20\ntoc = true\npage_numbers = false\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert_eq!(parsed.export.pdf.page_size, PdfPageSize::Letter);
+        assert_eq!(parsed.export.pdf.margin_mm, 20);
+        assert!(parsed.export.pdf.toc);
+        assert!(!parsed.export.pdf.page_numbers);
+
+        let fonts = "[export]\npdf_mainfont = \"Source Serif 4\"\npdf_cjk_font = \"Source Han Sans SC\"\n";
+        let parsed = parse_app_preferences(fonts).unwrap();
+        assert_eq!(parsed.export.pdf_mainfont.as_deref(), Some("Source Serif 4"));
+        assert_eq!(
+            parsed.export.pdf_cjk_font.as_deref(),
+            Some("Source Han Sans SC")
+        );
+    }
+
+    #[test]
+    fn pdf_export_options_tolerate_unknown_values() {
+        let text = "[export.pdf]\npage_size = \"tabloid\"\nmargin_mm = \"wide\"\ntoc = \"yes\"\npage_numbers = 12\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert_eq!(parsed.export.pdf.page_size, PdfPageSize::A4);
+        assert_eq!(parsed.export.pdf.margin_mm, crate::model::DEFAULT_PDF_MARGIN_MM);
+        assert!(!parsed.export.pdf.toc);
+        assert!(parsed.export.pdf.page_numbers);
+
+        // Negative margins degrade to the default.
+        let parsed = parse_app_preferences("[export.pdf]\nmargin_mm = -5\n").unwrap();
+        assert_eq!(parsed.export.pdf.margin_mm, crate::model::DEFAULT_PDF_MARGIN_MM);
+    }
+
+    #[test]
+    fn pdf_export_options_round_trip() {
+        let mut preferences = AppPreferences::default();
+        preferences.export.pdf = PdfExportOptions {
+            page_size: PdfPageSize::Legal,
+            margin_mm: 18,
+            toc: true,
+            page_numbers: false,
+        };
+        let rendered = render_app_preferences(&preferences);
+        assert!(rendered.contains("[export.pdf]"));
+        assert!(rendered.contains("page_size = \"legal\""));
+        assert!(rendered.contains("margin_mm = 18"));
+        assert!(rendered.contains("toc = true"));
+        assert!(rendered.contains("page_numbers = false"));
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(parsed.export.pdf, preferences.export.pdf);
     }
 }

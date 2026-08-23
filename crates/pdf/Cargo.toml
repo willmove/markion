@@ -1,0 +1,17 @@
+[package]
+name = "markion-pdf"
+description = "Markion's built-in PDF export engine: cosmic-text layout over krilla emission (GPUI-free)."
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+krilla = "=0.8.2"
+krilla-svg = "=0.8.1"
+cosmic-text = "=0.19.0"
+# krilla-svg's `SurfaceExt::draw_svg` takes a `usvg::Tree`, but krilla-svg
+# does not re-export usvg, so the engine parses SVG strings with the exact
+# same usvg version (already in the lockfile via krilla-svg).
+usvg = "=0.47.0"
+# Bundled Latin fallback fonts (Libertinus Serif, DejaVu Sans Mono) as
+# `&'static [u8]` embedded font data.
+typst-assets = { version = "=0.15.1", features = ["fonts"] }

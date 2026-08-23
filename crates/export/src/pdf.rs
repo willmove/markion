@@ -16,13 +16,50 @@ use crate::error::ExportError;
 /// Exports a Markdown document to PDF by invoking `pandoc` as a subprocess.
 ///
 /// Pandoc converts the Markdown input (with optional YAML front matter) into
-/// a PDF using xelatex as the PDF engine. Syntax highlighting, math rendering,
-/// and page-size options are passed through pandoc CLI flags.
+/// a PDF using xelatex as the PDF engine. Syntax highlighting, page size,
+/// and table-of-contents options are passed through pandoc CLI flags, and a
+/// CJK main font is configured automatically when the document contains CJK
+/// text so xelatex/lualatex do not drop the glyphs.
 pub struct PdfExporter {
     /// Path to the pandoc binary. Defaults to "pandoc" (resolved via PATH).
     pandoc_path: PathBuf,
     /// Pandoc PDF engine passed as `--pdf-engine=`. Defaults to "xelatex".
     pdf_engine: String,
+    /// Optional `mainfont` variable override (xelatex/lualatex/typst).
+    mainfont: Option<String>,
+    /// Optional `CJKmainfont` variable override; when unset, a
+    /// platform-appropriate default is used for documents with CJK content.
+    cjk_font: Option<String>,
+}
+
+/// Platform default CJK main font for the xelatex/lualatex `xeCJK`/`luatexja`
+/// variable. Windows and macOS ship these fonts; Linux assumes the widely
+/// packaged Noto Sans CJK SC.
+fn default_cjk_mainfont() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Microsoft YaHei"
+    } else if cfg!(target_os = "macos") {
+        "PingFang SC"
+    } else {
+        "Noto Sans CJK SC"
+    }
+}
+
+/// Whether the text contains CJK characters that LaTeX's default Latin fonts
+/// cannot typeset (CJK Unified Ideographs + extensions, CJK punctuation,
+/// kana, Hangul syllables, fullwidth forms, compatibility ideographs).
+fn contains_cjk(text: &str) -> bool {
+    text.chars().any(|ch| {
+        matches!(ch,
+            '\u{2E80}'..='\u{2FDF}'
+            | '\u{3000}'..='\u{30FF}'
+            | '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{AC00}'..='\u{D7AF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{FF00}'..='\u{FFEF}'
+            | '\u{20000}'..='\u{2FA1F}')
+    })
 }
 
 impl PdfExporter {
@@ -31,6 +68,8 @@ impl PdfExporter {
         Self {
             pandoc_path: PathBuf::from("pandoc"),
             pdf_engine: "xelatex".to_string(),
+            mainfont: None,
+            cjk_font: None,
         }
     }
 
@@ -53,8 +92,36 @@ impl PdfExporter {
         self
     }
 
-    /// Builds the pandoc command-line arguments from the given export options.
-    fn build_pandoc_args(&self, options: &ExportOptions) -> Vec<String> {
+    /// Sets the pandoc `mainfont` variable override. Blank values are ignored.
+    pub fn with_mainfont(mut self, font: Option<&str>) -> Self {
+        self.mainfont = font
+            .map(str::trim)
+            .filter(|font| !font.is_empty())
+            .map(str::to_string);
+        self
+    }
+
+    /// Sets the pandoc `CJKmainfont` variable override. Blank values are
+    /// ignored (the platform default kicks in for CJK documents).
+    pub fn with_cjk_font(mut self, font: Option<&str>) -> Self {
+        self.cjk_font = font
+            .map(str::trim)
+            .filter(|font| !font.is_empty())
+            .map(str::to_string);
+        self
+    }
+
+    /// Whether the configured engine typesets through the pandoc LaTeX
+    /// template, where `CJKmainfont` (xeCJK under xelatex, luatexja under
+    /// lualatex) is meaningful. Other engines (typst, wkhtmltopdf, …) handle
+    /// CJK through their own font stacks.
+    fn is_latex_engine(&self) -> bool {
+        matches!(self.pdf_engine.as_str(), "xelatex" | "lualatex")
+    }
+
+    /// Builds the pandoc command-line arguments from the given export options
+    /// and the prepared Markdown input (used for CJK content detection).
+    fn build_pandoc_args(&self, options: &ExportOptions, input: &str) -> Vec<String> {
         let mut args = Vec::new();
 
         // Input/output format
@@ -76,13 +143,33 @@ impl PdfExporter {
         };
         args.push(format!("--variable=geometry:{}", geometry));
 
+        // Fonts: explicit mainfont override, and a CJK main font whenever the
+        // document needs one and the engine typesets through LaTeX.
+        if let Some(mainfont) = &self.mainfont {
+            args.push(format!("--variable=mainfont:{}", mainfont));
+        }
+        if self.is_latex_engine() && contains_cjk(input) {
+            let cjk_font = self
+                .cjk_font
+                .as_deref()
+                .unwrap_or_else(|| default_cjk_mainfont());
+            args.push(format!("--variable=CJKmainfont:{}", cjk_font));
+        }
+
         // Syntax highlighting
         if options.include_styles {
             args.push("--highlight-style=tango".to_string());
         }
 
-        // Math rendering (katex for pandoc PDF)
-        args.push("--katex".to_string());
+        // Table of contents
+        if options.toc {
+            args.push("--toc".to_string());
+        }
+
+        // Resolve relative resource paths (images) against the document dir
+        if let Some(resource_path) = &options.resource_path {
+            args.push(format!("--resource-path={}", resource_path.display()));
+        }
 
         // Standalone document (includes preamble for proper PDF)
         args.push("--standalone".to_string());
@@ -140,7 +227,7 @@ impl Default for PdfExporter {
 impl Exporter for PdfExporter {
     fn export(&self, document: &Document, options: &ExportOptions) -> Result<Vec<u8>, ExportError> {
         let input = self.prepare_input(document, options);
-        let args = self.build_pandoc_args(options);
+        let args = self.build_pandoc_args(options, &input);
 
         // Spawn pandoc process
         let mut child = Command::new(&self.pandoc_path)
@@ -245,16 +332,16 @@ mod tests {
 
     #[test]
     fn pdf_engine_is_configurable() {
-        let default_args = PdfExporter::new().build_pandoc_args(&ExportOptions::default());
+        let default_args = PdfExporter::new().build_pandoc_args(&ExportOptions::default(), "");
         assert!(default_args.contains(&"--pdf-engine=xelatex".to_string()));
 
         let custom = PdfExporter::new().with_pdf_engine("pdfroff");
-        let custom_args = custom.build_pandoc_args(&ExportOptions::default());
+        let custom_args = custom.build_pandoc_args(&ExportOptions::default(), "");
         assert!(custom_args.contains(&"--pdf-engine=pdfroff".to_string()));
 
         // Blank values keep the default.
         let blank = PdfExporter::new().with_pdf_engine("  ");
-        let blank_args = blank.build_pandoc_args(&ExportOptions::default());
+        let blank_args = blank.build_pandoc_args(&ExportOptions::default(), "");
         assert!(blank_args.contains(&"--pdf-engine=xelatex".to_string()));
     }
 
@@ -305,14 +392,15 @@ mod tests {
     fn build_args_default_options() {
         let exporter = PdfExporter::new();
         let options = ExportOptions::default();
-        let args = exporter.build_pandoc_args(&options);
+        let args = exporter.build_pandoc_args(&options, "");
 
         assert!(args.contains(&"--from=markdown".to_string()));
         assert!(args.contains(&"--to=pdf".to_string()));
         assert!(args.contains(&"--pdf-engine=xelatex".to_string()));
         assert!(args.contains(&"--variable=geometry:a4paper".to_string()));
         assert!(args.contains(&"--highlight-style=tango".to_string()));
-        assert!(args.contains(&"--katex".to_string()));
+        // `--katex` only affects HTML output; it must not be passed for PDF.
+        assert!(!args.iter().any(|a| a == "--katex"));
         assert!(args.contains(&"--standalone".to_string()));
         assert!(args.contains(&"--output=-".to_string()));
     }
@@ -324,7 +412,7 @@ mod tests {
             page_size: PageSize::Letter,
             ..Default::default()
         };
-        let args = exporter.build_pandoc_args(&options);
+        let args = exporter.build_pandoc_args(&options, "");
 
         assert!(args.contains(&"--variable=geometry:letterpaper".to_string()));
     }
@@ -336,7 +424,7 @@ mod tests {
             page_size: PageSize::Legal,
             ..Default::default()
         };
-        let args = exporter.build_pandoc_args(&options);
+        let args = exporter.build_pandoc_args(&options, "");
 
         assert!(args.contains(&"--variable=geometry:legalpaper".to_string()));
     }
@@ -351,7 +439,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let args = exporter.build_pandoc_args(&options);
+        let args = exporter.build_pandoc_args(&options, "");
 
         assert!(
             args.contains(&"--variable=geometry:paperwidth=200mm,paperheight=300mm".to_string())
@@ -365,7 +453,7 @@ mod tests {
             include_styles: false,
             ..Default::default()
         };
-        let args = exporter.build_pandoc_args(&options);
+        let args = exporter.build_pandoc_args(&options, "");
 
         assert!(!args.iter().any(|a| a.starts_with("--highlight-style")));
     }
@@ -472,6 +560,68 @@ mod tests {
     fn escape_yaml_handles_special_chars() {
         assert_eq!(escape_yaml_string(r#"hello"world"#), r#"hello\"world"#);
         assert_eq!(escape_yaml_string(r"back\slash"), r"back\\slash");
+    }
+
+    #[test]
+    fn cjk_input_adds_cjk_mainfont_for_latex_engines() {
+        let exporter = PdfExporter::new();
+        let args = exporter.build_pandoc_args(&ExportOptions::default(), "# 你好世界");
+        assert!(
+            args.iter()
+                .any(|a| a.starts_with("--variable=CJKmainfont:")),
+            "CJK input must configure a CJK main font, got: {args:?}"
+        );
+
+        // Non-CJK input gets no CJK font variable.
+        let args = exporter.build_pandoc_args(&ExportOptions::default(), "# Hello");
+        assert!(!args.iter().any(|a| a.starts_with("--variable=CJKmainfont:")));
+
+        // Non-LaTeX engines handle CJK through their own font stacks.
+        let typst = PdfExporter::new().with_pdf_engine("typst");
+        let args = typst.build_pandoc_args(&ExportOptions::default(), "# 你好世界");
+        assert!(!args.iter().any(|a| a.starts_with("--variable=CJKmainfont:")));
+    }
+
+    #[test]
+    fn cjk_and_main_font_overrides_win() {
+        let exporter = PdfExporter::new()
+            .with_mainfont(Some("Source Serif 4"))
+            .with_cjk_font(Some("Source Han Sans SC"));
+        let args = exporter.build_pandoc_args(&ExportOptions::default(), "# 你好");
+        assert!(args.contains(&"--variable=mainfont:Source Serif 4".to_string()));
+        assert!(args.contains(&"--variable=CJKmainfont:Source Han Sans SC".to_string()));
+
+        // Blank overrides are ignored.
+        let blank = PdfExporter::new().with_mainfont(Some("  ")).with_cjk_font(None);
+        let args = blank.build_pandoc_args(&ExportOptions::default(), "# hi");
+        assert!(!args.iter().any(|a| a.starts_with("--variable=mainfont:")));
+    }
+
+    #[test]
+    fn build_args_resource_path_and_toc() {
+        let exporter = PdfExporter::new();
+        let options = ExportOptions {
+            resource_path: Some(PathBuf::from("/docs/guide")),
+            toc: true,
+            ..Default::default()
+        };
+        let args = exporter.build_pandoc_args(&options, "text");
+        assert!(args.contains(&"--resource-path=/docs/guide".to_string()));
+        assert!(args.contains(&"--toc".to_string()));
+
+        let args = exporter.build_pandoc_args(&ExportOptions::default(), "text");
+        assert!(!args.iter().any(|a| a.starts_with("--resource-path=")));
+        assert!(!args.iter().any(|a| a == "--toc"));
+    }
+
+    #[test]
+    fn contains_cjk_detection() {
+        assert!(contains_cjk("你好"));
+        assert!(contains_cjk("こんにちは"));
+        assert!(contains_cjk("한국어"));
+        assert!(contains_cjk("mixed 中文 text"));
+        assert!(!contains_cjk("plain English 123"));
+        assert!(!contains_cjk(""));
     }
 
     // Integration test that requires pandoc to be installed

@@ -189,7 +189,7 @@ use render::{
 };
 
 pub use export::{backend_status_msg, pandoc_available};
-use export::{write_docx, write_image_snapshot, write_pdf};
+use export::{write_docx, write_image_snapshot};
 
 use frontmatter::{parse_front_matter, split_front_matter};
 
@@ -519,16 +519,18 @@ impl MarkdownDocument {
             }
             ExportFormat::Pdf => match export::engine_pdf(
                 &self.text,
-                &settings.pdf_engine,
-                settings.pandoc_path.as_deref(),
+                settings,
+                self.path().and_then(Path::parent),
             ) {
                 Ok(bytes) => {
                     fs::write(path, bytes)?;
                     Ok(engine_ok())
                 }
                 Err(failure) => {
-                    let mut file = fs::File::create(path)?;
-                    write_pdf(&mut file, &self.plain_text_preview())?;
+                    let ir = export::build_pdf_ir(self, &settings.pdf, self.path().and_then(Path::parent));
+                    let bytes = markion_pdf::render(&ir)
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    fs::write(path, bytes)?;
                     Ok(builtin(Some(failure)))
                 }
             },

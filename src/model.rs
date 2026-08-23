@@ -273,6 +273,15 @@ pub struct ExportPreferences {
     /// User-supplied pandoc `--reference-doc` for engine-first DOCX export.
     /// `None` (or a path that does not exist) uses the bundled template.
     pub reference_doc: Option<String>,
+    /// Pandoc engine PDF font overrides: `mainfont` and `CJKmainfont`
+    /// variables. `None` lets pandoc/xelatex use its own defaults (the
+    /// platform CJK default is supplied automatically for CJK documents).
+    pub pdf_mainfont: Option<String>,
+    pub pdf_cjk_font: Option<String>,
+    /// Last-used PDF export options ([export.pdf] table), honored by the
+    /// built-in PDF writer and mapped onto pandoc variables on the engine
+    /// path.
+    pub pdf: PdfExportOptions,
     /// Last-used DOCX export options ([export.docx] table), re-presented by
     /// the export dialog on the next run.
     pub docx: DocxExportOptions,
@@ -284,7 +293,77 @@ impl Default for ExportPreferences {
             pdf_engine: "xelatex".to_string(),
             pandoc_path: None,
             reference_doc: None,
+            pdf_mainfont: None,
+            pdf_cjk_font: None,
+            pdf: PdfExportOptions::default(),
             docx: DocxExportOptions::default(),
+        }
+    }
+}
+
+/// Page size for PDF export. The built-in writer renders the matching page
+/// geometry; the pandoc engine maps it to the geometry variable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PdfPageSize {
+    #[default]
+    A4,
+    Letter,
+    Legal,
+}
+
+impl PdfPageSize {
+    /// (width, height) in millimetres.
+    pub fn dimensions_mm(self) -> (f32, f32) {
+        match self {
+            Self::A4 => (210.0, 297.0),
+            Self::Letter => (215.9, 279.4),
+            Self::Legal => (215.9, 355.6),
+        }
+    }
+
+    /// Config-file token ([export.pdf] `page_size`).
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::A4 => "a4",
+            Self::Letter => "letter",
+            Self::Legal => "legal",
+        }
+    }
+
+    /// Parses a config token; unknown values fall back to A4.
+    pub fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "letter" => Self::Letter,
+            "legal" => Self::Legal,
+            _ => Self::A4,
+        }
+    }
+}
+
+/// User-facing PDF export options, persisted as the last-used choices. All
+/// four are honored by the built-in PDF writer; the pandoc engine path maps
+/// page size to `--variable=geometry:` and `toc` to `--toc`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdfExportOptions {
+    pub page_size: PdfPageSize,
+    /// Page margin (all sides) in millimetres.
+    pub margin_mm: u32,
+    /// Table of contents page built from the document headings.
+    pub toc: bool,
+    /// Page-number footer on every page.
+    pub page_numbers: bool,
+}
+
+/// Default PDF page margin in millimetres (2.54 cm).
+pub const DEFAULT_PDF_MARGIN_MM: u32 = 25;
+
+impl Default for PdfExportOptions {
+    fn default() -> Self {
+        Self {
+            page_size: PdfPageSize::default(),
+            margin_mm: DEFAULT_PDF_MARGIN_MM,
+            toc: false,
+            page_numbers: true,
         }
     }
 }

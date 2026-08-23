@@ -420,8 +420,10 @@ pub enum Msg {
     StatusExported,
     /// {0}=path — PDF/DOCX produced by the pandoc engine
     StatusExportedEngine,
-    /// {0}=path — PDF/DOCX produced by the built-in writer (pandoc hint)
+    /// {0}=path — PDF produced by the built-in writer (rich default)
     StatusExportedBuiltin,
+    /// {0}=path — DOCX produced by the built-in writer (pandoc hint)
+    StatusExportedDocxBuiltin,
     /// {0}=path — built-in writer used because the pandoc binary was missing
     StatusExportedBuiltinPandocMissing,
     /// {0}=path — built-in writer used because pandoc conversion failed
@@ -2581,7 +2583,8 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusChoosingExportLocation => "Choosing .{0} export location...",
         Msg::StatusExported => "Exported {0}",
         Msg::StatusExportedEngine => "Exported {0} (pandoc engine)",
-        Msg::StatusExportedBuiltin => {
+        Msg::StatusExportedBuiltin => "Exported {0} (built-in writer)",
+        Msg::StatusExportedDocxBuiltin => {
             "Exported {0} (built-in writer — install pandoc for richer output)"
         }
         Msg::StatusExportedBuiltinPandocMissing => {
@@ -3060,7 +3063,8 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusChoosingExportLocation => ".{0} の出力先を選択中...",
         Msg::StatusExported => "{0} を出力しました",
         Msg::StatusExportedEngine => "{0} を出力しました（pandocエンジン）",
-        Msg::StatusExportedBuiltin => {
+        Msg::StatusExportedBuiltin => "{0} を出力しました（内蔵ライター）",
+        Msg::StatusExportedDocxBuiltin => {
             "{0} を出力しました（内蔵ライター — pandocをインストールするとより高品質な出力が可能です）"
         }
         Msg::StatusExportedBuiltinPandocMissing => {
@@ -3527,7 +3531,8 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusChoosingExportLocation => "Choix de l'emplacement d'export .{0}...",
         Msg::StatusExported => "{0} exporté",
         Msg::StatusExportedEngine => "{0} exporté (moteur pandoc)",
-        Msg::StatusExportedBuiltin => {
+        Msg::StatusExportedBuiltin => "{0} exporté (convertisseur intégré)",
+        Msg::StatusExportedDocxBuiltin => {
             "{0} exporté (convertisseur intégré — installez pandoc pour un meilleur rendu)"
         }
         Msg::StatusExportedBuiltinPandocMissing => {
@@ -4000,7 +4005,8 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusChoosingExportLocation => "Exportziel für .{0} wählen...",
         Msg::StatusExported => "{0} exportiert",
         Msg::StatusExportedEngine => "{0} exportiert (pandoc-Engine)",
-        Msg::StatusExportedBuiltin => {
+        Msg::StatusExportedBuiltin => "{0} exportiert (integrierter Konverter)",
+        Msg::StatusExportedDocxBuiltin => {
             "{0} exportiert (integrierter Konverter — installiere pandoc für bessere Ausgabe)"
         }
         Msg::StatusExportedBuiltinPandocMissing => {
@@ -4469,7 +4475,8 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusChoosingExportLocation => "Eligiendo ubicación de exportación .{0}...",
         Msg::StatusExported => "{0} exportado",
         Msg::StatusExportedEngine => "{0} exportado (motor pandoc)",
-        Msg::StatusExportedBuiltin => {
+        Msg::StatusExportedBuiltin => "{0} exportado (conversor integrado)",
+        Msg::StatusExportedDocxBuiltin => {
             "{0} exportado (conversor integrado — instale pandoc para una salida más rica)"
         }
         Msg::StatusExportedBuiltinPandocMissing => {
@@ -4939,7 +4946,8 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusChoosingExportLocation => "正在选择 .{0} 导出位置…",
         Msg::StatusExported => "已导出 {0}",
         Msg::StatusExportedEngine => "已导出 {0}（pandoc 引擎）",
-        Msg::StatusExportedBuiltin => "已导出 {0}（内置简易导出——安装 pandoc 可获得更高质量）",
+        Msg::StatusExportedBuiltin => "已导出 {0}（内置导出）",
+        Msg::StatusExportedDocxBuiltin => "已导出 {0}（内置简易导出——安装 pandoc 可获得更高质量）",
         Msg::StatusExportedBuiltinPandocMissing => {
             "已导出 {0}（内置简易导出——未找到 pandoc；安装 pandoc 可获得更高质量）"
         }
@@ -5399,7 +5407,8 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusChoosingExportLocation => "正在選擇 .{0} 匯出位置…",
         Msg::StatusExported => "已匯出 {0}",
         Msg::StatusExportedEngine => "已匯出 {0}（pandoc 引擎）",
-        Msg::StatusExportedBuiltin => {
+        Msg::StatusExportedBuiltin => "已匯出 {0}（內建匯出）",
+        Msg::StatusExportedDocxBuiltin => {
             "已匯出 {0}（內建簡易匯出——安裝 pandoc 可獲得更高品質的輸出）"
         }
         Msg::StatusExportedBuiltinPandocMissing => {
@@ -6252,6 +6261,8 @@ mod tests {
             Msg::StatusExportCanceled,
             Msg::StatusChoosingExportLocation,
             Msg::StatusExported,
+            Msg::StatusExportedBuiltin,
+            Msg::StatusExportedDocxBuiltin,
             Msg::StatusExportedBuiltinPandocMissing,
             Msg::StatusExportedBuiltinConversionFailed,
             Msg::StatusExportFailed,

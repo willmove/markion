@@ -62,18 +62,24 @@ Markion exports to eight formats. Run an export from the **Export** menu or with
 | HTML (styled) | built-in |
 | Plain HTML | built-in |
 | LaTeX | built-in (rich inline styling, table alignment, `lstlisting` code blocks) |
-| PDF | pandoc engine first, falls back to built-in |
+| PDF | pandoc engine first, falls back to the built-in `markion-pdf` writer |
 | DOCX | pandoc engine first, falls back to built-in |
 | PNG | built-in (basic text snapshot) |
 | JPEG | built-in (basic text snapshot) |
 
-**PDF and DOCX** try the pandoc engine first (a subprocess invoking [`pandoc`](https://pandoc.org/)). If pandoc (or the PDF engine, default `xelatex`) is unavailable or fails, Markion **silently falls back** to a simpler built-in writer so export always succeeds. The status bar message after export discloses which backend produced the file — pandoc engine or built-in — and the built-in message hints that installing pandoc yields richer output.
+**PDF and DOCX** try the pandoc engine first (a subprocess invoking [`pandoc`](https://pandoc.org/)). If pandoc (or the PDF engine, default `xelatex`) is unavailable or fails, Markion **silently falls back** to the built-in writer so export always succeeds. The status bar message after export discloses which backend produced the file. For PDF, the built-in fallback is now a full layout engine (krilla + cosmic-text) that supports CJK and Latin typography, embedded images, syntax-highlighted code blocks, tables, and footnotes, so the built-in message is shown neutrally. For DOCX, the built-in writer is still simpler, and its status message continues to hint that installing pandoc yields richer output.
 
-You can change the PDF engine via the config file:
+You can change the PDF engine and tune the built-in PDF output via the config file:
 
 ```toml
 [export]
 pdf_engine = "xelatex"   # alternatives: "pdfroff", "tectonic", ...
+
+[export.pdf]
+page_size = "a4"      # "a4" | "letter" | "legal"
+margin_mm = 25        # page margin in millimetres
+toc = false           # table of contents
+page_numbers = true   # footer page numbers
 ```
 
 **DOCX export options.** File → Export → DOCX opens a short options step before the save dialog: page size (A4 / Letter / Legal), table of contents (offered only when the pandoc engine is available — the built-in writer ignores it), and image policy (embed local images into the document, or export them as `alt: url` text). Both backends honor the page size and image policy; the table of contents is emitted only by the pandoc engine (`--toc`). After a successful export the choices are remembered as the defaults for the next run, persisted in the config file:
@@ -93,7 +99,7 @@ pandoc_path = "C:/tools/pandoc.exe"       # optional
 reference_doc = "templates/my-style.docx" # optional
 ```
 
-The built-in PDF/PNG/JPEG paths are deliberately basic (text snapshots). For high-quality output, install pandoc plus a LaTeX engine (e.g. `xelatex` from TeX Live / MiKTeX, or `pdfroff` from groff).
+The built-in PNG/JPEG paths are deliberately basic text snapshots. The built-in PDF writer is now a rich fallback; for DOCX-specific pandoc customization or advanced PDF templating, install pandoc plus a LaTeX engine (e.g. `xelatex` from TeX Live / MiKTeX, or `pdfroff` from groff).
 
 YAML front matter `title` / `author` / `date` feed into export metadata: HTML `<meta>` tags, DOCX document properties, and the LaTeX preamble.
 
