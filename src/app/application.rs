@@ -1190,21 +1190,39 @@ impl MarkionApp {
     /// Navigate to an outline heading while preserving the canonical source
     /// position used by active-section highlighting and later mode switches.
     /// Read mode additionally moves its visible virtualized preview to the
-    /// exact heading block; all other modes retain `jump_to_offset` behavior.
+    /// exact heading block. Visual Edit top-aligns the heading block: the
+    /// generic cursor reveal only scrolls minimally, which places headings
+    /// below the viewport at the pane bottom instead of its top. All other
+    /// modes retain `jump_to_offset` behavior.
     pub(super) fn navigate_to_outline_heading(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = clamp_to_text_boundary(self.active_tab().document.text(), offset);
         self.jump_to_offset(offset, cx);
-        if !matches!(self.view_mode, ViewMode::Read) {
-            return;
-        }
-
-        let target =
-            preview_heading_index_for_source_offset(&self.active_tab().preview_list_blocks, offset);
-        if let Some(item_ix) = target {
-            self.active_tab().preview_list.scroll_to(gpui::ListOffset {
-                item_ix,
-                offset_in_item: px(0.),
-            });
+        match self.view_mode {
+            ViewMode::Read => {
+                let target = preview_heading_index_for_source_offset(
+                    &self.active_tab().preview_list_blocks,
+                    offset,
+                );
+                if let Some(item_ix) = target {
+                    self.active_tab().preview_list.scroll_to(gpui::ListOffset {
+                        item_ix,
+                        offset_in_item: px(0.),
+                    });
+                }
+            }
+            ViewMode::VisualEdit => {
+                let tab = self.active_tab();
+                let blocks = tab.document.visual_blocks_shared();
+                let text_len = tab.document.text().len();
+                let target = visual_block_index_for_offset(&blocks, offset, text_len);
+                if let Some(item_ix) = target {
+                    self.active_tab().visual_list.scroll_to(gpui::ListOffset {
+                        item_ix,
+                        offset_in_item: px(0.),
+                    });
+                }
+            }
+            _ => {}
         }
     }
 

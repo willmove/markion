@@ -189,7 +189,7 @@ use render::{
 };
 
 pub use export::{backend_status_msg, pandoc_available};
-use export::{write_docx, write_image_snapshot};
+use export::{write_docx, write_image_export};
 
 use frontmatter::{parse_front_matter, split_front_matter};
 
@@ -552,11 +552,11 @@ impl MarkdownDocument {
                 }
             }
             ExportFormat::Png => {
-                write_image_snapshot(path, &self.plain_text_preview(), image::ImageFormat::Png)?;
+                write_image_export(path, self, settings, image::ImageFormat::Png)?;
                 Ok(builtin(None))
             }
             ExportFormat::Jpeg => {
-                write_image_snapshot(path, &self.plain_text_preview(), image::ImageFormat::Jpeg)?;
+                write_image_export(path, self, settings, image::ImageFormat::Jpeg)?;
                 Ok(builtin(None))
             }
         }

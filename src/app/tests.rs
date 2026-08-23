@@ -6922,6 +6922,55 @@ fn outline_navigation_outside_read_mode_keeps_existing_preview_position(cx: &mut
 }
 
 #[gpui::test]
+fn outline_navigation_visual_edit_top_aligns_heading_block(cx: &mut TestAppContext) {
+    let source = "# One\n\nBody\n\n## Two\n\nMore\n\n### Three\n";
+    let heading_offset = source.find("## Two").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut tab = EditorTab::new(MarkdownDocument::from_text(source));
+        let visual = tab.document.visual_blocks_shared();
+        tab.sync_visual_list(&visual);
+        app.tabs = vec![tab];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.view_mode = ViewMode::VisualEdit;
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let text_len = app.active_tab().document.text().len();
+        let heading_block =
+            visual_block_index_for_offset(&blocks, heading_offset, text_len).unwrap();
+
+        // Heading below the viewport: the minimal reveal alone would clamp its
+        // bottom edge to the pane bottom; navigation must top-align it.
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
+        app.navigate_to_outline_heading(heading_offset, cx);
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(top.item_ix, heading_block);
+        assert_eq!(top.offset_in_item, px(0.));
+
+        // Heading above the viewport stays top-aligned too, and the jump
+        // still arms the generic caret reveal used at render time.
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: heading_block + 1,
+            offset_in_item: px(0.),
+        });
+        app.navigate_to_outline_heading(heading_offset, cx);
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(top.item_ix, heading_block);
+        assert_eq!(top.offset_in_item, px(0.));
+        assert!(app.active_tab().visual_cursor_reveal_pending);
+        assert_eq!(
+            app.active_tab().selected_range,
+            heading_offset..heading_offset
+        );
+    });
+}
+
+#[gpui::test]
 fn outline_disclosures_fold_nested_rows_without_navigation(cx: &mut TestAppContext) {
     let source = "# Root\n\n## Branch\n\n### Leaf\n\n## Other\n\n# Sibling\n";
     let leaf_offset = source.find("### Leaf").unwrap();

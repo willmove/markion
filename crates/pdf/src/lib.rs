@@ -12,10 +12,12 @@ mod emit;
 mod engine;
 mod fonts;
 mod layout;
+mod raster;
 mod text;
 mod theme;
 
 pub use engine::render;
+pub use raster::{render_snapshot, DEFAULT_SCALE};
 pub use ir::{
     AlertKind, Alignment, Block, Cell, ImageData, ListMarker, PdfDocument, PdfMetadata, PdfOptions,
     Rgb, Run, Style,

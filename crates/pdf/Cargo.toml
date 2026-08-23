@@ -15,3 +15,8 @@ usvg = "=0.47.0"
 # Bundled Latin fallback fonts (Libertinus Serif, DejaVu Sans Mono) as
 # `&'static [u8]` embedded font data.
 typst-assets = { version = "=0.15.1", features = ["fonts"] }
+# Raster snapshot export (PNG/JPEG) decodes/deinterlaces embedded images and
+# encodes the canvas. Versions match the root crate's `image`/`resvg` so the
+# lockfile does not churn and the features (jpeg, png) unify across the build.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+resvg = "=0.47.0"

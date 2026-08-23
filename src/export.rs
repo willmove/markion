@@ -1,5 +1,6 @@
 //! Document exporters: PDF, DOCX (with a hand-written deflate-compressed ZIP
-//! container), and PNG/JPEG text snapshots rendered with the 8x8 bitmap font.
+//! container), and PNG/JPEG snapshots that re-render the layout IR through
+//! `markion-pdf` (real fonts, CJK-aware shaping, headings/code/tables).
 //!
 //! PDF and DOCX first try the export engine absorbed from Typune (a pandoc
 //! subprocess wrapper, `crates/export`); the hand-written implementations
@@ -2292,202 +2293,24 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    text.lines()
-        .flat_map(|line| {
-            let mut lines = Vec::new();
-            let mut current = String::new();
-            let mut current_width = 0usize;
-            for word in line.split_whitespace() {
-                // Measure in characters, not bytes, so multi-byte text (CJK,
-                // accented Latin) wraps at the intended column rather than
-                // breaking early on byte count.
-                let word_width = word.chars().count();
-                if current_width != 0 && current_width + word_width + 1 > width {
-                    lines.push(std::mem::take(&mut current));
-                    current_width = 0;
-                }
-                if current_width != 0 {
-                    current.push(' ');
-                    current_width += 1;
-                }
-                current.push_str(word);
-                current_width += word_width;
-            }
-            if current.is_empty() {
-                lines.push(String::new());
-            } else {
-                lines.push(current);
-            }
-            lines
-        })
-        .collect()
-}
-
-pub(crate) fn write_image_snapshot(
+/// Exports the rendered Markdown layout as a PNG/JPEG snapshot.
+///
+/// Unlike the previous ASCII-only 8x8 bitmap renderer, this reuses the PDF
+/// layout IR ([`build_pdf_ir`]) and the `markion-pdf` cosmic-text font
+/// pipeline (bundled Noto Sans SC for CJK plus system fonts), so CJK text
+/// renders as real glyphs and headings/code/tables keep the same typography
+/// as PDF export. The document flows into one tall, continuous image.
+pub(crate) fn write_image_export(
     path: &Path,
-    text: &str,
+    document: &MarkdownDocument,
+    settings: &ExportPreferences,
     format: image::ImageFormat,
 ) -> io::Result<()> {
-    let image = render_image_snapshot(text);
-    image
-        .save_with_format(path, format)
-        .map_err(io::Error::other)
-}
-
-fn render_image_snapshot(text: &str) -> image::RgbImage {
-    let lines = wrap_text(
-        if text.trim().is_empty() {
-            "Empty document"
-        } else {
-            text
-        },
-        96,
-    );
-    let scale = 2u32;
-    let padding = 32u32;
-    let glyph_width = 8 * scale;
-    let glyph_height = 8 * scale;
-    let char_gap = scale;
-    let line_gap = 6u32;
-    let line_height = glyph_height + line_gap;
-    let max_chars = lines
-        .iter()
-        .map(|line| line.chars().count() as u32)
-        .max()
-        .unwrap_or(0)
-        .min(120);
-    let width = (padding * 2 + max_chars * (glyph_width + char_gap)).clamp(640, 2200);
-    let height = (padding * 2 + lines.len() as u32 * line_height).clamp(360, 8000);
-    let mut image = image::ImageBuffer::from_pixel(width, height, image::Rgb([250, 250, 248]));
-
-    draw_snapshot_rule(&mut image, padding, padding / 2, width - padding * 2);
-    for (line_index, line) in lines.iter().enumerate() {
-        let y = padding + line_index as u32 * line_height;
-        if y + glyph_height >= height - padding / 2 {
-            break;
-        }
-        draw_bitmap_text(
-            &mut image,
-            padding,
-            y,
-            line,
-            scale,
-            image::Rgb([32, 33, 36]),
-        );
-    }
-
-    image
-}
-
-fn draw_snapshot_rule(image: &mut image::RgbImage, x: u32, y: u32, width: u32) {
-    let color = image::Rgb([220, 224, 230]);
-    for dx in 0..width {
-        put_pixel_if_in_bounds(image, x + dx, y, color);
-    }
-}
-
-fn draw_bitmap_text(
-    image: &mut image::RgbImage,
-    x: u32,
-    y: u32,
-    text: &str,
-    scale: u32,
-    color: image::Rgb<u8>,
-) {
-    use font8x8::UnicodeFonts;
-
-    let glyph_width = 8 * scale;
-    let char_gap = scale;
-    let mut cursor_x = x;
-    let right_edge = image.width().saturating_sub(x);
-
-    for ch in text.chars() {
-        if cursor_x + glyph_width >= right_edge {
-            break;
-        }
-
-        if ch == ' ' {
-            cursor_x += glyph_width / 2 + char_gap;
-            continue;
-        }
-
-        if let Some(glyph) = font8x8::BASIC_FONTS.get(ch) {
-            draw_bitmap_glyph(image, cursor_x, y, &glyph, scale, color);
-        } else {
-            draw_missing_glyph(image, cursor_x, y, scale, color);
-        }
-
-        cursor_x += glyph_width + char_gap;
-    }
-}
-
-fn draw_bitmap_glyph(
-    image: &mut image::RgbImage,
-    x: u32,
-    y: u32,
-    glyph: &[u8; 8],
-    scale: u32,
-    color: image::Rgb<u8>,
-) {
-    for (row, bits) in glyph.iter().copied().enumerate() {
-        for column in 0..8u32 {
-            if bits & (1 << column) == 0 {
-                continue;
-            }
-            let pixel_x = x + column * scale;
-            let pixel_y = y + row as u32 * scale;
-            fill_pixel_block(image, pixel_x, pixel_y, scale, color);
-        }
-    }
-}
-
-fn draw_missing_glyph(
-    image: &mut image::RgbImage,
-    x: u32,
-    y: u32,
-    scale: u32,
-    color: image::Rgb<u8>,
-) {
-    let size = 8 * scale;
-    for offset in 0..size {
-        fill_pixel_block(image, x + offset, y, scale, color);
-        fill_pixel_block(
-            image,
-            x + offset,
-            y + size.saturating_sub(scale),
-            scale,
-            color,
-        );
-        fill_pixel_block(image, x, y + offset, scale, color);
-        fill_pixel_block(
-            image,
-            x + size.saturating_sub(scale),
-            y + offset,
-            scale,
-            color,
-        );
-    }
-}
-
-fn fill_pixel_block(
-    image: &mut image::RgbImage,
-    x: u32,
-    y: u32,
-    scale: u32,
-    color: image::Rgb<u8>,
-) {
-    for dx in 0..scale {
-        for dy in 0..scale {
-            put_pixel_if_in_bounds(image, x + dx, y + dy, color);
-        }
-    }
-}
-
-fn put_pixel_if_in_bounds(image: &mut image::RgbImage, x: u32, y: u32, color: image::Rgb<u8>) {
-    if x < image.width() && y < image.height() {
-        image.put_pixel(x, y, color);
-    }
+    let base_dir = document.path().and_then(Path::parent);
+    let ir = build_pdf_ir(document, &settings.pdf, base_dir);
+    let image = markion_pdf::render_snapshot(&ir, markion_pdf::DEFAULT_SCALE)
+        .map_err(io::Error::other)?;
+    image.save_with_format(path, format).map_err(io::Error::other)
 }
 
 /// Test helper: extracts one entry from a hand-written DOCX ZIP by walking
