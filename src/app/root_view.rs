@@ -707,7 +707,146 @@ impl Render for MarkionApp {
             .when(self.recovery_manager.is_some(), |root| {
                 root.child(recovery_manager_view(self, cx))
             })
+            .when(self.about_dialog_open, |root| {
+                root.child(about_dialog_view(self, cx))
+            })
     }
+}
+
+/// Root-hosted About Markion modal. The platform prompt detail is plain text,
+/// so this purpose-built surface owns the two interactive external-link rows.
+pub(super) fn about_dialog_view(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let palette = app.palette();
+    let version = tf(
+        app.language,
+        Msg::DialogAboutVersion,
+        &[env!("CARGO_PKG_VERSION")],
+    );
+    let mut links = div().flex().flex_col().gap_2();
+    for link in AboutLink::ALL {
+        links = links.child(about_link_row(app, link, palette, cx));
+    }
+
+    div()
+        .id("about-dialog-overlay")
+        .debug_selector(|| "about-dialog-overlay".to_string())
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .bg(rgba(0x00000055))
+        .px_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .id("about-dialog-panel")
+                .debug_selector(|| "about-dialog-panel".to_string())
+                .occlude()
+                .w_full()
+                .max_w(px(480.))
+                .p_5()
+                .bg(palette.panel_bg)
+                .border_1()
+                .border_color(palette.border)
+                .rounded_lg()
+                .shadow_lg()
+                .text_color(palette.text)
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
+                    div()
+                        .debug_selector(|| "about-dialog-title".to_string())
+                        .text_size(px(17.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(app.tr(Msg::DialogAboutTitle)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .debug_selector(|| "about-dialog-version".to_string())
+                                .text_size(px(13.))
+                                .text_color(palette.muted)
+                                .child(version),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "about-dialog-description".to_string())
+                                .text_size(px(14.))
+                                .child(app.tr(Msg::DialogAboutDescription)),
+                        ),
+                )
+                .child(links)
+                .child(
+                    div().flex().justify_end().child(
+                        div()
+                            .id("about-dialog-ok")
+                            .debug_selector(|| "about-dialog-ok".to_string())
+                            .px_4()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(palette.active_bg)
+                            .text_color(palette.active_text)
+                            .hover(|style| style.bg(palette.surface_bg))
+                            .child(app.tr(Msg::DialogButtonOk))
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                    app.close_about_dialog(cx);
+                                }),
+                            ),
+                    ),
+                ),
+        )
+}
+
+fn about_link_row(
+    app: &MarkionApp,
+    link: AboutLink,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    div()
+        .debug_selector(move || link.row_selector().to_string())
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(palette.muted)
+                .child(app.tr(link.label())),
+        )
+        .child(
+            div()
+                .id(link.link_selector())
+                .debug_selector(move || link.link_selector().to_string())
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .text_color(palette.active_text)
+                .underline()
+                .hover(|style| style.bg(palette.active_bg))
+                .child(link.url())
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                        app.open_about_link(link, cx);
+                    }),
+                ),
+        )
 }
 
 pub(super) fn scale_down_image_size(

@@ -11,6 +11,10 @@
   <script defer src="static/vendor/katex.min.js"></script>
   <script defer src="static/bridge.js"></script>
   <script defer src="static/theme-runtime.js"></script>
+  <script defer src="static/marknice-format-runtime.js"></script>
+  <script defer src="static/vendor/html-docx.js"></script>
+  <script defer src="static/marknice-word-runtime.js"></script>
+  <script defer src="static/export-runtime.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -27,6 +31,24 @@
   <main class="workspace">
     <section class="editor-panel">
       <h1 id="editorHeading">Markdown</h1>
+      <div id="markdownFormatToolbar" class="markdown-format-toolbar" role="toolbar" aria-label="Markdown formatting">
+        <button type="button" data-md-action="heading1"><span aria-hidden="true">H1</span></button>
+        <button type="button" data-md-action="heading2"><span aria-hidden="true">H2</span></button>
+        <button type="button" data-md-action="heading3"><span aria-hidden="true">H3</span></button>
+        <span class="format-separator" aria-hidden="true"></span>
+        <button type="button" data-md-action="bold"><strong aria-hidden="true">B</strong></button>
+        <button type="button" data-md-action="italic"><em aria-hidden="true">I</em></button>
+        <button type="button" data-md-action="underline"><u aria-hidden="true">U</u></button>
+        <span class="format-separator" aria-hidden="true"></span>
+        <button type="button" data-md-action="orderedList"><span aria-hidden="true">1.</span></button>
+        <button type="button" data-md-action="unorderedList"><span aria-hidden="true">•</span></button>
+        <button type="button" data-md-action="code"><span aria-hidden="true">&lt;/&gt;</span></button>
+        <button type="button" data-md-action="link"><span aria-hidden="true">↗</span></button>
+        <button type="button" data-md-action="quote"><span aria-hidden="true">❞</span></button>
+        <button type="button" data-md-action="codeBlock"><span aria-hidden="true">{ }</span></button>
+        <button type="button" data-md-action="image"><span aria-hidden="true">▧</span></button>
+        <button type="button" data-md-action="table"><span aria-hidden="true">▦</span></button>
+      </div>
       <textarea id="markdown" spellcheck="true"></textarea>
     </section>
     <section class="preview-panel">
@@ -59,6 +81,9 @@
         <button id="paraSpacingUp" type="button" aria-label="增大段距">+</button>
         <button id="desktopModeBtn" class="active" type="button">桌面</button>
         <button id="phoneModeBtn" type="button">手机</button>
+        <button id="copyMarkdownBtn" type="button">复制 Markdown</button>
+        <button id="downloadHtmlBtn" type="button">下载 HTML</button>
+        <button id="downloadDocxBtn" type="button">下载 DOCX</button>
         <button id="copyBtn" class="primary" type="button">复制到公众号</button>
       </div>
       <div id="warning" class="warning" hidden></div>

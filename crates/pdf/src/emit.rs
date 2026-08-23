@@ -3,6 +3,7 @@
 //! outline, and writes metadata. All positioning was resolved during
 //! layout; this module only translates primitives into krilla calls.
 
+use krilla::Document;
 use krilla::action::{Action, LinkAction};
 use krilla::annotation::{Annotation, LinkAnnotation, Target};
 use krilla::color::rgb;
@@ -13,12 +14,11 @@ use krilla::outline::{Outline, OutlineNode};
 use krilla::page::PageSettings;
 use krilla::paint::{Fill, FillRule, Stroke};
 use krilla::surface::Surface;
-use krilla::{Document};
 use krilla_svg::{SurfaceExt, SvgSettings};
 
+use crate::PdfError;
 use crate::ir::{PdfMetadata, Rgb};
 use crate::layout::{AnnotTarget, LayoutResult, OutlineEntry, PageLayout, PlacedItem, RectF};
-use crate::PdfError;
 
 fn fill(color: Rgb) -> Fill {
     Fill {
@@ -85,13 +85,7 @@ fn draw_item(surface: &mut Surface, item: &PlacedItem) {
                 surface.draw_path(&path);
             }
         }
-        PlacedItem::Image {
-            image,
-            x,
-            y,
-            w,
-            h,
-        } => {
+        PlacedItem::Image { image, x, y, w, h } => {
             if let Some(size) = Size::from_wh(*w, *h) {
                 surface.push_transform(&Transform::from_translate(*x, *y));
                 surface.draw_image(image.clone(), size);
@@ -141,7 +135,10 @@ fn emit_page(
                 XyzDestination::new(page + toc_offset, Point::from_xy(0.0, *y)),
             )),
         };
-        page.add_annotation(Annotation::new_link(LinkAnnotation::new(rect, target), None));
+        page.add_annotation(Annotation::new_link(
+            LinkAnnotation::new(rect, target),
+            None,
+        ));
     }
     page.finish();
 }

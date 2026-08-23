@@ -20,12 +20,22 @@
       "version": "0.16.11",
       "license": "MIT",
       "license_file": "LICENSE.katex.txt"
+    },
+    {
+      "name": "html-docx-js",
+      "version": "0.3.1",
+      "license": "MIT",
+      "license_file": "LICENSE.html-docx-js.txt"
     }
   ],
   "files": [
     {
       "path": "index.html",
-      "sha256": "9bc4f424f78e2a264eee0737019485e3f4163a70cd181c7dee8865e26ae15fc2"
+      "sha256": "db7e8cd4e7cc9d90dae0588dc613402e55bd78fa6b015159c169748bb484e394"
+    },
+    {
+      "path": "LICENSE.html-docx-js.txt",
+      "sha256": "5746fa04896076c29db8ed46105d6ca2fe9b596550e8a7e0194c5fe2dd3e8a01"
     },
     {
       "path": "LICENSE.katex.txt",
@@ -41,23 +51,39 @@
     },
     {
       "path": "static/bridge.js",
-      "sha256": "d5b1a445c98cf9ff1c59eeb7ea0c2a7a16921b28e544b69dc3b2608642e4f872"
+      "sha256": "0de4e993fd1c1f8dfd71da4ca54587128d8b95716656c8710713a88084c5b8cb"
     },
     {
       "path": "static/compatibility-corpus.json",
-      "sha256": "75409f04b37d1d0327b83c114b8e5aacc6da71e9a49affeda316a33b1dea3e24"
+      "sha256": "c6d20cd045f45b272f90d4f3d4b4f79a5b7218e5cd7314a90589d1913e551e80"
     },
     {
       "path": "static/compatibility-golden.json",
-      "sha256": "16cd7c1f6ce13a0c2c385e9ffdff478c60a0c7e2b6fcaf6c4bfd78f30b239064"
+      "sha256": "5156ab4cb71c9ba5e00bd8569b80c256c5470c4352447a64730aeb9ffa959ca0"
+    },
+    {
+      "path": "static/docx-compatibility-fixture.json",
+      "sha256": "a940640a25bf1f86240f725992fb87b96d87244246a16116208e208cefd9706d"
+    },
+    {
+      "path": "static/export-runtime.js",
+      "sha256": "fbe7ce3a36a174eb59c4c7bcaf13d1e540d66d2000d454827c41d276ecda8c27"
+    },
+    {
+      "path": "static/marknice-format-runtime.js",
+      "sha256": "b8583f9713374348173f5309e6826d3452fd9096144957bf6c5d4f345fc8dcb6"
+    },
+    {
+      "path": "static/marknice-word-runtime.js",
+      "sha256": "7a68555795b74fd7df4e644bc4c3a7e7c570cec05be4790771466b611f20c929"
     },
     {
       "path": "static/self-test.html",
-      "sha256": "4058b46d7e48d5b1495f4c4097bbf2fe04ccb03c79379b443aa327c2a52174c2"
+      "sha256": "0e69e4204345f6432825ccc87733a5284a224c0272d16c3c4c3fe6762f55c796"
     },
     {
       "path": "static/self-test.js",
-      "sha256": "33de24c32763a64a6ff02a6bbd7973317fdbbea61d673e2ccb670541f4cacbde"
+      "sha256": "984d51aa714d11936357556f0cd9ec97acabd880a07a028f1bfca40d385081b1"
     },
     {
       "path": "static/theme-runtime.js",
@@ -304,6 +330,10 @@
       "sha256": "71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b"
     },
     {
+      "path": "static/vendor/html-docx.js",
+      "sha256": "e5b9717420117a9ee585538c8263e8cf3f56822cd3994b9402a08e8f1dd81cb9"
+    },
+    {
       "path": "static/vendor/katex.min.css",
       "sha256": "717bc9ae7853b61f0f76455dddf0ecd4f527a783f42de2ac24684899c1c46258"
     },
@@ -317,7 +347,7 @@
     },
     {
       "path": "static/workspace.css",
-      "sha256": "8c4bed45e3def09083b2cc6a0d83619232158370cb11f5d0a5daff6cee66335e"
+      "sha256": "de18a9fb81ad0799f879e1f8563a681cc8e1fbf2f042512cae64d4c070ca81c9"
     }
   ]
 }

@@ -10,16 +10,26 @@
   <script defer src="vendor/katex.min.js"></script>
   <script defer src="self-test.js"></script>
   <script defer src="theme-runtime.js"></script>
+  <script defer src="marknice-format-runtime.js"></script>
+  <script defer src="vendor/html-docx.js"></script>
+  <script defer src="marknice-word-runtime.js"></script>
+  <script defer src="export-runtime.js"></script>
 </head>
 <body>
   <main>
     <h1>MarkNice compatibility self-test</h1>
     <p id="status">Running…</p>
-    <textarea id="markdown" hidden></textarea>
+    <textarea id="markdown" aria-hidden="true" tabindex="-1" style="position:fixed;left:-10000px;top:0;width:1px;height:1px"></textarea>
+    <div class="markdown-format-toolbar" role="toolbar" aria-label="Markdown formatting" hidden>
+      <button type="button" data-md-action="bold">B</button>
+      <button type="button" data-md-action="heading2">H2</button>
+      <button type="button" data-md-action="table">Table</button>
+    </div>
     <select id="themeSelect" hidden>
       <option>claude</option><option>minimal</option><option>night</option><option>simple</option><option>elegant</option><option>vivid</option><option>amber</option><option>green</option><option>health</option><option>magazine</option><option>retro</option><option>ocean</option><option>tech</option><option>newspaper</option><option>warmred</option>
     </select>
     <span id="fontSizeLabel"></span><button id="fontSizeDown"></button><button id="fontSizeUp"></button>
+    <span id="documentName" hidden>launch.name.md</span>
     <article id="preview"></article>
     <pre id="results"></pre>
   </main>

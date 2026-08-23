@@ -8,12 +8,14 @@
 //! never requires external tools.
 
 use std::{
-    env, fs,
-    io,
+    env, fs, io,
     path::{Path, PathBuf},
 };
 
-use markion_pdf::{Block as PdfBlock, Cell as PdfCell, ImageData as PdfImageData, ListMarker, PdfDocument, PdfMetadata, PdfOptions, Rgb, Run as PdfRun, Style as PdfStyle};
+use markion_pdf::{
+    Block as PdfBlock, Cell as PdfCell, ImageData as PdfImageData, ListMarker, PdfDocument,
+    PdfMetadata, PdfOptions, Rgb, Run as PdfRun, Style as PdfStyle,
+};
 use percent_encoding::percent_decode_str;
 use typune_export::{DocxExporter, ExportError, ExportOptions, Exporter, PdfExporter};
 use typune_markdown::{MathRenderer, Parser};
@@ -109,7 +111,12 @@ pub fn build_pdf_ir(
     let title = metadata
         .as_ref()
         .and_then(|metadata| metadata.title.as_deref())
-        .or_else(|| document.path().and_then(Path::file_stem).and_then(|stem| stem.to_str()))
+        .or_else(|| {
+            document
+                .path()
+                .and_then(Path::file_stem)
+                .and_then(|stem| stem.to_str())
+        })
         .map(str::to_string);
     let author = metadata
         .as_ref()
@@ -149,13 +156,21 @@ pub fn build_pdf_ir(
                 footnotes.push(pdf_runs(text, &footnote_labels));
             }
             other => {
-                pdf_blocks.extend(pdf_blocks_from_preview_block(other, &base_dir, &footnote_labels));
+                pdf_blocks.extend(pdf_blocks_from_preview_block(
+                    other,
+                    &base_dir,
+                    &footnote_labels,
+                ));
             }
         }
     }
 
     PdfDocument {
-        metadata: PdfMetadata { title, author, date },
+        metadata: PdfMetadata {
+            title,
+            author,
+            date,
+        },
         options: pdf_options,
         blocks: pdf_blocks,
         footnotes,
@@ -169,7 +184,9 @@ fn pdf_blocks_from_preview_block(
 ) -> Vec<PdfBlock> {
     match block {
         PreviewBlock::Html { html, .. } => pdf_html_blocks(html, base_dir, footnotes),
-        _ => pdf_single_block(block, base_dir, footnotes).into_iter().collect(),
+        _ => pdf_single_block(block, base_dir, footnotes)
+            .into_iter()
+            .collect(),
     }
 }
 
@@ -226,7 +243,9 @@ fn pdf_single_block(
             language: language.clone(),
             lines: pdf_code_lines(code, language.as_deref()),
         }),
-        PreviewBlock::MathBlock { latex, authored, .. } => Some(pdf_math_block(latex, authored)),
+        PreviewBlock::MathBlock {
+            latex, authored, ..
+        } => Some(pdf_math_block(latex, authored)),
         PreviewBlock::Image { alt, url, .. } => {
             pdf_image_block(alt, url, base_dir).or_else(|| Some(pdf_image_fallback_block(alt, url)))
         }
@@ -235,15 +254,13 @@ fn pdf_single_block(
             rows, alignments, ..
         } => pdf_table_block(rows, alignments, footnotes),
         PreviewBlock::FootnoteDefinition { .. } => None,
-        PreviewBlock::Html { .. } => unreachable!("Html blocks are handled by pdf_blocks_from_preview_block"),
+        PreviewBlock::Html { .. } => {
+            unreachable!("Html blocks are handled by pdf_blocks_from_preview_block")
+        }
     }
 }
 
-fn pdf_html_blocks(
-    html: &str,
-    base_dir: &Option<PathBuf>,
-    footnotes: &[String],
-) -> Vec<PdfBlock> {
+fn pdf_html_blocks(html: &str, base_dir: &Option<PathBuf>, footnotes: &[String]) -> Vec<PdfBlock> {
     let mut blocks = Vec::new();
     for part in html_preview_parts(html) {
         match part {
@@ -340,12 +357,14 @@ fn pdf_html_table_block(grid: &HtmlTableGrid, footnotes: &[String]) -> Option<Pd
         (header, rows)
     } else {
         let header = vec![PdfCell::default(); columns];
-        let mut rows: Vec<Vec<PdfCell>> = vec![first_row
-            .iter()
-            .map(|cell| PdfCell {
-                content: pdf_runs(&cell.content, footnotes),
-            })
-            .collect()];
+        let mut rows: Vec<Vec<PdfCell>> = vec![
+            first_row
+                .iter()
+                .map(|cell| PdfCell {
+                    content: pdf_runs(&cell.content, footnotes),
+                })
+                .collect(),
+        ];
         rows.extend(row_iter.map(|row| {
             row.iter()
                 .map(|cell| PdfCell {
@@ -2308,15 +2327,17 @@ pub(crate) fn write_image_export(
 ) -> io::Result<()> {
     let base_dir = document.path().and_then(Path::parent);
     let ir = build_pdf_ir(document, &settings.pdf, base_dir);
-    let image = markion_pdf::render_snapshot(&ir, markion_pdf::DEFAULT_SCALE)
-        .map_err(io::Error::other)?;
+    let image =
+        markion_pdf::render_snapshot(&ir, markion_pdf::DEFAULT_SCALE).map_err(io::Error::other)?;
     let mut dynamic = image::DynamicImage::ImageRgba8(image);
     // JPEG has no alpha channel; flatten the (already opaque) RGBA snapshot
     // onto RGB8 or the encoder rejects the color type.
     if format == image::ImageFormat::Jpeg {
         dynamic = dynamic.to_rgb8().into();
     }
-    dynamic.save_with_format(path, format).map_err(io::Error::other)
+    dynamic
+        .save_with_format(path, format)
+        .map_err(io::Error::other)
 }
 
 /// Test helper: extracts one entry from a hand-written DOCX ZIP by walking
@@ -2359,8 +2380,8 @@ pub(crate) fn read_zip_entry(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use markion_pdf;
     use crate::MarkdownDocument;
+    use markion_pdf;
 
     fn docx_parts(document: &MarkdownDocument) -> Vec<u8> {
         build_docx_bytes(document, &DocxExportOptions::default()).expect("DOCX package build")
@@ -3044,11 +3065,7 @@ mod tests {
         let page_count = text
             .split("/Count")
             .nth(1)
-            .and_then(|s| {
-                s.trim_start()
-                    .split(|c: char| !c.is_ascii_digit())
-                    .next()
-            })
+            .and_then(|s| s.trim_start().split(|c: char| !c.is_ascii_digit()).next())
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
         assert!(page_count >= 1, "PDF should contain at least one page");

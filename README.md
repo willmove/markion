@@ -127,8 +127,12 @@ themes, renderer, math fonts, and application scripts work offline. Browser
 edits stay in that tab and never write back to Markion. Managed local images
 can be previewed, but copying requires explicitly omitting them because a local
 blob cannot be published by WeChat; remote images may still contact their
-authored hosts. If clipboard permission or the two-hour session expires, allow
-the permission or relaunch from Markion.
+authored hosts. The workspace can also copy its exact current Markdown and
+download standalone themed HTML or a browser-generated MarkNice DOCX. HTML
+embeds KaTeX assets and safely readable managed images; remote images remain
+remote. Browser DOCX targets Microsoft Word desktop and is distinct from
+Markion's native/Pandoc DOCX export. If clipboard permission or the two-hour
+session expires, allow the permission or relaunch from Markion.
 
 ## Performance
 

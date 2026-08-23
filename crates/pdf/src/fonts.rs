@@ -69,7 +69,12 @@ mod tests {
     fn bundled_only_resolves_chinese_to_noto() {
         let mut fs = bundled_only_font_system();
         let mut buffer = Buffer::new(&mut fs, Metrics::new(12.0, 12.0 * 1.4));
-        buffer.set_text("你好，世界", &Attrs::new().family(Family::Serif), Shaping::Advanced, None);
+        buffer.set_text(
+            "你好，世界",
+            &Attrs::new().family(Family::Serif),
+            Shaping::Advanced,
+            None,
+        );
         buffer.shape_until_scroll(&mut fs, true);
 
         let mut faces = Vec::new();

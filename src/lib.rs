@@ -517,23 +517,25 @@ impl MarkdownDocument {
                 fs::write(path, self.render_plain_html_document())?;
                 Ok(builtin(None))
             }
-            ExportFormat::Pdf => match export::engine_pdf(
-                &self.text,
-                settings,
-                self.path().and_then(Path::parent),
-            ) {
-                Ok(bytes) => {
-                    fs::write(path, bytes)?;
-                    Ok(engine_ok())
+            ExportFormat::Pdf => {
+                match export::engine_pdf(&self.text, settings, self.path().and_then(Path::parent)) {
+                    Ok(bytes) => {
+                        fs::write(path, bytes)?;
+                        Ok(engine_ok())
+                    }
+                    Err(failure) => {
+                        let ir = export::build_pdf_ir(
+                            self,
+                            &settings.pdf,
+                            self.path().and_then(Path::parent),
+                        );
+                        let bytes = markion_pdf::render(&ir)
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                        fs::write(path, bytes)?;
+                        Ok(builtin(Some(failure)))
+                    }
                 }
-                Err(failure) => {
-                    let ir = export::build_pdf_ir(self, &settings.pdf, self.path().and_then(Path::parent));
-                    let bytes = markion_pdf::render(&ir)
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-                    fs::write(path, bytes)?;
-                    Ok(builtin(Some(failure)))
-                }
-            },
+            }
             ExportFormat::Latex => {
                 fs::write(path, self.render_latex_document())?;
                 Ok(builtin(None))

@@ -7,7 +7,7 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 use markion::{FileTreeFileKind, ThemeFonts};
 
 #[gpui::test]
-fn publishing_snapshot_preserves_gpui_tab_and_document_state(cx: &mut TestAppContext) {
+fn publishing_browser_handoff_preserves_gpui_tab_and_document_state(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
 
     app.update(cx, |app, _| {
@@ -15,10 +15,12 @@ fn publishing_snapshot_preserves_gpui_tab_and_document_state(cx: &mut TestAppCon
         let tab = app.active_tab_mut();
         tab.document.insert(0, "# Draft\n\nSelected text");
         tab.selected_range = 2..7;
+        tab.push_undo_snapshot();
     });
 
     app.update(cx, |app, _| {
         let active_index = app.active_tab;
+        let highlight_probe = app.highlighted_code(Some("rust"), "fn publish_probe() {}");
         let tab = app.active_tab();
         let text = tab.document.text().to_owned();
         let selected_range = tab.selected_range.clone();
@@ -26,16 +28,31 @@ fn publishing_snapshot_preserves_gpui_tab_and_document_state(cx: &mut TestAppCon
         let dirty = tab.document.is_dirty();
         let visual = tab.document.visual_blocks_shared();
         let preview = tab.document.preview_blocks_shared();
+        let text_handle = tab.shared_document_text();
+        let undo_len = tab.undo_stack.len();
+        let highlight_count = app.highlight_cache.borrow().len();
 
-        let snapshot = build_publishing_snapshot(&tab.document, app.language.code());
-
-        assert_eq!(snapshot.markdown.as_ref(), text);
+        // All export outcomes happen inside the browser. Markion's complete
+        // contribution is this read-only immutable handoff, so successful,
+        // failed, and cancelled browser work must have the same app state.
+        for _browser_outcome in ["success", "failure", "cancelled"] {
+            let snapshot = build_publishing_snapshot(&tab.document, app.language.code());
+            assert_eq!(snapshot.markdown.as_ref(), text);
+        }
         assert_eq!(app.active_tab, active_index);
         assert_eq!(app.view_mode, ViewMode::Read);
         assert_eq!(app.active_tab().selected_range, selected_range);
         assert_eq!(app.active_tab().document.text(), text);
         assert_eq!(app.active_tab().document.version(), version);
         assert_eq!(app.active_tab().document.is_dirty(), dirty);
+        assert_eq!(app.active_tab().undo_stack.len(), undo_len);
+        assert_eq!(app.highlight_cache.borrow().len(), highlight_count);
+        assert_eq!(
+            app.active_tab().shared_document_text().as_ptr(),
+            text_handle.as_ptr()
+        );
+        let highlight_after = app.highlighted_code(Some("rust"), "fn publish_probe() {}");
+        assert!(Rc::ptr_eq(&highlight_after, &highlight_probe));
         assert!(Arc::ptr_eq(
             &preview,
             &app.active_tab().document.preview_blocks_shared()
@@ -2144,6 +2161,139 @@ fn global_shortcut_clear_restores_defaults_and_exits_capture(cx: &mut TestAppCon
         .expect("global Preferences reset handler");
     assert!(reset.contains("app.clear_shortcut_overrides(cx)"));
     assert!(reset.contains("app.persist_preferences()"));
+}
+
+#[gpui::test]
+fn about_dialog_opens_exact_ordered_links_and_closes_only_on_confirmation(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.active_menu = Some(AppMenu::Help);
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    cx.dispatch_action(AboutMarkion);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.about_dialog_open);
+        assert_eq!(app.active_menu, None);
+        assert_eq!(app.status, t(app.language, Msg::StatusAboutMarkion));
+    });
+
+    let website = cx
+        .debug_bounds(AboutLink::ProjectWebsite.link_selector())
+        .expect("project website link should render");
+    let github = cx
+        .debug_bounds(AboutLink::GithubRepository.link_selector())
+        .expect("GitHub link should render");
+    assert!(
+        website.center().y < github.center().y,
+        "project website link must render above GitHub"
+    );
+
+    cx.simulate_click(website.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some(MARKION_PROJECT_WEBSITE_URL)
+    );
+    app.update(cx, |app, _| assert!(app.about_dialog_open));
+
+    cx.simulate_click(github.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.opened_url().as_deref(), Some(GITHUB_REPO_URL));
+    app.update(cx, |app, _| assert!(app.about_dialog_open));
+
+    let ok = cx
+        .debug_bounds("about-dialog-ok")
+        .expect("localized confirmation control should render");
+    cx.simulate_click(ok.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| assert!(!app.about_dialog_open));
+}
+
+#[test]
+fn about_dialog_link_model_and_messages_cover_every_supported_language() {
+    assert_eq!(
+        AboutLink::ALL.map(AboutLink::url),
+        [MARKION_PROJECT_WEBSITE_URL, GITHUB_REPO_URL]
+    );
+
+    for &language in Language::all() {
+        let version = tf(language, Msg::DialogAboutVersion, &["1.2.3"]);
+        assert!(
+            version.contains("1.2.3"),
+            "missing version for {language:?}"
+        );
+        for msg in [
+            Msg::DialogAboutTitle,
+            Msg::DialogAboutDescription,
+            Msg::DialogAboutProjectWebsite,
+            Msg::DialogAboutGithub,
+            Msg::DialogButtonOk,
+        ] {
+            assert!(
+                !t(language, msg).trim().is_empty(),
+                "empty About label {msg:?} for {language:?}"
+            );
+        }
+        for link in AboutLink::ALL {
+            assert!(!t(language, link.label()).trim().is_empty());
+            assert!(link.url().starts_with("https://"));
+        }
+    }
+}
+
+#[gpui::test]
+fn about_dialog_renders_with_readable_theme_derived_chrome(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.about_dialog_open = true;
+        app
+    });
+
+    let mut prior_palette = None;
+    for theme in [AppTheme::Paper, AppTheme::Ink] {
+        app.update(cx, |app, cx| {
+            app.theme = theme;
+            app.custom_theme = None;
+            app.selected_theme_name = theme.name().to_string();
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        for selector in [
+            "about-dialog-overlay",
+            "about-dialog-panel",
+            "about-dialog-title",
+            "about-dialog-version",
+            "about-dialog-description",
+            "about-project-website-row",
+            "about-project-website-link",
+            "about-github-row",
+            "about-github-link",
+            "about-dialog-ok",
+        ] {
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "{selector} should render for {}",
+                theme.name()
+            );
+        }
+
+        app.update(cx, |app, _| {
+            let palette = app.palette();
+            assert_ne!(palette.panel_bg, palette.text);
+            assert_ne!(palette.active_bg, palette.active_text);
+            if let Some(prior) = prior_palette.replace(palette) {
+                assert_ne!(prior.panel_bg, palette.panel_bg);
+                assert_ne!(prior.text, palette.text);
+            }
+        });
+    }
 }
 
 #[gpui::test]

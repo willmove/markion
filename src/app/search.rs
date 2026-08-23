@@ -236,22 +236,23 @@ impl MarkionApp {
         cx.notify();
     }
 
-    pub(super) fn about(&mut self, _: &AboutMarkion, window: &mut Window, cx: &mut Context<Self>) {
-        let detail = tf(
-            self.language,
-            Msg::DialogAboutDetail,
-            &[env!("CARGO_PKG_VERSION"), GITHUB_REPO_URL],
-        );
-        std::mem::drop(window.prompt(
-            PromptLevel::Info,
-            self.tr(Msg::DialogAboutTitle),
-            Some(&detail),
-            &[PromptButton::ok(self.tr(Msg::DialogButtonOk))],
-            cx,
-        ));
+    pub(super) fn about(&mut self, _: &AboutMarkion, _: &mut Window, cx: &mut Context<Self>) {
+        self.about_dialog_open = true;
         self.status = t(self.language, Msg::StatusAboutMarkion).into();
         self.active_menu = None;
         cx.notify();
+    }
+
+    pub(super) fn close_about_dialog(&mut self, cx: &mut Context<Self>) {
+        if !self.about_dialog_open {
+            return;
+        }
+        self.about_dialog_open = false;
+        cx.notify();
+    }
+
+    pub(super) fn open_about_link(&mut self, link: AboutLink, cx: &mut Context<Self>) {
+        cx.open_url(link.url());
     }
 
     pub(super) fn report_issue(

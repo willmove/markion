@@ -19,7 +19,7 @@ use cosmic_text::{
 use image::RgbaImage;
 
 use crate::ir::{AlertKind, Alignment, Block, ImageData, ListMarker, PdfDocument, Rgb, Run, Style};
-use crate::{fonts, theme, PdfError};
+use crate::{PdfError, fonts, theme};
 
 /// Default pixels-per-point for a snapshot (≈ 144 DPI at an 11 pt body).
 pub const DEFAULT_SCALE: f32 = 2.0;
@@ -151,7 +151,11 @@ impl Canvas {
         let Some(i) = self.index(x, y) else {
             return;
         };
-        let (dr, dg, db) = (self.data[i] as u32, self.data[i + 1] as u32, self.data[i + 2] as u32);
+        let (dr, dg, db) = (
+            self.data[i] as u32,
+            self.data[i + 1] as u32,
+            self.data[i + 2] as u32,
+        );
         let mix = |s: u32, d: u32| ((s * a + d * (255 - a) + 127) / 255) as u8;
         self.data[i] = mix(sr, dr);
         self.data[i + 1] = mix(sg, dg);
@@ -172,7 +176,11 @@ impl Canvas {
                 let Some(i) = self.index(x + px as i32, y + py as i32) else {
                     continue;
                 };
-                let (dr, dg, db) = (self.data[i] as u32, self.data[i + 1] as u32, self.data[i + 2] as u32);
+                let (dr, dg, db) = (
+                    self.data[i] as u32,
+                    self.data[i + 1] as u32,
+                    self.data[i + 2] as u32,
+                );
                 let mix = |s: u32, d: u32| ((s * a + d * (255 - a) + 127) / 255) as u8;
                 self.data[i] = mix(src.0[0] as u32, dr);
                 self.data[i + 1] = mix(src.0[1] as u32, dg);
@@ -233,7 +241,11 @@ fn shape_buffer(
             } else {
                 default_color
             });
-            let run_family = if run.style.code { Family::Monospace } else { family };
+            let run_family = if run.style.code {
+                Family::Monospace
+            } else {
+                family
+            };
             let mut attrs = default_attrs
                 .clone()
                 .family(run_family)
@@ -459,7 +471,11 @@ fn draw_heading(raster: &mut Raster, level: u8, content: &[Run]) -> Result<(), P
     if h <= 0.0 {
         return Ok(());
     }
-    let before = if raster.y > raster.geom.top { raster.smul(theme::HEADING_BEFORE) } else { 0.0 };
+    let before = if raster.y > raster.geom.top {
+        raster.smul(theme::HEADING_BEFORE)
+    } else {
+        0.0
+    };
     raster.ensure(h + before);
     raster.y += before;
     let top = raster.y;
@@ -744,17 +760,30 @@ fn draw_table(
                             .collect()
                     })
                     .unwrap_or_default();
-                shape_buffer(raster.fs, &runs, size, line_h, Family::Serif, theme::TEXT, Some(cell_w))
+                shape_buffer(
+                    raster.fs,
+                    &runs,
+                    size,
+                    line_h,
+                    Family::Serif,
+                    theme::TEXT,
+                    Some(cell_w),
+                )
             })
             .collect()
     };
-    let row_height = |row: &[Buffer]| {
-        row.iter().map(buffer_height).fold(0.0_f32, f32::max) + cell_pad_y * 2.0
-    };
+    let row_height =
+        |row: &[Buffer]| row.iter().map(buffer_height).fold(0.0_f32, f32::max) + cell_pad_y * 2.0;
 
     let hair = raster.smul(0.5).max(1.0);
     let hairline = |raster: &mut Raster, color: Rgb, width: f32| {
-        raster.canvas.fill_rect(raster.geom.left, raster.y, raster.geom.content_w(), width, color);
+        raster.canvas.fill_rect(
+            raster.geom.left,
+            raster.y,
+            raster.geom.content_w(),
+            width,
+            color,
+        );
     };
     let draw_row = |raster: &mut Raster, row: &[Buffer], height: f32| {
         let row_top = raster.y;
@@ -824,12 +853,8 @@ fn draw_image(
         ImageData::Png(bytes) | ImageData::Jpeg(bytes) => match image::load_from_memory(bytes) {
             Ok(img) => {
                 let rgba = img.to_rgba8();
-                let resized = image::imageops::resize(
-                    &rgba,
-                    dw,
-                    dh,
-                    image::imageops::FilterType::Triangle,
-                );
+                let resized =
+                    image::imageops::resize(&rgba, dw, dh, image::imageops::FilterType::Triangle);
                 raster.canvas.draw_rgba(x0, y0, &resized);
             }
             Err(_) => {
@@ -893,7 +918,11 @@ fn draw_block(raster: &mut Raster, block: &Block) -> Result<(), PdfError> {
 
 // --- Driver ---------------------------------------------------------------
 
-fn render_document(fs: &mut FontSystem, doc: &PdfDocument, scale: f32) -> Result<RgbaImage, PdfError> {
+fn render_document(
+    fs: &mut FontSystem,
+    doc: &PdfDocument,
+    scale: f32,
+) -> Result<RgbaImage, PdfError> {
     let geom = Geometry::from_options(&doc.options, scale);
     let mut raster = Raster::new(fs, geom, scale);
     for block in &doc.blocks {
@@ -946,7 +975,10 @@ mod tests {
                 dark += 1;
             }
         }
-        assert!(dark > 50, "expected CJK glyphs to paint dark pixels, got {dark}");
+        assert!(
+            dark > 50,
+            "expected CJK glyphs to paint dark pixels, got {dark}"
+        );
     }
 
     /// Mixed CJK/Latin paragraph flows onto more than one line.

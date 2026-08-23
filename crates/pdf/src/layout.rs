@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use cosmic_text::FontSystem;
 use krilla::image::Image as KrillaImage;
 
-use crate::ir::{Alignment, AlertKind, Block, ImageData, ListMarker, PdfDocument, Rgb, Run, Style};
+use crate::ir::{AlertKind, Alignment, Block, ImageData, ListMarker, PdfDocument, Rgb, Run, Style};
 use crate::text::{
     FamilyKind, FontCache, ParagraphSpec, RunInfo, ShapedLine, ShapedParagraph, shape_paragraph,
 };
@@ -98,7 +98,10 @@ pub enum PlacedItem {
 pub enum AnnotTarget {
     Url(String),
     /// Body-relative page index and y position; emission adds the TOC offset.
-    Internal { page: usize, y: f32 },
+    Internal {
+        page: usize,
+        y: f32,
+    },
 }
 
 /// A placed link annotation.
@@ -316,7 +319,9 @@ impl<'a> Layouter<'a> {
         let seg_end = self.y.min(self.content_limit(self.notes_reserved));
         for accent in &mut self.accents {
             let item = accent_item(accent, seg_end);
-            self.pages[accent.page].items.insert(accent.insert_idx, item);
+            self.pages[accent.page]
+                .items
+                .insert(accent.insert_idx, item);
         }
         self.layout_note_area();
         self.pages.push(PageLayout::default());
@@ -347,7 +352,11 @@ impl<'a> Layouter<'a> {
         if self.page_notes.is_empty() {
             return;
         }
-        let actual_h: f32 = self.page_notes.iter().filter_map(|id| self.note_height(*id)).sum();
+        let actual_h: f32 = self
+            .page_notes
+            .iter()
+            .filter_map(|id| self.note_height(*id))
+            .sum();
         let rule_y = self.geom.bottom - actual_h - 4.0;
         let left = self.geom.left;
         let rule_end = left + self.geom.content_w() * 0.35;
@@ -522,7 +531,14 @@ impl<'a> Layouter<'a> {
             })
             .collect();
         let width = self.geom.content_w();
-        let para = self.shape(&runs, size, size * 1.25, FamilyKind::Heading, theme::TEXT, Some(width))?;
+        let para = self.shape(
+            &runs,
+            size,
+            size * 1.25,
+            FamilyKind::Heading,
+            theme::TEXT,
+            Some(width),
+        )?;
         let title: String = content.iter().map(|r| r.text.as_str()).collect();
         // Stacked headings keep together: flush an older pending heading
         // requiring room for this one too.
@@ -582,9 +598,7 @@ impl<'a> Layouter<'a> {
         let marker_text = match marker {
             ListMarker::Bullet => "•".to_string(),
             ListMarker::Number(n) => format!("{n}."),
-            ListMarker::Task { checked } => {
-                if checked { "[x]" } else { "[ ]" }.to_string()
-            }
+            ListMarker::Task { checked } => if checked { "[x]" } else { "[ ]" }.to_string(),
         };
         let marker_run = Run {
             text: marker_text,
@@ -640,7 +654,9 @@ impl<'a> Layouter<'a> {
         self.geom.left = saved_left;
         let accent = self.accents.pop().expect("quote accent open");
         let item = accent_item(&accent, self.y);
-        self.pages[accent.page].items.insert(accent.insert_idx, item);
+        self.pages[accent.page]
+            .items
+            .insert(accent.insert_idx, item);
         self.y += theme::BLOCK_SPACING * 0.5;
         Ok(())
     }
@@ -688,7 +704,9 @@ impl<'a> Layouter<'a> {
         self.y += 2.0;
         let accent = self.accents.pop().expect("alert accent open");
         let item = accent_item(&accent, self.y);
-        self.pages[accent.page].items.insert(accent.insert_idx, item);
+        self.pages[accent.page]
+            .items
+            .insert(accent.insert_idx, item);
         self.y += theme::BLOCK_SPACING * 0.5;
         Ok(())
     }
@@ -730,7 +748,11 @@ impl<'a> Layouter<'a> {
         }
     }
 
-    fn code_block(&mut self, _language: &Option<String>, lines: &[Vec<Run>]) -> Result<(), PdfError> {
+    fn code_block(
+        &mut self,
+        _language: &Option<String>,
+        lines: &[Vec<Run>],
+    ) -> Result<(), PdfError> {
         let line_height = theme::CODE_SIZE * 1.4;
         let mut shaped = Vec::with_capacity(lines.len());
         for line in lines {
@@ -837,7 +859,14 @@ impl<'a> Layouter<'a> {
         // Top border + header row (repeated after each page break below).
         self.hairline(theme::TABLE_BORDER, 0.7);
         self.ensure_space(header_h, &row_refs(&header_cells));
-        self.place_row(&header_cells, header_h, col_w, alignments, theme::HEADER_BORDER, 1.0);
+        self.place_row(
+            &header_cells,
+            header_h,
+            col_w,
+            alignments,
+            theme::HEADER_BORDER,
+            1.0,
+        );
 
         let mut first_row = true;
         for r in rows {
@@ -849,7 +878,14 @@ impl<'a> Layouter<'a> {
             if !first_row && self.pages.len() != page_before {
                 // The row moved to a new page: repeat the header.
                 self.hairline(theme::TABLE_BORDER, 0.7);
-                self.place_row(&header_cells, header_h, col_w, alignments, theme::HEADER_BORDER, 1.0);
+                self.place_row(
+                    &header_cells,
+                    header_h,
+                    col_w,
+                    alignments,
+                    theme::HEADER_BORDER,
+                    1.0,
+                );
             }
             self.place_row(&row, h, col_w, alignments, theme::TABLE_BORDER, 0.5);
             first_row = false;
@@ -923,7 +959,8 @@ impl<'a> Layouter<'a> {
                     .map_err(|e| format!("JPEG decode failed: {e}"))
             }
             ImageData::Svg(svg) => usvg::Tree::from_str(svg, &usvg::Options::default())
-                .map(Box::new).map(ParsedImage::Vector)
+                .map(Box::new)
+                .map(ParsedImage::Vector)
                 .map_err(|e| format!("SVG parse failed: {e}")),
         };
 
@@ -1243,7 +1280,11 @@ pub fn layout_document(
     if doc.options.page_numbers {
         let total = toc_offset + body_pages.len();
         let footer_y = geom.page_h - (geom.page_h - geom.bottom) * 0.45;
-        for (i, page) in toc_pages.iter_mut().chain(body_pages.iter_mut()).enumerate() {
+        for (i, page) in toc_pages
+            .iter_mut()
+            .chain(body_pages.iter_mut())
+            .enumerate()
+        {
             let para = lay.shape(
                 &[Run {
                     text: format!("{} / {}", i + 1, total),
@@ -1287,8 +1328,8 @@ mod tests {
     }
 
     fn long_paragraphs(n: usize) -> Vec<Block> {
-        let text = "这是一个用于分页测试的段落，包含中英文混排 content to wrap across lines. "
-            .repeat(6);
+        let text =
+            "这是一个用于分页测试的段落，包含中英文混排 content to wrap across lines. ".repeat(6);
         (0..n)
             .map(|_| Block::Paragraph {
                 content: vec![Run {
@@ -1425,17 +1466,16 @@ mod tests {
         let result = layout(&doc);
         assert_eq!(result.body_pages.len(), 1);
         let page = &result.body_pages[0];
-        let note_lines = page
-            .items
-            .iter()
-            .filter(|item| match item {
-                PlacedItem::Line(line) => line
-                    .groups
-                    .iter()
-                    .any(|g| g.text.contains("note one body") || g.text.contains("note two body")),
-                _ => false,
-            })
-            .count();
+        let note_lines =
+            page.items
+                .iter()
+                .filter(|item| match item {
+                    PlacedItem::Line(line) => line.groups.iter().any(|g| {
+                        g.text.contains("note one body") || g.text.contains("note two body")
+                    }),
+                    _ => false,
+                })
+                .count();
         assert_eq!(note_lines, 2, "both notes render at the page bottom");
         let internal_links = page
             .annotations

@@ -1,4 +1,4 @@
 {
-  "markdown": "# Heading one\n\nSoft line\nbreak and hard break  \nnext.\n\n- item\n  - nested\n\n1. ordered\n\n| Left | Right |\n| --- | ---: |\n| a | b |\n\n```rust\nfn main() {}\n```\n\nInline $E=mc^2$ and block:\n\n$$x^2+y^2=z^2$$\n\n[remote link](https://example.com)\n\n![remote](https://example.com/remote.png)\n\n![managed](note.assets/local.png)",
-  "required_fragments": ["Heading one", "<ul", "<ol", "<table", "<pre", "math-inline", "katex", "https://example.com", "data-mn-local-image-id"]
+  "markdown": "# Heading one\n\n## Heading two\n\n### Heading three\n\n#### Heading four\n\n##### Heading five\n\n###### Heading six\n\nSoft line\nbreak and hard break  \nnext. **bold**, *emphasis*, ~~deleted~~, and `inline code`.\n\n> Quoted **content** with a [remote link](https://example.com).\n>\n> Continued quote.\n\n- item\n  - nested\n    - deeply nested\n\n1. ordered\n   1. nested ordered\n\n| Left | Right |\n| --- | ---: |\n| a | b |\n\n```rust\nfn main() {}\n```\n\nInline $E=mc^2$ and block:\n\n$$x^2+y^2=z^2$$\n\n![remote](https://example.com/remote.png)\n\n![managed](note.assets/local.png)",
+  "required_fragments": ["Heading one", "Heading six", "<blockquote", "<ul", "<ol", "<table", "<pre", "<strong", "<em", "<del", "math-inline", "katex", "https://example.com", "data-mn-local-image-id"]
 }

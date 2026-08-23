@@ -506,8 +506,14 @@ pub enum Msg {
 
     /// About Markion dialog title.
     DialogAboutTitle,
-    /// About detail body. {0}=version {1}=repo url.
-    DialogAboutDetail,
+    /// About version line. {0}=running version.
+    DialogAboutVersion,
+    /// About product description.
+    DialogAboutDescription,
+    /// About project-website link label.
+    DialogAboutProjectWebsite,
+    /// About GitHub-repository link label.
+    DialogAboutGithub,
     /// Update check: up-to-date dialog title.
     DialogUpToDateTitle,
     /// Update check: up-to-date dialog body.
@@ -2643,9 +2649,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "Later",
 
         Msg::DialogAboutTitle => "About Markion",
-        Msg::DialogAboutDetail => {
-            "Version: {0}\n\nA local-first Markdown editor built with Rust and GPUI.\n\nGitHub: {1}"
-        }
+        Msg::DialogAboutVersion => "Version: {0}",
+        Msg::DialogAboutDescription => "A local-first Markdown editor built with Rust and GPUI.",
+        Msg::DialogAboutProjectWebsite => "Project website",
+        Msg::DialogAboutGithub => "GitHub",
         Msg::DialogUpToDateTitle => "Up to Date",
         Msg::DialogUpToDateDetail => "You are running the latest version of Markion.",
         Msg::DialogUpdateAvailableTitle => "Update Available",
@@ -3125,9 +3132,12 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "後で",
 
         Msg::DialogAboutTitle => "Markionについて",
-        Msg::DialogAboutDetail => {
-            "バージョン: {0}\n\nRustとGPUIで構築されたローカルファーストのMarkdownエディタです。\n\nGitHub: {1}"
+        Msg::DialogAboutVersion => "バージョン: {0}",
+        Msg::DialogAboutDescription => {
+            "RustとGPUIで構築されたローカルファーストのMarkdownエディタです。"
         }
+        Msg::DialogAboutProjectWebsite => "プロジェクトサイト",
+        Msg::DialogAboutGithub => "GitHub",
         Msg::DialogUpToDateTitle => "最新です",
         Msg::DialogUpToDateDetail => "Markion は最新のバージョンを実行しています。",
         Msg::DialogUpdateAvailableTitle => "更新があります",
@@ -3595,9 +3605,12 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogButtonDownloadManually => "Télécharger manuellement",
         Msg::DialogButtonLater => "Plus tard",
         Msg::DialogAboutTitle => "À propos de Markion",
-        Msg::DialogAboutDetail => {
-            "Version : {0}\n\nUn éditeur Markdown local-first construit avec Rust et GPUI.\n\nGitHub : {1}"
+        Msg::DialogAboutVersion => "Version : {0}",
+        Msg::DialogAboutDescription => {
+            "Un éditeur Markdown local-first construit avec Rust et GPUI."
         }
+        Msg::DialogAboutProjectWebsite => "Site du projet",
+        Msg::DialogAboutGithub => "GitHub",
         Msg::DialogUpToDateTitle => "À jour",
         Msg::DialogUpToDateDetail => "Vous exécutez la dernière version de Markion.",
         Msg::DialogUpdateAvailableTitle => "Mise à jour disponible",
@@ -4065,9 +4078,12 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogButtonDownloadManually => "Manuell herunterladen",
         Msg::DialogButtonLater => "Später",
         Msg::DialogAboutTitle => "Über Markion",
-        Msg::DialogAboutDetail => {
-            "Version: {0}\n\nEin lokal-first Markdown-Editor, entwickelt mit Rust und GPUI.\n\nGitHub: {1}"
+        Msg::DialogAboutVersion => "Version: {0}",
+        Msg::DialogAboutDescription => {
+            "Ein lokal-first Markdown-Editor, entwickelt mit Rust und GPUI."
         }
+        Msg::DialogAboutProjectWebsite => "Projektwebsite",
+        Msg::DialogAboutGithub => "GitHub",
         Msg::DialogUpToDateTitle => "Aktuell",
         Msg::DialogUpToDateDetail => "Sie verwenden die neueste Version von Markion.",
         Msg::DialogUpdateAvailableTitle => "Update verfügbar",
@@ -4537,9 +4553,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogButtonDownloadManually => "Descargar manualmente",
         Msg::DialogButtonLater => "Más tarde",
         Msg::DialogAboutTitle => "Acerca de Markion",
-        Msg::DialogAboutDetail => {
-            "Versión: {0}\n\nUn editor Markdown local-first construido con Rust y GPUI.\n\nGitHub: {1}"
-        }
+        Msg::DialogAboutVersion => "Versión: {0}",
+        Msg::DialogAboutDescription => "Un editor Markdown local-first construido con Rust y GPUI.",
+        Msg::DialogAboutProjectWebsite => "Sitio web del proyecto",
+        Msg::DialogAboutGithub => "GitHub",
         Msg::DialogUpToDateTitle => "Actualizado",
         Msg::DialogUpToDateDetail => "Estás usando la última versión de Markion.",
         Msg::DialogUpdateAvailableTitle => "Actualización disponible",
@@ -5000,9 +5017,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "稍后",
 
         Msg::DialogAboutTitle => "关于 Markion",
-        Msg::DialogAboutDetail => {
-            "版本：{0}\n\n一款使用 Rust 与 GPUI 构建的本地优先 Markdown 编辑器。\n\nGitHub：{1}"
-        }
+        Msg::DialogAboutVersion => "版本：{0}",
+        Msg::DialogAboutDescription => "一款使用 Rust 与 GPUI 构建的本地优先 Markdown 编辑器。",
+        Msg::DialogAboutProjectWebsite => "项目网站",
+        Msg::DialogAboutGithub => "GitHub",
         Msg::DialogUpToDateTitle => "已是最新版本",
         Msg::DialogUpToDateDetail => "您正在使用最新版本的 Markion。",
         Msg::DialogUpdateAvailableTitle => "发现新版本",
@@ -5463,9 +5481,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "稍後",
 
         Msg::DialogAboutTitle => "關於 Markion",
-        Msg::DialogAboutDetail => {
-            "版本：{0}\n\n一款使用 Rust 與 GPUI 打造的本機優先 Markdown 編輯器。\n\nGitHub：{1}"
-        }
+        Msg::DialogAboutVersion => "版本：{0}",
+        Msg::DialogAboutDescription => "一款使用 Rust 與 GPUI 打造的本機優先 Markdown 編輯器。",
+        Msg::DialogAboutProjectWebsite => "專案網站",
+        Msg::DialogAboutGithub => "GitHub",
         Msg::DialogUpToDateTitle => "已是最新版本",
         Msg::DialogUpToDateDetail => "您正在使用最新版本的 Markion。",
         Msg::DialogUpdateAvailableTitle => "發現新版本",
@@ -6294,7 +6313,10 @@ mod tests {
             Msg::DialogButtonDownloadManually,
             Msg::DialogButtonLater,
             Msg::DialogAboutTitle,
-            Msg::DialogAboutDetail,
+            Msg::DialogAboutVersion,
+            Msg::DialogAboutDescription,
+            Msg::DialogAboutProjectWebsite,
+            Msg::DialogAboutGithub,
             Msg::DialogUpToDateTitle,
             Msg::DialogUpToDateDetail,
             Msg::DialogUpdateAvailableTitle,

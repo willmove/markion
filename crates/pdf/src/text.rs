@@ -53,13 +53,14 @@ impl FontCache {
         if let Some(font) = self.fonts.get(&id) {
             return Ok(font.clone());
         }
-        let face = fs
-            .db()
-            .face(id)
-            .ok_or_else(|| PdfError::Fonts("cosmic-text used a face fontdb does not know".into()))?;
+        let face = fs.db().face(id).ok_or_else(|| {
+            PdfError::Fonts("cosmic-text used a face fontdb does not know".into())
+        })?;
         let face_index = face.index;
         let cosmic_font = fs.get_font(id, weight).ok_or_else(|| {
-            PdfError::Fonts(format!("cosmic-text resolved face {face_index} but cannot load it"))
+            PdfError::Fonts(format!(
+                "cosmic-text resolved face {face_index} but cannot load it"
+            ))
         })?;
         let font = KrillaFont::new(Data::from(cosmic_font.data().to_vec()), face_index)
             .ok_or_else(|| PdfError::Fonts(format!("krilla rejects face {face_index}")))?;
@@ -179,10 +180,11 @@ pub fn shape_paragraph(
     let mut run_infos = Vec::with_capacity(spec.runs.len());
 
     for run in spec.runs {
-        let fill = run
-            .style
-            .color
-            .unwrap_or(if run.link.is_some() { theme::LINK } else { spec.color });
+        let fill = run.style.color.unwrap_or(if run.link.is_some() {
+            theme::LINK
+        } else {
+            spec.color
+        });
         // A footnote reference renders as a superscript number (the 1-based
         // footnote id); the run's own text is replaced per the IR contract.
         let text = match run.footnote {
@@ -206,41 +208,39 @@ pub fn shape_paragraph(
     }
 
     let default_attrs = Attrs::new().family(spec.family.family());
-    let spans: Vec<(&str, Attrs)> = spec
-        .runs
-        .iter()
-        .zip(&texts)
-        .enumerate()
-        .map(|(i, (run, text))| {
-            let style = &run.style;
-            let family = if style.code {
-                Family::Monospace
-            } else {
-                spec.family.family()
-            };
-            let mut attrs = default_attrs
-                .clone()
-                .family(family)
-                .metadata(i)
-                .color(cosmic_text::Color::rgb(
-                    run_infos[i].fill.0,
-                    run_infos[i].fill.1,
-                    run_infos[i].fill.2,
-                ));
-            if style.bold {
-                attrs = attrs.weight(Weight::BOLD);
-            }
-            if style.italic {
-                attrs = attrs.style(cosmic_text::Style::Italic);
-            }
-            // Super/subscript and footnote references shape at a smaller
-            // size; the baseline offset is applied at emission time.
-            if style.superscript || style.subscript || run.footnote.is_some() {
-                attrs.metrics_opt = Some(Metrics::new(script_size, spec.line_height).into());
-            }
-            (text.as_str(), attrs)
-        })
-        .collect();
+    let spans: Vec<(&str, Attrs)> =
+        spec.runs
+            .iter()
+            .zip(&texts)
+            .enumerate()
+            .map(|(i, (run, text))| {
+                let style = &run.style;
+                let family = if style.code {
+                    Family::Monospace
+                } else {
+                    spec.family.family()
+                };
+                let mut attrs = default_attrs.clone().family(family).metadata(i).color(
+                    cosmic_text::Color::rgb(
+                        run_infos[i].fill.0,
+                        run_infos[i].fill.1,
+                        run_infos[i].fill.2,
+                    ),
+                );
+                if style.bold {
+                    attrs = attrs.weight(Weight::BOLD);
+                }
+                if style.italic {
+                    attrs = attrs.style(cosmic_text::Style::Italic);
+                }
+                // Super/subscript and footnote references shape at a smaller
+                // size; the baseline offset is applied at emission time.
+                if style.superscript || style.subscript || run.footnote.is_some() {
+                    attrs.metrics_opt = Some(Metrics::new(script_size, spec.line_height).into());
+                }
+                (text.as_str(), attrs)
+            })
+            .collect();
 
     let mut buffer = Buffer::new(fs, Metrics::new(spec.size, spec.line_height));
     buffer.set_size(spec.width, None);
@@ -259,9 +259,7 @@ pub fn shape_paragraph(
         while i < glyphs.len() {
             // Group consecutive glyphs sharing font, size, and source run.
             let first = i;
-            let key = |g: &cosmic_text::LayoutGlyph| {
-                (g.font_id, g.font_size.to_bits(), g.metadata)
-            };
+            let key = |g: &cosmic_text::LayoutGlyph| (g.font_id, g.font_size.to_bits(), g.metadata);
             let group_key = key(&glyphs[i]);
             while i + 1 < glyphs.len() && key(&glyphs[i + 1]) == group_key {
                 i += 1;

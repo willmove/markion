@@ -807,8 +807,11 @@ impl MarkionApp {
                             Ok(outcome)
                                 if matches!(format, ExportFormat::Pdf | ExportFormat::Docx) =>
                             {
-                                let msg =
-                                    backend_status_msg(outcome.backend, format, outcome.engine_failure);
+                                let msg = backend_status_msg(
+                                    outcome.backend,
+                                    format,
+                                    outcome.engine_failure,
+                                );
                                 tf(language, msg, &[&display_path]).into()
                             }
                             Ok(_) => tf(language, Msg::StatusExported, &[&display_path]).into(),

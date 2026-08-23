@@ -21,6 +21,40 @@ function Invoke-Native([string]$Label, [scriptblock]$Command) {
     if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE" }
 }
 
+function Assert-ExportBundleClosure([System.IO.DirectoryInfo]$BundleRoot) {
+    $required = @(
+        "static/export-runtime.js",
+        "static/marknice-format-runtime.js",
+        "static/marknice-word-runtime.js",
+        "static/vendor/html-docx.js",
+        "LICENSE.html-docx-js.txt"
+    )
+    $manifestPath = Join-Path $BundleRoot.FullName "bundle-manifest.json"
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $paths = @($manifest.files | ForEach-Object { $_.path })
+    foreach ($requiredPath in $required) {
+        if ($paths -notcontains $requiredPath -or -not (Test-Path -LiteralPath (Join-Path $BundleRoot.FullName $requiredPath) -PathType Leaf)) {
+            throw "Packaged export asset is missing: $requiredPath"
+        }
+    }
+    $converter = @($manifest.third_party | Where-Object {
+        $_.name -eq "html-docx-js" -and $_.version -eq "0.3.1" -and $_.license -eq "MIT" -and $_.license_file -eq "LICENSE.html-docx-js.txt"
+    })
+    if ($converter.Count -ne 1) { throw "Packaged html-docx-js provenance is incomplete" }
+
+    $prohibited = @(Get-ChildItem -LiteralPath $BundleRoot.FullName -File -Recurse | Where-Object {
+        $relative = $_.FullName.Substring($BundleRoot.FullName.Length + 1).Replace('\\', '/')
+        $lower = $relative.ToLowerInvariant()
+        $name = $_.Name.ToLowerInvariant()
+        $lower -match '(^|/)node_modules(/|$)' -or
+        $name -in @('package.json', 'package-lock.json', 'npm-shrinkwrap.json', '.npmrc', '.env', 'id_rsa', 'credentials') -or
+        $name -match '\.(tgz|npm|docx|mht|pem|key|p12)$'
+    })
+    if ($prohibited) {
+        throw "Packaged workspace contains prohibited export artifacts: $($prohibited.FullName -join ', ')"
+    }
+}
+
 try {
     switch ($Format) {
         "nsis" {
@@ -63,6 +97,7 @@ try {
         Invoke-Native "Packaged workspace verification" {
             cargo run --release -p wechat-workspace --bin verify-bundle -- $manifest.Directory.FullName
         }
+        Assert-ExportBundleClosure $manifest.Directory
     }
     Write-Host "Verified $($manifests.Count) packaged MarkNice workspace tree(s) in $Format output"
 }

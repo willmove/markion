@@ -574,12 +574,20 @@ mod tests {
 
         // Non-CJK input gets no CJK font variable.
         let args = exporter.build_pandoc_args(&ExportOptions::default(), "# Hello");
-        assert!(!args.iter().any(|a| a.starts_with("--variable=CJKmainfont:")));
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.starts_with("--variable=CJKmainfont:"))
+        );
 
         // Non-LaTeX engines handle CJK through their own font stacks.
         let typst = PdfExporter::new().with_pdf_engine("typst");
         let args = typst.build_pandoc_args(&ExportOptions::default(), "# 你好世界");
-        assert!(!args.iter().any(|a| a.starts_with("--variable=CJKmainfont:")));
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.starts_with("--variable=CJKmainfont:"))
+        );
     }
 
     #[test]
@@ -592,7 +600,9 @@ mod tests {
         assert!(args.contains(&"--variable=CJKmainfont:Source Han Sans SC".to_string()));
 
         // Blank overrides are ignored.
-        let blank = PdfExporter::new().with_mainfont(Some("  ")).with_cjk_font(None);
+        let blank = PdfExporter::new()
+            .with_mainfont(Some("  "))
+            .with_cjk_font(None);
         let args = blank.build_pandoc_args(&ExportOptions::default(), "# hi");
         assert!(!args.iter().any(|a| a.starts_with("--variable=mainfont:")));
     }

@@ -54,6 +54,7 @@ impl MarkionApp {
             focus_handle: cx.focus_handle(),
             active_menu: None,
             open_recent_submenu_open: false,
+            about_dialog_open: false,
             status: t(Language::default(), Msg::StatusReady).into(),
             publishing_service: None,
             browser_launcher: Arc::new(publishing::DefaultBrowserLauncher),

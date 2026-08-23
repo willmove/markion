@@ -23,16 +23,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
-use krilla::geom::{Point, Rect, Size, Transform};
-use krilla::page::PageSettings;
-use krilla::text::{Font as KrillaFont, GlyphId, KrillaGlyph};
+use krilla::Data;
 use krilla::Document;
 use krilla::action::{Action, LinkAction};
 use krilla::annotation::{Annotation, LinkAnnotation, Target};
 use krilla::destination::XyzDestination;
+use krilla::geom::{Point, Rect, Size, Transform};
 use krilla::metadata::{DateTime, Metadata};
 use krilla::outline::{Outline, OutlineNode};
-use krilla::Data;
+use krilla::page::PageSettings;
+use krilla::text::{Font as KrillaFont, GlyphId, KrillaGlyph};
 use krilla_svg::{SurfaceExt, SvgSettings};
 
 fn repo_root() -> PathBuf {
@@ -111,11 +111,9 @@ fn shape_line(fs: &mut FontSystem, text: &str, font_size: f32) -> (Vec<ShapedLin
                     "[spike]   face: {} index={} source={}",
                     face.post_script_name, face.index, source_path
                 );
-                let krilla_font = KrillaFont::new(
-                    Data::from(cosmic_font.data().to_vec()),
-                    face.index,
-                )
-                .expect("krilla loads the cosmic-selected font (incl. TTC face index)");
+                let krilla_font =
+                    KrillaFont::new(Data::from(cosmic_font.data().to_vec()), face.index)
+                        .expect("krilla loads the cosmic-selected font (incl. TTC face index)");
                 (krilla_font, face.post_script_name.clone())
             });
 
@@ -236,8 +234,13 @@ fn spike_pdf_api_surface() {
 
     // --- Capability 3: link annotation over the text rectangle ---
     let link = LinkAnnotation::new(
-        Rect::from_xywh(margin, margin + lines[0].line_y - font_size, lines[0].line_w, font_size * 1.4)
-            .expect("link rect"),
+        Rect::from_xywh(
+            margin,
+            margin + lines[0].line_y - font_size,
+            lines[0].line_w,
+            font_size * 1.4,
+        )
+        .expect("link rect"),
         Target::Action(Action::Link(LinkAction::new(
             "https://example.com".to_string(),
         ))),
@@ -309,7 +312,9 @@ fn spike_svg_with_text_element() {
     };
     let tree = usvg::Tree::from_str(text_svg, &options).expect("parse SVG with text");
     let spans_with_fonts = count_text_spans(&tree);
-    eprintln!("[spike] text spans laid out: empty fontdb = {spans_no_fonts}, system fontdb = {spans_with_fonts}");
+    eprintln!(
+        "[spike] text spans laid out: empty fontdb = {spans_no_fonts}, system fontdb = {spans_with_fonts}"
+    );
     assert!(
         spans_with_fonts > spans_no_fonts,
         "<text> only lays out when Options::fontdb has fonts"

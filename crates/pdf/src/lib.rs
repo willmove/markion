@@ -17,11 +17,11 @@ mod text;
 mod theme;
 
 pub use engine::render;
-pub use raster::{render_snapshot, DEFAULT_SCALE};
 pub use ir::{
     AlertKind, Alignment, Block, Cell, ImageData, ListMarker, PdfDocument, PdfMetadata, PdfOptions,
     Rgb, Run, Style,
 };
+pub use raster::{DEFAULT_SCALE, render_snapshot};
 
 /// Error type for the built-in PDF writer. Export failures surface through
 /// the root crate's user-facing status reporting.

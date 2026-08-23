@@ -170,9 +170,48 @@ const MARKION_APP_ID: &str = "dev.markion.app";
 const MARKION_WINDOW_TITLE: &str = "Markion";
 
 const MAX_HISTORY_LEN: usize = 200;
+const MARKION_PROJECT_WEBSITE_URL: &str = "https://markion.app";
 const GITHUB_REPO_URL: &str = "https://github.com/willmove/markion";
 const GITHUB_ISSUES_URL: &str = "https://github.com/willmove/markion/issues/new";
 const GITHUB_DOCS_URL: &str = "https://github.com/willmove/markion#readme";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AboutLink {
+    ProjectWebsite,
+    GithubRepository,
+}
+
+impl AboutLink {
+    const ALL: [Self; 2] = [Self::ProjectWebsite, Self::GithubRepository];
+
+    const fn label(self) -> Msg {
+        match self {
+            Self::ProjectWebsite => Msg::DialogAboutProjectWebsite,
+            Self::GithubRepository => Msg::DialogAboutGithub,
+        }
+    }
+
+    const fn url(self) -> &'static str {
+        match self {
+            Self::ProjectWebsite => MARKION_PROJECT_WEBSITE_URL,
+            Self::GithubRepository => GITHUB_REPO_URL,
+        }
+    }
+
+    const fn row_selector(self) -> &'static str {
+        match self {
+            Self::ProjectWebsite => "about-project-website-row",
+            Self::GithubRepository => "about-github-row",
+        }
+    }
+
+    const fn link_selector(self) -> &'static str {
+        match self {
+            Self::ProjectWebsite => "about-project-website-link",
+            Self::GithubRepository => "about-github-link",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppMenu {
@@ -1598,6 +1637,9 @@ struct MarkionApp {
     /// File → Open Recent nested submenu visibility. Cleared whenever
     /// `active_menu` leaves File or the whole menu closes.
     open_recent_submenu_open: bool,
+    /// Whether the transient, root-hosted About Markion modal is visible.
+    /// This is application chrome only and is never persisted.
+    about_dialog_open: bool,
     status: SharedString,
     /// Process-owned, lazily created loopback publishing service. `None`
     /// keeps ordinary startup/editing entirely free of bundle and socket work.

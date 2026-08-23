@@ -11,6 +11,15 @@ use thiserror::Error;
 
 pub const BUNDLE_MANIFEST: &str = "bundle-manifest.json";
 
+const MARKNICE_SOURCE_REPOSITORY: &str = "https://github.com/willmove/marknice";
+const REQUIRED_EXPORT_FILES: &[&str] = &[
+    "static/export-runtime.js",
+    "static/marknice-format-runtime.js",
+    "static/marknice-word-runtime.js",
+    "static/vendor/html-docx.js",
+    "LICENSE.html-docx-js.txt",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BundleManifest {
     pub import_format_version: u32,
@@ -64,6 +73,8 @@ pub enum BundleError {
     MissingLocalDependency,
     #[error("the local publishing workspace provenance or license data is incomplete")]
     IncompleteProvenance,
+    #[error("a local publishing workspace contains a prohibited export artifact: {path}")]
+    ProhibitedExportArtifact { path: String },
     #[error("the local publishing workspace could not be read")]
     Io(#[source] io::Error),
 }
@@ -134,6 +145,7 @@ pub fn verify_bundle(root: &Path) -> Result<BundleVerification, BundleError> {
     let manifest: BundleManifest =
         serde_json::from_slice(&manifest_bytes).map_err(BundleError::InvalidManifest)?;
     validate_provenance(&manifest)?;
+    validate_marknice_export_artifacts(&manifest)?;
 
     let mut listed = HashMap::new();
     let mut total_bytes = 0_u64;
@@ -213,6 +225,62 @@ fn validate_provenance(manifest: &BundleManifest) -> Result<(), BundleError> {
         return Err(BundleError::IncompleteProvenance);
     }
     Ok(())
+}
+
+/// The browser export is intentionally a checked-in static bundle: npm
+/// metadata, credentials, and generated documents must never become release
+/// assets. This applies only to MarkNice; generic test bundles retain their
+/// focused local-closure coverage.
+fn validate_marknice_export_artifacts(manifest: &BundleManifest) -> Result<(), BundleError> {
+    if manifest.source_repository != MARKNICE_SOURCE_REPOSITORY {
+        return Ok(());
+    }
+
+    let converter = manifest
+        .third_party
+        .iter()
+        .find(|component| component.name == "html-docx-js")
+        .filter(|component| {
+            component.version == "0.3.1"
+                && component.license == "MIT"
+                && component.license_file == "LICENSE.html-docx-js.txt"
+        });
+    if converter.is_none()
+        || REQUIRED_EXPORT_FILES
+            .iter()
+            .any(|required| !manifest.files.iter().any(|file| file.path == *required))
+    {
+        return Err(BundleError::IncompleteProvenance);
+    }
+
+    for file in &manifest.files {
+        if is_prohibited_export_artifact(&file.path) {
+            return Err(BundleError::ProhibitedExportArtifact {
+                path: file.path.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn is_prohibited_export_artifact(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    let file_name = lower.rsplit('/').next().unwrap_or_default();
+    lower.split('/').any(|part| part == "node_modules")
+        || matches!(
+            file_name,
+            "package.json"
+                | "package-lock.json"
+                | "npm-shrinkwrap.json"
+                | ".npmrc"
+                | ".env"
+                | "id_rsa"
+                | "credentials"
+        )
+        || [".tgz", ".npm", ".docx", ".mht", ".pem", ".key", ".p12"]
+            .iter()
+            .any(|extension| file_name.ends_with(extension))
 }
 
 const TEXT_EXTENSIONS: &[&str] = &[
@@ -589,5 +657,38 @@ mod tests {
             verification.source_commit,
             "c009c1ec7e7c92f89afa5a32edcb126b5296bda7"
         );
+
+        let manifest: BundleManifest = serde_json::from_slice(
+            &fs::read(root.join(BUNDLE_MANIFEST)).expect("checked-in workspace manifest"),
+        )
+        .expect("checked-in workspace manifest is valid");
+        assert!(
+            REQUIRED_EXPORT_FILES
+                .iter()
+                .all(|required| { manifest.files.iter().any(|file| file.path == *required) })
+        );
+        assert!(manifest.third_party.iter().any(|component| {
+            component.name == "html-docx-js"
+                && component.version == "0.3.1"
+                && component.license == "MIT"
+                && component.license_file == "LICENSE.html-docx-js.txt"
+        }));
+    }
+
+    #[test]
+    fn canonical_bundle_rejects_npm_credentials_and_generated_documents() {
+        for path in [
+            "node_modules/html-docx-js/index.js",
+            "package-lock.json",
+            "static/runtime.tgz",
+            "export.docx",
+            "token.pem",
+        ] {
+            assert!(
+                is_prohibited_export_artifact(path),
+                "{path} must be rejected"
+            );
+        }
+        assert!(!is_prohibited_export_artifact("static/vendor/html-docx.js"));
     }
 }
