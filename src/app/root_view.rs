@@ -3699,12 +3699,6 @@ pub(super) fn active_menu_dropdown(
         }
         AppMenu::Export => panel
             .child(action_item!(
-                Msg::ItemPublishWechat,
-                publish_wechat,
-                PublishWechat
-            ))
-            .child(menu_separator(palette))
-            .child(action_item!(
                 Msg::ItemExportHtml,
                 export_html,
                 ExportHtml,
@@ -3745,6 +3739,12 @@ pub(super) fn active_menu_dropdown(
                 export_jpeg,
                 ExportJpeg,
                 menu_shortcuts::EXPORT_JPEG
+            ))
+            .child(menu_separator(palette))
+            .child(action_item!(
+                Msg::ItemPublishWechat,
+                publish_wechat,
+                PublishWechat
             )),
         AppMenu::Help => panel
             .child(action_item!(
