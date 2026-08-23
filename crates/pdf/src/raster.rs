@@ -47,7 +47,11 @@ struct Geometry {
     left: f32,
     top: f32,
     right: f32,
-    bottom: f32,
+    /// Full page size in pixels, margins included. Blocks are placed at
+    /// absolute x positions starting at `left`, so the canvas must span the
+    /// whole page or the right margin's worth of content is clipped away.
+    page_w: f32,
+    page_h: f32,
 }
 
 const MM_TO_PT: f32 = 72.0 / 25.4;
@@ -62,7 +66,8 @@ impl Geometry {
             left,
             top: margin,
             right: (page_w - margin).max(left + 1.0),
-            bottom: page_h - margin,
+            page_w,
+            page_h,
         }
     }
 
@@ -262,8 +267,7 @@ fn buffer_height(buffer: &Buffer) -> f32 {
 }
 
 /// Blit the glyphs of one shaped layout run at screen origin (x, top), where
-/// `run.line_y` already carries the per-line baseline. `clip_right` truncates
-/// pixels past it (code lines that overflow the text column).
+/// `run.line_y` already carries the per-line baseline.
 #[allow(clippy::too_many_arguments)]
 fn blit_run(
     fs: &mut FontSystem,
@@ -272,7 +276,6 @@ fn blit_run(
     run: &cosmic_text::LayoutRun<'_>,
     x: f32,
     top: f32,
-    clip_right: Option<f32>,
     default_color: Rgb,
 ) {
     for glyph in run.glyphs {
@@ -285,14 +288,7 @@ fn blit_run(
         let ox = x.round() as i32 + phys.x;
         let oy = top.round() as i32 + phys.y;
         cache.with_pixels(fs, phys.cache_key, color, |dx, dy, pc| {
-            let sx = ox + dx;
-            let sy = oy + dy;
-            if let Some(clip) = clip_right {
-                if sx as f32 >= clip {
-                    return;
-                }
-            }
-            canvas.blend(sx, sy, pc);
+            canvas.blend(ox + dx, oy + dy, pc);
         });
     }
 }
@@ -307,7 +303,6 @@ fn draw_buffer(
     buffer: &Buffer,
     x: f32,
     top: f32,
-    clip_right: Option<f32>,
     default_color: Rgb,
 ) {
     for run in buffer.layout_runs() {
@@ -342,7 +337,7 @@ fn draw_buffer(
                 );
             }
         }
-        blit_run(fs, cache, canvas, &run, x, top, clip_right, default_color);
+        blit_run(fs, cache, canvas, &run, x, top, default_color);
     }
 }
 
@@ -366,7 +361,7 @@ fn draw_cell(
             Alignment::Right => cell_w - run.line_w,
         }
         .max(0.0);
-        blit_run(fs, cache, canvas, &run, cell_x + dx, y, None, theme::TEXT);
+        blit_run(fs, cache, canvas, &run, cell_x + dx, y, theme::TEXT);
         y += run.line_height;
     }
 }
@@ -385,7 +380,7 @@ struct Raster<'a> {
 
 impl<'a> Raster<'a> {
     fn new(fs: &'a mut FontSystem, geom: Geometry, scale: f32) -> Self {
-        let canvas = Canvas::new(geom.content_w().round().max(1.0) as u32);
+        let canvas = Canvas::new(geom.page_w.round().max(1.0) as u32);
         Raster {
             fs,
             cache: SwashCache::new(),
@@ -433,7 +428,6 @@ fn draw_paragraph(raster: &mut Raster, content: &[Run]) -> Result<(), PdfError> 
         &buffer,
         raster.geom.left,
         top,
-        None,
         theme::TEXT,
     );
     raster.y += h + raster.smul(theme::PARA_SPACING);
@@ -477,7 +471,6 @@ fn draw_heading(raster: &mut Raster, level: u8, content: &[Run]) -> Result<(), P
         &buffer,
         raster.geom.left,
         top,
-        None,
         theme::TEXT,
     );
     raster.y += h + raster.smul(theme::HEADING_AFTER);
@@ -545,7 +538,6 @@ fn draw_list_item(
         &marker_buffer,
         indent_x,
         top,
-        None,
         theme::MUTED,
     );
     draw_buffer(
@@ -556,7 +548,6 @@ fn draw_list_item(
         &buffer,
         content_x,
         top,
-        None,
         theme::TEXT,
     );
     raster.y += h + raster.smul(theme::PARA_SPACING * 0.5);
@@ -631,7 +622,6 @@ fn draw_alert(raster: &mut Raster, kind: AlertKind, children: &[Block]) -> Resul
         &label,
         raster.geom.left,
         label_top,
-        None,
         accent,
     );
     raster.y += lh + raster.smul(2.0);
@@ -659,10 +649,23 @@ fn draw_code_block(raster: &mut Raster, lines: &[Vec<Run>]) -> Result<(), PdfErr
     let seg_top = raster.y;
 
     // Shape all lines first so the background can be drawn behind the text.
+    // Unlike the paginated PDF engine (which clips overflowing code lines at
+    // the column edge), a snapshot must not lose text: long lines soft-wrap
+    // at the code column (word boundaries, glyph-level for unbreakable
+    // tokens).
+    let wrap_w = (raster.geom.content_w() - pad * 2.0).max(20.0 * raster.scale);
     let mut buffers = Vec::with_capacity(lines.len());
     let mut total_h = 0.0f32;
     for line in lines {
-        let buffer = shape_buffer(raster.fs, line, size, line_h, Family::Monospace, theme::TEXT, None);
+        let buffer = shape_buffer(
+            raster.fs,
+            line,
+            size,
+            line_h,
+            Family::Monospace,
+            theme::TEXT,
+            Some(wrap_w),
+        );
         let h = buffer_height(&buffer);
         total_h += h;
         buffers.push((buffer, h));
@@ -685,7 +688,6 @@ fn draw_code_block(raster: &mut Raster, lines: &[Vec<Run>]) -> Result<(), PdfErr
             &buffer,
             raster.geom.left + pad,
             raster.y,
-            Some(raster.geom.right),
             theme::TEXT,
         );
         raster.y += h;
@@ -897,8 +899,8 @@ fn render_document(fs: &mut FontSystem, doc: &PdfDocument, scale: f32) -> Result
     for block in &doc.blocks {
         draw_block(&mut raster, block)?;
     }
-    // Ensure at least one page-height of canvas (empty docs still export).
-    raster.canvas.grow((geom.bottom).ceil().max(1.0) as u32);
+    // Ensure at least one full page of canvas (empty docs still export).
+    raster.canvas.grow(geom.page_h.ceil().max(1.0) as u32);
     Ok(raster.canvas.into_rgba())
 }
 
@@ -971,6 +973,85 @@ mod tests {
         let doc = doc_with_blocks(Vec::new());
         let img = render_document(&mut fs, &doc, 2.0).expect("snapshot");
         assert!(img.width() > 0 && img.height() > 0);
+    }
+
+    /// The canvas spans the full page width and height, margins included.
+    /// Blocks are placed at absolute x positions starting at the left margin,
+    /// so a content-width canvas clipped the right margin's worth of text
+    /// (and a content-height frame cut the bottom margin).
+    #[test]
+    fn snapshot_canvas_spans_full_page_with_margins() {
+        let mut fs = bundled_only_font_system();
+        let scale = 2.0;
+        let options = PdfOptions::default();
+        let doc = doc_with_blocks(vec![Block::Paragraph {
+            content: vec![run_of("text towards the right edge of the column")],
+        }]);
+        let img = render_document(&mut fs, &doc, scale).expect("snapshot");
+        let page_w = (options.page_width_mm * MM_TO_PT * scale).round() as u32;
+        let margin = (options.margin_mm * MM_TO_PT * scale).round() as u32;
+        assert_eq!(img.width(), page_w, "canvas must include both margins");
+        // The right margin stays untouched background: no glyph or fill may
+        // bleed into it, and it must exist at all (the truncated-canvas bug).
+        for py in 0..img.height() {
+            for px in (page_w - margin)..page_w {
+                let p = img.get_pixel(px, py);
+                assert_eq!(
+                    p.0,
+                    [0xff, 0xff, 0xff, 0xff],
+                    "right margin must stay background"
+                );
+            }
+        }
+    }
+
+    /// An empty document renders one full page frame (both margins visible).
+    #[test]
+    fn empty_document_frame_is_a_full_page() {
+        let mut fs = bundled_only_font_system();
+        let scale = 2.0;
+        let options = PdfOptions::default();
+        let doc = doc_with_blocks(Vec::new());
+        let img = render_document(&mut fs, &doc, scale).expect("snapshot");
+        let page_h = (options.page_height_mm * MM_TO_PT * scale).round() as u32;
+        assert_eq!(img.height(), page_h);
+    }
+
+    /// Regression: overflowing code lines used to be hard-clipped at the
+    /// column edge, losing text on the right. They must soft-wrap instead —
+    /// many long lines push the canvas past one page height, and no glyph
+    /// may land in the right margin.
+    #[test]
+    fn long_code_lines_wrap_instead_of_clipping() {
+        let mut fs = bundled_only_font_system();
+        let scale = 2.0;
+        let options = PdfOptions::default();
+        // Unbreakable tokens (no spaces) wider than the code column.
+        let long_line = "k".repeat(160);
+        let lines: Vec<Vec<Run>> = (0..30).map(|_| vec![run_of(&long_line)]).collect();
+        let doc = doc_with_blocks(vec![Block::CodeBlock {
+            language: None,
+            lines,
+        }]);
+        let img = render_document(&mut fs, &doc, scale).expect("snapshot");
+        let page_w = (options.page_width_mm * MM_TO_PT * scale).round() as u32;
+        let page_h = (options.page_height_mm * MM_TO_PT * scale).round() as u32;
+        let margin = (options.margin_mm * MM_TO_PT * scale).round() as u32;
+        assert_eq!(img.width(), page_w);
+        assert!(
+            img.height() > page_h,
+            "30 wrapped code lines must exceed one page height, got {}",
+            img.height()
+        );
+        for py in 0..img.height() {
+            for px in (page_w - margin)..page_w {
+                assert_eq!(
+                    img.get_pixel(px, py).0,
+                    [0xff, 0xff, 0xff, 0xff],
+                    "right margin must stay background"
+                );
+            }
+        }
     }
 
     /// `render_snapshot` (the public wrapper) resolves fonts through the

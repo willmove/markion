@@ -2310,7 +2310,13 @@ pub(crate) fn write_image_export(
     let ir = build_pdf_ir(document, &settings.pdf, base_dir);
     let image = markion_pdf::render_snapshot(&ir, markion_pdf::DEFAULT_SCALE)
         .map_err(io::Error::other)?;
-    image.save_with_format(path, format).map_err(io::Error::other)
+    let mut dynamic = image::DynamicImage::ImageRgba8(image);
+    // JPEG has no alpha channel; flatten the (already opaque) RGBA snapshot
+    // onto RGB8 or the encoder rejects the color type.
+    if format == image::ImageFormat::Jpeg {
+        dynamic = dynamic.to_rgb8().into();
+    }
+    dynamic.save_with_format(path, format).map_err(io::Error::other)
 }
 
 /// Test helper: extracts one entry from a hand-written DOCX ZIP by walking
@@ -3046,5 +3052,33 @@ mod tests {
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
         assert!(page_count >= 1, "PDF should contain at least one page");
+    }
+
+    /// Regression (2026-08): JPEG has no alpha channel, so saving the RGBA
+    /// snapshot failed with "Jpeg does not support the color type 'Rgba8'";
+    /// the exporter must flatten to RGB8 first. Both snapshots must also span
+    /// the full A4 page width at the default scale — a content-width canvas
+    /// truncated the right margin's worth of text.
+    #[test]
+    fn image_export_writes_jpeg_and_png_snapshots() {
+        let document = MarkdownDocument::from_text("# 标题\n\nMixed CJK and Latin paragraph.\n");
+        let settings = ExportPreferences::default();
+        let dir = tempfile::tempdir().unwrap();
+
+        let jpg_path = dir.path().join("snapshot.jpg");
+        write_image_export(&jpg_path, &document, &settings, image::ImageFormat::Jpeg)
+            .expect("JPEG snapshot export");
+        let jpg = image::open(&jpg_path).expect("written JPEG decodes");
+        assert_eq!(jpg.color(), image::ColorType::Rgb8);
+
+        let png_path = dir.path().join("snapshot.png");
+        write_image_export(&png_path, &document, &settings, image::ImageFormat::Png)
+            .expect("PNG snapshot export");
+        let png = image::open(&png_path).expect("written PNG decodes");
+        assert_eq!(png.color(), image::ColorType::Rgba8);
+
+        let page_w = (210.0 * 72.0 / 25.4 * markion_pdf::DEFAULT_SCALE).round() as u32;
+        assert_eq!(jpg.width(), page_w, "JPEG must include both margins");
+        assert_eq!(png.width(), page_w, "PNG must include both margins");
     }
 }
