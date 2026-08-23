@@ -8,10 +8,10 @@ tester before archive or publication.
 | Evidence | Windows | macOS Apple Silicon | Linux X11 | Linux Wayland |
 | --- | --- | --- | --- | --- |
 | Packaged bundle extraction and digest verification | CI | CI | CI | CI |
-| Default-browser dispatch | Pending | Pending | Pending | Pending |
-| Offline shell, themes, typography, and math rendering | Pending | Pending | Pending | Pending |
-| Remote and managed-image preview; explicit omission copy | Pending | Pending | Pending | Pending |
-| Clipboard-denied feedback, expiry, and repeated sessions | Pending | Pending | Pending | Pending |
+| Default-browser dispatch | v0.2.1 / Edge 151.0.4129.101 / Pass / willmove | Deferred for v0.2.1 by maintainer | Deferred for v0.2.1 by maintainer | Deferred for v0.2.1 by maintainer |
+| Offline shell, themes, typography, and math rendering | v0.2.1 / Edge 151.0.4129.101 / Pass / willmove | Deferred for v0.2.1 by maintainer | Deferred for v0.2.1 by maintainer | Deferred for v0.2.1 by maintainer |
+| Remote and managed-image preview; explicit omission copy | v0.2.1 / Edge 151.0.4129.101 / Pass / willmove | Deferred for v0.2.1 by maintainer | Deferred for v0.2.1 by maintainer | Deferred for v0.2.1 by maintainer |
+| Clipboard-denied feedback, expiry, and repeated sessions | v0.2.1 / Edge 151.0.4129.101 / Pass / willmove | Deferred for v0.2.1 by maintainer | Deferred for v0.2.1 by maintainer | Deferred for v0.2.1 by maintainer |
 
 ## Source-tree browser evidence
 
@@ -22,11 +22,23 @@ font, claim, document, heartbeat, and protected-image request from loopback.
 Theme, typography, desktop/phone, math, tab-local editing, rich HTML/plain-text
 copy, clipboard denial, local-image cancel/explicit omission, safe copied-HTML
 URL assertions, one-time fragment removal, and localized expiry guidance all
-passed. This source-tree evidence does not replace packaged default-browser,
-macOS/Linux, installer-size, or real WeChat paste verification below.
+passed. For v0.2.1, the maintainer additionally verified the packaged Windows
+default-browser workflow in the same Edge version and accepted the Windows
+result as the manual browser release gate. macOS and Linux manual browser
+coverage is explicitly deferred; their native package extraction, bundle
+digest verification, and build results remain mandatory in the tag workflow.
 
-WeChat paste verification is also pending. Paste the compatibility corpus into
-the WeChat editor and record headings, paragraphs and breaks, nested lists,
-tables, code, math, links, remote images, plain-text fallback, and the reported
-local-image omission count. Record installer/package size deltas for all four
-native distributions alongside the results.
+## WeChat paste evidence
+
+On 2026-08-23, maintainer `willmove` verified the representative rich-copy
+payload in WeChat 4.1.13.7 on Windows. Headings, paragraphs and breaks, nested
+lists, tables, code, math, links, remote images, plain-text fallback, and the
+explicit local-image omission behavior passed.
+
+## v0.2.1 release decision
+
+On 2026-08-23, maintainer `willmove` explicitly authorized publishing v0.2.1
+with the completed Windows Edge and WeChat evidence above. The unperformed
+macOS and Linux manual browser checks are deferred rather than represented as
+passes. Publication still requires successful Windows, macOS, and Linux native
+build/package verification and all tag-only signing, release, and mirror jobs.
