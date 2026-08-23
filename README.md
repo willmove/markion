@@ -123,13 +123,16 @@ PDF and DOCX try the absorbed Typune/pandoc export engine first. If pandoc or th
 
 Choose **Export → Publish for WeChat (MarkNice)** to open the active in-memory
 document in a private loopback workspace in your default browser. The bundled
-themes, renderer, math fonts, and application scripts work offline. Browser
+themes, renderer, math typesetting, and application scripts work offline.
+Formulas are typeset as self-contained inline SVG (MathJax), so they survive
+the WeChat editor's paste-time filtering without duplication. Browser
 edits stay in that tab and never write back to Markion. Managed local images
 can be previewed, but copying requires explicitly omitting them because a local
 blob cannot be published by WeChat; remote images may still contact their
 authored hosts. The workspace can also copy its exact current Markdown and
 download standalone themed HTML or a browser-generated MarkNice DOCX. HTML
-embeds KaTeX assets and safely readable managed images; remote images remain
+embeds self-contained SVG formulas and safely readable managed images; remote
+images remain
 remote. Browser DOCX targets Microsoft Word desktop and is distinct from
 Markion's native/Pandoc DOCX export. If clipboard permission or the two-hour
 session expires, allow the permission or relaunch from Markion.

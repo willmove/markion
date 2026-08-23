@@ -161,9 +161,17 @@ let unresolvedCount = 0;
 let resolvedCount = 0;
 
 marked.setOptions({ breaks: true, gfm: true });
+function escapeMathHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 marked.use({ extensions: [
-  { name: 'mathBlock', level: 'block', start: src => (src.match(/\$\$/) || { index: -1 }).index, tokenizer(src) { const m = src.match(/^\$\$([\s\S]+?)\$\$/); if (m) return { type: 'mathBlock', raw: m[0], tex: m[1].trim() }; }, renderer: token => `<div class="math-block">\\[${token.tex}\\]</div>` },
-  { name: 'mathInline', level: 'inline', start: src => (src.match(/\$/) || { index: -1 }).index, tokenizer(src) { const m = src.match(/^\$([^$\n]+?)\$/); if (m) return { type: 'mathInline', raw: m[0], tex: m[1].trim() }; }, renderer: token => `<span class="math-inline">\\(${token.tex}\\)</span>` }
+  { name: 'mathBlock', level: 'block', start: src => (src.match(/\$\$/) || { index: -1 }).index, tokenizer(src) { const m = src.match(/^\$\$([\s\S]+?)\$\$/); if (m) return { type: 'mathBlock', raw: m[0], tex: m[1].trim() }; }, renderer: token => { const tex = escapeMathHtml(token.tex); return `<div class="math-block" data-tex="${tex}">\\[${tex}\\]</div>`; } },
+  { name: 'mathInline', level: 'inline', start: src => (src.match(/\$/) || { index: -1 }).index, tokenizer(src) { const m = src.match(/^\$([^$\n]+?)\$/); if (m) return { type: 'mathInline', raw: m[0], tex: m[1].trim() }; }, renderer: token => { const tex = escapeMathHtml(token.tex); return `<span class="math-inline" data-tex="${tex}">\\(${tex}\\)</span>`; } }
 ] });
 
 function normalizeImageReference(value) {

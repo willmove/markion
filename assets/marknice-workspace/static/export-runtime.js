@@ -5,7 +5,6 @@
   const MAX_MANAGED_EXPORT_RESOURCES = 64;
   const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=\s]+$/i;
   const BLOCKED_EXPORT_ELEMENTS = 'script,style,link,base,iframe,frame,frameset,object,embed,applet,form,input,button,select,textarea,meta,template';
-  let katexCssPromise;
 
   function exportedMessage(name, fallback) {
     return typeof locale?.[name] === 'function' || typeof locale?.[name] === 'string'
@@ -115,19 +114,12 @@
     image.replaceWith(fallback);
   }
 
-  function preserveMathClasses(root) {
-    const mathNodes = new Set();
-    root.querySelectorAll('.katex, .katex *').forEach(node => mathNodes.add(node));
-    return mathNodes;
-  }
-
   async function prepareExportArticle(snapshot) {
     const doc = new DOMParser().parseFromString(`<body>${snapshot.articleHtml}</body>`, 'text/html');
     const root = doc.body.firstElementChild || doc.createElement('section');
-    const mathNodes = preserveMathClasses(root);
     root.querySelectorAll(BLOCKED_EXPORT_ELEMENTS).forEach(node => node.remove());
     root.querySelectorAll('svg').forEach(node => {
-      if (!node.closest('.katex')) node.remove();
+      if (!node.closest('.math-block, .math-inline')) node.remove();
     });
     let fallbackCount = 0;
     let remoteImageCount = 0;
@@ -170,7 +162,7 @@
         const name = attribute.name.toLowerCase();
         if (name.startsWith('on') || name.startsWith('data-') || name === 'id' || name === 'name' || name === 'target' || name === 'formaction') {
           node.removeAttribute(attribute.name);
-        } else if (name === 'class' && !mathNodes.has(node)) {
+        } else if (name === 'class') {
           node.removeAttribute(attribute.name);
         } else if (name === 'style' && /(?:url\s*\(|expression\s*\(|behavior\s*:|-moz-binding)/i.test(attribute.value)) {
           node.removeAttribute(attribute.name);
@@ -195,44 +187,25 @@
     return Object.freeze({ articleHtml: html, fallbackCount, remoteImageCount });
   }
 
-  function exportAssetPrefix() {
-    return location.pathname.includes('/static/') ? '' : 'static/';
+  /* Word renders the DOCX body via altChunk(MHT), which supports neither MathML
+     nor SVG math layout, so formulas are degraded to linear readable text from
+     their preserved TeX source before the durable-artifact safety pass. */
+  async function prepareWordArticle(snapshot) {
+    const rewritten = typeof window.MarkionMath?.rewriteForWordExport === 'function'
+      ? { ...snapshot, articleHtml: window.MarkionMath.rewriteForWordExport(snapshot.articleHtml) }
+      : snapshot;
+    return prepareExportArticle(rewritten);
   }
 
-  async function katexCssWithEmbeddedFonts() {
-    if (!katexCssPromise) {
-      katexCssPromise = (async () => {
-        const prefix = exportAssetPrefix();
-        const response = await fetch(`${prefix}vendor/katex.min.css`, { cache: 'no-store', credentials: 'same-origin' });
-        if (!response.ok) throw new Error('KaTeX stylesheet unavailable');
-        let css = await response.text();
-        css = css.replace(/,?url\((?:['"])?fonts\/[^)'"?#]+\.(?:woff|ttf)(?:[?#][^)'"\s]*)?(?:['"])?\)\s*format\([^)]*\)/gi, '');
-        const fonts = [...new Set([...css.matchAll(/url\((?:['"])?(fonts\/[^)'"?#]+\.woff2)(?:[?#][^)'"\s]*)?(?:['"])?\)/gi)].map(match => match[1]))];
-        for (const font of fonts) {
-          const fontResponse = await fetch(`${prefix}vendor/${font}`, { cache: 'no-store', credentials: 'same-origin' });
-          if (!fontResponse.ok) throw new Error(`KaTeX font unavailable: ${font}`);
-          const dataUrl = await dataUrlForBlob(await fontResponse.blob());
-          css = css.replaceAll(`url(fonts/${font.slice('fonts/'.length)})`, `url(${dataUrl})`)
-            .replaceAll(`url('fonts/${font.slice('fonts/'.length)}')`, `url(${dataUrl})`)
-            .replaceAll(`url("fonts/${font.slice('fonts/'.length)}")`, `url(${dataUrl})`);
-        }
-        if (/url\((?:['"])?fonts\//i.test(css)) throw new Error('KaTeX font embedding incomplete');
-        return css;
-      })();
-    }
-    return katexCssPromise;
-  }
-
-  function standaloneHtml(snapshot, prepared, katexCss) {
+  function standaloneHtml(snapshot, prepared) {
     const title = escapeHtml(snapshot.title);
     return `<!doctype html>
 <html lang="${escapeHtml(snapshot.language)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: http: https:; font-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: http: https:; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'">
 <title>${title}</title>
-<style>${katexCss}</style>
 </head>
 <body>
 ${prepared.articleHtml}
@@ -328,8 +301,8 @@ body{font-family:'PingFang SC','Microsoft YaHei',SimHei,sans-serif;font-size:14p
         return false;
       }
       updateStatus(exportedMessage('htmlPreparing', 'Preparing themed HTML…'));
-      const [prepared, katexCss] = await Promise.all([prepareExportArticle(snapshot), katexCssWithEmbeddedFonts()]);
-      startDownload(new Blob([standaloneHtml(snapshot, prepared, katexCss)], { type: 'text/html;charset=utf-8' }), filenameFor(snapshot.title, 'html'));
+      const prepared = await prepareExportArticle(snapshot);
+      startDownload(new Blob([standaloneHtml(snapshot, prepared)], { type: 'text/html;charset=utf-8' }), filenameFor(snapshot.title, 'html'));
       updateStatus(`${exportedMessage('htmlDownloaded', 'Themed HTML download started.')}${appendExportResourceStatus(prepared)}`);
       return true;
     } catch (error) {
@@ -352,7 +325,7 @@ body{font-family:'PingFang SC','Microsoft YaHei',SimHei,sans-serif;font-size:14p
         return false;
       }
       updateStatus(exportedMessage('docxPreparing', 'Preparing browser-generated DOCX…'));
-      const prepared = await prepareExportArticle(snapshot);
+      const prepared = await prepareWordArticle(snapshot);
       startDownload(await createDocxBlob(snapshot, prepared), filenameFor(snapshot.title, 'docx'));
       updateStatus(`${exportedMessage('docxDownloaded', 'Browser-generated DOCX download started.')}${appendExportResourceStatus(prepared)} ${exportedMessage('docxNote', '')}`.trim());
       return true;
@@ -369,10 +342,10 @@ body{font-family:'PingFang SC','Microsoft YaHei',SimHei,sans-serif;font-size:14p
     buildExportSnapshot,
     filenameFor,
     prepareExportArticle,
+    prepareWordArticle,
     standaloneHtml,
     wordHtml,
     createDocxBlob,
-    katexCssWithEmbeddedFonts,
     copyMarkdown,
     downloadHtml,
     downloadDocx,

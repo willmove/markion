@@ -28,9 +28,17 @@ function applyLocalImages(root) {
 }
 function localImageStatusSuffix() { return ''; }
 marked.setOptions({ breaks: true, gfm: true });
+function escapeMathHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 marked.use({ extensions: [
-  { name: 'mathBlock', level: 'block', start: src => (src.match(/\$\$/) || { index: -1 }).index, tokenizer(src) { const m = src.match(/^\$\$([\s\S]+?)\$\$/); if (m) return { type: 'mathBlock', raw: m[0], tex: m[1].trim() }; }, renderer: token => `<div class="math-block">\\[${token.tex}\\]</div>` },
-  { name: 'mathInline', level: 'inline', start: src => (src.match(/\$/) || { index: -1 }).index, tokenizer(src) { const m = src.match(/^\$([^$\n]+?)\$/); if (m) return { type: 'mathInline', raw: m[0], tex: m[1].trim() }; }, renderer: token => `<span class="math-inline">\\(${token.tex}\\)</span>` }
+  { name: 'mathBlock', level: 'block', start: src => (src.match(/\$\$/) || { index: -1 }).index, tokenizer(src) { const m = src.match(/^\$\$([\s\S]+?)\$\$/); if (m) return { type: 'mathBlock', raw: m[0], tex: m[1].trim() }; }, renderer: token => { const tex = escapeMathHtml(token.tex); return `<div class="math-block" data-tex="${tex}">\\[${tex}\\]</div>`; } },
+  { name: 'mathInline', level: 'inline', start: src => (src.match(/\$/) || { index: -1 }).index, tokenizer(src) { const m = src.match(/^\$([^$\n]+?)\$/); if (m) return { type: 'mathInline', raw: m[0], tex: m[1].trim() }; }, renderer: token => { const tex = escapeMathHtml(token.tex); return `<span class="math-inline" data-tex="${tex}">\\(${tex}\\)</span>`; } }
 ] });
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -209,8 +217,9 @@ async function runExportChecks(docxFixture) {
   assert(prepared.articleHtml.includes('data:image/gif;base64,'), 'managed image was not embedded');
   assert(prepared.remoteImageCount === 1, 'remote image classification failed');
   assert(prepared.fallbackCount === 3, 'unsafe image fallback count failed');
-  const documentPrepared = await MarkionWorkspaceExports.prepareExportArticle(snapshot);
+  const documentPrepared = await MarkionWorkspaceExports.prepareWordArticle(snapshot);
   assert(documentPrepared.articleHtml.includes('background:#0f1220') && documentPrepared.articleHtml.includes('font-size:17px'), 'HTML export did not preserve the selected theme or typography offsets');
+  assert(documentPrepared.articleHtml.includes('E=mc²') && documentPrepared.articleHtml.includes('x²+y²=z²'), 'Word export did not degrade formulas to linear text');
   const oversizedResource = {
     id: 'oversized',
     blob: new Blob([new Uint8Array(MarkionWorkspaceExports.MAX_EMBEDDED_IMAGE_BYTES + 1)], { type: 'image/png' }),
@@ -221,12 +230,11 @@ async function runExportChecks(docxFixture) {
     articleHtml: '<section><img data-mn-local-image-id="oversized" src="blob:oversized" alt="oversized image"></section>',
   });
   assert(limited.fallbackCount === 1 && limited.articleHtml.includes('oversized image'), 'managed-image byte limit did not use a safe fallback');
-  const katexCss = await MarkionWorkspaceExports.katexCssWithEmbeddedFonts();
-  const standalone = MarkionWorkspaceExports.standaloneHtml(snapshot, prepared, katexCss);
+  const standalone = MarkionWorkspaceExports.standaloneHtml(snapshot, prepared);
   assert(standalone.includes("default-src 'none'") && !standalone.includes('static/vendor') && !standalone.includes('script src=') && !/url\((?:['"])?fonts\//i.test(standalone), 'standalone HTML is not inert and self-contained');
   const offlineHtml = MarkionWorkspaceExports.standaloneHtml(snapshot, {
     articleHtml: '<section style="color:#123"><h1 style="font-size:29px">Offline export</h1></section>', fallbackCount: 0, remoteImageCount: 0
-  }, katexCss);
+  });
   const offlineFrame = document.createElement('iframe');
   offlineFrame.sandbox = 'allow-same-origin';
   offlineFrame.srcdoc = offlineHtml;

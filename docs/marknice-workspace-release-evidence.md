@@ -9,7 +9,7 @@ tester before archive or publication.
 | --- | --- | --- | --- | --- |
 | Packaged bundle extraction and digest verification | CI | CI | CI | CI |
 | Default-browser dispatch | Pending | Pending | Pending | Pending |
-| Offline shell, themes, typography, and math fonts | Pending | Pending | Pending | Pending |
+| Offline shell, themes, typography, and math rendering | Pending | Pending | Pending | Pending |
 | Remote and managed-image preview; explicit omission copy | Pending | Pending | Pending | Pending |
 | Clipboard-denied feedback, expiry, and repeated sessions | Pending | Pending | Pending | Pending |
 

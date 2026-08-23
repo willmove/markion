@@ -8,8 +8,11 @@ unsaved edits—and opens a private loopback URL in the default browser. The URL
 contains a one-time capability in its fragment; the page removes it immediately
 and exchanges it for a token kept in that browser tab's `sessionStorage`.
 
-The editor, all 15 pinned MarkNice themes, marked, KaTeX, CSS, and fonts are
-packaged with Markion and load without external networking. Edits made in the
+The editor, all 15 pinned MarkNice themes, marked, MathJax, and CSS are
+packaged with Markion and load without external networking. Formulas are
+typeset by MathJax into self-contained inline SVG (the same approach as the
+MarkNice Obsidian plugin), so they survive the WeChat editor's paste-time
+filtering without the duplication that hidden MathML caused. Edits made in the
 browser are session-local: there is no endpoint that saves them to Markion.
 Return to Markion to make durable edits and launch again for a new snapshot.
 
@@ -36,8 +39,9 @@ The export toolbar also provides three browser-local recovery/export actions:
   includes tab-local edits, whitespace, and line endings; it never substitutes
   the snapshot that opened the workspace.
 - **Download HTML** creates a standalone MarkNice-styled UTF-8 HTML file from
-  the current theme and typography settings. Rendered KaTeX CSS and WOFF2 fonts
-  are embedded, as are safely readable managed raster images. An image larger
+  the current theme and typography settings. Formulas are embedded as
+  self-contained inline SVG (no CSS or web fonts required), as are safely
+  readable managed raster images. An image larger
   than 8 MiB or when the export would exceed 24 MiB is replaced with a visible
   non-sensitive text fallback. Authored remote HTTP(S) images remain linked to
   their original hosts, so such an export is not fully offline.
@@ -67,7 +71,7 @@ and at most eight snapshots are retained. Relaunch from Markion after expiry.
 ## Maintainer refresh
 
 The runtime is pinned to MarkNice commit
-`c009c1ec7e7c92f89afa5a32edcb126b5296bda7`, marked 15.0.12, KaTeX 0.16.11,
+`c009c1ec7e7c92f89afa5a32edcb126b5296bda7`, marked 15.0.12, MathJax 3.2.2,
 and html-docx-js 0.3.1.
 Normal builds use only checked-in files and require neither the sibling MarkNice
 repository, Node.js, nor downloads.
@@ -98,8 +102,12 @@ Source inventory for the pinned revision:
   `markdownEl.value`; Markion keeps that behavior in its curated export module
   so clipboard fallback, localization, and session isolation remain reviewable.
 - The original `saveHtmlBtn` handler supplies the feature intent, while
-  Markion's curated wrapper additionally embeds KaTeX WOFF2 assets and applies
-  the durable-artifact safety pass.
+  Markion's curated wrapper applies the durable-artifact safety pass; formulas
+  need no embedded assets because MathJax emits self-contained SVG.
+- MarkNice's KaTeX-based `renderMath` is replaced at sync time with the curated
+  `static/math-runtime.js` (MathJax tex-svg with `fontCache: 'none'`, matching
+  the MarkNice Obsidian plugin), which also provides the linear-text formula
+  fallback used by the browser DOCX export.
 - The generated `static/marknice-word-runtime.js` is the unique region between
   `// ===== Word export helpers =====` and `// ===== Save as Word =====`.
 - The generated `static/marknice-format-runtime.js` is the unique formatting

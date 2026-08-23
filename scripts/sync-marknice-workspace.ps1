@@ -9,8 +9,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $bundleRoot = Join-Path $repoRoot "assets\marknice-workspace"
 $staticRoot = Join-Path $bundleRoot "static"
 $vendorRoot = Join-Path $staticRoot "vendor"
-$fontRoot = Join-Path $vendorRoot "fonts"
 $htmlDocxVersion = "0.3.1"
+$mathjaxVersion = "3.2.2"
 
 if ((git -C $Source rev-parse HEAD).Trim() -ne $expectedCommit) {
     throw "MarkNice source must be pinned at $expectedCommit"
@@ -18,7 +18,7 @@ if ((git -C $Source rev-parse HEAD).Trim() -ne $expectedCommit) {
 if (-not (Test-Path -LiteralPath $bundleRoot -PathType Container)) {
     throw "Expected checked-in workspace shell at $bundleRoot"
 }
-New-Item -ItemType Directory -Force -Path $vendorRoot, $fontRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $vendorRoot | Out-Null
 
 function Get-UniqueSourceRegion {
     param(
@@ -64,6 +64,18 @@ $runtime = $runtime.Replace(
     "    document.execCommand('copy');",
     "    if (!document.execCommand('copy')) throw new Error('clipboard denied');"
 )
+# MarkNice renders formulas with KaTeX (MathML + CSS-dependent HTML spans), which
+# the WeChat editor strips into duplicated, broken output. Markion replaces the
+# renderer with the curated static/math-runtime.js (MathJax tex-svg, matching the
+# MarkNice Obsidian plugin) so formulas are self-contained inline SVG.
+$runtime = [regex]::Replace(
+    $runtime,
+    "(?s)function renderMath\(container\) \{\r?\n  if \(typeof katex === 'undefined'\) return;\r?\n.*?\n\}",
+    "function renderMath(container) {`n  if (window.MarkionMath && typeof MarkionMath.renderInto === 'function') MarkionMath.renderInto(container);`n}"
+)
+if ($runtime -notlike '*MarkionMath.renderInto*' -or $runtime -like '*katex.renderToString*') {
+    throw "MarkNice math rendering patch failed: renderMath source shape changed"
+}
 Set-Content -LiteralPath (Join-Path $staticRoot "theme-runtime.js") -Value $runtime -Encoding utf8NoBOM
 $formatRuntime = "/* Generated from MarkNice $expectedCommit by scripts/sync-marknice-workspace.ps1. */`n" +
     (Get-UniqueSourceRegion -Text $sourceText -StartMarker "const markdownFormatToolbar = document.querySelector('.markdown-format-toolbar');" -EndMarker "function localImageRecordsForCurrentPreview() {")
@@ -102,24 +114,22 @@ if ($RefreshThirdParty) {
     New-Item -ItemType Directory -Path $refreshRoot | Out-Null
     try {
         $markedArchive = (& npm pack marked@15.0.12 --pack-destination $refreshRoot --silent | Select-Object -Last 1).Trim()
-        $katexArchive = (& npm pack katex@0.16.11 --pack-destination $refreshRoot --silent | Select-Object -Last 1).Trim()
+        $mathjaxArchive = (& npm pack "mathjax@$mathjaxVersion" --pack-destination $refreshRoot --silent | Select-Object -Last 1).Trim()
         $htmlDocxArchive = (& npm pack "html-docx-js@$htmlDocxVersion" --pack-destination $refreshRoot --silent | Select-Object -Last 1).Trim()
-        if ($LASTEXITCODE -ne 0 -or -not $markedArchive -or -not $katexArchive -or -not $htmlDocxArchive) {
+        if ($LASTEXITCODE -ne 0 -or -not $markedArchive -or -not $mathjaxArchive -or -not $htmlDocxArchive) {
             throw "npm could not fetch the pinned renderer packages"
         }
         $markedExtract = Join-Path $refreshRoot "marked"
-        $katexExtract = Join-Path $refreshRoot "katex"
+        $mathjaxExtract = Join-Path $refreshRoot "mathjax"
         $htmlDocxExtract = Join-Path $refreshRoot "html-docx-js"
-        New-Item -ItemType Directory -Path $markedExtract, $katexExtract, $htmlDocxExtract | Out-Null
+        New-Item -ItemType Directory -Path $markedExtract, $mathjaxExtract, $htmlDocxExtract | Out-Null
         tar -xf (Join-Path $refreshRoot $markedArchive) -C $markedExtract
-        tar -xf (Join-Path $refreshRoot $katexArchive) -C $katexExtract
+        tar -xf (Join-Path $refreshRoot $mathjaxArchive) -C $mathjaxExtract
         tar -xf (Join-Path $refreshRoot $htmlDocxArchive) -C $htmlDocxExtract
         Copy-Item -LiteralPath (Join-Path $markedExtract "package\lib\marked.umd.js") -Destination (Join-Path $vendorRoot "marked.umd.js") -Force
         Copy-Item -LiteralPath (Join-Path $markedExtract "package\LICENSE.md") -Destination (Join-Path $bundleRoot "LICENSE.marked.txt") -Force
-        Copy-Item -LiteralPath (Join-Path $katexExtract "package\dist\katex.min.js") -Destination (Join-Path $vendorRoot "katex.min.js") -Force
-        Copy-Item -LiteralPath (Join-Path $katexExtract "package\dist\katex.min.css") -Destination (Join-Path $vendorRoot "katex.min.css") -Force
-        Copy-Item -LiteralPath (Join-Path $katexExtract "package\LICENSE") -Destination (Join-Path $bundleRoot "LICENSE.katex.txt") -Force
-        Copy-Item -Path (Join-Path $katexExtract "package\dist\fonts\*") -Destination $fontRoot -Force
+        Copy-Item -LiteralPath (Join-Path $mathjaxExtract "package\es5\tex-svg-full.js") -Destination (Join-Path $vendorRoot "tex-svg-full.js") -Force
+        Copy-Item -LiteralPath (Join-Path $mathjaxExtract "package\LICENSE") -Destination (Join-Path $bundleRoot "LICENSE.mathjax.txt") -Force
         Copy-Item -LiteralPath (Join-Path $htmlDocxExtract "package\dist\html-docx.js") -Destination (Join-Path $vendorRoot "html-docx.js") -Force
         Copy-Item -LiteralPath (Join-Path $htmlDocxExtract "package\LICENSE") -Destination (Join-Path $bundleRoot "LICENSE.html-docx-js.txt") -Force
     } finally {
@@ -131,7 +141,7 @@ if ($RefreshThirdParty) {
     }
 }
 
-$requiredThirdParty = @("marked.umd.js", "katex.min.js", "katex.min.css", "html-docx.js")
+$requiredThirdParty = @("marked.umd.js", "tex-svg-full.js", "html-docx.js")
 foreach ($file in $requiredThirdParty) {
     if (-not (Test-Path -LiteralPath (Join-Path $vendorRoot $file) -PathType Leaf)) {
         throw "Missing vendored dependency $file; rerun with -RefreshThirdParty"
@@ -211,7 +221,7 @@ $manifest = [ordered]@{
     third_party = @(
         [ordered]@{ name = "MarkNice"; version = $expectedCommit; license = "MIT"; license_file = "LICENSE.marknice.txt" }
         [ordered]@{ name = "marked"; version = "15.0.12"; license = "MIT"; license_file = "LICENSE.marked.txt" }
-        [ordered]@{ name = "KaTeX"; version = "0.16.11"; license = "MIT"; license_file = "LICENSE.katex.txt" }
+        [ordered]@{ name = "MathJax"; version = $mathjaxVersion; license = "Apache-2.0"; license_file = "LICENSE.mathjax.txt" }
         [ordered]@{ name = "html-docx-js"; version = $htmlDocxVersion; license = "MIT"; license_file = "LICENSE.html-docx-js.txt" }
     )
     files = @($files)

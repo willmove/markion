@@ -405,15 +405,7 @@ function sanitizeForWechat(html) {
 }
 
 function renderMath(container) {
-  if (typeof katex === 'undefined') return;
-  container.querySelectorAll('.math-block').forEach(function(el) {
-    var tex = el.textContent.replace(/^\\\[/, '').replace(/\\\]$/, '').trim();
-    try { el.innerHTML = katex.renderToString(tex, { displayMode: true, throwOnError: false }); } catch(e) {}
-  });
-  container.querySelectorAll('.math-inline').forEach(function(el) {
-    var tex = el.textContent.replace(/^\\\(/, '').replace(/\\\)$/, '').trim();
-    try { el.innerHTML = katex.renderToString(tex, { displayMode: false, throwOnError: false }); } catch(e) {}
-  });
+  if (window.MarkionMath && typeof MarkionMath.renderInto === 'function') MarkionMath.renderInto(container);
 }
 
 function render() {
