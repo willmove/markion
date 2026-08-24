@@ -260,6 +260,104 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
     }
 }
 
+/// Canonical rendered-text runs searched in Read mode. This deliberately
+/// differs from selection runs: authored math is selectable as a fallback,
+/// but it is a non-text rendered atom and therefore is not searchable. Code
+/// uses one canonical body run so line-number presentation cannot duplicate
+/// results.
+pub(super) fn preview_search_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> {
+    preview_block_runs(block)
+        .into_iter()
+        .filter(|run_id| {
+            !matches!(
+                run_id,
+                PreviewTextRunId::MathLatex | PreviewTextRunId::CodeLine(_)
+            )
+        })
+        .collect()
+}
+
+pub(super) fn preview_search_matches(
+    blocks: &[PreviewBlock],
+    pattern: &SearchPattern,
+) -> Vec<PreviewSearchMatch> {
+    let mut matches = Vec::new();
+    for (block_index, block) in blocks.iter().enumerate() {
+        for run_id in preview_search_runs(block) {
+            let Some(text) = preview_run_plain_text(block, run_id) else {
+                continue;
+            };
+            matches.extend(pattern.find_ranges(&text).into_iter().map(|range| {
+                PreviewSearchMatch {
+                    block_index,
+                    run_id,
+                    range,
+                }
+            }));
+        }
+    }
+    matches
+}
+
+/// Search ranges to paint for a displayed preview run. Canonical code-body
+/// ranges are translated into line-local ranges when line-number mode splits
+/// the block into separate shaped lines.
+pub(super) fn active_preview_search_ranges(
+    app: &MarkionApp,
+    block_index: usize,
+    run_id: PreviewTextRunId,
+    run_text: &str,
+) -> Vec<(Range<usize>, bool)> {
+    if !app.search_visible || !matches!(app.view_mode, ViewMode::Read) {
+        return Vec::new();
+    }
+    let current = app.current_search_index;
+    let mut ranges = Vec::new();
+    for (index, target) in app.search_matches.iter().enumerate() {
+        let SearchTarget::ReadPreview(target) = target else {
+            continue;
+        };
+        if target.block_index != block_index {
+            continue;
+        }
+        if target.run_id == run_id {
+            ranges.push((
+                normalize_preview_selection_range(run_text, target.range.clone()),
+                current == Some(index),
+            ));
+            continue;
+        }
+        if target.run_id == PreviewTextRunId::CodeBody
+            && let PreviewTextRunId::CodeLine(line_index) = run_id
+        {
+            let Some(block) = app.active_tab().preview_list_blocks.get(block_index) else {
+                continue;
+            };
+            let Some(code) = preview_run_plain_text(block, PreviewTextRunId::CodeBody) else {
+                continue;
+            };
+            let mut line_start = 0usize;
+            for (code_line_index, line) in code.split('\n').enumerate() {
+                let line_end = line_start + line.len();
+                if code_line_index == line_index {
+                    let start = target.range.start.max(line_start);
+                    let end = target.range.end.min(line_end);
+                    if start <= end
+                        && target.range.start <= line_end
+                        && target.range.end >= line_start
+                    {
+                        ranges.push((start - line_start..end - line_start, current == Some(index)));
+                    }
+                    break;
+                }
+                line_start = line_end + 1;
+            }
+        }
+    }
+    ranges.retain(|(range, _)| range.start <= range.end && range.end <= run_text.len());
+    ranges
+}
+
 /// Byte range to highlight inside `run_id` for a free-range selection, if any.
 pub(super) fn preview_run_highlight_range(
     selection: &PreviewSelection,
@@ -793,6 +891,7 @@ impl Element for VisualEditableText {
             entity.update(cx, |app, cx| {
                 app.file_tree_query_focused = false;
                 app.search_focus = None;
+                app.search_control_focus = None;
                 app.input_marked_len = 0;
                 app.active_tab_mut().clear_preview_selection();
                 app.active_tab_mut().is_selecting = true;
@@ -949,6 +1048,7 @@ struct SelectablePreviewText {
     /// Byte offset of this shaped fragment inside `run_text`.
     run_offset: usize,
     selection_range: Option<Range<usize>>,
+    search_ranges: Vec<(Range<usize>, bool)>,
     link_ranges: Vec<Range<usize>>,
     link_urls: Vec<String>,
     entity: Entity<MarkionApp>,
@@ -972,6 +1072,7 @@ impl SelectablePreviewText {
             run_text: run_text.into(),
             run_offset: 0,
             selection_range,
+            search_ranges: Vec::new(),
             link_ranges: Vec::new(),
             link_urls: Vec::new(),
             entity,
@@ -986,6 +1087,11 @@ impl SelectablePreviewText {
 
     fn with_run_offset(mut self, offset: usize) -> Self {
         self.run_offset = offset;
+        self
+    }
+
+    fn with_search_ranges(mut self, ranges: Vec<(Range<usize>, bool)>) -> Self {
+        self.search_ranges = ranges;
         self
     }
 }
@@ -1037,6 +1143,17 @@ impl Element for SelectablePreviewText {
         cx: &mut App,
     ) {
         let text_layout = self.text.layout().clone();
+        let palette = self.entity.read(cx).palette();
+        for (range, current) in self.search_ranges.clone() {
+            let color = if current {
+                palette.search_current
+            } else {
+                palette.search_match
+            };
+            for quad in preview_selection_paint_quads(&text_layout, range) {
+                window.paint_quad(fill(quad.bounds, color));
+            }
+        }
         if let Some(range) = self.selection_range.clone() {
             for quad in preview_selection_paint_quads(&text_layout, range) {
                 window.paint_quad(quad);
@@ -1294,6 +1411,7 @@ pub(super) fn rich_text_element(
     let styled_text =
         StyledText::new(SharedString::from(rich.text.clone())).with_highlights(highlights);
     let selection = active_preview_run_selection(app, block_index, run_id, &rich.text);
+    let search_ranges = active_preview_search_ranges(app, block_index, run_id, &rich.text);
     SelectablePreviewText::new(
         id,
         styled_text,
@@ -1303,6 +1421,7 @@ pub(super) fn rich_text_element(
         selection,
         cx.entity().clone(),
     )
+    .with_search_ranges(search_ranges)
     .with_links(link_ranges, link_urls)
     .into_any_element()
 }
@@ -1315,6 +1434,21 @@ fn preview_fragment_selection(
     let start = selection.start.max(fragment.start);
     let end = selection.end.min(fragment.end);
     (start < end).then(|| start - fragment.start..end - fragment.start)
+}
+
+fn preview_fragment_search_ranges(
+    ranges: &[(Range<usize>, bool)],
+    fragment: Range<usize>,
+) -> Vec<(Range<usize>, bool)> {
+    ranges
+        .iter()
+        .filter_map(|(range, current)| {
+            let start = range.start.max(fragment.start);
+            let end = range.end.min(fragment.end);
+            (start <= end && range.start <= fragment.end && range.end >= fragment.start)
+                .then_some((start - fragment.start..end - fragment.start, *current))
+        })
+        .collect()
 }
 
 fn preview_span_highlight(span: &InlineSpan) -> Option<HighlightStyle> {
@@ -1577,6 +1711,7 @@ pub(super) fn rich_text_with_math_element(
     }
 
     let full_selection = active_preview_run_selection(app, block_index, run_id, &rich.text);
+    let full_search_ranges = active_preview_search_ranges(app, block_index, run_id, &rich.text);
     let run_text = SharedString::from(rich.text.clone());
     let inline_metrics = Some((font_size, line_height));
     let mut children = Vec::new();
@@ -1626,6 +1761,8 @@ pub(super) fn rich_text_with_math_element(
                     }
                     let selection =
                         preview_fragment_selection(full_selection.as_ref(), span_range.clone());
+                    let search_ranges =
+                        preview_fragment_search_ranges(&full_search_ranges, span_range.clone());
                     children.push(
                         SelectablePreviewText::new(
                             ElementId::from(SharedString::from(format!(
@@ -1639,6 +1776,7 @@ pub(super) fn rich_text_with_math_element(
                             selection,
                             cx.entity(),
                         )
+                        .with_search_ranges(search_ranges)
                         .with_run_offset(span_range.start)
                         .into_any_element(),
                     );
@@ -1666,6 +1804,8 @@ pub(super) fn rich_text_with_math_element(
             let urls = span.link.clone().into_iter().collect();
             let selection =
                 preview_fragment_selection(full_selection.as_ref(), fragment_range.clone());
+            let search_ranges =
+                preview_fragment_search_ranges(&full_search_ranges, fragment_range.clone());
             children.push(
                 SelectablePreviewText::new(
                     ElementId::from(SharedString::from(format!(
@@ -1679,6 +1819,7 @@ pub(super) fn rich_text_with_math_element(
                     selection,
                     cx.entity(),
                 )
+                .with_search_ranges(search_ranges)
                 .with_run_offset(fragment_range.start)
                 .with_links(links, urls)
                 .into_any_element(),
@@ -1709,6 +1850,7 @@ pub(super) fn selectable_plain_text(
 ) -> gpui::AnyElement {
     let plain = plain.into();
     let selection = active_preview_run_selection(app, block_index, run_id, plain.as_ref());
+    let search_ranges = active_preview_search_ranges(app, block_index, run_id, plain.as_ref());
     SelectablePreviewText::new(
         id,
         styled,
@@ -1718,6 +1860,7 @@ pub(super) fn selectable_plain_text(
         selection,
         cx.entity().clone(),
     )
+    .with_search_ranges(search_ranges)
     .into_any_element()
 }
 
@@ -2034,7 +2177,36 @@ pub(super) fn visual_text_element(
         source_cursor,
         marked_range.clone(),
     );
-    let highlights = visual_projection_highlights(&projection, marked_range.as_ref());
+    let mut highlights = visual_projection_highlights(&projection, marked_range.as_ref());
+    if app.search_visible {
+        for (index, target) in app.search_matches.iter().enumerate() {
+            let SearchTarget::Source(found) = target else {
+                continue;
+            };
+            let Some(display_range) = projection
+                .display_range_for_source_range(found.range.clone())
+                .filter(|range| !range.is_empty())
+            else {
+                continue;
+            };
+            highlights = overlay_visual_highlight(
+                &projection.text,
+                highlights,
+                display_range,
+                HighlightStyle {
+                    background_color: Some(
+                        if app.current_search_index == Some(index) {
+                            app.palette().search_current
+                        } else {
+                            app.palette().search_match
+                        }
+                        .into(),
+                    ),
+                    ..Default::default()
+                },
+            );
+        }
+    }
     #[cfg(test)]
     let test_projection = visual_block_is_focused(app, block).then_some((
         projection.text.clone(),
@@ -2082,6 +2254,7 @@ fn visual_math_hit_target(boundary: usize, cx: &mut Context<MarkionApp>) -> Div 
                 window.focus(&focus_handle);
                 app.file_tree_query_focused = false;
                 app.search_focus = None;
+                app.search_control_focus = None;
                 app.input_marked_len = 0;
                 app.active_tab_mut().clear_preview_selection();
                 app.active_tab_mut().is_selecting = true;
@@ -3367,153 +3540,47 @@ pub(super) fn visual_block_menu(
     max_height: Pixels,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
-    let current_root = editing::block_menu_root_index_for_transform(presentation.current);
     let submenu = state.submenu;
+    let root_items = state.root_items();
+    let mut root_panel = div()
+        .id("visual-block-menu-root-panel")
+        .debug_selector(|| "visual-block-menu-panel".to_string())
+        .w(px(202.))
+        .max_h(max_height)
+        .overflow_y_scroll()
+        .scrollbar_width(px(8.))
+        .occlude()
+        .p(px(4.))
+        .bg(palette.panel_bg)
+        .border_1()
+        .border_color(palette.border)
+        .rounded_lg()
+        .shadow_lg()
+        .flex()
+        .flex_col();
+    for (index, item) in root_items.iter().copied().enumerate() {
+        root_panel = root_panel.child(block_menu_item_button(
+            block_menu_item_element_id(item),
+            block_menu_item_label(language, item),
+            item,
+            state.root_selected == index,
+            block_menu_item_is_current(item, presentation),
+            presentation.item_enabled(item),
+            Some(BlockMenuPointerTarget::Root(index)),
+            matches!(item, BlockMenuItem::Delete),
+            palette,
+            cx,
+        ));
+        if block_menu_item_is_followed_by_separator(item) {
+            root_panel = root_panel.child(block_menu_separator(palette));
+        }
+    }
     div()
         .id(("visual-block-menu", state.target.block_id.as_u64()))
         .flex()
         .items_start()
         .gap_1()
-        .child(
-            div()
-                .id("visual-block-menu-root-panel")
-                .debug_selector(|| "visual-block-menu-panel".to_string())
-                .w(px(202.))
-                .max_h(max_height)
-                .overflow_y_scroll()
-                .scrollbar_width(px(8.))
-                .occlude()
-                .p(px(4.))
-                .bg(palette.panel_bg)
-                .border_1()
-                .border_color(palette.border)
-                .rounded_lg()
-                .shadow_lg()
-                .flex()
-                .flex_col()
-                .child(block_menu_item_button(
-                    "visual-block-text-headings",
-                    p1_t(language, P1Msg::TextAndHeadings).to_string(),
-                    BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings),
-                    state.root_selected == 0,
-                    current_root == 0,
-                    true,
-                    Some(BlockMenuPointerTarget::Root(0)),
-                    false,
-                    palette,
-                    cx,
-                ))
-                .child(block_menu_item_button(
-                    "visual-block-lists",
-                    p1_t(language, P1Msg::Lists).to_string(),
-                    BlockMenuItem::Submenu(BlockMenuSubmenu::Lists),
-                    state.root_selected == 1,
-                    current_root == 1,
-                    true,
-                    Some(BlockMenuPointerTarget::Root(1)),
-                    false,
-                    palette,
-                    cx,
-                ))
-                .child(block_menu_item_button(
-                    visual_block_transform_element_id(10),
-                    block_transform_label(language, BlockTransform::Quote),
-                    BlockMenuItem::Transform(BlockTransform::Quote),
-                    state.root_selected == 2,
-                    presentation.current == BlockTransform::Quote,
-                    true,
-                    Some(BlockMenuPointerTarget::Root(2)),
-                    false,
-                    palette,
-                    cx,
-                ))
-                .child(block_menu_item_button(
-                    visual_block_transform_element_id(11),
-                    block_transform_label(language, BlockTransform::CodeBlock),
-                    BlockMenuItem::Transform(BlockTransform::CodeBlock),
-                    state.root_selected == 3,
-                    presentation.current == BlockTransform::CodeBlock,
-                    true,
-                    Some(BlockMenuPointerTarget::Root(3)),
-                    false,
-                    palette,
-                    cx,
-                ))
-                .child(block_menu_item_button(
-                    visual_block_transform_element_id(12),
-                    block_transform_label(language, BlockTransform::Divider),
-                    BlockMenuItem::Transform(BlockTransform::Divider),
-                    state.root_selected == 4,
-                    presentation.current == BlockTransform::Divider,
-                    true,
-                    Some(BlockMenuPointerTarget::Root(4)),
-                    false,
-                    palette,
-                    cx,
-                ))
-                .child(block_menu_item_button(
-                    visual_block_transform_element_id(13),
-                    block_transform_label(language, BlockTransform::Table),
-                    BlockMenuItem::Transform(BlockTransform::Table),
-                    state.root_selected == 5,
-                    presentation.current == BlockTransform::Table,
-                    true,
-                    Some(BlockMenuPointerTarget::Root(5)),
-                    false,
-                    palette,
-                    cx,
-                ))
-                .child(block_menu_separator(palette))
-                .child(block_menu_item_button(
-                    "visual-block-duplicate",
-                    p1_t(language, P1Msg::DuplicateBlock).to_string(),
-                    BlockMenuItem::Duplicate,
-                    state.root_selected == 6,
-                    false,
-                    presentation.can_duplicate_or_delete,
-                    Some(BlockMenuPointerTarget::Root(6)),
-                    false,
-                    palette,
-                    cx,
-                ))
-                .child(block_menu_item_button(
-                    "visual-block-move-up",
-                    p1_t(language, P1Msg::MoveUp).to_string(),
-                    BlockMenuItem::MoveUp,
-                    state.root_selected == 7,
-                    false,
-                    presentation.can_move_up,
-                    Some(BlockMenuPointerTarget::Root(7)),
-                    false,
-                    palette,
-                    cx,
-                ))
-                .child(block_menu_item_button(
-                    "visual-block-move-down",
-                    p1_t(language, P1Msg::MoveDown).to_string(),
-                    BlockMenuItem::MoveDown,
-                    state.root_selected == 8,
-                    false,
-                    presentation.can_move_down,
-                    Some(BlockMenuPointerTarget::Root(8)),
-                    false,
-                    palette,
-                    cx,
-                ))
-                .child(block_menu_separator(palette))
-                .child(block_menu_item_button(
-                    "visual-block-delete",
-                    p1_t(language, P1Msg::DeleteBlock).to_string(),
-                    BlockMenuItem::Delete,
-                    state.root_selected == 9,
-                    false,
-                    presentation.can_duplicate_or_delete,
-                    Some(BlockMenuPointerTarget::Root(9)),
-                    true,
-                    palette,
-                    cx,
-                )),
-        )
+        .child(root_panel)
         .when_some(submenu, |menu, submenu| {
             menu.child(visual_block_submenu(
                 language,
@@ -3525,6 +3592,86 @@ pub(super) fn visual_block_menu(
                 cx,
             ))
         })
+}
+
+fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
+    match item {
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold) => {
+            "visual-selection-format-bold"
+        }
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Italic) => {
+            "visual-selection-format-italic"
+        }
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::InlineCode) => {
+            "visual-selection-format-inline-code"
+        }
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Link) => {
+            "visual-selection-format-link"
+        }
+        BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings) => "visual-block-text-headings",
+        BlockMenuItem::Submenu(BlockMenuSubmenu::Lists) => "visual-block-lists",
+        BlockMenuItem::Transform(transform) => {
+            visual_block_transform_element_id(block_transform_index(transform))
+        }
+        BlockMenuItem::Duplicate => "visual-block-duplicate",
+        BlockMenuItem::MoveUp => "visual-block-move-up",
+        BlockMenuItem::MoveDown => "visual-block-move-down",
+        BlockMenuItem::Delete => "visual-block-delete",
+    }
+}
+
+fn block_menu_item_label(language: Language, item: BlockMenuItem) -> String {
+    match item {
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold) => {
+            t(language, Msg::ItemBold).to_string()
+        }
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Italic) => {
+            t(language, Msg::ItemItalic).to_string()
+        }
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::InlineCode) => {
+            t(language, Msg::ItemInlineCode).to_string()
+        }
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Link) => {
+            t(language, Msg::ItemLink).to_string()
+        }
+        BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings) => {
+            p1_t(language, P1Msg::TextAndHeadings).to_string()
+        }
+        BlockMenuItem::Submenu(BlockMenuSubmenu::Lists) => p1_t(language, P1Msg::Lists).to_string(),
+        BlockMenuItem::Transform(transform) => block_transform_label(language, transform),
+        BlockMenuItem::Duplicate => p1_t(language, P1Msg::DuplicateBlock).to_string(),
+        BlockMenuItem::MoveUp => p1_t(language, P1Msg::MoveUp).to_string(),
+        BlockMenuItem::MoveDown => p1_t(language, P1Msg::MoveDown).to_string(),
+        BlockMenuItem::Delete => p1_t(language, P1Msg::DeleteBlock).to_string(),
+    }
+}
+
+fn block_menu_item_is_current(item: BlockMenuItem, presentation: BlockMenuPresentation) -> bool {
+    match item {
+        BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings) => matches!(
+            presentation.current,
+            BlockTransform::Text | BlockTransform::Heading(_)
+        ),
+        BlockMenuItem::Submenu(BlockMenuSubmenu::Lists) => matches!(
+            presentation.current,
+            BlockTransform::BulletedList | BlockTransform::NumberedList | BlockTransform::TaskList
+        ),
+        BlockMenuItem::Transform(transform) => presentation.current == transform,
+        BlockMenuItem::SelectionFormat(_)
+        | BlockMenuItem::Duplicate
+        | BlockMenuItem::MoveUp
+        | BlockMenuItem::MoveDown
+        | BlockMenuItem::Delete => false,
+    }
+}
+
+fn block_menu_item_is_followed_by_separator(item: BlockMenuItem) -> bool {
+    matches!(
+        item,
+        BlockMenuItem::SelectionFormat(SelectionFormatAction::Link)
+            | BlockMenuItem::Transform(BlockTransform::Table)
+            | BlockMenuItem::MoveDown
+    )
 }
 
 #[derive(Clone, Copy)]

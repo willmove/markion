@@ -1,3 +1,4 @@
+use super::editing::visual_selection_format_target_for_block;
 use super::memory::{MemoryProfile, MemoryWarmup};
 use super::*;
 use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
@@ -200,6 +201,97 @@ fn menu_shortcut_labels_follow_platform_conventions() {
 }
 
 #[test]
+fn structural_format_shortcut_registry_matches_reference() {
+    let expected = [
+        (
+            &menu_shortcuts::ORDERED_LIST,
+            "ordered-list",
+            "secondary-shift-[",
+            "Ctrl+Shift+[",
+            "Cmd+Shift+[",
+        ),
+        (
+            &menu_shortcuts::UNORDERED_LIST,
+            "unordered-list",
+            "secondary-shift-]",
+            "Ctrl+Shift+]",
+            "Cmd+Shift+]",
+        ),
+        (
+            &menu_shortcuts::TASK_LIST,
+            "task-list",
+            "secondary-shift-x",
+            "Ctrl+Shift+X",
+            "Cmd+Shift+X",
+        ),
+        (
+            &menu_shortcuts::BLOCK_QUOTE,
+            "block-quote",
+            "secondary-shift-q",
+            "Ctrl+Shift+Q",
+            "Cmd+Shift+Q",
+        ),
+        (
+            &menu_shortcuts::CODE_FENCE,
+            "code-fence",
+            "secondary-shift-k",
+            "Ctrl+Shift+K",
+            "Cmd+Shift+K",
+        ),
+    ];
+
+    let mut stored = BTreeMap::new();
+    for (shortcut, id, binding, windows_linux, macos) in expected {
+        assert_eq!(shortcut.id, id);
+        assert_eq!(shortcut.binding, binding);
+        assert_eq!(shortcut_by_id(id), Some(shortcut));
+        assert_eq!(
+            shortcut.label(ShortcutPlatform::WindowsLinux),
+            windows_linux
+        );
+        assert_eq!(shortcut.label(ShortcutPlatform::MacOS), macos);
+        assert!(gpui::Keystroke::parse(binding).is_ok());
+        stored.insert(id.to_string(), binding.to_string());
+    }
+    assert_eq!(sanitized_shortcut_overrides(&stored), stored);
+
+    for (binding, key, windows_linux, macos) in [
+        ("secondary-shift-[", "[", "Ctrl+Shift+[", "Cmd+Shift+["),
+        ("secondary-shift-]", "]", "Ctrl+Shift+]", "Cmd+Shift+]"),
+    ] {
+        for (platform, label) in [
+            (ShortcutPlatform::WindowsLinux, windows_linux),
+            (ShortcutPlatform::MacOS, macos),
+        ] {
+            let parts = markion::keystroke::KeystrokeParts::parse(binding, platform)
+                .expect("literal bracket shortcut parses");
+            assert_eq!(parts.key.0, key);
+            assert_eq!(
+                markion::keystroke::format_keystroke_label(binding, platform),
+                label
+            );
+        }
+    }
+
+    for platform in ShortcutPlatform::ALL {
+        for (index, left) in menu_shortcuts::ALL.iter().enumerate() {
+            let left = markion::keystroke::KeystrokeParts::parse(left.binding, platform)
+                .expect("registry default parses");
+            for right in &menu_shortcuts::ALL[index + 1..] {
+                let right_parts =
+                    markion::keystroke::KeystrokeParts::parse(right.binding, platform)
+                        .expect("registry default parses");
+                assert_ne!(
+                    left, right_parts,
+                    "duplicate default shortcut for {} on {platform:?}",
+                    right.id
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn shortcut_registry_ids_are_stable_unique_and_fully_catalogued() {
     let mut registry_ids = std::collections::BTreeSet::new();
     for shortcut in menu_shortcuts::ALL {
@@ -246,6 +338,65 @@ fn shortcut_registry_ids_are_stable_unique_and_fully_catalogued() {
                     Some(catalog_label),
                     "catalog and registry default labels diverged for {action_id}"
                 );
+            }
+        }
+    }
+}
+
+#[test]
+fn structural_format_shortcuts_are_localized_in_every_catalog_variant() {
+    let expected = [
+        (
+            Msg::ItemBullets,
+            "unordered-list",
+            "Ctrl+Shift+]",
+            "Cmd+Shift+]",
+        ),
+        (
+            Msg::ItemNumbers,
+            "ordered-list",
+            "Ctrl+Shift+[",
+            "Cmd+Shift+[",
+        ),
+        (Msg::ItemTask, "task-list", "Ctrl+Shift+X", "Cmd+Shift+X"),
+        (Msg::ItemQuote, "block-quote", "Ctrl+Shift+Q", "Cmd+Shift+Q"),
+        (
+            Msg::ItemCodeFence,
+            "code-fence",
+            "Ctrl+Shift+K",
+            "Cmd+Shift+K",
+        ),
+    ];
+
+    for language in [
+        Language::En,
+        Language::Ja,
+        Language::Fr,
+        Language::De,
+        Language::Es,
+        Language::ZhHans,
+        Language::ZhHant,
+    ] {
+        for heading_depth in [
+            DEFAULT_HEADING_MENU_MAX_LEVEL,
+            EXTENDED_HEADING_MENU_MAX_LEVEL,
+        ] {
+            let catalog = shortcut_catalog(language, heading_depth);
+            let editing = catalog
+                .section(ShortcutCategory::Editing)
+                .expect("Editing shortcut category");
+            for (message, id, windows_linux, macos) in expected {
+                let action = editing
+                    .actions
+                    .iter()
+                    .find(|action| action.ids() == [id])
+                    .unwrap_or_else(|| panic!("missing {id} for {language:?} at H{heading_depth}"));
+                assert_eq!(action.label, t(language, message));
+                assert_eq!(
+                    action.combinations(ShortcutPlatform::WindowsLinux),
+                    [windows_linux]
+                );
+                assert_eq!(action.combinations(ShortcutPlatform::MacOS), [macos]);
             }
         }
     }
@@ -436,6 +587,11 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
         ("Msg::ItemRedo,", "menu_shortcuts::REDO"),
         ("Msg::ItemFind,", "menu_shortcuts::SHOW_FIND"),
         ("Msg::ItemBold,", "menu_shortcuts::BOLD"),
+        ("Msg::ItemBullets,", "menu_shortcuts::UNORDERED_LIST"),
+        ("Msg::ItemNumbers,", "menu_shortcuts::ORDERED_LIST"),
+        ("Msg::ItemTask,", "menu_shortcuts::TASK_LIST"),
+        ("Msg::ItemQuote,", "menu_shortcuts::BLOCK_QUOTE"),
+        ("Msg::ItemCodeFence,", "menu_shortcuts::CODE_FENCE"),
         ("Msg::ItemExportPdf,", "menu_shortcuts::EXPORT_PDF"),
     ] {
         assert!(
@@ -449,7 +605,6 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
         "Msg::ItemNewTab,",
         "Msg::ItemResetPreferences,",
         "Msg::ItemCheckForUpdates,",
-        "Msg::ItemBullets,",
         "Msg::ItemAboutMarkion,",
     ] {
         assert!(
@@ -464,6 +619,42 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
     );
     assert!(menu_source.contains("effective_label(shortcut_overrides, shortcut_platform)"));
     assert!(!menu_source.contains("Msg::ItemKeyboardShortcuts"));
+}
+
+#[test]
+fn native_structural_format_menu_actions_share_the_bound_handlers() {
+    let bootstrap = include_str!("bootstrap.rs").replace("\r\n", "\n");
+    let format_menu = bootstrap
+        .split_once("name: t(language, Msg::MenuFormat).into()")
+        .and_then(|(_, rest)| {
+            rest.split_once("name: t(language, Msg::MenuExport).into()")
+                .map(|(format, _)| format)
+        })
+        .expect("native Format menu");
+    let bindings = bootstrap
+        .split_once("pub(super) fn bind_app_keys")
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn run()").map(|(bind, _)| bind))
+        .expect("complete application keymap");
+
+    for (message, action, descriptor) in [
+        ("Msg::ItemBullets", "UnorderedList", "UNORDERED_LIST"),
+        ("Msg::ItemNumbers", "OrderedList", "ORDERED_LIST"),
+        ("Msg::ItemTask", "TaskList", "TASK_LIST"),
+        ("Msg::ItemQuote", "BlockQuote", "BLOCK_QUOTE"),
+        ("Msg::ItemCodeFence", "CodeFence", "CODE_FENCE"),
+    ] {
+        assert!(
+            format_menu.contains(&format!(
+                "MenuItem::action(t(language, {message}), {action})"
+            )),
+            "native {message} must keep dispatching {action}"
+        );
+        assert!(
+            bindings.contains(&format!("eff(&menu_shortcuts::{descriptor})"))
+                && bindings.contains(action),
+            "{descriptor} must bind the native menu's {action} handler"
+        );
+    }
 }
 
 #[test]
@@ -2703,6 +2894,78 @@ fn live_rebind_dispatches_override_and_preserves_core_and_file_tree_keys(cx: &mu
             t(app.language, Msg::StatusFileTreeRefreshed),
             "fixed file-tree shortcuts must survive a live rebind"
         );
+    });
+}
+
+#[gpui::test]
+fn structural_format_shortcuts_dispatch_and_live_rebind(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    cx.update(|window, cx| {
+        cx.clear_key_bindings();
+        bind_app_keys(cx, &BTreeMap::new());
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    for (shortcut, expected) in [
+        (&menu_shortcuts::UNORDERED_LIST, "- one\n- two"),
+        (&menu_shortcuts::ORDERED_LIST, "1. one\n2. two"),
+        (&menu_shortcuts::TASK_LIST, "- [ ] one\n- [ ] two"),
+        (&menu_shortcuts::BLOCK_QUOTE, "> one\n> two"),
+        (&menu_shortcuts::CODE_FENCE, "```\none\ntwo\n```"),
+    ] {
+        app.update(cx, |app, _| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("one\ntwo"))];
+            app.active_tab = 0;
+            app.active_tab_mut().selected_range = 0.."one\ntwo".len();
+        });
+        cx.simulate_keystrokes(shortcut.binding);
+        app.update(cx, |app, _| {
+            assert_eq!(
+                app.active_tab().document.text(),
+                expected,
+                "{} must dispatch its Format action",
+                shortcut.id
+            );
+        });
+    }
+
+    let mut overrides = BTreeMap::new();
+    overrides.insert("code-fence".to_string(), "ctrl-alt-k".to_string());
+    app.update(cx, |app, _| {
+        app.shortcut_overrides = overrides.clone();
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("code"))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 0.."code".len();
+    });
+    cx.update(|_, cx| {
+        cx.clear_key_bindings();
+        bind_app_keys(cx, &overrides);
+    });
+
+    cx.simulate_keystrokes(menu_shortcuts::CODE_FENCE.binding);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "code",
+            "the default must stop dispatching while overridden"
+        );
+    });
+    cx.simulate_keystrokes("ctrl-alt-k");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "```\ncode\n```");
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("reset"))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 0.."reset".len();
+        app.shortcut_overrides.clear();
+    });
+    cx.update(|_, cx| {
+        cx.clear_key_bindings();
+        bind_app_keys(cx, &BTreeMap::new());
+    });
+    cx.simulate_keystrokes(menu_shortcuts::CODE_FENCE.binding);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "```\nreset\n```");
     });
 }
 
@@ -8596,7 +8859,7 @@ fn visual_block_menu_anchor_and_overflow_stay_in_viewport(cx: &mut TestAppContex
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("one\n\ntwo"))];
-        app.active_tab_mut().selected_range = 1..1;
+        app.active_tab_mut().selected_range = 0..3;
         app.view_mode = ViewMode::VisualEdit;
         app
     });
@@ -8618,6 +8881,10 @@ fn visual_block_menu_anchor_and_overflow_stay_in_viewport(cx: &mut TestAppContex
     let panel = cx
         .debug_bounds("visual-block-menu-panel")
         .expect("edge-anchored menu should render");
+    assert!(
+        cx.debug_bounds("visual-selection-format-bold").is_some(),
+        "selection formatting remains reachable in an edge-constrained menu"
+    );
     assert!(f32::from(panel.left()) >= 0.0);
     assert!(f32::from(panel.top()) >= 0.0);
     assert!(f32::from(panel.right()) <= f32::from(viewport.width) + 0.5);
@@ -9021,8 +9288,8 @@ fn visual_block_context_targeting_preserves_non_caret_selection_and_rejects_unsu
         ));
     });
     assert!(
-        cx.debug_bounds("visual-context-bold").is_none(),
-        "block menu takes presentation precedence over selection toolbar"
+        cx.debug_bounds("visual-selection-format-bold").is_none(),
+        "an unrelated block must not expose actions for the preserved selection"
     );
 
     cx.dispatch_action(ClearFileTreeSearch);
@@ -9043,6 +9310,223 @@ fn visual_block_context_targeting_preserves_non_caret_selection_and_rejects_unsu
         app.open_visual_block_menu(stale, image_row.center(), cx);
         assert!(app.block_menu.is_none());
         assert_eq!(app.active_tab().selected_range, selection);
+    });
+}
+
+#[gpui::test]
+fn visual_selection_format_actions_live_in_the_context_menu(cx: &mut TestAppContext) {
+    const SOURCE: &str = "selected prose\n\nother";
+    const SELECTION: Range<usize> = 0..8;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = SELECTION;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    assert!(
+        cx.debug_bounds("visual-context-bold").is_none(),
+        "the retired floating toolbar must not render for a selection"
+    );
+    let (initial_version, initial_blocks) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+    let first_row = cx
+        .debug_bounds("visual-block-row-0")
+        .expect("selected paragraph should expose a block context target");
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: first_row.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let menu = app.block_menu.as_ref().expect("selection context menu");
+        let selection_target = menu
+            .selection_format
+            .as_ref()
+            .expect("exact selected prose should be format-safe");
+        assert_eq!(selection_target.range, SELECTION);
+        assert_eq!(
+            selection_target.document_version,
+            app.active_tab().document.version()
+        );
+        assert_eq!(app.active_tab().selected_range, SELECTION);
+        assert_eq!(app.active_tab().document.version(), initial_version);
+        assert_eq!(app.active_tab().undo_stack.len(), 0);
+        assert!(!app.active_tab().document.is_dirty());
+        assert!(Arc::ptr_eq(
+            &initial_blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+    });
+    for id in [
+        "visual-selection-format-bold",
+        "visual-selection-format-italic",
+        "visual-selection-format-inline-code",
+        "visual-selection-format-link",
+        "visual-block-text-headings",
+    ] {
+        assert!(
+            cx.debug_bounds(id).is_some(),
+            "selection-aware menu should expose {id}"
+        );
+    }
+
+    let bold = cx
+        .debug_bounds("visual-selection-format-bold")
+        .expect("pointer Bold command");
+    cx.simulate_click(bold.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "**selected** prose\n\nother"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert!(app.block_menu.is_none());
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+
+    let open_selection_menu = |app: &mut MarkionApp, cx: &mut Context<MarkionApp>| {
+        app.active_tab_mut().selected_range = SELECTION;
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let target = BlockTarget::from_block(app.active_tab().document.version(), &blocks[0]);
+        app.open_visual_block_menu(target, point(px(80.), px(80.)), cx);
+    };
+
+    app.update(cx, |app, cx| {
+        open_selection_menu(app, cx);
+        app.activate_visual_block_menu_item(
+            BlockMenuItem::SelectionFormat(SelectionFormatAction::Italic),
+            cx,
+        );
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "*selected* prose\n\nother"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        open_selection_menu(app, cx);
+        app.activate_visual_block_menu_item(
+            BlockMenuItem::SelectionFormat(SelectionFormatAction::InlineCode),
+            cx,
+        );
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "`selected` prose\n\nother"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        let version = app.active_tab().document.version();
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let undo_len = app.active_tab().undo_stack.len();
+        let dirty = app.active_tab().document.is_dirty();
+        open_selection_menu(app, cx);
+        app.activate_visual_block_menu_item(
+            BlockMenuItem::SelectionFormat(SelectionFormatAction::Link),
+            cx,
+        );
+        let editor = app
+            .link_editor
+            .as_ref()
+            .expect("Link should open the editor");
+        assert_eq!(editor.source_range, SELECTION);
+        assert_eq!(editor.label, "selected");
+        assert!(app.block_menu.is_none());
+        app.cancel_link_editor(cx);
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+        assert_eq!(app.active_tab().selected_range, SELECTION);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert_eq!(app.active_tab().undo_stack.len(), undo_len);
+        assert_eq!(app.active_tab().document.is_dirty(), dirty);
+        assert!(Arc::ptr_eq(
+            &blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+    });
+
+    app.update(cx, |app, cx| {
+        let version = app.active_tab().document.version();
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let undo_len = app.active_tab().undo_stack.len();
+        let dirty = app.active_tab().document.is_dirty();
+        open_selection_menu(app, cx);
+        app.active_tab_mut().selected_range = 1..7;
+        app.activate_visual_block_menu_item(
+            BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold),
+            cx,
+        );
+        assert!(app.block_menu.is_none());
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert_eq!(app.active_tab().undo_stack.len(), undo_len);
+        assert_eq!(app.active_tab().document.is_dirty(), dirty);
+        assert!(Arc::ptr_eq(
+            &blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+    });
+}
+
+#[gpui::test]
+fn visual_selection_format_actions_support_keyboard_context_invocation(cx: &mut TestAppContext) {
+    const SOURCE: &str = "selected prose";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 0..8;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_action(ShowVisualBlockContextMenu);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let menu = app
+            .block_menu
+            .as_ref()
+            .expect("keyboard selection context menu");
+        assert!(menu.selection_format.is_some());
+        assert_eq!(menu.root_selected, BLOCK_MENU_SELECTION_FORMAT_ITEMS.len());
+    });
+    assert!(cx.debug_bounds("visual-selection-format-bold").is_some());
+    app.update(cx, |app, cx| {
+        app.select_visual_block_menu_root(0, false, cx)
+    });
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "**selected** prose");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
     });
 }
 
@@ -9567,14 +10051,67 @@ fn external_change_reload_and_dirty_conflict_preserve_expected_source(cx: &mut T
 }
 
 #[test]
-fn contextual_toolbar_requires_one_exact_editable_run() {
+fn selection_format_target_requires_one_safe_exact_editable_run() {
     let document = MarkdownDocument::from_text("plain text and **bold**");
     let blocks = document.visual_blocks_shared();
+    let target = BlockTarget::from_block(document.version(), &blocks[0]);
     let mut tab = EditorTab::new(document);
+
     tab.selected_range = 0..5;
-    assert!(visual_selection_supports_contextual_format(&tab, &blocks));
+    let exact = visual_selection_format_target_for_block(&tab, &blocks, &target)
+        .expect("plain text selection should be format-safe");
+    assert_eq!(exact.range, 0..5);
+    assert_eq!(exact.block_id, blocks[0].id);
+
     tab.selected_range = 0..blocks[0].source_range.end;
-    assert!(!visual_selection_supports_contextual_format(&tab, &blocks));
+    assert!(visual_selection_format_target_for_block(&tab, &blocks, &target).is_none());
+
+    let mut stale = target.clone();
+    stale.document_version += 1;
+    tab.selected_range = 0..5;
+    assert!(visual_selection_format_target_for_block(&tab, &blocks, &stale).is_none());
+
+    let math_document = MarkdownDocument::from_text("before $x$ after");
+    let math_blocks = math_document.visual_blocks_shared();
+    let math_target = BlockTarget::from_block(math_document.version(), &math_blocks[0]);
+    let math_range = math_blocks[0]
+        .editable_runs
+        .iter()
+        .find(|run| run.math.is_some())
+        .expect("fixture should create an inline math run")
+        .content_range
+        .clone();
+    let mut math_tab = EditorTab::new(math_document);
+    math_tab.selected_range = math_range;
+    assert!(
+        visual_selection_format_target_for_block(&math_tab, &math_blocks, &math_target).is_none()
+    );
+
+    let html_document = MarkdownDocument::from_text("unclosed <em>em text");
+    let html_blocks = html_document.visual_blocks_shared();
+    let html_target = BlockTarget::from_block(html_document.version(), &html_blocks[0]);
+    let html_range = html_blocks[0]
+        .editable_runs
+        .first()
+        .expect("source-island fixture should retain an editable run")
+        .content_range
+        .clone();
+    let mut html_tab = EditorTab::new(html_document);
+    html_tab.selected_range = html_range;
+    assert!(html_blocks[0].source_island.is_some());
+    assert!(
+        visual_selection_format_target_for_block(&html_tab, &html_blocks, &html_target).is_none()
+    );
+
+    let multi_document = MarkdownDocument::from_text("first\n\nsecond");
+    let multi_blocks = multi_document.visual_blocks_shared();
+    let second_target = BlockTarget::from_block(multi_document.version(), &multi_blocks[1]);
+    let mut multi_tab = EditorTab::new(multi_document);
+    multi_tab.selected_range = 0..5;
+    assert!(
+        visual_selection_format_target_for_block(&multi_tab, &multi_blocks, &second_target)
+            .is_none()
+    );
 }
 
 #[gpui::test]
@@ -11505,5 +12042,580 @@ fn name_editor_escape_cancels_without_touching_disk(cx: &mut TestAppContext) {
         assert!(app.pending_name_input.is_none(), "Escape closed the editor");
         assert!(path.exists(), "original file untouched");
         assert!(!root.join("typed.md").exists());
+    });
+}
+
+#[test]
+fn search_field_state_edits_selection_ime_and_multibyte_boundaries() {
+    let mut field = SearchFieldState::new("a文🙂b");
+    field.move_caret(SearchCaretMove::Home);
+    field.move_caret(SearchCaretMove::Right);
+    assert_eq!(field.cursor, 1);
+    field.move_caret(SearchCaretMove::SelectRight);
+    assert_eq!(field.selected_text(), Some("文"));
+    field.replace_selection("字", false);
+    assert_eq!(field.buffer, "a字🙂b");
+
+    field.move_caret(SearchCaretMove::SelectAll);
+    field.replace_selection("拼", true);
+    assert_eq!(field.marked_range, Some(0.."拼".len()));
+    field.replace_selection("拼音", true);
+    field.replace_selection("拼音", false);
+    assert_eq!(field.buffer, "拼音");
+    assert!(field.marked_range.is_none());
+
+    field.move_caret(SearchCaretMove::Left);
+    field.backspace();
+    assert_eq!(field.buffer, "音");
+    field.move_caret(SearchCaretMove::Home);
+    field.delete_forward();
+    assert!(field.buffer.is_empty());
+}
+
+#[test]
+fn search_field_state_converts_platform_utf16_ranges_without_splitting_utf8() {
+    let field = SearchFieldState::new("a🙂文");
+    assert_eq!(field.byte_to_utf16(1), 1);
+    assert_eq!(field.byte_to_utf16(5), 3);
+    assert_eq!(field.range_from_utf16(1..3), 1..5);
+    assert_eq!(
+        field.utf16_to_byte(2),
+        1,
+        "inside a surrogate pair snaps left"
+    );
+}
+
+#[test]
+fn shared_search_pattern_keeps_unicode_regex_and_zero_width_behavior_identical() {
+    let literal = SearchPattern::compile(&SearchOptions {
+        query: "文本".into(),
+        case_sensitive: true,
+        regex: false,
+    })
+    .unwrap();
+    assert_eq!(literal.find_ranges("文本 x 文本"), vec![0..6, 9..15]);
+
+    let zero_width = SearchPattern::compile(&SearchOptions {
+        query: r"\b".into(),
+        case_sensitive: false,
+        regex: true,
+    })
+    .unwrap();
+    assert_eq!(zero_width.find_ranges("ab"), vec![0..0, 2..2]);
+    assert!(
+        SearchPattern::compile(&SearchOptions {
+            query: "(".into(),
+            case_sensitive: false,
+            regex: true,
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn read_preview_search_uses_visible_canonical_runs_in_document_order() {
+    let doc = MarkdownDocument::from_text(
+        "# Styled **visible phrase**\n\n[visible label](https://hidden.example/visible-phrase)\n\n```text\nvisible phrase\n```\n\n| A | B |\n|---|---|\n| visible phrase | cell |\n\n<div>visible phrase</div>\n\n![alt](hidden-visible-phrase.png)\n\n$visible phrase$",
+    );
+    let blocks = doc.preview_blocks_shared();
+    let pattern = SearchPattern::compile(&SearchOptions {
+        query: "visible phrase".into(),
+        case_sensitive: false,
+        regex: false,
+    })
+    .unwrap();
+    let matches = preview_search_matches(&blocks, &pattern);
+
+    assert!(
+        matches.len() >= 4,
+        "heading, code, table and HTML are searchable"
+    );
+    assert!(matches.windows(2).all(|pair| {
+        (
+            pair[0].block_index,
+            pair[0].run_id.rank(),
+            pair[0].range.start,
+        ) <= (
+            pair[1].block_index,
+            pair[1].run_id.rank(),
+            pair[1].range.start,
+        )
+    }));
+    assert!(matches.iter().all(|found| {
+        !matches!(
+            found.run_id,
+            PreviewTextRunId::MathLatex | PreviewTextRunId::CodeLine(_)
+        )
+    }));
+    assert_eq!(
+        matches
+            .iter()
+            .filter(|found| found.run_id == PreviewTextRunId::CodeBody)
+            .count(),
+        1,
+        "line-number presentation does not duplicate canonical code matches",
+    );
+
+    let destination = SearchPattern::compile(&SearchOptions {
+        query: "hidden.example".into(),
+        case_sensitive: false,
+        regex: false,
+    })
+    .unwrap();
+    assert!(preview_search_matches(&blocks, &destination).is_empty());
+    let image_path = SearchPattern::compile(&SearchOptions {
+        query: "hidden-visible-phrase.png".into(),
+        case_sensitive: false,
+        regex: false,
+    })
+    .unwrap();
+    assert!(preview_search_matches(&blocks, &image_path).is_empty());
+}
+
+#[gpui::test]
+fn focused_search_field_actions_and_ime_never_mutate_the_document(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "alpha beta alpha",
+        ))];
+        app.search_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app
+    });
+    let original = "alpha beta alpha";
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_text_in_range(app, None, "文本", window, cx);
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "拼", None, window, cx);
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "拼音", None, window, cx);
+            app.left(&Left, window, cx);
+            app.select_right(&SelectRight, window, cx);
+            app.backspace(&Backspace, window, cx);
+            app.home(&Home, window, cx);
+            app.delete(&Delete, window, cx);
+            app.select_all(&SelectAll, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), original);
+        assert_eq!(
+            app.search_query.selection(),
+            0..app.search_query.buffer.len()
+        );
+    });
+}
+
+#[gpui::test]
+fn search_navigation_wraps_and_read_mode_gates_replacement_without_losing_state(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "alpha\nalpha\nalpha",
+        ))];
+        app.search_visible = true;
+        app.search_form = SearchPanelForm::Replace;
+        app.replace_visible = true;
+        app.search_query.set_text("alpha");
+        app.replace_text.set_text("omega");
+        app.search_focus = Some(SearchField::Find);
+        app.refresh_search_matches();
+        app
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.current_search_index, Some(0));
+        assert!(
+            app.search_matches
+                .iter()
+                .all(|target| matches!(target, SearchTarget::Source(_)))
+        );
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.find_previous(&FindPrevious, window, cx);
+            assert_eq!(app.current_search_index, Some(2));
+            app.set_view_mode(ViewMode::Read, cx);
+            let blocks = app.active_tab().document.preview_blocks_shared();
+            let version = app.active_tab().document.version();
+            let tab = app.active_tab_mut();
+            tab.preview_reflects_version = Some(version);
+            tab.sync_preview_list(&blocks);
+            app.search_generation = None;
+            app.refresh_search_matches();
+            let before = app.active_tab().document.text().to_string();
+            app.replace_current_match(&ReplaceCurrentMatch, window, cx);
+            assert_eq!(app.active_tab().document.text(), before);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.search_form, SearchPanelForm::Replace);
+        assert!(!app.replace_visible);
+        assert_eq!(app.replace_text.buffer, "omega");
+        assert!(
+            app.search_matches
+                .iter()
+                .all(|target| matches!(target, SearchTarget::ReadPreview(_)))
+        );
+    });
+    app.update(cx, |app, cx| app.set_view_mode(ViewMode::Edit, cx));
+    app.update(cx, |app, _| {
+        assert!(app.replace_visible);
+        assert_eq!(app.search_query.buffer, "alpha");
+        assert_eq!(app.replace_text.buffer, "omega");
+    });
+}
+
+#[gpui::test]
+fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_states(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "Alpha 文本 alpha",
+        ))];
+        app.search_visible = true;
+        app.search_form = SearchPanelForm::Replace;
+        app.replace_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app.search_query.set_text("(");
+        app.search_regex = true;
+        app.refresh_search_matches();
+        app
+    });
+    cx.simulate_resize(size(px(460.), px(420.)));
+
+    for (language, theme) in [
+        (Language::En, AppTheme::Paper),
+        (Language::ZhHans, AppTheme::Ink),
+    ] {
+        app.update(cx, |app, cx| {
+            app.language = language;
+            app.theme = theme;
+            app.custom_theme = None;
+            app.selected_theme_name = theme.name().to_string();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        for selector in ["search-panel", "search-find-row", "search-replace-row"] {
+            assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
+        }
+        app.update(cx, |app, _| {
+            assert!(matches!(
+                app.search_result,
+                SearchResultState::InvalidPattern(_)
+            ));
+            assert_ne!(app.palette().panel_bg, app.palette().text);
+            assert_ne!(app.palette().search_match, app.palette().search_current);
+        });
+    }
+
+    app.update(cx, |app, cx| {
+        app.search_regex = false;
+        app.search_query
+            .set_text("very-long-search-value-".repeat(20));
+        app.search_generation = None;
+        app.refresh_search_matches();
+        assert_eq!(app.search_result, SearchResultState::NoMatches);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let panel = cx.debug_bounds("search-panel").unwrap();
+    let field = cx.debug_bounds("search-find-field").unwrap();
+    assert!(field.right() <= panel.right());
+
+    app.update(cx, |app, cx| app.set_view_mode(ViewMode::Read, cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("search-read-guidance").is_some());
+    app.update(cx, |app, _| assert!(!app.replace_visible));
+}
+
+#[gpui::test]
+fn search_ime_composition_is_field_only_in_every_view_mode(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("document"))];
+        app.search_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app
+    });
+    app.update(cx, |app, cx| {
+        for (language, mode) in [
+            (Language::En, ViewMode::Edit),
+            (Language::ZhHans, ViewMode::Split),
+            (Language::En, ViewMode::VisualEdit),
+            (Language::ZhHans, ViewMode::Read),
+        ] {
+            app.language = language;
+            app.set_view_mode(mode, cx);
+            if mode == ViewMode::Read {
+                let blocks = app.active_tab().document.preview_blocks_shared();
+                let version = app.active_tab().document.version();
+                let tab = app.active_tab_mut();
+                tab.preview_reflects_version = Some(version);
+                tab.sync_preview_list(&blocks);
+            }
+            app.search_focus = Some(SearchField::Find);
+            app.search_control_focus = Some(SearchOverlayControl::FindField);
+            app.search_query.set_text("");
+            app.insert_redirected_text("拼", true, cx);
+            app.insert_redirected_text("拼音", true, cx);
+            app.insert_redirected_text("拼音", false, cx);
+            assert_eq!(app.search_query.buffer, "拼音");
+            assert!(app.search_query.marked_range.is_none());
+            assert_eq!(app.active_tab().document.text(), "document");
+        }
+    });
+}
+
+#[gpui::test]
+fn search_tab_clipboard_escape_and_reopen_preserve_field_values(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("unchanged"))];
+        app.search_visible = true;
+        app.search_form = SearchPanelForm::Replace;
+        app.replace_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app.search_query.set_text("文本");
+        app.replace_text.set_text("replacement");
+        app.search_query.move_caret(SearchCaretMove::SelectAll);
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.copy(&Copy, window, cx);
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("文本".into())
+            );
+            app.indent(&Indent, window, cx);
+            assert_eq!(
+                app.search_control_focus,
+                Some(SearchOverlayControl::ReplaceField)
+            );
+            app.outdent(&Outdent, window, cx);
+            assert_eq!(
+                app.search_control_focus,
+                Some(SearchOverlayControl::FindField)
+            );
+            app.clear_file_tree_search(&ClearFileTreeSearch, window, cx);
+            assert!(!app.search_visible);
+            app.show_replace(&ShowReplace, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "unchanged");
+        assert_eq!(app.search_query.buffer, "文本");
+        assert_eq!(app.replace_text.buffer, "replacement");
+        assert_eq!(app.search_form, SearchPanelForm::Replace);
+    });
+}
+
+#[gpui::test]
+fn source_search_state_replaces_continues_undoes_and_clears_invalid_or_empty_results(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("one one"))];
+        app.search_visible = true;
+        app.search_form = SearchPanelForm::Replace;
+        app.replace_visible = true;
+        app.search_query.set_text("one");
+        app.replace_text.set_text("X");
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app.refresh_search_matches();
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(app.current_search_index, Some(0));
+            app.replace_current_match(&ReplaceCurrentMatch, window, cx);
+            assert_eq!(app.active_tab().document.text(), "X one");
+            let SearchTarget::Source(next) = &app.search_matches[app.current_search_index.unwrap()]
+            else {
+                panic!("source replacement must continue in the source domain");
+            };
+            assert_eq!(next.range, 2..5);
+
+            app.replace_all_matches(&ReplaceAllMatches, window, cx);
+            assert_eq!(app.active_tab().document.text(), "X X");
+            app.undo(&Undo, window, cx);
+            assert_eq!(app.active_tab().document.text(), "X one");
+
+            app.search_regex = true;
+            app.search_query.set_text("(");
+            app.search_generation = None;
+            app.refresh_search_matches();
+            assert!(matches!(
+                app.search_result,
+                SearchResultState::InvalidPattern(_)
+            ));
+            assert!(app.search_matches.is_empty());
+            assert!(app.current_search_index.is_none());
+
+            app.search_query.set_text("");
+            app.search_generation = None;
+            app.refresh_search_matches();
+            assert_eq!(app.search_result, SearchResultState::Idle);
+            assert!(app.search_matches.is_empty());
+        });
+    });
+}
+
+#[gpui::test]
+fn read_search_options_navigation_highlights_pending_and_close_transitions(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "Alpha alpha 文本\n\n**styled phrase**\n\n```text\nAlpha\n```",
+        ))];
+        app.view_mode = ViewMode::Read;
+        let blocks = app.active_tab().document.preview_blocks_shared();
+        let version = app.active_tab().document.version();
+        let tab = app.active_tab_mut();
+        tab.preview_reflects_version = Some(version);
+        tab.sync_preview_list(&blocks);
+        app.search_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app.search_query.set_text("alpha");
+        app.refresh_search_matches();
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(app.search_matches.len(), 3);
+            assert_eq!(app.current_search_index, Some(0));
+            app.find_previous(&FindPrevious, window, cx);
+            assert_eq!(app.current_search_index, Some(2));
+
+            app.search_case_sensitive = true;
+            app.search_generation = None;
+            app.refresh_search_matches();
+            assert_eq!(app.search_matches.len(), 1);
+
+            app.search_regex = true;
+            app.search_query.set_text(r"^Alpha$");
+            app.search_generation = None;
+            app.refresh_search_matches();
+            assert_eq!(app.search_matches.len(), 1);
+
+            let current = app.current_search_index.unwrap();
+            let SearchTarget::ReadPreview(found) = app.search_matches[current].clone() else {
+                panic!("Read mode must own rendered targets");
+            };
+            let block = &app.active_tab().preview_list_blocks[found.block_index];
+            let text = preview_run_plain_text(block, found.run_id).unwrap();
+            let painted = active_preview_search_ranges(app, found.block_index, found.run_id, &text);
+            assert!(painted.iter().any(|(_, is_current)| *is_current));
+
+            app.active_tab_mut().preview_reflects_version = None;
+            app.search_generation = None;
+            app.refresh_search_matches();
+            assert_eq!(app.search_result, SearchResultState::PendingPreview);
+            assert!(app.search_matches.is_empty());
+
+            app.close_search_overlay(cx);
+            assert!(!app.search_visible);
+            assert_eq!(app.search_result, SearchResultState::Idle);
+            assert!(app.search_matches.is_empty());
+        });
+    });
+}
+
+#[gpui::test]
+fn search_keyboard_navigation_cut_paste_and_escape_are_overlay_only(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "alpha alpha alpha",
+        ))];
+        app.search_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app.search_query.set_text("alpha");
+        app.refresh_search_matches();
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let document = app.active_tab().document.text().to_string();
+            app.insert_newline(&InsertNewline, window, cx);
+            assert_eq!(app.current_search_index, Some(1));
+            app.search_previous_or_newline(&SearchPreviousOrNewline, window, cx);
+            assert_eq!(app.current_search_index, Some(0));
+
+            app.search_query.move_caret(SearchCaretMove::SelectAll);
+            app.cut(&Cut, window, cx);
+            assert!(app.search_query.buffer.is_empty());
+            cx.write_to_clipboard(ClipboardItem::new_string("alpha".to_string()));
+            app.paste(&Paste, window, cx);
+            assert_eq!(app.search_query.buffer, "alpha");
+
+            app.indent(&Indent, window, cx);
+            assert_eq!(
+                app.search_control_focus,
+                Some(SearchOverlayControl::Previous)
+            );
+            app.outdent(&Outdent, window, cx);
+            assert_eq!(
+                app.search_control_focus,
+                Some(SearchOverlayControl::FindField)
+            );
+            app.clear_file_tree_search(&ClearFileTreeSearch, window, cx);
+            assert!(!app.search_visible);
+            assert_eq!(app.active_tab().document.text(), document);
+        });
+    });
+}
+
+#[gpui::test]
+fn search_domain_tracks_all_four_view_modes_and_replacement_availability(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("needle needle"))];
+        app.search_visible = true;
+        app.search_form = SearchPanelForm::Replace;
+        app.search_query.set_text("needle");
+        app
+    });
+    app.update(cx, |app, cx| {
+        for mode in [ViewMode::Edit, ViewMode::Split, ViewMode::VisualEdit] {
+            app.set_view_mode(mode, cx);
+            app.search_generation = None;
+            app.refresh_search_matches();
+            assert!(app.replace_visible);
+            assert!(
+                app.search_matches
+                    .iter()
+                    .all(|target| matches!(target, SearchTarget::Source(_)))
+            );
+        }
+
+        app.set_view_mode(ViewMode::Read, cx);
+        assert_eq!(app.search_result, SearchResultState::PendingPreview);
+        let blocks = app.active_tab().document.preview_blocks_shared();
+        let version = app.active_tab().document.version();
+        let tab = app.active_tab_mut();
+        tab.preview_reflects_version = Some(version);
+        tab.sync_preview_list(&blocks);
+        app.search_generation = None;
+        app.refresh_search_matches();
+        assert!(!app.replace_visible);
+        assert!(
+            app.search_matches
+                .iter()
+                .all(|target| matches!(target, SearchTarget::ReadPreview(_)))
+        );
     });
 }

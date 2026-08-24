@@ -36,6 +36,15 @@ impl Render for MarkionApp {
                 // only the changed range, preserving scroll; a reused Arc is a
                 // pointer-compare no-op).
                 self.active_tab_mut().sync_preview_list(&blocks);
+                if self.search_visible
+                    && matches!(self.view_mode, ViewMode::Read)
+                    && matches!(self.search_result, SearchResultState::PendingPreview)
+                    && self.active_tab().preview_reflects_version
+                        == Some(self.active_tab().document.version())
+                {
+                    self.search_generation = None;
+                    self.refresh_search_matches();
+                }
                 blocks
             };
         let visual_blocks: std::sync::Arc<Vec<VisualBlock>> =
@@ -148,10 +157,6 @@ impl Render for MarkionApp {
             .document_tab()
             .map(|tab| tab.editor_scroll.clone())
             .unwrap_or_else(ScrollHandle::new);
-        let show_selection_toolbar = !active_is_image
-            && matches!(self.view_mode, ViewMode::VisualEdit)
-            && self.block_menu.is_none()
-            && visual_selection_supports_contextual_format(self.active_tab(), &visual_blocks);
         let block_menu_max_height = px((f32::from(window.viewport_size().height) - 32.0)
             .max(120.0)
             .min(520.0));
@@ -232,6 +237,7 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::home))
                     .on_action(cx.listener(Self::end))
                     .on_action(cx.listener(Self::insert_newline))
+                    .on_action(cx.listener(Self::search_previous_or_newline))
                     .on_action(cx.listener(Self::indent))
                     .on_action(cx.listener(Self::outdent))
                     .on_action(cx.listener(Self::paste))
@@ -694,10 +700,6 @@ impl Render for MarkionApp {
             .when(self.preferences_panel_open, |root| {
                 root.child(preferences_panel_view(self, cx))
             })
-            .when(
-                show_selection_toolbar && self.link_editor.is_none(),
-                |root| root.child(visual_selection_toolbar(self.language, cx)),
-            )
             .when(self.link_editor.is_some(), |root| {
                 root.child(link_editor_view(self, cx))
             })
@@ -1328,69 +1330,6 @@ fn recovery_manager_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div 
         )
 }
 
-pub(super) fn visual_selection_supports_contextual_format(
-    tab: &EditorTab,
-    blocks: &[VisualBlock],
-) -> bool {
-    let selection = &tab.selected_range;
-    if selection.is_empty() {
-        return false;
-    }
-    blocks.iter().any(|block| {
-        block.source_island.is_none()
-            && block.editable_runs.iter().any(|run| {
-                !run.conservative_fallback
-                    && run.math.is_none()
-                    && run.content_range.start <= selection.start
-                    && run.content_range.end >= selection.end
-            })
-    })
-}
-
-fn visual_selection_toolbar(language: Language, cx: &mut Context<MarkionApp>) -> Div {
-    let button = |id: &'static str, label: &'static str| {
-        div()
-            .id(id)
-            .px_3()
-            .py_1()
-            .rounded_sm()
-            .text_size(px(12.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.bg(rgb(0xe2e8f0)))
-            .child(label)
-    };
-    div()
-        .absolute()
-        .top(px(68.))
-        .right(px(28.))
-        .p_1()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(0xcbd5e1))
-        .bg(rgb(0xffffff))
-        .shadow_lg()
-        .flex()
-        .gap_1()
-        .child(
-            button("visual-context-bold", "B")
-                .on_click(cx.listener(|app, _, window, cx| app.bold(&Bold, window, cx))),
-        )
-        .child(
-            button("visual-context-italic", "I")
-                .on_click(cx.listener(|app, _, window, cx| app.italic(&Italic, window, cx))),
-        )
-        .child(
-            button("visual-context-code", "</>").on_click(
-                cx.listener(|app, _, window, cx| app.inline_code(&InlineCode, window, cx)),
-            ),
-        )
-        .child(
-            button("visual-context-link", t(language, Msg::ItemLink))
-                .on_click(cx.listener(|app, _, _, cx| app.open_link_editor(cx))),
-        )
-}
-
 fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let editor = app.link_editor.as_ref().expect("link editor visible");
     let field = |id: &'static str,
@@ -1612,19 +1551,22 @@ pub(super) fn visual_edit_surface_view(
 
 pub(super) fn search_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let palette = app.palette();
-    let current = app.current_search_index.map(|index| index + 1).unwrap_or(0);
-    let total = app.search_matches.len();
-    let summary = if app.search_query.is_empty() {
-        "No query".to_string()
-    } else {
-        format!("{current}/{total}")
+    let summary = match app.search_result {
+        SearchResultState::Ready => app.trf(
+            Msg::SearchProgress,
+            &[
+                &app.current_search_index
+                    .map_or(1, |index| index + 1)
+                    .to_string(),
+                &app.search_matches.len().to_string(),
+            ],
+        ),
+        _ => app.search_summary().into(),
     };
+    let can_navigate = matches!(app.search_result, SearchResultState::Ready);
+    let can_replace = can_navigate && app.replace_visible;
+    let invalid = matches!(app.search_result, SearchResultState::InvalidPattern(_));
     let top = px(36. + document_tab_band_height(app.tabs.len()));
-    let max_width = if app.replace_visible {
-        px(720.)
-    } else {
-        px(560.)
-    };
 
     div()
         .absolute()
@@ -1635,8 +1577,9 @@ pub(super) fn search_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) 
         .justify_end()
         .child(
             div()
+                .debug_selector(|| "search-panel".to_string())
                 .w_full()
-                .max_w(max_width)
+                .max_w(px(680.))
                 .px_3()
                 .py_2()
                 .rounded_md()
@@ -1647,78 +1590,131 @@ pub(super) fn search_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) 
                 .shadow_md()
                 .occlude()
                 .flex()
-                .items_center()
-                .flex_wrap()
+                .flex_col()
                 .gap_2()
-                .child(search_field_view(
-                    app.tr(Msg::SearchFind),
-                    &app.search_query,
-                    app.search_focus == Some(SearchField::Find),
-                    palette,
-                    cx.listener(MarkionApp::focus_find_field),
-                ))
-                .when(app.replace_visible, |panel| {
-                    panel.child(search_field_view(
-                        app.tr(Msg::SearchReplace),
-                        &app.replace_text,
-                        app.search_focus == Some(SearchField::Replace),
-                        palette,
-                        cx.listener(MarkionApp::focus_replace_field),
-                    ))
-                })
-                .child(toolbar_button(
-                    app.tr(Msg::SearchPrev),
-                    palette,
-                    cx.listener(MarkionApp::click_find_previous),
-                ))
-                .child(toolbar_button(
-                    app.tr(Msg::SearchNext),
-                    palette,
-                    cx.listener(MarkionApp::click_find_next),
-                ))
-                .when(app.replace_visible, |panel| {
-                    panel
-                        .child(toolbar_button(
-                            app.tr(Msg::SearchReplace),
-                            palette,
-                            cx.listener(MarkionApp::click_replace_current),
-                        ))
-                        .child(toolbar_button(
-                            app.tr(Msg::SearchAll),
-                            palette,
-                            cx.listener(MarkionApp::click_replace_all),
-                        ))
-                })
-                .child(toolbar_button(
-                    if app.search_case_sensitive {
-                        app.tr(Msg::SearchCaseSensitiveMark)
-                    } else {
-                        app.tr(Msg::SearchCaseInsensitiveMark)
-                    },
-                    palette,
-                    cx.listener(MarkionApp::click_toggle_case),
-                ))
-                .child(toolbar_button(
-                    if app.search_regex {
-                        app.tr(Msg::SearchRegexMark)
-                    } else {
-                        app.tr(Msg::SearchLiteral)
-                    },
-                    palette,
-                    cx.listener(MarkionApp::click_toggle_regex),
-                ))
                 .child(
                     div()
-                        .ml_1()
-                        .text_size(px(12.))
-                        .text_color(palette.muted)
-                        .child(summary),
+                        .debug_selector(|| "search-find-row".to_string())
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(56.))
+                                .text_size(px(12.))
+                                .text_color(palette.muted)
+                                .child(app.tr(Msg::SearchFind)),
+                        )
+                        .child(search_field_view(
+                            SearchField::Find,
+                            &app.search_query,
+                            app.search_focus == Some(SearchField::Find),
+                            invalid,
+                            palette,
+                            cx,
+                        ))
+                        .child(
+                            div()
+                                .min_w(px(52.))
+                                .text_size(px(12.))
+                                .text_color(palette.muted)
+                                .child(summary),
+                        )
+                        .child(search_toolbar_button(
+                            app.tr(Msg::SearchPrev),
+                            palette,
+                            app.search_control_focus == Some(SearchOverlayControl::Previous),
+                            can_navigate,
+                            cx.listener(MarkionApp::click_find_previous),
+                        ))
+                        .child(search_toolbar_button(
+                            app.tr(Msg::SearchNext),
+                            palette,
+                            app.search_control_focus == Some(SearchOverlayControl::Next),
+                            can_navigate,
+                            cx.listener(MarkionApp::click_find_next),
+                        ))
+                        .child(search_toolbar_button(
+                            app.tr(Msg::SearchMatchCase),
+                            palette,
+                            app.search_case_sensitive
+                                || app.search_control_focus
+                                    == Some(SearchOverlayControl::MatchCase),
+                            true,
+                            cx.listener(MarkionApp::click_toggle_case),
+                        ))
+                        .child(search_toolbar_button(
+                            app.tr(Msg::SearchUseRegex),
+                            palette,
+                            app.search_regex
+                                || app.search_control_focus == Some(SearchOverlayControl::Regex),
+                            true,
+                            cx.listener(MarkionApp::click_toggle_regex),
+                        ))
+                        .child(search_toolbar_button(
+                            app.tr(Msg::SearchClose),
+                            palette,
+                            app.search_control_focus == Some(SearchOverlayControl::Close),
+                            true,
+                            cx.listener(MarkionApp::click_close_search),
+                        )),
                 )
-                .child(toolbar_button(
-                    "×",
-                    palette,
-                    cx.listener(MarkionApp::click_close_search),
-                )),
+                .when(app.replace_visible, |panel| {
+                    panel.child(
+                        div()
+                            .debug_selector(|| "search-replace-row".to_string())
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .w(px(56.))
+                                    .text_size(px(12.))
+                                    .text_color(palette.muted)
+                                    .child(app.tr(Msg::SearchReplace)),
+                            )
+                            .child(search_field_view(
+                                SearchField::Replace,
+                                &app.replace_text,
+                                app.search_focus == Some(SearchField::Replace),
+                                false,
+                                palette,
+                                cx,
+                            ))
+                            .child(search_toolbar_button(
+                                app.tr(Msg::SearchReplaceCurrent),
+                                palette,
+                                app.search_control_focus
+                                    == Some(SearchOverlayControl::ReplaceCurrent),
+                                can_replace,
+                                cx.listener(MarkionApp::click_replace_current),
+                            ))
+                            .child(search_toolbar_button(
+                                app.tr(Msg::SearchReplaceAll),
+                                palette,
+                                app.search_control_focus == Some(SearchOverlayControl::ReplaceAll),
+                                can_replace,
+                                cx.listener(MarkionApp::click_replace_all),
+                            )),
+                    )
+                })
+                .when(
+                    app.search_form == SearchPanelForm::Replace
+                        && matches!(app.view_mode, ViewMode::Read),
+                    |panel| {
+                        panel.child(
+                            div()
+                                .debug_selector(|| "search-read-guidance".to_string())
+                                .text_size(px(12.))
+                                .text_color(palette.muted)
+                                .child(app.tr(Msg::SearchReadReplaceUnavailable)),
+                        )
+                    },
+                ),
         )
 }
 
@@ -1735,27 +1731,47 @@ pub(super) fn hide_search_overlay_state(
 }
 
 pub(super) fn search_field_view(
-    label: &'static str,
-    value: &str,
+    field_kind: SearchField,
+    field: &SearchFieldState,
     active: bool,
+    invalid: bool,
     palette: ThemePalette,
-    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
-) -> Div {
-    let border = if active {
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    let border = if invalid {
+        palette.invalid
+    } else if active {
         palette.active_bg
     } else {
         palette.border
     };
-    let text = if value.is_empty() {
-        format!("{label}: ")
-    } else {
-        format!("{label}: {value}")
+    let buffer = field.buffer.clone();
+    let selection = field.selection();
+    let before = buffer.get(..selection.start).unwrap_or("").to_string();
+    let selected = buffer.get(selection.clone()).unwrap_or("").to_string();
+    let after = buffer.get(selection.end..).unwrap_or("").to_string();
+    let has_selection = !selection.is_empty();
+    let text_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
+    let bounds_for_click = text_bounds.clone();
+    let buffer_for_click = buffer.clone();
+    let app_entity = cx.entity();
+    let bounds_entity = app_entity.clone();
+    let debug_selector = match field_kind {
+        SearchField::Find => "search-find-field",
+        SearchField::Replace => "search-replace-field",
     };
 
     div()
+        .id(match field_kind {
+            SearchField::Find => "search-find-field",
+            SearchField::Replace => "search-replace-field",
+        })
+        .debug_selector(move || debug_selector.to_string())
         .min_w(px(180.))
-        .max_w(px(280.))
+        .max_w(px(300.))
         .flex_1()
+        .relative()
+        .overflow_x_scroll()
         .px_2()
         .py_1()
         .rounded_md()
@@ -1764,10 +1780,135 @@ pub(super) fn search_field_view(
         .bg(palette.surface_bg)
         .text_color(palette.text)
         .text_size(px(12.))
-        .cursor_pointer()
+        .cursor(CursorStyle::IBeam)
         .hover(move |style| style.border_color(palette.active_bg))
-        .child(text)
-        .on_mouse_up(MouseButton::Left, listener)
+        // The editable area contains only the exact field buffer. Identity,
+        // empty-state feedback and validation live in adjacent chrome.
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .whitespace_nowrap()
+                .child(div().child(before))
+                .when(has_selection, |d| {
+                    d.child(div().bg(palette.input_selection).child(selected))
+                })
+                .when(active && !has_selection, |d| {
+                    d.child(div().w(px(1.5)).h(px(13.)).bg(palette.active_bg))
+                })
+                .child(div().child(after)),
+        )
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, _, cx| {
+                    *text_bounds.borrow_mut() = Some(bounds);
+                    bounds_entity.update(cx, |app, _| {
+                        app.search_field_bounds[match field_kind {
+                            SearchField::Find => 0,
+                            SearchField::Replace => 1,
+                        }] = Some(bounds);
+                    });
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+        .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
+            cx.stop_propagation();
+            let Some(bounds) = bounds_for_click.borrow().as_ref().copied() else {
+                return;
+            };
+            let offset = name_x_to_offset(&buffer_for_click, event.position.x - bounds.left());
+            app_entity.update(cx, |app, cx| {
+                app.search_visible = true;
+                app.search_focus = Some(field_kind);
+                app.search_control_focus = Some(match field_kind {
+                    SearchField::Find => SearchOverlayControl::FindField,
+                    SearchField::Replace => SearchOverlayControl::ReplaceField,
+                });
+                app.file_tree_query_focused = false;
+                if let Some(field) = app.focused_search_field_mut() {
+                    field.cursor = clamp_search_boundary(&field.buffer, offset);
+                    if !event.modifiers.shift {
+                        field.anchor = field.cursor;
+                    }
+                    field.marked_range = None;
+                }
+                cx.notify();
+            });
+        })
+}
+
+fn search_toolbar_button(
+    label: &'static str,
+    palette: ThemePalette,
+    active: bool,
+    enabled: bool,
+    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let tooltip_label = SharedString::from(label);
+    div()
+        .id(SharedString::from(format!("search-button-{label}")))
+        .tooltip(move |_, cx| {
+            cx.new(|_| SearchTooltip {
+                palette,
+                label: tooltip_label.clone(),
+            })
+            .into()
+        })
+        .h(px(26.))
+        .min_w(px(26.))
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(if active {
+            palette.active_bg
+        } else {
+            palette.border
+        })
+        .bg(if active {
+            palette.active_bg
+        } else {
+            palette.surface_bg
+        })
+        .text_color(if active {
+            palette.active_text
+        } else {
+            palette.text
+        })
+        .text_size(px(12.))
+        .opacity(if enabled { 1. } else { 0.42 })
+        .when(enabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(move |style| style.bg(palette.active_bg).text_color(palette.active_text))
+                .on_mouse_up(MouseButton::Left, listener)
+        })
+        .child(label)
+}
+
+struct SearchTooltip {
+    palette: ThemePalette,
+    label: SharedString,
+}
+
+impl Render for SearchTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .py_1()
+            .px_2()
+            .rounded_md()
+            .border_1()
+            .border_color(self.palette.border)
+            .bg(self.palette.panel_bg)
+            .text_size(px(12.))
+            .text_color(self.palette.text)
+            .child(self.label.clone())
+    }
 }
 
 /// Inline name editor field used when the file-tree panel is hidden (the
@@ -3011,28 +3152,6 @@ pub(super) fn sidebar_resize_handle_view(
         )
 }
 
-pub(super) fn toolbar_button(
-    label: &'static str,
-    palette: ThemePalette,
-    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
-        .h(px(26.))
-        .min_w(px(26.))
-        .px_2()
-        .py_1()
-        .rounded_md()
-        .border_1()
-        .border_color(palette.border)
-        .bg(palette.surface_bg)
-        .text_color(palette.text)
-        .text_size(px(12.))
-        .cursor_pointer()
-        .hover(move |style| style.bg(palette.active_bg).text_color(palette.active_text))
-        .on_mouse_up(MouseButton::Left, listener)
-        .child(label)
-}
-
 pub(super) fn file_tree_context_menu_view(
     app: &MarkionApp,
     cx: &mut Context<MarkionApp>,
@@ -3783,12 +3902,33 @@ pub(super) fn active_menu_dropdown(
                 .child(action_item!(
                     Msg::ItemBullets,
                     unordered_list,
-                    UnorderedList
+                    UnorderedList,
+                    menu_shortcuts::UNORDERED_LIST
                 ))
-                .child(action_item!(Msg::ItemNumbers, ordered_list, OrderedList))
-                .child(action_item!(Msg::ItemTask, task_list, TaskList))
-                .child(action_item!(Msg::ItemQuote, block_quote, BlockQuote))
-                .child(action_item!(Msg::ItemCodeFence, code_fence, CodeFence))
+                .child(action_item!(
+                    Msg::ItemNumbers,
+                    ordered_list,
+                    OrderedList,
+                    menu_shortcuts::ORDERED_LIST
+                ))
+                .child(action_item!(
+                    Msg::ItemTask,
+                    task_list,
+                    TaskList,
+                    menu_shortcuts::TASK_LIST
+                ))
+                .child(action_item!(
+                    Msg::ItemQuote,
+                    block_quote,
+                    BlockQuote,
+                    menu_shortcuts::BLOCK_QUOTE
+                ))
+                .child(action_item!(
+                    Msg::ItemCodeFence,
+                    code_fence,
+                    CodeFence,
+                    menu_shortcuts::CODE_FENCE
+                ))
                 .child(menu_separator(palette))
                 .child(action_item!(
                     Msg::ItemFormatTable,

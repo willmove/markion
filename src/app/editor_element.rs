@@ -26,6 +26,11 @@ impl EntityInputHandler for MarkionApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
+        if let Some(field) = self.focused_search_field() {
+            let range = field.range_from_utf16(range_utf16);
+            actual_range.replace(field.byte_to_utf16(range.start)..field.byte_to_utf16(range.end));
+            return field.buffer.get(range).map(ToString::to_string);
+        }
         let tab = self.active_tab();
         let range = tab.range_from_utf16(&range_utf16)?;
         let text = tab.document.text().get(range.clone())?;
@@ -39,6 +44,13 @@ impl EntityInputHandler for MarkionApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if let Some(field) = self.focused_search_field() {
+            let range = field.selection();
+            return Some(UTF16Selection {
+                range: field.byte_to_utf16(range.start)..field.byte_to_utf16(range.end),
+                reversed: field.cursor < field.anchor,
+            });
+        }
         let tab = self.active_tab();
         let selected_range = tab.safe_selected_range();
         Some(UTF16Selection {
@@ -52,6 +64,12 @@ impl EntityInputHandler for MarkionApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
+        if let Some(field) = self.focused_search_field() {
+            return field
+                .marked_range
+                .as_ref()
+                .map(|range| field.byte_to_utf16(range.start)..field.byte_to_utf16(range.end));
+        }
         let tab = self.active_tab();
         tab.marked_range
             .as_ref()
@@ -60,6 +78,11 @@ impl EntityInputHandler for MarkionApp {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        if let Some(field) = self.focused_search_field_mut() {
+            field.marked_range = None;
+            self.input_marked_len = 0;
+            return;
+        }
         let tab = self.active_tab_mut();
         tab.marked_range = None;
         tab.finish_undo_capture();
@@ -73,6 +96,10 @@ impl EntityInputHandler for MarkionApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.search_focus.is_some() {
+            self.replace_search_text_utf16(range_utf16, new_text, false, None, cx);
+            return;
+        }
         if self.has_text_input_focus() {
             self.push_text_input(new_text, cx);
             return;
@@ -171,6 +198,16 @@ impl EntityInputHandler for MarkionApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.search_focus.is_some() {
+            self.replace_search_text_utf16(
+                range_utf16,
+                new_text,
+                true,
+                new_selected_range_utf16,
+                cx,
+            );
+            return;
+        }
         if self.has_text_input_focus() {
             self.insert_redirected_text(new_text, true, cx);
             return;
@@ -260,6 +297,27 @@ impl EntityInputHandler for MarkionApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if let Some(field) = self.focused_search_field() {
+            let field_index = match self.search_focus {
+                Some(SearchField::Find) => 0,
+                Some(SearchField::Replace) => 1,
+                None => return None,
+            };
+            let field_bounds = self.search_field_bounds[field_index]?;
+            let range = field.range_from_utf16(range_utf16);
+            let text_width = |end: usize| {
+                field.buffer[..clamp_search_boundary(&field.buffer, end)]
+                    .chars()
+                    .map(|ch| if ch.is_ascii() { 7. } else { 12. })
+                    .sum::<f32>()
+            };
+            let left = field_bounds.left() + px(8. + text_width(range.start));
+            let right = field_bounds.left() + px(8. + text_width(range.end));
+            return Some(Bounds::from_corners(
+                point(left, field_bounds.top() + px(4.)),
+                point(right.max(left + px(2.)), field_bounds.bottom() - px(4.)),
+            ));
+        }
         let tab = self.active_tab();
         if matches!(self.view_mode, ViewMode::VisualEdit) {
             if let Some(source_range) = tab.range_from_utf16(&range_utf16)
@@ -291,6 +349,26 @@ impl EntityInputHandler for MarkionApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
+        if let Some(field) = self.focused_search_field() {
+            let field_index = match self.search_focus {
+                Some(SearchField::Find) => 0,
+                Some(SearchField::Replace) => 1,
+                None => return None,
+            };
+            let bounds = self.search_field_bounds[field_index]?;
+            let mut width = 0f32;
+            let relative = f32::from(point.x - bounds.left() - px(8.)).max(0.);
+            let mut byte = 0;
+            for ch in field.buffer.chars() {
+                let next = width + if ch.is_ascii() { 7. } else { 12. };
+                if relative < (width + next) / 2. {
+                    break;
+                }
+                width = next;
+                byte += ch.len_utf8();
+            }
+            return Some(field.byte_to_utf16(byte));
+        }
         let tab = self.active_tab();
         if tab.last_lines.is_empty() {
             return None;
@@ -309,7 +387,80 @@ pub(super) struct PrepaintState {
     line_offsets: Vec<usize>,
     line_heights: Vec<Pixels>,
     cursors: Vec<PaintQuad>,
+    search_highlights: Vec<PaintQuad>,
     selections: Vec<PaintQuad>,
+}
+
+fn editor_range_paint_quads(
+    range: Range<usize>,
+    color: Rgba,
+    lines: &[WrappedLine],
+    line_offsets: &[usize],
+    line_heights: &[Pixels],
+    bounds: Bounds<Pixels>,
+    line_height: Pixels,
+    text_len: usize,
+) -> Vec<PaintQuad> {
+    let mut quads = Vec::new();
+    let start = range.start.min(text_len);
+    let end = range.end.min(text_len);
+    for (line_index, line) in lines.iter().enumerate() {
+        let line_start = line_offsets.get(line_index).copied().unwrap_or(end);
+        let line_end = line_offsets
+            .get(line_index + 1)
+            .map(|&next| next.saturating_sub(1))
+            .unwrap_or(text_len);
+        if line_start > end || line_end < start {
+            continue;
+        }
+        let line_len = line_end.saturating_sub(line_start);
+        let local_start = start
+            .max(line_start)
+            .saturating_sub(line_start)
+            .min(line_len);
+        let local_end = end.min(line_end).saturating_sub(line_start).min(line_len);
+        let start_pos = line
+            .position_for_index(local_start, line_height)
+            .unwrap_or_default();
+        let end_pos = line
+            .position_for_index(local_end, line_height)
+            .unwrap_or(start_pos);
+        let y = bounds.top()
+            + line_heights
+                .iter()
+                .take(line_index)
+                .copied()
+                .fold(px(0.), |sum, height| sum + height);
+        if start_pos.y == end_pos.y {
+            let width = (end_pos.x - start_pos.x).max(px(2.));
+            quads.push(fill(
+                Bounds::new(
+                    point(bounds.left() + start_pos.x, y + start_pos.y),
+                    size(width, line_height),
+                ),
+                color,
+            ));
+        } else {
+            quads.push(fill(
+                Bounds::from_corners(
+                    point(bounds.left() + start_pos.x, y + start_pos.y),
+                    point(bounds.right(), y + start_pos.y + line_height),
+                ),
+                color,
+            ));
+            quads.push(fill(
+                Bounds::from_corners(
+                    point(bounds.left(), y + end_pos.y),
+                    point(
+                        bounds.left() + end_pos.x.max(px(2.)),
+                        y + end_pos.y + line_height,
+                    ),
+                ),
+                color,
+            ));
+        }
+    }
+    quads
 }
 
 impl IntoElement for EditorElement {
@@ -530,6 +681,7 @@ impl Element for EditorElement {
             .collect();
 
         let mut cursors = Vec::new();
+        let mut search_highlights = Vec::new();
         let mut selections = Vec::new();
 
         // Convert a document byte offset into a screen-space point by finding
@@ -662,11 +814,36 @@ impl Element for EditorElement {
             }
         }
 
+        if app.search_visible && !matches!(app.view_mode, ViewMode::Read) {
+            let palette = app.palette();
+            for (index, target) in app.search_matches.iter().enumerate() {
+                let SearchTarget::Source(found) = target else {
+                    continue;
+                };
+                let color = if app.current_search_index == Some(index) {
+                    palette.search_current
+                } else {
+                    palette.search_match
+                };
+                search_highlights.extend(editor_range_paint_quads(
+                    found.range.clone(),
+                    color,
+                    &lines,
+                    &line_offsets,
+                    &line_heights,
+                    bounds,
+                    line_height,
+                    text_len,
+                ));
+            }
+        }
+
         PrepaintState {
             lines,
             line_offsets,
             line_heights,
             cursors,
+            search_highlights,
             selections,
         }
     }
@@ -718,6 +895,9 @@ impl Element for EditorElement {
                 cx,
             )
             .ok();
+        }
+        for highlight in prepaint.search_highlights.drain(..) {
+            window.paint_quad(highlight);
         }
         for selection in prepaint.selections.drain(..) {
             window.paint_quad(selection);

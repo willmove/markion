@@ -41,6 +41,21 @@ impl MarkionApp {
             tab.visual_cursor_reveal_pending = true;
             tab.visual_caret_bounds = None;
         }
+        if self.search_visible {
+            self.replace_visible = self.search_form == SearchPanelForm::Replace
+                && !matches!(view_mode, ViewMode::Read);
+            if matches!(view_mode, ViewMode::Read)
+                && self.search_focus == Some(SearchField::Replace)
+            {
+                self.search_focus = Some(SearchField::Find);
+                self.search_control_focus = Some(SearchOverlayControl::FindField);
+            }
+            self.search_generation = None;
+            self.refresh_search_matches();
+            if let Some(index) = self.current_search_index {
+                self.select_search_match(index, cx);
+            }
+        }
         self.status = self.view_mode_status().into();
         self.active_menu = None;
         cx.notify();
@@ -263,6 +278,7 @@ impl MarkionApp {
         self.set_sidebar_tab(SidebarTab::Files, cx);
         self.file_tree_query_focused = true;
         self.search_focus = None;
+        self.search_control_focus = None;
         self.pending_name_input = None;
         self.input_marked_len = 0;
         self.status = t(self.language, Msg::StatusFilteringFiles).into();
@@ -514,6 +530,7 @@ impl MarkionApp {
         self.tab_context_menu = None;
         self.file_tree_query_focused = false;
         self.search_focus = None;
+        self.search_control_focus = None;
         self.input_marked_len = 0;
         self.name_editor_click_away = false;
         self.pending_name_input = Some(PendingNameInput::new(kind, parent, target, prefill));
@@ -633,6 +650,7 @@ impl MarkionApp {
                 self.set_sidebar_tab(SidebarTab::Files, cx);
                 self.file_tree_query_focused = true;
                 self.search_focus = None;
+                self.search_control_focus = None;
                 self.input_marked_len = 0;
                 self.status = t(self.language, Msg::StatusFilteringFiles).into();
                 cx.notify();

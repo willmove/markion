@@ -46,6 +46,37 @@ fn block_menu_submenu_current_index(
         .unwrap_or(0)
 }
 
+pub(super) fn visual_selection_format_target_for_block(
+    tab: &EditorTab,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+) -> Option<VisualSelectionFormatTarget> {
+    let selection = &tab.selected_range;
+    if selection.is_empty()
+        || !tab.document.text().is_char_boundary(selection.start)
+        || !tab.document.text().is_char_boundary(selection.end)
+    {
+        return None;
+    }
+    let (_, block) = validate_block_target(tab.document.version(), blocks, target).ok()?;
+    if block.source_island.is_some()
+        || !block.editable_runs.iter().any(|run| {
+            !run.conservative_fallback
+                && run.math.is_none()
+                && run.html_image.is_none()
+                && run.content_range.start <= selection.start
+                && run.content_range.end >= selection.end
+        })
+    {
+        return None;
+    }
+    Some(VisualSelectionFormatTarget {
+        document_version: tab.document.version(),
+        range: selection.clone(),
+        block_id: block.id,
+    })
+}
+
 impl MarkionApp {
     pub(super) fn sync_slash_command_state(&mut self, cx: &mut Context<Self>) {
         let query = if self.block_menu.is_none()
@@ -151,9 +182,20 @@ impl MarkionApp {
             }
             return;
         };
-        let root_selected = block_menu_root_index_for_transform(presentation.current);
+        let selection_format = {
+            let tab = self.active_tab();
+            let blocks = tab.document.visual_blocks_shared();
+            visual_selection_format_target_for_block(tab, &blocks, &target)
+        };
+        let root_selected = block_menu_root_index_for_transform(presentation.current)
+            + if selection_format.is_some() {
+                BLOCK_MENU_SELECTION_FORMAT_ITEMS.len()
+            } else {
+                0
+            };
         self.block_menu = Some(BlockMenuState {
             target,
+            selection_format,
             anchor,
             root_selected,
             submenu: None,
@@ -238,9 +280,10 @@ impl MarkionApp {
         let Some(state) = &mut self.block_menu else {
             return;
         };
-        state.root_selected = index.min(BLOCK_MENU_ROOT_ITEMS.len().saturating_sub(1));
-        let submenu = match BLOCK_MENU_ROOT_ITEMS[state.root_selected] {
-            BlockMenuItem::Submenu(submenu) if open_submenu => Some(submenu),
+        let items = state.root_items();
+        state.root_selected = index.min(items.len().saturating_sub(1));
+        let submenu = match items.get(state.root_selected).copied() {
+            Some(BlockMenuItem::Submenu(submenu)) if open_submenu => Some(submenu),
             _ => None,
         };
         if state.submenu != submenu {
@@ -278,24 +321,39 @@ impl MarkionApp {
         let Some(state) = &mut self.block_menu else {
             return false;
         };
-        let (items, selected) = if let Some(submenu) = state.submenu {
-            (submenu.items(), &mut state.submenu_selected)
+        if let Some(submenu) = state.submenu {
+            let items = submenu.items();
+            if items.is_empty() {
+                return true;
+            }
+            for _ in 0..items.len() {
+                state.submenu_selected = if forward {
+                    (state.submenu_selected + 1) % items.len()
+                } else if state.submenu_selected == 0 {
+                    items.len() - 1
+                } else {
+                    state.submenu_selected - 1
+                };
+                if presentation.item_enabled(items[state.submenu_selected]) {
+                    break;
+                }
+            }
         } else {
-            (BLOCK_MENU_ROOT_ITEMS.as_slice(), &mut state.root_selected)
-        };
-        if items.is_empty() {
-            return true;
-        }
-        for _ in 0..items.len() {
-            *selected = if forward {
-                (*selected + 1) % items.len()
-            } else if *selected == 0 {
-                items.len() - 1
-            } else {
-                *selected - 1
-            };
-            if presentation.item_enabled(items[*selected]) {
-                break;
+            let items = state.root_items();
+            if items.is_empty() {
+                return true;
+            }
+            for _ in 0..items.len() {
+                state.root_selected = if forward {
+                    (state.root_selected + 1) % items.len()
+                } else if state.root_selected == 0 {
+                    items.len() - 1
+                } else {
+                    state.root_selected - 1
+                };
+                if presentation.item_enabled(items[state.root_selected]) {
+                    break;
+                }
             }
         }
         cx.notify();
@@ -310,7 +368,7 @@ impl MarkionApp {
             return true;
         }
         let Some(BlockMenuItem::Submenu(submenu)) =
-            BLOCK_MENU_ROOT_ITEMS.get(state.root_selected).copied()
+            state.root_items().get(state.root_selected).copied()
         else {
             return true;
         };
@@ -341,7 +399,7 @@ impl MarkionApp {
         let item = if let Some(submenu) = state.submenu {
             submenu.items().get(state.submenu_selected).copied()
         } else {
-            BLOCK_MENU_ROOT_ITEMS.get(state.root_selected).copied()
+            state.root_items().get(state.root_selected).copied()
         };
         let Some(item) = item else {
             return true;
@@ -366,6 +424,41 @@ impl MarkionApp {
             return;
         };
         match item {
+            BlockMenuItem::SelectionFormat(action) => {
+                let selection_format = self
+                    .block_menu
+                    .as_ref()
+                    .and_then(|menu| menu.selection_format.clone());
+                let selection_is_current = selection_format.as_ref().is_some_and(|captured| {
+                    let tab = self.active_tab();
+                    let blocks = tab.document.visual_blocks_shared();
+                    visual_selection_format_target_for_block(tab, &blocks, &target).as_ref()
+                        == Some(captured)
+                });
+                if !selection_is_current {
+                    self.close_visual_block_menu(cx);
+                    return;
+                }
+                self.dismiss_visual_block_menu();
+                match action {
+                    SelectionFormatAction::Bold => self.apply_markdown_format(
+                        MarkdownFormat::Bold,
+                        self.tr(Msg::StatusFmtBold).into(),
+                        cx,
+                    ),
+                    SelectionFormatAction::Italic => self.apply_markdown_format(
+                        MarkdownFormat::Italic,
+                        self.tr(Msg::StatusFmtItalic).into(),
+                        cx,
+                    ),
+                    SelectionFormatAction::InlineCode => self.apply_markdown_format(
+                        MarkdownFormat::InlineCode,
+                        self.tr(Msg::StatusFmtInlineCode).into(),
+                        cx,
+                    ),
+                    SelectionFormatAction::Link => self.open_link_editor(cx),
+                }
+            }
             BlockMenuItem::Submenu(submenu) => {
                 let current = Some(presentation.current);
                 if let Some(state) = &mut self.block_menu {
@@ -1608,6 +1701,7 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.search_control_focus = Some(SearchOverlayControl::Next);
         self.find_next(&FindNext, window, cx);
     }
 
@@ -1617,6 +1711,7 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.search_control_focus = Some(SearchOverlayControl::Previous);
         self.find_previous(&FindPrevious, window, cx);
     }
 
@@ -1626,6 +1721,7 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.search_control_focus = Some(SearchOverlayControl::ReplaceCurrent);
         self.replace_current_match(&ReplaceCurrentMatch, window, cx);
     }
 
@@ -1635,6 +1731,7 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.search_control_focus = Some(SearchOverlayControl::ReplaceAll);
         self.replace_all_matches(&ReplaceAllMatches, window, cx);
     }
 
@@ -1644,6 +1741,7 @@ impl MarkionApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.search_control_focus = Some(SearchOverlayControl::Close);
         self.close_search_overlay(cx);
     }
 
@@ -1653,6 +1751,7 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.search_control_focus = Some(SearchOverlayControl::MatchCase);
         self.toggle_find_case_sensitive(&ToggleFindCaseSensitive, window, cx);
     }
 
@@ -1662,39 +1761,14 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.search_control_focus = Some(SearchOverlayControl::Regex);
         self.toggle_find_regex(&ToggleFindRegex, window, cx);
     }
 
-    pub(super) fn focus_find_field(
-        &mut self,
-        _: &MouseUpEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.search_visible = true;
-        self.search_focus = Some(SearchField::Find);
-        self.file_tree_query_focused = false;
-        self.input_marked_len = 0;
-        self.status = t(self.language, Msg::StatusEditingFindQuery).into();
-        cx.notify();
-    }
-
-    pub(super) fn focus_replace_field(
-        &mut self,
-        _: &MouseUpEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.search_visible = true;
-        self.replace_visible = true;
-        self.search_focus = Some(SearchField::Replace);
-        self.file_tree_query_focused = false;
-        self.input_marked_len = 0;
-        self.status = t(self.language, Msg::StatusEditingReplacement).into();
-        cx.notify();
-    }
-
     pub(super) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_search_caret(SearchCaretMove::Left, cx) {
+            return;
+        }
         if self.pending_name_input.is_some() {
             self.move_name_caret(NameCaretMove::Left, cx);
             return;
@@ -1726,6 +1800,9 @@ impl MarkionApp {
     }
 
     pub(super) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_search_caret(SearchCaretMove::Right, cx) {
+            return;
+        }
         if self.pending_name_input.is_some() {
             self.move_name_caret(NameCaretMove::Right, cx);
             return;
@@ -1757,6 +1834,9 @@ impl MarkionApp {
     }
 
     pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_search_caret(SearchCaretMove::SelectLeft, cx) {
+            return;
+        }
         if self.pending_name_input.is_some() {
             self.move_name_caret(NameCaretMove::SelectLeft, cx);
             return;
@@ -1775,6 +1855,9 @@ impl MarkionApp {
     }
 
     pub(super) fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_search_caret(SearchCaretMove::SelectRight, cx) {
+            return;
+        }
         if self.pending_name_input.is_some() {
             self.move_name_caret(NameCaretMove::SelectRight, cx);
             return;
@@ -1859,6 +1942,9 @@ impl MarkionApp {
     }
 
     pub(super) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_search_caret(SearchCaretMove::SelectAll, cx) {
+            return;
+        }
         if self.pending_name_input.is_some() {
             self.move_name_caret(NameCaretMove::SelectAll, cx);
             return;
@@ -1869,6 +1955,9 @@ impl MarkionApp {
     }
 
     pub(super) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_search_caret(SearchCaretMove::Home, cx) {
+            return;
+        }
         if self.pending_name_input.is_some() {
             self.move_name_caret(NameCaretMove::Home, cx);
             return;
@@ -1883,6 +1972,9 @@ impl MarkionApp {
     }
 
     pub(super) fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
+        if self.move_search_caret(SearchCaretMove::End, cx) {
+            return;
+        }
         if self.pending_name_input.is_some() {
             self.move_name_caret(NameCaretMove::End, cx);
             return;
@@ -1902,6 +1994,10 @@ impl MarkionApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.search_visible && self.search_control_focus.is_some() {
+            self.find_next(&FindNext, _window, cx);
+            return;
+        }
         if self.confirm_visual_block_menu(cx) {
             return;
         }
@@ -1971,7 +2067,28 @@ impl MarkionApp {
         cx.notify();
     }
 
+    pub(super) fn search_previous_or_newline(
+        &mut self,
+        _: &SearchPreviousOrNewline,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.search_visible && self.search_control_focus.is_some() {
+            self.find_previous(&FindPrevious, window, cx);
+        } else {
+            self.insert_newline(&InsertNewline, window, cx);
+        }
+    }
+
     pub(super) fn indent(&mut self, _: &Indent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search_focus.is_some() {
+            self.cycle_search_overlay_focus(true, cx);
+            return;
+        }
+        if self.search_visible && self.search_control_focus.is_some() {
+            self.cycle_search_overlay_focus(true, cx);
+            return;
+        }
         let selected = self.active_tab().selected_range.clone();
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && let Some(target) = self
@@ -2010,6 +2127,10 @@ impl MarkionApp {
     }
 
     pub(super) fn outdent(&mut self, _: &Outdent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.search_visible && self.search_control_focus.is_some() {
+            self.cycle_search_overlay_focus(false, cx);
+            return;
+        }
         let selected = self.active_tab().selected_range.clone();
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && let Some(target) = self
@@ -2161,6 +2282,16 @@ impl MarkionApp {
     }
 
     pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = self
+            .focused_search_field()
+            .and_then(SearchFieldState::selected_text)
+            .map(ToString::to_string)
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.status = t(self.language, Msg::StatusCopiedSelection).into();
+            cx.notify();
+            return;
+        }
         let blocks = self.active_tab().preview_list_blocks.clone();
         if preview_selection_takes_copy_precedence(
             self.active_tab().preview_selection.as_ref(),
@@ -2188,6 +2319,24 @@ impl MarkionApp {
     }
 
     pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search_focus.is_some() {
+            if let Some(text) = self
+                .focused_search_field()
+                .and_then(SearchFieldState::selected_text)
+                .map(ToString::to_string)
+            {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                if let Some(field) = self.focused_search_field_mut() {
+                    field.replace_selection("", false);
+                }
+                self.search_generation = None;
+                self.after_input_changed(cx);
+            } else {
+                self.status = t(self.language, Msg::StatusNothingToCut).into();
+                cx.notify();
+            }
+            return;
+        }
         let selected = self.active_tab().selected_range.clone();
         if !selected.is_empty() {
             let text = self.active_tab().document.text()[selected].to_string();
@@ -2219,6 +2368,7 @@ impl MarkionApp {
         // or search fields that last held focus.
         self.file_tree_query_focused = false;
         self.search_focus = None;
+        self.search_control_focus = None;
         self.input_marked_len = 0;
         // Source-editor selection clears any preview selection so Copy routes
         // back to the editor.

@@ -98,6 +98,11 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 | Find | Ctrl+F |
 | Replace | Ctrl+H |
 | Find next / previous | F3 / Shift+F3 |
+| Next / previous while a search field is focused | Enter / Shift+Enter |
+| Move between available Find/Replace fields | Tab / Shift+Tab |
+| Close Find/Replace | Esc |
+
+Find searches authored Markdown in Edit, Visual Edit, and Split modes. In Read mode it searches only the rendered visible text (for example, a link label but not its hidden destination). Invoking Replace in Read mode keeps the query, replacement value, options, and requested Replace form, but presents Find-only controls because rendered content cannot be mutated; the Replace row returns when an editable mode is restored.
 
 ## Tables
 

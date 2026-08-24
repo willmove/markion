@@ -130,13 +130,18 @@ impl MarkionApp {
             block_menu: None,
             search_visible: false,
             replace_visible: false,
-            search_query: String::new(),
-            replace_text: String::new(),
+            search_form: SearchPanelForm::Find,
+            search_query: SearchFieldState::default(),
+            replace_text: SearchFieldState::default(),
             search_case_sensitive: false,
             search_regex: false,
             search_focus: None,
+            search_control_focus: None,
             search_matches: Vec::new(),
             current_search_index: None,
+            search_result: SearchResultState::Idle,
+            search_generation: None,
+            search_field_bounds: [None, None],
             pane_scrollbar_drag: None,
             auto_save_preferences: preferences.auto_save,
             export_preferences: preferences.export.clone(),
@@ -231,6 +236,7 @@ impl MarkionApp {
             self.search_visible = false;
             self.replace_visible = false;
             self.search_focus = None;
+            self.search_control_focus = None;
             self.link_editor = None;
             self.preview_context_menu = None;
         }
@@ -801,6 +807,7 @@ impl MarkionApp {
             self.search_visible = false;
             self.replace_visible = false;
             self.search_focus = None;
+            self.search_control_focus = None;
             self.link_editor = None;
             self.preview_context_menu = None;
         }
@@ -857,6 +864,7 @@ impl MarkionApp {
             self.search_visible = false;
             self.replace_visible = false;
             self.search_focus = None;
+            self.search_control_focus = None;
             self.link_editor = None;
             self.preview_context_menu = None;
         }
@@ -1104,38 +1112,111 @@ impl MarkionApp {
 
     pub(super) fn search_options(&self) -> SearchOptions {
         SearchOptions {
-            query: self.search_query.clone(),
+            query: self.search_query.buffer.clone(),
             case_sensitive: self.search_case_sensitive,
             regex: self.search_regex,
         }
     }
 
     pub(super) fn refresh_search_matches(&mut self) {
-        // Skip the full-document regex scan entirely when the find bar is
-        // closed: matches are recomputed on demand in show_find/show_replace,
-        // so there is no point paying for it on every keystroke while typing.
-        if !self.search_visible || self.search_query.is_empty() {
-            if !self.search_visible {
-                self.search_matches.clear();
-                self.current_search_index = None;
-            }
+        if !self.search_visible {
+            self.search_matches.clear();
+            self.current_search_index = None;
+            self.search_result = SearchResultState::Idle;
+            self.search_generation = None;
             return;
         }
 
-        match self
-            .active_tab()
-            .document
-            .find_matches(&self.search_options())
+        if self.search_query.buffer.is_empty() {
+            self.search_matches.clear();
+            self.current_search_index = None;
+            self.search_result = SearchResultState::Idle;
+            self.search_generation = None;
+            return;
+        }
+
+        let domain = if matches!(self.view_mode, ViewMode::Read) {
+            SearchDomain::ReadPreview
+        } else {
+            SearchDomain::Source
+        };
+        self.replace_visible =
+            self.search_form == SearchPanelForm::Replace && domain == SearchDomain::Source;
+        let version = self.active_tab().document.version();
+        let key = SearchGenerationKey {
+            tab_index: self.active_tab,
+            document_version: version,
+            domain,
+            query: self.search_query.buffer.clone(),
+            case_sensitive: self.search_case_sensitive,
+            regex: self.search_regex,
+        };
+        if self.search_generation.as_ref() == Some(&key) {
+            return;
+        }
+
+        if domain == SearchDomain::ReadPreview
+            && self.active_tab().preview_reflects_version != Some(version)
         {
+            self.search_matches.clear();
+            self.current_search_index = None;
+            self.search_result = SearchResultState::PendingPreview;
+            // Do not retain the generation: installation of current-version
+            // cached blocks must cause the same query to run again.
+            self.search_generation = None;
+            return;
+        }
+
+        let options = self.search_options();
+        let matches = match domain {
+            SearchDomain::Source => {
+                self.active_tab()
+                    .document
+                    .find_matches(&options)
+                    .map(|matches| {
+                        matches
+                            .into_iter()
+                            .map(SearchTarget::Source)
+                            .collect::<Vec<_>>()
+                    })
+            }
+            SearchDomain::ReadPreview => SearchPattern::compile(&options).map(|pattern| {
+                preview_search_matches(&self.active_tab().preview_list_blocks, &pattern)
+                    .into_iter()
+                    .map(SearchTarget::ReadPreview)
+                    .collect()
+            }),
+        };
+
+        self.search_generation = Some(key);
+        match matches {
+            Ok(matches) if matches.is_empty() => {
+                self.search_matches.clear();
+                self.current_search_index = None;
+                self.search_result = SearchResultState::NoMatches;
+            }
             Ok(matches) => {
+                let origin = match domain {
+                    SearchDomain::Source => self.cursor_offset(),
+                    SearchDomain::ReadPreview => {
+                        self.active_tab().preview_list.logical_scroll_top().item_ix
+                    }
+                };
+                let current = matches
+                    .iter()
+                    .position(|target| match target {
+                        SearchTarget::Source(found) => found.range.start >= origin,
+                        SearchTarget::ReadPreview(found) => found.block_index >= origin,
+                    })
+                    .unwrap_or(0);
                 self.search_matches = matches;
-                self.current_search_index = self
-                    .current_search_index
-                    .filter(|index| *index < self.search_matches.len());
+                self.current_search_index = Some(current);
+                self.search_result = SearchResultState::Ready;
             }
             Err(err) => {
                 self.search_matches.clear();
                 self.current_search_index = None;
+                self.search_result = SearchResultState::InvalidPattern(err.message().to_string());
                 self.status = self.trf(Msg::StatusFindFailed, &[err.message()]);
             }
         }
@@ -1148,6 +1229,10 @@ impl MarkionApp {
             &mut self.search_focus,
             &mut self.input_marked_len,
         );
+        self.search_control_focus = None;
+        self.search_field_bounds = [None, None];
+        self.search_query.marked_range = None;
+        self.replace_text.marked_range = None;
         self.refresh_search_matches();
         cx.notify();
     }
@@ -1155,22 +1240,50 @@ impl MarkionApp {
     pub(super) fn select_search_match(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(found) = self.search_matches.get(index).cloned() {
             self.current_search_index = Some(index);
-            let tab = self.active_tab_mut();
-            tab.selected_range = found.range.clone();
-            tab.selection_reversed = false;
-            tab.marked_range = None;
-            tab.visual_cursor_reveal_pending = true;
-            tab.visual_caret_bounds = None;
-            self.scroll_editor_to_offset(found.range.start);
-            self.status = self.trf(
-                Msg::StatusMatchPosition,
-                &[
-                    &(index + 1).to_string(),
-                    &self.search_matches.len().to_string(),
-                    &found.line.to_string(),
-                    &found.column.to_string(),
-                ],
-            );
+            match found {
+                SearchTarget::Source(found) => {
+                    let tab = self.active_tab_mut();
+                    tab.selected_range = found.range.clone();
+                    tab.selection_reversed = false;
+                    tab.marked_range = None;
+                    tab.visual_cursor_reveal_pending = true;
+                    tab.visual_caret_bounds = None;
+                    match self.view_mode {
+                        ViewMode::VisualEdit => {
+                            let blocks = self.active_tab().document.visual_blocks_shared();
+                            if let Some(item_ix) = visual_block_index_for_offset(
+                                &blocks,
+                                found.range.start,
+                                self.active_tab().document.text().len(),
+                            ) {
+                                self.active_tab().visual_list.scroll_to_reveal_item(item_ix);
+                            }
+                        }
+                        ViewMode::Edit | ViewMode::Split => {
+                            self.scroll_editor_to_offset(found.range.start);
+                        }
+                        ViewMode::Read => {}
+                    }
+                    self.status = self.trf(
+                        Msg::StatusMatchPosition,
+                        &[
+                            &(index + 1).to_string(),
+                            &self.search_matches.len().to_string(),
+                            &found.line.to_string(),
+                            &found.column.to_string(),
+                        ],
+                    );
+                }
+                SearchTarget::ReadPreview(found) => {
+                    self.active_tab()
+                        .preview_list
+                        .scroll_to_reveal_item(found.block_index);
+                    self.status = self.trf(
+                        Msg::StatusMatches,
+                        &[&self.search_matches.len().to_string()],
+                    );
+                }
+            }
             cx.notify();
         }
     }
@@ -1535,7 +1648,7 @@ impl MarkionApp {
         self.pending_name_input.is_some()
             || self.link_editor.is_some()
             || self.file_tree_query_focused
-            || self.search_focus.is_some()
+            || (self.search_visible && self.search_control_focus.is_some())
     }
 
     pub(super) fn active_input_text_mut(&mut self) -> Option<&mut String> {
@@ -1552,11 +1665,23 @@ impl MarkionApp {
                 LinkEditorField::Title => &mut editor.title,
             }),
             None if self.file_tree_query_focused => Some(&mut self.file_tree_query),
-            None => match self.search_focus {
-                Some(SearchField::Find) => Some(&mut self.search_query),
-                Some(SearchField::Replace) => Some(&mut self.replace_text),
-                None => None,
-            },
+            None => None,
+        }
+    }
+
+    pub(super) fn focused_search_field(&self) -> Option<&SearchFieldState> {
+        match self.search_focus {
+            Some(SearchField::Find) => Some(&self.search_query),
+            Some(SearchField::Replace) => Some(&self.replace_text),
+            None => None,
+        }
+    }
+
+    pub(super) fn focused_search_field_mut(&mut self) -> Option<&mut SearchFieldState> {
+        match self.search_focus {
+            Some(SearchField::Find) => Some(&mut self.search_query),
+            Some(SearchField::Replace) => Some(&mut self.replace_text),
+            None => None,
         }
     }
 
@@ -1571,6 +1696,11 @@ impl MarkionApp {
             self.status = self.file_tree_summary().into();
         } else {
             self.refresh_search_matches();
+            if self.search_focus == Some(SearchField::Find)
+                && let Some(index) = self.current_search_index
+            {
+                self.select_search_match(index, cx);
+            }
             self.status = self.search_summary().into();
         }
         cx.notify();
@@ -1590,6 +1720,13 @@ impl MarkionApp {
     ) {
         if self.pending_name_input.is_some() {
             self.insert_redirected_name_text(text, keep_marked, cx);
+            return;
+        }
+        if let Some(field) = self.focused_search_field_mut() {
+            field.replace_selection(text, keep_marked);
+            self.input_marked_len = 0;
+            self.search_generation = None;
+            self.after_input_changed(cx);
             return;
         }
         let marked = self.input_marked_len;
@@ -1732,9 +1869,102 @@ impl MarkionApp {
         self.insert_redirected_text(text, false, cx);
     }
 
+    pub(super) fn move_search_caret(
+        &mut self,
+        movement: SearchCaretMove,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(field) = self.focused_search_field_mut() else {
+            return false;
+        };
+        field.move_caret(movement);
+        self.input_marked_len = 0;
+        cx.notify();
+        true
+    }
+
+    pub(super) fn cycle_search_overlay_focus(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if !self.search_visible {
+            return;
+        }
+        let mut stops = vec![
+            SearchOverlayControl::FindField,
+            SearchOverlayControl::Previous,
+            SearchOverlayControl::Next,
+            SearchOverlayControl::MatchCase,
+            SearchOverlayControl::Regex,
+        ];
+        if self.replace_visible {
+            stops.insert(1, SearchOverlayControl::ReplaceField);
+            stops.extend([
+                SearchOverlayControl::ReplaceCurrent,
+                SearchOverlayControl::ReplaceAll,
+            ]);
+        }
+        stops.push(SearchOverlayControl::Close);
+        let current = self
+            .search_control_focus
+            .and_then(|control| stops.iter().position(|candidate| *candidate == control))
+            .unwrap_or(0);
+        let next = if forward {
+            (current + 1) % stops.len()
+        } else if current == 0 {
+            stops.len() - 1
+        } else {
+            current - 1
+        };
+        let control = stops[next];
+        self.search_control_focus = Some(control);
+        self.search_focus = match control {
+            SearchOverlayControl::FindField => Some(SearchField::Find),
+            SearchOverlayControl::ReplaceField => Some(SearchField::Replace),
+            _ => None,
+        };
+        cx.notify();
+    }
+
+    pub(super) fn replace_search_text_utf16(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        marked: bool,
+        selected_utf16: Option<Range<usize>>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(field) = self.focused_search_field_mut() else {
+            return false;
+        };
+        field.clamp_to_boundaries();
+        let range = range_utf16
+            .map(|range| field.range_from_utf16(range))
+            .or_else(|| field.marked_range.clone())
+            .unwrap_or_else(|| field.selection());
+        field.buffer.replace_range(range.clone(), new_text);
+        let inserted_end = range.start + new_text.len();
+        if let Some(selected) = selected_utf16 {
+            let inserted = SearchFieldState::new(new_text);
+            field.anchor = range.start + inserted.utf16_to_byte(selected.start);
+            field.cursor = range.start + inserted.utf16_to_byte(selected.end);
+        } else {
+            field.cursor = inserted_end;
+            field.anchor = inserted_end;
+        }
+        field.marked_range = marked.then_some(range.start..inserted_end);
+        self.input_marked_len = 0;
+        self.search_generation = None;
+        self.after_input_changed(cx);
+        true
+    }
+
     pub(super) fn pop_text_input(&mut self, cx: &mut Context<Self>) -> bool {
         if self.pending_name_input.is_some() {
             self.pop_name_text(cx);
+            return true;
+        }
+        if let Some(field) = self.focused_search_field_mut() {
+            field.backspace();
+            self.search_generation = None;
+            self.after_input_changed(cx);
             return true;
         }
         self.input_marked_len = 0;
@@ -1754,20 +1984,28 @@ impl MarkionApp {
             self.delete_name_text_forward(cx);
             return true;
         }
+        if let Some(field) = self.focused_search_field_mut() {
+            field.delete_forward();
+            self.search_generation = None;
+            self.after_input_changed(cx);
+            return true;
+        }
         false
     }
 
     pub(super) fn search_summary(&self) -> String {
-        if self.search_query.is_empty() {
-            t(self.language, Msg::StatusFindQueryEmpty).to_string()
-        } else if self.search_matches.is_empty() {
-            t(self.language, Msg::StatusNoMatches).to_string()
-        } else {
-            tf(
+        match &self.search_result {
+            SearchResultState::Idle => t(self.language, Msg::StatusFindQueryEmpty).to_string(),
+            SearchResultState::PendingPreview => t(self.language, Msg::SearchUpdating).to_string(),
+            SearchResultState::InvalidPattern(error) => {
+                tf(self.language, Msg::SearchInvalidRegex, &[error])
+            }
+            SearchResultState::NoMatches => t(self.language, Msg::StatusNoMatches).to_string(),
+            SearchResultState::Ready => tf(
                 self.language,
                 Msg::StatusMatches,
                 &[&self.search_matches.len().to_string()],
-            )
+            ),
         }
     }
 

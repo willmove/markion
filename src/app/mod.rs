@@ -36,23 +36,24 @@ use markion::{
     MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
     MarkdownFormat, MathLayoutStyle, Msg, P0Msg, P1Msg, PreviewBlock, RecoveryInventoryEntry,
     RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions,
-    SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery,
-    TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor,
-    VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualHtmlImage, VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge,
-    VisualSourceIslandKind, adjacent_reorder_target, backend_status_msg, block_can_reorder_at,
-    block_can_transform_at, build_publishing_snapshot, build_visual_projection,
-    build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
-    default_preferences_path, default_recovery_dir, default_session_path, default_themes_dir,
-    delete_block, delete_recovery_file, diagram_backend_id, duplicate_block, highlight_code,
-    html_preview_parts, html_preview_plain_text, image_extension_supported, import_image_bytes,
-    import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
-    is_text_path, list_theme_definitions, load_app_preferences, load_recovery_file,
-    load_session_state, normalize_editor_font_size, normalize_heading_menu_max_level,
-    normalize_paragraph_spacing, normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf,
-    pandoc_available, reorder_block, resolve_font_family, save_app_preferences, save_session_state,
-    save_theme_definition, serialize_inline_image, serialize_inline_link, shortcut_catalog,
-    sidebar_tab_label, slash_command_edit, slash_query_at, t, tf, title_from_path, transform_block,
+    SearchPattern, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand,
+    SlashQuery, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock,
+    VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField,
+    VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget, VisualProjection,
+    VisualQuoteGroupEdge, VisualSourceIslandKind, adjacent_reorder_target, backend_status_msg,
+    block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
+    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
+    builtin_theme_definitions, default_preferences_path, default_recovery_dir,
+    default_session_path, default_themes_dir, delete_block, delete_recovery_file,
+    diagram_backend_id, duplicate_block, highlight_code, html_preview_parts,
+    html_preview_plain_text, image_extension_supported, import_image_bytes, import_image_file,
+    inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path, is_text_path,
+    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
+    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
+    normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, reorder_block,
+    resolve_font_family, save_app_preferences, save_session_state, save_theme_definition,
+    serialize_inline_image, serialize_inline_link, shortcut_catalog, sidebar_tab_label,
+    slash_command_edit, slash_query_at, t, tf, title_from_path, transform_block,
     validate_block_target,
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -74,6 +75,7 @@ actions!(
         Home,
         End,
         InsertNewline,
+        SearchPreviousOrNewline,
         Indent,
         Outdent,
         Paste,
@@ -441,6 +443,36 @@ mod menu_shortcuts {
         MenuShortcut::new("heading-5", "secondary-5", "Ctrl+5", "Cmd+5");
     pub const HEADING_6: MenuShortcut =
         MenuShortcut::new("heading-6", "secondary-6", "Ctrl+6", "Cmd+6");
+    pub const UNORDERED_LIST: MenuShortcut = MenuShortcut::new(
+        "unordered-list",
+        "secondary-shift-]",
+        "Ctrl+Shift+]",
+        "Cmd+Shift+]",
+    );
+    pub const ORDERED_LIST: MenuShortcut = MenuShortcut::new(
+        "ordered-list",
+        "secondary-shift-[",
+        "Ctrl+Shift+[",
+        "Cmd+Shift+[",
+    );
+    pub const TASK_LIST: MenuShortcut = MenuShortcut::new(
+        "task-list",
+        "secondary-shift-x",
+        "Ctrl+Shift+X",
+        "Cmd+Shift+X",
+    );
+    pub const BLOCK_QUOTE: MenuShortcut = MenuShortcut::new(
+        "block-quote",
+        "secondary-shift-q",
+        "Ctrl+Shift+Q",
+        "Cmd+Shift+Q",
+    );
+    pub const CODE_FENCE: MenuShortcut = MenuShortcut::new(
+        "code-fence",
+        "secondary-shift-k",
+        "Ctrl+Shift+K",
+        "Cmd+Shift+K",
+    );
     pub const FORMAT_TABLE: MenuShortcut = MenuShortcut::new(
         "format-table",
         "secondary-shift-m",
@@ -576,6 +608,11 @@ mod menu_shortcuts {
         HEADING_4,
         HEADING_5,
         HEADING_6,
+        UNORDERED_LIST,
+        ORDERED_LIST,
+        TASK_LIST,
+        BLOCK_QUOTE,
+        CODE_FENCE,
         FORMAT_TABLE,
         TABLE_ADD_ROW,
         TABLE_DELETE_ROW,
@@ -907,6 +944,264 @@ enum SearchField {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchOverlayControl {
+    FindField,
+    ReplaceField,
+    Previous,
+    Next,
+    MatchCase,
+    Regex,
+    ReplaceCurrent,
+    ReplaceAll,
+    Close,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchCaretMove {
+    Left,
+    Right,
+    Home,
+    End,
+    SelectLeft,
+    SelectRight,
+    SelectAll,
+}
+
+/// UTF-8-safe state for one single-line search overlay field.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SearchFieldState {
+    buffer: String,
+    cursor: usize,
+    anchor: usize,
+    marked_range: Option<Range<usize>>,
+}
+
+impl SearchFieldState {
+    fn new(buffer: impl Into<String>) -> Self {
+        let buffer = buffer.into();
+        let end = buffer.len();
+        Self {
+            buffer,
+            cursor: end,
+            anchor: end,
+            marked_range: None,
+        }
+    }
+
+    fn selection(&self) -> Range<usize> {
+        self.anchor.min(self.cursor)..self.anchor.max(self.cursor)
+    }
+
+    fn clamp_to_boundaries(&mut self) {
+        self.cursor = clamp_search_boundary(&self.buffer, self.cursor);
+        self.anchor = clamp_search_boundary(&self.buffer, self.anchor);
+        self.marked_range = self.marked_range.take().map(|range| {
+            clamp_search_boundary(&self.buffer, range.start)
+                ..clamp_search_boundary(&self.buffer, range.end)
+        });
+    }
+
+    fn set_text(&mut self, text: impl Into<String>) {
+        self.buffer = text.into();
+        self.cursor = self.buffer.len();
+        self.anchor = self.cursor;
+        self.marked_range = None;
+    }
+
+    fn move_caret(&mut self, movement: SearchCaretMove) {
+        self.clamp_to_boundaries();
+        let selection = self.selection();
+        match movement {
+            SearchCaretMove::Left => {
+                self.cursor = if selection.is_empty() {
+                    previous_search_boundary(&self.buffer, self.cursor)
+                } else {
+                    selection.start
+                };
+                self.anchor = self.cursor;
+            }
+            SearchCaretMove::Right => {
+                self.cursor = if selection.is_empty() {
+                    next_search_boundary(&self.buffer, self.cursor)
+                } else {
+                    selection.end
+                };
+                self.anchor = self.cursor;
+            }
+            SearchCaretMove::Home => {
+                self.cursor = 0;
+                self.anchor = 0;
+            }
+            SearchCaretMove::End => {
+                self.cursor = self.buffer.len();
+                self.anchor = self.cursor;
+            }
+            SearchCaretMove::SelectLeft => {
+                self.cursor = previous_search_boundary(&self.buffer, self.cursor);
+            }
+            SearchCaretMove::SelectRight => {
+                self.cursor = next_search_boundary(&self.buffer, self.cursor);
+            }
+            SearchCaretMove::SelectAll => {
+                self.anchor = 0;
+                self.cursor = self.buffer.len();
+            }
+        }
+        self.marked_range = None;
+    }
+
+    fn replace_selection(&mut self, text: &str, marked: bool) {
+        self.clamp_to_boundaries();
+        let range = self
+            .marked_range
+            .clone()
+            .unwrap_or_else(|| self.selection());
+        self.buffer.replace_range(range.clone(), text);
+        self.cursor = range.start + text.len();
+        self.anchor = self.cursor;
+        self.marked_range = marked.then_some(range.start..self.cursor);
+    }
+
+    fn backspace(&mut self) {
+        self.clamp_to_boundaries();
+        let selection = self
+            .marked_range
+            .clone()
+            .unwrap_or_else(|| self.selection());
+        let range = if selection.is_empty() {
+            previous_search_boundary(&self.buffer, self.cursor)..self.cursor
+        } else {
+            selection
+        };
+        self.buffer.replace_range(range.clone(), "");
+        self.cursor = range.start;
+        self.anchor = self.cursor;
+        self.marked_range = None;
+    }
+
+    fn delete_forward(&mut self) {
+        self.clamp_to_boundaries();
+        let selection = self
+            .marked_range
+            .clone()
+            .unwrap_or_else(|| self.selection());
+        let range = if selection.is_empty() {
+            self.cursor..next_search_boundary(&self.buffer, self.cursor)
+        } else {
+            selection
+        };
+        self.buffer.replace_range(range.clone(), "");
+        self.cursor = range.start;
+        self.anchor = self.cursor;
+        self.marked_range = None;
+    }
+
+    fn selected_text(&self) -> Option<&str> {
+        let range = self.selection();
+        (!range.is_empty()).then(|| &self.buffer[range])
+    }
+
+    fn byte_to_utf16(&self, byte: usize) -> usize {
+        self.buffer[..clamp_search_boundary(&self.buffer, byte)]
+            .encode_utf16()
+            .count()
+    }
+
+    fn utf16_to_byte(&self, utf16: usize) -> usize {
+        let mut units = 0;
+        for (byte, ch) in self.buffer.char_indices() {
+            if units >= utf16 {
+                return byte;
+            }
+            let next = units + ch.len_utf16();
+            if next > utf16 {
+                return byte;
+            }
+            units = next;
+        }
+        self.buffer.len()
+    }
+
+    fn range_from_utf16(&self, range: Range<usize>) -> Range<usize> {
+        self.utf16_to_byte(range.start)..self.utf16_to_byte(range.end)
+    }
+}
+
+fn clamp_search_boundary(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+fn previous_search_boundary(text: &str, offset: usize) -> usize {
+    let offset = clamp_search_boundary(text, offset);
+    text[..offset]
+        .grapheme_indices(true)
+        .next_back()
+        .map_or(0, |(index, _)| index)
+}
+
+fn next_search_boundary(text: &str, offset: usize) -> usize {
+    let offset = clamp_search_boundary(text, offset);
+    text[offset..]
+        .grapheme_indices(true)
+        .nth(1)
+        .map_or(text.len(), |(index, _)| offset + index)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchPanelForm {
+    Find,
+    Replace,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchDomain {
+    Source,
+    ReadPreview,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreviewSearchMatch {
+    block_index: usize,
+    run_id: PreviewTextRunId,
+    range: Range<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SearchTarget {
+    Source(SearchMatchRange),
+    ReadPreview(PreviewSearchMatch),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SearchResultState {
+    Idle,
+    PendingPreview,
+    InvalidPattern(String),
+    NoMatches,
+    Ready,
+}
+
+impl Default for SearchResultState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SearchGenerationKey {
+    tab_index: usize,
+    document_version: u64,
+    domain: SearchDomain,
+    query: String,
+    case_sensitive: bool,
+    regex: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LinkEditorField {
     Label,
     Url,
@@ -937,10 +1232,28 @@ struct SlashCommandState {
 #[derive(Clone, Debug)]
 struct BlockMenuState {
     target: BlockTarget,
+    selection_format: Option<VisualSelectionFormatTarget>,
     anchor: Point<Pixels>,
     root_selected: usize,
     submenu: Option<BlockMenuSubmenu>,
     submenu_selected: usize,
+}
+
+/// An exact non-empty text selection that can safely receive one of the
+/// Visual Edit inline-format commands from a contextual menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VisualSelectionFormatTarget {
+    document_version: u64,
+    range: Range<usize>,
+    block_id: VisualBlockId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionFormatAction {
+    Bold,
+    Italic,
+    InlineCode,
+    Link,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -951,6 +1264,7 @@ enum BlockMenuSubmenu {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockMenuItem {
+    SelectionFormat(SelectionFormatAction),
     Submenu(BlockMenuSubmenu),
     Transform(BlockTransform),
     Duplicate,
@@ -958,6 +1272,13 @@ enum BlockMenuItem {
     MoveDown,
     Delete,
 }
+
+const BLOCK_MENU_SELECTION_FORMAT_ITEMS: [BlockMenuItem; 4] = [
+    BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold),
+    BlockMenuItem::SelectionFormat(SelectionFormatAction::Italic),
+    BlockMenuItem::SelectionFormat(SelectionFormatAction::InlineCode),
+    BlockMenuItem::SelectionFormat(SelectionFormatAction::Link),
+];
 
 const BLOCK_MENU_ROOT_ITEMS: [BlockMenuItem; 10] = [
     BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings),
@@ -988,6 +1309,28 @@ const BLOCK_MENU_LIST_ITEMS: [BlockMenuItem; 3] = [
     BlockMenuItem::Transform(BlockTransform::TaskList),
 ];
 
+fn block_menu_root_items(has_selection_format: bool) -> Vec<BlockMenuItem> {
+    let mut items = Vec::with_capacity(
+        BLOCK_MENU_ROOT_ITEMS.len()
+            + if has_selection_format {
+                BLOCK_MENU_SELECTION_FORMAT_ITEMS.len()
+            } else {
+                0
+            },
+    );
+    if has_selection_format {
+        items.extend(BLOCK_MENU_SELECTION_FORMAT_ITEMS);
+    }
+    items.extend(BLOCK_MENU_ROOT_ITEMS);
+    items
+}
+
+impl BlockMenuState {
+    fn root_items(&self) -> Vec<BlockMenuItem> {
+        block_menu_root_items(self.selection_format.is_some())
+    }
+}
+
 impl BlockMenuSubmenu {
     fn items(self) -> &'static [BlockMenuItem] {
         match self {
@@ -1011,7 +1354,9 @@ impl BlockMenuPresentation {
             BlockMenuItem::MoveUp => self.can_move_up,
             BlockMenuItem::MoveDown => self.can_move_down,
             BlockMenuItem::Duplicate | BlockMenuItem::Delete => self.can_duplicate_or_delete,
-            BlockMenuItem::Submenu(_) | BlockMenuItem::Transform(_) => true,
+            BlockMenuItem::SelectionFormat(_)
+            | BlockMenuItem::Submenu(_)
+            | BlockMenuItem::Transform(_) => true,
         }
     }
 }
@@ -1106,6 +1451,10 @@ struct ThemePalette {
     border: Rgba,
     active_bg: Rgba,
     active_text: Rgba,
+    input_selection: Rgba,
+    search_match: Rgba,
+    search_current: Rgba,
+    invalid: Rgba,
 }
 
 fn theme_palette_from_definition(theme: &ThemeDefinition) -> ThemePalette {
@@ -1113,6 +1462,7 @@ fn theme_palette_from_definition(theme: &ThemeDefinition) -> ThemePalette {
 }
 
 fn theme_palette_from_colors(colors: ThemeColors) -> ThemePalette {
+    let active_bg = rgb(colors.active_bg);
     ThemePalette {
         app_bg: rgb(colors.app_bg),
         panel_bg: rgb(colors.panel_bg),
@@ -1120,8 +1470,21 @@ fn theme_palette_from_colors(colors: ThemeColors) -> ThemePalette {
         text: rgb(colors.text),
         muted: rgb(colors.muted),
         border: rgb(colors.border),
-        active_bg: rgb(colors.active_bg),
+        active_bg,
         active_text: rgb(colors.active_text),
+        input_selection: Rgba {
+            a: 0.24,
+            ..active_bg
+        },
+        search_match: Rgba {
+            a: 0.18,
+            ..active_bg
+        },
+        search_current: Rgba {
+            a: 0.46,
+            ..active_bg
+        },
+        invalid: rgb(0xdc2626),
     }
 }
 
@@ -1775,14 +2138,21 @@ struct MarkionApp {
     dismissed_slash_query: Option<SlashQuery>,
     block_menu: Option<BlockMenuState>,
     search_visible: bool,
+    /// Whether replacement controls are currently available. The requested
+    /// form is retained separately so Read mode can temporarily present Find.
     replace_visible: bool,
-    search_query: String,
-    replace_text: String,
+    search_form: SearchPanelForm,
+    search_query: SearchFieldState,
+    replace_text: SearchFieldState,
     search_case_sensitive: bool,
     search_regex: bool,
     search_focus: Option<SearchField>,
-    search_matches: Vec<SearchMatchRange>,
+    search_control_focus: Option<SearchOverlayControl>,
+    search_matches: Vec<SearchTarget>,
     current_search_index: Option<usize>,
+    search_result: SearchResultState,
+    search_generation: Option<SearchGenerationKey>,
+    search_field_bounds: [Option<Bounds<Pixels>>; 2],
     pane_scrollbar_drag: Option<PaneScrollbarDrag>,
     /// Auto-save settings from the config file ([auto_save] table). Not
     /// editable in the Preferences panel; kept to round-trip on save.

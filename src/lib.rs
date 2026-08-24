@@ -138,6 +138,47 @@ pub use model::{
 };
 pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
+/// A compiled find pattern shared by source-document and rendered-preview
+/// search. Compiling once keeps literal/regex, case sensitivity, Unicode and
+/// zero-width match behavior identical across both domains.
+#[derive(Debug, Clone)]
+pub struct SearchPattern {
+    regex: regex::Regex,
+    empty_query: bool,
+}
+
+impl SearchPattern {
+    pub fn compile(options: &SearchOptions) -> Result<Self, SearchError> {
+        let pattern = if options.regex {
+            options.query.clone()
+        } else {
+            regex::escape(&options.query)
+        };
+        RegexBuilder::new(&pattern)
+            .case_insensitive(!options.case_sensitive)
+            .build()
+            .map(|regex| Self {
+                regex,
+                empty_query: options.query.is_empty(),
+            })
+            .map_err(|err| SearchError {
+                message: err.to_string(),
+            })
+    }
+
+    /// Return ordered, non-overlapping UTF-8 byte ranges. `regex::find_iter`
+    /// guarantees progress for zero-width expressions.
+    pub fn find_ranges(&self, text: &str) -> Vec<Range<usize>> {
+        if self.empty_query {
+            return Vec::new();
+        }
+        self.regex
+            .find_iter(text)
+            .map(|found| found.start()..found.end())
+            .collect()
+    }
+}
+
 pub use block_edit::{
     BlockEdit, BlockEditError, BlockPlacement, BlockTarget, BlockTransform, SlashCommand,
     SlashQuery, adjacent_reorder_target, block_can_reorder, block_can_reorder_at,
@@ -2784,21 +2825,10 @@ impl MarkdownDocument {
             return Ok(Vec::new());
         }
 
-        let pattern = if options.regex {
-            options.query.clone()
-        } else {
-            regex::escape(&options.query)
-        };
-        let regex = RegexBuilder::new(&pattern)
-            .case_insensitive(!options.case_sensitive)
-            .build()
-            .map_err(|err| SearchError {
-                message: err.to_string(),
-            })?;
-
-        Ok(regex
-            .find_iter(&self.text)
-            .map(|found| self.search_match_for_range(found.start()..found.end()))
+        Ok(SearchPattern::compile(options)?
+            .find_ranges(&self.text)
+            .into_iter()
+            .map(|range| self.search_match_for_range(range))
             .collect())
     }
 
