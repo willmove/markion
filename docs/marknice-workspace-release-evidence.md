@@ -42,3 +42,14 @@ with the completed Windows Edge and WeChat evidence above. The unperformed
 macOS and Linux manual browser checks are deferred rather than represented as
 passes. Publication still requires successful Windows, macOS, and Linux native
 build/package verification and all tag-only signing, release, and mirror jobs.
+
+## v0.2.2 carry-over
+
+v0.2.1..v0.2.2 contains no changes under `assets/`, so v0.2.2 packages the
+byte-identical MarkNice workspace bundle. `verify-bundle` passes and reports
+the same bundle revision `c009c1ec7e7c92f89afa5a32edcb126b5296bda7` pinned in
+`bundle-manifest.json` for v0.2.1. The Windows Edge default-browser rows, the
+WeChat paste evidence, and the maintainer-authorized macOS/Linux
+manual-browser deferral therefore carry over to v0.2.2 unchanged. The automated
+rows (packaged bundle extraction and digest verification on all three native
+platforms) re-ran in the v0.2.2 tag workflow.
