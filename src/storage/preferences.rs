@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     AppPreferences, AutoSavePreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_PARAGRAPH_SPACING,
     DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy, DocxPageSize,
-    ExportPreferences, PdfExportOptions, PdfPageSize, SidebarTab, normalize_editor_font_size,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    ExportBackendPreference, ExportPreferences, PdfExportOptions, PdfPageSize, SidebarTab,
+    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
+    normalize_rendered_font_size,
 };
 
 /// File name of the retired `key=value` preferences format, looked for next
@@ -94,6 +95,8 @@ struct AutoSaveFile {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
 struct ExportFile {
+    /// "builtin" | "pandoc"; unknown values fall back to builtin.
+    backend: String,
     pdf_engine: String,
     #[serde(
         default,
@@ -219,6 +222,7 @@ impl Default for ExportFile {
     fn default() -> Self {
         let defaults = ExportPreferences::default();
         Self {
+            backend: defaults.backend.config_value().to_string(),
             pdf_engine: defaults.pdf_engine,
             pandoc_path: defaults.pandoc_path,
             reference_doc: defaults.reference_doc,
@@ -284,6 +288,7 @@ impl From<&AppPreferences> for PreferencesFile {
                 delay_secs: preferences.auto_save.delay_secs,
             },
             export: ExportFile {
+                backend: preferences.export.backend.config_value().to_string(),
                 pdf_engine: preferences.export.pdf_engine.clone(),
                 pandoc_path: preferences.export.pandoc_path.clone(),
                 reference_doc: preferences.export.reference_doc.clone(),
@@ -333,6 +338,7 @@ impl From<PreferencesFile> for AppPreferences {
                 delay_secs: file.auto_save.delay_secs,
             },
             export: ExportPreferences {
+                backend: ExportBackendPreference::from_config(&file.export.backend),
                 pdf_engine: {
                     let engine = file.export.pdf_engine.trim().to_string();
                     if engine.is_empty() {
@@ -868,6 +874,42 @@ mod tests {
         // And a legacy file without the field keeps the default.
         let parsed_without = parse_legacy_app_preferences("theme = Paper\n").unwrap();
         assert!(!parsed_without.sync_scroll);
+    }
+
+    #[test]
+    fn export_backend_defaults_to_builtin_and_parses_from_config() {
+        // Pre-existing config.toml without the key keeps the built-in default.
+        let parsed = parse_app_preferences("[export]\npdf_engine = \"pdfroff\"\n").unwrap();
+        assert_eq!(
+            parsed.export.backend,
+            crate::model::ExportBackendPreference::BuiltIn
+        );
+
+        let parsed = parse_app_preferences("[export]\nbackend = \"pandoc\"\n").unwrap();
+        assert_eq!(
+            parsed.export.backend,
+            crate::model::ExportBackendPreference::Pandoc
+        );
+
+        // Unknown tokens fall back to the built-in default.
+        let parsed = parse_app_preferences("[export]\nbackend = \"typst\"\n").unwrap();
+        assert_eq!(
+            parsed.export.backend,
+            crate::model::ExportBackendPreference::BuiltIn
+        );
+    }
+
+    #[test]
+    fn export_backend_round_trips_through_config() {
+        let mut preferences = AppPreferences::default();
+        preferences.export.backend = crate::model::ExportBackendPreference::Pandoc;
+        let rendered = render_app_preferences(&preferences);
+        assert!(rendered.contains("backend = \"pandoc\""));
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(
+            parsed.export.backend,
+            crate::model::ExportBackendPreference::Pandoc
+        );
     }
 
     #[test]

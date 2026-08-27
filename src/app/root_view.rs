@@ -2795,6 +2795,7 @@ pub(super) fn pane_scrollbar_view(
         PaneScrollTarget::PreferencesGeneral => "preferences-general-scrollbar",
         PaneScrollTarget::PreferencesShortcutCategories => "preferences-categories-scrollbar",
         PaneScrollTarget::PreferencesShortcutActions => "preferences-actions-scrollbar",
+        PaneScrollTarget::PreferencesExport => "preferences-export-scrollbar",
     };
     let viewport_height = scroll_handle.bounds().size.height;
     let max_scroll = scroll_handle.max_offset().height.max(px(0.));
@@ -4587,6 +4588,9 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                 })
                 .when(active_tab == PreferencesTab::Shortcuts, |panel| {
                     panel.child(preferences_shortcuts_body(app, palette, cx))
+                })
+                .when(active_tab == PreferencesTab::Export, |panel| {
+                    panel.child(preferences_export_body(app, palette, cx))
                 }),
         )
 }
@@ -4617,6 +4621,14 @@ fn preferences_tab_strip(
             palette,
             cx.listener(|app, _: &MouseUpEvent, _window, cx| {
                 app.select_preferences_tab(PreferencesTab::Shortcuts, cx);
+            }),
+        ))
+        .child(preferences_tab_button(
+            app.tr(Msg::PrefPanelTabExport),
+            app.preferences_tab == PreferencesTab::Export,
+            palette,
+            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                app.select_preferences_tab(PreferencesTab::Export, cx);
             }),
         ))
 }
@@ -4659,6 +4671,426 @@ fn preferences_tab_button(
         .hover(move |style| style.border_color(palette.active_bg))
         .on_mouse_up(MouseButton::Left, listener)
         .child(label)
+}
+
+/// Preferences panel Export tab body: backend choice with the pandoc
+/// availability line, pandoc-only engine options, and the DOCX/PDF option
+/// sections. Every control applies immediately and persists.
+fn preferences_export_body(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let backend = app.export_preferences.backend;
+    let pandoc = backend == ExportBackendPreference::Pandoc;
+
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .child(
+            div()
+                .id("preferences-export-body")
+                .size_full()
+                .px_4()
+                .py_3()
+                .overflow_y_scroll()
+                .scrollbar_width(px(PANE_SCROLLBAR_RESERVED_WIDTH))
+                .track_scroll(&app.preferences_export_scroll)
+                .flex()
+                .flex_col()
+                .gap_4()
+                // Export engine (backend) choice.
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(preference_section_header(
+                            app.tr(Msg::PrefExportEngineSection),
+                        ))
+                        .child(div().flex().flex_wrap().gap_2().children([
+                            preference_option_button(
+                                app.tr(Msg::PrefExportBackendBuiltin).to_string(),
+                                !pandoc,
+                                palette,
+                                cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                    app.set_export_backend(ExportBackendPreference::BuiltIn, cx);
+                                }),
+                            ),
+                            preference_option_button(
+                                app.tr(Msg::PrefExportBackendPandoc).to_string(),
+                                pandoc,
+                                palette,
+                                cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                    app.set_export_backend(ExportBackendPreference::Pandoc, cx);
+                                }),
+                            ),
+                        ]))
+                        .child(preference_pandoc_availability_line(app, palette)),
+                )
+                // Pandoc-only options.
+                .when(pandoc, |body| {
+                    body.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(preference_section_header(
+                                app.tr(Msg::PrefExportPandocSection),
+                            ))
+                            .child(preference_path_row(
+                                app.tr(Msg::PrefExportPandocPath),
+                                app.export_preferences
+                                    .pandoc_path
+                                    .as_deref()
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| {
+                                        app.tr(Msg::PrefExportPandocPathAuto).to_string()
+                                    }),
+                                app.export_preferences.pandoc_path.is_some(),
+                                palette,
+                                app.language,
+                                cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                                    app.choose_pandoc_path(window, cx);
+                                }),
+                                cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                    app.reset_pandoc_path(cx);
+                                }),
+                            ))
+                            .child(preference_path_row(
+                                app.tr(Msg::PrefExportReferenceDoc),
+                                app.export_preferences
+                                    .reference_doc
+                                    .as_deref()
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| {
+                                        app.tr(Msg::PrefExportReferenceDocBundled).to_string()
+                                    }),
+                                app.export_preferences.reference_doc.is_some(),
+                                palette,
+                                app.language,
+                                cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                                    app.choose_reference_doc(window, cx);
+                                }),
+                                cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                    app.reset_reference_doc(cx);
+                                }),
+                            ))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .text_size(px(12.))
+                                    .px_1()
+                                    .py_1()
+                                    .gap_3()
+                                    .child(
+                                        div()
+                                            .text_color(palette.muted)
+                                            .child(app.tr(Msg::PrefExportPdfEngine)),
+                                    )
+                                    .child(div().flex().items_center().gap_1().children(
+                                        ["xelatex", "tectonic", "pdfroff", "lualatex"].map(
+                                            |engine| {
+                                                let active =
+                                                    app.export_preferences.pdf_engine == engine;
+                                                preference_option_button(
+                                                    engine.to_string(),
+                                                    active,
+                                                    palette,
+                                                    cx.listener(
+                                                        move |app, _: &MouseUpEvent, _window, cx| {
+                                                            app.set_pandoc_pdf_engine(engine, cx);
+                                                        },
+                                                    ),
+                                                )
+                                            },
+                                        ),
+                                    )),
+                            ),
+                    )
+                })
+                // Word (DOCX) options.
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(preference_section_header(
+                            app.tr(Msg::PrefExportDocxSection),
+                        ))
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(12.))
+                                .px_1()
+                                .py_1()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(palette.muted)
+                                        .child(app.tr(Msg::PrefExportDocxPageSize)),
+                                )
+                                .child(div().flex().items_center().gap_1().children([
+                                    preference_option_button(
+                                        "A4".to_string(),
+                                        app.export_preferences.docx.page_size == DocxPageSize::A4,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.set_docx_page_size(DocxPageSize::A4, cx);
+                                        }),
+                                    ),
+                                    preference_option_button(
+                                        "Letter".to_string(),
+                                        app.export_preferences.docx.page_size
+                                            == DocxPageSize::Letter,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.set_docx_page_size(DocxPageSize::Letter, cx);
+                                        }),
+                                    ),
+                                    preference_option_button(
+                                        "Legal".to_string(),
+                                        app.export_preferences.docx.page_size
+                                            == DocxPageSize::Legal,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.set_docx_page_size(DocxPageSize::Legal, cx);
+                                        }),
+                                    ),
+                                ])),
+                        )
+                        .child(preference_boolean_row(
+                            app.tr(Msg::PrefExportDocxToc),
+                            app.export_preferences.docx.toc,
+                            app.language,
+                            palette,
+                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                app.toggle_docx_toc(cx);
+                            }),
+                        ))
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(12.))
+                                .px_1()
+                                .py_1()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(palette.muted)
+                                        .child(app.tr(Msg::PrefExportDocxImages)),
+                                )
+                                .child(div().flex().items_center().gap_1().children([
+                                    preference_option_button(
+                                        app.tr(Msg::PrefExportDocxImagesEmbed).to_string(),
+                                        app.export_preferences.docx.image_policy
+                                            == DocxImagePolicy::Embed,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.set_docx_image_policy(DocxImagePolicy::Embed, cx);
+                                        }),
+                                    ),
+                                    preference_option_button(
+                                        app.tr(Msg::PrefExportDocxImagesText).to_string(),
+                                        app.export_preferences.docx.image_policy
+                                            == DocxImagePolicy::TextFallback,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.set_docx_image_policy(
+                                                DocxImagePolicy::TextFallback,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
+                                ])),
+                        ),
+                )
+                // PDF options.
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(preference_section_header(app.tr(Msg::PrefExportPdfSection)))
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(12.))
+                                .px_1()
+                                .py_1()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(palette.muted)
+                                        .child(app.tr(Msg::PrefExportPdfPageSize)),
+                                )
+                                .child(div().flex().items_center().gap_1().children([
+                                    preference_option_button(
+                                        "A4".to_string(),
+                                        app.export_preferences.pdf.page_size == PdfPageSize::A4,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.set_pdf_page_size(PdfPageSize::A4, cx);
+                                        }),
+                                    ),
+                                    preference_option_button(
+                                        "Letter".to_string(),
+                                        app.export_preferences.pdf.page_size == PdfPageSize::Letter,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.set_pdf_page_size(PdfPageSize::Letter, cx);
+                                        }),
+                                    ),
+                                    preference_option_button(
+                                        "Legal".to_string(),
+                                        app.export_preferences.pdf.page_size == PdfPageSize::Legal,
+                                        palette,
+                                        cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                            app.set_pdf_page_size(PdfPageSize::Legal, cx);
+                                        }),
+                                    ),
+                                ])),
+                        )
+                        .child(preference_numeric_row(
+                            app.tr(Msg::PrefExportPdfMargin),
+                            app.export_preferences.pdf.margin_mm as u16,
+                            10,
+                            50,
+                            palette,
+                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                app.step_pdf_margin(-1, cx);
+                            }),
+                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                app.step_pdf_margin(1, cx);
+                            }),
+                        ))
+                        .child(preference_boolean_row(
+                            app.tr(Msg::PrefExportPdfToc),
+                            app.export_preferences.pdf.toc,
+                            app.language,
+                            palette,
+                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                app.toggle_pdf_toc(cx);
+                            }),
+                        ))
+                        .child(preference_boolean_row(
+                            app.tr(Msg::PrefExportPdfPageNumbers),
+                            app.export_preferences.pdf.page_numbers,
+                            app.language,
+                            palette,
+                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                app.toggle_pdf_page_numbers(cx);
+                            }),
+                        )),
+                ),
+        )
+        .child(pane_scrollbar_view(
+            PaneScrollTarget::PreferencesExport,
+            &app.preferences_export_scroll,
+            palette,
+            cx,
+        ))
+}
+
+/// Muted section header used across the Preferences panel bodies.
+fn preference_section_header(label: &'static str) -> Div {
+    div()
+        .text_size(px(12.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(label)
+}
+
+/// Pandoc availability line: probing / found / not found, shown under the
+/// backend choice. Only meaningful while the pandoc backend is selected.
+fn preference_pandoc_availability_line(app: &MarkionApp, palette: ThemePalette) -> Div {
+    let backend = app.export_preferences.backend;
+    let text = match app.pandoc_available_cached {
+        None => app.tr(Msg::PrefExportPandocProbing).to_string(),
+        Some(true) => app.tr(Msg::PrefExportPandocFound).to_string(),
+        Some(false) => app.tr(Msg::PrefExportPandocMissing).to_string(),
+    };
+    let color = match (backend, app.pandoc_available_cached) {
+        (_, None) => palette.muted,
+        (_, Some(true)) => palette.muted,
+        (ExportBackendPreference::Pandoc, Some(false)) => rgb(0xd97706),
+        (ExportBackendPreference::BuiltIn, Some(false)) => palette.muted,
+    };
+    div()
+        .text_size(px(10.))
+        .text_color(color)
+        .when(backend == ExportBackendPreference::Pandoc, |line| {
+            line.pl_1()
+        })
+        .child(text)
+}
+
+/// One labeled row with a value box and Browse…/Reset actions (pandoc path,
+/// DOCX reference template). The action labels resolve from `language` so
+/// every caller shares them.
+fn preference_path_row(
+    label: &'static str,
+    value: String,
+    customized: bool,
+    palette: ThemePalette,
+    language: Language,
+    browse: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+    reset: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    let browse_label: SharedString = t(language, Msg::PrefExportBrowseAction).into();
+    let reset_label: SharedString = t(language, Msg::PrefExportResetAction).into();
+    div().w_full().flex().flex_col().gap_1().child(
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .text_size(px(12.))
+            .px_1()
+            .py_1()
+            .gap_3()
+            .child(div().text_color(palette.muted).child(label))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .min_w(px(90.))
+                            .max_w(px(220.))
+                            .h(px(26.))
+                            .px_2()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(palette.border)
+                            .bg(palette.surface_bg)
+                            .flex()
+                            .items_center()
+                            .text_color(if customized {
+                                palette.text
+                            } else {
+                                palette.muted
+                            })
+                            .overflow_hidden()
+                            .child(div().w_full().truncate().child(value)),
+                    )
+                    .child(preference_font_action(browse_label, palette, browse))
+                    .child(preference_font_action(reset_label, palette, reset)),
+            ),
+    )
 }
 
 fn preferences_shortcuts_body(

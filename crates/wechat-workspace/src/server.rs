@@ -23,7 +23,7 @@ use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use crate::session::{SessionId, SessionStore};
 use crate::{
     BundleError, Clock, OsTokenSource, PublishingSnapshot, SessionLimits, SystemClock, TokenSource,
-    verify_bundle,
+    verify_launch_gate,
 };
 
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' blob: data: http: https:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
@@ -108,10 +108,11 @@ struct HttpState {
 }
 
 impl WorkspaceService {
-    /// Validates configuration but does not bind a socket. Binding occurs on
-    /// the first call to `create_session`.
+    /// Validates configuration through the minimal runtime launch gate but
+    /// does not bind a socket. Binding occurs on the first call to
+    /// `create_session`.
     pub fn new(config: WorkspaceConfig) -> Result<Self, WorkspaceError> {
-        verify_bundle(&config.asset_root)?;
+        verify_launch_gate(&config.asset_root)?;
         let asset_root = config.asset_root.canonicalize().map_err(BundleError::Io)?;
         Ok(Self {
             inner: Arc::new(ServiceInner {
@@ -693,6 +694,25 @@ mod tests {
                 .status(),
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[tokio::test]
+    async fn service_launches_with_unlisted_leftover_files() {
+        // In-place package upgrades leave files the manifest no longer lists;
+        // the minimal launch gate must still accept the workspace.
+        let bundle = bundle();
+        fs::write(bundle.path().join("static/orphan.js"), "leftover").unwrap();
+        fs::write(bundle.path().join("LICENSE.katex.txt"), "MIT").unwrap();
+        let service = WorkspaceService::new(
+            WorkspaceConfig::new(bundle.path()).with_token_source(Arc::new(ScriptedTokens::new(4))),
+        )
+        .unwrap();
+        let launch = service
+            .create_session(snapshot("upgraded install"))
+            .await
+            .unwrap();
+        assert!(service.local_addr().unwrap().ip().is_loopback());
+        assert!(launch.url().contains("#claim="));
     }
 
     #[tokio::test]

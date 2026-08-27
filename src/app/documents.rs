@@ -619,128 +619,17 @@ impl MarkionApp {
         self.export_with_prompt(ExportFormat::Latex, window, cx);
     }
 
-    /// DOCX export runs a small options step before the save-path prompt:
-    /// page size, table of contents (offered only when the pandoc engine is
-    /// available — the built-in writer has no TOC support), and the image
-    /// policy. Each prompt shows the last-used choice; the chosen options are
-    /// kept in `export_preferences.docx` and persisted after a successful
-    /// export (see `export_with_prompt`).
+    /// DOCX export reads its options (page size, table of contents, image
+    /// policy — plus the backend preference) from `export_preferences`,
+    /// configured on the Preferences panel Export tab, and goes straight to
+    /// the save-path prompt like every other format.
     pub(super) fn export_docx(
         &mut self,
         _: &ExportDocx,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let options = self.export_preferences.docx.clone();
-        let language = self.language;
-        let toc_available = pandoc_available(self.export_preferences.pandoc_path.as_deref());
-        let window_handle = window.window_handle();
-
-        let current = page_size_label(options.page_size);
-        let page_answer = window.prompt(
-            PromptLevel::Info,
-            self.tr(Msg::DialogDocxPageSizeTitle),
-            Some(&tf(language, Msg::DialogDocxPageSizeDetail, &[current])),
-            &[
-                PromptButton::ok("A4"),
-                PromptButton::ok("Letter"),
-                PromptButton::ok("Legal"),
-                PromptButton::cancel(self.tr(Msg::DialogButtonCancel)),
-            ],
-            cx,
-        );
-
-        self.active_menu = None;
-        cx.notify();
-
-        cx.spawn(async move |this, cx| {
-            // Any dismissal/cancel aborts the whole flow.
-            let Ok(page_index) = page_answer.await else {
-                return;
-            };
-            if page_index > 2 {
-                return;
-            }
-            let page_size =
-                [DocxPageSize::A4, DocxPageSize::Letter, DocxPageSize::Legal][page_index];
-
-            let toc = if toc_available {
-                let current = t(
-                    language,
-                    if options.toc {
-                        Msg::DialogDocxTocOn
-                    } else {
-                        Msg::DialogDocxTocOff
-                    },
-                );
-                let answer = window_handle.update(cx, |_, window, cx| {
-                    window.prompt(
-                        PromptLevel::Info,
-                        t(language, Msg::DialogDocxTocTitle),
-                        Some(&tf(language, Msg::DialogDocxTocDetail, &[current])),
-                        &[
-                            PromptButton::ok(t(language, Msg::DialogDocxTocOn)),
-                            PromptButton::ok(t(language, Msg::DialogDocxTocOff)),
-                            PromptButton::cancel(t(language, Msg::DialogButtonCancel)),
-                        ],
-                        cx,
-                    )
-                });
-                match answer {
-                    Ok(answer) => match answer.await {
-                        Ok(0) => true,
-                        Ok(1) => false,
-                        _ => return,
-                    },
-                    Err(_) => return,
-                }
-            } else {
-                // Built-in writer ignores TOC; keep the stored choice.
-                options.toc
-            };
-
-            let current = t(
-                language,
-                match options.image_policy {
-                    DocxImagePolicy::Embed => Msg::DialogDocxImagesEmbed,
-                    DocxImagePolicy::TextFallback => Msg::DialogDocxImagesText,
-                },
-            );
-            let answer = window_handle.update(cx, |_, window, cx| {
-                window.prompt(
-                    PromptLevel::Info,
-                    t(language, Msg::DialogDocxImagesTitle),
-                    Some(&tf(language, Msg::DialogDocxImagesDetail, &[current])),
-                    &[
-                        PromptButton::ok(t(language, Msg::DialogDocxImagesEmbed)),
-                        PromptButton::ok(t(language, Msg::DialogDocxImagesText)),
-                        PromptButton::cancel(t(language, Msg::DialogButtonCancel)),
-                    ],
-                    cx,
-                )
-            });
-            let image_policy = match answer {
-                Ok(answer) => match answer.await {
-                    Ok(0) => DocxImagePolicy::Embed,
-                    Ok(1) => DocxImagePolicy::TextFallback,
-                    _ => return,
-                },
-                Err(_) => return,
-            };
-
-            let chosen = DocxExportOptions {
-                page_size,
-                toc,
-                image_policy,
-            };
-            let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = this.update(cx, |app, cx| {
-                    app.export_preferences.docx = chosen;
-                    app.export_with_prompt(ExportFormat::Docx, window, cx);
-                });
-            });
-        })
-        .detach();
+        self.export_with_prompt(ExportFormat::Docx, window, cx);
     }
 
     pub(super) fn export_png(
@@ -786,19 +675,48 @@ impl MarkionApp {
             let status = match save_future.await {
                 Some(path) => {
                     let display_path = path.display().to_string();
+                    // Snapshot the document and export settings up front, then
+                    // prefetch remote images off the main thread (PDF always;
+                    // DOCX under the embed policy — the built-in writers embed
+                    // the fetched bytes; a URL that fails to fetch keeps the
+                    // text fallback). Exporting the snapshot means slow
+                    // downloads can never export the wrong tab.
+                    let snapshot = this.update(cx, |app, _| {
+                        let tab = app.active_tab();
+                        // PDF always embeds images (no image policy); DOCX
+                        // embeds unless the text-fallback policy is active.
+                        let embeds_images = format == ExportFormat::Pdf
+                            || app.export_preferences.docx.image_policy == DocxImagePolicy::Embed;
+                        let remote_urls = embeds_images
+                            .then(|| tab.document.remote_image_urls())
+                            .filter(|urls| !urls.is_empty());
+                        (
+                            tab.document.clone(),
+                            app.export_preferences.clone(),
+                            remote_urls,
+                        )
+                    });
+                    let Ok((document, export_preferences, remote_urls)) = snapshot else {
+                        return;
+                    };
+                    let remote_images = if let Some(urls) = remote_urls {
+                        let _ = this.update(cx, |app, cx| {
+                            app.status = t(app.language, Msg::StatusFetchingExportImages).into();
+                            cx.notify();
+                        });
+                        cx.background_spawn(async move { network::fetch_url_bytes_all(urls) })
+                            .await
+                    } else {
+                        HashMap::new()
+                    };
                     let _ = this.update(cx, |app, cx| {
-                        let export_preferences = app.export_preferences.clone();
                         let language = app.language;
-                        let tab = app.active_tab_mut();
-                        let outcome =
-                            tab.document
-                                .export_to_with(&path, format, &export_preferences);
-                        // The DOCX options step stashes the chosen options in
-                        // `export_preferences.docx`; persist them as the
-                        // last-used choices once the export succeeds.
-                        if outcome.is_ok() && format == ExportFormat::Docx {
-                            app.persist_preferences();
-                        }
+                        let outcome = document.export_to_with(
+                            &path,
+                            format,
+                            &export_preferences,
+                            &remote_images,
+                        );
                         app.status = match outcome {
                             // Disclose the producing backend for the formats
                             // where the pandoc engine competes with the
@@ -807,11 +725,8 @@ impl MarkionApp {
                             Ok(outcome)
                                 if matches!(format, ExportFormat::Pdf | ExportFormat::Docx) =>
                             {
-                                let msg = backend_status_msg(
-                                    outcome.backend,
-                                    format,
-                                    outcome.engine_failure,
-                                );
+                                let msg =
+                                    backend_status_msg(outcome.backend, outcome.engine_failure);
                                 tf(language, msg, &[&display_path]).into()
                             }
                             Ok(_) => tf(language, Msg::StatusExported, &[&display_path]).into(),
@@ -856,14 +771,5 @@ impl MarkionApp {
             .filter(|stem| !stem.is_empty())
             .unwrap_or("Untitled");
         target.suggested_name(stem)
-    }
-}
-
-/// Page-size tokens are standard paper names; they stay untranslated.
-fn page_size_label(size: DocxPageSize) -> &'static str {
-    match size {
-        DocxPageSize::A4 => "A4",
-        DocxPageSize::Letter => "Letter",
-        DocxPageSize::Legal => "Legal",
     }
 }

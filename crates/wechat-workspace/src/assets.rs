@@ -79,8 +79,10 @@ pub enum BundleError {
     Io(#[source] io::Error),
 }
 
-/// Finds a verified bundle in an explicit development override, a source-tree
-/// layout, or one of the native packaged-resource layouts.
+/// Finds a launchable bundle in an explicit development override, a
+/// source-tree layout, or one of the native packaged-resource layouts. A
+/// candidate is accepted through the minimal runtime gate, so in-place
+/// package upgrades that leave unlisted files behind do not block publishing.
 pub fn discover_workspace_assets() -> Result<PathBuf, BundleError> {
     let mut candidates = Vec::new();
     if let Some(path) = env::var_os("MARKION_MARKNICE_WORKSPACE_DIR") {
@@ -123,7 +125,7 @@ pub fn discover_workspace_assets() -> Result<PathBuf, BundleError> {
         if !seen.insert(candidate.clone()) || !candidate.is_dir() {
             continue;
         }
-        match verify_bundle(&candidate) {
+        match verify_launch_gate(&candidate) {
             Ok(_) => return Ok(candidate),
             Err(error) => first_error.get_or_insert(error),
         };
@@ -197,6 +199,57 @@ pub fn verify_bundle(root: &Path) -> Result<BundleVerification, BundleError> {
     Ok(BundleVerification {
         file_count: manifest.files.len(),
         total_bytes,
+        source_commit: manifest.source_commit,
+    })
+}
+
+/// Minimal launch-time gate for the runtime call sites: the manifest parses,
+/// its provenance is valid, and the entry shell matches its recorded digest.
+/// Files on disk that the manifest does not list — in-place-upgrade
+/// leftovers, OS metadata — are deliberately tolerated, because the release
+/// pipeline already verified the complete bundle at package time. Full
+/// `verify_bundle` remains the exhaustive release-time check.
+pub fn verify_launch_gate(root: &Path) -> Result<BundleVerification, BundleError> {
+    let manifest_bytes = fs::read(root.join(BUNDLE_MANIFEST)).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            BundleError::Unavailable
+        } else {
+            BundleError::ManifestIo(error)
+        }
+    })?;
+    let manifest: BundleManifest =
+        serde_json::from_slice(&manifest_bytes).map_err(BundleError::InvalidManifest)?;
+    validate_provenance(&manifest)?;
+
+    let entry = manifest
+        .files
+        .iter()
+        .find(|file| file.path == "index.html")
+        .ok_or(BundleError::MissingFile)?;
+    let path = root.join("index.html");
+    let metadata = fs::metadata(&path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            BundleError::MissingFile
+        } else {
+            BundleError::Io(error)
+        }
+    })?;
+    if !metadata.is_file() {
+        return Err(BundleError::MissingFile);
+    }
+    let bytes = fs::read(&path).map_err(BundleError::Io)?;
+    let actual = format!(
+        "{:x}",
+        Sha256::digest(normalize_line_endings(&bytes).as_slice())
+    );
+    if !actual.eq_ignore_ascii_case(&entry.sha256) {
+        return Err(BundleError::DigestMismatch {
+            path: entry.path.clone(),
+        });
+    }
+    Ok(BundleVerification {
+        file_count: manifest.files.len(),
+        total_bytes: metadata.len(),
         source_commit: manifest.source_commit,
     })
 }
@@ -638,6 +691,113 @@ mod tests {
 
         create_bundle(temp.path(), r#"<script src="static/app.js"></script>"#);
         fs::write(temp.path().join("extra.js"), "extra").unwrap();
+        assert!(matches!(
+            verify_bundle(temp.path()),
+            Err(BundleError::UnlistedFile)
+        ));
+    }
+
+    #[test]
+    fn launch_gate_pins_the_entry_shell_and_tolerates_everything_else() {
+        let temp = tempfile::tempdir().unwrap();
+        create_bundle(temp.path(), r#"<script src="static/app.js"></script>"#);
+
+        // Unlisted files, including nested ones, do not block the launch gate.
+        fs::create_dir_all(temp.path().join("static/vendor/fonts")).unwrap();
+        fs::write(temp.path().join("static/vendor/orphan.js"), "leftover").unwrap();
+        fs::write(
+            temp.path()
+                .join("static/vendor/fonts/KaTeX_Main-Regular.ttf"),
+            b"font",
+        )
+        .unwrap();
+        fs::write(temp.path().join("LICENSE.orphan.txt"), "leftover").unwrap();
+        assert!(verify_launch_gate(temp.path()).is_ok());
+
+        // The entry shell stays pinned: tampering fails with the file named.
+        fs::write(
+            temp.path().join("index.html"),
+            r#"<script src="static/app.js"></script><meta name="tampered">"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_launch_gate(temp.path()),
+            Err(BundleError::DigestMismatch { path }) if path == "index.html"
+        ));
+
+        fs::remove_file(temp.path().join("index.html")).unwrap();
+        assert!(matches!(
+            verify_launch_gate(temp.path()),
+            Err(BundleError::MissingFile)
+        ));
+    }
+
+    #[test]
+    fn launch_gate_rejects_missing_entry_listing_and_invalid_manifests() {
+        let temp = tempfile::tempdir().unwrap();
+        create_bundle(temp.path(), r#"<script src="static/app.js"></script>"#);
+        let manifest: BundleManifest =
+            serde_json::from_slice(&fs::read(temp.path().join(BUNDLE_MANIFEST)).unwrap()).unwrap();
+
+        // A manifest that no longer lists the entry shell is not launchable.
+        let mut without_entry = manifest.clone();
+        without_entry.files.retain(|file| file.path != "index.html");
+        fs::write(
+            temp.path().join(BUNDLE_MANIFEST),
+            serde_json::to_vec_pretty(&without_entry).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_launch_gate(temp.path()),
+            Err(BundleError::MissingFile)
+        ));
+
+        fs::write(temp.path().join(BUNDLE_MANIFEST), b"not json").unwrap();
+        assert!(matches!(
+            verify_launch_gate(temp.path()),
+            Err(BundleError::InvalidManifest(_))
+        ));
+
+        fs::remove_file(temp.path().join(BUNDLE_MANIFEST)).unwrap();
+        assert!(matches!(
+            verify_launch_gate(temp.path()),
+            Err(BundleError::Unavailable)
+        ));
+
+        // Invalid provenance still blocks launching.
+        create_bundle(temp.path(), r#"<script src="static/app.js"></script>"#);
+        let mut bad_provenance = manifest;
+        bad_provenance.source_commit = "short".into();
+        fs::write(
+            temp.path().join(BUNDLE_MANIFEST),
+            serde_json::to_vec_pretty(&bad_provenance).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_launch_gate(temp.path()),
+            Err(BundleError::IncompleteProvenance)
+        ));
+    }
+
+    #[test]
+    fn launch_gate_accepts_an_upgraded_install_with_upgrade_leftovers() {
+        // Regression shape of the v0.1.24 -> v0.2.2 in-place NSIS upgrade:
+        // the MathJax-era manifest replaced KaTeX, but the installer never
+        // removed the old KaTeX assets from the install directory.
+        let temp = tempfile::tempdir().unwrap();
+        create_bundle(temp.path(), r#"<script src="static/app.js"></script>"#);
+        fs::create_dir_all(temp.path().join("static/vendor/fonts")).unwrap();
+        fs::write(temp.path().join("static/vendor/katex.min.js"), "katex").unwrap();
+        fs::write(temp.path().join("static/vendor/katex.min.css"), "katex").unwrap();
+        fs::write(temp.path().join("LICENSE.katex.txt"), "MIT").unwrap();
+        fs::write(
+            temp.path()
+                .join("static/vendor/fonts/KaTeX_Main-Regular.ttf"),
+            b"font",
+        )
+        .unwrap();
+
+        assert!(verify_launch_gate(temp.path()).is_ok());
         assert!(matches!(
             verify_bundle(temp.path()),
             Err(BundleError::UnlistedFile)

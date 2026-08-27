@@ -2267,6 +2267,51 @@ fn preferences_panel_renders_and_wires_the_shortcuts_tab() {
 }
 
 #[test]
+fn preferences_panel_renders_and_wires_the_export_tab() {
+    let source = include_str!("root_view.rs").replace("\r\n", "\n");
+    let panel = source
+        .split_once("pub(super) fn preferences_panel_view")
+        .and_then(|(_, rest)| rest.split_once("fn preferences_tab_strip"))
+        .map(|(body, _)| body)
+        .expect("Preferences panel view");
+    assert!(panel.contains("PreferencesTab::Export"));
+    assert!(panel.contains("preferences_export_body(app, palette, cx)"));
+
+    let strip = source
+        .split_once("fn preferences_tab_strip")
+        .and_then(|(_, rest)| rest.split_once("fn preferences_tab_button"))
+        .map(|(body, _)| body)
+        .expect("Preferences tab strip");
+    assert!(strip.contains("Msg::PrefPanelTabExport"));
+
+    let export_body = source
+        .split_once("fn preferences_export_body")
+        .and_then(|(_, rest)| rest.split_once("fn preference_section_header"))
+        .map(|(body, _)| body)
+        .expect("Preferences export body");
+    // Backend choice applies the persisted preference.
+    assert!(export_body.contains("Msg::PrefExportBackendBuiltin"));
+    assert!(export_body.contains("Msg::PrefExportBackendPandoc"));
+    assert!(export_body.contains("app.set_export_backend("));
+    // Pandoc-only rows render conditionally on the pandoc backend.
+    assert!(export_body.contains(".when(pandoc, |body|"));
+    assert!(export_body.contains("app.choose_pandoc_path(window, cx)"));
+    assert!(export_body.contains("app.reset_pandoc_path(cx)"));
+    assert!(export_body.contains("app.choose_reference_doc(window, cx)"));
+    assert!(export_body.contains("app.reset_reference_doc(cx)"));
+    assert!(export_body.contains("app.set_pandoc_pdf_engine(engine, cx)"));
+    // DOCX/PDF option sections map onto persisted export options.
+    assert!(export_body.contains("app.set_docx_page_size("));
+    assert!(export_body.contains("app.toggle_docx_toc(cx)"));
+    assert!(export_body.contains("app.set_docx_image_policy("));
+    assert!(export_body.contains("app.set_pdf_page_size("));
+    assert!(export_body.contains("app.step_pdf_margin(-1, cx)"));
+    assert!(export_body.contains("app.toggle_pdf_page_numbers(cx)"));
+    // The availability line is presentation-only (no probe in render).
+    assert!(export_body.contains("preference_pandoc_availability_line(app, palette)"));
+}
+
+#[test]
 fn preferences_language_picker_contains_variable_width_labels() {
     let source = include_str!("root_view.rs").replace("\r\n", "\n");
     let panel = source

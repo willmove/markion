@@ -679,7 +679,8 @@ impl MarkionApp {
             PaneScrollTarget::Visual
             | PaneScrollTarget::PreferencesGeneral
             | PaneScrollTarget::PreferencesShortcutCategories
-            | PaneScrollTarget::PreferencesShortcutActions => return,
+            | PaneScrollTarget::PreferencesShortcutActions
+            | PaneScrollTarget::PreferencesExport => return,
         }
         cx.notify();
     }

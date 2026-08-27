@@ -264,6 +264,10 @@ impl Default for AppPreferences {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportPreferences {
+    /// Which implementation produces PDF/DOCX exports. The default is the
+    /// dependency-free built-in writers; `Pandoc` keeps the engine-first flow
+    /// with the silent built-in fallback.
+    pub backend: ExportBackendPreference,
     /// Pandoc PDF engine used by the engine-first PDF export path
     /// (`--pdf-engine=`), e.g. "xelatex", "pdfroff", "tectonic".
     pub pdf_engine: String,
@@ -278,18 +282,19 @@ pub struct ExportPreferences {
     /// platform CJK default is supplied automatically for CJK documents).
     pub pdf_mainfont: Option<String>,
     pub pdf_cjk_font: Option<String>,
-    /// Last-used PDF export options ([export.pdf] table), honored by the
-    /// built-in PDF writer and mapped onto pandoc variables on the engine
-    /// path.
+    /// PDF export options ([export.pdf] table), configured on the
+    /// Preferences panel Export tab, honored by the built-in PDF writer and
+    /// mapped onto pandoc variables on the engine path.
     pub pdf: PdfExportOptions,
-    /// Last-used DOCX export options ([export.docx] table), re-presented by
-    /// the export dialog on the next run.
+    /// DOCX export options ([export.docx] table), configured on the
+    /// Preferences panel Export tab and honored by both backends.
     pub docx: DocxExportOptions,
 }
 
 impl Default for ExportPreferences {
     fn default() -> Self {
         Self {
+            backend: ExportBackendPreference::default(),
             pdf_engine: "xelatex".to_string(),
             pandoc_path: None,
             reference_doc: None,
@@ -297,6 +302,39 @@ impl Default for ExportPreferences {
             pdf_cjk_font: None,
             pdf: PdfExportOptions::default(),
             docx: DocxExportOptions::default(),
+        }
+    }
+}
+
+/// Which implementation produces PDF/DOCX exports — Markion's built-in
+/// writers or the absorbed Typune pandoc engine. This is the persisted
+/// preference; the runtime [`ExportBackend`] reports what actually produced
+/// a file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ExportBackendPreference {
+    /// Built-in PDF/DOCX writers produce the file directly; no pandoc
+    /// subprocess is spawned (default).
+    #[default]
+    BuiltIn,
+    /// Pandoc engine first, silently falling back to the built-in writers
+    /// when the binary is missing or the conversion fails.
+    Pandoc,
+}
+
+impl ExportBackendPreference {
+    /// Config-file token ([export] `backend`).
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "builtin",
+            Self::Pandoc => "pandoc",
+        }
+    }
+
+    /// Parses a config token; unknown values fall back to BuiltIn.
+    pub fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "pandoc" | "engine" => Self::Pandoc,
+            _ => Self::BuiltIn,
         }
     }
 }

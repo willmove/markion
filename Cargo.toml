@@ -65,7 +65,7 @@ raw-window-handle = "0.6"
 reqwest = { package = "zed-reqwest", version = "0.12.15-zed", default-features = false, features = ["rustls-tls-native-roots"] }
 tokio.workspace = true
 font8x8 = "0.3"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 pulldown-cmark.workspace = true
 percent-encoding.workspace = true
 # Spec-compliant (RFC 2397) `data:` URI parsing for base64/URL-encoded inline

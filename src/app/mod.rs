@@ -28,20 +28,20 @@ use gpui::{
 use markion::{
     AlertKind, AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement,
     BlockTarget, BlockTransform, DEFAULT_CODE_FONT_FAMILY, DEFAULT_EDITOR_FONT_SIZE,
-    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE, DiskState, DocxExportOptions,
-    DocxImagePolicy, DocxPageSize, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportFormat,
+    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE, DiskState, DocxImagePolicy,
+    DocxPageSize, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackendPreference, ExportFormat,
     ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan,
     HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
     Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
-    MarkdownFormat, MathLayoutStyle, Msg, P0Msg, P1Msg, PreviewBlock, RecoveryInventoryEntry,
-    RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions,
-    SearchPattern, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand,
-    SlashQuery, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock,
-    VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField,
-    VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget, VisualProjection,
-    VisualQuoteGroupEdge, VisualSourceIslandKind, adjacent_reorder_target, backend_status_msg,
-    block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
+    MarkdownFormat, MathLayoutStyle, Msg, P0Msg, P1Msg, PdfPageSize, PreviewBlock,
+    RecoveryInventoryEntry, RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange,
+    SearchOptions, SearchPattern, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab,
+    SlashCommand, SlashQuery, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode,
+    VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity,
+    VisualEditorField, VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget,
+    VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind, adjacent_reorder_target,
+    backend_status_msg, block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
     build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
     builtin_theme_definitions, default_preferences_path, default_recovery_dir,
     default_session_path, default_themes_dir, delete_block, delete_recovery_file,
@@ -1747,6 +1747,8 @@ enum PaneScrollTarget {
     PreferencesShortcutCategories,
     /// Preferences panel Shortcuts tab action list. Drag identity only.
     PreferencesShortcutActions,
+    /// Preferences panel Export tab body. Drag identity only.
+    PreferencesExport,
 }
 
 /// Identity of a selectable plain-text run inside one preview list item.
@@ -1914,6 +1916,7 @@ enum PreferencesTab {
     #[default]
     General,
     Shortcuts,
+    Export,
 }
 
 /// A shortcut row waiting for the user to press a new key combination.
@@ -1950,6 +1953,7 @@ mod diagram;
 mod documents;
 mod editing;
 mod editor_element;
+mod export_prefs;
 mod math_render;
 mod memory;
 mod network;
@@ -2037,6 +2041,10 @@ struct MarkionApp {
     preferences_general_scroll: ScrollHandle,
     preferences_categories_scroll: ScrollHandle,
     preferences_actions_scroll: ScrollHandle,
+    preferences_export_scroll: ScrollHandle,
+    /// Cached `pandoc --version` probe result for the Export tab's
+    /// availability line. `None` = not probed (or probing in flight).
+    pandoc_available_cached: Option<bool>,
     shortcut_platform: ShortcutPlatform,
     shortcut_category: ShortcutCategory,
     /// Menu-action shortcut overrides loaded from `config.toml`

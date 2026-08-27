@@ -53,3 +53,29 @@ WeChat paste evidence, and the maintainer-authorized macOS/Linux
 manual-browser deferral therefore carry over to v0.2.2 unchanged. The automated
 rows (packaged bundle extraction and digest verification on all three native
 platforms) re-ran in the v0.2.2 tag workflow.
+
+## Runtime gate versus release gate
+
+Two distinct verification levels apply to the workspace. **Release
+verification** (`verify_bundle`, the `verify-bundle` CLI, and every
+pre-publication check) stays exhaustive: every manifest-listed file must match
+its LF-normalized digest, no unlisted file may exist, and remote-dependency
+and prohibited-artifact scans must pass. **The runtime launch gate**
+(`verify_launch_gate`, used by `discover_workspace_assets` and
+`WorkspaceService::new`) checks only that the manifest parses with valid
+provenance and the entry shell `index.html` matches its recorded digest. The
+split is deliberate: the Windows NSIS installer and the in-app updater install
+by overwriting and never remove files a newer package no longer ships, so an
+upgraded install legitimately contains unlisted leftovers, and launch-time
+full-bundle equality would hard-fail publishing for every upgrading user.
+
+On 2026-08-27, maintainer `willmove` verified the launch gate on the affected
+Windows machine whose Markion install was upgraded in place from v0.1.24
+(KaTeX-era workspace) to v0.2.2 (MathJax-era workspace): the install directory
+retains 63 orphaned KaTeX files beside the 21-file manifest. The
+`preview-workspace` harness pinned to that directory via
+`MARKION_MARKNICE_WORKSPACE_DIR` created a session and served the shell,
+self-test page, and static assets over loopback. Before the gate split, the
+same directory failed with
+`the local publishing workspace contains an unlisted runtime file` on every
+publish attempt.

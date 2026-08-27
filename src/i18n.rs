@@ -426,38 +426,30 @@ pub enum Msg {
     StatusExportCanceled,
     /// {0}=ext — "Choosing .{ext} export location..."
     StatusChoosingExportLocation,
+    /// Status line while remote export images are prefetched.
+    StatusFetchingExportImages,
     /// {0}=path — "Exported {path}"
     StatusExported,
     /// {0}=path — PDF/DOCX produced by the pandoc engine
     StatusExportedEngine,
-    /// {0}=path — PDF produced by the built-in writer (rich default)
+    /// {0}=path — PDF/DOCX produced by the built-in writer
     StatusExportedBuiltin,
-    /// {0}=path — DOCX produced by the built-in writer (pandoc hint)
-    StatusExportedDocxBuiltin,
     /// {0}=path — built-in writer used because the pandoc binary was missing
     StatusExportedBuiltinPandocMissing,
     /// {0}=path — built-in writer used because pandoc conversion failed
     StatusExportedBuiltinConversionFailed,
-    /// DOCX options dialog: page-size prompt title
-    DialogDocxPageSizeTitle,
-    /// {0}=current size — page-size prompt detail
-    DialogDocxPageSizeDetail,
-    /// DOCX options dialog: table-of-contents prompt title (pandoc engine only)
-    DialogDocxTocTitle,
-    /// {0}=current state — TOC prompt detail
-    DialogDocxTocDetail,
-    /// TOC prompt button: include a table of contents
-    DialogDocxTocOn,
-    /// TOC prompt button: no table of contents
-    DialogDocxTocOff,
-    /// DOCX options dialog: image policy prompt title
-    DialogDocxImagesTitle,
-    /// {0}=current policy — image policy prompt detail
-    DialogDocxImagesDetail,
-    /// Image policy button: embed local images
-    DialogDocxImagesEmbed,
-    /// Image policy button: export local images as `alt: url` text
-    DialogDocxImagesText,
+    /// Export backend preference set to the built-in writer
+    StatusExportBackendBuiltin,
+    /// Export backend preference set to pandoc
+    StatusExportBackendPandoc,
+    /// Pandoc path preference reset to the system PATH lookup
+    StatusExportPandocPathReset,
+    /// {0}=path — pandoc program path set
+    StatusExportPandocPathSet,
+    /// {0}=path — Word reference template set
+    StatusExportReferenceDocSet,
+    /// Word reference template reset to the bundled default
+    StatusExportReferenceDocReset,
     /// {0}=err — "Export failed: {err}"
     StatusExportFailed,
     /// {0}=err — local publishing workspace setup/start failure.
@@ -702,6 +694,64 @@ pub enum Msg {
     PrefPanelTabGeneral,
     /// "Shortcuts" tab label in the Preferences panel tab strip.
     PrefPanelTabShortcuts,
+    /// "Export" tab label in the Preferences panel tab strip.
+    PrefPanelTabExport,
+    /// Export tab section: backend (engine) choice.
+    PrefExportEngineSection,
+    /// Backend choice: the built-in writers (default).
+    PrefExportBackendBuiltin,
+    /// Backend choice: the pandoc engine.
+    PrefExportBackendPandoc,
+    /// Availability line while the pandoc probe runs.
+    PrefExportPandocProbing,
+    /// Availability line when pandoc was detected.
+    PrefExportPandocFound,
+    /// Availability line when pandoc was not found.
+    PrefExportPandocMissing,
+    /// Export tab section: pandoc-only options.
+    PrefExportPandocSection,
+    /// Pandoc binary path row label.
+    PrefExportPandocPath,
+    /// Pandoc path value when unset (system PATH lookup).
+    PrefExportPandocPathAuto,
+    /// Word reference template row label.
+    PrefExportReferenceDoc,
+    /// Reference template value when unset (bundled template).
+    PrefExportReferenceDocBundled,
+    /// Path row action: open the native file picker.
+    PrefExportBrowseAction,
+    /// Path row action: restore the default value.
+    PrefExportResetAction,
+    /// Pandoc PDF engine row label.
+    PrefExportPdfEngine,
+    /// Export tab section: Word (DOCX) options.
+    PrefExportDocxSection,
+    /// Word page size row label.
+    PrefExportDocxPageSize,
+    /// Word table-of-contents toggle (pandoc path only).
+    PrefExportDocxToc,
+    /// Word image policy row label.
+    PrefExportDocxImages,
+    /// Image policy: embed local images.
+    PrefExportDocxImagesEmbed,
+    /// Image policy: export local images as `alt: url` text.
+    PrefExportDocxImagesText,
+    /// Export tab section: PDF options.
+    PrefExportPdfSection,
+    /// PDF page size row label.
+    PrefExportPdfPageSize,
+    /// PDF page margin row label (millimetres).
+    PrefExportPdfMargin,
+    /// PDF table-of-contents toggle.
+    PrefExportPdfToc,
+    /// PDF page-number footer toggle.
+    PrefExportPdfPageNumbers,
+    /// File picker title for the pandoc binary.
+    PrefExportPickPandocTitle,
+    /// File picker title for the Word reference template.
+    PrefExportPickReferenceTitle,
+    /// File picker filter label for Word documents.
+    PrefExportPickReferenceFilter,
     /// Prompt shown in a shortcut row while it waits for a key press.
     ShortcutCapturePrompt,
     /// Inline feedback for a keystroke that may not be assigned at all.
@@ -2639,30 +2689,16 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusSaveCanceled => "Save canceled",
         Msg::StatusExportCanceled => "Export canceled",
         Msg::StatusChoosingExportLocation => "Choosing .{0} export location...",
+        Msg::StatusFetchingExportImages => "Fetching remote images for export…",
         Msg::StatusExported => "Exported {0}",
         Msg::StatusExportedEngine => "Exported {0} (pandoc engine)",
         Msg::StatusExportedBuiltin => "Exported {0} (built-in writer)",
-        Msg::StatusExportedDocxBuiltin => {
-            "Exported {0} (built-in writer — install pandoc for richer output)"
-        }
         Msg::StatusExportedBuiltinPandocMissing => {
             "Exported {0} (built-in writer — pandoc not found; install pandoc for richer output)"
         }
         Msg::StatusExportedBuiltinConversionFailed => {
             "Exported {0} (built-in writer — pandoc conversion failed)"
         }
-        Msg::DialogDocxPageSizeTitle => "DOCX export: page size",
-        Msg::DialogDocxPageSizeDetail => "Current: {0}. Pick the page size for this export.",
-        Msg::DialogDocxTocTitle => "DOCX export: table of contents",
-        Msg::DialogDocxTocDetail => {
-            "Current: {0}. The table of contents is generated by the pandoc engine."
-        }
-        Msg::DialogDocxTocOn => "Include table of contents",
-        Msg::DialogDocxTocOff => "No table of contents",
-        Msg::DialogDocxImagesTitle => "DOCX export: images",
-        Msg::DialogDocxImagesDetail => "Current: {0}. Choose how local images are exported.",
-        Msg::DialogDocxImagesEmbed => "Embed local images",
-        Msg::DialogDocxImagesText => "Export images as text",
         Msg::StatusExportFailed => "Export failed: {0}",
         Msg::StatusPublishingOpening => "Opening the local WeChat publishing workspace…",
         Msg::StatusPublishingOpened => "Opened the local WeChat publishing workspace",
@@ -2820,6 +2856,45 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelClose => "Close",
         Msg::PrefPanelTabGeneral => "General",
         Msg::PrefPanelTabShortcuts => "Shortcuts",
+        Msg::PrefPanelTabExport => "Export",
+        Msg::PrefExportEngineSection => "Export engine",
+        Msg::PrefExportBackendBuiltin => "Built-in writer (default)",
+        Msg::PrefExportBackendPandoc => "Pandoc",
+        Msg::PrefExportPandocProbing => "Checking pandoc availability…",
+        Msg::PrefExportPandocFound => "pandoc found on this system",
+        Msg::PrefExportPandocMissing => {
+            "pandoc not found — exports fall back to the built-in writer"
+        }
+        Msg::PrefExportPandocSection => "Pandoc options",
+        Msg::PrefExportPandocPath => "Pandoc program path",
+        Msg::PrefExportPandocPathAuto => "Auto (system PATH)",
+        Msg::PrefExportReferenceDoc => "Word reference template",
+        Msg::PrefExportReferenceDocBundled => "Bundled template",
+        Msg::PrefExportBrowseAction => "Browse…",
+        Msg::PrefExportResetAction => "Reset",
+        Msg::PrefExportPdfEngine => "PDF engine",
+        Msg::PrefExportDocxSection => "Word (DOCX)",
+        Msg::PrefExportDocxPageSize => "Page size",
+        Msg::PrefExportDocxToc => "Table of contents (pandoc)",
+        Msg::PrefExportDocxImages => "Images",
+        Msg::PrefExportDocxImagesEmbed => "Embed images",
+        Msg::PrefExportDocxImagesText => "Export images as text",
+        Msg::PrefExportPdfSection => "PDF",
+        Msg::PrefExportPdfPageSize => "Page size",
+        Msg::PrefExportPdfMargin => "Page margin (mm)",
+        Msg::PrefExportPdfToc => "Table of contents",
+        Msg::PrefExportPdfPageNumbers => "Page numbers",
+        Msg::PrefExportPickPandocTitle => "Choose the pandoc program",
+        Msg::PrefExportPickReferenceTitle => "Choose a Word reference template",
+        Msg::PrefExportPickReferenceFilter => "Word document",
+        Msg::StatusExportBackendBuiltin => "PDF/Word export uses the built-in writer",
+        Msg::StatusExportBackendPandoc => "PDF/Word export uses pandoc",
+        Msg::StatusExportPandocPathReset => "Pandoc path reset to the system PATH",
+        Msg::StatusExportPandocPathSet => "Pandoc program path set to {0}",
+        Msg::StatusExportReferenceDocSet => "Word reference template set to {0}",
+        Msg::StatusExportReferenceDocReset => {
+            "Word reference template reset to the bundled default"
+        }
         Msg::ShortcutCapturePrompt => "Press keys… (Esc cancels)",
         Msg::ShortcutErrorNotAssignable => {
             "That key cannot be assigned. Add a modifier or use F1–F12."
@@ -3132,30 +3207,16 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusSaveCanceled => "保存をキャンセルしました",
         Msg::StatusExportCanceled => "エクスポートをキャンセルしました",
         Msg::StatusChoosingExportLocation => ".{0} の出力先を選択中...",
+        Msg::StatusFetchingExportImages => "エクスポートのためにリモート画像を取得中…",
         Msg::StatusExported => "{0} を出力しました",
         Msg::StatusExportedEngine => "{0} を出力しました（pandocエンジン）",
         Msg::StatusExportedBuiltin => "{0} を出力しました（内蔵ライター）",
-        Msg::StatusExportedDocxBuiltin => {
-            "{0} を出力しました（内蔵ライター — pandocをインストールするとより高品質な出力が可能です）"
-        }
         Msg::StatusExportedBuiltinPandocMissing => {
             "{0} を出力しました（内蔵ライター — pandocが見つかりません。インストールするとより高品質な出力が可能です）"
         }
         Msg::StatusExportedBuiltinConversionFailed => {
             "{0} を出力しました（内蔵ライター — pandocの変換に失敗しました）"
         }
-        Msg::DialogDocxPageSizeTitle => "DOCXエクスポート: ページサイズ",
-        Msg::DialogDocxPageSizeDetail => {
-            "現在: {0}。このエクスポートのページサイズを選択してください。"
-        }
-        Msg::DialogDocxTocTitle => "DOCXエクスポート: 目次",
-        Msg::DialogDocxTocDetail => "現在: {0}。目次はpandocエンジンが生成します。",
-        Msg::DialogDocxTocOn => "目次を含める",
-        Msg::DialogDocxTocOff => "目次を含めない",
-        Msg::DialogDocxImagesTitle => "DOCXエクスポート: 画像",
-        Msg::DialogDocxImagesDetail => "現在: {0}。ローカル画像の出力方法を選択してください。",
-        Msg::DialogDocxImagesEmbed => "ローカル画像を埋め込む",
-        Msg::DialogDocxImagesText => "画像をテキストとして出力",
         Msg::StatusExportFailed => "エクスポートに失敗しました: {0}",
         Msg::StatusPublishingOpening => "ローカルWeChat公開ワークスペースを開いています…",
         Msg::StatusPublishingOpened => "ローカルWeChat公開ワークスペースを開きました",
@@ -3317,6 +3378,43 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelClose => "閉じる",
         Msg::PrefPanelTabGeneral => "一般",
         Msg::PrefPanelTabShortcuts => "ショートカット",
+        Msg::PrefPanelTabExport => "エクスポート",
+        Msg::PrefExportEngineSection => "エクスポートエンジン",
+        Msg::PrefExportBackendBuiltin => "内蔵ライター（既定）",
+        Msg::PrefExportBackendPandoc => "Pandoc",
+        Msg::PrefExportPandocProbing => "pandocの可用性を確認中…",
+        Msg::PrefExportPandocFound => "pandocが見つかりました",
+        Msg::PrefExportPandocMissing => {
+            "pandocが見つかりません — エクスポートは内蔵ライターにフォールバックします"
+        }
+        Msg::PrefExportPandocSection => "Pandocオプション",
+        Msg::PrefExportPandocPath => "pandocプログラムのパス",
+        Msg::PrefExportPandocPathAuto => "自動（システムPATH）",
+        Msg::PrefExportReferenceDoc => "Word参照テンプレート",
+        Msg::PrefExportReferenceDocBundled => "同梱テンプレート",
+        Msg::PrefExportBrowseAction => "参照…",
+        Msg::PrefExportResetAction => "リセット",
+        Msg::PrefExportPdfEngine => "PDFエンジン",
+        Msg::PrefExportDocxSection => "Word（DOCX）",
+        Msg::PrefExportDocxPageSize => "ページサイズ",
+        Msg::PrefExportDocxToc => "目次（pandoc）",
+        Msg::PrefExportDocxImages => "画像",
+        Msg::PrefExportDocxImagesEmbed => "画像を埋め込む",
+        Msg::PrefExportDocxImagesText => "画像をテキストとして出力",
+        Msg::PrefExportPdfSection => "PDF",
+        Msg::PrefExportPdfPageSize => "ページサイズ",
+        Msg::PrefExportPdfMargin => "ページ余白（mm）",
+        Msg::PrefExportPdfToc => "目次",
+        Msg::PrefExportPdfPageNumbers => "ページ番号",
+        Msg::PrefExportPickPandocTitle => "pandocプログラムを選択",
+        Msg::PrefExportPickReferenceTitle => "Word参照テンプレートを選択",
+        Msg::PrefExportPickReferenceFilter => "Word文書",
+        Msg::StatusExportBackendBuiltin => "PDF/Wordエクスポートは内蔵ライターを使用します",
+        Msg::StatusExportBackendPandoc => "PDF/Wordエクスポートはpandocを使用します",
+        Msg::StatusExportPandocPathReset => "pandocのパスをシステムPATHに戻しました",
+        Msg::StatusExportPandocPathSet => "pandocプログラムのパスを{0}に設定しました",
+        Msg::StatusExportReferenceDocSet => "Word参照テンプレートを{0}に設定しました",
+        Msg::StatusExportReferenceDocReset => "Word参照テンプレートを同梱の既定に戻しました",
         Msg::ShortcutCapturePrompt => "キーを押してください…（Escで取消）",
         Msg::ShortcutErrorNotAssignable => {
             "このキーは割り当てできません。修飾キーを追加するか F1〜F12 を使用してください。"
@@ -3615,34 +3713,16 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusSaveCanceled => "Enregistrement annulé",
         Msg::StatusExportCanceled => "Exportation annulée",
         Msg::StatusChoosingExportLocation => "Choix de l'emplacement d'export .{0}...",
+        Msg::StatusFetchingExportImages => "Récupération des images distantes pour l'export…",
         Msg::StatusExported => "{0} exporté",
         Msg::StatusExportedEngine => "{0} exporté (moteur pandoc)",
         Msg::StatusExportedBuiltin => "{0} exporté (convertisseur intégré)",
-        Msg::StatusExportedDocxBuiltin => {
-            "{0} exporté (convertisseur intégré — installez pandoc pour un meilleur rendu)"
-        }
         Msg::StatusExportedBuiltinPandocMissing => {
             "{0} exporté (convertisseur intégré — pandoc introuvable ; installez pandoc pour un meilleur rendu)"
         }
         Msg::StatusExportedBuiltinConversionFailed => {
             "{0} exporté (convertisseur intégré — échec de la conversion pandoc)"
         }
-        Msg::DialogDocxPageSizeTitle => "Export DOCX : taille de page",
-        Msg::DialogDocxPageSizeDetail => {
-            "Actuel : {0}. Choisissez la taille de page pour cet export."
-        }
-        Msg::DialogDocxTocTitle => "Export DOCX : table des matières",
-        Msg::DialogDocxTocDetail => {
-            "Actuel : {0}. La table des matières est générée par le moteur pandoc."
-        }
-        Msg::DialogDocxTocOn => "Inclure la table des matières",
-        Msg::DialogDocxTocOff => "Sans table des matières",
-        Msg::DialogDocxImagesTitle => "Export DOCX : images",
-        Msg::DialogDocxImagesDetail => {
-            "Actuel : {0}. Choisissez comment exporter les images locales."
-        }
-        Msg::DialogDocxImagesEmbed => "Incorporer les images locales",
-        Msg::DialogDocxImagesText => "Exporter les images en texte",
         Msg::StatusExportFailed => "Échec de l'exportation : {0}",
         Msg::StatusPublishingOpening => "Ouverture de l’espace local de publication WeChat…",
         Msg::StatusPublishingOpened => "Espace local de publication WeChat ouvert",
@@ -3806,6 +3886,45 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelClose => "Fermer",
         Msg::PrefPanelTabGeneral => "Général",
         Msg::PrefPanelTabShortcuts => "Raccourcis",
+        Msg::PrefPanelTabExport => "Exporter",
+        Msg::PrefExportEngineSection => "Moteur d'export",
+        Msg::PrefExportBackendBuiltin => "Générateur intégré (par défaut)",
+        Msg::PrefExportBackendPandoc => "Pandoc",
+        Msg::PrefExportPandocProbing => "Vérification de pandoc…",
+        Msg::PrefExportPandocFound => "pandoc détecté sur ce système",
+        Msg::PrefExportPandocMissing => {
+            "pandoc introuvable — les exports basculent sur le générateur intégré"
+        }
+        Msg::PrefExportPandocSection => "Options Pandoc",
+        Msg::PrefExportPandocPath => "Chemin du programme pandoc",
+        Msg::PrefExportPandocPathAuto => "Auto (PATH système)",
+        Msg::PrefExportReferenceDoc => "Modèle de référence Word",
+        Msg::PrefExportReferenceDocBundled => "Modèle intégré",
+        Msg::PrefExportBrowseAction => "Parcourir…",
+        Msg::PrefExportResetAction => "Réinitialiser",
+        Msg::PrefExportPdfEngine => "Moteur PDF",
+        Msg::PrefExportDocxSection => "Word (DOCX)",
+        Msg::PrefExportDocxPageSize => "Taille de page",
+        Msg::PrefExportDocxToc => "Table des matières (pandoc)",
+        Msg::PrefExportDocxImages => "Images",
+        Msg::PrefExportDocxImagesEmbed => "Incorporer les images",
+        Msg::PrefExportDocxImagesText => "Exporter les images en texte",
+        Msg::PrefExportPdfSection => "PDF",
+        Msg::PrefExportPdfPageSize => "Taille de page",
+        Msg::PrefExportPdfMargin => "Marge de page (mm)",
+        Msg::PrefExportPdfToc => "Table des matières",
+        Msg::PrefExportPdfPageNumbers => "Numéros de page",
+        Msg::PrefExportPickPandocTitle => "Choisir le programme pandoc",
+        Msg::PrefExportPickReferenceTitle => "Choisir un modèle de référence Word",
+        Msg::PrefExportPickReferenceFilter => "Document Word",
+        Msg::StatusExportBackendBuiltin => "L'export PDF/Word utilise le générateur intégré",
+        Msg::StatusExportBackendPandoc => "L'export PDF/Word utilise pandoc",
+        Msg::StatusExportPandocPathReset => "Chemin pandoc réinitialisé sur le PATH système",
+        Msg::StatusExportPandocPathSet => "Chemin du programme pandoc défini sur {0}",
+        Msg::StatusExportReferenceDocSet => "Modèle de référence Word défini sur {0}",
+        Msg::StatusExportReferenceDocReset => {
+            "Modèle de référence Word réinitialisé sur la valeur intégrée"
+        }
         Msg::ShortcutCapturePrompt => "Appuyez sur les touches… (Échap annule)",
         Msg::ShortcutErrorNotAssignable => {
             "Cette touche ne peut pas être assignée. Ajoutez un modificateur ou utilisez F1–F12."
@@ -4104,30 +4223,16 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusSaveCanceled => "Speichern abgebrochen",
         Msg::StatusExportCanceled => "Export abgebrochen",
         Msg::StatusChoosingExportLocation => "Exportziel für .{0} wählen...",
+        Msg::StatusFetchingExportImages => "Remote-Bilder für den Export werden abgerufen…",
         Msg::StatusExported => "{0} exportiert",
         Msg::StatusExportedEngine => "{0} exportiert (pandoc-Engine)",
         Msg::StatusExportedBuiltin => "{0} exportiert (integrierter Konverter)",
-        Msg::StatusExportedDocxBuiltin => {
-            "{0} exportiert (integrierter Konverter — installiere pandoc für bessere Ausgabe)"
-        }
         Msg::StatusExportedBuiltinPandocMissing => {
             "{0} exportiert (integrierter Konverter — pandoc nicht gefunden; installiere pandoc für bessere Ausgabe)"
         }
         Msg::StatusExportedBuiltinConversionFailed => {
             "{0} exportiert (integrierter Konverter — pandoc-Konvertierung fehlgeschlagen)"
         }
-        Msg::DialogDocxPageSizeTitle => "DOCX-Export: Seitengröße",
-        Msg::DialogDocxPageSizeDetail => "Aktuell: {0}. Wähle die Seitengröße für diesen Export.",
-        Msg::DialogDocxTocTitle => "DOCX-Export: Inhaltsverzeichnis",
-        Msg::DialogDocxTocDetail => {
-            "Aktuell: {0}. Das Inhaltsverzeichnis wird von der pandoc-Engine erzeugt."
-        }
-        Msg::DialogDocxTocOn => "Inhaltsverzeichnis einschließen",
-        Msg::DialogDocxTocOff => "Kein Inhaltsverzeichnis",
-        Msg::DialogDocxImagesTitle => "DOCX-Export: Bilder",
-        Msg::DialogDocxImagesDetail => "Aktuell: {0}. Wähle, wie lokale Bilder exportiert werden.",
-        Msg::DialogDocxImagesEmbed => "Lokale Bilder einbetten",
-        Msg::DialogDocxImagesText => "Bilder als Text exportieren",
         Msg::StatusExportFailed => "Export fehlgeschlagen: {0}",
         Msg::StatusPublishingOpening => "Lokaler WeChat-Veröffentlichungsbereich wird geöffnet…",
         Msg::StatusPublishingOpened => "Lokaler WeChat-Veröffentlichungsbereich geöffnet",
@@ -4291,6 +4396,45 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelClose => "Schließen",
         Msg::PrefPanelTabGeneral => "Allgemein",
         Msg::PrefPanelTabShortcuts => "Tastenkürzel",
+        Msg::PrefPanelTabExport => "Exportieren",
+        Msg::PrefExportEngineSection => "Export-Engine",
+        Msg::PrefExportBackendBuiltin => "Eingebauter Writer (Standard)",
+        Msg::PrefExportBackendPandoc => "Pandoc",
+        Msg::PrefExportPandocProbing => "pandoc-Verfügbarkeit wird geprüft…",
+        Msg::PrefExportPandocFound => "pandoc auf diesem System gefunden",
+        Msg::PrefExportPandocMissing => {
+            "pandoc nicht gefunden — Exporte greifen auf den eingebauten Writer zurück"
+        }
+        Msg::PrefExportPandocSection => "Pandoc-Optionen",
+        Msg::PrefExportPandocPath => "Pfad zum pandoc-Programm",
+        Msg::PrefExportPandocPathAuto => "Automatisch (System-PATH)",
+        Msg::PrefExportReferenceDoc => "Word-Referenzvorlage",
+        Msg::PrefExportReferenceDocBundled => "Mitgelieferte Vorlage",
+        Msg::PrefExportBrowseAction => "Durchsuchen…",
+        Msg::PrefExportResetAction => "Zurücksetzen",
+        Msg::PrefExportPdfEngine => "PDF-Engine",
+        Msg::PrefExportDocxSection => "Word (DOCX)",
+        Msg::PrefExportDocxPageSize => "Seitengröße",
+        Msg::PrefExportDocxToc => "Inhaltsverzeichnis (pandoc)",
+        Msg::PrefExportDocxImages => "Bilder",
+        Msg::PrefExportDocxImagesEmbed => "Bilder einbetten",
+        Msg::PrefExportDocxImagesText => "Bilder als Text exportieren",
+        Msg::PrefExportPdfSection => "PDF",
+        Msg::PrefExportPdfPageSize => "Seitengröße",
+        Msg::PrefExportPdfMargin => "Seitenrand (mm)",
+        Msg::PrefExportPdfToc => "Inhaltsverzeichnis",
+        Msg::PrefExportPdfPageNumbers => "Seitenzahlen",
+        Msg::PrefExportPickPandocTitle => "pandoc-Programm auswählen",
+        Msg::PrefExportPickReferenceTitle => "Word-Referenzvorlage auswählen",
+        Msg::PrefExportPickReferenceFilter => "Word-Dokument",
+        Msg::StatusExportBackendBuiltin => "PDF/Word-Export verwendet den eingebauten Writer",
+        Msg::StatusExportBackendPandoc => "PDF/Word-Export verwendet pandoc",
+        Msg::StatusExportPandocPathReset => "pandoc-Pfad auf den System-PATH zurückgesetzt",
+        Msg::StatusExportPandocPathSet => "pandoc-Programmpfad auf {0} gesetzt",
+        Msg::StatusExportReferenceDocSet => "Word-Referenzvorlage auf {0} gesetzt",
+        Msg::StatusExportReferenceDocReset => {
+            "Word-Referenzvorlage auf die mitgelieferte Standardvorlage zurückgesetzt"
+        }
         Msg::ShortcutCapturePrompt => "Tasten drücken… (Esc bricht ab)",
         Msg::ShortcutErrorNotAssignable => {
             "Diese Taste kann nicht zugewiesen werden. Modifikator hinzufügen oder F1–F12 nutzen."
@@ -4589,32 +4733,16 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusSaveCanceled => "Guardado cancelado",
         Msg::StatusExportCanceled => "Exportación cancelada",
         Msg::StatusChoosingExportLocation => "Eligiendo ubicación de exportación .{0}...",
+        Msg::StatusFetchingExportImages => "Descargando imágenes remotas para la exportación…",
         Msg::StatusExported => "{0} exportado",
         Msg::StatusExportedEngine => "{0} exportado (motor pandoc)",
         Msg::StatusExportedBuiltin => "{0} exportado (conversor integrado)",
-        Msg::StatusExportedDocxBuiltin => {
-            "{0} exportado (conversor integrado — instale pandoc para una salida más rica)"
-        }
         Msg::StatusExportedBuiltinPandocMissing => {
             "{0} exportado (conversor integrado — pandoc no encontrado; instale pandoc para una salida más rica)"
         }
         Msg::StatusExportedBuiltinConversionFailed => {
             "{0} exportado (conversor integrado — falló la conversión con pandoc)"
         }
-        Msg::DialogDocxPageSizeTitle => "Exportación DOCX: tamaño de página",
-        Msg::DialogDocxPageSizeDetail => {
-            "Actual: {0}. Elige el tamaño de página para esta exportación."
-        }
-        Msg::DialogDocxTocTitle => "Exportación DOCX: tabla de contenidos",
-        Msg::DialogDocxTocDetail => {
-            "Actual: {0}. La tabla de contenidos la genera el motor pandoc."
-        }
-        Msg::DialogDocxTocOn => "Incluir tabla de contenidos",
-        Msg::DialogDocxTocOff => "Sin tabla de contenidos",
-        Msg::DialogDocxImagesTitle => "Exportación DOCX: imágenes",
-        Msg::DialogDocxImagesDetail => "Actual: {0}. Elige cómo se exportan las imágenes locales.",
-        Msg::DialogDocxImagesEmbed => "Incrustar imágenes locales",
-        Msg::DialogDocxImagesText => "Exportar imágenes como texto",
         Msg::StatusExportFailed => "Error de exportación: {0}",
         Msg::StatusPublishingOpening => "Abriendo el espacio local de publicación de WeChat…",
         Msg::StatusPublishingOpened => "Espacio local de publicación de WeChat abierto",
@@ -4766,6 +4894,45 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelClose => "Cerrar",
         Msg::PrefPanelTabGeneral => "General",
         Msg::PrefPanelTabShortcuts => "Atajos",
+        Msg::PrefPanelTabExport => "Exportar",
+        Msg::PrefExportEngineSection => "Motor de exportación",
+        Msg::PrefExportBackendBuiltin => "Escritor integrado (predeterminado)",
+        Msg::PrefExportBackendPandoc => "Pandoc",
+        Msg::PrefExportPandocProbing => "Comprobando la disponibilidad de pandoc…",
+        Msg::PrefExportPandocFound => "pandoc encontrado en este sistema",
+        Msg::PrefExportPandocMissing => {
+            "pandoc no encontrado — las exportaciones recurren al escritor integrado"
+        }
+        Msg::PrefExportPandocSection => "Opciones de Pandoc",
+        Msg::PrefExportPandocPath => "Ruta del programa pandoc",
+        Msg::PrefExportPandocPathAuto => "Automático (PATH del sistema)",
+        Msg::PrefExportReferenceDoc => "Plantilla de referencia de Word",
+        Msg::PrefExportReferenceDocBundled => "Plantilla incluida",
+        Msg::PrefExportBrowseAction => "Examinar…",
+        Msg::PrefExportResetAction => "Restablecer",
+        Msg::PrefExportPdfEngine => "Motor PDF",
+        Msg::PrefExportDocxSection => "Word (DOCX)",
+        Msg::PrefExportDocxPageSize => "Tamaño de página",
+        Msg::PrefExportDocxToc => "Tabla de contenidos (pandoc)",
+        Msg::PrefExportDocxImages => "Imágenes",
+        Msg::PrefExportDocxImagesEmbed => "Incrustar imágenes",
+        Msg::PrefExportDocxImagesText => "Exportar imágenes como texto",
+        Msg::PrefExportPdfSection => "PDF",
+        Msg::PrefExportPdfPageSize => "Tamaño de página",
+        Msg::PrefExportPdfMargin => "Margen de página (mm)",
+        Msg::PrefExportPdfToc => "Tabla de contenidos",
+        Msg::PrefExportPdfPageNumbers => "Números de página",
+        Msg::PrefExportPickPandocTitle => "Elegir el programa pandoc",
+        Msg::PrefExportPickReferenceTitle => "Elegir una plantilla de referencia de Word",
+        Msg::PrefExportPickReferenceFilter => "Documento de Word",
+        Msg::StatusExportBackendBuiltin => "La exportación PDF/Word usa el escritor integrado",
+        Msg::StatusExportBackendPandoc => "La exportación PDF/Word usa pandoc",
+        Msg::StatusExportPandocPathReset => "Ruta de pandoc restablecida al PATH del sistema",
+        Msg::StatusExportPandocPathSet => "Ruta del programa pandoc establecida en {0}",
+        Msg::StatusExportReferenceDocSet => "Plantilla de referencia de Word establecida en {0}",
+        Msg::StatusExportReferenceDocReset => {
+            "Plantilla de referencia de Word restablecida a la incluida"
+        }
         Msg::ShortcutCapturePrompt => "Pulsa las teclas… (Esc cancela)",
         Msg::ShortcutErrorNotAssignable => {
             "Esa tecla no se puede asignar. Añade un modificador o usa F1–F12."
@@ -5071,24 +5238,14 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusSaveCanceled => "已取消保存",
         Msg::StatusExportCanceled => "已取消导出",
         Msg::StatusChoosingExportLocation => "正在选择 .{0} 导出位置…",
+        Msg::StatusFetchingExportImages => "正在获取导出所需的网络图片…",
         Msg::StatusExported => "已导出 {0}",
         Msg::StatusExportedEngine => "已导出 {0}（pandoc 引擎）",
         Msg::StatusExportedBuiltin => "已导出 {0}（内置导出）",
-        Msg::StatusExportedDocxBuiltin => "已导出 {0}（内置简易导出——安装 pandoc 可获得更高质量）",
         Msg::StatusExportedBuiltinPandocMissing => {
             "已导出 {0}（内置简易导出——未找到 pandoc；安装 pandoc 可获得更高质量）"
         }
         Msg::StatusExportedBuiltinConversionFailed => "已导出 {0}（内置简易导出——pandoc 转换失败）",
-        Msg::DialogDocxPageSizeTitle => "DOCX 导出：页面尺寸",
-        Msg::DialogDocxPageSizeDetail => "当前：{0}。请选择本次导出的页面尺寸。",
-        Msg::DialogDocxTocTitle => "DOCX 导出：目录",
-        Msg::DialogDocxTocDetail => "当前：{0}。目录由 pandoc 引擎生成。",
-        Msg::DialogDocxTocOn => "包含目录",
-        Msg::DialogDocxTocOff => "不包含目录",
-        Msg::DialogDocxImagesTitle => "DOCX 导出：图片",
-        Msg::DialogDocxImagesDetail => "当前：{0}。请选择本地图片的导出方式。",
-        Msg::DialogDocxImagesEmbed => "嵌入本地图片",
-        Msg::DialogDocxImagesText => "图片导出为文本",
         Msg::StatusExportFailed => "导出失败：{0}",
         Msg::StatusPublishingOpening => "正在打开本地微信公众号发布工作区…",
         Msg::StatusPublishingOpened => "已打开本地微信公众号发布工作区",
@@ -5240,6 +5397,41 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelClose => "关闭",
         Msg::PrefPanelTabGeneral => "常规",
         Msg::PrefPanelTabShortcuts => "快捷键",
+        Msg::PrefPanelTabExport => "导出",
+        Msg::PrefExportEngineSection => "导出引擎",
+        Msg::PrefExportBackendBuiltin => "内置写入器（默认）",
+        Msg::PrefExportBackendPandoc => "Pandoc",
+        Msg::PrefExportPandocProbing => "正在检测 pandoc…",
+        Msg::PrefExportPandocFound => "已在此系统上检测到 pandoc",
+        Msg::PrefExportPandocMissing => "未找到 pandoc——导出将回退到内置写入器",
+        Msg::PrefExportPandocSection => "Pandoc 选项",
+        Msg::PrefExportPandocPath => "pandoc 程序路径",
+        Msg::PrefExportPandocPathAuto => "自动（系统 PATH）",
+        Msg::PrefExportReferenceDoc => "Word 样式参考模板",
+        Msg::PrefExportReferenceDocBundled => "内置模板",
+        Msg::PrefExportBrowseAction => "浏览…",
+        Msg::PrefExportResetAction => "重置",
+        Msg::PrefExportPdfEngine => "PDF 引擎",
+        Msg::PrefExportDocxSection => "Word（DOCX）",
+        Msg::PrefExportDocxPageSize => "页面尺寸",
+        Msg::PrefExportDocxToc => "目录（pandoc）",
+        Msg::PrefExportDocxImages => "图片",
+        Msg::PrefExportDocxImagesEmbed => "嵌入图片",
+        Msg::PrefExportDocxImagesText => "图片导出为文本",
+        Msg::PrefExportPdfSection => "PDF",
+        Msg::PrefExportPdfPageSize => "页面尺寸",
+        Msg::PrefExportPdfMargin => "页边距（毫米）",
+        Msg::PrefExportPdfToc => "目录",
+        Msg::PrefExportPdfPageNumbers => "页码",
+        Msg::PrefExportPickPandocTitle => "选择 pandoc 程序",
+        Msg::PrefExportPickReferenceTitle => "选择 Word 样式参考模板",
+        Msg::PrefExportPickReferenceFilter => "Word 文档",
+        Msg::StatusExportBackendBuiltin => "PDF/Word 导出将使用内置写入器",
+        Msg::StatusExportBackendPandoc => "PDF/Word 导出将使用 pandoc",
+        Msg::StatusExportPandocPathReset => "pandoc 路径已重置为系统 PATH",
+        Msg::StatusExportPandocPathSet => "pandoc 程序路径已设为 {0}",
+        Msg::StatusExportReferenceDocSet => "Word 样式参考模板已设为 {0}",
+        Msg::StatusExportReferenceDocReset => "Word 样式参考模板已重置为内置默认",
         Msg::ShortcutCapturePrompt => "请按下按键…（Esc 取消）",
         Msg::ShortcutErrorNotAssignable => "该按键无法分配，请添加修饰键或使用 F1–F12。",
         Msg::ShortcutErrorConflict => "已被“{0}”占用",
@@ -5543,26 +5735,14 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusSaveCanceled => "已取消儲存",
         Msg::StatusExportCanceled => "已取消匯出",
         Msg::StatusChoosingExportLocation => "正在選擇 .{0} 匯出位置…",
+        Msg::StatusFetchingExportImages => "正在擷取匯出所需的網路圖片…",
         Msg::StatusExported => "已匯出 {0}",
         Msg::StatusExportedEngine => "已匯出 {0}（pandoc 引擎）",
         Msg::StatusExportedBuiltin => "已匯出 {0}（內建匯出）",
-        Msg::StatusExportedDocxBuiltin => {
-            "已匯出 {0}（內建簡易匯出——安裝 pandoc 可獲得更高品質的輸出）"
-        }
         Msg::StatusExportedBuiltinPandocMissing => {
             "已匯出 {0}（內建簡易匯出——找不到 pandoc；安裝 pandoc 可獲得更高品質的輸出）"
         }
         Msg::StatusExportedBuiltinConversionFailed => "已匯出 {0}（內建簡易匯出——pandoc 轉換失敗）",
-        Msg::DialogDocxPageSizeTitle => "DOCX 匯出：頁面大小",
-        Msg::DialogDocxPageSizeDetail => "目前：{0}。請選擇本次匯出的頁面大小。",
-        Msg::DialogDocxTocTitle => "DOCX 匯出：目錄",
-        Msg::DialogDocxTocDetail => "目前：{0}。目錄由 pandoc 引擎產生。",
-        Msg::DialogDocxTocOn => "包含目錄",
-        Msg::DialogDocxTocOff => "不包含目錄",
-        Msg::DialogDocxImagesTitle => "DOCX 匯出：圖片",
-        Msg::DialogDocxImagesDetail => "目前：{0}。請選擇本機圖片的匯出方式。",
-        Msg::DialogDocxImagesEmbed => "嵌入本機圖片",
-        Msg::DialogDocxImagesText => "圖片匯出為文字",
         Msg::StatusExportFailed => "匯出失敗：{0}",
         Msg::StatusPublishingOpening => "正在開啟本機微信公眾號發佈工作區…",
         Msg::StatusPublishingOpened => "已開啟本機微信公眾號發佈工作區",
@@ -5714,6 +5894,41 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelClose => "關閉",
         Msg::PrefPanelTabGeneral => "一般",
         Msg::PrefPanelTabShortcuts => "快速鍵",
+        Msg::PrefPanelTabExport => "匯出",
+        Msg::PrefExportEngineSection => "匯出引擎",
+        Msg::PrefExportBackendBuiltin => "內建寫入器（預設）",
+        Msg::PrefExportBackendPandoc => "Pandoc",
+        Msg::PrefExportPandocProbing => "正在偵測 pandoc…",
+        Msg::PrefExportPandocFound => "已在此系統上偵測到 pandoc",
+        Msg::PrefExportPandocMissing => "找不到 pandoc——匯出將回退到內建寫入器",
+        Msg::PrefExportPandocSection => "Pandoc 選項",
+        Msg::PrefExportPandocPath => "pandoc 程式路徑",
+        Msg::PrefExportPandocPathAuto => "自動（系統 PATH）",
+        Msg::PrefExportReferenceDoc => "Word 樣式參考範本",
+        Msg::PrefExportReferenceDocBundled => "內建範本",
+        Msg::PrefExportBrowseAction => "瀏覽…",
+        Msg::PrefExportResetAction => "重設",
+        Msg::PrefExportPdfEngine => "PDF 引擎",
+        Msg::PrefExportDocxSection => "Word（DOCX）",
+        Msg::PrefExportDocxPageSize => "頁面大小",
+        Msg::PrefExportDocxToc => "目錄（pandoc）",
+        Msg::PrefExportDocxImages => "圖片",
+        Msg::PrefExportDocxImagesEmbed => "嵌入圖片",
+        Msg::PrefExportDocxImagesText => "圖片匯出為文字",
+        Msg::PrefExportPdfSection => "PDF",
+        Msg::PrefExportPdfPageSize => "頁面大小",
+        Msg::PrefExportPdfMargin => "頁邊距（公釐）",
+        Msg::PrefExportPdfToc => "目錄",
+        Msg::PrefExportPdfPageNumbers => "頁碼",
+        Msg::PrefExportPickPandocTitle => "選擇 pandoc 程式",
+        Msg::PrefExportPickReferenceTitle => "選擇 Word 樣式參考範本",
+        Msg::PrefExportPickReferenceFilter => "Word 文件",
+        Msg::StatusExportBackendBuiltin => "PDF/Word 匯出將使用內建寫入器",
+        Msg::StatusExportBackendPandoc => "PDF/Word 匯出將使用 pandoc",
+        Msg::StatusExportPandocPathReset => "pandoc 路徑已重設為系統 PATH",
+        Msg::StatusExportPandocPathSet => "pandoc 程式路徑已設為 {0}",
+        Msg::StatusExportReferenceDocSet => "Word 樣式參考範本已設為 {0}",
+        Msg::StatusExportReferenceDocReset => "Word 樣式參考範本已重設為內建預設",
         Msg::ShortcutCapturePrompt => "請按下按鍵…（Esc 取消）",
         Msg::ShortcutErrorNotAssignable => "此按鍵無法指派，請加上修飾鍵或使用 F1–F12。",
         Msg::ShortcutErrorConflict => "已被「{0}」占用",
@@ -6411,9 +6626,13 @@ mod tests {
             Msg::StatusChoosingExportLocation,
             Msg::StatusExported,
             Msg::StatusExportedBuiltin,
-            Msg::StatusExportedDocxBuiltin,
             Msg::StatusExportedBuiltinPandocMissing,
             Msg::StatusExportedBuiltinConversionFailed,
+            Msg::StatusExportBackendBuiltin,
+            Msg::StatusExportBackendPandoc,
+            Msg::StatusExportPandocPathReset,
+            Msg::StatusExportReferenceDocSet,
+            Msg::StatusExportReferenceDocReset,
             Msg::StatusExportFailed,
             Msg::StatusCreated,
             Msg::StatusCreateFileFailed,
@@ -6526,6 +6745,7 @@ mod tests {
             Msg::PrefPanelHeadingMenu,
             Msg::PrefPanelTabGeneral,
             Msg::PrefPanelTabShortcuts,
+            Msg::PrefPanelTabExport,
             Msg::ShortcutCapturePrompt,
             Msg::ShortcutErrorNotAssignable,
             Msg::ShortcutErrorConflict,

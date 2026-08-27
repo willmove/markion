@@ -2,14 +2,18 @@
 //! container), and PNG/JPEG snapshots that re-render the layout IR through
 //! `markion-pdf` (real fonts, CJK-aware shaping, headings/code/tables).
 //!
-//! PDF and DOCX first try the export engine absorbed from Typune (a pandoc
-//! subprocess wrapper, `crates/export`); the hand-written implementations
-//! below are the fallback when pandoc is unavailable or fails, so export
-//! never requires external tools.
+//! PDF and DOCX follow the persisted backend preference: `pandoc` runs the
+//! export engine absorbed from Typune (a pandoc subprocess wrapper,
+//! `crates/export`) with the hand-written implementations below as the
+//! fallback when pandoc is unavailable or fails; `builtin` (the default)
+//! writes through the hand-written implementations directly, so export never
+//! requires external tools.
 
 use std::{
+    collections::HashMap,
     env, fs, io,
     path::{Path, PathBuf},
+    sync::{Arc, LazyLock},
 };
 
 use markion_pdf::{
@@ -27,8 +31,8 @@ use crate::i18n::Msg;
 use crate::math::tex_to_omml;
 use crate::model::{
     AlertKind, DocxExportOptions, DocxImagePolicy, DocxPageSize, EngineFailureCategory,
-    ExportBackend, ExportFormat, ExportPreferences, HighlightKind, InlineSpan, InlineStyle,
-    PdfExportOptions, PdfPageSize, PreviewBlock, RichText, TableAlignment,
+    ExportBackend, ExportPreferences, HighlightKind, InlineSpan, InlineStyle, PdfExportOptions,
+    PdfPageSize, PreviewBlock, RichText, TableAlignment,
 };
 use crate::parse::{HtmlPreviewPart, HtmlTableGrid, html_preview_parts};
 
@@ -99,13 +103,15 @@ pub(crate) fn engine_pdf(
 /// Builds the `markion_pdf` layout IR from the cached preview blocks.
 ///
 /// Mirrors `render_docx_document_xml`: walks `preview_blocks_shared()` once,
-/// resolves local images against `base_dir`, converts every `PreviewBlock`
-/// variant into the corresponding `PdfBlock`, and collects footnote bodies into
-/// `PdfDocument::footnotes` so inline references can resolve to 1-based ids.
+/// resolves images against `base_dir` and the prefetched `remote_images`
+/// map, converts every `PreviewBlock` variant into the corresponding
+/// `PdfBlock`, and collects footnote bodies into `PdfDocument::footnotes`
+/// so inline references can resolve to 1-based ids.
 pub fn build_pdf_ir(
     document: &MarkdownDocument,
     options: &PdfExportOptions,
     base_dir: Option<&Path>,
+    remote_images: &HashMap<String, Vec<u8>>,
 ) -> PdfDocument {
     let metadata = document.front_matter().ok().flatten();
     let title = metadata
@@ -160,6 +166,7 @@ pub fn build_pdf_ir(
                     other,
                     &base_dir,
                     &footnote_labels,
+                    remote_images,
                 ));
             }
         }
@@ -181,10 +188,13 @@ fn pdf_blocks_from_preview_block(
     block: &PreviewBlock,
     base_dir: &Option<PathBuf>,
     footnotes: &[String],
+    remote_images: &HashMap<String, Vec<u8>>,
 ) -> Vec<PdfBlock> {
     match block {
-        PreviewBlock::Html { html, .. } => pdf_html_blocks(html, base_dir, footnotes),
-        _ => pdf_single_block(block, base_dir, footnotes)
+        PreviewBlock::Html { html, .. } => {
+            pdf_html_blocks(html, base_dir, footnotes, remote_images)
+        }
+        _ => pdf_single_block(block, base_dir, footnotes, remote_images)
             .into_iter()
             .collect(),
     }
@@ -194,6 +204,7 @@ fn pdf_single_block(
     block: &PreviewBlock,
     base_dir: &Option<PathBuf>,
     footnotes: &[String],
+    remote_images: &HashMap<String, Vec<u8>>,
 ) -> Option<PdfBlock> {
     match block {
         PreviewBlock::Heading { level, text, .. } => Some(PdfBlock::Heading {
@@ -228,7 +239,9 @@ fn pdf_single_block(
         } => {
             let children: Vec<PdfBlock> = children
                 .iter()
-                .flat_map(|child| pdf_blocks_from_preview_block(child, base_dir, footnotes))
+                .flat_map(|child| {
+                    pdf_blocks_from_preview_block(child, base_dir, footnotes, remote_images)
+                })
                 .collect();
             if let Some(kind) = alert {
                 Some(PdfBlock::Alert {
@@ -246,9 +259,8 @@ fn pdf_single_block(
         PreviewBlock::MathBlock {
             latex, authored, ..
         } => Some(pdf_math_block(latex, authored)),
-        PreviewBlock::Image { alt, url, .. } => {
-            pdf_image_block(alt, url, base_dir).or_else(|| Some(pdf_image_fallback_block(alt, url)))
-        }
+        PreviewBlock::Image { alt, url, .. } => pdf_image_block(alt, url, base_dir, remote_images)
+            .or_else(|| Some(pdf_image_fallback_block(alt, url))),
         PreviewBlock::Rule { .. } => Some(PdfBlock::Rule),
         PreviewBlock::Table {
             rows, alignments, ..
@@ -260,7 +272,12 @@ fn pdf_single_block(
     }
 }
 
-fn pdf_html_blocks(html: &str, base_dir: &Option<PathBuf>, footnotes: &[String]) -> Vec<PdfBlock> {
+fn pdf_html_blocks(
+    html: &str,
+    base_dir: &Option<PathBuf>,
+    footnotes: &[String],
+    remote_images: &HashMap<String, Vec<u8>>,
+) -> Vec<PdfBlock> {
     let mut blocks = Vec::new();
     for part in html_preview_parts(html) {
         match part {
@@ -272,7 +289,7 @@ fn pdf_html_blocks(html: &str, base_dir: &Option<PathBuf>, footnotes: &[String])
                 }
             }
             HtmlPreviewPart::Image { alt, url, .. } => {
-                if let Some(block) = pdf_image_block(&alt, &url, base_dir) {
+                if let Some(block) = pdf_image_block(&alt, &url, base_dir, remote_images) {
                     blocks.push(block);
                 } else {
                     blocks.push(pdf_image_fallback_block(&alt, &url));
@@ -531,33 +548,28 @@ fn pdf_math_block(latex: &str, authored: &str) -> PdfBlock {
     }
 }
 
-fn pdf_image_block(alt: &str, url: &str, base_dir: &Option<PathBuf>) -> Option<PdfBlock> {
-    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:") {
-        return None;
-    }
-    let decoded = percent_decode_str(url).decode_utf8().ok()?;
-    let path = base_dir.as_ref()?.join(decoded.as_ref());
-    let bytes = fs::read(&path).ok()?;
-    let ext = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let (data, width_px, height_px) = match ext.as_str() {
-        "png" => {
-            let (w, h) = image_dimensions_png(&bytes)?;
-            (PdfImageData::Png(bytes), w, h)
-        }
-        "jpg" | "jpeg" => {
-            let (w, h) = image_dimensions_jpeg(&bytes)?;
-            (PdfImageData::Jpeg(bytes), w, h)
-        }
-        "svg" => {
-            let svg = String::from_utf8(bytes).ok()?;
+fn pdf_image_block(
+    alt: &str,
+    url: &str,
+    base_dir: &Option<PathBuf>,
+    remote_images: &HashMap<String, Vec<u8>>,
+) -> Option<PdfBlock> {
+    let bytes = resolve_image_bytes(url, base_dir, remote_images)?;
+    let (data, width_px, height_px) = match normalize_embedded_image(&bytes)? {
+        EmbeddableImage::Png {
+            bytes,
+            width_px,
+            height_px,
+        } => (PdfImageData::Png(bytes), width_px, height_px),
+        EmbeddableImage::Jpeg {
+            bytes,
+            width_px,
+            height_px,
+        } => (PdfImageData::Jpeg(bytes), width_px, height_px),
+        EmbeddableImage::Svg(svg) => {
             let (w, h) = svg_dimensions(&svg).unwrap_or((300, 100));
             (PdfImageData::Svg(svg), w, h)
         }
-        _ => return None,
     };
     Some(PdfBlock::Image {
         data,
@@ -567,38 +579,144 @@ fn pdf_image_block(alt: &str, url: &str, base_dir: &Option<PathBuf>) -> Option<P
     })
 }
 
-fn image_dimensions_png(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.len() >= 24 && bytes[..8] == *b"\x89PNG\r\n\x1a\n" && bytes[12..16] == *b"IHDR" {
-        let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
-        let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
-        return Some((width, height));
+/// Resolves an image URL to raw bytes for either built-in writer: remote
+/// (`http(s)`) URLs resolve from the prefetched map (a missing entry means
+/// the fetch failed, so the caller keeps the text fallback), `data:` URIs
+/// decode inline with no network access, and anything else reads a local
+/// file against the document directory.
+fn resolve_image_bytes(
+    url: &str,
+    base_dir: &Option<PathBuf>,
+    remote_images: &HashMap<String, Vec<u8>>,
+) -> Option<Vec<u8>> {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return remote_images.get(url).cloned();
     }
-    None
+    if url.starts_with("data:") {
+        return decode_data_url_bytes(url);
+    }
+    let decoded = percent_decode_str(url).decode_utf8().ok()?;
+    let path = base_dir.as_ref()?.join(decoded.as_ref());
+    fs::read(&path).ok()
 }
 
-fn image_dimensions_jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.len() >= 4 && bytes[0] == 0xff && bytes[1] == 0xd8 {
-        let mut cursor = 2usize;
-        while cursor + 9 < bytes.len() {
-            if bytes[cursor] != 0xff {
-                cursor += 1;
-                continue;
-            }
-            let marker = bytes[cursor + 1];
-            if matches!(marker, 0xc0..=0xcf) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) {
-                let height = u16::from_be_bytes(bytes[cursor + 5..cursor + 7].try_into().ok()?);
-                let width = u16::from_be_bytes(bytes[cursor + 7..cursor + 9].try_into().ok()?);
-                return Some((u32::from(width), u32::from(height)));
-            }
-            let length =
-                u16::from_be_bytes(bytes[cursor + 2..cursor + 4].try_into().ok()?) as usize;
-            if length < 2 {
-                return None;
-            }
-            cursor += 2 + length;
-        }
+/// An image payload reduced to one of the embeddable forms shared by the
+/// built-in DOCX and PDF writers.
+pub(crate) enum EmbeddableImage {
+    Png {
+        bytes: Vec<u8>,
+        width_px: u32,
+        height_px: u32,
+    },
+    Jpeg {
+        bytes: Vec<u8>,
+        width_px: u32,
+        height_px: u32,
+    },
+    /// Vector markup; consumers either embed it natively (the PDF writer) or
+    /// rasterize it (the DOCX writer).
+    Svg(String),
+}
+
+/// System-font database for export-time SVG rasterization — usvg drops
+/// `<text>` nodes when no fonts are loaded, which would strip labels from
+/// vector illustrations.
+static EXPORT_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
+    let mut db = usvg::fontdb::Database::new();
+    db.load_system_fonts();
+    Arc::new(db)
+});
+
+/// Supersampling factor for export-time SVG rasterization (DOCX embedding):
+/// the raster doubles in resolution while the reported size stays natural.
+const EXPORT_SVG_SUPERSAMPLE: f32 = 2.0;
+/// Long-edge cap for SVG rasters so pathological vectors cannot exhaust
+/// memory during export.
+const EXPORT_SVG_MAX_EDGE: u32 = 4096;
+
+/// Normalizes a resolved image payload for embedding: PNG/JPEG pass through
+/// with sniffed dimensions, SVG payloads (detected and validated by content)
+/// pass through as vector text, and every other decodable raster family
+/// (GIF, WebP, …) is decoded and re-encoded as in-memory PNG. `None`
+/// (undecodable input) keeps the caller's text fallback.
+pub(crate) fn normalize_embedded_image(bytes: &[u8]) -> Option<EmbeddableImage> {
+    if let Some((kind, width_px, height_px)) = docx_image_dimensions(bytes) {
+        let bytes = bytes.to_vec();
+        return Some(match kind {
+            DocxImageKind::Png => EmbeddableImage::Png {
+                bytes,
+                width_px,
+                height_px,
+            },
+            DocxImageKind::Jpeg => EmbeddableImage::Jpeg {
+                bytes,
+                width_px,
+                height_px,
+            },
+        });
     }
-    None
+    if looks_like_svg_bytes(bytes)
+        && let Ok(svg) = std::str::from_utf8(bytes)
+        && usvg::Tree::from_str(svg, &usvg::Options::default()).is_ok()
+    {
+        return Some(EmbeddableImage::Svg(svg.to_string()));
+    }
+    let decoded = image::load_from_memory(bytes).ok()?;
+    let width_px = decoded.width();
+    let height_px = decoded.height();
+    let mut png = Vec::new();
+    decoded
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some(EmbeddableImage::Png {
+        bytes: png,
+        width_px,
+        height_px,
+    })
+}
+
+/// Cheap leading-bytes heuristic for SVG payloads, mirroring the preview
+/// loader's detector but scanning a wider prefix (remote SVGs commonly
+/// carry an XML prolog before the root element).
+fn looks_like_svg_bytes(bytes: &[u8]) -> bool {
+    bytes
+        .windows(4)
+        .take(512)
+        .any(|window| window == b"<svg" || window == b"<SVG")
+}
+
+/// Rasterizes one SVG payload to PNG bytes plus its natural pixel size. The
+/// raster is supersampled (and capped) for crispness; the returned size is
+/// the SVG's intrinsic size, so callers embed at natural dimensions.
+fn rasterize_svg_png(svg: &str) -> Option<(Vec<u8>, u32, u32)> {
+    let options = usvg::Options {
+        fontdb: EXPORT_FONT_DB.clone(),
+        ..usvg::Options::default()
+    };
+    let tree = usvg::Tree::from_str(svg, &options).ok()?;
+    let size = tree.size();
+    let width = size.width().ceil().max(1.0) as u32;
+    let height = size.height().ceil().max(1.0) as u32;
+    let scale = if width.max(height) > EXPORT_SVG_MAX_EDGE {
+        (EXPORT_SVG_MAX_EDGE as f32) / (width.max(height) as f32)
+    } else {
+        1.0
+    };
+    let raster_scale = scale * EXPORT_SVG_SUPERSAMPLE;
+    let raster_width = ((width as f32) * raster_scale).ceil().max(1.0) as u32;
+    let raster_height = ((height as f32) * raster_scale).ceil().max(1.0) as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(raster_width, raster_height)?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(raster_scale, raster_scale),
+        &mut pixmap.as_mut(),
+    );
+    let buffer = image::RgbaImage::from_raw(raster_width, raster_height, pixmap.take())?;
+    let mut png = Vec::new();
+    buffer
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some((png, width, height))
 }
 
 fn svg_dimensions(svg: &str) -> Option<(u32, u32)> {
@@ -757,8 +875,8 @@ fn strip_local_images(source: &str) -> String {
 }
 
 /// Whether the pandoc engine binary can be launched (system PATH or the
-/// configured explicit path). Drives whether the DOCX options dialog offers
-/// the engine-only table-of-contents toggle.
+/// configured explicit path). Drives the availability line on the
+/// Preferences panel Export tab.
 pub fn pandoc_available(pandoc_path: Option<&str>) -> bool {
     match pandoc_path.map(str::trim).filter(|path| !path.is_empty()) {
         Some(path) => DocxExporter::with_pandoc_path(path).check_pandoc_available(),
@@ -766,25 +884,22 @@ pub fn pandoc_available(pandoc_path: Option<&str>) -> bool {
     }
 }
 
-/// Status-bar message for a completed PDF/DOCX export, disclosing the backend
-/// and, when the built-in writer took over, the engine failure category.
-///
-/// `format` distinguishes PDF (built-in is the rich default, disclosed
-/// neutrally) from DOCX (the built-in writer still prompts that installing
-/// pandoc yields richer output).
+/// Status-bar message for a completed PDF/DOCX export, disclosing the
+/// backend and, when the built-in writer took over from the pandoc
+/// preference, the engine failure category. An export under the explicit
+/// built-in preference reports neutrally — the user already declined pandoc,
+/// so no install hint is owed.
 pub fn backend_status_msg(
     backend: ExportBackend,
-    format: ExportFormat,
     engine_failure: Option<EngineFailureCategory>,
 ) -> Msg {
-    match (backend, format, engine_failure) {
-        (ExportBackend::PandocEngine, _, _) => Msg::StatusExportedEngine,
-        (ExportBackend::BuiltIn, ExportFormat::Docx, None) => Msg::StatusExportedDocxBuiltin,
-        (ExportBackend::BuiltIn, _, None) => Msg::StatusExportedBuiltin,
-        (ExportBackend::BuiltIn, _, Some(EngineFailureCategory::BinaryMissing)) => {
+    match (backend, engine_failure) {
+        (ExportBackend::PandocEngine, _) => Msg::StatusExportedEngine,
+        (ExportBackend::BuiltIn, None) => Msg::StatusExportedBuiltin,
+        (ExportBackend::BuiltIn, Some(EngineFailureCategory::BinaryMissing)) => {
             Msg::StatusExportedBuiltinPandocMissing
         }
-        (ExportBackend::BuiltIn, _, Some(EngineFailureCategory::ConversionError)) => {
+        (ExportBackend::BuiltIn, Some(EngineFailureCategory::ConversionError)) => {
             Msg::StatusExportedBuiltinConversionFailed
         }
     }
@@ -828,13 +943,15 @@ pub(crate) fn write_docx(
     path: &Path,
     document: &MarkdownDocument,
     options: &DocxExportOptions,
+    remote_images: &HashMap<String, Vec<u8>>,
 ) -> io::Result<()> {
-    fs::write(path, build_docx_bytes(document, options)?)
+    fs::write(path, build_docx_bytes(document, options, remote_images)?)
 }
 
 pub(crate) fn build_docx_bytes(
     document: &MarkdownDocument,
     options: &DocxExportOptions,
+    remote_images: &HashMap<String, Vec<u8>>,
 ) -> io::Result<Vec<u8>> {
     let metadata = document.front_matter().ok().flatten();
     let title = metadata
@@ -865,7 +982,13 @@ pub(crate) fn build_docx_bytes(
         .path()
         .and_then(Path::parent)
         .map(Path::to_path_buf);
-    let rendered = render_docx_document_xml(document, front_matter_title, base_dir, options);
+    let rendered = render_docx_document_xml(
+        document,
+        front_matter_title,
+        base_dir,
+        options,
+        remote_images,
+    );
 
     let mut entries: Vec<(String, Vec<u8>)> = vec![
         (
@@ -1060,13 +1183,17 @@ struct DocxRenderState {
     ordered_group_count: u32,
     base_dir: Option<PathBuf>,
     images: Vec<DocxImage>,
+    /// Remote (`http(s)`) image bytes prefetched by the export flow, keyed by
+    /// the exact source URL. A URL missing from the map failed to fetch and
+    /// keeps the text fallback.
+    remote_images: HashMap<String, Vec<u8>>,
     /// (label, text) pairs; the `w:footnote` id is the 1-based position.
     footnotes: Vec<(String, RichText)>,
     /// Page geometry from the export options (drives `w:sectPr` and the text
     /// column width tables/images are sized against).
     page_width_twips: u32,
     page_height_twips: u32,
-    /// When false, local images keep the `alt: url` text fallback.
+    /// When false, images keep the `alt: url` text fallback.
     embed_images: bool,
 }
 
@@ -1079,6 +1206,7 @@ impl Default for DocxRenderState {
             ordered_group_count: 0,
             base_dir: None,
             images: Vec::new(),
+            remote_images: HashMap::new(),
             footnotes: Vec::new(),
             page_width_twips: DOCX_PAGE_WIDTH_TWIPS,
             page_height_twips: DOCX_PAGE_HEIGHT_TWIPS,
@@ -1115,21 +1243,35 @@ impl DocxRenderState {
             .map(|index| index as u32 + 1)
     }
 
-    /// Embeds a local PNG/JPEG into the package and returns its `w:drawing`
-    /// run XML. Remote/data-URI sources, unreadable files, other formats, and
-    /// the text-fallback image policy return `None` so callers keep the text
-    /// fallback.
+    /// Embeds a normalized image into the package and returns its `w:drawing`
+    /// run XML. Bytes resolve from three sources — local files (relative to
+    /// the document directory), prefetched remote (`http(s)`) images, and
+    /// decoded `data:` URIs — then pass through the shared normalizer: PNG
+    /// and JPEG embed as-is, other raster payloads (GIF, WebP, …) re-encode
+    /// as PNG, and SVG rasterizes to PNG. Unresolvable or undecodable
+    /// sources and the text-fallback image policy return `None` so callers
+    /// keep the text fallback.
     fn embed_image(&mut self, alt: &str, url: &str) -> Option<String> {
         if !self.embed_images {
             return None;
         }
-        if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:") {
-            return None;
-        }
-        let decoded = percent_decode_str(url).decode_utf8().ok()?;
-        let path = self.base_dir.as_ref()?.join(decoded.as_ref());
-        let bytes = fs::read(&path).ok()?;
-        let (kind, width_px, height_px) = docx_image_dimensions(&bytes)?;
+        let bytes = self.image_bytes(url)?;
+        let (kind, bytes, width_px, height_px) = match normalize_embedded_image(&bytes)? {
+            EmbeddableImage::Png {
+                bytes,
+                width_px,
+                height_px,
+            } => (DocxImageKind::Png, bytes, width_px, height_px),
+            EmbeddableImage::Jpeg {
+                bytes,
+                width_px,
+                height_px,
+            } => (DocxImageKind::Jpeg, bytes, width_px, height_px),
+            EmbeddableImage::Svg(svg) => {
+                let (bytes, width_px, height_px) = rasterize_svg_png(&svg)?;
+                (DocxImageKind::Png, bytes, width_px, height_px)
+            }
+        };
         let mut cx = u64::from(width_px) * DOCX_EMU_PER_PIXEL;
         let mut cy = u64::from(height_px) * DOCX_EMU_PER_PIXEL;
         let column_emu = self.text_column_emu();
@@ -1150,6 +1292,12 @@ impl DocxRenderState {
         Some(docx_drawing_run(
             rid, doc_pr_id, &part_name, cx as u32, cy as u32, alt,
         ))
+    }
+
+    /// Source resolution for [`Self::embed_image`] — the shared
+    /// three-source resolver over the render state's fields.
+    fn image_bytes(&self, url: &str) -> Option<Vec<u8>> {
+        resolve_image_bytes(url, &self.base_dir, &self.remote_images)
     }
 
     /// Ends the current contiguous ordered-list group; the next ordered item
@@ -1304,6 +1452,7 @@ fn render_docx_document_xml(
     front_matter_title: Option<&str>,
     base_dir: Option<PathBuf>,
     options: &DocxExportOptions,
+    remote_images: &HashMap<String, Vec<u8>>,
 ) -> DocxRenderResult {
     let (page_width_twips, page_height_twips) = options.page_size.dimensions_twips();
     let mut state = DocxRenderState {
@@ -1311,6 +1460,7 @@ fn render_docx_document_xml(
         page_width_twips,
         page_height_twips,
         embed_images: options.image_policy == DocxImagePolicy::Embed,
+        remote_images: remote_images.clone(),
         ..DocxRenderState::default()
     };
     // Collect footnote definitions up front so in-text references resolve to
@@ -1763,6 +1913,16 @@ impl DocxImageKind {
             Self::Jpeg => "image/jpeg",
         }
     }
+}
+
+/// Decodes an RFC 2397 `data:` image URL to raw bytes. Both `;base64` and
+/// URL-encoded payloads are supported; the format sniffing stays with
+/// `docx_image_dimensions`, so non-embeddable payloads keep the text
+/// fallback. Mirrors the preview loader's `data_url`-based decoder.
+fn decode_data_url_bytes(url: &str) -> Option<Vec<u8>> {
+    let processed = data_url::DataUrl::process(url).ok()?;
+    let (bytes, _fragment) = processed.decode_to_vec().ok()?;
+    Some(bytes)
 }
 
 /// Reads pixel dimensions from PNG (IHDR) or JPEG (SOF0-SOF15) headers without
@@ -2326,7 +2486,7 @@ pub(crate) fn write_image_export(
     format: image::ImageFormat,
 ) -> io::Result<()> {
     let base_dir = document.path().and_then(Path::parent);
-    let ir = build_pdf_ir(document, &settings.pdf, base_dir);
+    let ir = build_pdf_ir(document, &settings.pdf, base_dir, &HashMap::new());
     let image =
         markion_pdf::render_snapshot(&ir, markion_pdf::DEFAULT_SCALE).map_err(io::Error::other)?;
     let mut dynamic = image::DynamicImage::ImageRgba8(image);
@@ -2384,7 +2544,8 @@ mod tests {
     use markion_pdf;
 
     fn docx_parts(document: &MarkdownDocument) -> Vec<u8> {
-        build_docx_bytes(document, &DocxExportOptions::default()).expect("DOCX package build")
+        build_docx_bytes(document, &DocxExportOptions::default(), &HashMap::new())
+            .expect("DOCX package build")
     }
 
     fn entry<'a>(bytes: &'a [u8], name: &str) -> String {
@@ -2699,7 +2860,8 @@ mod tests {
                 page_size,
                 ..DocxExportOptions::default()
             };
-            let bytes = build_docx_bytes(&document, &options).expect("DOCX package build");
+            let bytes =
+                build_docx_bytes(&document, &options, &HashMap::new()).expect("DOCX package build");
             let document_xml = entry(&bytes, "word/document.xml");
             assert!(
                 document_xml.contains(&format!("<w:pgSz w:w=\"{}\" w:h=\"{}\"/>", dims.0, dims.1)),
@@ -2719,7 +2881,8 @@ mod tests {
             image_policy: DocxImagePolicy::TextFallback,
             ..DocxExportOptions::default()
         };
-        let bytes = build_docx_bytes(&document, &options).expect("DOCX package build");
+        let bytes =
+            build_docx_bytes(&document, &options, &HashMap::new()).expect("DOCX package build");
         let document_xml = entry(&bytes, "word/document.xml");
         assert!(document_xml.contains("diagram: diagram.png"));
         assert!(!document_xml.contains("<w:drawing>"));
@@ -2987,23 +3150,20 @@ mod tests {
     }
 
     #[test]
-    fn backend_status_msg_discloses_backend_format_and_failure_category() {
+    fn backend_status_msg_discloses_backend_and_failure_category() {
         assert_eq!(
-            backend_status_msg(ExportBackend::PandocEngine, ExportFormat::Pdf, None),
+            backend_status_msg(ExportBackend::PandocEngine, None),
             Msg::StatusExportedEngine
         );
+        // Explicit built-in preference (no engine attempt) reports neutrally
+        // for both formats — the user already declined pandoc.
         assert_eq!(
-            backend_status_msg(ExportBackend::BuiltIn, ExportFormat::Pdf, None),
+            backend_status_msg(ExportBackend::BuiltIn, None),
             Msg::StatusExportedBuiltin
-        );
-        assert_eq!(
-            backend_status_msg(ExportBackend::BuiltIn, ExportFormat::Docx, None),
-            Msg::StatusExportedDocxBuiltin
         );
         assert_eq!(
             backend_status_msg(
                 ExportBackend::BuiltIn,
-                ExportFormat::Pdf,
                 Some(EngineFailureCategory::BinaryMissing)
             ),
             Msg::StatusExportedBuiltinPandocMissing
@@ -3011,7 +3171,6 @@ mod tests {
         assert_eq!(
             backend_status_msg(
                 ExportBackend::BuiltIn,
-                ExportFormat::Docx,
                 Some(EngineFailureCategory::ConversionError)
             ),
             Msg::StatusExportedBuiltinConversionFailed
@@ -3051,7 +3210,7 @@ mod tests {
         let doc = MarkdownDocument::from_text(
             "# 标题 (Title)\n\nMixed CJK and Latin paragraph with **bold** and *italic*.\n\n- 第一项\n- 第二项\n\n| Name | 值 |\n|---|---|\n| Ada | 十 |\n| Bob | 百 |\n\n```rust\nfn main() { println!(\"hello\"); }\n```\n\n$$\nE = mc^2\n$$\n",
         );
-        let ir = build_pdf_ir(&doc, &PdfExportOptions::default(), None);
+        let ir = build_pdf_ir(&doc, &PdfExportOptions::default(), None, &HashMap::new());
         let bytes = markion_pdf::render(&ir).expect("built-in PDF render should succeed");
         assert!(
             bytes.starts_with(b"%PDF-"),

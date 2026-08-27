@@ -75,6 +75,8 @@ impl MarkionApp {
             preferences_general_scroll: ScrollHandle::new(),
             preferences_categories_scroll: ScrollHandle::new(),
             preferences_actions_scroll: ScrollHandle::new(),
+            preferences_export_scroll: ScrollHandle::new(),
+            pandoc_available_cached: None,
             shortcut_platform: ShortcutPlatform::current(),
             shortcut_category: ShortcutCategory::Files,
             shortcut_overrides: sanitized_shortcut_overrides(&preferences.shortcut_overrides),

@@ -189,7 +189,7 @@ The editor SHALL persist the Preview adaptive width preference in the existing p
 - **THEN** Preview adaptive width is disabled
 
 ### Requirement: Dense pane chrome with draggable scrollbars
-The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane, Visual Edit surface, and rendered preview pane when their content exceeds the visible area. The Visual Edit scrollbar SHALL match the Read-mode preview overlay in placement and drag behavior. The Preferences panel SHALL provide the same draggable, right-side vertical scrollbars for each of its scrollable regions — the General tab body, the Shortcuts category sidebar, and the Shortcuts action list — whenever a region's content exceeds its visible area; wheel and trackpad scrolling SHALL continue to work unchanged. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
+The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane, Visual Edit surface, and rendered preview pane when their content exceeds the visible area. The Visual Edit scrollbar SHALL match the Read-mode preview overlay in placement and drag behavior. The Preferences panel SHALL provide the same draggable, right-side vertical scrollbars for each of its scrollable regions — the General tab body, the Shortcuts category sidebar, the Shortcuts action list, and the Export tab body — whenever a region's content exceeds its visible area; wheel and trackpad scrolling SHALL continue to work unchanged. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
 
 #### Scenario: Large source document exposes editor scrollbar
 - **WHEN** the active document has more source lines than fit in the editor pane
@@ -215,7 +215,7 @@ The application chrome SHALL provide visible, right-side vertical scrollbars for
 
 #### Scenario: Overflowing Preferences panel region exposes a scrollbar
 - **WHEN** the Preferences panel is open
-- **AND** a scrollable panel region (General tab body, Shortcuts category sidebar, or Shortcuts action list) contains more content than fits its visible area
+- **AND** a scrollable panel region (General tab body, Shortcuts category sidebar, Shortcuts action list, or Export tab body) contains more content than fits its visible area
 - **THEN** that region shows a right-side vertical scrollbar thumb
 - **AND** dragging the thumb with the left mouse button scrolls that region up and down
 - **AND** the thumb position reflects the region's scroll offset

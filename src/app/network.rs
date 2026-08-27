@@ -1,4 +1,4 @@
-use std::{any::type_name, sync::OnceLock, time::Duration};
+use std::{any::type_name, collections::HashMap, sync::OnceLock, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
 use gpui::{
@@ -155,6 +155,85 @@ pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>> {
     })
 }
 
+/// Per-image download cap for the export prefetch.
+const EXPORT_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
+/// Per-request overall timeout for the export prefetch (connect + body),
+/// bounding how long one slow server can delay an export.
+const EXPORT_IMAGE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Concurrently GETs every URL on the shared HTTP runtime, returning the
+/// successfully fetched bodies keyed by URL. A URL that errors, times out,
+/// answers non-2xx, or exceeds the size cap is logged and omitted — the
+/// corresponding image keeps the DOCX export text fallback instead of
+/// failing the export. Intended to run on a background executor.
+pub(super) fn fetch_url_bytes_all(urls: Vec<String>) -> HashMap<String, Vec<u8>> {
+    if urls.is_empty() {
+        return HashMap::new();
+    }
+    runtime_handle().block_on(async {
+        let client = reqwest::Client::builder()
+            .use_rustls_tls()
+            .connect_timeout(Duration::from_secs(15))
+            .user_agent(format!("Markion/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .context("building export-image HTTP client")
+            .expect("export-image HTTP client builds with valid defaults");
+        let mut pending = tokio::task::JoinSet::new();
+        for url in urls {
+            let client = client.clone();
+            pending.spawn(async move {
+                let fetch = async {
+                    let response = client
+                        .get(&url)
+                        .send()
+                        .await
+                        .with_context(|| format!("requesting {url}"))?;
+                    if !response.status().is_success() {
+                        anyhow::bail!("HTTP {} fetching {url}", response.status().as_u16());
+                    }
+                    let bytes = response
+                        .bytes()
+                        .await
+                        .with_context(|| format!("reading body from {url}"))?;
+                    if bytes.len() > EXPORT_IMAGE_MAX_BYTES {
+                        anyhow::bail!(
+                            "image at {url} is {} bytes, over the {} byte export cap",
+                            bytes.len(),
+                            EXPORT_IMAGE_MAX_BYTES
+                        );
+                    }
+                    Ok(bytes.to_vec())
+                };
+                (
+                    url.clone(),
+                    tokio::time::timeout(EXPORT_IMAGE_TIMEOUT, fetch).await,
+                )
+            });
+        }
+        let mut fetched = HashMap::new();
+        while let Some(joined) = pending.join_next().await {
+            let Ok((url, result)) = joined else {
+                continue;
+            };
+            match result {
+                Ok(Ok(bytes)) => {
+                    fetched.insert(url, bytes);
+                }
+                Ok(Err(err)) => {
+                    tracing::warn!(error = %err, "skipping remote export image");
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        timeout = ?EXPORT_IMAGE_TIMEOUT,
+                        "remote export image timed out"
+                    );
+                }
+            }
+        }
+        fetched
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -237,6 +316,45 @@ mod tests {
             "user-agent: markion/{}",
             env!("CARGO_PKG_VERSION")
         )));
+    }
+
+    #[test]
+    fn fetch_url_bytes_all_keeps_successes_and_skips_failures() {
+        let ok_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let ok_address = ok_listener.local_addr().unwrap();
+        let fail_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let fail_address = fail_listener.local_addr().unwrap();
+        let ok_server = thread::spawn(move || {
+            serve_http_response(
+                ok_listener,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabcd".to_vec(),
+            )
+        });
+        let fail_server = thread::spawn(move || {
+            serve_http_response(
+                fail_listener,
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_vec(),
+            )
+        });
+
+        let fetched = fetch_url_bytes_all(vec![
+            format!("http://{ok_address}/ok.png"),
+            format!("http://{fail_address}/gone.png"),
+        ]);
+
+        // The 404 is skipped, not fatal; the success is keyed by its URL.
+        assert_eq!(fetched.len(), 1);
+        let (url, bytes) = fetched.iter().next().unwrap();
+        assert!(url.ends_with("/ok.png"));
+        assert_eq!(bytes, b"abcd");
+        ok_server.join().unwrap();
+        fail_server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_url_bytes_all_returns_empty_for_no_urls() {
+        assert!(fetch_url_bytes_all(Vec::new()).is_empty());
     }
 
     #[test]

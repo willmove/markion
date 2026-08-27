@@ -5,22 +5,26 @@
 Covers the multi-format export engine and YAML front matter metadata handling. The exports range from full-fidelity (HTML, DOCX, LaTeX) to deliberately limited (a simple single-page text PDF and basic text-snapshot PNG/JPEG). Rich image export fidelity is **not** part of this capability — it is a future candidate.
 ## Requirements
 ### Requirement: Multi-format document export
-The export engine SHALL export the document to Markdown, styled HTML, plain HTML, LaTeX, DOCX, PDF, and basic PNG/JPEG text snapshots, prompting the user for an output path and suggesting a filename based on the current document. For PDF and DOCX, the editor SHALL first attempt the absorbed Typune export engine (pandoc subprocess, with the PDF engine taken from the `[export] pdf_engine` config value, default `xelatex`); if the external tool is unavailable or the conversion fails, it SHALL silently fall back to the built-in implementations (the rich built-in PDF writer, the built-in DOCX writer) so export always succeeds without external dependencies. The status bar message for a successful PDF/DOCX export SHALL disclose which backend produced the file. For DOCX, the built-in-writer message retains a hint that installing pandoc yields richer output; for PDF, the built-in-writer message SHALL NOT claim that pandoc yields richer output, because the built-in PDF writer is the rich default. When the pandoc engine fails and the fallback is used, the status message SHALL additionally indicate the failure category (pandoc not found vs. conversion error). Export failures SHALL be reported with user-facing status messages.
+The export engine SHALL export the document to Markdown, styled HTML, plain HTML, LaTeX, DOCX, PDF, and basic PNG/JPEG text snapshots, prompting the user for an output path and suggesting a filename based on the current document. For PDF and DOCX, the producing implementation SHALL be selected by the `[export] backend` preference: `builtin` (the default) SHALL write the file directly through the built-in PDF writer / built-in DOCX writer without spawning any pandoc subprocess, while `pandoc` SHALL first attempt the absorbed Typune export engine (pandoc subprocess, with the PDF engine taken from the `[export] pdf_engine` config value, default `xelatex`) and silently fall back to the built-in implementation when the external tool is unavailable or the conversion fails, so export always succeeds without external dependencies. The status bar message for a successful PDF/DOCX export SHALL disclose which backend produced the file. When the backend preference is `builtin`, the built-in-writer message SHALL be neutral and SHALL NOT hint that installing pandoc yields richer output. When the `pandoc` preference falls back to the built-in writer, the status message SHALL retain the hint that installing pandoc yields richer DOCX output (PDF stays neutral because the built-in PDF writer is the rich default) and SHALL additionally indicate the failure category (pandoc not found vs. conversion error). Export failures SHALL be reported with user-facing status messages.
 
 #### Scenario: Engine-produced export is disclosed
-- **WHEN** the user exports to PDF or DOCX and the pandoc engine succeeds
+- **WHEN** the backend preference is `pandoc` and the user exports to PDF or DOCX with the pandoc engine succeeding
 - **THEN** the status message names the output path and indicates the pandoc engine produced it
 
+#### Scenario: Built-in preference exports without pandoc
+- **WHEN** the backend preference is `builtin` (or unset) and the user exports to PDF or DOCX
+- **THEN** the file is produced by the built-in writer, no pandoc subprocess is spawned, and the status message names the output path and indicates the built-in writer neutrally without hinting that installing pandoc improves output
+
 #### Scenario: Built-in fallback is disclosed with a hint
-- **WHEN** the user exports to DOCX and the editor falls back to the built-in writer
+- **WHEN** the backend preference is `pandoc` and the DOCX export falls back to the built-in writer
 - **THEN** the status message names the output path, indicates the built-in writer was used, and hints that installing pandoc improves output quality
 
 #### Scenario: Built-in PDF export is disclosed neutrally
-- **WHEN** the user exports to PDF and the built-in PDF writer produced the file
+- **WHEN** PDF is exported through the built-in writer, whether by preference or by fallback
 - **THEN** the status message names the output path and indicates the built-in PDF engine produced it, without hinting that installing pandoc improves output quality
 
 #### Scenario: Engine failure category is disclosed
-- **WHEN** the pandoc engine fails (binary missing or conversion error) and the fallback produces the file
+- **WHEN** the backend preference is `pandoc` and the pandoc engine fails (binary missing or conversion error) so the fallback produces the file
 - **THEN** the status message indicates which failure category occurred
 
 #### Scenario: PDF engine is configurable via the config file
@@ -32,7 +36,7 @@ The export engine SHALL export the document to Markdown, styled HTML, plain HTML
 - **THEN** the export preserves headings, lists, tables (with parsed alignment for LaTeX/HTML), code blocks, math fallback, and footnote/highlight/superscript constructs as each format allows
 
 #### Scenario: PDF and DOCX fallback without pandoc
-- **WHEN** the user exports to PDF or DOCX and the pandoc engine path fails (tool missing or conversion error)
+- **WHEN** the backend preference is `pandoc` and the engine path fails (tool missing or conversion error)
 - **THEN** the editor silently falls back to the built-in implementation and the export still succeeds
 
 #### Scenario: Basic image snapshot export
@@ -190,7 +194,7 @@ The built-in DOCX writer SHALL declare east-asian fonts for CJK text. `docDefaul
 - **THEN** `w:sectPr` in `word/document.xml` specifies A4 dimensions (11906×16838 twips) and 1440-twip margins
 
 ### Requirement: Built-in DOCX fallback embeds local images
-The built-in DOCX writer SHALL embed local image files into the package. A Markdown image whose source resolves to an existing local file (relative paths resolved against the document's directory) SHALL be copied into `word/media/` with a unique name, declared in `[Content_Types].xml`, and referenced from `word/document.xml` as a `w:drawing` sized in EMUs so that images wider than the text column are scaled down to fit while narrower images keep their natural pixel size (at 96 DPI). The image's alt text SHALL be preserved as the drawing's description. Remote (`http(s)`) and data-URI images SHALL keep the existing text fallback.
+The built-in DOCX writer SHALL embed image bytes into the package from three resolvable sources: a local file (relative paths resolved against the document's directory), a remote `http(s)` image whose bytes were prefetched by the export flow, and a `data:` URI decoded inline. Every resolved payload SHALL be normalized before embedding: PNG and JPEG bytes pass through with sniffed dimensions, other decodable raster payloads (GIF, WebP, …) are decoded and re-encoded as PNG, and SVG payloads are rasterized to PNG with system fonts loaded (supersampled for crispness, reported at the SVG's natural size). An embedded image SHALL be copied into `word/media/` with a unique name, declared in `[Content_Types].xml`, and referenced from `word/document.xml` as a `w:drawing` sized in EMUs so that images wider than the text column are scaled down to fit while narrower images keep their natural pixel size (at 96 DPI). The image's alt text SHALL be preserved as the drawing's description. The export flow SHALL prefetch remote images concurrently off the main thread with bounded per-image timeouts and size caps before invoking the writer; images whose fetch fails (offline, HTTP error, oversized) or whose payload cannot be normalized SHALL keep the existing `alt: url` text fallback, and the export SHALL still succeed. The `text-fallback` image policy SHALL continue to export every image (local and remote) as text on both backends.
 
 #### Scenario: Local image is embedded
 - **WHEN** a document references `![diagram](images/diagram.png)` and the file exists relative to the document
@@ -200,8 +204,20 @@ The built-in DOCX writer SHALL embed local image files into the package. A Markd
 - **WHEN** an embedded image's natural width at 96 DPI exceeds the text column width
 - **THEN** the `wp:extent` scales it down proportionally to fit the column
 
+#### Scenario: Prefetched remote image is embedded
+- **WHEN** a document references `![chart](https://example.com/chart.png)` and the export flow's prefetch delivered that URL's PNG bytes to the writer
+- **THEN** the package contains `word/media/` with the fetched bytes and a `w:drawing` in the document flow, with the alt text as the description
+
+#### Scenario: Data-URI image is embedded
+- **WHEN** a document references a base64 PNG `data:` URI image
+- **THEN** the writer decodes the payload inline and embeds it like a local image, without any network access
+
+#### Scenario: Raster and vector payloads are normalized
+- **WHEN** a resolved image payload is GIF, WebP, or SVG
+- **THEN** the writer embeds it as a PNG `w:drawing` (rasterized from SVG at natural size) instead of the text fallback
+
 #### Scenario: Missing or remote images keep the text fallback
-- **WHEN** an image source is remote, a data URI, or a local path that does not exist
+- **WHEN** an image source is remote and its bytes were not prefetched (fetch failed, timed out, was oversized), or a data URI that does not decode, or a local path that does not exist, or a payload the writer cannot normalize
 - **THEN** the writer emits the existing `alt: url` text paragraph and the export still succeeds
 
 ### Requirement: Built-in DOCX fallback table fidelity
@@ -272,22 +288,30 @@ The DOCX pandoc engine path SHALL style its output through a reference document:
 - **THEN** the pandoc invocation enables the `mark`, `superscript`, and `subscript` extensions so the engine output preserves them
 
 ### Requirement: Configurable pandoc binary path
-The pandoc binary location SHALL be configurable via `[export] pandoc_path` in `config.toml`. When unset, the engine locates `pandoc` on the system PATH as today.
+The pandoc binary location SHALL be configurable via `[export] pandoc_path` in `config.toml` and through the Preferences panel Export tab (a file picker plus a reset action). When unset, the engine locates `pandoc` on the system PATH as today.
 
 #### Scenario: Configured pandoc path is used
 - **WHEN** `[export] pandoc_path` names an executable
 - **THEN** the DOCX/PDF engine invocations use that executable instead of a PATH lookup
 
+#### Scenario: Pandoc path is editable in the Preferences panel
+- **WHEN** the user picks a pandoc binary through the Export tab's file picker
+- **THEN** subsequent engine invocations use that path, the choice persists, and resetting returns to the PATH lookup
+
 ### Requirement: User-facing DOCX export options
-The DOCX export flow SHALL offer user-facing options before writing the file: page size (A4, Letter, Legal), table of contents on the pandoc engine path (default off), and image embedding policy (embed local images vs. text fallback, default embed). Both the pandoc engine path and the built-in fallback SHALL honor the applicable options. The last-used DOCX export options SHALL persist across sessions via the `[export.docx]` config section.
+DOCX export options SHALL be configured in the Preferences panel rather than at export time: page size (A4, Letter, Legal), table of contents on the pandoc engine path (default off), and image embedding policy (embed local images vs. text fallback, default embed). Triggering a DOCX export SHALL go directly to the save-path prompt and apply the stored options. Both the pandoc engine path and the built-in writer SHALL honor the applicable options. The options SHALL persist across sessions via the `[export.docx]` config section.
 
 #### Scenario: Options reach the engine path
-- **WHEN** the user exports to DOCX with the pandoc engine available and has enabled the table of contents
+- **WHEN** the backend preference is `pandoc`, pandoc is available, and the table of contents option is enabled
 - **THEN** the pandoc invocation includes `--toc`
 
+#### Scenario: Options reach the built-in writer
+- **WHEN** the backend preference is `builtin` with Letter page size selected
+- **THEN** the built-in writer's `w:sectPr` uses Letter dimensions instead of the A4 default
+
 #### Scenario: Options reach the fallback path
-- **WHEN** the user exports to DOCX via the built-in fallback with Letter page size selected
-- **THEN** the fallback writer's `w:sectPr` uses Letter dimensions instead of the A4 default
+- **WHEN** the backend preference is `pandoc`, the engine fails, and Letter page size is selected
+- **THEN** the built-in fallback writer's `w:sectPr` uses Letter dimensions instead of the A4 default
 
 #### Scenario: Image policy is honored
 - **WHEN** the user selects the text-fallback image policy
@@ -295,7 +319,11 @@ The DOCX export flow SHALL offer user-facing options before writing the file: pa
 
 #### Scenario: Options persist across sessions
 - **WHEN** the user changes a DOCX export option and later restarts the app
-- **THEN** the export dialog presents the previously used options
+- **THEN** the Preferences panel presents the previously used options and the next export applies them
+
+#### Scenario: Export goes straight to the save prompt
+- **WHEN** the user triggers a DOCX export
+- **THEN** no per-export options dialog precedes the save-path prompt
 
 ### Requirement: Built-in PDF writer pagination and document structure
 The built-in PDF writer SHALL produce a true multi-page document: content is laid out with UAX#14 line breaking (CJK text may break between characters, Latin text at word boundaries), flows across as many pages as needed with no truncation, and respects the configured page size and margins. Headings SHALL generate PDF outline bookmarks matching their hierarchy, and the document metadata (title, author, date from YAML front matter, with the file-stem title fallback) SHALL be written to the PDF document properties. An optional page-number footer SHALL be emitted when enabled (default on).
@@ -362,14 +390,30 @@ The built-in PDF writer SHALL preserve resolved inline styling from the rich-tex
 - **THEN** the PDF contains a clickable link on `label` targeting `https://example.com`
 
 ### Requirement: Built-in PDF writer embeds local images
-The built-in PDF writer SHALL embed local image files (PNG, JPEG, SVG) whose paths resolve against the document's directory, scaling images wider than the text column down to fit while narrower images keep their natural size at 96 DPI, and preserving the alt text as the image's accessibility description. Remote (`http(s)`), data-URI, and unresolvable images SHALL fall back to an `alt: url` text paragraph without failing the export.
+The built-in PDF writer SHALL embed images whose bytes resolve — local files (paths resolved against the document's directory, accepted by payload content rather than extension), remote `http(s)` images prefetched by the export flow, and decoded `data:` URIs. Every resolved payload SHALL be normalized: PNG and JPEG bytes pass through with sniffed dimensions, SVG passes through as the native vector image variant, and other decodable raster payloads (GIF, WebP, …) are decoded and re-encoded as PNG. Images wider than the text column SHALL be scaled down to fit while narrower images keep their natural size at 96 DPI, and the alt text SHALL be preserved as the image's accessibility description. Unresolvable or undecodable image sources SHALL fall back to an `alt: url` text paragraph without failing the export.
 
 #### Scenario: Local image is embedded and scaled
 - **WHEN** a document references `![diagram](images/diagram.png)` wider than the text column and the file exists relative to the document
 - **THEN** the PDF embeds the image scaled to the column width
 
+#### Scenario: Prefetched remote image is embedded
+- **WHEN** a document references `![chart](https://example.com/chart.png)` and the export flow's prefetch delivered that URL's bytes
+- **THEN** the PDF embeds the image with the alt text as its accessibility description
+
+#### Scenario: Remote SVG stays vector
+- **WHEN** a prefetched remote image is an SVG payload
+- **THEN** the PDF embeds it through the native vector image variant rather than dropping it to text
+
+#### Scenario: Raster families are normalized
+- **WHEN** a resolved image payload is GIF or WebP
+- **THEN** the writer decodes it and embeds a PNG re-encoding instead of the text fallback
+
+#### Scenario: Data-URI image is embedded
+- **WHEN** a document references a base64 image `data:` URI
+- **THEN** the writer decodes the payload inline and embeds it like a local image, without any network access
+
 #### Scenario: Missing or remote images keep the text fallback
-- **WHEN** an image source is remote, a data URI, or a local path that does not exist
+- **WHEN** an image source is remote and its bytes were not prefetched (fetch failed, timed out, was oversized), or a data URI that does not decode, or a local path that does not exist, or a payload the writer cannot decode
 - **THEN** the writer emits the `alt: url` text and the export still succeeds
 
 ### Requirement: Built-in PDF writer renders math
@@ -384,10 +428,10 @@ The built-in PDF writer SHALL render valid inline and display math as vector gra
 - **THEN** the PDF contains the byte-identical authored LaTeX in code styling and the export succeeds
 
 ### Requirement: User-facing PDF export options
-PDF export SHALL honor user-facing options persisted in a new `[export.pdf]` config section: page size (A4, Letter, Legal; default A4), page margin in millimetres (default 25), table of contents (default off), and page-number footer (default on). The built-in writer SHALL apply all four options; the pandoc engine path SHALL map page size to `--variable=geometry:` and the table of contents to `--toc`. Unknown or missing values SHALL fall back to the defaults.
+PDF export options SHALL be configured in the Preferences panel and persisted in the `[export.pdf]` config section: page size (A4, Letter, Legal; default A4), page margin in millimetres (default 25), table of contents (default off), and page-number footer (default on). The built-in writer SHALL apply all four options; the pandoc engine path SHALL map page size to `--variable=geometry:` and the table of contents to `--toc`. Unknown or missing values SHALL fall back to the defaults.
 
 #### Scenario: Options reach the built-in writer
-- **WHEN** `[export.pdf]` sets Letter page size and a 20 mm margin
+- **WHEN** Letter page size and a 20 mm margin are configured
 - **THEN** the built-in PDF uses Letter geometry with 20 mm margins
 
 #### Scenario: Table of contents is emitted

@@ -361,6 +361,10 @@ impl MarkionApp {
         if self.shortcut_capture.take().is_some() {
             self.rebind_keys(cx);
         }
+        // Entering the Export tab refreshes the pandoc availability line.
+        if tab == PreferencesTab::Export {
+            self.refresh_pandoc_availability(cx);
+        }
         cx.notify();
     }
 

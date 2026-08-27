@@ -198,6 +198,27 @@ pub(super) fn prompt_for_save_path(
     })
 }
 
+/// Native open-file picker for the Preferences panel Export tab (pandoc
+/// binary, DOCX reference template). `filter` `None` shows all files.
+pub(super) fn prompt_for_open_file(
+    window: &Window,
+    language: Language,
+    title: Msg,
+    filter: Option<(Msg, &[&str])>,
+) -> Pin<Box<dyn Future<Output = Option<PathBuf>> + 'static>> {
+    let mut dialog =
+        set_dialog_parent(AsyncFileDialog::new(), window).set_title(t(language, title));
+    if let Some((filter_label, extensions)) = filter {
+        dialog = dialog.add_filter(t(language, filter_label), extensions);
+    }
+    Box::pin(async move {
+        dialog
+            .pick_file()
+            .await
+            .map(|handle| PathBuf::from(handle.path()))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
