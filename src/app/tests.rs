@@ -10203,7 +10203,11 @@ fn external_check_outcome_is_dropped_when_the_document_was_saved_meanwhile(
     app.update(cx, |app, cx| {
         app.active_tab_mut().document.set_text("saved locally");
         app.active_tab_mut().document.force_save().unwrap();
-        let recovery_id = app.active_tab().document_tab().unwrap().recovery_id;
+        let tab = app.active_tab().document_tab().unwrap();
+        let recovery_id = tab.recovery_id;
+        // Keep instance/version current so this test still isolates the
+        // identity-staleness guard; the version guard has its own coverage.
+        let (instance, version) = (tab.document.instance_id(), tab.document.version());
         app.apply_external_check_outcomes(
             vec![(
                 ExternalCheckRequest {
@@ -10211,6 +10215,8 @@ fn external_check_outcome_is_dropped_when_the_document_was_saved_meanwhile(
                     path: path.clone(),
                     known: stale_identity,
                     read_for_reload: true,
+                    instance,
+                    version,
                 },
                 markion::ExternalCheckOutcome::Modified {
                     reload: Some(Ok((

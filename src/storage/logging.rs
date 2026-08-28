@@ -48,8 +48,8 @@ pub fn init_logging_to(log_dir: &Path) -> Result<(), Box<dyn std::error::Error>>
     // (`markion::document` / `markion::editing` targets) that make a repro of
     // in-memory text corruption identifiable from logs; dependency crates stay
     // at info so the volume cost is a few lines per document edit.
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,markion=debug"));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,markion=debug"));
 
     tracing_subscriber::registry()
         .with(env_filter)

@@ -603,13 +603,35 @@ impl MarkionApp {
             op = "exact_block_edit",
             range = ?edit.range,
             replacement_len = edit.replacement.len(),
+            document_version = edit.document_version,
             "block menu edit"
         );
         self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
-        self.active_tab_mut()
-            .document
-            .replace_range(edit.range, &edit.replacement);
+        // The edit is bound to the version it was computed against; the
+        // checked boundary rejects a block command that outlived an edit.
+        let mutation = {
+            let tab = self.active_tab_mut();
+            CheckedMutation::range(
+                tab.document.instance_id(),
+                edit.document_version,
+                MutationOrigin::ExactBlockEdit,
+                edit.range.clone(),
+                tab.document
+                    .text()
+                    .get(edit.range.clone())
+                    .map(str::to_string)
+                    .unwrap_or_default(),
+                edit.replacement.clone(),
+            )
+        };
+        if self
+            .apply_document_mutation("exact_block_edit", mutation)
+            .is_none()
+        {
+            cx.notify();
+            return;
+        }
         self.commit_undo_snapshot(snapshot);
         let tab = self.active_tab_mut();
         tab.selected_range = edit.selection_after;
@@ -694,9 +716,21 @@ impl MarkionApp {
         let replacement = markdown.join("\n");
         let selected = self.active_tab().selected_range.clone();
         let insertion_start = selected.start;
-        self.active_tab_mut()
-            .document
-            .replace_range(selected, &replacement);
+        let mutation = {
+            let tab = self.active_tab_mut();
+            tab.document.prepare_range_mutation(
+                MutationOrigin::MarkdownFormat,
+                selected,
+                &replacement,
+            )
+        };
+        if self
+            .apply_document_mutation("insert_image_inputs", mutation)
+            .is_none()
+        {
+            cx.notify();
+            return;
+        }
         self.commit_undo_snapshot(snapshot);
         let tab = self.active_tab_mut();
         tab.selected_range =
@@ -797,9 +831,21 @@ impl MarkionApp {
         self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         let start = source_range.start;
-        self.active_tab_mut()
-            .document
-            .replace_range(source_range, &replacement);
+        let mutation = {
+            let tab = self.active_tab_mut();
+            tab.document.prepare_range_mutation(
+                MutationOrigin::MarkdownFormat,
+                source_range,
+                &replacement,
+            )
+        };
+        if self
+            .apply_document_mutation("replace_exact_inline_target", mutation)
+            .is_none()
+        {
+            cx.notify();
+            return;
+        }
         self.commit_undo_snapshot(snapshot);
         let tab = self.active_tab_mut();
         tab.selected_range = start..start + replacement.len();
@@ -1040,9 +1086,30 @@ impl MarkionApp {
         self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         let start = editor.source_range.start;
-        self.active_tab_mut()
-            .document
-            .replace_range(editor.source_range, &replacement);
+        // The link editor captured its source range at `document_version`;
+        // the checked boundary enforces exactly that generation.
+        let mutation = {
+            let tab = self.active_tab_mut();
+            CheckedMutation::range(
+                tab.document.instance_id(),
+                editor.document_version,
+                MutationOrigin::MarkdownFormat,
+                editor.source_range.clone(),
+                tab.document
+                    .text()
+                    .get(editor.source_range.clone())
+                    .map(str::to_string)
+                    .unwrap_or_default(),
+                &replacement,
+            )
+        };
+        if self
+            .apply_document_mutation("confirm_link_editor", mutation)
+            .is_none()
+        {
+            cx.notify();
+            return;
+        }
         self.commit_undo_snapshot(snapshot);
         let tab = self.active_tab_mut();
         tab.selected_range = start..start + replacement.len();
@@ -2078,17 +2145,47 @@ impl MarkionApp {
             "enter pressed"
         );
         self.push_undo_snapshot();
-        let tab = self.active_tab_mut();
         if let Some(edit) = structural_edit {
-            tab.document.replace_range(edit.range, &edit.replacement);
+            let mutation = {
+                let tab = self.active_tab_mut();
+                tab.document.prepare_range_mutation(
+                    MutationOrigin::StructuralEdit,
+                    edit.range.clone(),
+                    &edit.replacement,
+                )
+            };
+            if self
+                .apply_document_mutation("insert_newline_structural", mutation)
+                .is_none()
+            {
+                cx.notify();
+                return;
+            }
+            let tab = self.active_tab_mut();
             tab.selected_range = edit.selection_after;
         } else {
             if !selected.is_empty() {
-                tab.document.replace_range(selected, "");
+                let mutation = {
+                    let tab = self.active_tab_mut();
+                    tab.document.prepare_range_mutation(
+                        MutationOrigin::StructuralEdit,
+                        selected,
+                        "",
+                    )
+                };
+                if self
+                    .apply_document_mutation("insert_newline_replace_selection", mutation)
+                    .is_none()
+                {
+                    cx.notify();
+                    return;
+                }
             }
+            let tab = self.active_tab_mut();
             let new_cursor = tab.document.insert_markdown_newline(cursor);
             tab.selected_range = new_cursor..new_cursor;
         }
+        let tab = self.active_tab_mut();
         tab.selection_reversed = false;
         tab.marked_range = None;
         self.status = t(self.language, Msg::StatusEditing).into();
@@ -2220,8 +2317,22 @@ impl MarkionApp {
                 .visual_backspace_edit(self.cursor_offset())
         {
             self.push_undo_snapshot();
+            let mutation = {
+                let tab = self.active_tab_mut();
+                tab.document.prepare_range_mutation(
+                    MutationOrigin::StructuralEdit,
+                    edit.range.clone(),
+                    &edit.replacement,
+                )
+            };
+            if self
+                .apply_document_mutation("backspace_visual_edit", mutation)
+                .is_none()
+            {
+                cx.notify();
+                return;
+            }
             let tab = self.active_tab_mut();
-            tab.document.replace_range(edit.range, &edit.replacement);
             tab.selected_range = edit.selection_after;
             tab.selection_reversed = false;
             tab.marked_range = None;

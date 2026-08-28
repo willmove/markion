@@ -834,6 +834,15 @@ impl MarkionApp {
                             match &mut self.tabs[index] {
                                 WorkspaceTab::Document(tab) => {
                                     if let Ok(document) = MarkdownDocument::open(&new_path) {
+                                        // The reopened file is a new document
+                                        // instance: history and capture state
+                                        // still reference the replaced
+                                        // document and must not survive the
+                                        // slot replacement.
+                                        tab.undo_stack.clear();
+                                        tab.redo_stack.clear();
+                                        tab.undo_capture = None;
+                                        tab.pending_text_edit_intent = None;
                                         tab.document = document;
                                     }
                                 }

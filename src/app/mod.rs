@@ -27,16 +27,15 @@ use gpui::{
 };
 use markion::{
     AlertKind, AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement,
-    BlockTarget, BlockTransform, DEFAULT_CODE_FONT_FAMILY, DEFAULT_EDITOR_FONT_SIZE,
-    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE, DiskIdentity, DiskState,
-    DocumentInstanceId, DocxImagePolicy, DocxPageSize, EXTENDED_HEADING_MENU_MAX_LEVEL,
-    ExportBackendPreference,
-    ExportFormat, ExportPreferences, ExternalCheckOutcome, FileTree, FileTreeEntry,
-    FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, HtmlTableGrid,
-    ImageAlignment, ImagePresentation, InlineSpan, InlineStyle, Language, MAX_EDITOR_FONT_SIZE,
-    MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
-    MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat, MathLayoutStyle, Msg,
-    MutationOrigin, MutationReceipt, MutationRejection, P0Msg, P1Msg,
+    BlockTarget, BlockTransform, CheckedMutation, DEFAULT_CODE_FONT_FAMILY,
+    DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE,
+    DiskIdentity, DiskState, DocumentInstanceId, DocxImagePolicy, DocxPageSize,
+    EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackendPreference, ExportFormat, ExportPreferences,
+    ExternalCheckOutcome, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind,
+    HighlightedSpan, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan,
+    InlineStyle, Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
+    MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
+    MarkdownFormat, MathLayoutStyle, Msg, MutationOrigin, MutationReceipt, P0Msg, P1Msg,
     PdfPageSize, PreviewBlock, RecoveryInventoryEntry, RecoverySourceState, RichText,
     SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions, SearchPattern, SessionState,
     ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery, TableEdit,
@@ -1977,6 +1976,8 @@ use workspace::OpenPathIntent;
 #[cfg(test)]
 use workspace::{ExternalDropIntent, classify_external_drop_path};
 
+#[cfg(test)]
+mod mutation_tests;
 #[cfg(test)]
 mod tests;
 

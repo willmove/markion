@@ -33,9 +33,12 @@ impl EntityInputHandler for MarkionApp {
         }
         let tab = self.active_tab();
         let range = tab.range_from_utf16(&range_utf16)?;
-        let text = tab.document.text().get(range.clone())?;
+        let text = tab.document.text().get(range.clone()).map(str::to_string)?;
         actual_range.replace(tab.range_to_utf16(&range));
-        Some(text.to_string())
+        // The platform now holds text derived from this exact document
+        // generation; subsequent input callbacks are validated against it.
+        self.note_document_input_target();
+        Some(text)
     }
 
     fn selected_text_range(
@@ -53,10 +56,12 @@ impl EntityInputHandler for MarkionApp {
         }
         let tab = self.active_tab();
         let selected_range = tab.safe_selected_range();
-        Some(UTF16Selection {
+        let selection = UTF16Selection {
             range: tab.range_to_utf16(&selected_range),
             reversed: tab.selection_reversed,
-        })
+        };
+        self.note_document_input_target();
+        Some(selection)
     }
 
     fn marked_text_range(
@@ -87,6 +92,8 @@ impl EntityInputHandler for MarkionApp {
         tab.marked_range = None;
         tab.finish_undo_capture();
         self.input_marked_len = 0;
+        // The composition session is over; its version chain is void.
+        self.ime_input_target = None;
     }
 
     fn replace_text_in_range(
@@ -105,12 +112,63 @@ impl EntityInputHandler for MarkionApp {
             return;
         }
 
+        // The platform derived explicit offsets against the document state it
+        // last queried (recorded in `document_input_target`). If the active
+        // document's identity or version has moved on — tab switch, external
+        // reload, undo, another document occupying the slot — those offsets
+        // describe different text and must not be reinterpreted against the
+        // current document. A callback without explicit offsets derives its
+        // range from the current selection/marked state and cannot carry
+        // stale offsets, so it stays on the ordinary checked path.
+        let current_target = self.active_document_target();
+        if range_utf16.is_some()
+            && self
+                .document_input_target
+                .is_some_and(|reported| reported != current_target)
+        {
+            tracing::error!(
+                target: "markion::mutation",
+                reported_document = ?self.document_input_target.map(|(id, version)| (id.get(), version)),
+                current_document = ?Some((current_target.0.get(), current_target.1)),
+                "stale platform text callback rejected before any canonical mutation"
+            );
+            self.warn_mutation_rejected();
+            cx.notify();
+            return;
+        }
+
         let visual_edit = matches!(self.view_mode, ViewMode::VisualEdit);
+        let (active_marked_range, committing_ime) = {
+            let tab = self.active_tab();
+            let active_marked_range = tab
+                .marked_range
+                .as_ref()
+                .and_then(|range| tab.checked_source_range(range));
+            let committing_ime = active_marked_range.is_some()
+                && tab
+                    .undo_capture
+                    .as_ref()
+                    .is_some_and(|capture| capture.kind == UndoCaptureKind::Ime);
+            (active_marked_range, committing_ime)
+        };
+        // An active composition owns the exact version chain its own updates
+        // produced; committing it against any other state is rejected.
+        if committing_ime
+            && self
+                .ime_input_target
+                .is_some_and(|target| target != current_target)
+        {
+            tracing::error!(
+                target: "markion::mutation",
+                composition_target = ?self.ime_input_target.map(|(id, version)| (id.get(), version)),
+                current_document = ?Some((current_target.0.get(), current_target.1)),
+                "stale IME composition commit rejected; composition reset without mutating text"
+            );
+            self.warn_mutation_rejected();
+            cx.notify();
+            return;
+        }
         let tab = self.active_tab_mut();
-        let active_marked_range = tab
-            .marked_range
-            .as_ref()
-            .and_then(|range| tab.checked_source_range(range));
         let range = range_utf16
             .as_ref()
             .and_then(|range_utf16| tab.range_from_utf16(range_utf16))
@@ -131,6 +189,11 @@ impl EntityInputHandler for MarkionApp {
         let replacement = direct_edit
             .as_ref()
             .map_or_else(|| new_text.to_string(), |edit| edit.replacement.clone());
+        let origin = if committing_ime {
+            MutationOrigin::ImeComposition
+        } else {
+            MutationOrigin::PlatformTextInput
+        };
 
         tracing::debug!(
             target: "markion::editing",
@@ -146,10 +209,7 @@ impl EntityInputHandler for MarkionApp {
             .text()
             .get(edit_range.clone())
             .is_some_and(|current| current != replacement);
-        let committing_ime = active_marked_range.is_some()
-            && tab
-                .undo_capture
-                .is_some_and(|capture| capture.kind == UndoCaptureKind::Ime);
+        let mut applied = false;
         if changed {
             let intent = if committing_ime {
                 UndoCaptureKind::Ime
@@ -174,8 +234,42 @@ impl EntityInputHandler for MarkionApp {
             if let (Some(edit), Some(capture)) = (direct_edit.as_ref(), tab.undo_capture.as_mut()) {
                 capture.next_cursor = edit.selection_after.end;
             }
-            tab.document.replace_range(edit_range.clone(), &replacement);
+            let outcome = {
+                let tab = self.active_tab_mut();
+                let mutation =
+                    tab.document
+                        .prepare_range_mutation(origin, edit_range.clone(), &replacement);
+                tab.document.apply_checked_mutation(mutation)
+            };
+            match outcome {
+                Ok(receipt) => {
+                    tracing::debug!(
+                        target: "markion::editing",
+                        op = "replace_text_in_range",
+                        sequence = receipt.sequence,
+                        before_version = receipt.before_version,
+                        after_version = receipt.after_version,
+                        "canonical edit accepted by checked boundary"
+                    );
+                    self.document_input_target = Some((receipt.document, receipt.after_version));
+                    applied = true;
+                }
+                Err(rejection) => {
+                    tracing::error!(
+                        target: "markion::mutation",
+                        sequence = rejection.sequence,
+                        reason = ?rejection.reason,
+                        expected_version = rejection.expected_version,
+                        current_version = rejection.current_version,
+                        "platform text input rejected by checked boundary; document preserved"
+                    );
+                    self.warn_mutation_rejected();
+                    cx.notify();
+                    return;
+                }
+            }
         }
+        let tab = self.active_tab_mut();
         tab.selected_range = direct_edit.as_ref().map_or_else(
             || range.start + replacement.len()..range.start + replacement.len(),
             |edit| edit.selection_after.clone(),
@@ -183,17 +277,18 @@ impl EntityInputHandler for MarkionApp {
         tab.marked_range.take();
         if committing_ime {
             tab.finish_undo_capture();
+            self.ime_input_target = None;
         }
         self.status = t(
             self.language,
-            if changed {
+            if applied {
                 Msg::StatusEditing
             } else {
                 Msg::StatusNoEdit
             },
         )
         .into();
-        if changed {
+        if applied {
             self.after_document_changed(cx);
         }
         cx.notify();
@@ -219,6 +314,38 @@ impl EntityInputHandler for MarkionApp {
         }
         if self.has_text_input_focus() {
             self.insert_redirected_text(new_text, true, cx);
+            return;
+        }
+
+        // A live composition owns the version chain its own updates created.
+        // If the document moved on underneath it (tab switch, reload, undo,
+        // another edit), the pending update is stale: reset the composition
+        // without mutating instead of splicing its payload elsewhere. A fresh
+        // composition falls back to the same generation check as ordinary
+        // input, but only when the platform supplied explicit offsets — an
+        // offset-free callback derives its range from current state.
+        let current_target = self.active_document_target();
+        let composition_active = self.active_tab().marked_range.is_some();
+        let stale = if composition_active {
+            self.ime_input_target
+                .is_some_and(|target| target != current_target)
+        } else {
+            range_utf16.is_some()
+                && self
+                    .document_input_target
+                    .is_some_and(|reported| reported != current_target)
+        };
+        if stale {
+            tracing::error!(
+                target: "markion::mutation",
+                composition = composition_active,
+                composition_target = ?self.ime_input_target.map(|(id, version)| (id.get(), version)),
+                reported_target = ?self.document_input_target.map(|(id, version)| (id.get(), version)),
+                current_document = ?Some((current_target.0.get(), current_target.1)),
+                "stale IME composition update rejected; composition reset without mutating text"
+            );
+            self.warn_mutation_rejected();
+            cx.notify();
             return;
         }
 
@@ -262,6 +389,7 @@ impl EntityInputHandler for MarkionApp {
             .text()
             .get(edit_range.clone())
             .is_some_and(|current| current != replacement);
+        let mut applied = false;
         if changed {
             let history_range = direct_edit
                 .as_ref()
@@ -280,9 +408,44 @@ impl EntityInputHandler for MarkionApp {
             if let (Some(edit), Some(capture)) = (direct_edit.as_ref(), tab.undo_capture.as_mut()) {
                 capture.next_cursor = edit.selection_after.end;
             }
-            tab.document.replace_range(edit_range.clone(), &replacement);
+            let outcome = {
+                let tab = self.active_tab_mut();
+                let mutation = tab.document.prepare_range_mutation(
+                    MutationOrigin::ImeComposition,
+                    edit_range.clone(),
+                    &replacement,
+                );
+                tab.document.apply_checked_mutation(mutation)
+            };
+            match outcome {
+                Ok(receipt) => {
+                    tracing::debug!(
+                        target: "markion::editing",
+                        op = "ime_composition_mark",
+                        sequence = receipt.sequence,
+                        before_version = receipt.before_version,
+                        after_version = receipt.after_version,
+                        "IME composition edit accepted by checked boundary"
+                    );
+                    applied = true;
+                }
+                Err(rejection) => {
+                    tracing::error!(
+                        target: "markion::mutation",
+                        sequence = rejection.sequence,
+                        reason = ?rejection.reason,
+                        expected_version = rejection.expected_version,
+                        current_version = rejection.current_version,
+                        "IME composition update rejected by checked boundary; document preserved"
+                    );
+                    self.warn_mutation_rejected();
+                    cx.notify();
+                    return;
+                }
+            }
         }
-        tab.marked_range = direct_edit.as_ref().map_or_else(
+        let tab = self.active_tab_mut();
+        let marked_after = direct_edit.as_ref().map_or_else(
             || {
                 (!replacement.is_empty())
                     .then_some(edit_range.start..edit_range.start + replacement.len())
@@ -291,6 +454,7 @@ impl EntityInputHandler for MarkionApp {
                 (!edit.inserted_range_after.is_empty()).then_some(edit.inserted_range_after.clone())
             },
         );
+        tab.marked_range = marked_after;
         tab.selected_range = if let Some(edit) = direct_edit.as_ref() {
             edit.selection_after.clone()
         } else {
@@ -300,8 +464,18 @@ impl EntityInputHandler for MarkionApp {
                 .map(|new_range| new_range.start + range.start..new_range.end + range.start)
                 .unwrap_or_else(|| range.start + replacement.len()..range.start + replacement.len())
         };
+        // The composition (if any remains) now owns the chain through the
+        // current version; a commit or later update is validated against it.
+        let composition_continues = tab.marked_range.is_some();
+        if composition_continues {
+            let target = self.active_document_target();
+            self.ime_input_target = Some(target);
+            self.document_input_target = Some(target);
+        } else {
+            self.ime_input_target = None;
+        }
         self.status = t(self.language, Msg::StatusComposing).into();
-        if changed {
+        if applied {
             self.after_document_changed(cx);
         }
         cx.notify();
@@ -335,6 +509,7 @@ impl EntityInputHandler for MarkionApp {
                 point(right.max(left + px(2.)), field_bounds.bottom() - px(4.)),
             ));
         }
+        self.note_document_input_target();
         let tab = self.active_tab();
         if matches!(self.view_mode, ViewMode::VisualEdit) {
             if let Some(source_range) = tab.range_from_utf16(&range_utf16)

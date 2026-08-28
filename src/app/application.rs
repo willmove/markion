@@ -4,12 +4,16 @@ use super::*;
 /// external-change detection. `recovery_id` re-locates the tab afterwards
 /// (tab indices shift when other tabs close), and `known` doubles as the
 /// staleness guard: an outcome only applies while the document's identity is
-/// still the one that was checked.
+/// still the one that was checked. `instance`/`version` bind any reload to
+/// the exact document generation that was checked, so a read completing
+/// after intervening edits cannot overwrite them.
 pub(super) struct ExternalCheckRequest {
     pub(super) recovery_id: u64,
     pub(super) path: PathBuf,
     pub(super) known: Option<DiskIdentity>,
     pub(super) read_for_reload: bool,
+    pub(super) instance: DocumentInstanceId,
+    pub(super) version: u64,
 }
 
 /// Snapshot captured on the UI thread when an autosave timer fires; the
@@ -645,6 +649,10 @@ impl MarkionApp {
                 // filter) used to freeze the window on its very first frame.
                 let display_path = path.display().to_string();
                 self.active_menu = None;
+                // Bind the replace-target tab slot to the document instance
+                // occupying it now: a slow read must not replace whatever
+                // document the user switched to (or opened) meanwhile.
+                let replace_target = self.active_document_target();
                 cx.spawn(async move |this, cx| {
                     let read_path = path.clone();
                     let result = cx
@@ -657,9 +665,12 @@ impl MarkionApp {
                                     MarkdownDocument::from_loaded(text, path.clone(), identity);
                                 // The welcome tab is normally still pristine,
                                 // but a slow read leaves a window where the
-                                // user may have started typing — never
-                                // replace work in progress.
-                                if app.active_tab().is_dirty() {
+                                // user may have started typing — never replace
+                                // work in progress, and never replace a
+                                // different document that took over the slot.
+                                if app.active_tab().is_dirty()
+                                    || app.active_document_target() != replace_target
+                                {
                                     app.open_in_new_tab(document, cx);
                                 } else {
                                     app.replace_active_tab(document, cx);
@@ -728,6 +739,87 @@ impl MarkionApp {
         self.schedule_autosave(cx);
     }
 
+    /// Identity/version pair of the active document. Operations derived from
+    /// document state carry this pair so the checked mutation boundary can
+    /// reject anything that no longer targets the live document.
+    pub(super) fn active_document_target(&self) -> (DocumentInstanceId, u64) {
+        (
+            self.active_tab().document.instance_id(),
+            self.active_tab().document.version(),
+        )
+    }
+
+    /// Record the document identity/version last reported to the platform
+    /// text service (selection/text/marked-range queries). A later input
+    /// callback that no longer matches the active document was computed
+    /// against different state and is rejected instead of reinterpreted.
+    pub(super) fn note_document_input_target(&mut self) {
+        self.document_input_target = Some(self.active_document_target());
+    }
+
+    /// Apply one prepared checked mutation to the active document, tying the
+    /// high-level operation label to the canonical mutation sequence in the
+    /// log. A rejection preserves the document, surfaces the localized
+    /// integrity warning, resets stale composition/control state, and
+    /// returns `None`.
+    pub(super) fn apply_document_mutation(
+        &mut self,
+        op: &'static str,
+        mutation: CheckedMutation,
+    ) -> Option<MutationReceipt> {
+        let origin = mutation.origin();
+        match self
+            .active_tab_mut()
+            .document
+            .apply_checked_mutation(mutation)
+        {
+            Ok(receipt) => {
+                tracing::debug!(
+                    target: "markion::editing",
+                    op,
+                    sequence = receipt.sequence,
+                    origin = ?origin,
+                    before_version = receipt.before_version,
+                    after_version = receipt.after_version,
+                    "canonical edit accepted by checked boundary"
+                );
+                Some(receipt)
+            }
+            Err(rejection) => {
+                tracing::error!(
+                    target: "markion::mutation",
+                    op,
+                    sequence = rejection.sequence,
+                    origin = ?origin,
+                    reason = ?rejection.reason,
+                    expected_version = rejection.expected_version,
+                    current_version = rejection.current_version,
+                    "canonical edit rejected by checked boundary; document preserved"
+                );
+                self.warn_mutation_rejected();
+                None
+            }
+        }
+    }
+
+    /// Shared response when the checked boundary rejects a canonical
+    /// mutation, or a platform callback arrives too stale to even prepare
+    /// one: the document stays untouched, stale composition/control state is
+    /// reset, and the user gets the content-free localized warning pointing
+    /// at the log. The boundary itself already emitted the bounded journal
+    /// at error level; no authored content is exposed here.
+    pub(super) fn warn_mutation_rejected(&mut self) {
+        let tab = self.active_tab_mut();
+        tab.marked_range = None;
+        tab.finish_undo_capture();
+        self.ime_input_target = None;
+        self.input_marked_len = 0;
+        self.slash_commands = None;
+        self.dismissed_slash_query = None;
+        self.dismiss_visual_block_menu();
+        self.status = p0_t(self.language, P0Msg::IntegrityMutationRejected).into();
+    }
+
     /// Kicks one round of external-change detection. The disk work (metadata
     /// probes and any full reads) runs on the background executor from a
     /// captured snapshot; only the bookkeeping returns to the UI thread. A
@@ -751,6 +843,8 @@ impl MarkionApp {
                     path: doc.document.path()?.to_path_buf(),
                     known: doc.document.disk_identity().cloned(),
                     read_for_reload: !doc.document.is_dirty(),
+                    instance: doc.document.instance_id(),
+                    version: doc.document.version(),
                 })
             })
             .collect();
@@ -816,6 +910,9 @@ impl MarkionApp {
                     tab.external_conflict = None;
                 }
                 ExternalCheckOutcome::Modified { reload } => match reload {
+                    // Only the dirty precondition is checked here; instance and
+                    // version staleness is decided (and journaled) by the
+                    // checked boundary so a rejected reload stays attributable.
                     Some(Ok((text, identity))) if !self.tabs[index].document.is_dirty() => {
                         tracing::debug!(
                             target: "markion::editing",
@@ -825,7 +922,36 @@ impl MarkionApp {
                         );
                         self.release_tab_image_claims(index, cx);
                         let tab = &mut self.tabs[index];
-                        tab.document.apply_external_reload(text, identity);
+                        // Generation-bound lifecycle replacement: the read ran
+                        // off the UI thread, so it may complete after edits or
+                        // a tab-slot replacement. The checked boundary rejects
+                        // anything that no longer targets the exact document
+                        // instance and version that was checked.
+                        match tab.document.apply_external_reload_checked(
+                            request.instance,
+                            request.version,
+                            text,
+                            identity,
+                        ) {
+                            Ok(receipt) => {
+                                tracing::debug!(
+                                    target: "markion::editing",
+                                    op = "reload_external_disk",
+                                    sequence = receipt.sequence,
+                                    after_version = receipt.after_version,
+                                    "external reload accepted"
+                                );
+                            }
+                            Err(rejection) => {
+                                tracing::warn!(
+                                    target: "markion::mutation",
+                                    sequence = rejection.sequence,
+                                    reason = ?rejection.reason,
+                                    "external reload rejected; document preserved"
+                                );
+                                continue;
+                            }
+                        }
                         tab.external_conflict = None;
                         tab.selected_range = 0..0;
                         tab.selection_reversed = false;

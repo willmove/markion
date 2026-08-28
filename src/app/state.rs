@@ -1322,40 +1322,59 @@ impl DocumentTabState {
         }
     }
 
-    /// Restore a full snapshot's document and selection.
-    pub(super) fn restore_snapshot(&mut self, snapshot: EditorSnapshot) {
-        // The snapshot carries the identity that was current when it was
-        // taken; saves since then made it stale. Transplant the live
-        // document's identity (same destination only) so the dirty recompute
-        // below compares against what is actually on disk now.
-        let current_identity = (self.document.path() == snapshot.document.path())
-            .then(|| self.document.disk_identity().cloned())
-            .flatten();
-        self.document = snapshot.document;
-        if let Some(identity) = current_identity {
-            self.document.record_disk_identity(identity, false);
-        }
+    /// Restore a full snapshot's document text and selection through the
+    /// checked mutation boundary on the live document. A wholesale
+    /// `self.document = snapshot.document` assignment would resurrect the
+    /// snapshot's older `text_version`, and a version number that names two
+    /// different texts poisons every tab-level per-version cache (display
+    /// text, source layout, measured height) that assumes versions are
+    /// globally unique. Applying the snapshot text as an authorized
+    /// whole-document mutation keeps the instance identity and only ever
+    /// advances the version. Returns false when the boundary rejected the
+    /// restoration, leaving text, version, and history untouched.
+    pub(super) fn restore_snapshot(
+        &mut self,
+        snapshot: EditorSnapshot,
+        origin: MutationOrigin,
+    ) -> bool {
+        let replacement = snapshot.document.text().to_string();
+        let mutation = self.document.prepare_whole_mutation(origin, replacement);
+        let Ok(receipt) = self.document.apply_checked_mutation(mutation) else {
+            return false;
+        };
+        let _ = receipt;
         self.document.refresh_dirty_against_known_disk();
         self.selected_range = snapshot.selected_range;
         self.selection_reversed = snapshot.selection_reversed;
         self.marked_range = None;
+        true
     }
 
     /// Apply a compact history record and return its inverse — the record
     /// that, pushed onto the opposite stack, re-creates the state being left.
-    pub(super) fn apply_history_diff(&mut self, diff: UndoDiff) -> UndoDiff {
+    /// Returns `None` when the record no longer matches the live text: the
+    /// checked boundary rejected the splice and nothing changed.
+    pub(super) fn apply_history_diff(
+        &mut self,
+        diff: UndoDiff,
+        origin: MutationOrigin,
+    ) -> Option<UndoDiff> {
+        let expected = self.document.text().get(diff.range.clone())?.to_string();
         let inverse = UndoDiff {
             range: diff.range.start..diff.range.start + diff.insert.len(),
-            insert: self.document.text()[diff.range.clone()].to_string(),
+            insert: expected,
             selected_range: self.selected_range.clone(),
             selection_reversed: self.selection_reversed,
         };
-        self.document.replace_range(diff.range, &diff.insert);
+        let mutation = self
+            .document
+            .prepare_range_mutation(origin, diff.range, diff.insert);
+        self.document.apply_checked_mutation(mutation).ok()?;
         self.document.refresh_dirty_against_known_disk();
         self.selected_range = diff.selected_range;
         self.selection_reversed = diff.selection_reversed;
         self.marked_range = None;
-        inverse
+        Some(inverse)
     }
 
     /// Pop and apply the newest undo entry, pushing its inverse onto the redo
@@ -1368,12 +1387,14 @@ impl DocumentTabState {
         match entry {
             UndoEntry::Full(snapshot) => {
                 let current = self.snapshot();
-                push_history_entry(&mut self.redo_stack, UndoEntry::Full(current));
-                self.restore_snapshot(snapshot);
+                if self.restore_snapshot(snapshot, MutationOrigin::Undo) {
+                    push_history_entry(&mut self.redo_stack, UndoEntry::Full(current));
+                }
             }
             UndoEntry::Diff(diff) => {
-                let inverse = self.apply_history_diff(diff);
-                push_history_entry(&mut self.redo_stack, UndoEntry::Diff(inverse));
+                if let Some(inverse) = self.apply_history_diff(diff, MutationOrigin::Undo) {
+                    push_history_entry(&mut self.redo_stack, UndoEntry::Diff(inverse));
+                }
             }
         }
         true
@@ -1390,12 +1411,14 @@ impl DocumentTabState {
         match entry {
             UndoEntry::Full(snapshot) => {
                 let current = self.snapshot();
-                push_history_entry(&mut self.undo_stack, UndoEntry::Full(current));
-                self.restore_snapshot(snapshot);
+                if self.restore_snapshot(snapshot, MutationOrigin::Redo) {
+                    push_history_entry(&mut self.undo_stack, UndoEntry::Full(current));
+                }
             }
             UndoEntry::Diff(diff) => {
-                let inverse = self.apply_history_diff(diff);
-                push_history_entry(&mut self.undo_stack, UndoEntry::Diff(inverse));
+                if let Some(inverse) = self.apply_history_diff(diff, MutationOrigin::Redo) {
+                    push_history_entry(&mut self.undo_stack, UndoEntry::Diff(inverse));
+                }
             }
         }
         true

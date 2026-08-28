@@ -447,7 +447,9 @@ enum CheckedMutationEdit {
         expected_source: String,
         replacement: String,
     },
-    Whole { replacement: String },
+    Whole {
+        replacement: String,
+    },
 }
 
 /// A mutation prepared against one exact document instance and version.
@@ -784,7 +786,9 @@ impl MarkdownDocument {
         }
     }
 
-    /// Reloads the destination as the new clean canonical source.
+    /// Reloads the destination as the new clean canonical source. The read is
+    /// synchronous, so the reload is inherently bound to the current
+    /// document generation; the checked boundary still attributes it.
     pub fn reload_from_disk(&mut self) -> io::Result<()> {
         let path = self
             .path
@@ -792,12 +796,17 @@ impl MarkdownDocument {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "document has no path"))?
             .clone();
         let (text, identity) = read_document_source(&path)?;
-        self.apply_external_reload(text, identity);
+        let target = self.instance_id;
+        let version = self.text_version;
+        let _ = self.apply_external_reload_checked(target, version, text, identity);
         Ok(())
     }
 
-    /// Applies an external reload whose read ran off the UI thread; equivalent
-    /// to [`MarkdownDocument::reload_from_disk`] with the read already done.
+    /// Applies an external reload whose read ran off the UI thread; test
+    /// convenience equivalent of the synchronous [`Self::reload_from_disk`].
+    /// Production reloads carry the document generation they were captured
+    /// against through [`Self::apply_external_reload_checked`].
+    #[doc(hidden)]
     pub fn apply_external_reload(&mut self, text: String, identity: DiskIdentity) {
         let target = self.instance_id;
         let version = self.text_version;
@@ -1203,11 +1212,22 @@ impl MarkdownDocument {
         })
     }
 
+    /// Whole-document replacement attributed to the trusted origin. Test and
+    /// benchmark convenience only: production code must go through an
+    /// authorized lifecycle origin (`Undo`, `Redo`, `ExternalReload`,
+    /// `Recovery`, …) so every canonical write is attributable to a real
+    /// operation. `production_code_cannot_bypass_checked_mutations` audits
+    /// this repository for production call sites.
+    #[doc(hidden)]
     pub fn set_text(&mut self, text: impl Into<String>) {
         let mutation = self.prepare_whole_mutation(MutationOrigin::Trusted, text);
         let _ = self.apply_checked_mutation(mutation);
     }
 
+    /// Clamping insert attributed to the trusted origin. Test and benchmark
+    /// convenience only; production edits supply an explicit origin through
+    /// [`MarkdownDocument::prepare_range_mutation`].
+    #[doc(hidden)]
     pub fn insert(&mut self, byte_index: usize, text: &str) {
         let index = clamp_to_char_boundary(&self.text, byte_index);
         let mutation =
@@ -1215,14 +1235,18 @@ impl MarkdownDocument {
         let _ = self.apply_checked_mutation(mutation);
     }
 
+    /// Clamping range replacement attributed to the trusted origin. Test and
+    /// benchmark convenience only: production call sites validate their own
+    /// ranges and submit checked mutations so an invalid range is rejected,
+    /// not silently clamped into the wrong edit.
+    /// `production_code_cannot_bypass_checked_mutations` audits this
+    /// repository for production call sites.
+    #[doc(hidden)]
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, text: &str) {
         let start = clamp_to_char_boundary(&self.text, range.start);
         let end = clamp_to_char_boundary(&self.text, range.end).max(start);
-        let mutation = self.prepare_range_mutation(
-            MutationOrigin::Trusted,
-            start..end,
-            text.to_string(),
-        );
+        let mutation =
+            self.prepare_range_mutation(MutationOrigin::Trusted, start..end, text.to_string());
         let _ = self.apply_checked_mutation(mutation);
     }
 
@@ -1285,9 +1309,7 @@ impl MarkdownDocument {
         }
         let mut suffix = 0;
         let suffix_limit = old.len().min(new.len()).saturating_sub(prefix);
-        while suffix < suffix_limit
-            && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
-        {
+        while suffix < suffix_limit && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix] {
             suffix += 1;
         }
         while suffix > 0
@@ -1297,11 +1319,7 @@ impl MarkdownDocument {
             suffix -= 1;
         }
         let replacement = transformed[prefix..transformed.len() - suffix].to_string();
-        Some(self.apply_current_range(
-            origin,
-            prefix..self.text.len() - suffix,
-            replacement,
-        ))
+        Some(self.apply_current_range(origin, prefix..self.text.len() - suffix, replacement))
     }
 
     /// Marks the document as modified and discards any cached derived state.
@@ -1610,8 +1628,7 @@ impl MarkdownDocument {
                 continue;
             }
 
-            transformed
-                .replace_range(adjusted_line_start..adjusted_line_start + remove_len, "");
+            transformed.replace_range(adjusted_line_start..adjusted_line_start + remove_len, "");
             if line_start < range.start {
                 removed_before_start += remove_len;
             }
@@ -1770,11 +1787,7 @@ impl MarkdownDocument {
         {
             let replacement =
                 self.text[range.start + prefix.len()..range.end - suffix.len()].to_string();
-            self.apply_current_range(
-                MutationOrigin::MarkdownFormat,
-                range.clone(),
-                &replacement,
-            );
+            self.apply_current_range(MutationOrigin::MarkdownFormat, range.clone(), &replacement);
             return range.start..range.end - prefix.len() - suffix.len();
         }
 
@@ -1856,8 +1869,7 @@ impl MarkdownDocument {
             let line_end = transformed[adjusted_line_start..]
                 .find('\n')
                 .map_or(transformed.len(), |offset| adjusted_line_start + offset);
-            let prefix =
-                prefix_for_line(line_index, &transformed[adjusted_line_start..line_end]);
+            let prefix = prefix_for_line(line_index, &transformed[adjusted_line_start..line_end]);
             transformed.insert_str(adjusted_line_start, &prefix);
             if line_start < range.start || (range.is_empty() && line_start == range.start) {
                 inserted_before_start += prefix.len();
@@ -1975,11 +1987,7 @@ impl MarkdownDocument {
         let after_cursor = &self.text[cursor..line_end];
 
         if after_cursor.trim().is_empty() && is_empty_list_marker(before_cursor) {
-            self.apply_current_range(
-                MutationOrigin::StructuralEdit,
-                line_start..cursor,
-                "",
-            );
+            self.apply_current_range(MutationOrigin::StructuralEdit, line_start..cursor, "");
             return line_start;
         }
 
@@ -4129,6 +4137,10 @@ mod tests {
         let receipt = doc.apply_checked_mutation(mutation).unwrap();
 
         assert_eq!(doc.text(), "prefix §1.2 suffix");
+        // Only the declared range changed: the prefix and suffix bytes are
+        // preserved byte-for-byte by construction, never re-clamped.
+        assert_eq!(&doc.text()[..7], "prefix ");
+        assert_eq!(&doc.text()["prefix §1.2".len()..], " suffix");
         assert_eq!(receipt.before_version, before);
         assert_eq!(receipt.after_version, before + 1);
         assert_eq!(doc.version(), before + 1);
@@ -4136,6 +4148,213 @@ mod tests {
         assert_eq!(
             doc.mutation_journal()[0].origin,
             MutationOrigin::PlatformTextInput
+        );
+        // The journal fingerprints only the touched slices, not the document.
+        let entry = &doc.mutation_journal()[0];
+        assert_eq!(entry.replaced_len, "§1.1".len());
+        assert_eq!(entry.replacement_len, "§1.2".len());
+    }
+
+    /// Table-driven mutation contract (task 4.1): every origin performs the
+    /// exact declared splice when current, and every rejection class leaves
+    /// text, version, dirty flag, and journal-correlated state unchanged for
+    /// every origin that could carry it.
+    #[test]
+    fn mutation_contract_table_covers_every_origin() {
+        const RANGE_ORIGINS: &[MutationOrigin] = &[
+            MutationOrigin::Trusted,
+            MutationOrigin::PlatformTextInput,
+            MutationOrigin::ImeComposition,
+            MutationOrigin::StructuralEdit,
+            MutationOrigin::MarkdownFormat,
+            MutationOrigin::ExactBlockEdit,
+            MutationOrigin::TableEdit,
+            MutationOrigin::SearchReplace,
+            MutationOrigin::SearchReplaceAll,
+            MutationOrigin::Undo,
+            MutationOrigin::Redo,
+            MutationOrigin::ExternalReload,
+            MutationOrigin::Recovery,
+        ];
+
+        for &origin in RANGE_ORIGINS {
+            // Accepted exact splice: one version step, exact prefix/suffix.
+            let base = "# §1.1\n\nbody";
+            let mut doc = MarkdownDocument::from_text(base);
+            let before = doc.version();
+            let mutation = doc.prepare_range_mutation(origin, 2.."§1.1".len() + 2, "§9.9");
+            let receipt = doc
+                .apply_checked_mutation(mutation)
+                .unwrap_or_else(|e| panic!("{origin:?} splice must be accepted: {e}"));
+            assert_eq!(doc.text(), "# §9.9\n\nbody", "{origin:?}");
+            assert_eq!(receipt.before_version, before, "{origin:?}");
+            assert_eq!(receipt.after_version, before + 1, "{origin:?}");
+            assert_eq!(doc.version(), before + 1, "{origin:?}");
+            assert!(doc.is_dirty(), "{origin:?}");
+            assert_eq!(doc.mutation_journal().last().unwrap().rejection, None);
+
+            // Stale version: unchanged state for every origin.
+            let mut doc = MarkdownDocument::from_text(base);
+            let stale = doc.prepare_range_mutation(origin, 0..0, "x");
+            doc.set_text("# moved on");
+            let before = (doc.text().to_string(), doc.version(), doc.is_dirty());
+            let journal_len = doc.mutation_journal_len();
+            assert_eq!(
+                doc.apply_checked_mutation(stale).unwrap_err().reason,
+                MutationRejectionReason::StaleVersion,
+                "{origin:?}"
+            );
+            assert_eq!(
+                (doc.text().to_string(), doc.version(), doc.is_dirty()),
+                before,
+                "{origin:?}"
+            );
+            assert_eq!(doc.mutation_journal_len(), journal_len + 1, "{origin:?}");
+
+            // Wrong document: unchanged state for every origin.
+            let mut doc = MarkdownDocument::from_text(base);
+            let other = MarkdownDocument::from_text("other");
+            let wrong =
+                CheckedMutation::range(other.instance_id(), doc.version(), origin, 0..0, "", "x");
+            assert_eq!(
+                doc.apply_checked_mutation(wrong).unwrap_err().reason,
+                MutationRejectionReason::WrongDocument,
+                "{origin:?}"
+            );
+            assert_eq!(doc.text(), base, "{origin:?}");
+        }
+
+        // Whole-document authorization matrix: only lifecycle origins may
+        // replace the whole document; editing origins are rejected unchanged.
+        for &(origin, authorized) in &[
+            (MutationOrigin::Trusted, true),
+            (MutationOrigin::PlatformTextInput, false),
+            (MutationOrigin::ImeComposition, false),
+            (MutationOrigin::StructuralEdit, false),
+            (MutationOrigin::MarkdownFormat, false),
+            (MutationOrigin::ExactBlockEdit, false),
+            (MutationOrigin::TableEdit, false),
+            (MutationOrigin::SearchReplace, false),
+            (MutationOrigin::SearchReplaceAll, true),
+            (MutationOrigin::Undo, true),
+            (MutationOrigin::Redo, true),
+            (MutationOrigin::ExternalReload, true),
+            (MutationOrigin::Recovery, true),
+        ] {
+            let mut doc = MarkdownDocument::from_text("# §1.1\n");
+            let before = (doc.text().to_string(), doc.version());
+            let mutation = doc.prepare_whole_mutation(origin, "# replaced\n".to_string());
+            let outcome = doc.apply_checked_mutation(mutation);
+            assert_eq!(outcome.is_ok(), authorized, "{origin:?}");
+            if authorized {
+                assert_eq!(doc.text(), "# replaced\n", "{origin:?}");
+                assert_eq!(doc.version(), before.1 + 1, "{origin:?}");
+            } else {
+                assert_eq!(
+                    outcome.unwrap_err().reason,
+                    MutationRejectionReason::UnauthorizedWholeDocument,
+                    "{origin:?}"
+                );
+                assert_eq!(
+                    (doc.text().to_string(), doc.version()),
+                    before,
+                    "{origin:?}"
+                );
+            }
+        }
+    }
+
+    /// Task 3.4: a range edit on a large document must advance the version
+    /// exactly once, must not parse or populate any derived Markdown cache at
+    /// mutation time, and must fingerprint only the touched slices.
+    #[test]
+    fn large_document_range_edits_stay_lazy_and_single_step() {
+        let mut section = String::new();
+        for n in 1..=9 {
+            section.push_str(&format!("# §1.{n}\n\nbody {n}\n\n"));
+        }
+        let base = section.repeat(220);
+        let mut doc = MarkdownDocument::from_text(base.clone());
+        let initial_version = doc.version();
+
+        for i in 0..50usize {
+            let end = doc.text().len();
+            let mutation =
+                doc.prepare_range_mutation(MutationOrigin::PlatformTextInput, end..end, "字");
+            let receipt = doc.apply_checked_mutation(mutation).unwrap();
+            assert_eq!(receipt.after_version, initial_version + 1 + i as u64);
+            assert_eq!(receipt.changed, true);
+            let entry = doc.mutation_journal().last().cloned().unwrap();
+            assert_eq!(entry.replaced_len, 0);
+            assert_eq!(entry.replacement_len, "字".len());
+            assert!(entry.rejection.is_none());
+        }
+
+        // No derived state was computed or invalidated more than once per
+        // edit: none of the caches is populated at all until a read happens.
+        let breakdown = doc.memory_breakdown();
+        for cache in ["preview_blocks", "visual_blocks", "outline", "stats"] {
+            assert!(!breakdown.site(cache).unwrap().populated, "{cache}");
+        }
+        // The document grew by exactly the inserted bytes.
+        assert_eq!(doc.text().len(), base.len() + 50 * "字".len());
+    }
+
+    /// Task 1.4 audit: production sources must submit canonical mutations
+    /// through the checked boundary with an explicit origin. The trusted
+    /// convenience mutators (`set_text`/`insert`/`replace_range`/
+    /// `apply_external_reload`) are test/benchmark helpers only: this test
+    /// scans every production line of `src/` for call sites on documents.
+    #[test]
+    fn production_code_cannot_bypass_checked_mutations() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders: Vec<String> = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let entries = match fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(error) => panic!("cannot read {}: {error}", dir.display()),
+            };
+            for entry in entries {
+                let path = entry.expect("directory entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                    continue;
+                }
+                if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("tests.rs") {
+                    continue; // dedicated test module
+                }
+                let source = fs::read_to_string(&path).expect("utf-8 source file");
+                // Inline `mod tests` blocks are test code; everything from
+                // the first such declaration to the end of the file is
+                // excluded from the production audit.
+                let production = source.split("mod tests").next().unwrap_or("");
+                for (index, line) in production.lines().enumerate() {
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                        continue;
+                    }
+                    let convenience_call = trimmed.contains("document.set_text(")
+                        || trimmed.contains("doc.set_text(")
+                        || trimmed.contains("document.insert(")
+                        || trimmed.contains("doc.insert(")
+                        || trimmed.contains("document.replace_range(")
+                        || trimmed.contains("doc.replace_range(")
+                        || trimmed.contains(".apply_external_reload(");
+                    if convenience_call {
+                        offenders.push(format!("{}:{}: {}", path.display(), index + 1, trimmed));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "production code must submit checked mutations with an explicit origin \
+             (prepare_range_mutation / prepare_whole_mutation / apply_external_reload_checked); \
+             trusted convenience mutators are test-only:\n{offenders:#?}"
         );
     }
 
@@ -4185,6 +4404,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::reversed_empty_ranges)] // the reversed literal IS the fixture
     fn checked_mutation_rejects_invalid_ranges_and_unauthorized_whole_replacement() {
         let cases = [
             (
@@ -4266,11 +4486,8 @@ mod tests {
         let initial_version = doc.version();
         for _ in 0..MUTATION_JOURNAL_CAPACITY + 8 {
             let end = doc.text().len();
-            let mutation = doc.prepare_range_mutation(
-                MutationOrigin::PlatformTextInput,
-                end..end,
-                "x",
-            );
+            let mutation =
+                doc.prepare_range_mutation(MutationOrigin::PlatformTextInput, end..end, "x");
             doc.apply_checked_mutation(mutation).unwrap();
         }
         assert_eq!(doc.mutation_journal_len(), MUTATION_JOURNAL_CAPACITY);

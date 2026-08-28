@@ -113,6 +113,10 @@ impl BlockTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockEdit {
+    /// Version of the source the edit was computed against. Applying the
+    /// edit through the checked mutation boundary rejects a stale value
+    /// instead of splicing it into newer text.
+    pub document_version: u64,
     pub range: Range<usize>,
     pub replacement: String,
     pub selection_after: Range<usize>,
@@ -177,6 +181,7 @@ pub fn slash_command_edit(
     let (replacement, caret) = slash_template(command, line_ending);
     let start = query.source_range.start;
     Ok(BlockEdit {
+        document_version: current_version,
         range: query.source_range.clone(),
         replacement,
         selection_after: start + caret..start + caret,
@@ -267,6 +272,7 @@ pub fn transform_block(
     let selection_after = transform_caret(transform, &replacement, start, line_ending);
     replacement.push_str(trailing);
     Ok(BlockEdit {
+        document_version: current_version,
         range: block.source_range.clone(),
         replacement,
         selection_after,
@@ -293,6 +299,7 @@ pub fn duplicate_block(
     let replacement = format!("{authored}{separator}{authored}");
     let second_start = unit.start + authored.len() + separator.len();
     Ok(BlockEdit {
+        document_version: current_version,
         range: unit,
         replacement,
         selection_after: second_start..second_start,
@@ -311,6 +318,7 @@ pub fn delete_block(
     }
     let unit = source_unit(source, blocks, index)?;
     Ok(BlockEdit {
+        document_version: current_version,
         selection_after: unit.start..unit.start,
         range: unit,
         replacement: String::new(),
@@ -376,6 +384,7 @@ pub fn reorder_block(
             .count();
     replacement.insert_str(insertion, &moved);
     Ok(BlockEdit {
+        document_version: current_version,
         range: 0..source.len(),
         replacement,
         selection_after: selected_start..selected_start,
