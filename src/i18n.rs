@@ -825,9 +825,10 @@ pub enum P0Msg {
     Right,
     Replace,
     MissingImage,
+    IntegrityMutationRejected,
 }
 
-const P0_EN: [&str; 31] = [
+const P0_EN: [&str; 32] = [
     "Save the Markdown document before adding image resources",
     "Images inserted; some resources failed: {0}",
     "Choose replacement image",
@@ -859,8 +860,9 @@ const P0_EN: [&str; 31] = [
     "Right",
     "Replace…",
     "Missing or unreadable image: {0}\n{1}",
+    "An unsafe or stale edit was rejected; the document was preserved. Details were written to the Markion log.",
 ];
-const P0_ZH_HANS: [&str; 31] = [
+const P0_ZH_HANS: [&str; 32] = [
     "添加图片资源前请先保存 Markdown 文档",
     "图片已插入；部分资源失败：{0}",
     "选择替换图片",
@@ -892,8 +894,9 @@ const P0_ZH_HANS: [&str; 31] = [
     "右对齐",
     "替换…",
     "图片缺失或无法读取：{0}\n{1}",
+    "已拒绝不安全或过期的编辑，文档内容已保留；详情已写入 Markion 日志。",
 ];
-const P0_ZH_HANT: [&str; 31] = [
+const P0_ZH_HANT: [&str; 32] = [
     "加入圖片資源前請先儲存 Markdown 文件",
     "圖片已插入；部分資源失敗：{0}",
     "選擇替換圖片",
@@ -925,8 +928,9 @@ const P0_ZH_HANT: [&str; 31] = [
     "靠右",
     "替換…",
     "圖片遺失或無法讀取：{0}\n{1}",
+    "已拒絕不安全或過期的編輯，文件內容已保留；詳情已寫入 Markion 日誌。",
 ];
-const P0_JA: [&str; 31] = [
+const P0_JA: [&str; 32] = [
     "画像リソースを追加する前に Markdown 文書を保存してください",
     "画像を挿入しました。一部のリソースに失敗しました: {0}",
     "置換画像を選択",
@@ -958,8 +962,9 @@ const P0_JA: [&str; 31] = [
     "右",
     "置換…",
     "画像が見つからないか読み込めません：{0}\n{1}",
+    "安全でないか古い編集を拒否し、文書を保持しました。詳細は Markion ログに記録されています。",
 ];
-const P0_FR: [&str; 31] = [
+const P0_FR: [&str; 32] = [
     "Enregistrez le document Markdown avant d’ajouter des images",
     "Images insérées ; certains fichiers ont échoué : {0}",
     "Choisir l’image de remplacement",
@@ -991,8 +996,9 @@ const P0_FR: [&str; 31] = [
     "Droite",
     "Remplacer…",
     "Image absente ou illisible : {0}\n{1}",
+    "Une modification non sûre ou obsolète a été refusée ; le document a été préservé. Les détails figurent dans le journal Markion.",
 ];
-const P0_DE: [&str; 31] = [
+const P0_DE: [&str; 32] = [
     "Speichern Sie das Markdown-Dokument, bevor Sie Bilder hinzufügen",
     "Bilder eingefügt; einige Ressourcen sind fehlgeschlagen: {0}",
     "Ersatzbild auswählen",
@@ -1024,8 +1030,9 @@ const P0_DE: [&str; 31] = [
     "Rechts",
     "Ersetzen…",
     "Fehlendes oder nicht lesbares Bild: {0}\n{1}",
+    "Eine unsichere oder veraltete Bearbeitung wurde abgelehnt; das Dokument blieb erhalten. Details stehen im Markion-Protokoll.",
 ];
-const P0_ES: [&str; 31] = [
+const P0_ES: [&str; 32] = [
     "Guarda el documento Markdown antes de añadir imágenes",
     "Imágenes insertadas; algunos recursos fallaron: {0}",
     "Elegir imagen de reemplazo",
@@ -1057,6 +1064,7 @@ const P0_ES: [&str; 31] = [
     "Derecha",
     "Reemplazar…",
     "Imagen ausente o ilegible: {0}\n{1}",
+    "Se rechazó una edición insegura u obsoleta; el documento se conservó. Los detalles se escribieron en el registro de Markion.",
 ];
 
 pub fn p0_t(lang: Language, msg: P0Msg) -> &'static str {
@@ -6043,6 +6051,7 @@ mod tests {
             P0Msg::Right,
             P0Msg::Replace,
             P0Msg::MissingImage,
+            P0Msg::IntegrityMutationRejected,
         ];
         for language in Language::all() {
             for message in messages {

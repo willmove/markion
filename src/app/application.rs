@@ -215,6 +215,8 @@ impl MarkionApp {
             #[cfg(test)]
             last_tab_strip_reveal: None,
             input_marked_len: 0,
+            document_input_target: None,
+            ime_input_target: None,
             selected_tree_path: None,
             collapsed_tree_paths: HashSet::new(),
             file_tree_needs_initial_collapse: false,
