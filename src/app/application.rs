@@ -815,6 +815,12 @@ impl MarkionApp {
                 }
                 ExternalCheckOutcome::Modified { reload } => match reload {
                     Some(Ok((text, identity))) if !self.tabs[index].document.is_dirty() => {
+                        tracing::debug!(
+                            target: "markion::editing",
+                            op = "reload_external_disk",
+                            tab = index,
+                            "clean document reloaded from disk"
+                        );
                         self.release_tab_image_claims(index, cx);
                         let tab = &mut self.tabs[index];
                         tab.document.apply_external_reload(text, identity);

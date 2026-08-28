@@ -789,6 +789,13 @@ impl MarkdownDocument {
     pub fn set_text(&mut self, text: impl Into<String>) {
         let text = text.into();
         if self.text != text {
+            tracing::debug!(
+                target: "markion::document",
+                version = self.text_version,
+                old_len = self.text.len(),
+                new_len = text.len(),
+                "document text replaced wholesale"
+            );
             self.text = text;
             self.invalidate_derived();
         }
@@ -806,6 +813,18 @@ impl MarkdownDocument {
     }
 
     fn replace_source_range(&mut self, range: Range<usize>, replacement: &str) {
+        // Never logs content: version + offsets + lengths are enough to
+        // reconstruct which operation corrupted in-memory text when a repro
+        // of the duplicated-headings incident is captured from logs.
+        tracing::debug!(
+            target: "markion::document",
+            version = self.text_version,
+            start = range.start,
+            end = range.end,
+            replacement_len = replacement.len(),
+            old_len = self.text.len(),
+            "document source replaced"
+        );
         let old_version = self.text_version;
         let new_version = old_version.wrapping_add(1);
         let edit = source_mapped::SourceEdit::new(

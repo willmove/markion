@@ -2037,6 +2037,56 @@ fn visual_block_splice_preserves_shifted_rows_by_identity() {
     assert_eq!(visual_block_splice(&old, &new), (0..1, 1));
 }
 
+/// The tail whitespace row is the row whose covered blank-line count changes
+/// while Enter is pressed at the document end. Whatever identity the
+/// incremental cache assigns, the splice must cover that row so the
+/// virtualized list drops any cached height and re-measures it.
+#[test]
+fn visual_block_splice_remeasures_tail_whitespace_when_it_grows() {
+    let mut document = MarkdownDocument::from_text("para\n\n");
+    let old = document.visual_blocks();
+    let old_tail = old.last().unwrap();
+    assert_eq!(old_tail.kind, markion::VisualBlockKind::Whitespace);
+    let old_signature = old_tail.height_signature;
+
+    // Two Enters at the tail: two more covered newlines.
+    document.replace_range(document.text().len()..document.text().len(), "\n\n");
+    let new = document.visual_blocks();
+    let new_tail = new.last().unwrap();
+    assert_eq!(new_tail.kind, markion::VisualBlockKind::Whitespace);
+    assert!(new_tail.height_signature > old_signature);
+
+    let (range, count) = visual_block_splice(&old, &new);
+    assert_eq!(count, 1);
+    assert!(
+        range.contains(&(old.len() - 1)),
+        "tail row spliced: {range:?}"
+    );
+}
+
+/// Identity-preserving rows with an unchanged height signature keep their
+/// cached heights; the same id with a changed signature must be re-spliced.
+/// The signature is built by mutating a cloned slice so both sides share ids.
+#[test]
+fn visual_block_splice_keys_height_mutable_rows_on_signature() {
+    let document = MarkdownDocument::from_text("first\n\nsecond\n\nthird\n");
+    let old = document.visual_blocks();
+
+    // Same ids everywhere, but the tail whitespace signature changes: the
+    // whitespace row must land inside the splice even though every id is
+    // equal, while the content rows around it stay reusable.
+    let mut new = old.clone();
+    let tail = new.last_mut().unwrap();
+    tail.height_signature = Some(tail.height_signature.map_or(1, |lines| lines + 3));
+    assert_eq!(
+        visual_block_splice(&old, &new),
+        (old.len() - 1..old.len(), 1)
+    );
+
+    // Identical slices (same ids, same signatures) remain a no-op splice.
+    assert_eq!(visual_block_splice(&old, &old), (old.len()..old.len(), 0));
+}
+
 #[test]
 fn preview_block_splice_isolates_a_single_changed_block() {
     let old = blocks(&["a", "b", "c"]);
@@ -2087,6 +2137,36 @@ fn preview_block_splice_result_reconstructs_new_slice() {
         reconstructed.splice(range, inserted);
         assert_eq!(reconstructed, new, "old={old_tags:?} new={new_tags:?}");
     }
+}
+
+#[test]
+fn whitespace_row_height_grows_with_blank_lines_without_the_old_cap() {
+    // Zero/one newline both floor at a single row height.
+    assert_eq!(whitespace_row_height(0), WHITESPACE_ROW_LINE_HEIGHT);
+    assert_eq!(whitespace_row_height(1), WHITESPACE_ROW_LINE_HEIGHT);
+    // Growth is linear and stays visible far past the former 72px cap (~6
+    // lines): every Enter at the document tail must change the rendered
+    // height, in both directions (typo fix / undo shrink symmetrically).
+    for lines in 2..=40 {
+        assert_eq!(
+            whitespace_row_height(lines),
+            lines as f32 * WHITESPACE_ROW_LINE_HEIGHT
+        );
+    }
+    assert_eq!(whitespace_row_height(40), 40. * WHITESPACE_ROW_LINE_HEIGHT);
+    assert_eq!(whitespace_row_height(3), 3. * WHITESPACE_ROW_LINE_HEIGHT);
+}
+
+#[test]
+fn whitespace_row_height_respects_the_pathological_bound() {
+    assert_eq!(
+        whitespace_row_height(WHITESPACE_ROW_MAX_LINES),
+        WHITESPACE_ROW_MAX_LINES as f32 * WHITESPACE_ROW_LINE_HEIGHT
+    );
+    assert_eq!(
+        whitespace_row_height(WHITESPACE_ROW_MAX_LINES + 100_000),
+        WHITESPACE_ROW_MAX_LINES as f32 * WHITESPACE_ROW_LINE_HEIGHT
+    );
 }
 
 #[test]

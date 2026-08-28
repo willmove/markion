@@ -132,6 +132,15 @@ impl EntityInputHandler for MarkionApp {
             .as_ref()
             .map_or_else(|| new_text.to_string(), |edit| edit.replacement.clone());
 
+        tracing::debug!(
+            target: "markion::editing",
+            op = "replace_text_in_range",
+            range = ?edit_range,
+            replacement_len = replacement.len(),
+            marked = active_marked_range.is_some(),
+            "platform text input"
+        );
+
         let changed = tab
             .document
             .text()
@@ -239,6 +248,14 @@ impl EntityInputHandler for MarkionApp {
         let replacement = direct_edit
             .as_ref()
             .map_or_else(|| new_text.to_string(), |edit| edit.replacement.clone());
+
+        tracing::debug!(
+            target: "markion::editing",
+            op = "ime_composition_mark",
+            range = ?edit_range,
+            replacement_len = replacement.len(),
+            "IME composition update"
+        );
 
         let changed = tab
             .document

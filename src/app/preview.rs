@@ -1939,12 +1939,26 @@ pub(super) fn preview_block_splice(
 /// Visual rows reconcile by stable source lineage rather than byte ranges.
 /// The row builder still reads the fresh block slice after the splice, so
 /// preserved rows receive current offsets without losing cached heights.
+/// Height-mutable rows (whitespace) additionally compare their rendered
+/// height — identity alone would let a grown or shrunk whitespace row keep
+/// a stale cached list height and under-report the scroll extent. The
+/// signature maps through [`whitespace_row_height`] so growth past the
+/// sanity bound (which no longer changes the rendered height) also stops
+/// forcing re-measures.
 pub(super) fn visual_block_splice(
     old: &[VisualBlock],
     new: &[VisualBlock],
 ) -> (std::ops::Range<usize>, usize) {
-    let old_ids = old.iter().map(|block| block.id).collect::<Vec<_>>();
-    let new_ids = new.iter().map(|block| block.id).collect::<Vec<_>>();
+    let row_identity = |block: &VisualBlock| {
+        (
+            block.id,
+            block
+                .height_signature
+                .map(|lines| whitespace_row_height(lines as usize)),
+        )
+    };
+    let old_ids = old.iter().map(row_identity).collect::<Vec<_>>();
+    let new_ids = new.iter().map(row_identity).collect::<Vec<_>>();
     block_splice(&old_ids, &new_ids)
 }
 
@@ -2994,6 +3008,20 @@ pub(super) fn visual_block_index_for_offset(
     })
 }
 
+/// Visual Edit whitespace rows use a compact 12px per covered blank line.
+pub(super) const WHITESPACE_ROW_LINE_HEIGHT: f32 = 12.;
+/// Sanity bound for pathological documents; ~49k px of tail whitespace is far
+/// beyond any real document while keeping row heights bounded.
+pub(super) const WHITESPACE_ROW_MAX_LINES: usize = 4096;
+
+/// Height of a Visual Edit whitespace row: 12px per covered blank line,
+/// floored at one line. Uncapped up to the sanity bound so trailing blank
+/// lines stay visible no matter how many the source carries — a small fixed
+/// cap here previously made every Enter past the cap silently invisible.
+pub(super) fn whitespace_row_height(line_count: usize) -> f32 {
+    line_count.clamp(1, WHITESPACE_ROW_MAX_LINES) as f32 * WHITESPACE_ROW_LINE_HEIGHT
+}
+
 pub(super) fn visual_block_view(
     app: &MarkionApp,
     block: &VisualBlock,
@@ -3265,9 +3293,8 @@ pub(super) fn visual_block_view(
             let line_count = text[source_range.clone()]
                 .bytes()
                 .filter(|byte| *byte == b'\n')
-                .count()
-                .max(1);
-            let row_height = (line_count as f32 * 12.).clamp(12., 72.);
+                .count();
+            let row_height = whitespace_row_height(line_count);
 
             if owns_caret {
                 // Whitespace owning the caret is painted as the same

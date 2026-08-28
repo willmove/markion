@@ -501,6 +501,12 @@ impl MarkionApp {
 
     fn reload_active_external(&mut self, cx: &mut Context<Self>) {
         let active = self.active_tab;
+        tracing::debug!(
+            target: "markion::editing",
+            op = "reload_external_conflict",
+            tab = active,
+            "conflict dialog reload accepted"
+        );
         self.release_tab_image_claims(active, cx);
         let tab = self.active_tab_mut();
         match tab.document.reload_from_disk() {

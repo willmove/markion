@@ -43,8 +43,13 @@ pub fn init_logging_to(log_dir: &Path) -> Result<(), Box<dyn std::error::Error>>
 
     let console_layer = fmt::layer().compact().with_target(false);
 
-    // RUST_LOG wins when set; otherwise default to info.
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // RUST_LOG wins when set; otherwise default to info plus debug for the
+    // app's own crates. The debug tier carries the per-mutation diagnostics
+    // (`markion::document` / `markion::editing` targets) that make a repro of
+    // in-memory text corruption identifiable from logs; dependency crates stay
+    // at info so the volume cost is a few lines per document edit.
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,markion=debug"));
 
     tracing_subscriber::registry()
         .with(env_filter)

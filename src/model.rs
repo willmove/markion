@@ -910,6 +910,13 @@ pub struct VisualBlock {
     pub marker_ranges: Vec<Range<usize>>,
     /// Exact structural prefix for supported line-oriented blocks.
     pub block_prefix: Option<VisualBlockPrefix>,
+    /// Rendered-geometry provenance for rows whose height depends on source
+    /// content that can change while the block identity stays stable. A
+    /// whitespace row carries its covered newline count; every other kind is
+    /// `None` because identity already proves its geometry unchanged. The
+    /// virtualized list compares this alongside `id` so a height-mutable row
+    /// is re-measured instead of reusing a stale cached height.
+    pub height_signature: Option<u32>,
     /// Quote decoration and exact source markers inherited from an enclosing
     /// blockquote. The visual row remains a paragraph/list leaf.
     pub quote_context: Option<VisualQuoteContext>,

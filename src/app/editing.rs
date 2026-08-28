@@ -598,6 +598,13 @@ impl MarkionApp {
         status: SharedString,
         cx: &mut Context<Self>,
     ) {
+        tracing::debug!(
+            target: "markion::editing",
+            op = "exact_block_edit",
+            range = ?edit.range,
+            replacement_len = edit.replacement.len(),
+            "block menu edit"
+        );
         self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         self.active_tab_mut()
@@ -816,6 +823,7 @@ impl MarkionApp {
     }
 
     pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        tracing::debug!(target: "markion::editing", op = "undo", "undo invoked");
         if self.active_tab_mut().apply_undo() {
             self.active_menu = None;
             self.after_document_changed(cx);
@@ -827,6 +835,7 @@ impl MarkionApp {
     }
 
     pub(super) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        tracing::debug!(target: "markion::editing", op = "redo", "redo invoked");
         if self.active_tab_mut().apply_redo() {
             self.active_menu = None;
             self.after_document_changed(cx);
@@ -843,6 +852,12 @@ impl MarkionApp {
         status: SharedString,
         cx: &mut Context<Self>,
     ) {
+        tracing::debug!(
+            target: "markion::editing",
+            op = "apply_markdown_format",
+            selection = ?self.active_tab().selected_range,
+            "format action"
+        );
         self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         let tab = self.active_tab_mut();
@@ -880,6 +895,12 @@ impl MarkionApp {
         status: SharedString,
         cx: &mut Context<Self>,
     ) {
+        tracing::debug!(
+            target: "markion::editing",
+            op = "table_edit",
+            offset,
+            "table toolbar or source command"
+        );
         self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         let tab = self.active_tab_mut();
@@ -2048,6 +2069,14 @@ impl MarkionApp {
             && selected.is_empty())
         .then(|| self.active_tab().document.visual_enter_edit(cursor))
         .flatten();
+        tracing::debug!(
+            target: "markion::editing",
+            op = "insert_newline",
+            cursor,
+            selection_len = selected.len(),
+            structural = structural_edit.is_some(),
+            "enter pressed"
+        );
         self.push_undo_snapshot();
         let tab = self.active_tab_mut();
         if let Some(edit) = structural_edit {

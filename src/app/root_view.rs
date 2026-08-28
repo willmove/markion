@@ -543,17 +543,30 @@ impl Render for MarkionApp {
                                                 // viewport, so preview render cost is
                                                 // O(visible) rather than O(document).
                                                 //
-                                                // GPUI's list uses padding for vertical
-                                                // scroll math, but item layout still starts
-                                                // at the list's left edge. Keep horizontal
-                                                // padding on the parent surface so rows are
-                                                // actually inset from the overlay scrollbar.
-                                                list(
-                                                    preview_list_state.clone(),
-                                                    cx.processor(
-                                                        move |app, ix: usize, _window, cx| {
-                                                            let block = &preview_items[ix];
-                                                            let row = div()
+                                                // Padding lives on this wrapper, not on
+                                                // the list element itself: GPUI's list
+                                                // scroll math (`max_offset_for_scrollbar`)
+                                                // ignores the list's own padding, so
+                                                // padding on the list would make the last
+                                                // row permanently unreachable at the
+                                                // bottom. The wrapper keeps both insets
+                                                // while the list's bounds cover exactly
+                                                // its scrollable content.
+                                                div()
+                                                    .size_full()
+                                                    .pt(px(PANE_INNER_PADDING))
+                                                    .pb(px(PANE_INNER_PADDING))
+                                                    .child(
+                                                        list(
+                                                            preview_list_state.clone(),
+                                                            cx.processor(
+                                                                move |app,
+                                                                      ix: usize,
+                                                                      _window,
+                                                                      cx| {
+                                                                    let block =
+                                                                        &preview_items[ix];
+                                                                    let row = div()
                                                                 .debug_selector(move || {
                                                                     format!(
                                                                         "preview-block-row-{ix}"
@@ -587,10 +600,9 @@ impl Render for MarkionApp {
                                                         },
                                                     ),
                                                 )
-                                                .size_full()
-                                                .pt(px(PANE_INNER_PADDING))
-                                                .pb(px(PANE_INNER_PADDING)),
+                                                    .size_full(),
                                             ),
+                                        ),
                                     )
                                     .child(preview_list_scrollbar_view(
                                         &preview_list_state,
@@ -1523,11 +1535,17 @@ pub(super) fn visual_edit_surface_view(
                     )
                 })
                 .when(!is_empty, move |surface| {
+                    // Padding on the wrapper (not the list) so the list's
+                    // scroll extent covers exactly its content: GPUI's
+                    // `max_offset_for_scrollbar` ignores the list's own
+                    // padding, and list-borne padding previously made the
+                    // last row unreachable at the pane bottom.
                     surface.child(
-                        list(list_state, row_processor)
+                        div()
                             .size_full()
                             .pt(px(PANE_INNER_PADDING))
-                            .pb(px(PANE_INNER_PADDING)),
+                            .pb(px(PANE_INNER_PADDING))
+                            .child(list(list_state, row_processor).size_full()),
                     )
                 }),
         )
