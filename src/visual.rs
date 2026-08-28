@@ -1840,13 +1840,13 @@ fn push_text_runs(
 ) {
     let event_source = &source[event_range.clone()];
     if event_source != visible {
-        if let Some(escapes) = escape_matches(event_source, visible)
-            && push_escaped_text_runs(
+        if let Some(spans) = decoded_text_matches(event_source, visible)
+            && push_decoded_text_runs(
                 runs,
                 candidates,
                 source,
                 event_source,
-                &escapes,
+                &spans,
                 event_range.clone(),
                 base_style,
                 link_target_range.clone(),
@@ -1880,19 +1880,22 @@ fn push_text_runs(
 }
 
 /// Splits a text event whose parser transformation is proven to consist of
-/// backslash escapes (see `escape_matches`). Each escaped character becomes a
-/// one-byte content run plus an `Escape` reveal candidate — the backslash
-/// byte stays uncovered so `marker_ranges` hides it — and the remaining
-/// segments keep the identity handling, extended inline markers included.
-/// Extended markers compose only when every escape is disjoint from the
-/// construct or fully inside its content; any other overlap is unproven and
-/// returns `false` so the caller keeps the conservative fallback.
-fn push_escaped_text_runs(
+/// decoded spans — backslash escapes and HTML entity references (see
+/// `decoded_text_matches`). Each escape becomes a one-byte content run plus
+/// an `Escape` reveal candidate — the backslash byte stays uncovered so
+/// `marker_ranges` hides it — each entity becomes a single-character run
+/// plus an `Entity` reveal candidate covering the full authored token, and
+/// the remaining segments keep the identity handling, extended inline
+/// markers included. Extended markers compose only when every decoded span
+/// is disjoint from the construct or fully inside its content; any other
+/// overlap is unproven and returns `false` so the caller keeps the
+/// conservative fallback.
+fn push_decoded_text_runs(
     runs: &mut Vec<VisualInlineRun>,
     candidates: &mut Vec<RevealCandidate>,
     source: &str,
     event_source: &str,
-    escapes: &[Range<usize>],
+    spans: &[DecodedSpan],
     event_range: Range<usize>,
     base_style: InlineStyle,
     link_target_range: Option<Range<usize>>,
@@ -1900,11 +1903,11 @@ fn push_escaped_text_runs(
 ) -> bool {
     let extended = extended_inline_matches(event_source);
     let conflicting = extended.iter().any(|item| {
-        escapes.iter().any(|escape| {
-            let overlaps =
-                escape.start < item.source_range.end && item.source_range.start < escape.end;
-            let inside_content =
-                escape.start >= item.content_range.start && escape.end <= item.content_range.end;
+        spans.iter().any(|span| {
+            let overlaps = span.range.start < item.source_range.end
+                && item.source_range.start < span.range.end;
+            let inside_content = span.range.start >= item.content_range.start
+                && span.range.end <= item.content_range.end;
             overlaps && !inside_content
         })
     });
@@ -1934,8 +1937,8 @@ fn push_escaped_text_runs(
             link_target_range: None,
         });
     }
-    for escape in escapes {
-        boundaries.extend([escape.start, escape.end]);
+    for span in spans {
+        boundaries.extend([span.range.start, span.range.end]);
     }
     boundaries.sort_unstable();
     boundaries.dedup();
@@ -1961,49 +1964,115 @@ fn push_escaped_text_runs(
                 }
             }
         }
-        let escape = escapes
-            .iter()
-            .find(|escape| escape.start == local_range.start && escape.end == local_range.end);
-        let (run_source, run_range) = match escape {
-            Some(escape) => (
-                &event_source[escape.start + 1..escape.end],
-                event_range.start + escape.start + 1..event_range.start + escape.end,
-            ),
-            None => (
-                &event_source[local_range.clone()],
-                event_range.start + local_range.start..event_range.start + local_range.end,
-            ),
-        };
-        if escape.is_some() {
-            candidates.push(RevealCandidate {
-                kind: VisualRevealKind::Escape,
-                source_range: event_range.start + local_range.start
-                    ..event_range.start + local_range.end,
-                link_target_range: None,
-            });
+        let span = spans.iter().find(|span| {
+            span.range.start == local_range.start && span.range.end == local_range.end
+        });
+        match span {
+            Some(span) if span.kind == DecodedSpanKind::Escape => {
+                candidates.push(RevealCandidate {
+                    kind: VisualRevealKind::Escape,
+                    source_range: event_range.start + local_range.start
+                        ..event_range.start + local_range.end,
+                    link_target_range: None,
+                });
+                push_run(
+                    runs,
+                    source,
+                    &event_source[span.range.start + 1..span.range.end],
+                    event_range.start + span.range.start + 1..event_range.start + span.range.end,
+                    style,
+                    link_target_range.clone(),
+                    navigation.clone(),
+                    false,
+                );
+            }
+            Some(span) => {
+                candidates.push(RevealCandidate {
+                    kind: VisualRevealKind::Entity,
+                    source_range: event_range.start + local_range.start
+                        ..event_range.start + local_range.end,
+                    link_target_range: None,
+                });
+                push_decoded_entity_run(
+                    runs,
+                    span.decoded,
+                    event_range.start + span.range.start..event_range.start + span.range.end,
+                    style,
+                    link_target_range.clone(),
+                    navigation.clone(),
+                );
+            }
+            None => {
+                push_run(
+                    runs,
+                    source,
+                    &event_source[local_range.clone()],
+                    event_range.start + local_range.start..event_range.start + local_range.end,
+                    style,
+                    link_target_range.clone(),
+                    navigation.clone(),
+                    false,
+                );
+            }
         }
-        push_run(
-            runs,
-            source,
-            run_source,
-            run_range,
-            style,
-            link_target_range.clone(),
-            navigation.clone(),
-            false,
-        );
     }
     true
 }
 
-/// Byte ranges of backslash-escaped ASCII punctuation inside an event slice,
-/// proven by reconstruction: removing one backslash before each escaped
-/// punctuation character must reproduce the parser's visible text exactly.
-/// Returns `None` when the difference cannot be explained by escapes alone
-/// (e.g. HTML entities), so the caller keeps the conservative fallback.
-fn escape_matches(event_source: &str, visible: &str) -> Option<Vec<Range<usize>>> {
+/// Emits the run for one decoded entity token: a single visible character
+/// backed by the full authored token range. The decoded character generally
+/// does not occur inside the token's source bytes, so `push_run`'s substring
+/// proof cannot apply; the run carries the token as both its source and
+/// content range and never triggers the conservative fallback.
+fn push_decoded_entity_run(
+    runs: &mut Vec<VisualInlineRun>,
+    decoded: char,
+    token_range: Range<usize>,
+    style: InlineStyle,
+    link_target_range: Option<Range<usize>>,
+    navigation: Option<VisualNavigationTarget>,
+) {
+    runs.push(VisualInlineRun {
+        visible_text: decoded.to_string(),
+        source_range: token_range.clone(),
+        content_range: token_range,
+        style,
+        link_target_range,
+        navigation,
+        math: None,
+        html_image: None,
+        conservative_fallback: false,
+    });
+}
+
+/// One proven parser transformation inside a text event slice: either a
+/// backslash escape (two source bytes rendering one punctuation character)
+/// or an HTML entity reference (the full authored `&…;` token rendering one
+/// decoded character).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DecodedSpanKind {
+    Escape,
+    Entity,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct DecodedSpan {
+    /// Byte range of the authored syntax inside the event slice.
+    range: Range<usize>,
+    kind: DecodedSpanKind,
+    /// The character the parser emits for the span.
+    decoded: char,
+}
+
+/// Proves that the difference between an event slice and the parser's
+/// visible text consists only of backslash escapes and HTML entity
+/// references, by reconstruction: applying the parser's escape and entity
+/// decoding rules must reproduce the visible text exactly. Returns the
+/// proven spans, or `None` when the difference cannot be explained, so
+/// the caller keeps the conservative fallback.
+fn decoded_text_matches(event_source: &str, visible: &str) -> Option<Vec<DecodedSpan>> {
     let bytes = event_source.as_bytes();
-    let mut escapes = Vec::new();
+    let mut spans = Vec::new();
     let mut reconstructed = String::with_capacity(visible.len());
     let mut index = 0;
     while index < bytes.len() {
@@ -2011,19 +2080,328 @@ fn escape_matches(event_source: &str, visible: &str) -> Option<Vec<Range<usize>>
             && index + 1 < bytes.len()
             && bytes[index + 1].is_ascii_punctuation()
         {
-            escapes.push(index..index + 2);
             // Escaped ASCII punctuation is one ASCII byte, so re-encoding it
             // as `char` cannot split a multi-byte sequence.
-            reconstructed.push(bytes[index + 1] as char);
+            let decoded = bytes[index + 1] as char;
+            spans.push(DecodedSpan {
+                range: index..index + 2,
+                kind: DecodedSpanKind::Escape,
+                decoded,
+            });
+            reconstructed.push(decoded);
             index += 2;
-        } else {
-            let ch = event_source[index..].chars().next()?;
-            reconstructed.push(ch);
-            index += ch.len_utf8();
+            continue;
         }
+        if bytes[index] == b'&'
+            && let Some(token_len) = entity_token_len(&event_source[index..])
+            && let Some(decoded) = decode_entity_token(&event_source[index..index + token_len])
+        {
+            spans.push(DecodedSpan {
+                range: index..index + token_len,
+                kind: DecodedSpanKind::Entity,
+                decoded,
+            });
+            reconstructed.push(decoded);
+            index += token_len;
+            continue;
+        }
+        let ch = event_source[index..].chars().next()?;
+        reconstructed.push(ch);
+        index += ch.len_utf8();
     }
-    (reconstructed == visible).then_some(escapes)
+    (reconstructed == visible).then_some(spans)
 }
+
+/// Length in bytes of one entity reference starting at `source` (including
+/// the leading `&` and trailing `;`), mirroring the parser's entity scan
+/// shape: `&#` with up to 7 decimal or `&#x` with up to 6 hexadecimal
+/// digits, or `&` with an ASCII alphanumeric name. The decode itself happens
+/// in `decode_entity_token`; unknown names return a length here but no
+/// decode, so the authored bytes stay literal.
+fn entity_token_len(source: &str) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut end = 1;
+    if bytes.get(end) == Some(&b'#') {
+        end += 1;
+        let is_hex = end < bytes.len() && bytes[end] | 0x20 == b'x';
+        if is_hex {
+            end += 1;
+        }
+        let digit_count = if is_hex {
+            bytes[end..]
+                .iter()
+                .take(6)
+                .take_while(|byte| byte.is_ascii_hexdigit())
+                .count()
+        } else {
+            bytes[end..]
+                .iter()
+                .take(7)
+                .take_while(|byte| byte.is_ascii_digit())
+                .count()
+        };
+        if digit_count == 0 {
+            return None;
+        }
+        end += digit_count;
+        return (bytes.get(end) == Some(&b';')).then_some(end + 1);
+    }
+    end += bytes[end..]
+        .iter()
+        .take_while(|byte| byte.is_ascii_alphanumeric())
+        .count();
+    (bytes.get(end) == Some(&b';')).then_some(end + 1)
+}
+
+/// Decodes one complete entity token (`&…;`) to the single character the
+/// parser emits, mirroring its shape rules: numeric references map their
+/// code point, and named references resolve through the proven
+/// single-character table. Zero, surrogate, and out-of-range code points
+/// return `None` even though the parser substitutes U+FFFD — the projection
+/// degrades to the conservative fallback instead of guessing — as does any
+/// unknown name, so those authored bytes stay literal.
+fn decode_entity_token(token: &str) -> Option<char> {
+    let bytes = token.as_bytes();
+    if bytes.len() < 4 || bytes[0] != b'&' || bytes[bytes.len() - 1] != b';' {
+        return None;
+    }
+    if bytes[1] == b'#' {
+        let (digits, radix) = if bytes[2] | 0x20 == b'x' {
+            (&bytes[3..bytes.len() - 1], 16u32)
+        } else {
+            (&bytes[2..bytes.len() - 1], 10u32)
+        };
+        let max_digits = if radix == 16 { 6 } else { 7 };
+        if digits.is_empty() || digits.len() > max_digits {
+            return None;
+        }
+        let mut codepoint = 0u32;
+        for byte in digits {
+            let digit = match byte {
+                b'0'..=b'9' => u32::from(byte - b'0'),
+                _ if radix == 16 => {
+                    let lower = byte | 0x20;
+                    if (b'a'..=b'f').contains(&lower) {
+                        u32::from(lower - b'a' + 10)
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            };
+            codepoint = codepoint.checked_mul(radix)?.checked_add(digit)?;
+        }
+        return if codepoint == 0 {
+            None
+        } else {
+            char::from_u32(codepoint)
+        };
+    }
+    named_entity_char(&token[1..token.len() - 1])
+}
+
+fn named_entity_char(name: &str) -> Option<char> {
+    NAMED_ENTITY_DECODES
+        .iter()
+        .find(|(candidate, _)| *candidate == name)
+        .map(|(_, decoded)| *decoded)
+}
+
+/// Named HTML entities proven to decode to exactly one character, verified
+/// byte-for-byte against the parser's entity table. Entities decoding to
+/// multiple code points are intentionally absent: they fail the lookup, so
+/// their authored bytes stay literal and unproven input keeps the
+/// conservative fallback.
+const NAMED_ENTITY_DECODES: &[(&str, char)] = &[
+    // Core.
+    ("AMP", '&'),
+    ("AElig", '\u{00C6}'),
+    ("Aacute", '\u{00C1}'),
+    ("Acirc", '\u{00C2}'),
+    ("Agrave", '\u{00C0}'),
+    ("Atilde", '\u{00C3}'),
+    ("Auml", '\u{00C4}'),
+    ("Aring", '\u{00C5}'),
+    ("COPY", '\u{00A9}'),
+    ("Ccedil", '\u{00C7}'),
+    ("ETH", '\u{00D0}'),
+    ("Eacute", '\u{00C9}'),
+    ("Ecirc", '\u{00CA}'),
+    ("Egrave", '\u{00C8}'),
+    ("Euml", '\u{00CB}'),
+    ("GT", '>'),
+    ("Iacute", '\u{00CD}'),
+    ("Icirc", '\u{00CE}'),
+    ("Igrave", '\u{00CC}'),
+    ("Iuml", '\u{00CF}'),
+    ("LT", '<'),
+    ("Ntilde", '\u{00D1}'),
+    ("Oacute", '\u{00D3}'),
+    ("Ocirc", '\u{00D4}'),
+    ("Ograve", '\u{00D2}'),
+    ("Oslash", '\u{00D8}'),
+    ("Otilde", '\u{00D5}'),
+    ("Ouml", '\u{00D6}'),
+    ("QUOT", '"'),
+    ("REG", '\u{00AE}'),
+    ("THORN", '\u{00DE}'),
+    ("TRADE", '\u{2122}'),
+    ("Uacute", '\u{00DA}'),
+    ("Ucirc", '\u{00DB}'),
+    ("Ugrave", '\u{00D9}'),
+    ("Uuml", '\u{00DC}'),
+    ("Yacute", '\u{00DD}'),
+    ("Yuml", '\u{0178}'),
+    ("amp", '&'),
+    ("apos", '\''),
+    ("gt", '>'),
+    ("lt", '<'),
+    ("nbsp", '\u{00A0}'),
+    ("quot", '"'),
+    ("copy", '\u{00A9}'),
+    ("reg", '\u{00AE}'),
+    ("trade", '\u{2122}'),
+    // Typography.
+    ("bull", '\u{2022}'),
+    ("dagger", '\u{2020}'),
+    ("Dagger", '\u{2021}'),
+    ("hellip", '\u{2026}'),
+    ("mdash", '\u{2014}'),
+    ("ndash", '\u{2013}'),
+    ("lsquo", '\u{2018}'),
+    ("rsquo", '\u{2019}'),
+    ("sbquo", '\u{201A}'),
+    ("ldquo", '\u{201C}'),
+    ("rdquo", '\u{201D}'),
+    ("bdquo", '\u{201E}'),
+    ("laquo", '\u{00AB}'),
+    ("raquo", '\u{00BB}'),
+    ("lsaquo", '\u{2039}'),
+    ("rsaquo", '\u{203A}'),
+    ("prime", '\u{2032}'),
+    ("Prime", '\u{2033}'),
+    ("permil", '\u{2030}'),
+    ("frasl", '\u{2044}'),
+    // Math and logic.
+    ("plusmn", '\u{00B1}'),
+    ("times", '\u{00D7}'),
+    ("divide", '\u{00F7}'),
+    ("minus", '\u{2212}'),
+    ("plus", '\u{002B}'),
+    ("lowast", '\u{2217}'),
+    ("infin", '\u{221E}'),
+    ("le", '\u{2264}'),
+    ("ge", '\u{2265}'),
+    ("ne", '\u{2260}'),
+    ("equiv", '\u{2261}'),
+    ("asymp", '\u{2248}'),
+    ("approx", '\u{2248}'),
+    ("cong", '\u{2245}'),
+    ("sim", '\u{223C}'),
+    ("prop", '\u{221D}'),
+    ("sum", '\u{2211}'),
+    ("prod", '\u{220F}'),
+    ("radic", '\u{221A}'),
+    ("part", '\u{2202}'),
+    ("int", '\u{222B}'),
+    ("nabla", '\u{2207}'),
+    ("there4", '\u{2234}'),
+    ("because", '\u{2235}'),
+    ("and", '\u{2227}'),
+    ("or", '\u{2228}'),
+    ("cap", '\u{2229}'),
+    ("cup", '\u{222A}'),
+    ("sub", '\u{2282}'),
+    ("sup", '\u{2283}'),
+    ("nsub", '\u{2284}'),
+    ("ang", '\u{2220}'),
+    ("perp", '\u{22A5}'),
+    ("sdot", '\u{22C5}'),
+    ("not", '\u{00AC}'),
+    ("deg", '\u{00B0}'),
+    ("micro", '\u{00B5}'),
+    // Arrows and geometry.
+    ("larr", '\u{2190}'),
+    ("rarr", '\u{2192}'),
+    ("uarr", '\u{2191}'),
+    ("darr", '\u{2193}'),
+    ("harr", '\u{2194}'),
+    ("lceil", '\u{2308}'),
+    ("rceil", '\u{2309}'),
+    ("lfloor", '\u{230A}'),
+    ("rfloor", '\u{230B}'),
+    ("lang", '\u{27E8}'),
+    ("rang", '\u{27E9}'),
+    ("loz", '\u{25CA}'),
+    ("star", '\u{2606}'),
+    // Symbols.
+    ("sect", '\u{00A7}'),
+    ("para", '\u{00B6}'),
+    ("middot", '\u{00B7}'),
+    ("acute", '\u{00B4}'),
+    ("cedil", '\u{00B8}'),
+    ("iexcl", '\u{00A1}'),
+    ("iquest", '\u{00BF}'),
+    ("circ", '\u{02C6}'),
+    ("tilde", '\u{02DC}'),
+    ("check", '\u{2713}'),
+    ("cross", '\u{2717}'),
+    ("female", '\u{2640}'),
+    ("male", '\u{2642}'),
+    ("spades", '\u{2660}'),
+    ("clubs", '\u{2663}'),
+    ("hearts", '\u{2665}'),
+    ("diams", '\u{2666}'),
+    ("sharp", '\u{266F}'),
+    ("flat", '\u{266D}'),
+    ("natural", '\u{266E}'),
+    // Currency.
+    ("cent", '\u{00A2}'),
+    ("pound", '\u{00A3}'),
+    ("curren", '\u{00A4}'),
+    ("yen", '\u{00A5}'),
+    ("euro", '\u{20AC}'),
+    // Fractions and supercripts.
+    ("frac14", '\u{00BC}'),
+    ("frac12", '\u{00BD}'),
+    ("frac34", '\u{00BE}'),
+    ("sup1", '\u{00B9}'),
+    ("sup2", '\u{00B2}'),
+    ("sup3", '\u{00B3}'),
+    // Lowercase accented letters.
+    ("agrave", '\u{00E0}'),
+    ("aacute", '\u{00E1}'),
+    ("acirc", '\u{00E2}'),
+    ("atilde", '\u{00E3}'),
+    ("auml", '\u{00E4}'),
+    ("aring", '\u{00E5}'),
+    ("aelig", '\u{00E6}'),
+    ("ccedil", '\u{00E7}'),
+    ("egrave", '\u{00E8}'),
+    ("eacute", '\u{00E9}'),
+    ("ecirc", '\u{00EA}'),
+    ("euml", '\u{00EB}'),
+    ("igrave", '\u{00EC}'),
+    ("iacute", '\u{00ED}'),
+    ("icirc", '\u{00EE}'),
+    ("iuml", '\u{00EF}'),
+    ("eth", '\u{00F0}'),
+    ("ntilde", '\u{00F1}'),
+    ("ograve", '\u{00F2}'),
+    ("oacute", '\u{00F3}'),
+    ("ocirc", '\u{00F4}'),
+    ("otilde", '\u{00F5}'),
+    ("ouml", '\u{00F6}'),
+    ("oslash", '\u{00F8}'),
+    ("ugrave", '\u{00F9}'),
+    ("uacute", '\u{00FA}'),
+    ("ucirc", '\u{00FB}'),
+    ("uuml", '\u{00FC}'),
+    ("yacute", '\u{00FD}'),
+    ("thorn", '\u{00FE}'),
+    ("szlig", '\u{00DF}'),
+    ("yuml", '\u{00FF}'),
+];
 
 /// Emits an identity-mapped text slice: the slice equals its visible text, so
 /// it is pushed directly or split around extended inline markers.
@@ -2268,6 +2646,7 @@ fn reveal_candidate_is_exact(
                 && source.as_bytes()[0] == b'\\'
                 && source.as_bytes()[1].is_ascii_punctuation()
         }
+        VisualRevealKind::Entity => decode_entity_token(source).is_some(),
         VisualRevealKind::InlineHtml => {
             matches!(
                 parse_inline_html_style_tag(source),
@@ -3307,17 +3686,236 @@ mod tests {
     }
 
     #[test]
-    fn entity_references_stay_conservative() {
-        let source = "fish &amp; chips";
+    fn entity_references_render_with_progressive_reveal() {
+        let source = "fish &amp; chips &#39;quoted&#39; &#x2014; tail";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks();
+        let block = &blocks[0];
         assert!(
-            blocks[0]
+            block
                 .editable_runs
                 .iter()
-                .any(|run| run.conservative_fallback),
-            "entity transformation is not escape-proven, so it stays conservative"
+                .all(|run| !run.conservative_fallback),
+            "proven entity references render instead of demoting the paragraph"
         );
+        let visible: String = block
+            .editable_runs
+            .iter()
+            .map(|run| run.visible_text.as_str())
+            .collect();
+        assert_eq!(visible, "fish & chips 'quoted' \u{2014} tail");
+
+        // Every decoded character is one run whose source and content range
+        // is the complete authored token.
+        for (token, decoded) in [("&amp;", "&"), ("&#39;", "'"), ("&#x2014;", "\u{2014}")] {
+            let run = block
+                .editable_runs
+                .iter()
+                .find(|run| run.visible_text == decoded)
+                .unwrap_or_else(|| panic!("decoded run for {token}"));
+            assert_eq!(&source[run.source_range.clone()], token);
+            assert_eq!(run.source_range, run.content_range);
+        }
+
+        let entities: Vec<&str> = block
+            .reveal_groups
+            .iter()
+            .filter(|group| group.kind == VisualRevealKind::Entity)
+            .map(|group| &source[group.source_range.clone()])
+            .collect();
+        assert_eq!(entities, vec!["&amp;", "&#39;", "&#39;", "&#x2014;"]);
+        // Entity tokens are fully covered content, so nothing stays hidden.
+        assert!(block.marker_ranges.is_empty());
+    }
+
+    #[test]
+    fn entity_projection_reveal_round_trip() {
+        let source = "fish &amp; chips";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        let token_start = source.find("&amp;").unwrap();
+
+        // Caret anywhere inside the token reveals the complete authored form.
+        for cursor in token_start..token_start + "&amp;".len() {
+            let projection =
+                build_visual_projection_with_marked_range(source, block, 0..0, cursor, None);
+            assert!(
+                projection
+                    .revealed_source_ranges
+                    .contains(&(token_start..token_start + "&amp;".len())),
+                "caret at {cursor} reveals the whole entity token"
+            );
+            assert_eq!(projection.text, "fish &amp; chips");
+        }
+
+        // Caret outside keeps the decoded rendering.
+        let projection = build_visual_projection_with_marked_range(source, block, 0..0, 0, None);
+        assert_eq!(projection.text, "fish & chips");
+        assert!(projection.revealed_source_ranges.is_empty());
+
+        // The single display character maps back to the token boundaries:
+        // before it resolves to the token start, after it to the token end.
+        let amp_display = projection.text.find('&').unwrap();
+        let before = projection.boundary_candidates(amp_display);
+        assert_eq!(before.upstream_source, token_start);
+        assert_eq!(before.downstream_source, token_start);
+        let after = projection.boundary_candidates(amp_display + 1);
+        assert_eq!(after.upstream_source, token_start + "&amp;".len());
+        assert_eq!(after.downstream_source, token_start + "&amp;".len());
+    }
+
+    #[test]
+    fn unproven_entity_forms_stay_conservative() {
+        // Multi-codepoint names, names outside the maintained table, and
+        // numeric forms the parser maps to U+FFFD cannot be proven, so the
+        // paragraph keeps the conservative fallback.
+        for source in [
+            "value &NotEqualTilde; end",
+            "value &ordf; end",
+            "value &#0; end",
+            "value &#xD800; end",
+            "value &#x110000; end",
+            "value &#1114112; end",
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks();
+            assert!(
+                blocks[0]
+                    .editable_runs
+                    .iter()
+                    .any(|run| run.conservative_fallback),
+                "unproven entity form stays conservative: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_entity_forms_decode_like_the_parser() {
+        let source = "a &#65; b &#X41; c &#8212; d &#x2014; e";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let block = &blocks[0];
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback),
+            "complete numeric references render"
+        );
+        let visible: String = block
+            .editable_runs
+            .iter()
+            .map(|run| run.visible_text.as_str())
+            .collect();
+        assert_eq!(visible, "a A b A c \u{2014} d \u{2014} e");
+    }
+
+    #[test]
+    fn entities_compose_with_escapes_and_strong() {
+        let source = r"**a &amp; \* b**";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let block = &blocks[0];
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
+        let visible: String = block
+            .editable_runs
+            .iter()
+            .map(|run| run.visible_text.as_str())
+            .collect();
+        assert_eq!(visible, "a & * b");
+        assert!(
+            block.editable_runs.iter().all(|run| run.style.bold),
+            "entity and escape runs keep the enclosing strong style"
+        );
+        let kinds: Vec<VisualRevealKind> =
+            block.reveal_groups.iter().map(|group| group.kind).collect();
+        assert!(kinds.contains(&VisualRevealKind::Strong));
+        assert!(kinds.contains(&VisualRevealKind::Entity));
+        assert!(kinds.contains(&VisualRevealKind::Escape));
+
+        // Caret inside the entity activates only the containing strong group.
+        let token_start = source.find("&amp;").unwrap();
+        let projection =
+            build_visual_projection_with_marked_range(source, block, 0..0, token_start + 1, None);
+        assert_eq!(
+            projection.revealed_source_ranges,
+            vec![0..source.len()],
+            "the outermost containing group is revealed exactly once"
+        );
+        assert_eq!(projection.text, source);
+    }
+
+    #[test]
+    fn mixed_escapes_and_entities_in_one_event() {
+        let source = r"a \* b &amp; c &#8212; d";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let block = &blocks[0];
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback),
+            "one event mixing escapes and entities proves as a whole"
+        );
+        let visible: String = block
+            .editable_runs
+            .iter()
+            .map(|run| run.visible_text.as_str())
+            .collect();
+        assert_eq!(visible, "a * b & c \u{2014} d");
+    }
+
+    #[test]
+    fn entities_stay_byte_exact_beside_multibyte_text() {
+        let source = "世界 &amp; 中文 &#8212; 完";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let block = &blocks[0];
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
+        let visible: String = block
+            .editable_runs
+            .iter()
+            .map(|run| run.visible_text.as_str())
+            .collect();
+        assert_eq!(visible, "世界 & 中文 \u{2014} 完");
+        let entity_run = block
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text == "&")
+            .expect("decoded ampersand run");
+        assert_eq!(&source[entity_run.content_range.clone()], "&amp;");
+    }
+
+    #[test]
+    fn named_entity_table_matches_pulldown_decoding() {
+        use pulldown_cmark::{Event, Parser};
+
+        for &(name, decoded) in super::NAMED_ENTITY_DECODES {
+            let reference = format!("&{name};");
+            let mut visible = String::new();
+            for event in Parser::new_ext(&reference, crate::parse::visual_markdown_options()) {
+                if let Event::Text(chunk) = event {
+                    visible.push_str(&chunk);
+                }
+            }
+            assert_eq!(
+                visible,
+                decoded.to_string(),
+                "table entry for {reference} disagrees with the parser"
+            );
+        }
     }
 
     #[test]
@@ -3923,7 +4521,9 @@ mod tests {
 
     #[test]
     fn uses_conservative_fallback_when_visible_text_is_not_byte_exact() {
-        let doc = MarkdownDocument::from_text("A &amp; B");
+        // The parser substitutes U+FFFD for the surrogate code point, a
+        // transformation the projection prover intentionally cannot prove.
+        let doc = MarkdownDocument::from_text("A &#xD800; B");
         let blocks = doc.visual_blocks();
         assert!(
             blocks[0]

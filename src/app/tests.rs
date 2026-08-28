@@ -11006,15 +11006,21 @@ fn inline_html_image_renders_mixed_path_including_a_wrapped_badges(cx: &mut Test
 }
 
 #[gpui::test]
-fn visual_edit_renders_escapes_and_inline_html_without_source_island(cx: &mut TestAppContext) {
+fn visual_edit_renders_escapes_inline_html_and_entities_without_source_island(
+    cx: &mut TestAppContext,
+) {
     // Paragraphs whose only "unsupported" content used to be escaped
-    // punctuation or non-image inline HTML must render as styled prose with
-    // no source-island box: no island kind and no conservative run.
+    // punctuation, non-image inline HTML, or decoded HTML entities must
+    // render as styled prose with no source-island box: no island kind and
+    // no conservative run.
     let cases: &[&str] = &[
         r"escaped \* star and \. dot",
         "text <em>em</em> and <strong>bold</strong> more",
         "one<br>two<br/>three",
         r"mixed \* escape and <em>html</em> and <br> break",
+        "fish &amp; chips &mdash; done &#39;quoted&#39;",
+        "dash &#x2014; here &copy; 2026",
+        r"entity \* mix &amp; <br> break",
     ];
     for source in cases {
         let (app, cx) = cx.add_window_view(|_, cx| {
@@ -11056,14 +11062,18 @@ fn visual_edit_renders_escapes_and_inline_html_without_source_island(cx: &mut Te
 }
 
 #[gpui::test]
-fn visual_edit_reveals_escape_and_inline_html_groups_without_version_bump(cx: &mut TestAppContext) {
-    // Moving the caret into an escape or a supported inline-HTML element
-    // reveals the authored source group in place without changing the
-    // document version or dirtying the tab.
+fn visual_edit_reveals_escape_inline_html_and_entity_groups_without_version_bump(
+    cx: &mut TestAppContext,
+) {
+    // Moving the caret into an escape, a supported inline-HTML element, or
+    // a decoded entity token reveals the authored source group in place
+    // without changing the document version or dirtying the tab.
     for (source, caret) in [
         (r"escaped \* star", 9),      // inside the `\*` group
         ("text <em>em</em> more", 8), // inside the em content
         ("one<br>two", 3),            // at the `<br>` tag start
+        ("fish &amp; chips", 7),      // inside the `&amp;` token
+        ("dash &#x2014; here", 8),    // inside the numeric token
     ] {
         let (app, cx) = cx.add_window_view(|_, cx| {
             let mut app = MarkionApp::new(cx);

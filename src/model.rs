@@ -1034,6 +1034,10 @@ pub enum VisualRevealKind {
     /// One backslash-escaped ASCII punctuation character (`\*`, `\\`): the
     /// escaped character renders literally while the backslash stays hidden.
     Escape,
+    /// One decoded HTML entity reference (`&amp;`, `&#39;`, `&#x2014;`): the
+    /// decoded character renders while the complete authored `&…;` token
+    /// stays hidden until the caret enters it.
+    Entity,
     /// One supported inline-HTML element (style pair or `<br>`): the tags stay
     /// hidden markers while the content renders with the mapped style.
     InlineHtml,
