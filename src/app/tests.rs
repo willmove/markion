@@ -1,3 +1,4 @@
+use super::application::{AutosaveCompletion, AutosaveOutcome, ExternalCheckRequest};
 use super::editing::visual_selection_format_target_for_block;
 use super::memory::{MemoryProfile, MemoryWarmup};
 use super::*;
@@ -883,8 +884,11 @@ fn startup_application_flow_reuses_existing_open_behaviour() {
                 .map(|(body, _)| body)
         })
         .expect("startup intent handler");
-    assert!(apply_fn.contains("self.replace_active_tab(document, cx);"));
-    assert!(apply_fn.contains("self.update_workspace_root_from_document(cx);"));
+    // The File branch now opens through a background read; the bookkeeping
+    // runs in the spawned apply closure on the app handle.
+    assert!(apply_fn.contains("app.replace_active_tab(document, cx);"));
+    assert!(apply_fn.contains("app.update_workspace_root_from_document(cx);"));
+    assert!(apply_fn.contains("background_spawn"));
     assert!(apply_fn.contains("self.set_workspace_root(path, cx);"));
     assert!(apply_fn.contains("self.sidebar_visible = true;"));
     assert!(apply_fn.contains("self.sidebar_tab = SidebarTab::Files;"));
@@ -10073,6 +10077,8 @@ fn external_change_reload_and_dirty_conflict_preserve_expected_source(cx: &mut T
 
     fs::write(&path, "disk version two").unwrap();
     app.update(cx, |app, cx| app.check_external_changes(cx));
+    // The disk half of the check now runs on the background executor.
+    cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_eq!(app.active_tab().document.text(), "disk version two");
         assert!(!app.active_tab().document.is_dirty());
@@ -10084,6 +10090,7 @@ fn external_change_reload_and_dirty_conflict_preserve_expected_source(cx: &mut T
     });
     fs::write(&path, "third external version").unwrap();
     app.update(cx, |app, cx| app.check_external_changes(cx));
+    cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_eq!(app.active_tab().document.text(), "local dirty");
         assert!(app.active_tab().document.is_dirty());
@@ -10092,6 +10099,150 @@ fn external_change_reload_and_dirty_conflict_preserve_expected_source(cx: &mut T
             Some(DiskState::Modified)
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), "third external version");
+    });
+}
+
+#[gpui::test]
+fn external_check_outcome_is_dropped_when_the_document_was_saved_meanwhile(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stale.md");
+    fs::write(&path, "disk one").unwrap();
+    let document = MarkdownDocument::open(&path).unwrap();
+    let stale_identity = document.disk_identity().cloned();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app
+    });
+
+    // Simulate a round that was checked against `stale_identity` while the
+    // user saved new content: the document's identity moved on, so the
+    // outcome must not apply.
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("saved locally");
+        app.active_tab_mut().document.force_save().unwrap();
+        let recovery_id = app.active_tab().document_tab().unwrap().recovery_id;
+        app.apply_external_check_outcomes(
+            vec![(
+                ExternalCheckRequest {
+                    recovery_id,
+                    path: path.clone(),
+                    known: stale_identity,
+                    read_for_reload: true,
+                },
+                markion::ExternalCheckOutcome::Modified {
+                    reload: Some(Ok((
+                        "outdated reload".to_string(),
+                        app.active_tab().document.disk_identity().cloned().unwrap(),
+                    ))),
+                },
+            )],
+            cx,
+        );
+        assert_eq!(app.active_tab().document.text(), "saved locally");
+        assert_eq!(app.active_tab().external_conflict, None);
+    });
+}
+
+#[gpui::test]
+fn autosave_runs_off_thread_and_clears_dirty(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("auto.md");
+    fs::write(&path, "v1").unwrap();
+    let document = MarkdownDocument::open(&path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.auto_save_preferences = AutoSavePreferences {
+            enabled: true,
+            delay_secs: 1,
+        };
+        app.recovery_dir = dir.path().join("recovery");
+        app.tabs = vec![EditorTab::new(document)];
+        app
+    });
+
+    // `gpui::Timer` is a real-time smol timer outside the test clock, so the
+    // due autosave is driven directly; the background disk stage still runs
+    // through the (deterministic) test executor.
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("v2");
+        app.schedule_autosave(cx);
+        let generation = app.active_tab().autosave_generation;
+        let recovery_dir = app.recovery_dir.clone();
+        app.run_due_autosave(0, generation, recovery_dir, cx);
+        assert!(app.active_tab().autosave_in_flight);
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        assert!(!app.active_tab().document.is_dirty());
+        assert!(!app.active_tab().autosave_in_flight);
+        assert_eq!(app.active_tab().last_recovery_file, None);
+    });
+    assert_eq!(fs::read_to_string(&path).unwrap(), "v2");
+}
+
+#[gpui::test]
+fn autosave_completion_after_racing_edit_keeps_dirty_but_records_identity(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("race.md");
+    fs::write(&path, "v1").unwrap();
+    let document = MarkdownDocument::open(&path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.document.set_text("racing edit");
+        tab.autosave_generation = 7;
+        let recovery_id = tab.document_tab().unwrap().recovery_id;
+        // The background stage saved an older snapshot ("v2") while the edit
+        // above advanced the generation past the captured value.
+        fs::write(&path, "v2").unwrap();
+        let (_, identity) = markion::read_document_source(&path).unwrap();
+        app.apply_autosave_outcome(
+            AutosaveCompletion {
+                recovery_id,
+                generation: 6,
+                result: AutosaveOutcome::Saved {
+                    path: path.clone(),
+                    identity: identity.clone(),
+                },
+            },
+            cx,
+        );
+        let tab = app.active_tab();
+        // Dirty survives (the racing edit is not on disk)...
+        assert!(tab.document.is_dirty());
+        // ...but the identity reflects our own write, so the external-change
+        // poll will not mistake it for a foreign modification.
+        assert_eq!(tab.document.disk_identity(), Some(&identity));
+        assert!(!tab.autosave_in_flight);
+    });
+}
+
+#[gpui::test]
+fn startup_file_intent_opens_via_background_read(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("startup.md");
+    fs::write(&path, "# opened at startup").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, cx| {
+        app.apply_startup_open_intent(StartupOpenIntent::File(path.clone()), cx);
+        // The read has not landed yet: the welcome tab is still in place.
+        assert_eq!(app.active_tab().document.path(), None);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.path(), Some(path.as_path()));
+        assert_eq!(app.active_tab().document.text(), "# opened at startup");
+        assert!(!app.active_tab().document.is_dirty());
     });
 }
 

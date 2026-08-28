@@ -303,6 +303,96 @@ fn external_change_error(path: &Path, missing: bool) -> io::Error {
     )
 }
 
+/// Outcome of one document destination's disk-side freshness check. Produced
+/// by [`check_path_state`], which touches only its arguments, so the whole
+/// check (metadata probe, plus the full read a mismatch requires) can run off
+/// the UI thread; the caller applies the outcome to its document afterwards.
+#[derive(Debug)]
+pub enum ExternalCheckOutcome {
+    /// Destination still matches `known`. `refreshed` carries the new cheap
+    /// identity when only metadata drifted (same digest), so the caller can
+    /// absorb metadata-only touches exactly like
+    /// [`MarkdownDocument::check_disk_state`] does.
+    Unchanged {
+        refreshed: Option<DiskIdentity>,
+    },
+    /// Destination content diverged. `reload` holds the destination's current
+    /// source when the caller asked for it (`read_for_reload`), letting a
+    /// clean document reload without a second read on the UI thread.
+    Modified {
+        reload: Option<io::Result<(String, DiskIdentity)>>,
+    },
+    Missing,
+    /// The check itself failed (I/O error on the metadata or content read).
+    Failed(io::Error),
+}
+
+/// Disk-side half of [`MarkdownDocument::check_disk_state`], free of `&self`
+/// so it can run on a background thread against a captured `path` + `known`
+/// identity snapshot.
+pub fn check_path_state(
+    path: &Path,
+    known: Option<&DiskIdentity>,
+    read_for_reload: bool,
+) -> ExternalCheckOutcome {
+    if !path.exists() {
+        return ExternalCheckOutcome::Missing;
+    }
+    let Some(known) = known else {
+        let reload = read_for_reload.then(|| read_document_source(path));
+        return ExternalCheckOutcome::Modified { reload };
+    };
+    match known.metadata_matches(path) {
+        Ok(true) => return ExternalCheckOutcome::Unchanged { refreshed: None },
+        Ok(false) => {}
+        Err(err) => return ExternalCheckOutcome::Failed(err),
+    }
+    let (current, bytes) = match DiskIdentity::read(path) {
+        Ok(read) => read,
+        Err(err) => return ExternalCheckOutcome::Failed(err),
+    };
+    if current.digest == known.digest {
+        ExternalCheckOutcome::Unchanged {
+            refreshed: Some(current),
+        }
+    } else {
+        let reload = read_for_reload.then(|| {
+            String::from_utf8(bytes)
+                .map(|text| (text, current))
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+        });
+        ExternalCheckOutcome::Modified { reload }
+    }
+}
+
+/// Background-safe read of a document destination: full content + identity.
+/// This is the disk-side half of [`MarkdownDocument::open`].
+pub fn read_document_source(path: &Path) -> io::Result<(String, DiskIdentity)> {
+    let (identity, bytes) = DiskIdentity::read(path)?;
+    let text =
+        String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    Ok((text, identity))
+}
+
+/// Disk-side half of [`MarkdownDocument::save`] for a text snapshot captured
+/// on the UI thread: refuses to clobber external changes (the same
+/// `ErrorKind::AlreadyExists` contract as `save`), then atomically writes the
+/// snapshot and returns the written destination's identity.
+pub fn save_text_snapshot(
+    path: &Path,
+    known: Option<&DiskIdentity>,
+    text: &str,
+) -> io::Result<DiskIdentity> {
+    match check_path_state(path, known, false) {
+        ExternalCheckOutcome::Unchanged { .. } => {}
+        ExternalCheckOutcome::Modified { .. } => return Err(external_change_error(path, false)),
+        ExternalCheckOutcome::Missing => return Err(external_change_error(path, true)),
+        ExternalCheckOutcome::Failed(err) => return Err(err),
+    }
+    atomic_write(path, text.as_bytes())?;
+    DiskIdentity::for_bytes(path, text.as_bytes())
+}
+
 #[derive(Debug)]
 pub struct MarkdownDocument {
     text: String,
@@ -421,12 +511,17 @@ impl MarkdownDocument {
 
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
-        let (identity, bytes) = DiskIdentity::read(path)?;
-        let text = String::from_utf8(bytes)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        let mut document = Self::with_state(text, Some(path.to_path_buf()), false);
+        let (text, identity) = read_document_source(path)?;
+        Ok(Self::from_loaded(text, path.to_path_buf(), identity))
+    }
+
+    /// Rebuilds a document from [`read_document_source`] output, producing
+    /// exactly what [`MarkdownDocument::open`] would for the same bytes. This
+    /// is the UI-thread half of an open whose read ran on a background thread.
+    pub fn from_loaded(text: String, path: PathBuf, identity: DiskIdentity) -> Self {
+        let mut document = Self::with_state(text, Some(path), false);
         document.disk_identity = Some(identity);
-        Ok(document)
+        document
     }
 
     pub fn save(&mut self) -> io::Result<()> {
@@ -507,13 +602,29 @@ impl MarkdownDocument {
             .as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "document has no path"))?
             .clone();
-        let (identity, bytes) = DiskIdentity::read(&path)?;
-        let text = String::from_utf8(bytes)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        let (text, identity) = read_document_source(&path)?;
+        self.apply_external_reload(text, identity);
+        Ok(())
+    }
+
+    /// Applies an external reload whose read ran off the UI thread; equivalent
+    /// to [`MarkdownDocument::reload_from_disk`] with the read already done.
+    pub fn apply_external_reload(&mut self, text: String, identity: DiskIdentity) {
         self.set_text(text);
         self.dirty = false;
         self.disk_identity = Some(identity);
-        Ok(())
+    }
+
+    /// Records the destination identity a background write or check produced.
+    /// When `clean`, the in-memory text is exactly what that identity
+    /// describes, so the dirty flag clears; otherwise later edits keep the
+    /// document dirty while the identity still reflects our own write (so the
+    /// external-change poll does not mistake it for a foreign modification).
+    pub fn record_disk_identity(&mut self, identity: DiskIdentity, clean: bool) {
+        self.disk_identity = Some(identity);
+        if clean {
+            self.dirty = false;
+        }
     }
 
     pub fn export_to(
@@ -642,12 +753,20 @@ impl MarkdownDocument {
         self.dirty
     }
 
-    pub fn refresh_dirty_from_disk(&mut self) {
-        let Some(path) = self.path.as_ref() else {
+    /// Recomputes `dirty` against the last-known destination identity without
+    /// touching the filesystem. The identity's digest describes the bytes last
+    /// read from or written to the destination, and the external-change poll
+    /// keeps it current when the file changes underneath — so this stays pure
+    /// in-memory work on the undo/redo path, where the previous
+    /// implementation re-read the whole file on the UI thread every step.
+    pub fn refresh_dirty_against_known_disk(&mut self) {
+        if self.path.is_none() {
             return;
+        }
+        self.dirty = match &self.disk_identity {
+            Some(identity) => content_digest(self.text.as_bytes()) != identity.digest,
+            None => true,
         };
-
-        self.dirty = fs::read_to_string(path).map_or(true, |saved_text| saved_text != self.text);
     }
 
     pub fn front_matter(&self) -> Result<Option<YamlFrontMatter>, FrontMatterError> {
@@ -3056,35 +3175,13 @@ impl MarkdownDocument {
         dir: impl AsRef<Path>,
         recovery_id: u64,
     ) -> io::Result<PathBuf> {
-        let dir = dir.as_ref();
-        fs::create_dir_all(dir)?;
-        let path = stable_recovery_file_path(dir, self.path.as_deref(), recovery_id);
-        let original_path = self
-            .path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default();
-        let (modified, len, digest) = self.disk_identity.as_ref().map_or(
-            (String::new(), String::new(), String::new()),
-            |identity| {
-                let modified = identity
-                    .modified
-                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|duration| duration.as_millis().to_string())
-                    .unwrap_or_default();
-                (
-                    modified,
-                    identity.len.to_string(),
-                    identity.digest.to_string(),
-                )
-            },
-        );
-        let payload = format!(
-            "markion-recovery-v2\npath:{original_path}\ndisk-modified-ms:{modified}\ndisk-len:{len}\ndisk-digest:{digest}\n---\n{}",
-            self.text
-        );
-        atomic_write(&path, payload.as_bytes())?;
-        Ok(path)
+        write_recovery_copy(
+            dir.as_ref(),
+            recovery_id,
+            self.path.as_deref(),
+            self.disk_identity.as_ref(),
+            &self.text,
+        )
     }
 
     pub fn stats(&self) -> DocumentStats {
@@ -3108,6 +3205,41 @@ impl MarkdownDocument {
         });
         stats
     }
+}
+
+/// Body of [`MarkdownDocument::save_recovery_copy_with_id`], free of `&self`
+/// so autosave can write the snapshot on a background thread from captured
+/// path/identity/text state.
+pub fn write_recovery_copy(
+    dir: &Path,
+    recovery_id: u64,
+    original_path: Option<&Path>,
+    identity: Option<&DiskIdentity>,
+    text: &str,
+) -> io::Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    let path = stable_recovery_file_path(dir, original_path, recovery_id);
+    let original_path = original_path
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let (modified, len, digest) =
+        identity.map_or((String::new(), String::new(), String::new()), |identity| {
+            let modified = identity
+                .modified
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis().to_string())
+                .unwrap_or_default();
+            (
+                modified,
+                identity.len.to_string(),
+                identity.digest.to_string(),
+            )
+        });
+    let payload = format!(
+        "markion-recovery-v2\npath:{original_path}\ndisk-modified-ms:{modified}\ndisk-len:{len}\ndisk-digest:{digest}\n---\n{text}"
+    );
+    atomic_write(&path, payload.as_bytes())?;
+    Ok(path)
 }
 
 fn sanitize_visual_field_replacement(
@@ -5391,7 +5523,10 @@ mod tests {
         assert!(!saved.is_dirty());
 
         let mut restored = undo_snapshot;
-        restored.refresh_dirty_from_disk();
+        // Mirror the undo path: the live document's post-save identity is
+        // transplanted onto the restored snapshot before the recompute.
+        restored.record_disk_identity(saved.disk_identity().cloned().unwrap(), false);
+        restored.refresh_dirty_against_known_disk();
         assert!(restored.is_dirty());
 
         let mut unsaved = MarkdownDocument::new();
@@ -5411,6 +5546,81 @@ mod tests {
         );
         delete_recovery_file(recovery_path).unwrap();
         assert!(list_recovery_files(&recovery_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn check_path_state_classifies_destination_freshness() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checked.md");
+        fs::write(&path, "one").unwrap();
+        let (text, identity) = read_document_source(&path).unwrap();
+        assert_eq!(text, "one");
+
+        // Untouched destination matches (by metadata, or by digest when the
+        // filesystem's timestamp granularity blurred the rewrite).
+        assert!(matches!(
+            check_path_state(&path, Some(&identity), true),
+            ExternalCheckOutcome::Unchanged { .. }
+        ));
+
+        // Changed content reports Modified and carries the reload payload
+        // when asked for one. (Different length on purpose: the cheap
+        // len+mtime identity cannot see a same-length rewrite that lands in
+        // the same filesystem timestamp tick — same granularity the old
+        // `check_disk_state` had.)
+        fs::write(&path, "two two").unwrap();
+        match check_path_state(&path, Some(&identity), true) {
+            ExternalCheckOutcome::Modified {
+                reload: Some(Ok((reloaded, current))),
+            } => {
+                assert_eq!(reloaded, "two two");
+                assert_ne!(current.digest, identity.digest);
+            }
+            other => panic!("expected Modified with reload, got {other:?}"),
+        }
+        assert!(matches!(
+            check_path_state(&path, Some(&identity), false),
+            ExternalCheckOutcome::Modified { reload: None }
+        ));
+
+        // No known identity means the caller cannot prove freshness.
+        assert!(matches!(
+            check_path_state(&path, None, false),
+            ExternalCheckOutcome::Modified { reload: None }
+        ));
+
+        fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            check_path_state(&path, Some(&identity), true),
+            ExternalCheckOutcome::Missing
+        ));
+    }
+
+    #[test]
+    fn save_text_snapshot_saves_fresh_and_refuses_diverged_destinations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.md");
+        fs::write(&path, "one").unwrap();
+        let (_, identity) = read_document_source(&path).unwrap();
+
+        let saved_identity = save_text_snapshot(&path, Some(&identity), "two").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "two");
+        assert!(matches!(
+            check_path_state(&path, Some(&saved_identity), false),
+            ExternalCheckOutcome::Unchanged { .. }
+        ));
+
+        // Externally modified since our identity: refuse and leave the
+        // foreign bytes untouched (same contract as `MarkdownDocument::save`).
+        fs::write(&path, "external").unwrap();
+        let err = save_text_snapshot(&path, Some(&saved_identity), "three").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "external");
+
+        fs::remove_file(&path).unwrap();
+        let err = save_text_snapshot(&path, Some(&saved_identity), "three").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(!path.exists());
     }
 
     #[test]

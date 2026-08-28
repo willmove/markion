@@ -124,6 +124,12 @@ pub(super) fn install_http_client(cx: &mut App) -> Result<()> {
     Ok(())
 }
 
+/// Overall (connect + body) timeout for single-URL fetches. Without it a
+/// server that accepts the connection but stalls the body pins the calling
+/// background-executor thread forever — the connect timeout alone never
+/// fires once the TCP handshake succeeds.
+const FETCH_URL_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Fetch a remote URL's response body on the shared HTTP runtime.
 ///
 /// Used by the Markdown preview-image cache so decode work can run off the UI
@@ -133,6 +139,7 @@ pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>> {
         let client = reqwest::Client::builder()
             .use_rustls_tls()
             .connect_timeout(Duration::from_secs(15))
+            .timeout(FETCH_URL_TIMEOUT)
             .user_agent(format!("Markion/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .context("building preview-image HTTP client")?;

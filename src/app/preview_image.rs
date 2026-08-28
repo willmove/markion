@@ -689,7 +689,44 @@ impl MarkionApp {
     pub(super) fn schedule_pending_preview_decodes(&mut self, cx: &mut Context<Self>) {
         let candidates = self.preview_image_cache.pending_not_started();
         for key in candidates {
-            let heavy = probe_is_heavy(&key);
+            // The heavy-slot probe opens the image header on disk, so it must
+            // not run on the UI thread (a stalled file would freeze every
+            // frame that schedules decodes). Local files get a one-off
+            // background probe whose result is memoized; the key stays
+            // pending until the probe lands and re-kicks scheduling.
+            let heavy = if key.local_path().is_some() {
+                match self.preview_probe_results.get(&key) {
+                    Some(&heavy) => heavy,
+                    None => {
+                        if self.preview_probes_in_flight.insert(key.clone()) {
+                            let probe_key = key.clone();
+                            cx.spawn(async move |this, cx| {
+                                let heavy_key = probe_key.clone();
+                                let heavy = cx
+                                    .background_spawn(async move { probe_is_heavy(&heavy_key) })
+                                    .await;
+                                let _ = this.update(cx, |app, cx| {
+                                    app.preview_probes_in_flight.remove(&probe_key);
+                                    // Unbounded sessions could grow this map
+                                    // one bool per image ever seen; reprobing
+                                    // is cheap, so just reset when large.
+                                    if app.preview_probe_results.len() >= 4096 {
+                                        app.preview_probe_results.clear();
+                                    }
+                                    app.preview_probe_results.insert(probe_key, heavy);
+                                    app.schedule_pending_preview_decodes(cx);
+                                });
+                            })
+                            .detach();
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                // Remote / data-URI sources never probe the filesystem and
+                // classify as light without I/O.
+                false
+            };
             if !self.preview_image_cache.try_begin_decode(&key, heavy) {
                 // Caps full; remaining pendings wait for a completion kick.
                 if self.preview_image_cache.in_flight_count() >= PREVIEW_IMAGE_DECODE_CONCURRENCY {

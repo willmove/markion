@@ -1,5 +1,104 @@
 use super::*;
 
+/// Per-tab snapshot captured on the UI thread for one background round of
+/// external-change detection. `recovery_id` re-locates the tab afterwards
+/// (tab indices shift when other tabs close), and `known` doubles as the
+/// staleness guard: an outcome only applies while the document's identity is
+/// still the one that was checked.
+pub(super) struct ExternalCheckRequest {
+    pub(super) recovery_id: u64,
+    pub(super) path: PathBuf,
+    pub(super) known: Option<DiskIdentity>,
+    pub(super) read_for_reload: bool,
+}
+
+/// Snapshot captured on the UI thread when an autosave timer fires; the
+/// background stage works exclusively from this, never from live app state.
+pub(super) struct AutosaveRequest {
+    pub(super) recovery_id: u64,
+    /// `autosave_generation` at capture time. Still current at apply time
+    /// means no edits raced the write, so the document may be marked clean.
+    pub(super) generation: u64,
+    pub(super) path: Option<PathBuf>,
+    pub(super) known: Option<DiskIdentity>,
+    pub(super) text: String,
+    pub(super) previous_recovery: Option<PathBuf>,
+}
+
+pub(super) struct AutosaveCompletion {
+    pub(super) recovery_id: u64,
+    pub(super) generation: u64,
+    pub(super) result: AutosaveOutcome,
+}
+
+pub(super) enum AutosaveOutcome {
+    /// The recovery snapshot itself could not be written; nothing changed.
+    RecoveryFailed { error: String },
+    /// Untitled document: only the recovery snapshot exists.
+    RecoveryOnly { recovery: PathBuf },
+    /// Destination saved; its recovery snapshot was deleted.
+    Saved {
+        path: PathBuf,
+        identity: DiskIdentity,
+    },
+    /// Recovery snapshot written but the destination save failed; the
+    /// snapshot is kept. `external_conflict` mirrors `save()`'s
+    /// `ErrorKind::AlreadyExists` contract for on-disk divergence.
+    SaveFailed {
+        recovery: PathBuf,
+        external_conflict: bool,
+        error: String,
+    },
+}
+
+/// Background stage of one autosave: recovery snapshot first (so a failed or
+/// refused destination save still leaves the text recoverable), then the
+/// destination write. All file I/O for autosave lives here, off the UI
+/// thread. Recovery-file cleanup happens here too — deletes are disk I/O.
+fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveCompletion {
+    let complete = |result| AutosaveCompletion {
+        recovery_id: request.recovery_id,
+        generation: request.generation,
+        result,
+    };
+    let recovery = match markion::write_recovery_copy(
+        recovery_dir,
+        request.recovery_id,
+        request.path.as_deref(),
+        request.known.as_ref(),
+        &request.text,
+    ) {
+        Ok(path) => path,
+        Err(err) => {
+            return complete(AutosaveOutcome::RecoveryFailed {
+                error: err.to_string(),
+            });
+        }
+    };
+    if let Some(previous) = &request.previous_recovery
+        && *previous != recovery
+    {
+        let _ = delete_recovery_file(previous);
+    }
+    let Some(path) = &request.path else {
+        return complete(AutosaveOutcome::RecoveryOnly { recovery });
+    };
+    match save_text_snapshot(path, request.known.as_ref(), &request.text) {
+        Ok(identity) => {
+            let _ = delete_recovery_file(&recovery);
+            complete(AutosaveOutcome::Saved {
+                path: path.clone(),
+                identity,
+            })
+        }
+        Err(err) => complete(AutosaveOutcome::SaveFailed {
+            recovery,
+            external_conflict: err.kind() == io::ErrorKind::AlreadyExists,
+            error: err.to_string(),
+        }),
+    }
+}
+
 impl MarkionApp {
     pub(super) fn new(cx: &mut Context<Self>) -> Self {
         let document = MarkdownDocument::from_text(markion::DEFAULT_WELCOME_MARKDOWN);
@@ -148,6 +247,9 @@ impl MarkionApp {
             auto_save_preferences: preferences.auto_save,
             export_preferences: preferences.export.clone(),
             recovery_dir: default_recovery_dir(),
+            external_check_in_flight: false,
+            preview_probe_results: HashMap::new(),
+            preview_probes_in_flight: HashSet::new(),
             highlight_cache: RefCell::new(HashMap::new()),
             diagram_cache: DiagramCache::new(DIAGRAM_CACHE_CAPACITY),
             preview_image_cache: PreviewImageCache::new(PREVIEW_IMAGE_CACHE_CAPACITY),
@@ -350,14 +452,34 @@ impl MarkionApp {
         highlighted
     }
 
+    /// Surfaces crash snapshots awaiting a decision. The inventory scan runs
+    /// on the background executor: besides reading every snapshot, it probes
+    /// each one's *original document* path, which can be any destination the
+    /// user ever edited — a stalled one used to freeze the window during
+    /// startup, before the first frame.
     pub(super) fn check_recovery_on_startup(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Ok(entries) = inspect_recovery_files(&self.recovery_dir) else {
-            return;
-        };
+        let recovery_dir = self.recovery_dir.clone();
+        cx.spawn(async move |this, cx| {
+            let entries = cx
+                .background_spawn(async move { inspect_recovery_files(&recovery_dir) })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.present_recovery_inventory(entries.unwrap_or_default(), cx);
+            });
+        })
+        .detach();
+    }
+
+    /// UI-thread half of the startup recovery scan.
+    pub(super) fn present_recovery_inventory(
+        &mut self,
+        entries: Vec<RecoveryInventoryEntry>,
+        cx: &mut Context<Self>,
+    ) {
         if entries.is_empty() {
             return;
         }
@@ -516,21 +638,43 @@ impl MarkionApp {
         match intent {
             StartupOpenIntent::None => {}
             StartupOpenIntent::File(path) => {
+                // The read runs on the background executor: a stalled
+                // destination (cloud placeholder, network path, antivirus
+                // filter) used to freeze the window on its very first frame.
                 let display_path = path.display().to_string();
-                match MarkdownDocument::open(&path) {
-                    Ok(document) => {
-                        self.replace_active_tab(document, cx);
-                        self.update_workspace_root_from_document(cx);
-                        self.record_recent_path(&path);
-                        self.active_menu = None;
-                        self.status = self.trf(Msg::StatusOpened, &[&display_path]);
-                    }
-                    Err(err) => {
-                        tracing::warn!(path = ?path, error = %err, "startup file open failed");
-                        self.active_menu = None;
-                        self.status = self.trf(Msg::StatusOpenFailed, &[&err.to_string()]);
-                    }
-                }
+                self.active_menu = None;
+                cx.spawn(async move |this, cx| {
+                    let read_path = path.clone();
+                    let result = cx
+                        .background_spawn(async move { read_document_source(&read_path) })
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        match result {
+                            Ok((text, identity)) => {
+                                let document =
+                                    MarkdownDocument::from_loaded(text, path.clone(), identity);
+                                // The welcome tab is normally still pristine,
+                                // but a slow read leaves a window where the
+                                // user may have started typing — never
+                                // replace work in progress.
+                                if app.active_tab().is_dirty() {
+                                    app.open_in_new_tab(document, cx);
+                                } else {
+                                    app.replace_active_tab(document, cx);
+                                }
+                                app.update_workspace_root_from_document(cx);
+                                app.record_recent_path(&path);
+                                app.status = app.trf(Msg::StatusOpened, &[&display_path]);
+                            }
+                            Err(err) => {
+                                tracing::warn!(path = ?path, error = %err, "startup file open failed");
+                                app.status = app.trf(Msg::StatusOpenFailed, &[&err.to_string()]);
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
                 cx.notify();
             }
             StartupOpenIntent::Folder(path) => {
@@ -582,52 +726,128 @@ impl MarkionApp {
         self.schedule_autosave(cx);
     }
 
+    /// Kicks one round of external-change detection. The disk work (metadata
+    /// probes and any full reads) runs on the background executor from a
+    /// captured snapshot; only the bookkeeping returns to the UI thread. A
+    /// synchronous check here froze the whole UI for as long as one stalled
+    /// file kept a metadata or read call blocked (network drive, cloud
+    /// placeholder, antivirus filter), and the 2s poll re-entered the stall
+    /// every cycle.
     pub(super) fn check_external_changes(&mut self, cx: &mut Context<Self>) {
-        for index in 0..self.tabs.len() {
-            if self.tabs[index].is_image() {
+        // One round in flight at a time: if the disk is stalling, piling up
+        // further rounds would only queue more blocked background tasks.
+        if self.external_check_in_flight {
+            return;
+        }
+        let requests: Vec<ExternalCheckRequest> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| {
+                let doc = tab.document_tab()?;
+                Some(ExternalCheckRequest {
+                    recovery_id: doc.recovery_id,
+                    path: doc.document.path()?.to_path_buf(),
+                    known: doc.document.disk_identity().cloned(),
+                    read_for_reload: !doc.document.is_dirty(),
+                })
+            })
+            .collect();
+        if requests.is_empty() {
+            return;
+        }
+        self.external_check_in_flight = true;
+        cx.spawn(async move |this, cx| {
+            let outcomes = cx
+                .background_spawn(async move {
+                    requests
+                        .into_iter()
+                        .map(|request| {
+                            let outcome = check_path_state(
+                                &request.path,
+                                request.known.as_ref(),
+                                request.read_for_reload,
+                            );
+                            (request, outcome)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.external_check_in_flight = false;
+                app.apply_external_check_outcomes(outcomes, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// UI-thread half of the external-change poll: re-locates each checked
+    /// tab by its stable `recovery_id`, drops outcomes that went stale while
+    /// the background check ran (tab closed, retargeted, or saved — its
+    /// identity no longer matches the checked snapshot), and applies the rest
+    /// with the same state transitions the old synchronous check performed.
+    pub(super) fn apply_external_check_outcomes(
+        &mut self,
+        outcomes: Vec<(ExternalCheckRequest, ExternalCheckOutcome)>,
+        cx: &mut Context<Self>,
+    ) {
+        for (request, outcome) in outcomes {
+            let Some(index) = self.tabs.iter().position(|tab| {
+                tab.document_tab()
+                    .is_some_and(|doc| doc.recovery_id == request.recovery_id)
+            }) else {
                 continue;
-            }
-            let state = match self.tabs[index].document.check_disk_state() {
-                Ok(state) => state,
-                Err(err) => {
-                    tracing::warn!(error = %err, "external file check failed");
+            };
+            {
+                let doc = &self.tabs[index];
+                if doc.document.path() != Some(request.path.as_path())
+                    || doc.document.disk_identity() != request.known.as_ref()
+                {
                     continue;
                 }
-            };
-            match state {
-                DiskState::Unchanged => self.tabs[index].external_conflict = None,
-                DiskState::Modified if !self.tabs[index].document.is_dirty() => {
-                    self.release_tab_image_claims(index, cx);
+            }
+            match outcome {
+                ExternalCheckOutcome::Unchanged { refreshed } => {
                     let tab = &mut self.tabs[index];
-                    match tab.document.reload_from_disk() {
-                        Ok(()) => {
-                            tab.external_conflict = None;
-                            tab.selected_range = 0..0;
-                            tab.selection_reversed = false;
-                            tab.marked_range = None;
-                            tab.undo_stack.clear();
-                            tab.redo_stack.clear();
-                            tab.reset_preview_list();
-                            if index == self.active_tab {
-                                self.status = p0_t(self.language, P0Msg::ExternalReloaded).into();
-                            }
+                    if let Some(identity) = refreshed {
+                        tab.document.record_disk_identity(identity, false);
+                    }
+                    tab.external_conflict = None;
+                }
+                ExternalCheckOutcome::Modified { reload } => match reload {
+                    Some(Ok((text, identity))) if !self.tabs[index].document.is_dirty() => {
+                        self.release_tab_image_claims(index, cx);
+                        let tab = &mut self.tabs[index];
+                        tab.document.apply_external_reload(text, identity);
+                        tab.external_conflict = None;
+                        tab.selected_range = 0..0;
+                        tab.selection_reversed = false;
+                        tab.marked_range = None;
+                        tab.undo_stack.clear();
+                        tab.redo_stack.clear();
+                        tab.reset_preview_list();
+                        if index == self.active_tab {
+                            self.status = p0_t(self.language, P0Msg::ExternalReloaded).into();
                         }
-                        Err(err) => {
-                            tab.external_conflict = Some(DiskState::Modified);
-                            tracing::warn!(error = %err, "external file reload failed");
+                    }
+                    Some(Err(err)) if !self.tabs[index].document.is_dirty() => {
+                        self.tabs[index].external_conflict = Some(DiskState::Modified);
+                        tracing::warn!(error = %err, "external file reload failed");
+                    }
+                    _ => {
+                        self.tabs[index].external_conflict = Some(DiskState::Modified);
+                        if index == self.active_tab {
+                            self.status = p0_t(self.language, P0Msg::ExternalConflict).into();
                         }
+                    }
+                },
+                ExternalCheckOutcome::Missing => {
+                    self.tabs[index].external_conflict = Some(DiskState::Missing);
+                    if index == self.active_tab {
+                        self.status = p0_t(self.language, P0Msg::ExternalMissing).into();
                     }
                 }
-                DiskState::Modified | DiskState::Missing => {
-                    self.tabs[index].external_conflict = Some(state);
-                    if index == self.active_tab {
-                        self.status = match state {
-                            DiskState::Missing => {
-                                p0_t(self.language, P0Msg::ExternalMissing).into()
-                            }
-                            _ => p0_t(self.language, P0Msg::ExternalConflict).into(),
-                        };
-                    }
+                ExternalCheckOutcome::Failed(err) => {
+                    tracing::warn!(error = %err, "external file check failed");
                 }
             }
         }
@@ -1039,77 +1259,133 @@ impl MarkionApp {
         cx.spawn(async move |this, cx| {
             Timer::after(delay).await;
             let _ = this.update(cx, |app, cx| {
-                // Validate the tab still exists and its generation matches, so
-                // a tab switch (or close) between schedule and fire does not
-                // autosave the wrong tab or a removed one.
-                let Some(tab) = app.tabs.get(active_index) else {
-                    return;
-                };
-                if tab.is_image()
-                    || tab.autosave_generation != generation
-                    || !tab.document.is_dirty()
-                {
-                    return;
-                }
-
-                let tab = &mut app.tabs[active_index];
-                let recovery = match tab
-                    .document
-                    .save_recovery_copy_with_id(&recovery_dir, tab.recovery_id)
-                {
-                    Ok(path) => {
-                        if let Some(previous) = tab.last_recovery_file.replace(path.clone())
-                            && previous != path
-                        {
-                            let _ = delete_recovery_file(previous);
-                        }
-                        path
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "recovery snapshot failed");
-                        app.status =
-                            tf(app.language, Msg::StatusAutoSaveFailed, &[&err.to_string()]).into();
-                        cx.notify();
-                        return;
-                    }
-                };
-
-                if tab.document.path().is_none() {
-                    app.status = tf(
-                        app.language,
-                        Msg::StatusRecoverySaved,
-                        &[&recovery.display().to_string()],
-                    )
-                    .into();
-                } else {
-                    match tab.document.save() {
-                        Ok(()) => {
-                            if let Some(recovery) = tab.last_recovery_file.take() {
-                                let _ = delete_recovery_file(recovery);
-                            }
-                            let path = tab.document.path().unwrap();
-                            app.status = tf(
-                                app.language,
-                                Msg::StatusAutoSaved,
-                                &[&path.display().to_string()],
-                            )
-                            .into();
-                        }
-                        Err(err) => {
-                            if err.kind() == io::ErrorKind::AlreadyExists {
-                                tab.external_conflict = Some(DiskState::Modified);
-                            }
-                            tracing::warn!(error = %err, "auto-save failed after recovery");
-                            app.status =
-                                tf(app.language, Msg::StatusAutoSaveFailed, &[&err.to_string()])
-                                    .into();
-                        }
-                    }
-                }
-                cx.notify();
+                app.run_due_autosave(active_index, generation, recovery_dir, cx);
             });
         })
         .detach();
+    }
+
+    /// Fires one due autosave: validates the tab, captures the snapshot, and
+    /// hands the disk work (recovery snapshot + destination save) to the
+    /// background executor, so a stalled write can no longer freeze the UI
+    /// mid-typing. Split from the timer so tests can drive it directly —
+    /// `gpui::Timer` is real-time and outside the test executor's clock.
+    pub(super) fn run_due_autosave(
+        &mut self,
+        active_index: usize,
+        generation: u64,
+        recovery_dir: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        // Validate the tab still exists and its generation matches, so a tab
+        // switch (or close) between schedule and fire does not autosave the
+        // wrong tab or a removed one.
+        let Some(tab) = self.tabs.get(active_index) else {
+            return;
+        };
+        if tab.is_image() || tab.autosave_generation != generation || !tab.document.is_dirty() {
+            return;
+        }
+
+        let tab = &mut self.tabs[active_index];
+        // One write per tab at a time; when the running one lands, its apply
+        // step re-arms if the document is dirty again.
+        if tab.autosave_in_flight {
+            return;
+        }
+        tab.autosave_in_flight = true;
+        let request = AutosaveRequest {
+            recovery_id: tab.recovery_id,
+            generation,
+            path: tab.document.path().map(Path::to_path_buf),
+            known: tab.document.disk_identity().cloned(),
+            text: tab.document.text().to_string(),
+            previous_recovery: tab.last_recovery_file.clone(),
+        };
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_spawn(async move { run_autosave(&recovery_dir, request) })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.apply_autosave_outcome(outcome, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// UI-thread half of an autosave: re-locates the tab by `recovery_id`,
+    /// records what the background stage did to disk, and clears the dirty
+    /// flag only when no edits raced the write (`generation` unchanged). The
+    /// saved identity is recorded even when edits did race — the file now
+    /// holds our own snapshot, and without the identity the external-change
+    /// poll would mistake that write for a foreign modification.
+    pub(super) fn apply_autosave_outcome(
+        &mut self,
+        outcome: AutosaveCompletion,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.tabs.iter().position(|tab| {
+            tab.document_tab()
+                .is_some_and(|doc| doc.recovery_id == outcome.recovery_id)
+        }) else {
+            return;
+        };
+        let language = self.language;
+        let status;
+        {
+            let tab = &mut self.tabs[index];
+            tab.autosave_in_flight = false;
+            status = match outcome.result {
+                AutosaveOutcome::RecoveryFailed { error } => {
+                    tracing::warn!(error = %error, "recovery snapshot failed");
+                    tf(language, Msg::StatusAutoSaveFailed, &[&error])
+                }
+                AutosaveOutcome::RecoveryOnly { recovery } => {
+                    let status = tf(
+                        language,
+                        Msg::StatusRecoverySaved,
+                        &[&recovery.display().to_string()],
+                    );
+                    tab.last_recovery_file = Some(recovery);
+                    status
+                }
+                AutosaveOutcome::Saved { path, identity } => {
+                    tab.last_recovery_file = None;
+                    let clean = tab.autosave_generation == outcome.generation;
+                    tab.document.record_disk_identity(identity, clean);
+                    tf(
+                        language,
+                        Msg::StatusAutoSaved,
+                        &[&path.display().to_string()],
+                    )
+                }
+                AutosaveOutcome::SaveFailed {
+                    recovery,
+                    external_conflict,
+                    error,
+                } => {
+                    tab.last_recovery_file = Some(recovery);
+                    if external_conflict {
+                        tab.external_conflict = Some(DiskState::Modified);
+                    }
+                    tracing::warn!(error = %error, "auto-save failed after recovery");
+                    tf(language, Msg::StatusAutoSaveFailed, &[&error])
+                }
+            };
+        }
+        self.status = status.into();
+        // Edits that raced the write (generation advanced past the captured
+        // one) may have had their own timer fire into the in-flight skip;
+        // give them a fresh pass. An untitled document that stayed dirty
+        // without new edits must NOT re-arm here, or recovery snapshots
+        // would rewrite in a permanent loop.
+        if index == self.active_tab
+            && self.tabs[index].is_dirty()
+            && self.tabs[index].autosave_generation != outcome.generation
+        {
+            self.schedule_autosave(cx);
+        }
+        cx.notify();
     }
 
     pub(super) fn search_options(&self) -> SearchOptions {
@@ -1545,28 +1821,59 @@ impl MarkionApp {
             return;
         }
 
-        let (workspace_root, open_files, active_file) = filter_restorable_session(&self.session);
+        // Filter and read the whole session on the background executor first;
+        // even the existence probes stall on a dead network path recorded in
+        // session.toml, and one stalled file used to freeze startup for the
+        // whole window. The restore bookkeeping then runs on the UI thread
+        // with the results.
+        let session = self.session.clone();
+        cx.spawn(async move |this, cx| {
+            let (workspace_root, loaded, active_file) = cx
+                .background_spawn(async move {
+                    let (workspace_root, open_files, active_file) =
+                        filter_restorable_session(&session);
+                    let loaded = open_files
+                        .into_iter()
+                        .map(|path| {
+                            let result = read_document_source(&path);
+                            (path, result)
+                        })
+                        .collect::<Vec<_>>();
+                    (workspace_root, loaded, active_file)
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.finish_session_restore(loaded, workspace_root, active_file, cx);
+            });
+        })
+        .detach();
+    }
 
-        if open_files.is_empty() {
-            if let Some(root) = workspace_root {
-                self.set_workspace_root(root, cx);
-                self.schedule_file_tree_scan(None, cx);
-            }
-            return;
-        }
-
+    /// UI-thread half of session restore: turns the background reads into
+    /// tabs with the same replace-first/append-rest, focus, workspace-root,
+    /// and recent-list behavior the old synchronous restore had.
+    fn finish_session_restore(
+        &mut self,
+        loaded: Vec<(PathBuf, io::Result<(String, DiskIdentity)>)>,
+        workspace_root: Option<PathBuf>,
+        active_file: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         let mut opened_any = false;
         let mut replaced_initial = false;
-        for path in open_files.iter() {
-            match MarkdownDocument::open(path) {
-                Ok(document) => {
-                    if !replaced_initial {
+        let mut restored_paths = Vec::new();
+        for (path, result) in loaded {
+            match result {
+                Ok((text, identity)) => {
+                    let document = MarkdownDocument::from_loaded(text, path.clone(), identity);
+                    if !replaced_initial && !self.active_tab().is_dirty() {
                         self.replace_active_tab(document, cx);
                         replaced_initial = true;
                     } else {
                         self.open_in_new_tab(document, cx);
                     }
                     opened_any = true;
+                    restored_paths.push(path);
                 }
                 Err(err) => {
                     tracing::warn!(path = ?path, error = %err, "session restore skipped file");
@@ -1596,10 +1903,8 @@ impl MarkionApp {
         }
 
         // Refresh recent list with restored paths and rewrite pruned session.
-        for path in &open_files {
-            if path.exists() {
-                self.session.touch_recent(comparable_document_path(path));
-            }
+        for path in &restored_paths {
+            self.session.touch_recent(comparable_document_path(path));
         }
         self.sync_and_persist_session();
     }

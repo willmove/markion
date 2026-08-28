@@ -28,32 +28,33 @@ use gpui::{
 use markion::{
     AlertKind, AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement,
     BlockTarget, BlockTransform, DEFAULT_CODE_FONT_FAMILY, DEFAULT_EDITOR_FONT_SIZE,
-    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE, DiskState, DocxImagePolicy,
-    DocxPageSize, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackendPreference, ExportFormat,
-    ExportPreferences, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind, HighlightedSpan,
-    HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
-    Language, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
-    MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
-    MarkdownFormat, MathLayoutStyle, Msg, P0Msg, P1Msg, PdfPageSize, PreviewBlock,
-    RecoveryInventoryEntry, RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange,
-    SearchOptions, SearchPattern, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab,
-    SlashCommand, SlashQuery, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode,
-    VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity,
-    VisualEditorField, VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget,
-    VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind, adjacent_reorder_target,
-    backend_status_msg, block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
-    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
-    builtin_theme_definitions, default_preferences_path, default_recovery_dir,
-    default_session_path, default_themes_dir, delete_block, delete_recovery_file,
-    diagram_backend_id, duplicate_block, highlight_code, html_preview_parts,
-    html_preview_plain_text, image_extension_supported, import_image_bytes, import_image_file,
-    inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path, is_text_path,
-    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
-    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
-    normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, reorder_block,
-    resolve_font_family, save_app_preferences, save_session_state, save_theme_definition,
-    serialize_inline_image, serialize_inline_link, shortcut_catalog, sidebar_tab_label,
-    slash_command_edit, slash_query_at, t, tf, title_from_path, transform_block,
+    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE, DiskIdentity, DiskState,
+    DocxImagePolicy, DocxPageSize, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackendPreference,
+    ExportFormat, ExportPreferences, ExternalCheckOutcome, FileTree, FileTreeEntry,
+    FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlPreviewPart, HtmlTableGrid,
+    ImageAlignment, ImagePresentation, InlineSpan, InlineStyle, Language, MAX_EDITOR_FONT_SIZE,
+    MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
+    MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat, MathLayoutStyle, Msg, P0Msg, P1Msg,
+    PdfPageSize, PreviewBlock, RecoveryInventoryEntry, RecoverySourceState, RichText,
+    SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions, SearchPattern, SessionState,
+    ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery, TableEdit,
+    ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor,
+    VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualHtmlImage, VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge,
+    VisualSourceIslandKind, adjacent_reorder_target, backend_status_msg, block_can_reorder_at,
+    block_can_transform_at, build_publishing_snapshot, build_visual_projection,
+    build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
+    check_path_state, default_preferences_path, default_recovery_dir, default_session_path,
+    default_themes_dir, delete_block, delete_recovery_file, diagram_backend_id, duplicate_block,
+    highlight_code, html_preview_parts, html_preview_plain_text, image_extension_supported,
+    import_image_bytes, import_image_file, inline_image_at, inline_link_at, inspect_recovery_files,
+    is_markdown_path, is_text_path, list_theme_definitions, load_app_preferences,
+    load_recovery_file, load_session_state, normalize_editor_font_size,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    p0_t, p0_tf, p1_t, p1_tf, pandoc_available, read_document_source, reorder_block,
+    resolve_font_family, save_app_preferences, save_session_state, save_text_snapshot,
+    save_theme_definition, serialize_inline_image, serialize_inline_link, shortcut_catalog,
+    sidebar_tab_label, slash_command_edit, slash_query_at, t, tf, title_from_path, transform_block,
     validate_block_target,
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -2169,6 +2170,17 @@ struct MarkionApp {
     /// in the Preferences panel; kept to round-trip on save.
     export_preferences: ExportPreferences,
     recovery_dir: PathBuf,
+    /// One background external-change round at a time: while the disk work of
+    /// `check_external_changes` is in flight, further poll ticks are skipped
+    /// so a stalled filesystem cannot pile up blocked background tasks.
+    external_check_in_flight: bool,
+    /// Memoized heavy-slot classification for preview-image decode
+    /// scheduling. The probe opens the image header on disk, so it runs on
+    /// the background executor and the result is cached here; keys are image
+    /// identities, so a stale entry can at worst misclassify a slot, never
+    /// corrupt a decode.
+    preview_probe_results: HashMap<PreviewImageKey, bool>,
+    preview_probes_in_flight: HashSet<PreviewImageKey>,
     /// Memoized syntax highlighting keyed by (language, code). Preview blocks
     /// are re-collected on every edit, but the code blocks themselves rarely
     /// change while typing prose, so their token spans are reused across

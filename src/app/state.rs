@@ -678,6 +678,10 @@ pub(super) struct DocumentTabState {
     /// Generation token incremented on every autosave schedule; a pending timer
     /// compares its captured generation against this to decide whether to fire.
     pub(super) autosave_generation: u64,
+    /// True while this tab's autosave disk work runs on the background
+    /// executor. Timer fires during that window are skipped; the completion
+    /// re-arms when the document is dirty again.
+    pub(super) autosave_in_flight: bool,
     pub(super) sync_scroll_state: SyncScrollState,
     /// Active drag/copy selection in the rendered preview for this tab.
     /// Independent of the source editor selection; never mutates the document.
@@ -888,6 +892,7 @@ impl DocumentTabState {
             line_offsets_cache: RefCell::new(None),
             last_recovery_file: None,
             autosave_generation: 0,
+            autosave_in_flight: false,
             sync_scroll_state: SyncScrollState::default(),
             preview_selection: None,
             preview_is_selecting: false,
@@ -1319,8 +1324,18 @@ impl DocumentTabState {
 
     /// Restore a full snapshot's document and selection.
     pub(super) fn restore_snapshot(&mut self, snapshot: EditorSnapshot) {
+        // The snapshot carries the identity that was current when it was
+        // taken; saves since then made it stale. Transplant the live
+        // document's identity (same destination only) so the dirty recompute
+        // below compares against what is actually on disk now.
+        let current_identity = (self.document.path() == snapshot.document.path())
+            .then(|| self.document.disk_identity().cloned())
+            .flatten();
         self.document = snapshot.document;
-        self.document.refresh_dirty_from_disk();
+        if let Some(identity) = current_identity {
+            self.document.record_disk_identity(identity, false);
+        }
+        self.document.refresh_dirty_against_known_disk();
         self.selected_range = snapshot.selected_range;
         self.selection_reversed = snapshot.selection_reversed;
         self.marked_range = None;
@@ -1336,7 +1351,7 @@ impl DocumentTabState {
             selection_reversed: self.selection_reversed,
         };
         self.document.replace_range(diff.range, &diff.insert);
-        self.document.refresh_dirty_from_disk();
+        self.document.refresh_dirty_against_known_disk();
         self.selected_range = diff.selected_range;
         self.selection_reversed = diff.selection_reversed;
         self.marked_range = None;
