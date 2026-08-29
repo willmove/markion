@@ -20,11 +20,11 @@ const PX_TO_PT: f32 = 72.0 / 96.0;
 /// can measure as zero-width when the face has no EM/NBSP glyph.
 const PLACEHOLDER: &str = "M";
 
-/// Which family stack a paragraph uses (design D3: generic families resolve
-/// to system faces when present, bundled fallbacks otherwise).
+/// Which family stack a paragraph uses (design D3: body Latin is the bundled
+/// serif; heading/code generics resolve to system faces when present).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FamilyKind {
-    /// Serif body text.
+    /// Serif body text (bundled Libertinus Serif, not the host `serif` generic).
     Body,
     /// Sans-serif headings.
     Heading,
@@ -35,7 +35,7 @@ pub enum FamilyKind {
 impl FamilyKind {
     fn family(self) -> Family<'static> {
         match self {
-            Self::Body => Family::Serif,
+            Self::Body => crate::fonts::body_family(),
             Self::Heading => Family::SansSerif,
             Self::Code => Family::Monospace,
         }
@@ -462,14 +462,19 @@ pub fn shape_paragraph(
         let mut drawn = Vec::new();
         for group in groups {
             if let Some(prepared) = objects.get(group.run).and_then(|object| object.as_ref()) {
-                line_objects.push(ShapedInlineObject {
-                    run: group.run,
-                    x: group.start_x,
-                    width: prepared.width,
-                    height: prepared.height,
-                    ascent: prepared.ascent,
-                    tree: prepared.tree.clone(),
-                });
+                // The image run is "\u{200B}M": UAX#14 may leave the ZWSP on
+                // the previous line. That group has ~zero advance and must
+                // not duplicate the atom.
+                if group.width() > 0.05 {
+                    line_objects.push(ShapedInlineObject {
+                        run: group.run,
+                        x: group.start_x,
+                        width: prepared.width,
+                        height: prepared.height,
+                        ascent: prepared.ascent,
+                        tree: prepared.tree.clone(),
+                    });
+                }
             } else {
                 drawn.push(group);
             }
@@ -712,7 +717,10 @@ mod tests {
             .count();
         assert_eq!(object_lines, 1, "the atom must occupy exactly one line");
         assert_eq!(
-            para.lines.iter().map(|line| line.objects.len()).sum::<usize>(),
+            para.lines
+                .iter()
+                .map(|line| line.objects.len())
+                .sum::<usize>(),
             1
         );
     }

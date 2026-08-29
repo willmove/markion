@@ -185,3 +185,42 @@ fn empty_document_renders_one_page() {
     let pdf = markion_pdf::render(&PdfDocument::default()).expect("render empty doc");
     assert!(pdf.starts_with(b"%PDF"));
 }
+
+fn pdf_contains(pdf: &[u8], needle: &[u8]) -> bool {
+    pdf.windows(needle.len()).any(|w| w == needle)
+}
+
+/// ToUnicode CMap entries are ASCII hex of UTF-16BE code units (`<0054>` for
+/// 'T'). Symbol-encoded body text would map those letters to Greek instead.
+fn pdf_contains_utf16_hex(pdf: &[u8], text: &str) -> bool {
+    let mut hex = String::new();
+    for ch in text.encode_utf16() {
+        hex.push_str(&format!("{ch:04X}"));
+    }
+    pdf_contains(pdf, hex.as_bytes())
+}
+
+#[test]
+fn latin_body_to_unicode_is_not_greek() {
+    let doc = PdfDocument {
+        blocks: vec![Block::Paragraph {
+            content: vec![run("This starter document is a quick tour")],
+        }],
+        ..PdfDocument::default()
+    };
+    let pdf = markion_pdf::render(&doc).expect("render latin paragraph");
+    assert!(
+        pdf_contains(&pdf, b"LibertinusSerif"),
+        "body Latin should embed Libertinus Serif"
+    );
+    assert!(
+        !pdf_contains(&pdf, b"StandardSymbols") && !pdf_contains(&pdf, b"OpenSymbol"),
+        "body Latin must not embed a Pi/Symbol face"
+    );
+    // ToUnicode streams are often Flate-compressed, so consecutive Latin hex
+    // may be absent; Greek homoglyphs must still not appear uncompressed.
+    assert!(
+        !pdf_contains_utf16_hex(&pdf, "Τηις") && !pdf_contains_utf16_hex(&pdf, "σταρτερ"),
+        "ToUnicode must not map body Latin to Greek homoglyphs"
+    );
+}

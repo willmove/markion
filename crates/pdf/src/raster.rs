@@ -18,6 +18,7 @@ use cosmic_text::{
 };
 use image::RgbaImage;
 
+use crate::fonts::body_family;
 use crate::ir::{AlertKind, Alignment, Block, ImageData, ListMarker, PdfDocument, Rgb, Run, Style};
 use crate::{PdfError, fonts, theme};
 
@@ -422,7 +423,7 @@ fn draw_paragraph(raster: &mut Raster, content: &[Run]) -> Result<(), PdfError> 
         content,
         size,
         line_h,
-        Family::Serif,
+        body_family(),
         theme::TEXT,
         Some(raster.geom.content_w()),
     );
@@ -509,7 +510,7 @@ fn draw_list_item(
         content,
         size,
         line_h,
-        Family::Serif,
+        body_family(),
         theme::TEXT,
         Some(width),
     );
@@ -538,7 +539,7 @@ fn draw_list_item(
         std::slice::from_ref(&marker_run),
         size,
         line_h,
-        Family::Serif,
+        body_family(),
         theme::MUTED,
         None,
     );
@@ -765,7 +766,7 @@ fn draw_table(
                     &runs,
                     size,
                     line_h,
-                    Family::Serif,
+                    body_family(),
                     theme::TEXT,
                     Some(cell_w),
                 )
