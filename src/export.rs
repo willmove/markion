@@ -17,8 +17,8 @@ use std::{
 };
 
 use markion_pdf::{
-    Block as PdfBlock, Cell as PdfCell, ImageData as PdfImageData, ListMarker, PdfDocument,
-    PdfMetadata, PdfOptions, Rgb, Run as PdfRun, Style as PdfStyle,
+    Block as PdfBlock, Cell as PdfCell, ImageData as PdfImageData, InlineImage as PdfInlineImage,
+    ListMarker, PdfDocument, PdfMetadata, PdfOptions, Rgb, Run as PdfRun, Style as PdfStyle,
 };
 use percent_encoding::percent_decode_str;
 use typune_export::{DocxExporter, ExportError, ExportOptions, Exporter, PdfExporter};
@@ -435,16 +435,7 @@ fn pdf_runs(rich: &RichText, footnotes: &[String]) -> Vec<PdfRun> {
 
 fn pdf_run(span: &InlineSpan, footnotes: &[String]) -> Option<PdfRun> {
     if let Some(math) = &span.math {
-        // The IR has no inline image container, so inline math is preserved as
-        // a code-styled run. Display math blocks are rendered to SVG images.
-        return Some(PdfRun {
-            text: math.authored.clone(),
-            style: PdfStyle {
-                code: true,
-                ..PdfStyle::default()
-            },
-            ..PdfRun::default()
-        });
+        return Some(pdf_inline_math(math, span.link.as_deref()));
     }
     if span.text.is_empty() {
         return None;
@@ -519,6 +510,32 @@ fn pdf_highlight_color(kind: HighlightKind) -> Option<Rgb> {
         HighlightKind::Number => Some(Rgb(0x09, 0x55, 0xa5)),
         HighlightKind::Comment => Some(Rgb(0x6e, 0x77, 0x80)),
         HighlightKind::Type => Some(Rgb(0x00, 0x70, 0x90)),
+    }
+}
+
+fn pdf_inline_math(math: &crate::model::MathSource, link: Option<&str>) -> PdfRun {
+    match MathRenderer::new().render_inline(&math.latex) {
+        Ok(rendered) => PdfRun {
+            text: String::new(),
+            link: link.map(str::to_string),
+            inline_image: Some(PdfInlineImage {
+                data: PdfImageData::Svg(rendered.svg),
+                width_px: rendered.dimensions.width,
+                height_px: rendered.dimensions.height,
+                ascent_px: rendered.ascent,
+                alt: math.authored.clone(),
+            }),
+            ..PdfRun::default()
+        },
+        Err(_) => PdfRun {
+            text: math.authored.clone(),
+            style: PdfStyle {
+                code: true,
+                ..PdfStyle::default()
+            },
+            link: link.map(str::to_string),
+            ..PdfRun::default()
+        },
     }
 }
 
@@ -3228,6 +3245,52 @@ mod tests {
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
         assert!(page_count >= 1, "PDF should contain at least one page");
+    }
+
+    #[test]
+    fn pdf_inline_math_becomes_svg_run() {
+        let doc = MarkdownDocument::from_text("The formula $E = mc^2$ is famous.\n");
+        let ir = build_pdf_ir(&doc, &PdfExportOptions::default(), None, &HashMap::new());
+        let content = match ir.blocks.first() {
+            Some(PdfBlock::Paragraph { content }) => content,
+            other => panic!("expected a paragraph, got {other:?}"),
+        };
+        let math = content
+            .iter()
+            .find(|run| run.inline_image.is_some())
+            .expect("inline math should become an IR inline image");
+        match &math.inline_image.as_ref().unwrap().data {
+            PdfImageData::Svg(svg) => {
+                assert!(
+                    svg.to_ascii_lowercase().contains("<svg"),
+                    "inline math SVG missing, got {svg}"
+                )
+            }
+            other => panic!("expected SVG payload, got {other:?}"),
+        }
+        assert!(math.inline_image.as_ref().unwrap().width_px > 0.0);
+        assert!(
+            !content
+                .iter()
+                .any(|run| run.style.code && run.text.contains("E = mc^2")),
+            "valid inline math must not fall back to a code-styled source run"
+        );
+        markion_pdf::render(&ir).expect("PDF with inline math should render");
+    }
+
+    #[test]
+    fn pdf_unrenderable_inline_math_keeps_authored_source() {
+        let math = crate::model::MathSource {
+            latex: String::new(),
+            authored: "$ $".to_string(),
+            style: crate::model::MathLayoutStyle::Text,
+            delimiter: crate::model::MathDelimiter::InlineDollar,
+            source_range: 0..3,
+        };
+        let run = pdf_inline_math(&math, None);
+        assert!(run.inline_image.is_none());
+        assert!(run.style.code);
+        assert_eq!(run.text, "$ $");
     }
 
     /// Regression (2026-08): JPEG has no alpha channel, so saving the RGBA

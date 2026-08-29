@@ -18,8 +18,8 @@ mod theme;
 
 pub use engine::render;
 pub use ir::{
-    AlertKind, Alignment, Block, Cell, ImageData, ListMarker, PdfDocument, PdfMetadata, PdfOptions,
-    Rgb, Run, Style,
+    AlertKind, Alignment, Block, Cell, ImageData, InlineImage, ListMarker, PdfDocument,
+    PdfMetadata, PdfOptions, Rgb, Run, Style,
 };
 pub use raster::{DEFAULT_SCALE, render_snapshot};
 

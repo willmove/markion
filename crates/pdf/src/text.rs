@@ -10,8 +10,15 @@ use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight};
 use krilla::Data;
 use krilla::text::{Font as KrillaFont, Glyph, GlyphId, KrillaGlyph};
 
-use crate::ir::{Rgb, Run, Style};
+use crate::ir::{ImageData, InlineImage, Rgb, Run, Style};
 use crate::{PdfError, theme};
+
+/// Points per CSS pixel for inline-image natural sizing (96 DPI).
+const PX_TO_PT: f32 = 72.0 / 96.0;
+/// Unbreakable placeholder occupying an inline image's advance during wrap.
+/// A Latin letter is used because every bundled face has it; Unicode spaces
+/// can measure as zero-width when the face has no EM/NBSP glyph.
+const PLACEHOLDER: &str = "M";
 
 /// Which family stack a paragraph uses (design D3: generic families resolve
 /// to system faces when present, bundled fallbacks otherwise).
@@ -109,12 +116,26 @@ impl GlyphGroup {
 /// One laid-out line of a paragraph.
 pub struct ShapedLine {
     pub groups: Vec<GlyphGroup>,
+    /// Inline images on this line, x relative to the line origin.
+    pub objects: Vec<ShapedInlineObject>,
     /// Line height in points.
     pub height: f32,
+    /// Distance from the line's top to the text/math baseline.
+    pub baseline_offset: f32,
     /// Visual width in points.
     pub width: f32,
     /// Footnote ids referenced by runs on this line (deduplicated, in order).
     pub footnotes: Vec<u32>,
+}
+
+/// A placed inline image (math SVG) after wrapping.
+pub struct ShapedInlineObject {
+    pub run: usize,
+    pub x: f32,
+    pub width: f32,
+    pub height: f32,
+    pub ascent: f32,
+    pub tree: Box<usvg::Tree>,
 }
 
 /// A fully shaped paragraph: lines plus the run table they reference.
@@ -169,6 +190,43 @@ fn classify(c: char) -> ScriptClass {
     }
 }
 
+struct PreparedObject {
+    width: f32,
+    height: f32,
+    ascent: f32,
+    tree: Box<usvg::Tree>,
+}
+
+fn image_size_pt(image: &InlineImage, max_width: Option<f32>) -> (f32, f32, f32) {
+    let mut width = image.width_px * PX_TO_PT;
+    let mut height = image.height_px * PX_TO_PT;
+    let mut ascent = image.ascent_px * PX_TO_PT;
+    if let Some(max_width) = max_width
+        && width > max_width
+        && width > 0.0
+    {
+        let scale = max_width / width;
+        width *= scale;
+        height *= scale;
+        ascent *= scale;
+    }
+    (width.max(0.5), height, ascent)
+}
+
+fn parse_inline_svg(image: &InlineImage, max_width: Option<f32>) -> Option<PreparedObject> {
+    let ImageData::Svg(svg) = &image.data else {
+        return None;
+    };
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
+    let (width, height, ascent) = image_size_pt(image, max_width);
+    Some(PreparedObject {
+        width,
+        height,
+        ascent,
+        tree: Box::new(tree),
+    })
+}
+
 /// Shape one paragraph of styled runs.
 pub fn shape_paragraph(
     fs: &mut FontSystem,
@@ -178,6 +236,8 @@ pub fn shape_paragraph(
     let script_size = spec.size * 0.75;
     let mut texts: Vec<String> = Vec::with_capacity(spec.runs.len());
     let mut run_infos = Vec::with_capacity(spec.runs.len());
+    let mut objects: Vec<Option<PreparedObject>> = Vec::with_capacity(spec.runs.len());
+    let mut placeholder_em: Vec<Option<f32>> = Vec::with_capacity(spec.runs.len());
 
     for run in spec.runs {
         let fill = run.style.color.unwrap_or(if run.link.is_some() {
@@ -185,13 +245,25 @@ pub fn shape_paragraph(
         } else {
             spec.color
         });
+        let prepared = run
+            .inline_image
+            .as_ref()
+            .and_then(|image| parse_inline_svg(image, spec.width));
         // A footnote reference renders as a superscript number (the 1-based
         // footnote id); the run's own text is replaced per the IR contract.
-        let text = match run.footnote {
-            Some(id) => id.to_string(),
-            None => run.text.clone(),
+        let text = if prepared.is_some() {
+            format!("\u{200B}{PLACEHOLDER}")
+        } else if let Some(id) = run.footnote {
+            id.to_string()
+        } else if let Some(image) = &run.inline_image {
+            image.alt.clone()
+        } else {
+            run.text.clone()
         };
+        let em = prepared.as_ref().map(|object| object.width);
         texts.push(text);
+        placeholder_em.push(em);
+        objects.push(prepared);
         run_infos.push(RunInfo {
             style: run.style,
             link: run.link.clone(),
@@ -208,8 +280,10 @@ pub fn shape_paragraph(
     }
 
     let default_attrs = Attrs::new().family(spec.family.family());
-    let spans: Vec<(&str, Attrs)> =
-        spec.runs
+    let mut buffer = Buffer::new(fs, Metrics::new(spec.size, spec.line_height));
+    for pass in 0..3 {
+        let spans: Vec<(&str, Attrs)> = spec
+            .runs
             .iter()
             .zip(&texts)
             .enumerate()
@@ -233,19 +307,48 @@ pub fn shape_paragraph(
                 if style.italic {
                     attrs = attrs.style(cosmic_text::Style::Italic);
                 }
-                // Super/subscript and footnote references shape at a smaller
-                // size; the baseline offset is applied at emission time.
-                if style.superscript || style.subscript || run.footnote.is_some() {
+                if let Some(em) = placeholder_em[i] {
+                    let line_h = spec.line_height.max(
+                        objects[i]
+                            .as_ref()
+                            .map(|object| object.height)
+                            .unwrap_or(spec.line_height),
+                    );
+                    attrs.metrics_opt = Some(Metrics::new(em, line_h).into());
+                } else if style.superscript || style.subscript || run.footnote.is_some() {
+                    // Super/subscript and footnote references shape at a smaller
+                    // size; the baseline offset is applied at emission time.
                     attrs.metrics_opt = Some(Metrics::new(script_size, spec.line_height).into());
                 }
                 (text.as_str(), attrs)
             })
             .collect();
-
-    let mut buffer = Buffer::new(fs, Metrics::new(spec.size, spec.line_height));
-    buffer.set_size(spec.width, None);
-    buffer.set_rich_text(spans, &default_attrs, Shaping::Advanced, None);
-    buffer.shape_until_scroll(fs, true);
+        buffer.set_size(spec.width, None);
+        buffer.set_rich_text(spans, &default_attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(fs, true);
+        if pass == 2 {
+            break;
+        }
+        let mut changed = false;
+        for (i, em) in placeholder_em.iter_mut().enumerate() {
+            let Some(desired) = objects[i].as_ref().map(|object| object.width) else {
+                continue;
+            };
+            let measured = placeholder_advance(&buffer, i);
+            if measured <= 0.05 {
+                continue;
+            }
+            let current = em.unwrap_or(desired);
+            let new_em = current * desired / measured;
+            if (new_em - current).abs() / current.max(0.5) > 0.02 {
+                *em = Some(new_em);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 
     let mut lines = Vec::new();
     for run in buffer.layout_runs() {
@@ -355,9 +458,42 @@ pub fn shape_paragraph(
             }
         }
 
+        let mut line_objects = Vec::new();
+        let mut drawn = Vec::new();
+        for group in groups {
+            if let Some(prepared) = objects.get(group.run).and_then(|object| object.as_ref()) {
+                line_objects.push(ShapedInlineObject {
+                    run: group.run,
+                    x: group.start_x,
+                    width: prepared.width,
+                    height: prepared.height,
+                    ascent: prepared.ascent,
+                    tree: prepared.tree.clone(),
+                });
+            } else {
+                drawn.push(group);
+            }
+        }
+
+        let (height, baseline_offset) = if line_objects.is_empty() {
+            (run.line_height, run.line_height * 0.8)
+        } else {
+            let text_ascent = run.line_height * 0.8;
+            let text_descent = run.line_height * 0.2;
+            let mut ascent = text_ascent;
+            let mut descent = text_descent;
+            for object in &line_objects {
+                ascent = ascent.max(object.ascent);
+                descent = descent.max((object.height - object.ascent).max(0.0));
+            }
+            (ascent + descent, ascent)
+        };
+
         lines.push(ShapedLine {
-            groups,
-            height: run.line_height,
+            groups: drawn,
+            objects: line_objects,
+            height,
+            baseline_offset,
             width: run.line_w + shift,
             footnotes,
         });
@@ -367,6 +503,23 @@ pub fn shape_paragraph(
         lines,
         runs: run_infos,
     })
+}
+
+fn placeholder_advance(buffer: &Buffer, run_idx: usize) -> f32 {
+    for layout in buffer.layout_runs() {
+        let mut width = 0.0;
+        let mut found = false;
+        for glyph in layout.glyphs.iter() {
+            if glyph.metadata == run_idx {
+                found = true;
+                width += glyph.w;
+            }
+        }
+        if found {
+            return width;
+        }
+    }
+    0.0
 }
 
 #[cfg(test)]
@@ -478,6 +631,89 @@ mod tests {
         assert!(
             ref_group.font_size < theme::BODY_SIZE,
             "reference shapes at the smaller script size"
+        );
+    }
+
+    const TINY_MATH_SVG: &str = concat!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="80" height="12" viewBox="0 0 80 12">"##,
+        r##"<path d="M1 11 L79 1" stroke="#000" fill="none" stroke-width="1.5"/></svg>"##
+    );
+
+    fn inline_svg_run(width_px: f32, height_px: f32, ascent_px: f32) -> Run {
+        Run {
+            inline_image: Some(InlineImage {
+                data: ImageData::Svg(TINY_MATH_SVG.to_string()),
+                width_px,
+                height_px,
+                ascent_px,
+                alt: "$x$".to_string(),
+            }),
+            ..Run::default()
+        }
+    }
+
+    #[test]
+    fn inline_image_sits_on_the_same_line_as_surrounding_text() {
+        let mut fs = bundled_only_font_system();
+        let mut cache = FontCache::default();
+        let runs = vec![
+            Run {
+                text: "before ".to_string(),
+                ..Run::default()
+            },
+            inline_svg_run(24.0, 12.0, 9.0),
+            Run {
+                text: " after".to_string(),
+                ..Run::default()
+            },
+        ];
+        let para = shape_paragraph(&mut fs, &mut cache, &spec(&runs, Some(300.0)))
+            .expect("shape inline image");
+        assert_eq!(para.lines.len(), 1);
+        assert_eq!(para.lines[0].objects.len(), 1);
+        assert!(
+            para.lines[0].objects[0].x > 0.0,
+            "inline image should follow the leading text"
+        );
+        assert!(
+            para.lines[0].groups.iter().all(|g| g.run != 1),
+            "placeholder glyphs must not be emitted"
+        );
+    }
+
+    #[test]
+    fn inline_image_wraps_as_an_atom() {
+        let mut fs = bundled_only_font_system();
+        let mut cache = FontCache::default();
+        // "MMMMMMMM" at body size is wider than 50pt; a 60pt-wide atom cannot
+        // stay on the same line if its placeholder advance is calibrated.
+        let runs = vec![
+            Run {
+                text: "MMMMMMMM".to_string(),
+                ..Run::default()
+            },
+            inline_svg_run(80.0, 12.0, 9.0),
+            Run {
+                text: " z".to_string(),
+                ..Run::default()
+            },
+        ];
+        let para = shape_paragraph(&mut fs, &mut cache, &spec(&runs, Some(80.0)))
+            .expect("shape wrapping inline image");
+        assert!(
+            para.lines.len() >= 2,
+            "wide inline image must wrap as a unit, got {} line(s)",
+            para.lines.len()
+        );
+        let object_lines = para
+            .lines
+            .iter()
+            .filter(|line| !line.objects.is_empty())
+            .count();
+        assert_eq!(object_lines, 1, "the atom must occupy exactly one line");
+        assert_eq!(
+            para.lines.iter().map(|line| line.objects.len()).sum::<usize>(),
+            1
         );
     }
 }

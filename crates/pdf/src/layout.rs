@@ -378,7 +378,7 @@ impl<'a> Layouter<'a> {
             };
             let mut first = true;
             for line in &note.lines {
-                let baseline = y + line.height * 0.8;
+                let baseline = y + line.baseline_offset;
                 if first {
                     self.note_anchors.insert(*id, (page_idx, baseline));
                     first = false;
@@ -444,6 +444,27 @@ impl<'a> Layouter<'a> {
                 ));
             }
         }
+        let mut svgs: Vec<PlacedItem> = Vec::new();
+        for object in &line.objects {
+            svgs.push(PlacedItem::Svg {
+                tree: object.tree.clone(),
+                x: x + object.x,
+                y: baseline - object.ascent,
+                w: object.width,
+                h: object.height,
+            });
+            if let Some(url) = runs.get(object.run).and_then(|info| info.link.clone()) {
+                annotations.push(PlacedAnnotation {
+                    rect: RectF::new(
+                        x + object.x,
+                        baseline - object.ascent,
+                        object.width,
+                        object.height.max(1.0),
+                    ),
+                    target: AnnotTarget::Url(url),
+                });
+            }
+        }
         let page = self.cur_page();
         page.items.append(&mut decorations);
         page.annotations.append(&mut annotations);
@@ -452,13 +473,14 @@ impl<'a> Layouter<'a> {
             baseline,
             groups: line.groups.clone(),
         }));
+        page.items.append(&mut svgs);
     }
 
     /// Place a paragraph line by line, splitting across pages as needed.
     fn place_paragraph(&mut self, para: &ShapedParagraph, x: f32) {
         for line in &para.lines {
             self.ensure_space(line.height, &line.footnotes);
-            let baseline = self.y + line.height * 0.8;
+            let baseline = self.y + line.baseline_offset;
             self.place_line_raw(line, &para.runs, x, baseline);
             self.y += line.height;
             self.page_empty = false;
@@ -539,7 +561,7 @@ impl<'a> Layouter<'a> {
             theme::TEXT,
             Some(width),
         )?;
-        let title: String = content.iter().map(|r| r.text.as_str()).collect();
+        let title: String = content.iter().map(Run::plain_text).collect();
         // Stacked headings keep together: flush an older pending heading
         // requiring room for this one too.
         let h = para.height();
@@ -788,7 +810,7 @@ impl<'a> Layouter<'a> {
                     seg_top = self.y;
                     self.push_code_clip();
                 }
-                let baseline = self.y + line.height * 0.8;
+                let baseline = self.y + line.baseline_offset;
                 self.place_line_raw(line, &para.runs, self.geom.left + theme::CODE_PAD, baseline);
                 self.y += line.height;
                 self.page_empty = false;
@@ -932,7 +954,7 @@ impl<'a> Layouter<'a> {
                     Alignment::Right => inner_w - line.width,
                 }
                 .max(0.0);
-                let baseline = cy + line.height * 0.8;
+                let baseline = cy + line.baseline_offset;
                 self.place_line_raw(line, &cell.runs, cell_x + dx, baseline);
                 cy += line.height;
             }
@@ -1209,7 +1231,7 @@ pub fn layout_document(
         for line in &title.lines {
             page.items.push(PlacedItem::Line(PlacedLine {
                 x: geom.left,
-                baseline: y + line.height * 0.8,
+                baseline: y + line.baseline_offset,
                 groups: line.groups.clone(),
             }));
             y += line.height;
@@ -1518,5 +1540,51 @@ mod tests {
         assert!(result.body_pages.len() > 1);
         assert_eq!(result.outline.len(), 2);
         assert_eq!(result.outline[0].title, "Chapter");
+    }
+
+    #[test]
+    fn inline_svg_is_placed_on_the_text_line() {
+        let svg = concat!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12" viewBox="0 0 24 12">"##,
+            r##"<path d="M1 11 L23 1" stroke="#000" fill="none" stroke-width="1.5"/></svg>"##
+        );
+        let doc = PdfDocument {
+            blocks: vec![Block::Paragraph {
+                content: vec![
+                    Run {
+                        text: "E = ".to_string(),
+                        ..Run::default()
+                    },
+                    Run {
+                        inline_image: Some(crate::ir::InlineImage {
+                            data: ImageData::Svg(svg.to_string()),
+                            width_px: 24.0,
+                            height_px: 12.0,
+                            ascent_px: 9.0,
+                            alt: "$mc^2$".to_string(),
+                        }),
+                        ..Run::default()
+                    },
+                    Run {
+                        text: " here".to_string(),
+                        ..Run::default()
+                    },
+                ],
+            }],
+            ..PdfDocument::default()
+        };
+        let result = layout(&doc);
+        let page = &result.body_pages[0];
+        let svgs = page
+            .items
+            .iter()
+            .filter(|item| matches!(item, PlacedItem::Svg { .. }))
+            .count();
+        assert_eq!(svgs, 1, "inline math SVG must be placed in the paragraph");
+        let has_text = page
+            .items
+            .iter()
+            .any(|item| matches!(item, PlacedItem::Line(line) if !line.groups.is_empty()));
+        assert!(has_text, "surrounding prose must still be placed");
     }
 }

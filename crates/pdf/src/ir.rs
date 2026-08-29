@@ -132,6 +132,21 @@ pub enum ImageData {
     Svg(String),
 }
 
+/// An inline image atom (math SVG today) that participates in prose wrapping
+/// as a single unbreakable object aligned to the surrounding baseline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InlineImage {
+    pub data: ImageData,
+    /// Natural width in CSS pixels (96 DPI).
+    pub width_px: f32,
+    /// Natural height in CSS pixels (96 DPI).
+    pub height_px: f32,
+    /// Distance from the top edge to the formula baseline, in CSS pixels.
+    pub ascent_px: f32,
+    /// Fallback / accessibility text (authored LaTeX for math).
+    pub alt: String,
+}
+
 /// One styled inline run.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Run {
@@ -143,6 +158,18 @@ pub struct Run {
     /// 1-based footnote id into [`PdfDocument::footnotes`]; the run text is
     /// replaced by a superscript reference number.
     pub footnote: Option<u32>,
+    /// When set, this run is an inline image atom; `text` is ignored.
+    pub inline_image: Option<InlineImage>,
+}
+
+impl Run {
+    /// Visible plain text for outlines and fallbacks: image alt, else run text.
+    pub fn plain_text(&self) -> &str {
+        match &self.inline_image {
+            Some(image) => image.alt.as_str(),
+            None => self.text.as_str(),
+        }
+    }
 }
 
 /// Inline style flags. `color` carries syntax-highlight / accent colors
