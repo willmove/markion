@@ -2118,7 +2118,9 @@ impl MarkionApp {
                     }
                     return;
                 }
-                VisualEditorFieldKind::CodePayload | VisualEditorFieldKind::MathPayload => {
+                VisualEditorFieldKind::CodePayload
+                | VisualEditorFieldKind::MathPayload
+                | VisualEditorFieldKind::HtmlSource => {
                     self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
                     self.replace_text_in_range(None, "\n", _window, cx);
                     self.active_tab_mut().finish_undo_capture();

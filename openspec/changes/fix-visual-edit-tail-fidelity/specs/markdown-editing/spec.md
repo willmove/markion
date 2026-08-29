@@ -34,7 +34,14 @@ A whitespace row's passive height SHALL correspond to the amount of blank source
 - **WHEN** the caret is in the trailing whitespace of the document and the user presses Enter several times in a row
 - **THEN** each press inserts one newline (plus continuation prefix) into the canonical source
 - **AND** the trailing whitespace row's rendered height grows visibly with each press instead of stopping after a fixed small height
+- **AND** the insertion caret moves down the grown row with each press instead of remaining painted at the row origin
 - **AND** no press is silently swallowed or hidden by the rendering
+
+#### Scenario: Typing at the last visible line keeps the caret and new text in view
+- **WHEN** the Visual Edit caret is on the last rendered line of a document whose content is taller than the pane
+- **AND** the user types characters or presses Enter so the last row grows past the current viewport bottom
+- **THEN** the list scrolls enough that the painted caret and the newly inserted text remain fully visible
+- **AND** the caret does not appear stuck at its previous screen position
 
 #### Scenario: Whitespace row height tracks blank-line count in both directions
 - **WHEN** blank lines covered by a whitespace row are added or removed — including via undo, redo, or external reload

@@ -55,7 +55,20 @@ impl Render for MarkionApp {
                     .active_tab_mut()
                     .take_visual_cursor_reveal_index(&blocks)
                 {
-                    self.active_tab().visual_list.scroll_to_reveal_item(index);
+                    let list = self.active_tab().visual_list.clone();
+                    let top = list.logical_scroll_top();
+                    if index > top.item_ix {
+                        // Unmeasured rows below the viewport contribute 0
+                        // height, so reveal-by-bounds cannot walk to a newly
+                        // created tail block. Pin the caret's item first.
+                        list.scroll_to(gpui::ListOffset {
+                            item_ix: index,
+                            offset_in_item: px(0.),
+                        });
+                    } else if index < top.item_ix {
+                        list.scroll_to_reveal_item(index);
+                    }
+                    self.active_tab_mut().visual_caret_follow_frames = 2;
                 }
                 blocks
             } else {

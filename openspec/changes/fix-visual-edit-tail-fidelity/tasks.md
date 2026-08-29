@@ -31,3 +31,9 @@
 
 - [ ] 5.1 `cargo test --workspace` passes with the new tests
 - [ ] 5.2 `openspec validate fix-visual-edit-tail-fidelity` passes
+
+## 6. Tail caret follow (remaining UX hole after row-height fidelity)
+
+- [x] 6.1 Paint the whitespace-row caret on the insertion line that matches newlines before the source caret, and map clicks by Y onto those newlines
+- [x] 6.2 After a caret-moving edit, pixel-follow `visual_caret_bounds` into the Visual Edit list viewport so last-line typing and tail Enter cannot grow below the clip
+- [x] 6.3 Tests: caret Y increases with each tail Enter; typed tail text stays inside the laid-out visual viewport

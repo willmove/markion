@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
 
 use crate::frontmatter::split_front_matter;
 use crate::model::{
@@ -1039,16 +1039,15 @@ fn visual_block_from_preview(
                 |prefix| prefix.end..source_range.end,
             )
     };
-    let (mut editable_runs, reveal_groups, contains_non_image_html) =
-        if matches!(kind, VisualBlockKind::Html { .. }) {
-            // Rendered HTML blocks present through the HTML-parts pipeline,
-            // not the inline projection. Keeping their runs empty preserves
-            // the focused source-island affordance (the empty-runs gate in
-            // the view layer) for editing raw HTML.
-            (Vec::new(), Vec::new(), false)
-        } else {
-            inline_runs(text, inline_source_range, reference_definitions)
-        };
+    let (mut editable_runs, reveal_groups, _) = if matches!(kind, VisualBlockKind::Html { .. }) {
+        // Rendered HTML blocks present through the HTML-parts pipeline,
+        // not the inline projection. Keeping their runs empty preserves
+        // the focused source-island affordance (the empty-runs gate in
+        // the view layer) for editing raw HTML.
+        (Vec::new(), Vec::new(), false)
+    } else {
+        inline_runs(text, inline_source_range, reference_definitions)
+    };
     append_trailing_horizontal_whitespace_run(
         text,
         &source_range,
@@ -1072,7 +1071,7 @@ fn visual_block_from_preview(
     let source_island = if matches!(kind, VisualBlockKind::Html { .. }) {
         None
     } else {
-        source_island.or(contains_non_image_html.then_some(VisualSourceIslandKind::Html))
+        source_island
     };
     VisualBlock {
         id: allocate_id(),
@@ -1162,6 +1161,12 @@ fn visual_block_editor(
                     .collect(),
             })
         }
+        PreviewBlock::Html { .. } => Some(VisualBlockEditor::Html {
+            payload: VisualEditorField {
+                kind: VisualEditorFieldKind::HtmlSource,
+                source_range,
+            },
+        }),
         _ => None,
     }
 }
@@ -1401,6 +1406,7 @@ fn with_html_style(base: InlineStyle, html_depths: &[usize; HTML_STYLE_KIND_COUN
         highlight: base.highlight || html_depths[4] > 0,
         subscript: base.subscript || html_depths[5] > 0,
         superscript: base.superscript || html_depths[6] > 0,
+        ..base
     }
 }
 
@@ -1509,13 +1515,18 @@ fn inline_runs(
             Event::End(TagEnd::Strikethrough) => {
                 markdown_style.strikethrough = false;
             }
-            Event::Start(Tag::Link { dest_url, .. }) => {
+            Event::Start(Tag::Link {
+                dest_url,
+                link_type,
+                ..
+            }) => {
                 // pulldown-cmark reports a collapsed reference link's
                 // (`[label][]`) tag range as `[label]` only; extend it to
                 // cover the trailing `[]` so the reveal group exposes the
                 // complete authored syntax.
                 let mut link_range = event_range.clone();
-                if text[link_range.clone()].ends_with(']')
+                if !matches!(link_type, LinkType::Autolink | LinkType::Email)
+                    && text[link_range.clone()].ends_with(']')
                     && text[link_range.end..].starts_with("[]")
                 {
                     link_range.end += 2;
@@ -1995,7 +2006,7 @@ fn push_decoded_text_runs(
                 });
                 push_decoded_entity_run(
                     runs,
-                    span.decoded,
+                    &span.decoded,
                     event_range.start + span.range.start..event_range.start + span.range.end,
                     style,
                     link_target_range.clone(),
@@ -2019,14 +2030,15 @@ fn push_decoded_text_runs(
     true
 }
 
-/// Emits the run for one decoded entity token: a single visible character
-/// backed by the full authored token range. The decoded character generally
-/// does not occur inside the token's source bytes, so `push_run`'s substring
-/// proof cannot apply; the run carries the token as both its source and
-/// content range and never triggers the conservative fallback.
+/// Emits the run for one decoded entity token: the parser's visible text
+/// backed by the full authored token range. Multi-codepoint names occupy one
+/// run whose `visible_text` is the full decoded string. The decoded text
+/// generally does not occur inside the token's source bytes, so `push_run`'s
+/// substring proof cannot apply; the run carries the token as both its source
+/// and content range and never triggers the conservative fallback.
 fn push_decoded_entity_run(
     runs: &mut Vec<VisualInlineRun>,
-    decoded: char,
+    decoded: &str,
     token_range: Range<usize>,
     style: InlineStyle,
     link_target_range: Option<Range<usize>>,
@@ -2047,9 +2059,9 @@ fn push_decoded_entity_run(
 
 /// One proven parser transformation inside a text event slice: either a
 /// backslash escape (two source bytes rendering one punctuation character)
-/// or an HTML entity reference (the full authored `&…;` token rendering one
-/// decoded character).
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// or an HTML entity reference (the full authored `&…;` token rendering the
+/// parser's decoded string, one or more characters).
+#[derive(Clone, PartialEq, Eq)]
 enum DecodedSpanKind {
     Escape,
     Entity,
@@ -2060,8 +2072,8 @@ struct DecodedSpan {
     /// Byte range of the authored syntax inside the event slice.
     range: Range<usize>,
     kind: DecodedSpanKind,
-    /// The character the parser emits for the span.
-    decoded: char,
+    /// The text the parser emits for the span.
+    decoded: String,
 }
 
 /// Proves that the difference between an event slice and the parser's
@@ -2086,7 +2098,7 @@ fn decoded_text_matches(event_source: &str, visible: &str) -> Option<Vec<Decoded
             spans.push(DecodedSpan {
                 range: index..index + 2,
                 kind: DecodedSpanKind::Escape,
-                decoded,
+                decoded: decoded.to_string(),
             });
             reconstructed.push(decoded);
             index += 2;
@@ -2099,9 +2111,9 @@ fn decoded_text_matches(event_source: &str, visible: &str) -> Option<Vec<Decoded
             spans.push(DecodedSpan {
                 range: index..index + token_len,
                 kind: DecodedSpanKind::Entity,
-                decoded,
+                decoded: decoded.clone(),
             });
-            reconstructed.push(decoded);
+            reconstructed.push_str(&decoded);
             index += token_len;
             continue;
         }
@@ -2160,7 +2172,7 @@ fn entity_token_len(source: &str) -> Option<usize> {
 /// return `None` even though the parser substitutes U+FFFD — the projection
 /// degrades to the conservative fallback instead of guessing — as does any
 /// unknown name, so those authored bytes stay literal.
-fn decode_entity_token(token: &str) -> Option<char> {
+fn decode_entity_token(token: &str) -> Option<String> {
     let bytes = token.as_bytes();
     if bytes.len() < 4 || bytes[0] != b'&' || bytes[bytes.len() - 1] != b';' {
         return None;
@@ -2194,10 +2206,10 @@ fn decode_entity_token(token: &str) -> Option<char> {
         return if codepoint == 0 {
             None
         } else {
-            char::from_u32(codepoint)
+            char::from_u32(codepoint).map(|ch| ch.to_string())
         };
     }
-    named_entity_char(&token[1..token.len() - 1])
+    named_entity_decode(&token[1..token.len() - 1])
 }
 
 fn named_entity_char(name: &str) -> Option<char> {
@@ -2207,11 +2219,19 @@ fn named_entity_char(name: &str) -> Option<char> {
         .map(|(_, decoded)| *decoded)
 }
 
+fn named_entity_decode(name: &str) -> Option<String> {
+    if let Some(decoded) = named_entity_char(name) {
+        return Some(decoded.to_string());
+    }
+    NAMED_ENTITY_DECODES_MULTI
+        .iter()
+        .find(|(candidate, _)| *candidate == name)
+        .map(|(_, decoded)| (*decoded).to_string())
+}
+
 /// Named HTML entities proven to decode to exactly one character, verified
-/// byte-for-byte against the parser's entity table. Entities decoding to
-/// multiple code points are intentionally absent: they fail the lookup, so
-/// their authored bytes stay literal and unproven input keeps the
-/// conservative fallback.
+/// byte-for-byte against the parser's entity table. Multi-codepoint names
+/// live in `NAMED_ENTITY_DECODES_MULTI`. Unknown names stay conservative.
 const NAMED_ENTITY_DECODES: &[(&str, char)] = &[
     // Core.
     ("AMP", '&'),
@@ -2401,7 +2421,28 @@ const NAMED_ENTITY_DECODES: &[(&str, char)] = &[
     ("thorn", '\u{00FE}'),
     ("szlig", '\u{00DF}'),
     ("yuml", '\u{00FF}'),
+    ("ordf", '\u{00AA}'),
+    ("ordm", '\u{00BA}'),
+    ("shy", '\u{00AD}'),
+    ("macr", '\u{00AF}'),
+    ("uml", '\u{00A8}'),
+    ("oelig", '\u{0153}'),
+    ("OElig", '\u{0152}'),
+    ("scaron", '\u{0161}'),
+    ("Scaron", '\u{0160}'),
+    ("fnof", '\u{0192}'),
+    ("ensp", '\u{2002}'),
+    ("emsp", '\u{2003}'),
+    ("thinsp", '\u{2009}'),
+    ("zwnj", '\u{200C}'),
+    ("zwj", '\u{200D}'),
+    ("lrm", '\u{200E}'),
+    ("rlm", '\u{200F}'),
 ];
+
+/// Named HTML entities that decode to more than one code point. Each entry is
+/// proven against pulldown-cmark the same way as the single-character table.
+const NAMED_ENTITY_DECODES_MULTI: &[(&str, &str)] = &[("NotEqualTilde", "\u{2242}\u{0338}")];
 
 /// Emits an identity-mapped text slice: the slice equals its visible text, so
 /// it is pushed directly or split around extended inline markers.
@@ -2658,10 +2699,22 @@ fn reveal_candidate_is_exact(
                 || (source.starts_with('$') && source.ends_with('$') && source.len() >= 2)
         }
         VisualRevealKind::Link => {
-            if !source.starts_with('[') {
-                return false;
-            }
-            if source.ends_with(')') && source.contains("](") {
+            let is_angle_autolink = source.starts_with('<')
+                && source.ends_with('>')
+                && source.len() >= 3
+                && !source[1..source.len() - 1].contains(['<', '>', ' ', '\n']);
+            if is_angle_autolink {
+                candidate.link_target_range.as_ref().is_some_and(|target| {
+                    target.start >= range.start
+                        && target.end <= range.end
+                        && text.is_char_boundary(target.start)
+                        && text.is_char_boundary(target.end)
+                        && target.start > range.start
+                        && target.end < range.end
+                })
+            } else if !source.starts_with('[') {
+                false
+            } else if source.ends_with(')') && source.contains("](") {
                 // Inline link: the destination is local, so it must map
                 // byte-exactly inside the revealed range.
                 candidate.link_target_range.as_ref().is_some_and(|target| {
@@ -3767,12 +3820,10 @@ mod tests {
 
     #[test]
     fn unproven_entity_forms_stay_conservative() {
-        // Multi-codepoint names, names outside the maintained table, and
-        // numeric forms the parser maps to U+FFFD cannot be proven, so the
-        // paragraph keeps the conservative fallback.
+        // Names outside the maintained tables and numeric forms the parser
+        // maps to U+FFFD cannot be proven, so those runs stay conservative.
         for source in [
-            "value &NotEqualTilde; end",
-            "value &ordf; end",
+            "value &angst; end",
             "value &#0; end",
             "value &#xD800; end",
             "value &#x110000; end",
@@ -3914,6 +3965,19 @@ mod tests {
                 visible,
                 decoded.to_string(),
                 "table entry for {reference} disagrees with the parser"
+            );
+        }
+        for &(name, decoded) in super::NAMED_ENTITY_DECODES_MULTI {
+            let reference = format!("&{name};");
+            let mut visible = String::new();
+            for event in Parser::new_ext(&reference, crate::parse::visual_markdown_options()) {
+                if let Event::Text(chunk) = event {
+                    visible.push_str(&chunk);
+                }
+            }
+            assert_eq!(
+                visible, decoded,
+                "multi-codepoint table entry for {reference} disagrees with the parser"
             );
         }
     }
@@ -5330,6 +5394,10 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             html_block.source_island.is_none(),
             "HTML visual block must not carry a source island"
         );
+        assert!(
+            matches!(html_block.editor, Some(VisualBlockEditor::Html { .. })),
+            "HTML visual block must expose a source payload editor"
+        );
         match &html_block.kind {
             VisualBlockKind::Html { html } => {
                 assert!(html.contains("<table"));
@@ -5447,27 +5515,39 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
 
     #[test]
     fn visual_edit_inline_html_images_span_prose_contexts() {
+        // HTML-only list/quote images are nested Html blocks (P0). Mixed
+        // prose plus `<img>` stays on the inline atom path.
         let doc = MarkdownDocument::from_text("- <img src=\"dot.png\" alt=\"dot\">");
         let blocks = doc.visual_blocks_shared();
-        assert!(matches!(blocks[0].kind, VisualBlockKind::ListItem { .. }));
-        assert!(blocks[0].source_island.is_none());
         assert!(
-            blocks[0]
-                .editable_runs
+            blocks.iter().any(|block| {
+                matches!(block.kind, VisualBlockKind::Html { .. }) && block.source_island.is_none()
+            }),
+            "html-only list image is a nested Html block, got {:?}",
+            blocks.iter().map(|b| &b.kind).collect::<Vec<_>>()
+        );
+
+        let doc = MarkdownDocument::from_text("- hello <img src=\"mix.png\" alt=\"m\">");
+        let blocks = doc.visual_blocks_shared();
+        let item = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .expect("mixed list item");
+        assert!(item.source_island.is_none());
+        assert!(
+            item.editable_runs
                 .iter()
                 .any(|run| run.html_image.is_some())
         );
 
         let doc = MarkdownDocument::from_text("> <img src=\"q.png\" alt=\"q\">");
         let blocks = doc.visual_blocks_shared();
-        assert!(matches!(blocks[0].kind, VisualBlockKind::Paragraph));
-        assert!(blocks[0].quote_context.is_some());
-        assert!(blocks[0].source_island.is_none());
         assert!(
-            blocks[0]
-                .editable_runs
-                .iter()
-                .any(|run| run.html_image.is_some())
+            blocks.iter().any(|block| {
+                matches!(block.kind, VisualBlockKind::Html { .. }) && block.source_island.is_none()
+            }),
+            "html-only quote image is an Html child, got {:?}",
+            blocks.iter().map(|b| &b.kind).collect::<Vec<_>>()
         );
 
         let doc = MarkdownDocument::from_text("# Title <img src=\"i.png\">");
@@ -5643,28 +5723,49 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
 
     #[test]
     fn visual_edit_keeps_conservative_fallback_for_unsupported_inline_html() {
-        // Pure unsupported inline HTML keeps the whole-block HTML source
-        // island (no image run to render, so the view-layer gate shows the
-        // source box).
+        // Unsupported inline HTML stays mixed: conservative tag runs, no
+        // whole-block island, focused and unfocused alike.
         let doc = MarkdownDocument::from_text("text <a href=\"u\">link</a> more");
         let blocks = doc.visual_blocks_shared();
-        assert_eq!(
-            blocks[0].source_island,
-            Some(VisualSourceIslandKind::Html),
-            "unsupported tags keep the whole-block island"
+        assert_eq!(blocks[0].source_island, None);
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.conservative_fallback && run.visible_text.contains("<a")),
+            "unsupported tags stay as conservative atoms"
+        );
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| !run.conservative_fallback && run.visible_text.contains("text")),
+            "surrounding prose stays rendered"
         );
 
-        // Attributed forms of supported names are outside the subset.
-        let doc = MarkdownDocument::from_text("x <em class=\"q\">y</em> z");
+        // Ignorable class/id/clear on supported names keep the styled path.
+        let source = "x <em class=\"q\">y</em> z";
+        let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
-        assert_eq!(blocks[0].source_island, Some(VisualSourceIslandKind::Html));
+        assert_eq!(blocks[0].source_island, None);
+        let em_run = blocks[0]
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text == "y")
+            .expect("classed em still renders");
+        assert!(em_run.style.italic);
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
 
-        // An unclosed supported tag spoils the block and exposes the tag
-        // bytes as a conservative run.
+        // An unclosed supported tag demotes inner runs but does not island.
         let doc = MarkdownDocument::from_text("unclosed <em>em text");
         let blocks = doc.visual_blocks_shared();
         let block = &blocks[0];
-        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Html));
+        assert_eq!(block.source_island, None);
         assert!(
             block
                 .editable_runs
@@ -5680,10 +5781,16 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             "content inside the unclosed element is demoted"
         );
 
-        // A stray close without an open also spoils the block.
+        // A stray close without an open also stays mixed.
         let doc = MarkdownDocument::from_text("stray </strong> close");
         let blocks = doc.visual_blocks_shared();
-        assert_eq!(blocks[0].source_island, Some(VisualSourceIslandKind::Html));
+        assert_eq!(blocks[0].source_island, None);
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.conservative_fallback && run.visible_text.contains("</strong>"))
+        );
     }
 
     #[test]
@@ -5708,12 +5815,10 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
         );
 
         // The README badge pattern (`<a href><img></a>`) emits the image run
-        // plus conservative source runs for the unsupported `<a>` wrappers,
-        // so the block can render the image in the mixed path instead of
-        // collapsing to a whole-block source island.
+        // plus conservative source runs for the unsupported `<a>` wrappers.
         let doc = MarkdownDocument::from_text("plain <a href=\"u\"><img src=\"x.png\"></a> end");
         let blocks = doc.visual_blocks_shared();
-        assert_eq!(blocks[0].source_island, Some(VisualSourceIslandKind::Html));
+        assert_eq!(blocks[0].source_island, None);
         assert!(
             blocks[0]
                 .editable_runs
@@ -5729,18 +5834,115 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             "a-wrapped image keeps conservative source runs for the wrappers"
         );
 
-        // An unclosed `<em>` before an image also spoils the block while the
-        // image run survives the demotion.
+        // An unclosed `<em>` before an image demotes the styled run while the
+        // image run survives; the paragraph stays mixed, not an island.
         let doc = MarkdownDocument::from_text("bad <em>styled <img src=\"x.png\"> tail");
         let blocks = doc.visual_blocks_shared();
         let block = &blocks[0];
-        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Html));
+        assert_eq!(block.source_island, None);
         assert!(
             block
                 .editable_runs
                 .iter()
                 .any(|run| run.html_image.is_some()),
             "image atoms are never demoted by the pairing failure"
+        );
+    }
+
+    #[test]
+    fn unsupported_inline_html_stays_mixed_layout() {
+        let source = "Hello <span>x</span> world";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].source_island, None);
+        assert!(
+            blocks[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.conservative_fallback && run.visible_text.contains("<span>"))
+        );
+        let visible: String = blocks[0]
+            .editable_runs
+            .iter()
+            .map(|run| run.visible_text.as_str())
+            .collect();
+        assert!(visible.contains("Hello"));
+        assert!(visible.contains("world"));
+    }
+
+    #[test]
+    fn residual_named_entities_and_multi_codepoint_decode() {
+        let source = "a &ordf; b &NotEqualTilde; c";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback)
+        );
+        let visible: String = block
+            .editable_runs
+            .iter()
+            .map(|run| run.visible_text.as_str())
+            .collect();
+        assert_eq!(visible, "a \u{00AA} b \u{2242}\u{0338} c");
+        let multi = block
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text == "\u{2242}\u{0338}")
+            .expect("multi-codepoint entity is one run");
+        assert_eq!(&source[multi.content_range.clone()], "&NotEqualTilde;");
+        assert_eq!(multi.source_range, multi.content_range);
+    }
+
+    #[test]
+    fn angle_bracket_autolinks_use_link_reveal() {
+        let source = "see <https://example.com> and <user@example.com>";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        assert_eq!(block.source_island, None);
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .all(|run| !run.conservative_fallback),
+            "autolinks stay proven, got {:?}",
+            block.editable_runs
+        );
+        let url_run = block
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text.contains("https://example.com"))
+            .expect("url autolink visible");
+        assert!(url_run.navigation.is_some());
+        let email_run = block
+            .editable_runs
+            .iter()
+            .find(|run| run.visible_text.contains("user@example.com"))
+            .expect("email autolink visible");
+        assert!(email_run.navigation.is_some());
+        let kinds: Vec<_> = block
+            .reveal_groups
+            .iter()
+            .map(|group| (group.kind, &source[group.source_range.clone()]))
+            .collect();
+        assert!(
+            kinds
+                .iter()
+                .any(|(kind, slice)| *kind == VisualRevealKind::Link
+                    && *slice == "<https://example.com>"),
+            "url autolink reveal, got {kinds:?}"
+        );
+        assert!(
+            kinds
+                .iter()
+                .any(|(kind, slice)| *kind == VisualRevealKind::Link
+                    && *slice == "<user@example.com>"),
+            "email autolink reveal, got {kinds:?}"
         );
     }
 }

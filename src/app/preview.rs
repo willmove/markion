@@ -667,8 +667,20 @@ impl Element for VisualInputElement {
             ElementInputHandler::new(bounds, self.app.clone()),
             cx,
         );
-        self.app.update(cx, |app, _| {
-            app.active_tab_mut().visual_input_bounds = Some(bounds);
+        self.app.update(cx, |app, cx| {
+            let tab = app.active_tab_mut();
+            tab.visual_input_bounds = Some(bounds);
+            if tab.visual_caret_follow_frames == 0 {
+                return;
+            }
+            tab.visual_caret_follow_frames = tab.visual_caret_follow_frames.saturating_sub(1);
+            let Some(caret) = tab.visual_caret_bounds else {
+                return;
+            };
+            let list = tab.visual_list.clone();
+            if follow_visual_caret_in_list(&list, caret) {
+                cx.notify();
+            }
         });
     }
 }
@@ -697,10 +709,21 @@ struct VisualEditableText {
     /// Source position clicks resolve to when this row has no segments
     /// (an empty block still needs to place the caret inside itself).
     entity: Entity<MarkionApp>,
+    /// When set, this element is a whitespace insertion row: it fills the
+    /// parent, paints the caret at `caret_shift` from the top, and maps
+    /// clicks by Y onto the covered source newlines.
+    whitespace_caret: Option<WhitespaceCaretLayout>,
     #[cfg(test)]
     test_projection: Option<(String, Vec<Range<usize>>)>,
     #[cfg(test)]
     test_projection_styles: Option<Vec<InlineStyle>>,
+}
+
+/// Geometry for a caret-owning Visual Edit whitespace row.
+#[derive(Clone)]
+struct WhitespaceCaretLayout {
+    caret_shift: Pixels,
+    source_range: Range<usize>,
 }
 
 impl Element for VisualEditableText {
@@ -722,6 +745,12 @@ impl Element for VisualEditableText {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        if self.whitespace_caret.is_some() {
+            let mut style = Style::default();
+            style.size.width = gpui::relative(1.).into();
+            style.size.height = gpui::relative(1.).into();
+            return (window.request_layout(style, [], cx), ());
+        }
         self.text.request_layout(None, inspector_id, window, cx)
     }
 
@@ -734,8 +763,10 @@ impl Element for VisualEditableText {
         window: &mut Window,
         cx: &mut App,
     ) -> Hitbox {
-        self.text
-            .prepaint(None, inspector_id, bounds, state, window, cx);
+        if self.whitespace_caret.is_none() {
+            self.text
+                .prepaint(None, inspector_id, bounds, state, window, cx);
+        }
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
@@ -749,29 +780,45 @@ impl Element for VisualEditableText {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let layout = self.text.layout().clone();
+        let whitespace_caret = self.whitespace_caret.clone();
+        let is_whitespace_row = whitespace_caret.is_some();
+        let layout = (!is_whitespace_row).then(|| self.text.layout().clone());
         let affinity = self
             .entity
             .read(cx)
             .active_tab()
             .current_visual_caret_affinity();
-        let caret_bounds = self
-            .caret_active
-            .then(|| {
-                let display = self.projection.display_for_source(self.source_cursor)?;
-                if let Some(affinity) = affinity {
-                    let candidates = self.projection.boundary_candidates(display);
-                    if candidates.is_ambiguous()
-                        && candidates.resolve(affinity) != self.source_cursor
-                    {
-                        return self.projection.display_for_source(self.source_cursor);
-                    }
-                }
-                Some(display)
+        let caret_bounds = if let Some(whitespace) = whitespace_caret.as_ref() {
+            self.caret_active.then(|| {
+                Bounds::new(
+                    point(bounds.origin.x, bounds.origin.y + whitespace.caret_shift),
+                    size(px(2.), px(WHITESPACE_ROW_LINE_HEIGHT)),
+                )
             })
-            .flatten()
-            .and_then(|index| layout.position_for_index(index))
-            .map(|position| Bounds::new(position, size(px(2.), layout.line_height())));
+        } else {
+            self.caret_active
+                .then(|| {
+                    let display = self.projection.display_for_source(self.source_cursor)?;
+                    if let Some(affinity) = affinity {
+                        let candidates = self.projection.boundary_candidates(display);
+                        if candidates.is_ambiguous()
+                            && candidates.resolve(affinity) != self.source_cursor
+                        {
+                            return self.projection.display_for_source(self.source_cursor);
+                        }
+                    }
+                    Some(display)
+                })
+                .flatten()
+                .and_then(|index| layout.as_ref()?.position_for_index(index))
+                .map(|position| {
+                    let line_height = layout
+                        .as_ref()
+                        .map(|layout| layout.line_height())
+                        .unwrap_or(px(WHITESPACE_ROW_LINE_HEIGHT));
+                    Bounds::new(position, size(px(2.), line_height))
+                })
+        };
         if self.source_selection.is_empty() {
             if let Some(caret_bounds) = caret_bounds {
                 #[cfg(test)]
@@ -782,7 +829,7 @@ impl Element for VisualEditableText {
                     window.paint_quad(fill(caret_bounds, rgb(0x2563eb)));
                 }
             }
-        } else {
+        } else if let Some(layout) = layout.as_ref() {
             for segment in &self.projection.segments {
                 let start = self.source_selection.start.max(segment.source_range.start);
                 let end = self.source_selection.end.min(segment.source_range.end);
@@ -795,7 +842,7 @@ impl Element for VisualEditableText {
                         + end
                             .saturating_sub(segment.source_range.start)
                             .min(segment.display_range.len());
-                    for quad in preview_selection_paint_quads(&layout, visible_start..visible_end) {
+                    for quad in preview_selection_paint_quads(layout, visible_start..visible_end) {
                         window.paint_quad(quad);
                     }
                 }
@@ -807,7 +854,7 @@ impl Element for VisualEditableText {
                 app.active_tab_mut().visual_caret_bounds = Some(caret_bounds);
             });
         }
-        if let Some(marked_range) = self.marked_range.clone() {
+        if let (Some(marked_range), Some(layout)) = (self.marked_range.clone(), layout.as_ref()) {
             let mut marked_bounds: Option<Bounds<Pixels>> = None;
             for segment in &self.projection.segments {
                 let start = marked_range.start.max(segment.source_range.start);
@@ -819,7 +866,7 @@ impl Element for VisualEditableText {
                     + (start - segment.source_range.start).min(segment.display_range.len());
                 let display_end = segment.display_range.start
                     + (end - segment.source_range.start).min(segment.display_range.len());
-                for quad in preview_selection_paint_quads(&layout, display_start..display_end) {
+                for quad in preview_selection_paint_quads(layout, display_start..display_end) {
                     marked_bounds = Some(
                         marked_bounds.map_or(quad.bounds, |bounds| bounds.union(&quad.bounds)),
                     );
@@ -835,20 +882,22 @@ impl Element for VisualEditableText {
         let document_version = self.entity.read(cx).active_tab().document.version();
         let marked_range = self.entity.read(cx).active_tab().marked_range.clone();
         if self.navigation_active {
-            let navigation_snapshot = visual_navigation_snapshot(
-                document_version,
-                self.block_index,
-                self.source_selection.clone(),
-                marked_range,
-                self.source_island,
-                &self.projection,
-                &layout,
-            );
-            self.entity.update(cx, |app, cx| {
-                app.active_tab_mut()
-                    .register_visual_navigation_snapshot(navigation_snapshot);
-                app.complete_pending_visual_navigation(cx);
-            });
+            if let Some(layout) = layout.as_ref() {
+                let navigation_snapshot = visual_navigation_snapshot(
+                    document_version,
+                    self.block_index,
+                    self.source_selection.clone(),
+                    marked_range,
+                    self.source_island,
+                    &self.projection,
+                    layout,
+                );
+                self.entity.update(cx, |app, cx| {
+                    app.active_tab_mut()
+                        .register_visual_navigation_snapshot(navigation_snapshot);
+                    app.complete_pending_visual_navigation(cx);
+                });
+            }
         }
         #[cfg(test)]
         if let Some(projection) = self.test_projection.clone() {
@@ -864,6 +913,8 @@ impl Element for VisualEditableText {
         let entity = self.entity.clone();
         let projection = self.projection.clone();
         let text_layout = layout.clone();
+        let whitespace_click = whitespace_caret.clone();
+        let row_top = bounds.top();
         let hitbox_for_down = hitbox.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble
@@ -872,20 +923,37 @@ impl Element for VisualEditableText {
             {
                 return;
             }
-            let visible = preview_index_for_position(&text_layout, event.position);
-            let candidates = projection.boundary_candidates(visible);
-            let boundary_x = text_layout
-                .position_for_index(candidates.display_offset)
-                .map(|position| position.x)
-                .unwrap_or(event.position.x);
-            let affinity = if candidates.is_ambiguous() && event.position.x < boundary_x {
-                Some(VisualCaretAffinity::Upstream)
-            } else if candidates.is_ambiguous() {
-                Some(VisualCaretAffinity::Downstream)
+            let (source, affinity) = if let Some(whitespace) = whitespace_click.as_ref() {
+                let text = entity.read(cx).active_tab().document.text().to_string();
+                (
+                    whitespace_source_at_y(
+                        whitespace.source_range.clone(),
+                        event.position.y - row_top,
+                        &text,
+                    ),
+                    None,
+                )
+            } else if let Some(text_layout) = text_layout.as_ref() {
+                let visible = preview_index_for_position(text_layout, event.position);
+                let candidates = projection.boundary_candidates(visible);
+                let boundary_x = text_layout
+                    .position_for_index(candidates.display_offset)
+                    .map(|position| position.x)
+                    .unwrap_or(event.position.x);
+                let affinity = if candidates.is_ambiguous() && event.position.x < boundary_x {
+                    Some(VisualCaretAffinity::Upstream)
+                } else if candidates.is_ambiguous() {
+                    Some(VisualCaretAffinity::Downstream)
+                } else {
+                    None
+                };
+                (
+                    candidates.resolve(affinity.unwrap_or(VisualCaretAffinity::Downstream)),
+                    affinity,
+                )
             } else {
-                None
+                return;
             };
-            let source = candidates.resolve(affinity.unwrap_or(VisualCaretAffinity::Downstream));
             let focus_handle = entity.read(cx).focus_handle.clone();
             window.focus(&focus_handle);
             entity.update(cx, |app, cx| {
@@ -908,6 +976,8 @@ impl Element for VisualEditableText {
         let entity = self.entity.clone();
         let projection = self.projection.clone();
         let text_layout = layout.clone();
+        let whitespace_drag = whitespace_caret;
+        let row_top = bounds.top();
         let hitbox_for_move = hitbox.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble
@@ -917,9 +987,20 @@ impl Element for VisualEditableText {
             {
                 return;
             }
-            let visible = preview_index_for_position(&text_layout, event.position);
-            let candidates = projection.boundary_candidates(visible);
-            let source = candidates.resolve(VisualCaretAffinity::Downstream);
+            let source = if let Some(whitespace) = whitespace_drag.as_ref() {
+                let text = entity.read(cx).active_tab().document.text().to_string();
+                whitespace_source_at_y(
+                    whitespace.source_range.clone(),
+                    event.position.y - row_top,
+                    &text,
+                )
+            } else if let Some(text_layout) = text_layout.as_ref() {
+                let visible = preview_index_for_position(text_layout, event.position);
+                let candidates = projection.boundary_candidates(visible);
+                candidates.resolve(VisualCaretAffinity::Downstream)
+            } else {
+                return;
+            };
             entity.update(cx, |app, cx| {
                 app.select_to(source, cx);
                 app.active_tab_mut().set_visual_caret_affinity(None);
@@ -936,8 +1017,10 @@ impl Element for VisualEditableText {
         });
 
         window.set_cursor_style(CursorStyle::IBeam, hitbox);
-        self.text
-            .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+        if !is_whitespace_row {
+            self.text
+                .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+        }
     }
 }
 
@@ -1392,6 +1475,18 @@ pub(super) fn rich_text_element(
             style.color = Some(rgb(PREVIEW_SUPER_SUB_COLOR).into());
             styled = true;
         }
+        if span.style.underline {
+            style.underline = Some(UnderlineStyle {
+                thickness: px(1.),
+                color: None,
+                wavy: false,
+            });
+            styled = true;
+        }
+        if let Some(color) = span.style.color {
+            style.color = Some(rgb(color).into());
+            styled = true;
+        }
         if let Some(url) = &span.link {
             style.color = Some(rgb(PREVIEW_LINK_COLOR).into());
             style.underline = Some(UnderlineStyle {
@@ -1480,6 +1575,18 @@ fn preview_span_highlight(span: &InlineSpan) -> Option<HighlightStyle> {
     }
     if span.style.superscript || span.style.subscript {
         style.color = Some(rgb(PREVIEW_SUPER_SUB_COLOR).into());
+        styled = true;
+    }
+    if span.style.underline {
+        style.underline = Some(UnderlineStyle {
+            thickness: px(1.),
+            color: None,
+            wavy: false,
+        });
+        styled = true;
+    }
+    if let Some(color) = span.style.color {
+        style.color = Some(rgb(color).into());
         styled = true;
     }
     if span.link.is_some() {
@@ -2040,6 +2147,18 @@ pub(super) fn visual_highlight_style(
         style.color = Some(rgb(PREVIEW_SUPER_SUB_COLOR).into());
         styled = true;
     }
+    if inline_style.underline {
+        style.underline = Some(UnderlineStyle {
+            thickness: px(1.),
+            color: None,
+            wavy: false,
+        });
+        styled = true;
+    }
+    if let Some(color) = inline_style.color {
+        style.color = Some(rgb(color).into());
+        styled = true;
+    }
     if link {
         style.color = Some(rgb(PREVIEW_LINK_COLOR).into());
         style.underline = Some(UnderlineStyle {
@@ -2248,6 +2367,7 @@ pub(super) fn visual_text_element(
         caret_active: visual_block_owns_caret(app, block_index),
         navigation_active: true,
         entity: cx.entity(),
+        whitespace_caret: None,
         #[cfg(test)]
         test_projection,
         #[cfg(test)]
@@ -2374,10 +2494,19 @@ fn visual_html_image_atom(
         PreviewImageEntry::Ready(ready) => {
             // Same presentation rules as `preview_image_view`: supersampled
             // (SVG) entries present at their intrinsic display width, plain
-            // rasters keep implicit pixel sizing.
+            // rasters keep implicit pixel sizing, and authored HTML width/height
+            // hints override both when present.
             let supersampled = ready.display_width != ready.width;
+            let sized = resolve_html_img_display_size(
+                image.width,
+                image.height,
+                ready.display_width as f32,
+                ready.display_height as f32,
+            );
             let rendered = img(ImageSource::Render(ready.image)).max_w_full();
-            if supersampled {
+            if let Some((width, height)) = sized {
+                rendered.w(px(width)).h(px(height)).into_any_element()
+            } else if supersampled {
                 rendered
                     .w(px(ready.display_width as f32))
                     .into_any_element()
@@ -2469,6 +2598,7 @@ fn visual_projection_fragment(
             || (source_range.contains(&app.active_tab().cursor_offset())
                 || app.active_tab().cursor_offset() == source_range.end),
         entity: cx.entity(),
+        whitespace_caret: None,
         #[cfg(test)]
         test_projection,
         #[cfg(test)]
@@ -2889,6 +3019,7 @@ pub(super) fn visual_source_island_view(
             caret_active: visual_block_owns_caret(app, block_index),
             navigation_active: true,
             entity: cx.entity(),
+            whitespace_caret: None,
             #[cfg(test)]
             test_projection: None,
             #[cfg(test)]
@@ -2897,19 +3028,22 @@ pub(super) fn visual_source_island_view(
 }
 
 /// Paints a thin insertion caret on a `Whitespace` row that owns the document
-/// caret, without wrapping the row in a source-island box. The caret itself
-/// is drawn by `VisualEditableText` against an empty projection whose single
-/// segment maps the row's source start to display index 0, so the caret lands
-/// at the row's origin. Clicks hit the same element and place the caret at
-/// `block.source_range.start`. IME bounds are still resolved via the
-/// `visual_input_bounds` surface fallback.
+/// caret, without wrapping the row in a source-island box. The caret Y is
+/// derived from how many covered newlines sit before the source caret, so
+/// repeated Enter at the document tail moves the insertion line down the
+/// row. Clicks map the same way. IME bounds still fall back to
+/// `visual_input_bounds` before the row has painted.
 pub(super) fn visual_whitespace_caret_element(
     app: &MarkionApp,
     block: &VisualBlock,
     block_index: usize,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
-    let anchor = block.source_range.start;
+    let text = app.active_tab().document.text();
+    let cursor = app.active_tab().cursor_offset();
+    let source_range = block.source_range.clone();
+    let caret_line = whitespace_caret_line(source_range.clone(), cursor, text);
+    let anchor = source_range.start;
     let projection = VisualProjection {
         text: String::new(),
         segments: vec![markion::VisualProjectionSegment {
@@ -2927,11 +3061,15 @@ pub(super) fn visual_whitespace_caret_element(
         text: StyledText::new(SharedString::from("")),
         projection,
         source_selection: app.active_tab().selected_range.clone(),
-        source_cursor: app.active_tab().cursor_offset(),
+        source_cursor: cursor,
         marked_range: app.active_tab().marked_range.clone(),
         caret_active: visual_block_owns_caret(app, block_index),
-        navigation_active: true,
+        navigation_active: false,
         entity: cx.entity(),
+        whitespace_caret: Some(WhitespaceCaretLayout {
+            caret_shift: px(whitespace_caret_y(caret_line)),
+            source_range,
+        }),
         #[cfg(test)]
         test_projection: None,
         #[cfg(test)]
@@ -3022,6 +3160,92 @@ pub(super) fn whitespace_row_height(line_count: usize) -> f32 {
     line_count.clamp(1, WHITESPACE_ROW_MAX_LINES) as f32 * WHITESPACE_ROW_LINE_HEIGHT
 }
 
+/// Line index within a whitespace row for a source caret. Each covered
+/// newline is one 12px line: the caret after the first newline sits on
+/// line 0 (the top of the row); each additional newline moves it down
+/// one line so repeated Enter at the tail is visible.
+pub(super) fn whitespace_caret_line(
+    source_range: Range<usize>,
+    cursor: usize,
+    text: &str,
+) -> usize {
+    let end = source_range.end.min(text.len());
+    let start = source_range.start.min(end);
+    let cursor = cursor.clamp(start, end);
+    let newlines_before = text[start..cursor]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count();
+    newlines_before.saturating_sub(1)
+}
+
+pub(super) fn whitespace_caret_y(line: usize) -> f32 {
+    let max_line = WHITESPACE_ROW_MAX_LINES.saturating_sub(1);
+    line.min(max_line) as f32 * WHITESPACE_ROW_LINE_HEIGHT
+}
+
+/// Source offset for insertion line `line` inside a whitespace range.
+/// Line 0 is the first covered newline; later lines walk subsequent newlines.
+pub(super) fn whitespace_source_at_line(
+    source_range: Range<usize>,
+    line: usize,
+    text: &str,
+) -> usize {
+    let end = source_range.end.min(text.len());
+    let start = source_range.start.min(end);
+    let newline_ends: Vec<usize> = text[start..end]
+        .bytes()
+        .enumerate()
+        .filter(|(_, byte)| *byte == b'\n')
+        .map(|(index, _)| start + index + 1)
+        .collect();
+    if newline_ends.is_empty() {
+        return start;
+    }
+    newline_ends
+        .get(line)
+        .copied()
+        .unwrap_or(*newline_ends.last().expect("non-empty newline list"))
+        .min(end)
+}
+
+pub(super) fn whitespace_source_at_y(
+    source_range: Range<usize>,
+    rel_y: Pixels,
+    text: &str,
+) -> usize {
+    let line = (f32::from(rel_y).max(0.) / WHITESPACE_ROW_LINE_HEIGHT).floor() as usize;
+    whitespace_source_at_line(source_range, line, text)
+}
+
+/// Scroll the Visual Edit list just enough to keep `caret` inside the
+/// viewport. Returns true when a scroll was requested.
+pub(super) fn follow_visual_caret_in_list(list: &ListState, caret: Bounds<Pixels>) -> bool {
+    let viewport = list.viewport_bounds();
+    if viewport.size.height <= px(0.) || caret.size.height <= px(0.) {
+        return false;
+    }
+    let margin = px(2.);
+    let view_top = viewport.top() + margin;
+    let view_bottom = viewport.bottom() - margin;
+    let delta = if caret.bottom() > view_bottom {
+        caret.bottom() - view_bottom
+    } else if caret.top() < view_top {
+        caret.top() - view_top
+    } else {
+        return false;
+    };
+    if delta == px(0.) {
+        return false;
+    }
+    let top = list.logical_scroll_top();
+    list.scroll_to(gpui::ListOffset {
+        item_ix: top.item_ix,
+        offset_in_item: top.offset_in_item + delta,
+    });
+    true
+}
+
 pub(super) fn visual_block_view(
     app: &MarkionApp,
     block: &VisualBlock,
@@ -3049,19 +3273,11 @@ pub(super) fn visual_block_view(
                 | VisualSourceIslandKind::Code
                 | VisualSourceIslandKind::Unsupported
         )
-    ) || (block.editor.is_none()
-        && block
-            .editable_runs
-            .iter()
-            .any(|run| run.conservative_fallback))
-        // A prose block that carries inline HTML images renders them through
-        // the mixed text/image path; the surrounding non-image inline HTML
-        // shows as conservative source fragments in the same path. Only the
-        // HTML source-island kind is exempted here — front matter, code, and
-        // unsupported islands keep their whole-block source box even if an
-        // image run somehow appears.
-        && !matches!(block.source_island, Some(VisualSourceIslandKind::Html))
-        && !has_html_image;
+    );
+    // Conservative inline-HTML fragments stay in the mixed rendered path
+    // (verbatim tag atoms) instead of promoting the whole paragraph to a
+    // source island. Front matter, unclosed code, and unsupported parser
+    // gaps still use the whole-block source box.
     // A Whitespace row that owns the caret is ordinary inter-paragraph
     // spacing, not a code-like block. Promoting it to a source-island box
     // (border + padding + monospace + gray background) makes a normal blank
@@ -3207,7 +3423,7 @@ pub(super) fn visual_block_view(
                 .or_else(|| (!image_alt.is_empty()).then_some(image_alt.as_str()));
             let image = div()
                 .w(gpui::relative(presentation.width_percent as f32 / 100.))
-                .child(preview_image_view(app, url, document_dir));
+                .child(preview_image_view(app, url, document_dir, None, None));
             let image = match presentation.alignment {
                 ImageAlignment::Left => div().w_full().flex().items_start().child(image),
                 ImageAlignment::Center => div().w_full().flex().items_center().child(image),
@@ -3381,11 +3597,11 @@ pub(super) fn visual_block_view(
         }
         VisualBlockKind::Unsupported => visual_source_island_view(app, block, block_index, cx),
         VisualBlockKind::Html { html } => {
-            // Read-only rendered HTML (tables, text, images) via the same
-            // pipeline as Split Preview/Read mode — no editable runs, no
-            // source box. `source_island` is `None` for this kind, so the
-            // `always_source`/`focused_conservative` gates above are bypassed.
-            html_preview_block_view(app, html, block_index, document_dir, cx)
+            if let Some(VisualBlockEditor::Html { payload }) = block.editor.as_ref() {
+                visual_html_editor(app, block, block_index, html, payload, document_dir, cx)
+            } else {
+                html_preview_block_view(app, html, block_index, document_dir, cx)
+            }
         }
         VisualBlockKind::FootnoteDefinition { label } => div()
             .mb(px(typography.paragraph_spacing))
@@ -3929,6 +4145,7 @@ pub(super) fn visual_reference_definition_view(
             caret_active: visual_block_owns_caret(app, block_index),
             navigation_active: true,
             entity: cx.entity(),
+            whitespace_caret: None,
             #[cfg(test)]
             test_projection: None,
             #[cfg(test)]
@@ -3994,6 +4211,7 @@ fn visual_editor_field_element(
         caret_active,
         navigation_active: caret_active || !block_owns_caret,
         entity: cx.entity(),
+        whitespace_caret: None,
         #[cfg(test)]
         test_projection,
         #[cfg(test)]
@@ -4061,7 +4279,9 @@ pub(super) fn visual_editor_field_projection(
             .and_then(|offset| source[offset..].chars().next())
             .map(|delimiter| if delimiter == '(' { ')' } else { delimiter }),
         VisualEditorFieldKind::TableCell { .. } => Some('|'),
-        VisualEditorFieldKind::CodePayload | VisualEditorFieldKind::MathPayload => None,
+        VisualEditorFieldKind::CodePayload
+        | VisualEditorFieldKind::MathPayload
+        | VisualEditorFieldKind::HtmlSource => None,
     };
     let Some(terminator) = terminator else {
         return VisualProjection {
@@ -4212,6 +4432,45 @@ fn visual_math_editor(
         block.id,
         payload,
         forced,
+        presentation.into_any_element(),
+        payload_editor.into_any_element(),
+        cx,
+    ))
+}
+
+fn visual_html_editor(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    html: &str,
+    payload: &VisualEditorField,
+    document_dir: Option<&Path>,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let typography = app.typography_metrics();
+    let presentation = html_preview_block_view(app, html, block_index, document_dir, cx);
+    let payload_editor = div()
+        .border_t_1()
+        .border_color(rgb(0xe2e8f0))
+        .bg(rgb(0xf8fafc))
+        .p_2()
+        .font(code_slot_font(&app.resolved_font_families.code))
+        .text_size(px(typography.source_island_font_size))
+        .line_height(px(typography.source_island_line_height))
+        .child(visual_editor_field_element(
+            app,
+            block_index,
+            payload,
+            ElementId::from(("visual-html-payload", block.id.as_u64())),
+            None,
+            None,
+            cx,
+        ));
+    div().child(visual_collapsible_source_block(
+        app,
+        block.id,
+        payload,
+        false,
         presentation.into_any_element(),
         payload_editor.into_any_element(),
         cx,
@@ -4774,12 +5033,35 @@ fn html_preview_block_view(
         .mb_3()
         .children(parts.into_iter().enumerate().map(|(part_index, part)| {
             match part {
-                HtmlPreviewPart::Text { text, centered } => div()
-                    .mb_2()
-                    .line_height(px(typography.paragraph_line_height))
-                    .text_size(px(typography.rendered_font_size))
-                    .when(centered, |style| style.text_center())
-                    .child(rich_text_element(
+                HtmlPreviewPart::Text {
+                    text,
+                    centered,
+                    heading_level,
+                    list_marker,
+                    pre,
+                    align,
+                } => {
+                    let font_size = heading_level
+                        .map(|level| typography.heading_font_size(u32::from(level)))
+                        .unwrap_or(if pre {
+                            typography.code_font_size
+                        } else {
+                            typography.rendered_font_size
+                        });
+                    let line_height = if heading_level.is_some() {
+                        font_size * 1.25
+                    } else if pre {
+                        typography.code_line_height
+                    } else {
+                        typography.paragraph_line_height
+                    };
+                    let marker_label = match list_marker {
+                        Some(HtmlListMarker::Disc) => Some("•".to_string()),
+                        Some(HtmlListMarker::Decimal(index)) => Some(format!("{index}.")),
+                        None => None,
+                    };
+                    let has_marker = marker_label.is_some();
+                    let body = rich_text_element(
                         app,
                         ElementId::from((
                             "preview-html-text",
@@ -4789,16 +5071,59 @@ fn html_preview_block_view(
                         block_index,
                         PreviewTextRunId::HtmlText,
                         cx,
-                    )),
-                HtmlPreviewPart::Image { url, centered, .. } => div()
+                    );
+                    let aligned = match align {
+                        HtmlAlign::Center if !has_marker => {
+                            div().w_full().flex().justify_center().child(body)
+                        }
+                        HtmlAlign::End if !has_marker => {
+                            div().w_full().flex().justify_end().child(body)
+                        }
+                        _ => div().child(body),
+                    };
+                    let content = if let Some(marker) = marker_label {
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_start()
+                            .child(div().flex_none().child(marker))
+                            .child(aligned)
+                    } else {
+                        aligned
+                    };
+                    div()
+                        .mb_2()
+                        .line_height(px(line_height))
+                        .text_size(px(font_size))
+                        .when(heading_level.is_some(), |style| {
+                            style.font_weight(FontWeight::SEMIBOLD)
+                        })
+                        .when(pre, |style| {
+                            style.font(code_slot_font(&app.resolved_font_families.code))
+                        })
+                        .when(centered && !has_marker, |style| style.text_center())
+                        .child(content)
+                }
+                HtmlPreviewPart::Image {
+                    url,
+                    centered,
+                    width,
+                    height,
+                    align,
+                    ..
+                } => div()
                     .mb_2()
-                    .when(centered, |style| style.flex().justify_center())
-                    .child(preview_image_view(app, &url, document_dir)),
+                    .when(centered || align == HtmlAlign::Center, |style| {
+                        style.flex().justify_center()
+                    })
+                    .when(align == HtmlAlign::End, |style| style.flex().justify_end())
+                    .child(preview_image_view(app, &url, document_dir, width, height)),
                 HtmlPreviewPart::Table { grid } => div().mb_2().child(html_table_grid_view(
                     app,
                     &grid,
                     block_index,
                     part_index,
+                    document_dir,
                     &typography,
                     cx,
                 )),
@@ -4816,6 +5141,7 @@ fn html_table_grid_view(
     grid: &HtmlTableGrid,
     block_index: usize,
     part_index: usize,
+    document_dir: Option<&Path>,
     typography: &DocumentTypographyMetrics,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
@@ -4868,20 +5194,37 @@ fn html_table_grid_view(
                     .when(!touches_last_row, |style| {
                         style.border_b_1().border_color(border)
                     })
-                    .child(rich_text_element(
-                        app,
-                        ElementId::from((
-                            "preview-html-table-cell",
-                            ((block_index as u64) << 40)
-                                | ((part_index as u64) << 28)
-                                | (((row_index as u64) & 0xff) << 14)
-                                | ((cell_index as u64) & 0x3fff),
-                        )),
-                        &cell.content,
-                        block_index,
-                        PreviewTextRunId::HtmlText,
-                        cx,
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .children(cell.image.as_ref().map(|image| {
+                                preview_image_view(
+                                    app,
+                                    &image.url,
+                                    document_dir,
+                                    image.width,
+                                    image.height,
+                                )
+                            }))
+                            .when(!cell.content.is_empty(), |style| {
+                                style.child(rich_text_element(
+                                    app,
+                                    ElementId::from((
+                                        "preview-html-table-cell",
+                                        ((block_index as u64) << 40)
+                                            | ((part_index as u64) << 28)
+                                            | (((row_index as u64) & 0xff) << 14)
+                                            | ((cell_index as u64) & 0x3fff),
+                                    )),
+                                    &cell.content,
+                                    block_index,
+                                    PreviewTextRunId::HtmlText,
+                                    cx,
+                                ))
+                            }),
+                    ),
             );
             col = col.saturating_add(colspan as i16);
         }
@@ -5134,6 +5477,16 @@ pub(super) fn preview_block_view(
                     }
                     continue;
                 }
+                if let PreviewBlock::Html { html, .. } = child {
+                    container = container.child(html_preview_block_view(
+                        app,
+                        html,
+                        block_index,
+                        document_dir,
+                        cx,
+                    ));
+                    continue;
+                }
                 let PreviewBlock::ListItem {
                     level,
                     ordered,
@@ -5357,7 +5710,7 @@ pub(super) fn preview_block_view(
         PreviewBlock::Image { url, .. } => {
             div()
                 .mb_3()
-                .child(preview_image_view(app, url, document_dir))
+                .child(preview_image_view(app, url, document_dir, None, None))
         }
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
         PreviewBlock::FootnoteDefinition { label, text, .. } => div()

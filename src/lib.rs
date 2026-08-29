@@ -120,7 +120,7 @@ pub use model::{
     DEFAULT_RENDERED_FONT_SIZE, DocumentStats, DocxExportOptions, DocxImagePolicy, DocxPageSize,
     EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory, ExportBackend, ExportBackendPreference,
     ExportFormat, ExportOutcome, ExportPreferences, Footnote, FrontMatterError, Heading,
-    HighlightKind, HighlightedSpan, InlineSpan, InlineStyle, MAX_EDITOR_FONT_SIZE,
+    HighlightKind, HighlightedSpan, HtmlImgLength, InlineSpan, InlineStyle, MAX_EDITOR_FONT_SIZE,
     MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
     MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownFormat, MathDelimiter, MathExpression,
     MathLayoutStyle, MathSource, PdfExportOptions, PdfPageSize, PreviewBlock, RecoveryDocument,
@@ -196,7 +196,8 @@ pub use i18n::{
 };
 pub use math::{render_math, validate_latex};
 pub use parse::{
-    HtmlPreviewPart, HtmlTableCell, HtmlTableGrid, html_preview_parts, html_preview_plain_text,
+    HtmlAlign, HtmlListMarker, HtmlPreviewPart, HtmlTableCell, HtmlTableCellImage, HtmlTableGrid,
+    html_preview_parts, html_preview_plain_text, resolve_html_img_display_size,
 };
 pub use publishing::build_publishing_snapshot;
 
@@ -2899,14 +2900,23 @@ impl MarkdownDocument {
                             // Keep a line break between sibling paragraphs that get
                             // flattened into one list item.
                             append_span(&mut item.spans, "\n", InlineStyle::default(), None);
+                            let _ = spans;
                         } else if quote_depth > 0 {
-                            push_nonempty_block(
-                                &mut quote_children,
-                                PreviewBlock::Paragraph {
-                                    text: finish_rich_text(spans),
-                                    source_range: paragraph_range,
-                                },
-                            );
+                            if html_only_paragraph_source(&text[paragraph_range.clone()]) {
+                                push_html_block(
+                                    &mut quote_children,
+                                    text[paragraph_range.clone()].to_string(),
+                                    paragraph_range,
+                                );
+                            } else {
+                                push_nonempty_block(
+                                    &mut quote_children,
+                                    PreviewBlock::Paragraph {
+                                        text: finish_rich_text(spans),
+                                        source_range: paragraph_range,
+                                    },
+                                );
+                            }
                         } else if table.is_none() {
                             if html_only_paragraph_source(&text[paragraph_range.clone()]) {
                                 push_html_block(
@@ -3214,7 +3224,13 @@ impl MarkdownDocument {
                         false,
                     );
                 }
-                Event::Html(text) | Event::InlineHtml(text) => {
+                Event::Html(html) => {
+                    let html_string = html.to_string();
+                    let nested_container = heading.is_none()
+                        && image.is_none()
+                        && code.is_none()
+                        && table.is_none()
+                        && (list_item.is_some() || quote_depth > 0);
                     let standalone_html = heading.is_none()
                         && paragraph.is_none()
                         && quote_depth == 0
@@ -3223,9 +3239,52 @@ impl MarkdownDocument {
                         && code.is_none()
                         && table.is_none();
                     if standalone_html {
-                        push_html_block(&mut blocks, text.to_string(), source_range);
+                        push_html_block(&mut blocks, html_string, source_range);
+                    } else if nested_container {
+                        if list_item.is_some() {
+                            item_nested_block_start =
+                                Some(item_nested_block_start.map_or(source_range.start, |start| {
+                                    start.min(source_range.start)
+                                }));
+                        }
+                        let target = if quote_depth > 0 {
+                            &mut quote_children
+                        } else {
+                            &mut blocks
+                        };
+                        push_html_block(target, html_string, source_range);
                     } else {
-                        let text = html_preview_plain_text(&text);
+                        let text = html_preview_plain_text(&html_string);
+                        if !text.is_empty() {
+                            push_preview_rich(
+                                &mut heading,
+                                &mut paragraph,
+                                &mut quote,
+                                quote_depth,
+                                &mut list_item,
+                                &mut image,
+                                &mut code,
+                                &mut table,
+                                &text,
+                                inline.style(),
+                                inline.link(),
+                                false,
+                            );
+                        }
+                    }
+                }
+                Event::InlineHtml(html) => {
+                    let standalone_html = heading.is_none()
+                        && paragraph.is_none()
+                        && quote_depth == 0
+                        && list_item.is_none()
+                        && image.is_none()
+                        && code.is_none()
+                        && table.is_none();
+                    if standalone_html {
+                        push_html_block(&mut blocks, html.to_string(), source_range);
+                    } else {
+                        let text = html_preview_plain_text(&html);
                         if !text.is_empty() {
                             push_preview_rich(
                                 &mut heading,
@@ -3768,9 +3827,9 @@ fn sanitize_visual_field_replacement(
     replacement: &str,
 ) -> String {
     match kind {
-        VisualEditorFieldKind::CodePayload | VisualEditorFieldKind::MathPayload => {
-            replacement.to_string()
-        }
+        VisualEditorFieldKind::CodePayload
+        | VisualEditorFieldKind::MathPayload
+        | VisualEditorFieldKind::HtmlSource => replacement.to_string(),
         VisualEditorFieldKind::ImageAlt => {
             escape_unescaped_visual_terminators(&replacement.replace(['\r', '\n'], " "), |ch| {
                 ch == ']'
@@ -4061,10 +4120,20 @@ mod tests {
 
         assert!(matches!(
             &parts[0],
-            HtmlPreviewPart::Image { url, alt, centered, .. }
-                if url == "assets/markion-logo.svg" && alt == "Markion logo" && *centered
+            HtmlPreviewPart::Image {
+                url,
+                alt,
+                centered,
+                width,
+                height,
+                ..
+            } if url == "assets/markion-logo.svg"
+                && alt == "Markion logo"
+                && *centered
+                && *width == Some(HtmlImgLength::Px(128))
+                && *height == Some(HtmlImgLength::Px(128))
         ));
-        let HtmlPreviewPart::Text { text, centered } = &parts[1] else {
+        let HtmlPreviewPart::Text { text, centered, .. } = &parts[1] else {
             panic!("expected text part");
         };
         assert!(*centered);
@@ -4087,10 +4156,9 @@ mod tests {
         let doc = MarkdownDocument::from_text("<p><strong>HTML</strong></p>\n\nText");
         let blocks = doc.visual_blocks();
 
-        // Visual Edit now renders HTML blocks (text/image/table parts) via the
-        // shared HTML pipeline instead of a raw-source box. The block maps to
-        // VisualBlockKind::Html with no source island, so the rendered view is
-        // used; it falls back to the raw-source box only when focused.
+        // Visual Edit renders HTML blocks through the shared HTML pipeline
+        // and exposes a collapsible source payload instead of a whole-block
+        // source island.
         let html_block = blocks
             .first()
             .expect("HTML block should be the first block");
@@ -4098,6 +4166,10 @@ mod tests {
             matches!(&html_block.kind, VisualBlockKind::Html { html } if html.contains("HTML")),
             "expected Html kind, got {:?}",
             html_block.kind
+        );
+        assert!(
+            matches!(html_block.editor, Some(VisualBlockEditor::Html { .. })),
+            "rendered HTML block must expose a source payload editor"
         );
         assert!(
             html_block.source_island.is_none(),
@@ -6162,6 +6234,64 @@ mod tests {
     }
 
     #[test]
+    fn list_item_with_nested_html_image_stays_in_document_order() {
+        let source =
+            "- logo\n\n  <p align=\"center\"><img src=\"x.png\" alt=\"X\"></p>\n\n- next\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+        let kinds = blocks
+            .iter()
+            .map(|block| match block {
+                PreviewBlock::ListItem { .. } => "item",
+                PreviewBlock::Html { .. } => "html",
+                _ => "other",
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            kinds.iter().any(|kind| *kind == "html"),
+            "nested HTML image should be its own Html block, got {kinds:?}"
+        );
+        for pair in blocks.windows(2) {
+            assert!(
+                pair[0].source_range().end <= pair[1].source_range().start,
+                "list item must not swallow nested HTML: {:?} then {:?}",
+                pair[0].source_range(),
+                pair[1].source_range()
+            );
+        }
+        assert!(
+            html_preview_parts(
+                match &blocks.iter().find_map(|block| match block {
+                    PreviewBlock::Html { html, .. } => Some(html.as_str()),
+                    _ => None,
+                }) {
+                    Some(html) => html,
+                    None => panic!("missing html block"),
+                }
+            )
+            .iter()
+            .any(|part| matches!(part, HtmlPreviewPart::Image { url, .. } if url == "x.png")),
+            "nested HTML block should render the image"
+        );
+    }
+
+    #[test]
+    fn blockquote_html_only_image_is_an_html_child() {
+        let source = "> <p align=\"center\"><img src=\"q.png\" alt=\"Q\"></p>\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+        let PreviewBlock::BlockQuote { children, .. } = &blocks[0] else {
+            panic!("expected blockquote, got {:?}", blocks[0]);
+        };
+        assert!(
+            children.iter().any(
+                |child| matches!(child, PreviewBlock::Html { html, .. } if html.contains("q.png"))
+            ),
+            "quote should keep HTML image as an Html child, got {children:?}"
+        );
+    }
+
+    #[test]
     fn table_edit_deletes_columns_and_moves_data_rows() {
         let mut doc = MarkdownDocument::from_text(
             "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |",
@@ -7998,6 +8128,7 @@ mod tests {
             "VisualBlockEditor::Code",
             "VisualBlockEditor::Math",
             "VisualBlockEditor::Table",
+            "VisualBlockEditor::Html",
             "progressive source reveal",
             "YAML front matter",
             "Mermaid/registered diagrams",

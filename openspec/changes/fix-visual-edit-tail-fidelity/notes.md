@@ -34,6 +34,15 @@ Integration coverage: `visual_block_splice_remeasures_tail_whitespace_when_it_gr
   no height-mutable rows. The preview list did get the D3 padding restructure
   (same latent bottom-clipping shortfall).
 
+## Task 6 — tail caret follow (2026-08-29)
+
+Row-height fidelity made the trailing whitespace *row* grow, but two remaining seams still made tail editing look like a no-op:
+
+1. The whitespace caret was painted at the row origin (empty projection → display 0). Each extra Enter grew the row downward while the caret stayed put.
+2. `scroll_to_reveal_item` only reveals the *block* and uses pre-layout / stale heights. A last paragraph or whitespace row that was already visible could grow below the viewport; typed characters and the caret were clipped.
+
+Fix: map whitespace caret/clicks by covered-newline line index (12px/line), and after a reveal, pixel-follow `visual_caret_bounds` into the list viewport for two frames.
+
 ## Task 3.3 — manual verification (debug build, 2026-08-28)
 
 Launched `target/debug/markion.exe` with `工期保障 - 副本.md` (228 lines, ~45
