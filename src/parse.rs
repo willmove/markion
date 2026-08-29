@@ -11,26 +11,47 @@ use std::ops::Range;
 use pulldown_cmark::{BlockQuoteKind, HeadingLevel, Options};
 
 use crate::escape::escape_html_attribute;
-use crate::model::{InlineSpan, InlineStyle, MathSource, PreviewBlock, RichText, VisualHtmlImage};
+use crate::model::{
+    HtmlImgLength, InlineSpan, InlineStyle, MathSource, PreviewBlock, RichText, VisualHtmlImage,
+};
 use crate::table::TableDraft;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HtmlAlign {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HtmlListMarker {
+    Disc,
+    Decimal(u64),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HtmlPreviewPart {
     Text {
         text: RichText,
         centered: bool,
+        heading_level: Option<u8>,
+        list_marker: Option<HtmlListMarker>,
+        pre: bool,
+        align: HtmlAlign,
     },
     Image {
         alt: String,
         url: String,
         title: Option<String>,
         centered: bool,
+        width: Option<HtmlImgLength>,
+        height: Option<HtmlImgLength>,
+        align: HtmlAlign,
     },
     /// A raw HTML `<table>` block resolved into a row/column grid, honoring
     /// `rowspan`/`colspan`. Produced instead of flattening the table to text.
-    Table {
-        grid: HtmlTableGrid,
-    },
+    Table { grid: HtmlTableGrid },
 }
 
 /// A resolved HTML table ready for rendering. `rows` holds one entry per visual
@@ -54,6 +75,8 @@ pub struct HtmlTableGrid {
 pub struct HtmlTableCell {
     /// Resolved inline content (bold/italic/code/links via the shared pipeline).
     pub content: RichText,
+    /// Optional cell image extracted from `<img>` inside `<td>`/`<th>`.
+    pub image: Option<HtmlTableCellImage>,
     /// Number of columns this slot occupies (>= 1).
     pub colspan: usize,
     /// Number of rows this cell spans (>= 1). 0 for spacer slots.
@@ -62,6 +85,22 @@ pub struct HtmlTableCell {
     pub is_header: bool,
     /// True for spacer slots covering a rowspan from above.
     pub is_spacer: bool,
+}
+
+/// An `<img>` found inside an HTML table cell.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HtmlTableCellImage {
+    pub alt: String,
+    pub url: String,
+    pub title: Option<String>,
+    pub width: Option<HtmlImgLength>,
+    pub height: Option<HtmlImgLength>,
+}
+
+impl HtmlAlign {
+    fn combine(self, other: Self) -> Self {
+        if other == Self::Start { self } else { other }
+    }
 }
 
 pub(crate) struct ListItemDraft {
@@ -615,7 +654,69 @@ pub(crate) fn parse_inline_html_image(source: &str) -> Option<VisualHtmlImage> {
         alt: tag.attr("alt").unwrap_or_default(),
         url,
         title: tag.attr("title").filter(|title| !title.is_empty()),
+        width: tag.attr("width").as_deref().and_then(parse_html_img_length),
+        height: tag
+            .attr("height")
+            .as_deref()
+            .and_then(parse_html_img_length),
     })
+}
+
+pub(crate) fn parse_html_img_length(value: &str) -> Option<HtmlImgLength> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(percent) = trimmed.strip_suffix('%') {
+        let n: u16 = percent.trim().parse().ok()?;
+        return Some(HtmlImgLength::Percent(n));
+    }
+    let px = trimmed
+        .strip_suffix("px")
+        .or_else(|| trimmed.strip_suffix("PX"))
+        .unwrap_or(trimmed)
+        .trim();
+    let n: u32 = px.parse().ok()?;
+    (n > 0).then_some(HtmlImgLength::Px(n))
+}
+
+pub fn resolve_html_img_display_size(
+    width: Option<HtmlImgLength>,
+    height: Option<HtmlImgLength>,
+    intrinsic_w: f32,
+    intrinsic_h: f32,
+) -> Option<(f32, f32)> {
+    if width.is_none() && height.is_none() {
+        return None;
+    }
+    let resolve = |len: HtmlImgLength, intrinsic: f32| match len {
+        HtmlImgLength::Px(px) => px as f32,
+        HtmlImgLength::Percent(percent) => intrinsic * f32::from(percent) / 100.0,
+    };
+    match (width, height) {
+        (Some(width), Some(height)) => {
+            Some((resolve(width, intrinsic_w), resolve(height, intrinsic_h)))
+        }
+        (Some(width), None) => {
+            let width = resolve(width, intrinsic_w);
+            let height = if intrinsic_w > 0.0 {
+                width * intrinsic_h / intrinsic_w
+            } else {
+                intrinsic_h
+            };
+            Some((width, height))
+        }
+        (None, Some(height)) => {
+            let height = resolve(height, intrinsic_h);
+            let width = if intrinsic_h > 0.0 {
+                height * intrinsic_w / intrinsic_h
+            } else {
+                intrinsic_w
+            };
+            Some((width, height))
+        }
+        (None, None) => None,
+    }
 }
 
 /// One style flag the supported inline-HTML subset can contribute to the
@@ -640,12 +741,13 @@ pub(crate) enum InlineHtmlStyleTag {
     LineBreak,
 }
 
-/// Recognizes exactly one complete, unattributed inline-HTML tag from the
-/// narrow subset the Visual Edit inline projection can hide as a marker:
-/// the style pairs `em`/`i`, `strong`/`b`, `s`/`del`/`strike`, `code`,
-/// `mark`, `sub`, `sup` (tag names case-insensitive) and the void line-break
-/// forms `<br>`, `<br/>`, `<br />`. Like `parse_inline_html_image`, `source`
-/// must be a single tag slice. Anything else — unknown tags, tags carrying
+/// Recognizes exactly one complete inline-HTML tag from the narrow subset the
+/// Visual Edit inline projection can hide as a marker: the style pairs
+/// `em`/`i`, `strong`/`b`, `s`/`del`/`strike`, `code`, `mark`, `sub`, `sup`
+/// (tag names case-insensitive) and the void line-break forms `<br>`, `<br/>`,
+/// `<br />`. Ignorable presentation attributes `class`, `id`, and `clear` are
+/// accepted without mapping to style. Like `parse_inline_html_image`, `source`
+/// must be a single tag slice. Anything else — unknown tags, non-ignorable
 /// attributes, self-closing style pairs, closing `</br>` — returns `None` so
 /// callers keep the conservative fallback.
 pub(crate) fn parse_inline_html_style_tag(source: &str) -> Option<InlineHtmlStyleTag> {
@@ -655,7 +757,11 @@ pub(crate) fn parse_inline_html_style_tag(source: &str) -> Option<InlineHtmlStyl
         return None;
     }
     let tag = ParsedHtmlTag::parse(trimmed)?;
-    if !tag.attrs.is_empty() {
+    if !tag
+        .attrs
+        .iter()
+        .all(|(name, _)| matches!(name.as_str(), "class" | "id" | "clear"))
+    {
         return None;
     }
     let kind = match tag.name.as_str() {
@@ -680,16 +786,34 @@ pub(crate) fn parse_inline_html_style_tag(source: &str) -> Option<InlineHtmlStyl
 }
 
 pub fn html_preview_parts(html: &str) -> Vec<HtmlPreviewPart> {
-    // A raw HTML block whose first tag is `<table>` is routed through the
-    // dedicated table parser (honoring rowspan/colspan). Anything else — or a
-    // table we could not resolve into a grid — falls back to the flattener.
-    let trimmed_start = html.trim_start();
-    if trimmed_start.to_ascii_lowercase().starts_with("<table") {
-        if let Some(grid) = parse_html_table_grid(html) {
-            return vec![HtmlPreviewPart::Table { grid }];
+    let mut parts = Vec::new();
+    let mut index = 0usize;
+    while index < html.len() {
+        let rest = &html[index..];
+        let Some(relative) = find_html_table_start(rest) else {
+            parts.extend(HtmlPreviewBuilder::new(rest).finish());
+            break;
+        };
+        let table_start = index + relative;
+        if table_start > index {
+            parts.extend(HtmlPreviewBuilder::new(&html[index..table_start]).finish());
+        }
+        match parse_html_table_at(html, table_start) {
+            Some((grid, table_end)) => {
+                parts.push(HtmlPreviewPart::Table { grid });
+                index = table_end.max(table_start + 1);
+            }
+            None => {
+                parts.extend(HtmlPreviewBuilder::new(&html[table_start..]).finish());
+                break;
+            }
         }
     }
-    HtmlPreviewBuilder::new(html).finish()
+    parts
+}
+
+fn find_html_table_start(html: &str) -> Option<usize> {
+    html.to_ascii_lowercase().find("<table")
 }
 
 /// Resolves a raw HTML `<table>...</table>` into a grid honoring `rowspan` and
@@ -701,8 +825,15 @@ pub fn html_preview_parts(html: &str) -> Vec<HtmlPreviewPart> {
 /// next free column in its row, skipping cells still held open by a `rowspan`
 /// from an earlier row. Spacer slots mark those held-open cells so the renderer
 /// can reserve width without drawing content.
+#[cfg(test)]
 pub(crate) fn parse_html_table_grid(html: &str) -> Option<HtmlTableGrid> {
-    HtmlTableParser::new(html).parse()
+    parse_html_table_at(html, 0).map(|(grid, _)| grid)
+}
+
+fn parse_html_table_at(html: &str, start: usize) -> Option<(HtmlTableGrid, usize)> {
+    HtmlTableParser::new(&html[start..])
+        .parse()
+        .map(|(grid, end)| (grid, start + end))
 }
 
 struct HtmlTableParser<'a> {
@@ -732,6 +863,12 @@ struct HtmlTableParser<'a> {
     italic_depth: usize,
     code_depth: usize,
     strike_depth: usize,
+    /// Byte end of the outer `</table>` (or the slice end if unclosed).
+    table_end: Option<usize>,
+    /// Open `<a href>` destinations while inside a cell.
+    links: Vec<String>,
+    /// Last `<img>` captured in the current cell.
+    pending_image: Option<HtmlTableCellImage>,
 }
 
 impl<'a> HtmlTableParser<'a> {
@@ -755,10 +892,13 @@ impl<'a> HtmlTableParser<'a> {
             italic_depth: 0,
             code_depth: 0,
             strike_depth: 0,
+            table_end: None,
+            links: Vec::new(),
+            pending_image: None,
         }
     }
 
-    fn parse(mut self) -> Option<HtmlTableGrid> {
+    fn parse(mut self) -> Option<(HtmlTableGrid, usize)> {
         while self.index < self.html.len() {
             if self.html[self.index..].starts_with('<')
                 && let Some(tag_end) = find_html_tag_end(self.html, self.index)
@@ -768,6 +908,9 @@ impl<'a> HtmlTableParser<'a> {
                 self.index = tag_end;
                 if self.failed {
                     return None;
+                }
+                if self.table_end.is_some() {
+                    break;
                 }
                 continue;
             }
@@ -786,7 +929,7 @@ impl<'a> HtmlTableParser<'a> {
         if !self.saw_table || self.grid.rows.is_empty() {
             return None;
         }
-        Some(self.grid)
+        Some((self.grid, self.table_end.unwrap_or(self.html.len())))
     }
 
     fn handle_tag(&mut self, tag: &str) {
@@ -798,6 +941,7 @@ impl<'a> HtmlTableParser<'a> {
                 if parsed.closing {
                     self.flush_row();
                     self.in_table = false;
+                    self.table_end = Some(self.index + tag.len());
                 } else if !parsed.self_closing {
                     if self.in_table {
                         // Nested tables are out of scope; bail to the flattener.
@@ -861,6 +1005,30 @@ impl<'a> HtmlTableParser<'a> {
             "s" | "del" | "strike" if self.cell_open => {
                 self.adjust_depth(parsed.closing, |s| &mut s.strike_depth)
             }
+            "a" if self.cell_open => {
+                if parsed.closing {
+                    self.links.pop();
+                } else if let Some(href) = parsed.attr("href") {
+                    self.links.push(href);
+                }
+            }
+            "img" if self.cell_open && !parsed.closing => {
+                if let Some(url) = parsed.attr("src") {
+                    self.pending_image = Some(HtmlTableCellImage {
+                        alt: parsed.attr("alt").unwrap_or_default(),
+                        url,
+                        title: parsed.attr("title").filter(|title| !title.is_empty()),
+                        width: parsed
+                            .attr("width")
+                            .as_deref()
+                            .and_then(parse_html_img_length),
+                        height: parsed
+                            .attr("height")
+                            .as_deref()
+                            .and_then(parse_html_img_length),
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -877,6 +1045,8 @@ impl<'a> HtmlTableParser<'a> {
         self.pending_colspan = colspan;
         self.pending_rowspan = rowspan;
         self.current_cell_spans.clear();
+        self.links.clear();
+        self.pending_image = None;
         self.cell_open = true;
     }
 
@@ -893,8 +1063,10 @@ impl<'a> HtmlTableParser<'a> {
         let rowspan = self.pending_rowspan.max(1);
         let is_header = self.pending_is_header;
         let content = finish_rich_text(std::mem::take(&mut self.current_cell_spans));
+        let image = self.pending_image.take();
         self.place_cell(HtmlTableCell {
             content,
+            image,
             colspan,
             rowspan,
             is_header,
@@ -951,6 +1123,7 @@ impl<'a> HtmlTableParser<'a> {
         for _ in spacers {
             row.push(HtmlTableCell {
                 content: RichText::default(),
+                image: None,
                 colspan: 1,
                 rowspan: 0,
                 is_header: false,
@@ -975,6 +1148,7 @@ impl<'a> HtmlTableParser<'a> {
             while col < self.row_spans.len() && self.row_spans[col] > 0 {
                 row.push(HtmlTableCell {
                     content: RichText::default(),
+                    image: None,
                     colspan: 1,
                     rowspan: 0,
                     is_header: false,
@@ -1007,6 +1181,7 @@ impl<'a> HtmlTableParser<'a> {
         }
         let decoded = decode_html_entities(text);
         let style = self.cell_style();
+        let link = self.links.last().cloned();
         for ch in decoded.chars() {
             if ch.is_whitespace() {
                 // Collapse runs of whitespace to a single space, mirroring HTML.
@@ -1015,7 +1190,7 @@ impl<'a> HtmlTableParser<'a> {
                 }) {
                     continue;
                 }
-                append_span(&mut self.current_cell_spans, " ", style, None);
+                append_span(&mut self.current_cell_spans, " ", style, link.as_deref());
                 continue;
             }
             let mut buf = [0u8; 4];
@@ -1023,7 +1198,7 @@ impl<'a> HtmlTableParser<'a> {
                 &mut self.current_cell_spans,
                 ch.encode_utf8(&mut buf),
                 style,
-                None,
+                link.as_deref(),
             );
         }
     }
@@ -1073,6 +1248,18 @@ struct HtmlPreviewBuilder<'a> {
     links: Vec<String>,
     centered_depth: usize,
     text_centered: bool,
+    underline_depth: usize,
+    pre_depth: usize,
+    heading_level: Option<u8>,
+    align: HtmlAlign,
+    align_stack: Vec<HtmlAlign>,
+    colors: Vec<Option<u32>>,
+    list_stack: Vec<Option<u64>>,
+    list_marker: Option<HtmlListMarker>,
+    text_heading_level: Option<u8>,
+    text_list_marker: Option<HtmlListMarker>,
+    text_pre: bool,
+    text_align: HtmlAlign,
 }
 
 struct HtmlPendingSpace {
@@ -1097,6 +1284,18 @@ impl<'a> HtmlPreviewBuilder<'a> {
             links: Vec::new(),
             centered_depth: 0,
             text_centered: false,
+            underline_depth: 0,
+            pre_depth: 0,
+            heading_level: None,
+            align: HtmlAlign::Start,
+            align_stack: Vec::new(),
+            colors: Vec::new(),
+            list_stack: Vec::new(),
+            list_marker: None,
+            text_heading_level: None,
+            text_list_marker: None,
+            text_pre: false,
+            text_align: HtmlAlign::Start,
         }
     }
 
@@ -1137,36 +1336,122 @@ impl<'a> HtmlPreviewBuilder<'a> {
 
         match parsed.name.as_str() {
             "br" => self.push_line_break(),
-            "p" | "div" | "section" | "article" | "header" | "footer" | "li" | "tr" | "table"
-            | "blockquote" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+            "pre" => {
                 self.pending_space = None;
                 if parsed.closing {
-                    if self.centered_depth > 0 {
-                        self.centered_depth -= 1;
+                    self.flush_text();
+                    self.pre_depth = self.pre_depth.saturating_sub(1);
+                } else if !parsed.self_closing {
+                    if self.has_text() {
+                        self.flush_text();
                     }
+                    self.pre_depth += 1;
+                    self.apply_open_align(&parsed);
+                }
+            }
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                self.pending_space = None;
+                let level = parsed.name.as_bytes()[1].saturating_sub(b'0');
+                if parsed.closing {
+                    self.flush_text();
+                    self.heading_level = None;
+                    self.pop_align();
+                } else if !parsed.self_closing {
+                    if self.has_text() {
+                        self.flush_text();
+                    }
+                    self.heading_level = Some(level);
+                    self.apply_open_align(&parsed);
+                }
+            }
+            "ul" => {
+                if parsed.closing {
+                    self.list_stack.pop();
+                    self.pop_align();
+                } else if !parsed.self_closing {
+                    self.list_stack.push(None);
+                    self.apply_open_align(&parsed);
+                }
+            }
+            "ol" => {
+                if parsed.closing {
+                    self.list_stack.pop();
+                    self.pop_align();
+                } else if !parsed.self_closing {
+                    self.list_stack.push(Some(1));
+                    self.apply_open_align(&parsed);
+                }
+            }
+            "p" | "div" | "section" | "article" | "header" | "footer" | "li" | "tr" | "table"
+            | "blockquote" => {
+                self.pending_space = None;
+                if parsed.name == "li" && !parsed.closing && !parsed.self_closing {
+                    self.list_marker = Some(match self.list_stack.last_mut() {
+                        Some(Some(counter)) => {
+                            let marker = HtmlListMarker::Decimal(*counter);
+                            *counter = counter.saturating_add(1);
+                            marker
+                        }
+                        _ => HtmlListMarker::Disc,
+                    });
+                }
+                if parsed.closing {
+                    self.flush_text();
+                    if parsed.name == "li" {
+                        self.list_marker = None;
+                    }
+                    self.pop_align();
                     self.push_line_break();
                 } else {
                     if self.has_text() {
-                        self.push_line_break();
+                        self.flush_text();
                     }
-                    if parsed.is_centered() {
-                        self.centered_depth += 1;
-                    }
+                    self.apply_open_align(&parsed);
                 }
+            }
+            "u" => {
+                if parsed.closing {
+                    self.underline_depth = self.underline_depth.saturating_sub(1);
+                } else if !parsed.self_closing {
+                    self.underline_depth += 1;
+                }
+                self.update_style();
+            }
+            "font" => {
+                if parsed.closing {
+                    self.pop_color();
+                } else if !parsed.self_closing {
+                    self.push_color(parsed.attr("color").as_deref().and_then(parse_css_color));
+                }
+                self.update_style();
+            }
+            "span" => {
+                if parsed.closing {
+                    self.pop_color();
+                    self.pop_align();
+                } else if !parsed.self_closing {
+                    self.apply_open_align(&parsed);
+                    self.push_color(parsed.attr("style").as_deref().and_then(color_from_style));
+                }
+                self.update_style();
             }
             "strong" | "b" => {
                 if parsed.closing {
                     self.bold_depth = self.bold_depth.saturating_sub(1);
+                    self.pop_color();
                 } else if !parsed.self_closing {
                     self.bold_depth += 1;
+                    self.push_color(parsed.attr("style").as_deref().and_then(color_from_style));
                 }
                 self.update_style();
             }
             "em" | "i" => {
                 if parsed.closing {
                     self.italic_depth = self.italic_depth.saturating_sub(1);
+                    self.pop_color();
                 } else if !parsed.self_closing {
                     self.italic_depth += 1;
+                    self.push_color(parsed.attr("style").as_deref().and_then(color_from_style));
                 }
                 self.update_style();
             }
@@ -1197,11 +1482,21 @@ impl<'a> HtmlPreviewBuilder<'a> {
                 if let Some(url) = parsed.attr("src") {
                     self.pending_space = None;
                     self.flush_text();
+                    let align = self.current_align().combine(parsed.html_align());
                     self.parts.push(HtmlPreviewPart::Image {
                         alt: parsed.attr("alt").unwrap_or_default(),
                         url,
                         title: parsed.attr("title").filter(|title| !title.is_empty()),
-                        centered: self.centered_depth > 0 || parsed.is_centered(),
+                        centered: align == HtmlAlign::Center,
+                        width: parsed
+                            .attr("width")
+                            .as_deref()
+                            .and_then(parse_html_img_length),
+                        height: parsed
+                            .attr("height")
+                            .as_deref()
+                            .and_then(parse_html_img_length),
+                        align,
                     });
                 }
             }
@@ -1214,10 +1509,57 @@ impl<'a> HtmlPreviewBuilder<'a> {
         self.style.italic = self.italic_depth > 0;
         self.style.code = self.code_depth > 0;
         self.style.strikethrough = self.strike_depth > 0;
+        self.style.underline = self.underline_depth > 0;
+        self.style.color = self.colors.iter().rev().find_map(|color| *color);
+    }
+
+    fn apply_open_align(&mut self, parsed: &ParsedHtmlTag) {
+        self.align_stack.push(self.align);
+        self.align = self.align.combine(parsed.html_align());
+        self.centered_depth = usize::from(self.align == HtmlAlign::Center);
+    }
+
+    fn pop_align(&mut self) {
+        self.align = self.align_stack.pop().unwrap_or(HtmlAlign::Start);
+        self.centered_depth = usize::from(self.align == HtmlAlign::Center);
+    }
+
+    fn current_align(&self) -> HtmlAlign {
+        self.align
+    }
+
+    fn push_color(&mut self, color: Option<u32>) {
+        self.colors.push(color);
+    }
+
+    fn pop_color(&mut self) {
+        self.colors.pop();
+    }
+
+    fn capture_text_meta(&mut self) {
+        if self.spans.is_empty() {
+            self.text_heading_level = self.heading_level;
+            self.text_list_marker = self.list_marker;
+            self.text_pre = self.pre_depth > 0;
+            self.text_align = self.current_align();
+            self.text_centered = self.text_align == HtmlAlign::Center;
+        }
     }
 
     fn push_text(&mut self, text: &str) {
         let decoded = decode_html_entities(text);
+        if self.pre_depth > 0 {
+            for ch in decoded.chars() {
+                if ch == '\n' {
+                    self.push_line_break();
+                    continue;
+                }
+                self.capture_text_meta();
+                let mut buf = [0u8; 4];
+                self.push_visible(ch.encode_utf8(&mut buf));
+            }
+            return;
+        }
         for ch in decoded.chars() {
             if ch.is_whitespace() {
                 self.pending_space = Some(HtmlPendingSpace {
@@ -1228,6 +1570,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
                 continue;
             }
             self.push_pending_space();
+            self.capture_text_meta();
             let mut buf = [0u8; 4];
             self.push_visible(ch.encode_utf8(&mut buf));
         }
@@ -1257,7 +1600,8 @@ impl<'a> HtmlPreviewBuilder<'a> {
     }
 
     fn push_visible(&mut self, text: &str) {
-        self.text_centered |= self.centered_depth > 0;
+        self.capture_text_meta();
+        self.text_centered |= self.centered_depth > 0 || self.current_align() == HtmlAlign::Center;
         append_span(
             &mut self.spans,
             text,
@@ -1268,14 +1612,47 @@ impl<'a> HtmlPreviewBuilder<'a> {
 
     fn flush_text(&mut self) {
         self.pending_space = None;
-        let text = finish_rich_text(std::mem::take(&mut self.spans));
+        let pre = self.text_pre || self.pre_depth > 0;
+        let spans = std::mem::take(&mut self.spans);
+        let text = if pre {
+            let joined: String = spans.iter().map(|span| span.text.as_str()).collect();
+            RichText {
+                text: joined,
+                spans,
+            }
+        } else {
+            finish_rich_text(spans)
+        };
+        if self.text_list_marker.is_none() {
+            self.text_list_marker = self.list_marker;
+        }
+        if self.text_heading_level.is_none() {
+            self.text_heading_level = self.heading_level;
+        }
+        if self.text_align == HtmlAlign::Start {
+            self.text_align = self.current_align();
+        }
         if !text.is_empty() {
+            let align = if self.text_centered || self.text_align == HtmlAlign::Center {
+                HtmlAlign::Center
+            } else {
+                self.text_align
+            };
             self.parts.push(HtmlPreviewPart::Text {
                 text,
-                centered: self.text_centered,
+                centered: align == HtmlAlign::Center,
+                heading_level: self.text_heading_level,
+                list_marker: self.text_list_marker.take(),
+                pre,
+                align,
             });
+            self.list_marker = None;
         }
         self.text_centered = false;
+        self.text_heading_level = None;
+        self.text_list_marker = None;
+        self.text_pre = false;
+        self.text_align = HtmlAlign::Start;
     }
 
     fn has_text(&self) -> bool {
@@ -1340,12 +1717,92 @@ impl ParsedHtmlTag {
             .map(|(_, value)| value.clone())
     }
 
-    fn is_centered(&self) -> bool {
-        self.attr("align")
-            .is_some_and(|value| value.eq_ignore_ascii_case("center"))
-            || self
-                .attr("style")
-                .is_some_and(|value| value.to_ascii_lowercase().contains("text-align: center"))
+    fn html_align(&self) -> HtmlAlign {
+        if let Some(value) = self.attr("align") {
+            return match value.to_ascii_lowercase().as_str() {
+                "center" => HtmlAlign::Center,
+                "right" => HtmlAlign::End,
+                "left" => HtmlAlign::Start,
+                _ => HtmlAlign::Start,
+            };
+        }
+        if let Some(style) = self.attr("style") {
+            let lower = style.to_ascii_lowercase();
+            if css_decl_contains(&lower, "text-align", "center") {
+                return HtmlAlign::Center;
+            }
+            if css_decl_contains(&lower, "text-align", "right") {
+                return HtmlAlign::End;
+            }
+            if css_decl_contains(&lower, "text-align", "left") {
+                return HtmlAlign::Start;
+            }
+        }
+        HtmlAlign::Start
+    }
+}
+
+fn css_decl_contains(style: &str, property: &str, value: &str) -> bool {
+    let needle = format!("{property}:");
+    style.split(';').any(|decl| {
+        let decl = decl.trim();
+        decl.starts_with(&needle)
+            && decl[needle.len()..]
+                .split_whitespace()
+                .next()
+                .is_some_and(|token| token.trim_end_matches(';') == value)
+    })
+}
+
+fn color_from_style(style: &str) -> Option<u32> {
+    let lower = style.to_ascii_lowercase();
+    for (index, _) in lower.match_indices("color:") {
+        if index > 0 {
+            let previous = lower.as_bytes()[index - 1];
+            if previous == b'-' || previous.is_ascii_alphabetic() {
+                continue;
+            }
+        }
+        let rest = style[index + "color:".len()..].trim();
+        let token_end = rest.find(';').unwrap_or(rest.len());
+        return parse_css_color(rest[..token_end].trim());
+    }
+    None
+}
+
+fn parse_css_color(value: &str) -> Option<u32> {
+    let value = value.trim();
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("url(") || lower.contains("var(") || lower.contains("expression") {
+        return None;
+    }
+    if let Some(hex) = lower.strip_prefix('#') {
+        return parse_hex_color(hex);
+    }
+    if let Some(inner) = lower.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')')) {
+        let mut parts = inner.split(',').map(|part| part.trim().parse::<u8>().ok());
+        let red = parts.next()??;
+        let green = parts.next()??;
+        let blue = parts.next()??;
+        if parts.next().is_some() {
+            return None;
+        }
+        return Some((u32::from(red) << 16) | (u32::from(green) << 8) | u32::from(blue));
+    }
+    None
+}
+
+fn parse_hex_color(hex: &str) -> Option<u32> {
+    let hex = hex.trim();
+    match hex.len() {
+        3 => {
+            let red = u32::from_str_radix(&hex[0..1], 16).ok()?;
+            let green = u32::from_str_radix(&hex[1..2], 16).ok()?;
+            let blue = u32::from_str_radix(&hex[2..3], 16).ok()?;
+            Some((red << 20) | (red << 16) | (green << 12) | (green << 8) | (blue << 4) | blue)
+        }
+        6 if hex.chars().all(|ch| ch.is_ascii_hexdigit()) => u32::from_str_radix(hex, 16).ok(),
+        _ => None,
     }
 }
 
@@ -1893,6 +2350,13 @@ mod inline_html_image_tests {
 
         let image = parse_inline_html_image(r#"<img src="a&amp;b.png">"#).unwrap();
         assert_eq!(image.url, "a&b.png");
+
+        let image = parse_inline_html_image(
+            r#"<img src="assets/markion-logo.svg" alt="Markion logo" width="128" height="128">"#,
+        )
+        .unwrap();
+        assert_eq!(image.width, Some(crate::model::HtmlImgLength::Px(128)));
+        assert_eq!(image.height, Some(crate::model::HtmlImgLength::Px(128)));
     }
 
     #[test]
@@ -1968,6 +2432,11 @@ mod inline_html_style_tag_tests {
             ("<br/>", T::LineBreak),
             ("<br />", T::LineBreak),
             ("<BR>", T::LineBreak),
+            ("<em class=\"x\">", T::Open { kind: K::Emphasis }),
+            ("</em class=\"x\">", T::Close { kind: K::Emphasis }),
+            ("<br class=\"clear\">", T::LineBreak),
+            ("<br id=\"b\" class=\"clear\">", T::LineBreak),
+            ("<code class=\"l\">", T::Open { kind: K::Code }),
         ];
         for (source, expected) in cases {
             assert_eq!(parse_inline_html_style_tag(source), Some(expected));
@@ -1981,11 +2450,9 @@ mod inline_html_style_tag_tests {
             "</a>",
             "<u>",
             "<span>",
-            "<em class=\"x\">",
             "<em title>",
             "<em/>",
             "</br>",
-            "<code class=\"l\">",
             "text",
             "<em",
             "<em>x</em>",
@@ -2204,6 +2671,56 @@ mod html_table_tests {
     }
 
     #[test]
+    fn html_preview_parts_finds_table_inside_wrapper() {
+        let html = "<div align=\"center\"><table><tr><td>A</td></tr></table></div>";
+        let parts = html_preview_parts(html);
+        assert!(
+            parts
+                .iter()
+                .any(|part| matches!(part, HtmlPreviewPart::Table { .. })),
+            "wrapped table should still be a grid, got {parts:?}"
+        );
+    }
+
+    #[test]
+    fn html_preview_parts_keeps_caption_after_table() {
+        let html = "<table><tr><td>A</td></tr></table><p>caption</p>";
+        let parts = html_preview_parts(html);
+        assert!(matches!(parts.first(), Some(HtmlPreviewPart::Table { .. })));
+        assert!(
+            parts.iter().any(|part| matches!(
+                part,
+                HtmlPreviewPart::Text { text, .. } if text.text.contains("caption")
+            )),
+            "suffix caption must remain, got {parts:?}"
+        );
+    }
+
+    #[test]
+    fn html_preview_parts_honors_img_pixel_size() {
+        let parts = html_preview_parts(
+            "<p align=\"center\"><img src=\"assets/markion-logo.svg\" alt=\"Markion logo\" width=\"128\" height=\"128\"></p>",
+        );
+        match &parts[0] {
+            HtmlPreviewPart::Image {
+                url,
+                alt,
+                centered,
+                width,
+                height,
+                ..
+            } => {
+                assert_eq!(url, "assets/markion-logo.svg");
+                assert_eq!(alt, "Markion logo");
+                assert!(*centered);
+                assert_eq!(*width, Some(crate::model::HtmlImgLength::Px(128)));
+                assert_eq!(*height, Some(crate::model::HtmlImgLength::Px(128)));
+            }
+            other => panic!("expected sized image, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn non_table_html_still_uses_flattener() {
         let parts = html_preview_parts("<p>hello <strong>world</strong></p>");
         assert!(
@@ -2232,5 +2749,127 @@ mod html_table_tests {
             .find(|c| !c.is_spacer)
             .expect("body cell");
         assert!(!body.is_header);
+    }
+
+    #[test]
+    fn html_preview_parts_headings_lists_pre_align_underline_and_color() {
+        let parts = html_preview_parts(
+            "<h1>Title</h1><ul><li>one</li></ul><ol><li>two</li></ol>\
+<pre>  spaced\nline</pre><p align=\"right\"><u>under</u></p>\
+<span style=\"color:#cc0000\">red</span>\
+<span style=\"color:rgb(0, 128, 0)\">green</span>\
+<span style=\"color:url(evil)\">ignored</span>",
+        );
+        let heading = parts.iter().find_map(|part| match part {
+            HtmlPreviewPart::Text {
+                text,
+                heading_level,
+                ..
+            } if text.text.contains("Title") => Some(*heading_level),
+            _ => None,
+        });
+        assert_eq!(heading, Some(Some(1)));
+
+        let disc = parts.iter().find_map(|part| match part {
+            HtmlPreviewPart::Text {
+                text, list_marker, ..
+            } if text.text.contains("one") => Some(*list_marker),
+            _ => None,
+        });
+        assert_eq!(disc, Some(Some(super::HtmlListMarker::Disc)));
+
+        let numbered = parts.iter().find_map(|part| match part {
+            HtmlPreviewPart::Text {
+                text, list_marker, ..
+            } if text.text.contains("two") => Some(*list_marker),
+            _ => None,
+        });
+        assert_eq!(numbered, Some(Some(super::HtmlListMarker::Decimal(1))));
+
+        let pre = parts
+            .iter()
+            .find_map(|part| match part {
+                HtmlPreviewPart::Text { text, pre, .. } if *pre => Some(text.text.as_str()),
+                _ => None,
+            })
+            .expect("pre part");
+        assert!(
+            pre.contains("  spaced"),
+            "pre keeps leading spaces: {pre:?}"
+        );
+        assert!(pre.contains('\n') || pre.contains("spaced"), "{pre:?}");
+
+        let right = parts.iter().find(|part| match part {
+            HtmlPreviewPart::Text { text, .. } => text.text.contains("under"),
+            _ => false,
+        });
+        match right {
+            Some(HtmlPreviewPart::Text { text, align, .. }) => {
+                assert_eq!(*align, super::HtmlAlign::End);
+                assert!(
+                    text.spans.iter().any(|span| span.style.underline),
+                    "underline flag, got {:?}",
+                    text.spans
+                );
+            }
+            other => panic!("expected right-aligned underlined text, got {other:?}"),
+        }
+
+        let red = parts.iter().find_map(|part| match part {
+            HtmlPreviewPart::Text { text, .. } => text
+                .spans
+                .iter()
+                .find(|span| span.text.contains("red"))
+                .map(|span| span.style.color),
+            _ => None,
+        });
+        assert_eq!(red, Some(Some(0xcc0000)));
+
+        let green = parts.iter().find_map(|part| match part {
+            HtmlPreviewPart::Text { text, .. } => text
+                .spans
+                .iter()
+                .find(|span| span.text.contains("green"))
+                .map(|span| span.style.color),
+            _ => None,
+        });
+        assert_eq!(green, Some(Some(0x008000)));
+
+        let ignored = parts.iter().find_map(|part| match part {
+            HtmlPreviewPart::Text { text, .. } => text
+                .spans
+                .iter()
+                .find(|span| span.text.contains("ignored"))
+                .map(|span| span.style.color),
+            _ => None,
+        });
+        assert_eq!(ignored, Some(None));
+    }
+
+    #[test]
+    fn html_table_cell_parses_image_and_link() {
+        let html = "<table><tr>\
+<td><img src=\"pic.png\" alt=\"P\" width=\"32\"></td>\
+<td><a href=\"https://example.com\">go</a></td>\
+</tr></table>";
+        let grid = parse_html_table_grid(html).expect("table");
+        let image_cell = grid.rows[0]
+            .iter()
+            .find(|cell| cell.image.is_some())
+            .expect("image cell");
+        let image = image_cell.image.as_ref().unwrap();
+        assert_eq!(image.url, "pic.png");
+        assert_eq!(image.alt, "P");
+        assert_eq!(image.width, Some(crate::model::HtmlImgLength::Px(32)));
+
+        let link_cell = grid.rows[0]
+            .iter()
+            .find(|cell| cell.content.text.contains("go"))
+            .expect("link cell");
+        assert!(
+            link_cell.content.spans.iter().any(
+                |span| span.text == "go" && span.link.as_deref() == Some("https://example.com")
+            )
+        );
     }
 }

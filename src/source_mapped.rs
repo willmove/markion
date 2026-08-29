@@ -761,6 +761,9 @@ fn shift_block_editor(editor: &mut VisualBlockEditor, delta: isize) -> Option<()
                 shift_editor_field(&mut cell.field, delta)?;
             }
         }
+        VisualBlockEditor::Html { payload } => {
+            shift_editor_field(payload, delta)?;
+        }
     }
     Some(())
 }

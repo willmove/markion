@@ -1475,6 +1475,18 @@ pub(super) fn rich_text_element(
             style.color = Some(rgb(PREVIEW_SUPER_SUB_COLOR).into());
             styled = true;
         }
+        if span.style.underline {
+            style.underline = Some(UnderlineStyle {
+                thickness: px(1.),
+                color: None,
+                wavy: false,
+            });
+            styled = true;
+        }
+        if let Some(color) = span.style.color {
+            style.color = Some(rgb(color).into());
+            styled = true;
+        }
         if let Some(url) = &span.link {
             style.color = Some(rgb(PREVIEW_LINK_COLOR).into());
             style.underline = Some(UnderlineStyle {
@@ -1563,6 +1575,18 @@ fn preview_span_highlight(span: &InlineSpan) -> Option<HighlightStyle> {
     }
     if span.style.superscript || span.style.subscript {
         style.color = Some(rgb(PREVIEW_SUPER_SUB_COLOR).into());
+        styled = true;
+    }
+    if span.style.underline {
+        style.underline = Some(UnderlineStyle {
+            thickness: px(1.),
+            color: None,
+            wavy: false,
+        });
+        styled = true;
+    }
+    if let Some(color) = span.style.color {
+        style.color = Some(rgb(color).into());
         styled = true;
     }
     if span.link.is_some() {
@@ -2123,6 +2147,18 @@ pub(super) fn visual_highlight_style(
         style.color = Some(rgb(PREVIEW_SUPER_SUB_COLOR).into());
         styled = true;
     }
+    if inline_style.underline {
+        style.underline = Some(UnderlineStyle {
+            thickness: px(1.),
+            color: None,
+            wavy: false,
+        });
+        styled = true;
+    }
+    if let Some(color) = inline_style.color {
+        style.color = Some(rgb(color).into());
+        styled = true;
+    }
     if link {
         style.color = Some(rgb(PREVIEW_LINK_COLOR).into());
         style.underline = Some(UnderlineStyle {
@@ -2458,10 +2494,19 @@ fn visual_html_image_atom(
         PreviewImageEntry::Ready(ready) => {
             // Same presentation rules as `preview_image_view`: supersampled
             // (SVG) entries present at their intrinsic display width, plain
-            // rasters keep implicit pixel sizing.
+            // rasters keep implicit pixel sizing, and authored HTML width/height
+            // hints override both when present.
             let supersampled = ready.display_width != ready.width;
+            let sized = resolve_html_img_display_size(
+                image.width,
+                image.height,
+                ready.display_width as f32,
+                ready.display_height as f32,
+            );
             let rendered = img(ImageSource::Render(ready.image)).max_w_full();
-            if supersampled {
+            if let Some((width, height)) = sized {
+                rendered.w(px(width)).h(px(height)).into_any_element()
+            } else if supersampled {
                 rendered
                     .w(px(ready.display_width as f32))
                     .into_any_element()
@@ -3228,19 +3273,11 @@ pub(super) fn visual_block_view(
                 | VisualSourceIslandKind::Code
                 | VisualSourceIslandKind::Unsupported
         )
-    ) || (block.editor.is_none()
-        && block
-            .editable_runs
-            .iter()
-            .any(|run| run.conservative_fallback))
-        // A prose block that carries inline HTML images renders them through
-        // the mixed text/image path; the surrounding non-image inline HTML
-        // shows as conservative source fragments in the same path. Only the
-        // HTML source-island kind is exempted here — front matter, code, and
-        // unsupported islands keep their whole-block source box even if an
-        // image run somehow appears.
-        && !matches!(block.source_island, Some(VisualSourceIslandKind::Html))
-        && !has_html_image;
+    );
+    // Conservative inline-HTML fragments stay in the mixed rendered path
+    // (verbatim tag atoms) instead of promoting the whole paragraph to a
+    // source island. Front matter, unclosed code, and unsupported parser
+    // gaps still use the whole-block source box.
     // A Whitespace row that owns the caret is ordinary inter-paragraph
     // spacing, not a code-like block. Promoting it to a source-island box
     // (border + padding + monospace + gray background) makes a normal blank
@@ -3386,7 +3423,7 @@ pub(super) fn visual_block_view(
                 .or_else(|| (!image_alt.is_empty()).then_some(image_alt.as_str()));
             let image = div()
                 .w(gpui::relative(presentation.width_percent as f32 / 100.))
-                .child(preview_image_view(app, url, document_dir));
+                .child(preview_image_view(app, url, document_dir, None, None));
             let image = match presentation.alignment {
                 ImageAlignment::Left => div().w_full().flex().items_start().child(image),
                 ImageAlignment::Center => div().w_full().flex().items_center().child(image),
@@ -3560,11 +3597,11 @@ pub(super) fn visual_block_view(
         }
         VisualBlockKind::Unsupported => visual_source_island_view(app, block, block_index, cx),
         VisualBlockKind::Html { html } => {
-            // Read-only rendered HTML (tables, text, images) via the same
-            // pipeline as Split Preview/Read mode — no editable runs, no
-            // source box. `source_island` is `None` for this kind, so the
-            // `always_source`/`focused_conservative` gates above are bypassed.
-            html_preview_block_view(app, html, block_index, document_dir, cx)
+            if let Some(VisualBlockEditor::Html { payload }) = block.editor.as_ref() {
+                visual_html_editor(app, block, block_index, html, payload, document_dir, cx)
+            } else {
+                html_preview_block_view(app, html, block_index, document_dir, cx)
+            }
         }
         VisualBlockKind::FootnoteDefinition { label } => div()
             .mb(px(typography.paragraph_spacing))
@@ -4242,7 +4279,9 @@ pub(super) fn visual_editor_field_projection(
             .and_then(|offset| source[offset..].chars().next())
             .map(|delimiter| if delimiter == '(' { ')' } else { delimiter }),
         VisualEditorFieldKind::TableCell { .. } => Some('|'),
-        VisualEditorFieldKind::CodePayload | VisualEditorFieldKind::MathPayload => None,
+        VisualEditorFieldKind::CodePayload
+        | VisualEditorFieldKind::MathPayload
+        | VisualEditorFieldKind::HtmlSource => None,
     };
     let Some(terminator) = terminator else {
         return VisualProjection {
@@ -4393,6 +4432,45 @@ fn visual_math_editor(
         block.id,
         payload,
         forced,
+        presentation.into_any_element(),
+        payload_editor.into_any_element(),
+        cx,
+    ))
+}
+
+fn visual_html_editor(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    html: &str,
+    payload: &VisualEditorField,
+    document_dir: Option<&Path>,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let typography = app.typography_metrics();
+    let presentation = html_preview_block_view(app, html, block_index, document_dir, cx);
+    let payload_editor = div()
+        .border_t_1()
+        .border_color(rgb(0xe2e8f0))
+        .bg(rgb(0xf8fafc))
+        .p_2()
+        .font(code_slot_font(&app.resolved_font_families.code))
+        .text_size(px(typography.source_island_font_size))
+        .line_height(px(typography.source_island_line_height))
+        .child(visual_editor_field_element(
+            app,
+            block_index,
+            payload,
+            ElementId::from(("visual-html-payload", block.id.as_u64())),
+            None,
+            None,
+            cx,
+        ));
+    div().child(visual_collapsible_source_block(
+        app,
+        block.id,
+        payload,
+        false,
         presentation.into_any_element(),
         payload_editor.into_any_element(),
         cx,
@@ -4955,12 +5033,35 @@ fn html_preview_block_view(
         .mb_3()
         .children(parts.into_iter().enumerate().map(|(part_index, part)| {
             match part {
-                HtmlPreviewPart::Text { text, centered } => div()
-                    .mb_2()
-                    .line_height(px(typography.paragraph_line_height))
-                    .text_size(px(typography.rendered_font_size))
-                    .when(centered, |style| style.text_center())
-                    .child(rich_text_element(
+                HtmlPreviewPart::Text {
+                    text,
+                    centered,
+                    heading_level,
+                    list_marker,
+                    pre,
+                    align,
+                } => {
+                    let font_size = heading_level
+                        .map(|level| typography.heading_font_size(u32::from(level)))
+                        .unwrap_or(if pre {
+                            typography.code_font_size
+                        } else {
+                            typography.rendered_font_size
+                        });
+                    let line_height = if heading_level.is_some() {
+                        font_size * 1.25
+                    } else if pre {
+                        typography.code_line_height
+                    } else {
+                        typography.paragraph_line_height
+                    };
+                    let marker_label = match list_marker {
+                        Some(HtmlListMarker::Disc) => Some("•".to_string()),
+                        Some(HtmlListMarker::Decimal(index)) => Some(format!("{index}.")),
+                        None => None,
+                    };
+                    let has_marker = marker_label.is_some();
+                    let body = rich_text_element(
                         app,
                         ElementId::from((
                             "preview-html-text",
@@ -4970,16 +5071,59 @@ fn html_preview_block_view(
                         block_index,
                         PreviewTextRunId::HtmlText,
                         cx,
-                    )),
-                HtmlPreviewPart::Image { url, centered, .. } => div()
+                    );
+                    let aligned = match align {
+                        HtmlAlign::Center if !has_marker => {
+                            div().w_full().flex().justify_center().child(body)
+                        }
+                        HtmlAlign::End if !has_marker => {
+                            div().w_full().flex().justify_end().child(body)
+                        }
+                        _ => div().child(body),
+                    };
+                    let content = if let Some(marker) = marker_label {
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_start()
+                            .child(div().flex_none().child(marker))
+                            .child(aligned)
+                    } else {
+                        aligned
+                    };
+                    div()
+                        .mb_2()
+                        .line_height(px(line_height))
+                        .text_size(px(font_size))
+                        .when(heading_level.is_some(), |style| {
+                            style.font_weight(FontWeight::SEMIBOLD)
+                        })
+                        .when(pre, |style| {
+                            style.font(code_slot_font(&app.resolved_font_families.code))
+                        })
+                        .when(centered && !has_marker, |style| style.text_center())
+                        .child(content)
+                }
+                HtmlPreviewPart::Image {
+                    url,
+                    centered,
+                    width,
+                    height,
+                    align,
+                    ..
+                } => div()
                     .mb_2()
-                    .when(centered, |style| style.flex().justify_center())
-                    .child(preview_image_view(app, &url, document_dir)),
+                    .when(centered || align == HtmlAlign::Center, |style| {
+                        style.flex().justify_center()
+                    })
+                    .when(align == HtmlAlign::End, |style| style.flex().justify_end())
+                    .child(preview_image_view(app, &url, document_dir, width, height)),
                 HtmlPreviewPart::Table { grid } => div().mb_2().child(html_table_grid_view(
                     app,
                     &grid,
                     block_index,
                     part_index,
+                    document_dir,
                     &typography,
                     cx,
                 )),
@@ -4997,6 +5141,7 @@ fn html_table_grid_view(
     grid: &HtmlTableGrid,
     block_index: usize,
     part_index: usize,
+    document_dir: Option<&Path>,
     typography: &DocumentTypographyMetrics,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
@@ -5049,20 +5194,37 @@ fn html_table_grid_view(
                     .when(!touches_last_row, |style| {
                         style.border_b_1().border_color(border)
                     })
-                    .child(rich_text_element(
-                        app,
-                        ElementId::from((
-                            "preview-html-table-cell",
-                            ((block_index as u64) << 40)
-                                | ((part_index as u64) << 28)
-                                | (((row_index as u64) & 0xff) << 14)
-                                | ((cell_index as u64) & 0x3fff),
-                        )),
-                        &cell.content,
-                        block_index,
-                        PreviewTextRunId::HtmlText,
-                        cx,
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .children(cell.image.as_ref().map(|image| {
+                                preview_image_view(
+                                    app,
+                                    &image.url,
+                                    document_dir,
+                                    image.width,
+                                    image.height,
+                                )
+                            }))
+                            .when(!cell.content.is_empty(), |style| {
+                                style.child(rich_text_element(
+                                    app,
+                                    ElementId::from((
+                                        "preview-html-table-cell",
+                                        ((block_index as u64) << 40)
+                                            | ((part_index as u64) << 28)
+                                            | (((row_index as u64) & 0xff) << 14)
+                                            | ((cell_index as u64) & 0x3fff),
+                                    )),
+                                    &cell.content,
+                                    block_index,
+                                    PreviewTextRunId::HtmlText,
+                                    cx,
+                                ))
+                            }),
+                    ),
             );
             col = col.saturating_add(colspan as i16);
         }
@@ -5315,6 +5477,16 @@ pub(super) fn preview_block_view(
                     }
                     continue;
                 }
+                if let PreviewBlock::Html { html, .. } = child {
+                    container = container.child(html_preview_block_view(
+                        app,
+                        html,
+                        block_index,
+                        document_dir,
+                        cx,
+                    ));
+                    continue;
+                }
                 let PreviewBlock::ListItem {
                     level,
                     ordered,
@@ -5538,7 +5710,7 @@ pub(super) fn preview_block_view(
         PreviewBlock::Image { url, .. } => {
             div()
                 .mb_3()
-                .child(preview_image_view(app, url, document_dir))
+                .child(preview_image_view(app, url, document_dir, None, None))
         }
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
         PreviewBlock::FootnoteDefinition { label, text, .. } => div()

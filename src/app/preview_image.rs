@@ -840,15 +840,29 @@ fn collect_preview_image_urls(
 }
 
 /// Present a cached preview image, or a compact pending/error placeholder.
-pub(super) fn preview_image_view(app: &MarkionApp, url: &str, document_dir: Option<&Path>) -> Div {
+pub(super) fn preview_image_view(
+    app: &MarkionApp,
+    url: &str,
+    document_dir: Option<&Path>,
+    width: Option<HtmlImgLength>,
+    height: Option<HtmlImgLength>,
+) -> Div {
     match app.preview_image_entry(url, document_dir) {
         PreviewImageEntry::Ready(ready) => {
             // Supersampled entries (SVG) present at their intrinsic size via an
             // explicit width, exactly like `visual_diagram_editor`; plain
             // rasters keep implicit sizing (gpui lays them out at pixel size).
             let supersampled = ready.display_width != ready.width;
+            let sized = resolve_html_img_display_size(
+                width,
+                height,
+                ready.display_width as f32,
+                ready.display_height as f32,
+            );
             let image = img(ImageSource::Render(ready.image)).max_w_full();
-            let image = if supersampled {
+            let image = if let Some((width, height)) = sized {
+                image.w(px(width)).h(px(height))
+            } else if supersampled {
                 image.w(px(ready.display_width as f32))
             } else {
                 image

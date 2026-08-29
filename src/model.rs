@@ -845,6 +845,8 @@ pub struct InlineStyle {
     pub highlight: bool,
     pub superscript: bool,
     pub subscript: bool,
+    pub underline: bool,
+    pub color: Option<u32>,
 }
 
 impl InlineStyle {
@@ -1003,12 +1005,21 @@ pub struct VisualInlineRun {
     pub conservative_fallback: bool,
 }
 
+/// A CSS length authored on an HTML `<img>` `width` or `height` attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HtmlImgLength {
+    Px(u32),
+    Percent(u16),
+}
+
 /// Attributes of one raw-HTML `<img>` tag recognized inside prose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisualHtmlImage {
     pub alt: String,
     pub url: String,
     pub title: Option<String>,
+    pub width: Option<HtmlImgLength>,
+    pub height: Option<HtmlImgLength>,
 }
 
 /// Destination opened or jumped to from a Visual Edit navigation icon.
@@ -1034,6 +1045,10 @@ pub enum VisualRevealKind {
     /// One backslash-escaped ASCII punctuation character (`\*`, `\\`): the
     /// escaped character renders literally while the backslash stays hidden.
     Escape,
+    /// One decoded HTML entity reference (`&amp;`, `&#39;`, `&#x2014;`): the
+    /// decoded character renders while the complete authored `&…;` token
+    /// stays hidden until the caret enters it.
+    Entity,
     /// One supported inline-HTML element (style pair or `<br>`): the tags stay
     /// hidden markers while the content renders with the mapped style.
     InlineHtml,
@@ -1072,12 +1087,17 @@ pub enum VisualBlockEditor {
     Table {
         cells: Vec<VisualTableCell>,
     },
+    Html {
+        payload: VisualEditorField,
+    },
 }
 
 impl VisualBlockEditor {
     pub fn fields(&self) -> Vec<&VisualEditorField> {
         match self {
-            Self::Code { payload, .. } | Self::Math { payload, .. } => vec![payload],
+            Self::Code { payload, .. } | Self::Math { payload, .. } | Self::Html { payload } => {
+                vec![payload]
+            }
             Self::Table { cells } => cells.iter().map(|cell| &cell.field).collect(),
         }
     }
@@ -1093,6 +1113,7 @@ impl VisualBlockEditor {
 pub enum VisualEditorFieldKind {
     CodePayload,
     MathPayload,
+    HtmlSource,
     ImageAlt,
     ImageDestination,
     ImageTitle,
