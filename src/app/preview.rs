@@ -667,8 +667,20 @@ impl Element for VisualInputElement {
             ElementInputHandler::new(bounds, self.app.clone()),
             cx,
         );
-        self.app.update(cx, |app, _| {
-            app.active_tab_mut().visual_input_bounds = Some(bounds);
+        self.app.update(cx, |app, cx| {
+            let tab = app.active_tab_mut();
+            tab.visual_input_bounds = Some(bounds);
+            if tab.visual_caret_follow_frames == 0 {
+                return;
+            }
+            tab.visual_caret_follow_frames = tab.visual_caret_follow_frames.saturating_sub(1);
+            let Some(caret) = tab.visual_caret_bounds else {
+                return;
+            };
+            let list = tab.visual_list.clone();
+            if follow_visual_caret_in_list(&list, caret) {
+                cx.notify();
+            }
         });
     }
 }
@@ -697,10 +709,21 @@ struct VisualEditableText {
     /// Source position clicks resolve to when this row has no segments
     /// (an empty block still needs to place the caret inside itself).
     entity: Entity<MarkionApp>,
+    /// When set, this element is a whitespace insertion row: it fills the
+    /// parent, paints the caret at `caret_shift` from the top, and maps
+    /// clicks by Y onto the covered source newlines.
+    whitespace_caret: Option<WhitespaceCaretLayout>,
     #[cfg(test)]
     test_projection: Option<(String, Vec<Range<usize>>)>,
     #[cfg(test)]
     test_projection_styles: Option<Vec<InlineStyle>>,
+}
+
+/// Geometry for a caret-owning Visual Edit whitespace row.
+#[derive(Clone)]
+struct WhitespaceCaretLayout {
+    caret_shift: Pixels,
+    source_range: Range<usize>,
 }
 
 impl Element for VisualEditableText {
@@ -722,6 +745,12 @@ impl Element for VisualEditableText {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        if self.whitespace_caret.is_some() {
+            let mut style = Style::default();
+            style.size.width = gpui::relative(1.).into();
+            style.size.height = gpui::relative(1.).into();
+            return (window.request_layout(style, [], cx), ());
+        }
         self.text.request_layout(None, inspector_id, window, cx)
     }
 
@@ -734,8 +763,10 @@ impl Element for VisualEditableText {
         window: &mut Window,
         cx: &mut App,
     ) -> Hitbox {
-        self.text
-            .prepaint(None, inspector_id, bounds, state, window, cx);
+        if self.whitespace_caret.is_none() {
+            self.text
+                .prepaint(None, inspector_id, bounds, state, window, cx);
+        }
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
@@ -749,29 +780,45 @@ impl Element for VisualEditableText {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let layout = self.text.layout().clone();
+        let whitespace_caret = self.whitespace_caret.clone();
+        let is_whitespace_row = whitespace_caret.is_some();
+        let layout = (!is_whitespace_row).then(|| self.text.layout().clone());
         let affinity = self
             .entity
             .read(cx)
             .active_tab()
             .current_visual_caret_affinity();
-        let caret_bounds = self
-            .caret_active
-            .then(|| {
-                let display = self.projection.display_for_source(self.source_cursor)?;
-                if let Some(affinity) = affinity {
-                    let candidates = self.projection.boundary_candidates(display);
-                    if candidates.is_ambiguous()
-                        && candidates.resolve(affinity) != self.source_cursor
-                    {
-                        return self.projection.display_for_source(self.source_cursor);
-                    }
-                }
-                Some(display)
+        let caret_bounds = if let Some(whitespace) = whitespace_caret.as_ref() {
+            self.caret_active.then(|| {
+                Bounds::new(
+                    point(bounds.origin.x, bounds.origin.y + whitespace.caret_shift),
+                    size(px(2.), px(WHITESPACE_ROW_LINE_HEIGHT)),
+                )
             })
-            .flatten()
-            .and_then(|index| layout.position_for_index(index))
-            .map(|position| Bounds::new(position, size(px(2.), layout.line_height())));
+        } else {
+            self.caret_active
+                .then(|| {
+                    let display = self.projection.display_for_source(self.source_cursor)?;
+                    if let Some(affinity) = affinity {
+                        let candidates = self.projection.boundary_candidates(display);
+                        if candidates.is_ambiguous()
+                            && candidates.resolve(affinity) != self.source_cursor
+                        {
+                            return self.projection.display_for_source(self.source_cursor);
+                        }
+                    }
+                    Some(display)
+                })
+                .flatten()
+                .and_then(|index| layout.as_ref()?.position_for_index(index))
+                .map(|position| {
+                    let line_height = layout
+                        .as_ref()
+                        .map(|layout| layout.line_height())
+                        .unwrap_or(px(WHITESPACE_ROW_LINE_HEIGHT));
+                    Bounds::new(position, size(px(2.), line_height))
+                })
+        };
         if self.source_selection.is_empty() {
             if let Some(caret_bounds) = caret_bounds {
                 #[cfg(test)]
@@ -782,7 +829,7 @@ impl Element for VisualEditableText {
                     window.paint_quad(fill(caret_bounds, rgb(0x2563eb)));
                 }
             }
-        } else {
+        } else if let Some(layout) = layout.as_ref() {
             for segment in &self.projection.segments {
                 let start = self.source_selection.start.max(segment.source_range.start);
                 let end = self.source_selection.end.min(segment.source_range.end);
@@ -795,7 +842,7 @@ impl Element for VisualEditableText {
                         + end
                             .saturating_sub(segment.source_range.start)
                             .min(segment.display_range.len());
-                    for quad in preview_selection_paint_quads(&layout, visible_start..visible_end) {
+                    for quad in preview_selection_paint_quads(layout, visible_start..visible_end) {
                         window.paint_quad(quad);
                     }
                 }
@@ -807,7 +854,7 @@ impl Element for VisualEditableText {
                 app.active_tab_mut().visual_caret_bounds = Some(caret_bounds);
             });
         }
-        if let Some(marked_range) = self.marked_range.clone() {
+        if let (Some(marked_range), Some(layout)) = (self.marked_range.clone(), layout.as_ref()) {
             let mut marked_bounds: Option<Bounds<Pixels>> = None;
             for segment in &self.projection.segments {
                 let start = marked_range.start.max(segment.source_range.start);
@@ -819,7 +866,7 @@ impl Element for VisualEditableText {
                     + (start - segment.source_range.start).min(segment.display_range.len());
                 let display_end = segment.display_range.start
                     + (end - segment.source_range.start).min(segment.display_range.len());
-                for quad in preview_selection_paint_quads(&layout, display_start..display_end) {
+                for quad in preview_selection_paint_quads(layout, display_start..display_end) {
                     marked_bounds = Some(
                         marked_bounds.map_or(quad.bounds, |bounds| bounds.union(&quad.bounds)),
                     );
@@ -835,20 +882,22 @@ impl Element for VisualEditableText {
         let document_version = self.entity.read(cx).active_tab().document.version();
         let marked_range = self.entity.read(cx).active_tab().marked_range.clone();
         if self.navigation_active {
-            let navigation_snapshot = visual_navigation_snapshot(
-                document_version,
-                self.block_index,
-                self.source_selection.clone(),
-                marked_range,
-                self.source_island,
-                &self.projection,
-                &layout,
-            );
-            self.entity.update(cx, |app, cx| {
-                app.active_tab_mut()
-                    .register_visual_navigation_snapshot(navigation_snapshot);
-                app.complete_pending_visual_navigation(cx);
-            });
+            if let Some(layout) = layout.as_ref() {
+                let navigation_snapshot = visual_navigation_snapshot(
+                    document_version,
+                    self.block_index,
+                    self.source_selection.clone(),
+                    marked_range,
+                    self.source_island,
+                    &self.projection,
+                    layout,
+                );
+                self.entity.update(cx, |app, cx| {
+                    app.active_tab_mut()
+                        .register_visual_navigation_snapshot(navigation_snapshot);
+                    app.complete_pending_visual_navigation(cx);
+                });
+            }
         }
         #[cfg(test)]
         if let Some(projection) = self.test_projection.clone() {
@@ -864,6 +913,8 @@ impl Element for VisualEditableText {
         let entity = self.entity.clone();
         let projection = self.projection.clone();
         let text_layout = layout.clone();
+        let whitespace_click = whitespace_caret.clone();
+        let row_top = bounds.top();
         let hitbox_for_down = hitbox.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble
@@ -872,20 +923,37 @@ impl Element for VisualEditableText {
             {
                 return;
             }
-            let visible = preview_index_for_position(&text_layout, event.position);
-            let candidates = projection.boundary_candidates(visible);
-            let boundary_x = text_layout
-                .position_for_index(candidates.display_offset)
-                .map(|position| position.x)
-                .unwrap_or(event.position.x);
-            let affinity = if candidates.is_ambiguous() && event.position.x < boundary_x {
-                Some(VisualCaretAffinity::Upstream)
-            } else if candidates.is_ambiguous() {
-                Some(VisualCaretAffinity::Downstream)
+            let (source, affinity) = if let Some(whitespace) = whitespace_click.as_ref() {
+                let text = entity.read(cx).active_tab().document.text().to_string();
+                (
+                    whitespace_source_at_y(
+                        whitespace.source_range.clone(),
+                        event.position.y - row_top,
+                        &text,
+                    ),
+                    None,
+                )
+            } else if let Some(text_layout) = text_layout.as_ref() {
+                let visible = preview_index_for_position(text_layout, event.position);
+                let candidates = projection.boundary_candidates(visible);
+                let boundary_x = text_layout
+                    .position_for_index(candidates.display_offset)
+                    .map(|position| position.x)
+                    .unwrap_or(event.position.x);
+                let affinity = if candidates.is_ambiguous() && event.position.x < boundary_x {
+                    Some(VisualCaretAffinity::Upstream)
+                } else if candidates.is_ambiguous() {
+                    Some(VisualCaretAffinity::Downstream)
+                } else {
+                    None
+                };
+                (
+                    candidates.resolve(affinity.unwrap_or(VisualCaretAffinity::Downstream)),
+                    affinity,
+                )
             } else {
-                None
+                return;
             };
-            let source = candidates.resolve(affinity.unwrap_or(VisualCaretAffinity::Downstream));
             let focus_handle = entity.read(cx).focus_handle.clone();
             window.focus(&focus_handle);
             entity.update(cx, |app, cx| {
@@ -908,6 +976,8 @@ impl Element for VisualEditableText {
         let entity = self.entity.clone();
         let projection = self.projection.clone();
         let text_layout = layout.clone();
+        let whitespace_drag = whitespace_caret;
+        let row_top = bounds.top();
         let hitbox_for_move = hitbox.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble
@@ -917,9 +987,20 @@ impl Element for VisualEditableText {
             {
                 return;
             }
-            let visible = preview_index_for_position(&text_layout, event.position);
-            let candidates = projection.boundary_candidates(visible);
-            let source = candidates.resolve(VisualCaretAffinity::Downstream);
+            let source = if let Some(whitespace) = whitespace_drag.as_ref() {
+                let text = entity.read(cx).active_tab().document.text().to_string();
+                whitespace_source_at_y(
+                    whitespace.source_range.clone(),
+                    event.position.y - row_top,
+                    &text,
+                )
+            } else if let Some(text_layout) = text_layout.as_ref() {
+                let visible = preview_index_for_position(text_layout, event.position);
+                let candidates = projection.boundary_candidates(visible);
+                candidates.resolve(VisualCaretAffinity::Downstream)
+            } else {
+                return;
+            };
             entity.update(cx, |app, cx| {
                 app.select_to(source, cx);
                 app.active_tab_mut().set_visual_caret_affinity(None);
@@ -936,8 +1017,10 @@ impl Element for VisualEditableText {
         });
 
         window.set_cursor_style(CursorStyle::IBeam, hitbox);
-        self.text
-            .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+        if !is_whitespace_row {
+            self.text
+                .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+        }
     }
 }
 
@@ -2248,6 +2331,7 @@ pub(super) fn visual_text_element(
         caret_active: visual_block_owns_caret(app, block_index),
         navigation_active: true,
         entity: cx.entity(),
+        whitespace_caret: None,
         #[cfg(test)]
         test_projection,
         #[cfg(test)]
@@ -2469,6 +2553,7 @@ fn visual_projection_fragment(
             || (source_range.contains(&app.active_tab().cursor_offset())
                 || app.active_tab().cursor_offset() == source_range.end),
         entity: cx.entity(),
+        whitespace_caret: None,
         #[cfg(test)]
         test_projection,
         #[cfg(test)]
@@ -2889,6 +2974,7 @@ pub(super) fn visual_source_island_view(
             caret_active: visual_block_owns_caret(app, block_index),
             navigation_active: true,
             entity: cx.entity(),
+            whitespace_caret: None,
             #[cfg(test)]
             test_projection: None,
             #[cfg(test)]
@@ -2897,19 +2983,22 @@ pub(super) fn visual_source_island_view(
 }
 
 /// Paints a thin insertion caret on a `Whitespace` row that owns the document
-/// caret, without wrapping the row in a source-island box. The caret itself
-/// is drawn by `VisualEditableText` against an empty projection whose single
-/// segment maps the row's source start to display index 0, so the caret lands
-/// at the row's origin. Clicks hit the same element and place the caret at
-/// `block.source_range.start`. IME bounds are still resolved via the
-/// `visual_input_bounds` surface fallback.
+/// caret, without wrapping the row in a source-island box. The caret Y is
+/// derived from how many covered newlines sit before the source caret, so
+/// repeated Enter at the document tail moves the insertion line down the
+/// row. Clicks map the same way. IME bounds still fall back to
+/// `visual_input_bounds` before the row has painted.
 pub(super) fn visual_whitespace_caret_element(
     app: &MarkionApp,
     block: &VisualBlock,
     block_index: usize,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
-    let anchor = block.source_range.start;
+    let text = app.active_tab().document.text();
+    let cursor = app.active_tab().cursor_offset();
+    let source_range = block.source_range.clone();
+    let caret_line = whitespace_caret_line(source_range.clone(), cursor, text);
+    let anchor = source_range.start;
     let projection = VisualProjection {
         text: String::new(),
         segments: vec![markion::VisualProjectionSegment {
@@ -2927,11 +3016,15 @@ pub(super) fn visual_whitespace_caret_element(
         text: StyledText::new(SharedString::from("")),
         projection,
         source_selection: app.active_tab().selected_range.clone(),
-        source_cursor: app.active_tab().cursor_offset(),
+        source_cursor: cursor,
         marked_range: app.active_tab().marked_range.clone(),
         caret_active: visual_block_owns_caret(app, block_index),
-        navigation_active: true,
+        navigation_active: false,
         entity: cx.entity(),
+        whitespace_caret: Some(WhitespaceCaretLayout {
+            caret_shift: px(whitespace_caret_y(caret_line)),
+            source_range,
+        }),
         #[cfg(test)]
         test_projection: None,
         #[cfg(test)]
@@ -3020,6 +3113,92 @@ pub(super) const WHITESPACE_ROW_MAX_LINES: usize = 4096;
 /// cap here previously made every Enter past the cap silently invisible.
 pub(super) fn whitespace_row_height(line_count: usize) -> f32 {
     line_count.clamp(1, WHITESPACE_ROW_MAX_LINES) as f32 * WHITESPACE_ROW_LINE_HEIGHT
+}
+
+/// Line index within a whitespace row for a source caret. Each covered
+/// newline is one 12px line: the caret after the first newline sits on
+/// line 0 (the top of the row); each additional newline moves it down
+/// one line so repeated Enter at the tail is visible.
+pub(super) fn whitespace_caret_line(
+    source_range: Range<usize>,
+    cursor: usize,
+    text: &str,
+) -> usize {
+    let end = source_range.end.min(text.len());
+    let start = source_range.start.min(end);
+    let cursor = cursor.clamp(start, end);
+    let newlines_before = text[start..cursor]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count();
+    newlines_before.saturating_sub(1)
+}
+
+pub(super) fn whitespace_caret_y(line: usize) -> f32 {
+    let max_line = WHITESPACE_ROW_MAX_LINES.saturating_sub(1);
+    line.min(max_line) as f32 * WHITESPACE_ROW_LINE_HEIGHT
+}
+
+/// Source offset for insertion line `line` inside a whitespace range.
+/// Line 0 is the first covered newline; later lines walk subsequent newlines.
+pub(super) fn whitespace_source_at_line(
+    source_range: Range<usize>,
+    line: usize,
+    text: &str,
+) -> usize {
+    let end = source_range.end.min(text.len());
+    let start = source_range.start.min(end);
+    let newline_ends: Vec<usize> = text[start..end]
+        .bytes()
+        .enumerate()
+        .filter(|(_, byte)| *byte == b'\n')
+        .map(|(index, _)| start + index + 1)
+        .collect();
+    if newline_ends.is_empty() {
+        return start;
+    }
+    newline_ends
+        .get(line)
+        .copied()
+        .unwrap_or(*newline_ends.last().expect("non-empty newline list"))
+        .min(end)
+}
+
+pub(super) fn whitespace_source_at_y(
+    source_range: Range<usize>,
+    rel_y: Pixels,
+    text: &str,
+) -> usize {
+    let line = (f32::from(rel_y).max(0.) / WHITESPACE_ROW_LINE_HEIGHT).floor() as usize;
+    whitespace_source_at_line(source_range, line, text)
+}
+
+/// Scroll the Visual Edit list just enough to keep `caret` inside the
+/// viewport. Returns true when a scroll was requested.
+pub(super) fn follow_visual_caret_in_list(list: &ListState, caret: Bounds<Pixels>) -> bool {
+    let viewport = list.viewport_bounds();
+    if viewport.size.height <= px(0.) || caret.size.height <= px(0.) {
+        return false;
+    }
+    let margin = px(2.);
+    let view_top = viewport.top() + margin;
+    let view_bottom = viewport.bottom() - margin;
+    let delta = if caret.bottom() > view_bottom {
+        caret.bottom() - view_bottom
+    } else if caret.top() < view_top {
+        caret.top() - view_top
+    } else {
+        return false;
+    };
+    if delta == px(0.) {
+        return false;
+    }
+    let top = list.logical_scroll_top();
+    list.scroll_to(gpui::ListOffset {
+        item_ix: top.item_ix,
+        offset_in_item: top.offset_in_item + delta,
+    });
+    true
 }
 
 pub(super) fn visual_block_view(
@@ -3929,6 +4108,7 @@ pub(super) fn visual_reference_definition_view(
             caret_active: visual_block_owns_caret(app, block_index),
             navigation_active: true,
             entity: cx.entity(),
+            whitespace_caret: None,
             #[cfg(test)]
             test_projection: None,
             #[cfg(test)]
@@ -3994,6 +4174,7 @@ fn visual_editor_field_element(
         caret_active,
         navigation_active: caret_active || !block_owns_caret,
         entity: cx.entity(),
+        whitespace_caret: None,
         #[cfg(test)]
         test_projection,
         #[cfg(test)]

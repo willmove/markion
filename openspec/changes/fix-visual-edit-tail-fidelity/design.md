@@ -50,6 +50,9 @@ Scrollbar geometry (`list_pane_scrollbar_view`) and Split Preview sync-scroll co
 
 *Alternatives:* fork/patch gpui to include padding in extent (rejected — registry dependency, out of scope); remove the padding entirely (rejected — visual regression at pane edges).
 
+### D11 — Caret Y on whitespace rows; post-paint pixel follow
+The 72px-cap / splice work made the tail *row* grow, but two remaining seams still hid tail edits: the whitespace caret was painted at the row origin (empty projection → display 0), and `scroll_to_reveal_item` only reveals a *block* using pre-layout heights (unmeasured suffix rows contribute 0). Paint the caret on the insertion line that matches newlines before the source caret; when reveal targets a later item, `scroll_to` that index so it can be measured; after paint, pixel-follow `visual_caret_bounds` into the list viewport for two frames.
+
 ### D4 — Mutation choke-point diagnostics for the duplication
 Add `tracing::debug!` at the two canonical document choke points (`replace_source_range`, `set_text`): document version, edit range, old/new lengths — never content. Add one tagged `debug!` line per high-level mutation entry point (`insert_newline`, `replace_text_in_range` / IME mark path, `apply_markdown_format`, `apply_exact_block_edit`, table edits, undo/redo, `reload_from_disk`) so a repro log reconstructs the writing sequence. All logging is off the render path and free when the subscriber filters the level.
 

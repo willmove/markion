@@ -597,6 +597,11 @@ pub(super) struct DocumentTabState {
     /// separate from list state avoids snapping manual scroll back to the caret
     /// on every unrelated frame.
     pub(super) visual_cursor_reveal_pending: bool,
+    /// Remaining frames that should pixel-follow `visual_caret_bounds` into
+    /// the list viewport after a caret-moving edit. `scroll_to_reveal_item`
+    /// only guarantees the *block* is visible and uses pre-layout heights,
+    /// so a growing last row still needs a post-paint follow.
+    pub(super) visual_caret_follow_frames: u8,
     /// Ephemeral screen-space geometry produced by the focused visual row.
     pub(super) visual_caret_bounds: Option<Bounds<Pixels>>,
     pub(super) visual_marked_range_bounds: Option<(Range<usize>, Bounds<Pixels>)>,
@@ -849,6 +854,7 @@ impl DocumentTabState {
             hovered_visual_source_block: None,
             retain_visual_source_expand: None,
             visual_cursor_reveal_pending: false,
+            visual_caret_follow_frames: 0,
             visual_caret_bounds: None,
             visual_marked_range_bounds: None,
             visual_caret_affinity: None,
@@ -1036,6 +1042,7 @@ impl DocumentTabState {
         self.retain_visual_source_expand = None;
         self.visual_caret_bounds = None;
         self.visual_marked_range_bounds = None;
+        self.visual_caret_follow_frames = 0;
         self.clear_visual_caret_affinity();
         self.clear_visual_navigation_intent();
         self.visual_navigation_snapshots.clear();
@@ -1082,6 +1089,7 @@ impl DocumentTabState {
         self.hovered_visual_source_block = None;
         self.retain_visual_source_expand = None;
         self.visual_cursor_reveal_pending = true;
+        self.visual_caret_follow_frames = 2;
         self.visual_caret_bounds = None;
         self.visual_marked_range_bounds = None;
         self.clear_visual_caret_affinity();

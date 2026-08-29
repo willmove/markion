@@ -2170,6 +2170,38 @@ fn whitespace_row_height_respects_the_pathological_bound() {
 }
 
 #[test]
+fn whitespace_caret_line_tracks_newlines_before_the_source_caret() {
+    let text = "Hello\n\n\n";
+    let range = 5..8;
+    assert_eq!(whitespace_caret_line(range.clone(), 5, text), 0);
+    assert_eq!(whitespace_caret_line(range.clone(), 6, text), 0);
+    assert_eq!(whitespace_caret_line(range.clone(), 7, text), 1);
+    assert_eq!(whitespace_caret_line(range, 8, text), 2);
+    assert_eq!(whitespace_caret_y(0), 0.);
+    assert_eq!(whitespace_caret_y(1), WHITESPACE_ROW_LINE_HEIGHT);
+    assert_eq!(whitespace_caret_y(2), 2. * WHITESPACE_ROW_LINE_HEIGHT);
+}
+
+#[test]
+fn whitespace_source_at_line_and_y_map_back_to_newline_ends() {
+    let text = "Hello\n\n\n";
+    let range = 5..8;
+    assert_eq!(whitespace_source_at_line(range.clone(), 0, text), 6);
+    assert_eq!(whitespace_source_at_line(range.clone(), 1, text), 7);
+    assert_eq!(whitespace_source_at_line(range.clone(), 2, text), 8);
+    assert_eq!(whitespace_source_at_line(range.clone(), 9, text), 8);
+    assert_eq!(whitespace_source_at_y(range.clone(), px(0.), text), 6);
+    assert_eq!(
+        whitespace_source_at_y(range.clone(), px(WHITESPACE_ROW_LINE_HEIGHT), text),
+        7
+    );
+    assert_eq!(
+        whitespace_source_at_y(range, px(2. * WHITESPACE_ROW_LINE_HEIGHT + 4.), text),
+        8
+    );
+}
+
+#[test]
 fn preview_parses_immediately_when_never_changed_or_never_parsed() {
     // First render of a fresh document: no change timestamp, no parse yet.
     assert!(should_parse_preview_now(None, None));
@@ -5554,6 +5586,134 @@ fn visual_edit_paragraph_enter_shows_caret_not_source_island(cx: &mut TestAppCon
         assert_eq!(tab.document.text(), "Body\n\nMore");
         assert!(tab.document.is_dirty());
         assert!(!tab.undo_stack.is_empty());
+    });
+}
+
+#[gpui::test]
+fn visual_edit_tail_enter_moves_caret_down_the_whitespace_row(cx: &mut TestAppContext) {
+    // Repeated Enter at the document tail must move the painted caret down
+    // the growing whitespace row. Painting it at the row origin made every
+    // extra blank line look like a no-op.
+    let source = "Body";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    let first_top = app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Body\n");
+        app.active_tab()
+            .visual_caret_bounds
+            .expect("caret after first Enter")
+            .top()
+    });
+
+    let mut previous_top = first_top;
+    for press in 2..=5 {
+        cx.dispatch_action(InsertNewline);
+        cx.run_until_parked();
+        let top = app.update(cx, |app, _| {
+            let expected_newlines = "\n".repeat(press);
+            assert_eq!(
+                app.active_tab().document.text(),
+                format!("Body{expected_newlines}")
+            );
+            app.active_tab()
+                .visual_caret_bounds
+                .expect("caret after tail Enter")
+                .top()
+        });
+        assert!(
+            f32::from(top) > f32::from(previous_top) + 8.0,
+            "Enter #{press} must move the caret down: {previous_top:?} -> {top:?}"
+        );
+        previous_top = top;
+    }
+}
+
+#[gpui::test]
+fn visual_edit_tail_typing_stays_visible_at_the_viewport_bottom(cx: &mut TestAppContext) {
+    // When the last rendered line sits on the pane bottom, typed characters
+    // and the caret must remain inside the Visual Edit viewport instead of
+    // growing the last row below the clip.
+    let source = (0..40)
+        .map(|index| format!("Paragraph {index}"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let end = source.len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.active_tab_mut().selected_range = end..end;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        assert_eq!(app.active_tab().cursor_offset(), end);
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let index = visual_block_index_for_offset(&blocks, end, end)
+            .expect("tail offset owns a visual row");
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: index,
+            offset_in_item: px(0.),
+        });
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(
+            tab.visual_caret_bounds.is_some(),
+            "caret must be painted at the tail before editing"
+        );
+        assert!(
+            tab.visual_list.viewport_bounds().size.height > px(80.),
+            "visual list viewport too small"
+        );
+    });
+
+    for _ in 0..8 {
+        cx.dispatch_action(InsertNewline);
+        cx.run_until_parked();
+    }
+    cx.simulate_input("TailVisible");
+    cx.run_until_parked();
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(
+            tab.document.text().ends_with("TailVisible"),
+            "typed tail text must land in the source: {}",
+            tab.document.text()
+        );
+        let caret = tab.visual_caret_bounds.expect("caret after tail typing");
+        let viewport = tab.visual_list.viewport_bounds();
+        assert!(
+            caret.top() >= viewport.top() - px(1.) && caret.bottom() <= viewport.bottom() + px(1.),
+            "caret {caret:?} must stay inside visual viewport {viewport:?}"
+        );
     });
 }
 
