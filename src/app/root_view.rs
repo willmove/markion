@@ -4399,6 +4399,7 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                 app.editor_font_size,
                                                 MIN_EDITOR_FONT_SIZE,
                                                 MAX_EDITOR_FONT_SIZE,
+                                                "px",
                                                 palette,
                                                 cx.listener(
                                                     |app, _: &MouseUpEvent, _window, cx| {
@@ -4436,6 +4437,7 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                 app.rendered_font_size,
                                                 MIN_RENDERED_FONT_SIZE,
                                                 MAX_RENDERED_FONT_SIZE,
+                                                "px",
                                                 palette,
                                                 cx.listener(
                                                     |app, _: &MouseUpEvent, _window, cx| {
@@ -4473,6 +4475,7 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                 app.paragraph_spacing,
                                                 MIN_PARAGRAPH_SPACING,
                                                 MAX_PARAGRAPH_SPACING,
+                                                "px",
                                                 palette,
                                                 cx.listener(
                                                     |app, _: &MouseUpEvent, _window, cx| {
@@ -4607,6 +4610,71 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                 ),
                                             ))
                                             .child(preference_sidebar_row(app, palette, cx)),
+                                    )
+                                    // Auto-save (silent write-back + delay).
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(palette.muted)
+                                                    .child(app.tr(Msg::PrefPanelAutoSaveSection)),
+                                            )
+                                            .child(preference_boolean_row(
+                                                app.tr(Msg::PrefPanelSilentSave),
+                                                app.auto_save_preferences.silent_save,
+                                                app.language,
+                                                palette,
+                                                cx.listener(
+                                                    |app, _: &MouseUpEvent, _window, cx| {
+                                                        app.toggle_silent_save(cx);
+                                                    },
+                                                ),
+                                            ))
+                                            .child(preference_numeric_row(
+                                                app.tr(Msg::PrefPanelAutoSaveDelay),
+                                                app.auto_save_preferences.delay_secs as u16,
+                                                MIN_AUTO_SAVE_DELAY_SECS as u16,
+                                                MAX_AUTO_SAVE_DELAY_SECS as u16,
+                                                "s",
+                                                palette,
+                                                cx.listener(
+                                                    |app, _: &MouseUpEvent, _window, cx| {
+                                                        if let Some(value) = preference_step_value(
+                                                            app.auto_save_preferences.delay_secs
+                                                                as u16,
+                                                            MIN_AUTO_SAVE_DELAY_SECS as u16,
+                                                            MAX_AUTO_SAVE_DELAY_SECS as u16,
+                                                            -1,
+                                                        ) {
+                                                            app.set_auto_save_delay_secs(
+                                                                value as i64,
+                                                                cx,
+                                                            );
+                                                        }
+                                                    },
+                                                ),
+                                                cx.listener(
+                                                    |app, _: &MouseUpEvent, _window, cx| {
+                                                        if let Some(value) = preference_step_value(
+                                                            app.auto_save_preferences.delay_secs
+                                                                as u16,
+                                                            MIN_AUTO_SAVE_DELAY_SECS as u16,
+                                                            MAX_AUTO_SAVE_DELAY_SECS as u16,
+                                                            1,
+                                                        ) {
+                                                            app.set_auto_save_delay_secs(
+                                                                value as i64,
+                                                                cx,
+                                                            );
+                                                        }
+                                                    },
+                                                ),
+                                            )),
                                     ),
                             )
                             .child(pane_scrollbar_view(
@@ -5000,6 +5068,7 @@ fn preferences_export_body(
                             app.export_preferences.pdf.margin_mm as u16,
                             10,
                             50,
+                            "mm",
                             palette,
                             cx.listener(|app, _: &MouseUpEvent, _window, cx| {
                                 app.step_pdf_margin(-1, cx);
@@ -5530,6 +5599,7 @@ pub(super) fn preference_numeric_row(
     value: u16,
     min: u16,
     max: u16,
+    unit: &'static str,
     palette: ThemePalette,
     decrement: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
     increment: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
@@ -5568,7 +5638,7 @@ pub(super) fn preference_numeric_row(
                         .items_center()
                         .justify_center()
                         .text_color(palette.text)
-                        .child(format!("{value} px")),
+                        .child(format!("{value} {unit}")),
                 )
                 .child(preference_numeric_button(
                     "+",

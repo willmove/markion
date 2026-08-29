@@ -121,21 +121,21 @@ pub use model::{
     EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory, ExportBackend, ExportBackendPreference,
     ExportFormat, ExportOutcome, ExportPreferences, Footnote, FrontMatterError, Heading,
     HighlightKind, HighlightedSpan, HtmlImgLength, InlineSpan, InlineStyle, MAX_EDITOR_FONT_SIZE,
-    MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES, MAX_RENDERED_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
-    MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownFormat, MathDelimiter, MathExpression,
-    MathLayoutStyle, MathSource, PdfExportOptions, PdfPageSize, PreviewBlock, RecoveryDocument,
-    RenderedMath, ReplaceResult, RichText, SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch,
-    SearchMatchRange, SearchOptions, SessionState, SidebarTab, TableAlignment, TableEdit,
-    TableEditResult, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock,
-    VisualBlockEdit, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix,
-    VisualBlockPrefixKind, VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField,
-    VisualEditorFieldKind, VisualHtmlImage, VisualInlineRun, VisualNavigationTarget,
-    VisualProjection, VisualProjectionSegment, VisualProjectionSpan, VisualQuoteContext,
-    VisualQuoteGroupEdge, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
-    VisualStructuralEdit, VisualTableCell, YamlFrontMatter, builtin_theme_definitions,
-    normalize_editor_font_size, normalize_font_family, normalize_heading_menu_max_level,
-    normalize_paragraph_spacing, normalize_rendered_font_size, resolve_font_family,
-    touch_recent_file,
+    MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES, MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS,
+    MAX_AUTO_SAVE_DELAY_SECS, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE,
+    MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle, MathSource, PdfExportOptions,
+    PdfPageSize, PreviewBlock, RecoveryDocument, RenderedMath, ReplaceResult, RichText,
+    SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch, SearchMatchRange, SearchOptions, SessionState,
+    SidebarTab, TableAlignment, TableEdit, TableEditResult, ThemeColors, ThemeDefinition,
+    ThemeFonts, ViewMode, VisualBlock, VisualBlockEdit, VisualBlockEditor, VisualBlockId,
+    VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind, VisualBoundaryCandidates,
+    VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind, VisualHtmlImage, VisualInlineRun,
+    VisualNavigationTarget, VisualProjection, VisualProjectionSegment, VisualProjectionSpan,
+    VisualQuoteContext, VisualQuoteGroupEdge, VisualRevealGroup, VisualRevealKind,
+    VisualSourceIslandKind, VisualStructuralEdit, VisualTableCell, YamlFrontMatter,
+    builtin_theme_definitions, normalize_auto_save_delay_secs, normalize_editor_font_size,
+    normalize_font_family, normalize_heading_menu_max_level, normalize_paragraph_spacing,
+    normalize_rendered_font_size, resolve_font_family, touch_recent_file,
 };
 pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
@@ -6680,6 +6680,7 @@ mod tests {
             last_update_check: Some("2026-07-27T10:30:00Z".to_string()),
             auto_save: AutoSavePreferences {
                 enabled: false,
+                silent_save: false,
                 delay_secs: 30,
             },
             export: ExportPreferences {
@@ -6702,6 +6703,7 @@ mod tests {
         assert!(written.contains("heading_menu_max_level = 6"));
         assert!(written.contains("sync_scroll = true"));
         assert!(written.contains("[auto_save]"));
+        assert!(written.contains("silent_save = false"));
         assert!(written.contains("delay_secs = 30"));
         assert!(written.contains("[export]"));
         assert!(written.contains("pdf_engine = \"tectonic\""));
@@ -6717,6 +6719,7 @@ mod tests {
         assert_eq!(parsed.rendered_font_size, DEFAULT_RENDERED_FONT_SIZE);
         assert_eq!(parsed.paragraph_spacing, DEFAULT_PARAGRAPH_SPACING);
         assert!(parsed.auto_save.enabled);
+        assert!(parsed.auto_save.silent_save);
         assert_eq!(parsed.auto_save.delay_secs, 9);
 
         // An empty file is all defaults; unknown sidebar tabs fall back to

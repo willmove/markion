@@ -369,6 +369,12 @@ pub enum Msg {
     StatusOpenInCurrentTabOn,
     /// Status: non-explicit opens now always append a new tab.
     StatusOpenInCurrentTabOff,
+    /// Silent save-to-file enabled.
+    StatusSilentSaveOn,
+    /// Silent save-to-file disabled (recovery-only).
+    StatusSilentSaveOff,
+    /// Auto-save delay changed. {0}=seconds.
+    StatusAutoSaveDelay,
     /// {0}=logical pixel value — source-editor font size changed.
     StatusEditorFontSize,
     /// {0}=logical pixel value — rendered-document font size changed.
@@ -642,6 +648,12 @@ pub enum Msg {
     PrefPanelOtherSection,
     /// Section header for document typography controls.
     PrefPanelTypographySection,
+    /// Auto-save section title in Preferences → General.
+    PrefPanelAutoSaveSection,
+    /// Silent save-to-file toggle label.
+    PrefPanelSilentSave,
+    /// Auto-save inactivity delay row label.
+    PrefPanelAutoSaveDelay,
     /// Source-editor font-size row label.
     PrefPanelEditorFontSize,
     /// Rendered-document font-size row label.
@@ -2674,6 +2686,9 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "Show hidden files off",
         Msg::StatusOpenInCurrentTabOn => "Open in current tab on",
         Msg::StatusOpenInCurrentTabOff => "Open in current tab off",
+        Msg::StatusSilentSaveOn => "Auto-save to file on",
+        Msg::StatusSilentSaveOff => "Auto-save to file off (recovery only)",
+        Msg::StatusAutoSaveDelay => "Auto-save delay: {0}s",
         Msg::StatusEditorFontSize => "Source font size: {0}",
         Msg::StatusRenderedFontSize => "Reading font size: {0}",
         Msg::StatusParagraphSpacing => "Paragraph spacing: {0}",
@@ -2836,6 +2851,9 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelLanguageSection => "Language",
         Msg::PrefPanelOtherSection => "Other",
         Msg::PrefPanelTypographySection => "Document typography",
+        Msg::PrefPanelAutoSaveSection => "Auto-save",
+        Msg::PrefPanelSilentSave => "Auto-save to file",
+        Msg::PrefPanelAutoSaveDelay => "Idle delay",
         Msg::PrefPanelEditorFontSize => "Source font size",
         Msg::PrefPanelRenderedFontSize => "Reading font size",
         Msg::PrefPanelParagraphSpacing => "Paragraph spacing",
@@ -2933,7 +2951,7 @@ fn en(msg: Msg) -> &'static str {
 //   {4}=preview adaptive width {5}=sidebar {6}=source font size
 //   {7}=reading font size {8}=paragraph spacing {9}=prefs path
 //   {10}=themes dir {11}=custom theme count
-const PREFERENCES_DETAIL_EN: &str = "Theme: {0}\nFocus mode: {1}\nTypewriter mode: {2}\nCode line numbers: {3}\nPreview adaptive width: {4}\nSidebar: {5}\nSource font size: {6}\nReading font size: {7}\nParagraph spacing: {8}\n\nPreferences: {9}\nCustom themes: {10}\nInstalled custom themes: {11}";
+const PREFERENCES_DETAIL_EN: &str = "Theme: {0}\nFocus mode: {1}\nTypewriter mode: {2}\nCode line numbers: {3}\nPreview adaptive width: {4}\nSidebar: {5}\nSource font size: {6}\nReading font size: {7}\nParagraph spacing: {8}\nAuto-save to file: {12}\nAuto-save delay: {13}s\n\nPreferences: {9}\nCustom themes: {10}\nInstalled custom themes: {11}";
 
 // ---------------------------------------------------------------------------
 // Japanese
@@ -3192,6 +3210,9 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "非表示ファイルの表示オフ",
         Msg::StatusOpenInCurrentTabOn => "現在のタブで開くオン",
         Msg::StatusOpenInCurrentTabOff => "現在のタブで開くオフ",
+        Msg::StatusSilentSaveOn => "ファイルへの自動保存オン",
+        Msg::StatusSilentSaveOff => "ファイルへの自動保存オフ（復旧のみ）",
+        Msg::StatusAutoSaveDelay => "自動保存の間隔: {0}秒",
         Msg::StatusEditorFontSize => "ソースのフォントサイズ: {0}",
         Msg::StatusRenderedFontSize => "閲覧フォントサイズ: {0}",
         Msg::StatusParagraphSpacing => "段落間隔: {0}",
@@ -3358,6 +3379,9 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelLanguageSection => "言語",
         Msg::PrefPanelOtherSection => "その他",
         Msg::PrefPanelTypographySection => "文書の文字設定",
+        Msg::PrefPanelAutoSaveSection => "自動保存",
+        Msg::PrefPanelSilentSave => "ファイルへ自動保存",
+        Msg::PrefPanelAutoSaveDelay => "アイドル間隔",
         Msg::PrefPanelEditorFontSize => "ソースのフォントサイズ",
         Msg::PrefPanelRenderedFontSize => "閲覧フォントサイズ",
         Msg::PrefPanelParagraphSpacing => "段落間隔",
@@ -3448,7 +3472,7 @@ fn ja(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_JA: &str = "テーマ: {0}\n集中モード: {1}\nタイプライターモード: {2}\nコード行番号: {3}\nプレビュー幅自動調整: {4}\nサイドバー: {5}\nソースのフォントサイズ: {6}\n閲覧フォントサイズ: {7}\n段落間隔: {8}\n\n設定ファイル: {9}\nカスタムテーマ: {10}\nインストール済みカスタムテーマ: {11}";
+const PREFERENCES_DETAIL_JA: &str = "テーマ: {0}\n集中モード: {1}\nタイプライターモード: {2}\nコード行番号: {3}\nプレビュー幅自動調整: {4}\nサイドバー: {5}\nソースのフォントサイズ: {6}\n閲覧フォントサイズ: {7}\n段落間隔: {8}\nファイルへ自動保存: {12}\n自動保存間隔: {13}秒\n\n設定ファイル: {9}\nカスタムテーマ: {10}\nインストール済みカスタムテーマ: {11}";
 
 // ---------------------------------------------------------------------------
 // French
@@ -3699,6 +3723,9 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "Afficher les fichiers cachés désactivé",
         Msg::StatusOpenInCurrentTabOn => "Ouvrir dans l'onglet actif activé",
         Msg::StatusOpenInCurrentTabOff => "Ouvrir dans l'onglet actif désactivé",
+        Msg::StatusSilentSaveOn => "Enregistrement auto vers le fichier activé",
+        Msg::StatusSilentSaveOff => "Enregistrement auto vers le fichier désactivé (récupération seule)",
+        Msg::StatusAutoSaveDelay => "Délai d'enregistrement auto : {0}s",
         Msg::StatusEditorFontSize => "Taille de la source : {0}",
         Msg::StatusRenderedFontSize => "Taille de lecture : {0}",
         Msg::StatusParagraphSpacing => "Espacement des paragraphes : {0}",
@@ -3866,6 +3893,9 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelLanguageSection => "Langue",
         Msg::PrefPanelOtherSection => "Autre",
         Msg::PrefPanelTypographySection => "Typographie du document",
+        Msg::PrefPanelAutoSaveSection => "Enregistrement automatique",
+        Msg::PrefPanelSilentSave => "Enregistrer automatiquement vers le fichier",
+        Msg::PrefPanelAutoSaveDelay => "Délai d'inactivité",
         Msg::PrefPanelEditorFontSize => "Taille de la source",
         Msg::PrefPanelRenderedFontSize => "Taille de lecture",
         Msg::PrefPanelParagraphSpacing => "Espacement des paragraphes",
@@ -3960,7 +3990,7 @@ fn fr(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_FR: &str = "Thème : {0}\nMode concentré : {1}\nMode machine à écrire : {2}\nNuméros de ligne : {3}\nLargeur adaptative : {4}\nBarre latérale : {5}\nTaille de la source : {6}\nTaille de lecture : {7}\nEspacement des paragraphes : {8}\n\nPréférences : {9}\nThèmes personnalisés : {10}\nThèmes installés : {11}";
+const PREFERENCES_DETAIL_FR: &str = "Thème : {0}\nMode concentré : {1}\nMode machine à écrire : {2}\nNuméros de ligne : {3}\nLargeur adaptative : {4}\nBarre latérale : {5}\nTaille de la source : {6}\nTaille de lecture : {7}\nEspacement des paragraphes : {8}\nEnregistrement auto vers le fichier : {12}\nDélai d'enregistrement auto : {13}s\n\nPréférences : {9}\nThèmes personnalisés : {10}\nThèmes installés : {11}";
 
 // ---------------------------------------------------------------------------
 // German
@@ -4209,6 +4239,9 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "Versteckte Dateien anzeigen aus",
         Msg::StatusOpenInCurrentTabOn => "Im aktuellen Tab öffnen ein",
         Msg::StatusOpenInCurrentTabOff => "Im aktuellen Tab öffnen aus",
+        Msg::StatusSilentSaveOn => "Automatisch in Datei speichern ein",
+        Msg::StatusSilentSaveOff => "Automatisch in Datei speichern aus (nur Wiederherstellung)",
+        Msg::StatusAutoSaveDelay => "Autospeicher-Intervall: {0}s",
         Msg::StatusEditorFontSize => "Quelltext-Schriftgröße: {0}",
         Msg::StatusRenderedFontSize => "Leseschriftgröße: {0}",
         Msg::StatusParagraphSpacing => "Absatzabstand: {0}",
@@ -4376,6 +4409,9 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelLanguageSection => "Sprache",
         Msg::PrefPanelOtherSection => "Sonstiges",
         Msg::PrefPanelTypographySection => "Dokumenttypografie",
+        Msg::PrefPanelAutoSaveSection => "Automatisches Speichern",
+        Msg::PrefPanelSilentSave => "Automatisch in Datei speichern",
+        Msg::PrefPanelAutoSaveDelay => "Leerlaufintervall",
         Msg::PrefPanelEditorFontSize => "Quelltext-Schriftgröße",
         Msg::PrefPanelRenderedFontSize => "Leseschriftgröße",
         Msg::PrefPanelParagraphSpacing => "Absatzabstand",
@@ -4470,7 +4506,7 @@ fn de(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_DE: &str = "Design: {0}\nFokusmodus: {1}\nSchreibmaschinenmodus: {2}\nZeilennummern: {3}\nAdaptive Vorschaubreite: {4}\nSeitenleiste: {5}\nQuelltext-Schriftgröße: {6}\nLeseschriftgröße: {7}\nAbsatzabstand: {8}\n\nEinstellungen: {9}\nBenutzerdefinierte Designs: {10}\nInstallierte Designs: {11}";
+const PREFERENCES_DETAIL_DE: &str = "Design: {0}\nFokusmodus: {1}\nSchreibmaschinenmodus: {2}\nZeilennummern: {3}\nAdaptive Vorschaubreite: {4}\nSeitenleiste: {5}\nQuelltext-Schriftgröße: {6}\nLeseschriftgröße: {7}\nAbsatzabstand: {8}\nAutomatisch in Datei speichern: {12}\nAutospeicher-Intervall: {13}s\n\nEinstellungen: {9}\nBenutzerdefinierte Designs: {10}\nInstallierte Designs: {11}";
 
 // ---------------------------------------------------------------------------
 // Spanish
@@ -4719,6 +4755,9 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "Mostrar archivos ocultos desactivado",
         Msg::StatusOpenInCurrentTabOn => "Abrir en la pestaña actual activado",
         Msg::StatusOpenInCurrentTabOff => "Abrir en la pestaña actual desactivado",
+        Msg::StatusSilentSaveOn => "Autoguardar en archivo activado",
+        Msg::StatusSilentSaveOff => "Autoguardar en archivo desactivado (solo recuperación)",
+        Msg::StatusAutoSaveDelay => "Retraso de autoguardado: {0}s",
         Msg::StatusEditorFontSize => "Tamaño de fuente del código: {0}",
         Msg::StatusRenderedFontSize => "Tamaño de lectura: {0}",
         Msg::StatusParagraphSpacing => "Espacio entre párrafos: {0}",
@@ -4876,6 +4915,9 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelLanguageSection => "Idioma",
         Msg::PrefPanelOtherSection => "Otro",
         Msg::PrefPanelTypographySection => "Tipografía del documento",
+        Msg::PrefPanelAutoSaveSection => "Autoguardado",
+        Msg::PrefPanelSilentSave => "Autoguardar en archivo",
+        Msg::PrefPanelAutoSaveDelay => "Retraso de inactividad",
         Msg::PrefPanelEditorFontSize => "Tamaño de fuente del código",
         Msg::PrefPanelRenderedFontSize => "Tamaño de lectura",
         Msg::PrefPanelParagraphSpacing => "Espacio entre párrafos",
@@ -4966,7 +5008,7 @@ fn es(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_ES: &str = "Tema: {0}\nModo concentración: {1}\nModo máquina de escribir: {2}\nNúmeros de línea: {3}\nAncho adaptativo: {4}\nBarra lateral: {5}\nTamaño de fuente del código: {6}\nTamaño de lectura: {7}\nEspacio entre párrafos: {8}\n\nPreferencias: {9}\nTemas personalizados: {10}\nTemas instalados: {11}";
+const PREFERENCES_DETAIL_ES: &str = "Tema: {0}\nModo concentración: {1}\nModo máquina de escribir: {2}\nNúmeros de línea: {3}\nAncho adaptativo: {4}\nBarra lateral: {5}\nTamaño de fuente del código: {6}\nTamaño de lectura: {7}\nEspacio entre párrafos: {8}\nAutoguardar en archivo: {12}\nRetraso de autoguardado: {13}s\n\nPreferencias: {9}\nTemas personalizados: {10}\nTemas instalados: {11}";
 
 // ---------------------------------------------------------------------------
 // Chinese (Simplified)
@@ -5223,6 +5265,9 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "显示隐藏文件已关闭",
         Msg::StatusOpenInCurrentTabOn => "在当前标签页打开已开启",
         Msg::StatusOpenInCurrentTabOff => "在当前标签页打开已关闭",
+        Msg::StatusSilentSaveOn => "已开启自动保存到原文件",
+        Msg::StatusSilentSaveOff => "已关闭自动保存到原文件（仅保留恢复快照）",
+        Msg::StatusAutoSaveDelay => "自动保存间隔：{0} 秒",
         Msg::StatusEditorFontSize => "源码字号：{0}",
         Msg::StatusRenderedFontSize => "阅读字号：{0}",
         Msg::StatusParagraphSpacing => "段落间距：{0}",
@@ -5379,6 +5424,9 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelLanguageSection => "语言",
         Msg::PrefPanelOtherSection => "其他",
         Msg::PrefPanelTypographySection => "文档排版",
+        Msg::PrefPanelAutoSaveSection => "自动保存",
+        Msg::PrefPanelSilentSave => "自动保存到原文件",
+        Msg::PrefPanelAutoSaveDelay => "空闲间隔",
         Msg::PrefPanelEditorFontSize => "源码字号",
         Msg::PrefPanelRenderedFontSize => "阅读字号",
         Msg::PrefPanelParagraphSpacing => "段落间距",
@@ -5463,7 +5511,7 @@ fn zh(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_ZH: &str = "主题：{0}\n专注模式：{1}\n打字机模式：{2}\n代码行号：{3}\n预览自适应宽度：{4}\n侧边栏：{5}\n源码字号：{6}\n阅读字号：{7}\n段落间距：{8}\n\n首选项：{9}\n主题目录：{10}\n已安装自定义主题：{11}";
+const PREFERENCES_DETAIL_ZH: &str = "主题：{0}\n专注模式：{1}\n打字机模式：{2}\n代码行号：{3}\n预览自适应宽度：{4}\n侧边栏：{5}\n源码字号：{6}\n阅读字号：{7}\n段落间距：{8}\n自动保存到原文件：{12}\n自动保存间隔：{13} 秒\n\n首选项：{9}\n主题目录：{10}\n已安装自定义主题：{11}";
 
 // ---------------------------------------------------------------------------
 // Traditional Chinese (Taiwan regional terminology)
@@ -5720,6 +5768,9 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "顯示隱藏檔案已關閉",
         Msg::StatusOpenInCurrentTabOn => "在目前分頁開啟已開啟",
         Msg::StatusOpenInCurrentTabOff => "在目前分頁開啟已關閉",
+        Msg::StatusSilentSaveOn => "已開啟自動儲存到原檔案",
+        Msg::StatusSilentSaveOff => "已關閉自動儲存到原檔案（僅保留還原快照）",
+        Msg::StatusAutoSaveDelay => "自動儲存間隔：{0} 秒",
         Msg::StatusEditorFontSize => "原始碼字號：{0}",
         Msg::StatusRenderedFontSize => "閱讀字號：{0}",
         Msg::StatusParagraphSpacing => "段落間距：{0}",
@@ -5876,6 +5927,9 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelLanguageSection => "語言",
         Msg::PrefPanelOtherSection => "其他",
         Msg::PrefPanelTypographySection => "文件排版",
+        Msg::PrefPanelAutoSaveSection => "自動儲存",
+        Msg::PrefPanelSilentSave => "自動儲存到原檔案",
+        Msg::PrefPanelAutoSaveDelay => "閒置間隔",
         Msg::PrefPanelEditorFontSize => "原始碼字號",
         Msg::PrefPanelRenderedFontSize => "閱讀字號",
         Msg::PrefPanelParagraphSpacing => "段落間距",
@@ -5960,7 +6014,7 @@ fn zh_hant(msg: Msg) -> &'static str {
     }
 }
 
-const PREFERENCES_DETAIL_ZH_HANT: &str = "佈景主題：{0}\n專注模式：{1}\n打字機模式：{2}\n程式碼行號：{3}\n預覽自適應寬度：{4}\n側邊欄：{5}\n原始碼字號：{6}\n閱讀字號：{7}\n段落間距：{8}\n\n偏好設定：{9}\n佈景主題目錄：{10}\n已安裝自訂佈景主題：{11}";
+const PREFERENCES_DETAIL_ZH_HANT: &str = "佈景主題：{0}\n專注模式：{1}\n打字機模式：{2}\n程式碼行號：{3}\n預覽自適應寬度：{4}\n側邊欄：{5}\n原始碼字號：{6}\n閱讀字號：{7}\n段落間距：{8}\n自動儲存到原檔案：{12}\n自動儲存間隔：{13} 秒\n\n偏好設定：{9}\n佈景主題目錄：{10}\n已安裝自訂佈景主題：{11}";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -6605,6 +6659,9 @@ mod tests {
             Msg::StatusShowHiddenFilesOff,
             Msg::StatusOpenInCurrentTabOn,
             Msg::StatusOpenInCurrentTabOff,
+            Msg::StatusSilentSaveOn,
+            Msg::StatusSilentSaveOff,
+            Msg::StatusAutoSaveDelay,
             Msg::StatusEditorFontSize,
             Msg::StatusRenderedFontSize,
             Msg::StatusParagraphSpacing,
@@ -6740,6 +6797,9 @@ mod tests {
             Msg::PrefPanelLanguageSection,
             Msg::PrefPanelOtherSection,
             Msg::PrefPanelTypographySection,
+            Msg::PrefPanelAutoSaveSection,
+            Msg::PrefPanelSilentSave,
+            Msg::PrefPanelAutoSaveDelay,
             Msg::PrefPanelEditorFontSize,
             Msg::PrefPanelRenderedFontSize,
             Msg::PrefPanelParagraphSpacing,

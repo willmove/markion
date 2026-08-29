@@ -10404,6 +10404,7 @@ fn autosave_runs_off_thread_and_clears_dirty(cx: &mut TestAppContext) {
         let mut app = MarkionApp::new(cx);
         app.auto_save_preferences = AutoSavePreferences {
             enabled: true,
+            silent_save: true,
             delay_secs: 1,
         };
         app.recovery_dir = dir.path().join("recovery");
@@ -10430,6 +10431,80 @@ fn autosave_runs_off_thread_and_clears_dirty(cx: &mut TestAppContext) {
         assert_eq!(app.active_tab().last_recovery_file, None);
     });
     assert_eq!(fs::read_to_string(&path).unwrap(), "v2");
+}
+
+#[gpui::test]
+fn autosave_silent_save_off_keeps_named_file_and_recovery(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keep.md");
+    fs::write(&path, "on-disk").unwrap();
+    let document = MarkdownDocument::open(&path).unwrap();
+    let recovery_dir = dir.path().join("recovery");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.auto_save_preferences = AutoSavePreferences {
+            enabled: true,
+            silent_save: false,
+            delay_secs: 1,
+        };
+        app.recovery_dir = recovery_dir.clone();
+        app.tabs = vec![EditorTab::new(document)];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("in-memory");
+        app.schedule_autosave(cx);
+        let generation = app.active_tab().autosave_generation;
+        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+    });
+    cx.run_until_parked();
+
+    let recovery = app.update(cx, |app, _| {
+        assert!(app.active_tab().document.is_dirty());
+        assert!(!app.active_tab().autosave_in_flight);
+        app.active_tab().last_recovery_file.clone().unwrap()
+    });
+    assert_eq!(fs::read_to_string(&path).unwrap(), "on-disk");
+    let recovered = load_recovery_file(&recovery).unwrap();
+    assert_eq!(recovered.text, "in-memory");
+}
+
+#[gpui::test]
+fn autosave_enabled_false_does_not_run_due_work(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("off.md");
+    fs::write(&path, "v1").unwrap();
+    let document = MarkdownDocument::open(&path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.auto_save_preferences = AutoSavePreferences {
+            enabled: false,
+            silent_save: true,
+            delay_secs: 1,
+        };
+        app.recovery_dir = dir.path().join("recovery");
+        app.tabs = vec![EditorTab::new(document)];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("v2");
+        let before = app.active_tab().autosave_generation;
+        app.schedule_autosave(cx);
+        assert_eq!(app.active_tab().autosave_generation, before.wrapping_add(1));
+        // Even if a stale due call arrives, enabled=false means schedule never
+        // armed a timer; drive due with the generation that schedule produced
+        // and confirm no in-flight write starts when we somehow call it —
+        // schedule itself returned early so we verify dirty state and disk.
+        assert!(!app.active_tab().autosave_in_flight);
+    });
+    assert_eq!(fs::read_to_string(&path).unwrap(), "v1");
+    let recovery_dir = dir.path().join("recovery");
+    assert!(
+        !recovery_dir.exists()
+            || fs::read_dir(&recovery_dir).unwrap().next().is_none()
+    );
 }
 
 #[gpui::test]

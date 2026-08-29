@@ -27,6 +27,8 @@ pub(super) struct AutosaveRequest {
     pub(super) known: Option<DiskIdentity>,
     pub(super) text: String,
     pub(super) previous_recovery: Option<PathBuf>,
+    /// When false, skip writing the named destination after recovery.
+    pub(super) silent_save: bool,
 }
 
 pub(super) struct AutosaveCompletion {
@@ -84,7 +86,8 @@ fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveComple
     {
         let _ = delete_recovery_file(previous);
     }
-    let Some(path) = &request.path else {
+    // Untitled tabs, or named tabs with silent_save off: keep recovery only.
+    let Some(path) = request.path.as_ref().filter(|_| request.silent_save) else {
         return complete(AutosaveOutcome::RecoveryOnly { recovery });
     };
     match save_text_snapshot(path, request.known.as_ref(), &request.text) {
@@ -1435,6 +1438,7 @@ impl MarkionApp {
             known: tab.document.disk_identity().cloned(),
             text: tab.document.text().to_string(),
             previous_recovery: tab.last_recovery_file.clone(),
+            silent_save: self.auto_save_preferences.silent_save,
         };
         cx.spawn(async move |this, cx| {
             let outcome = cx

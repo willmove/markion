@@ -132,6 +132,7 @@ impl MarkionApp {
                     app.open_in_current_tab = preferences.open_in_current_tab;
                     app.sidebar_visible = preferences.sidebar_visible;
                     app.sidebar_tab = preferences.sidebar_tab;
+                    app.auto_save_preferences = preferences.auto_save;
                     // Reset also restores the default interface language.
                     app.language = Language::from_code(&preferences.language);
                     app.clear_shortcut_overrides(cx);
@@ -421,6 +422,32 @@ impl MarkionApp {
             },
         )
         .into();
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn toggle_silent_save(&mut self, cx: &mut Context<Self>) {
+        self.auto_save_preferences.silent_save = !self.auto_save_preferences.silent_save;
+        self.status = t(
+            self.language,
+            if self.auto_save_preferences.silent_save {
+                Msg::StatusSilentSaveOn
+            } else {
+                Msg::StatusSilentSaveOff
+            },
+        )
+        .into();
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn set_auto_save_delay_secs(&mut self, value: i64, cx: &mut Context<Self>) {
+        let value = normalize_auto_save_delay_secs(value);
+        if self.auto_save_preferences.delay_secs == value {
+            return;
+        }
+        self.auto_save_preferences.delay_secs = value;
+        self.status = self.trf(Msg::StatusAutoSaveDelay, &[&value.to_string()]);
         self.persist_preferences();
         cx.notify();
     }

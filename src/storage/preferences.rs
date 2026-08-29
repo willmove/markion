@@ -89,6 +89,9 @@ struct PreferencesFile {
 #[serde(default)]
 struct AutoSaveFile {
     enabled: bool,
+    /// Omitted / invalid values fall back to true (preserve historical write-back).
+    #[serde(deserialize_with = "deserialize_bool_or_true")]
+    silent_save: bool,
     delay_secs: u64,
 }
 
@@ -245,6 +248,7 @@ impl Default for AutoSaveFile {
         let defaults = AutoSavePreferences::default();
         Self {
             enabled: defaults.enabled,
+            silent_save: defaults.silent_save,
             delay_secs: defaults.delay_secs,
         }
     }
@@ -285,6 +289,7 @@ impl From<&AppPreferences> for PreferencesFile {
             },
             auto_save: AutoSaveFile {
                 enabled: preferences.auto_save.enabled,
+                silent_save: preferences.auto_save.silent_save,
                 delay_secs: preferences.auto_save.delay_secs,
             },
             export: ExportFile {
@@ -335,7 +340,10 @@ impl From<PreferencesFile> for AppPreferences {
             },
             auto_save: AutoSavePreferences {
                 enabled: file.auto_save.enabled,
-                delay_secs: file.auto_save.delay_secs,
+                silent_save: file.auto_save.silent_save,
+                delay_secs: crate::model::normalize_auto_save_delay_secs(
+                    file.auto_save.delay_secs as i64,
+                ),
             },
             export: ExportPreferences {
                 backend: ExportBackendPreference::from_config(&file.export.backend),

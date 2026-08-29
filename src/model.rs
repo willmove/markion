@@ -515,14 +515,32 @@ pub struct ExportOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AutoSavePreferences {
     pub enabled: bool,
+    /// When true (default), inactivity also writes named documents back to
+    /// their file path after the recovery snapshot. When false, only the
+    /// recovery snapshot is written and the tab stays dirty.
+    pub silent_save: bool,
     /// Inactivity interval before an auto-save fires, in seconds.
     pub delay_secs: u64,
+}
+
+/// Minimum inactivity interval accepted for `[auto_save] delay_secs`.
+pub const MIN_AUTO_SAVE_DELAY_SECS: u64 = 1;
+/// Maximum inactivity interval offered by the Preferences stepper (seconds).
+pub const MAX_AUTO_SAVE_DELAY_SECS: u64 = 300;
+
+/// Clamp a raw delay to the supported `[MIN_AUTO_SAVE_DELAY_SECS, MAX_AUTO_SAVE_DELAY_SECS]` range.
+pub fn normalize_auto_save_delay_secs(value: i64) -> u64 {
+    value.clamp(
+        MIN_AUTO_SAVE_DELAY_SECS as i64,
+        MAX_AUTO_SAVE_DELAY_SECS as i64,
+    ) as u64
 }
 
 impl Default for AutoSavePreferences {
     fn default() -> Self {
         Self {
             enabled: true,
+            silent_save: true,
             delay_secs: 5,
         }
     }

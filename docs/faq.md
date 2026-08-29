@@ -105,15 +105,22 @@ YAML front matter `title` / `author` / `date` feed into export metadata: HTML `<
 
 ## Auto-save and crash recovery
 
-Markion auto-saves your document after a period of inactivity. Defaults: **enabled, 5 second delay**. Configure in `config.toml`:
+Markion writes a crash-recovery snapshot after a period of inactivity (default **5 seconds**). For documents that already have a file path, it can also **silently save back to that file**. Both behaviors share the same idle timer.
+
+Configure from **Preferences → General → Auto-save**, or in `config.toml`:
 
 ```toml
 [auto_save]
-enabled = true
-delay_secs = 5
+enabled = true        # master switch (file only): false disables timer, recovery, and write-back
+silent_save = true    # write named documents back to their path (Preferences toggle)
+delay_secs = 5        # idle interval in seconds, 1–300 (Preferences stepper)
 ```
 
-For documents that have never been saved to a file, Markion writes a recovery copy to the recovery directory. If Markion exits unexpectedly, the next launch offers to restore the unsaved work from that copy.
+- **`silent_save = true` (default):** after recovery is written, named files are also saved to disk and the dirty marker clears when nothing raced the write.
+- **`silent_save = false`:** Markion still writes/updates a recovery snapshot, but **does not** overwrite the original file. The tab stays dirty (`*` in the title) until you save manually. Use this when you want crash protection without silent overwrites.
+- **`enabled = false`:** nothing automatic runs (no recovery, no write-back). Edit `config.toml` for this; it is not shown in Preferences. Manual Save is unaffected.
+
+Untitled documents always use recovery copies only. If Markion exits unexpectedly, the next launch offers to restore work from the recovery directory.
 
 The title bar shows a `*` suffix next to the file name when there are unsaved changes.
 
@@ -182,6 +189,7 @@ show_hidden_files = false
 
 [auto_save]
 enabled = true
+silent_save = true
 delay_secs = 5
 
 [export]
