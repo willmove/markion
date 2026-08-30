@@ -447,9 +447,21 @@ fn compare_with_running_for(release: &GitHubRelease, os: &str, arch: &str) -> Up
 /// Returns the exact supported package URL, or the Release page on an
 /// unsupported OS/architecture where no installable package can be promised.
 fn browser_download_url(release: &GitHubRelease, os: &str, arch: &str) -> Result<String, String> {
+    browser_download_url_with_os_release(release, os, arch, read_os_release().as_deref())
+}
+
+/// Like [`browser_download_url`], with the `/etc/os-release` contents supplied
+/// by the caller so tests stay hermetic.
+fn browser_download_url_with_os_release(
+    release: &GitHubRelease,
+    os: &str,
+    arch: &str,
+    os_release: Option<&str>,
+) -> Result<String, String> {
     let asset_suffix = match (os, arch) {
         ("windows", "x86_64") => "_x64-setup.exe",
         ("macos", "aarch64") => "_aarch64.dmg",
+        ("linux", "x86_64") if linux_wants_appimage(os_release) => "_x86_64.AppImage",
         ("linux", "x86_64") => "_amd64.deb",
         _ => return Ok(release.html_url.clone()),
     };
@@ -459,6 +471,41 @@ fn browser_download_url(release: &GitHubRelease, os: &str, arch: &str) -> Result
         .find(|asset| asset.name.ends_with(asset_suffix))
         .map(|asset| asset.browser_download_url.clone())
         .ok_or_else(|| format!("latest GitHub Release has no asset ending with {asset_suffix:?}"))
+}
+
+/// Classifies a Linux system from its `/etc/os-release` contents: a
+/// pacman-based distribution — the `ID` value, or any token of the
+/// space-separated `ID_LIKE` list, equals `arch` (Arch, Omarchy, Manjaro,
+/// EndeavourOS, …) — takes the portable AppImage, and every other or
+/// undecidable system keeps the DEB default.
+fn linux_wants_appimage(os_release: Option<&str>) -> bool {
+    let Some(text) = os_release else {
+        return false;
+    };
+    let mut id_is_arch = false;
+    let mut id_like_arch = false;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"');
+        match key.trim() {
+            "ID" => id_is_arch = value == "arch",
+            "ID_LIKE" => id_like_arch = value.split_whitespace().any(|token| token == "arch"),
+            _ => {}
+        }
+    }
+    id_is_arch || id_like_arch
+}
+
+/// Reads `/etc/os-release` for the update-check asset mapping. The file only
+/// exists on Linux, so other platforms — and any read failure — yield `None`
+/// and keep the default asset choice.
+fn read_os_release() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    std::fs::read_to_string("/etc/os-release").ok()
 }
 
 /// Minimal `MAJOR.MINOR.PATCH` parser. Markion tags are strict `vX.Y.Z`, so
@@ -597,6 +644,36 @@ mod tests {
             browser_download_url(&release, "freebsd", "x86_64").unwrap(),
             release.html_url
         );
+    }
+
+    #[test]
+    fn linux_asset_follows_the_distribution_family() {
+        let release = release_with_version("9.9.9");
+        let appimage_url = "https://github.com/willmove/markion/releases/download/v9.9.9/appimage";
+        let deb_url = "https://github.com/willmove/markion/releases/download/v9.9.9/linux";
+        let offered = |os_release: Option<&str>| {
+            browser_download_url_with_os_release(&release, "linux", "x86_64", os_release)
+                .unwrap()
+        };
+        let arch_id = "ID=arch\n";
+        let omarchy_id = "ID=omarchy\nID_LIKE=arch\n";
+        let quoted_manjaro = "NAME=\"Manjaro Linux\"\nID=manjaro\nID_LIKE=\"arch\"\n";
+        let endeavour = "ID=endeavouros\nID_LIKE=\"arch\"\n";
+        let debian = "ID=debian\nID_LIKE=debian\n";
+        for os_release in [Some(arch_id), Some(omarchy_id), Some(quoted_manjaro), Some(endeavour)] {
+            assert_eq!(
+                offered(os_release),
+                appimage_url,
+                "pacman-based {os_release:?} should be offered the AppImage"
+            );
+        }
+        for os_release in [Some(debian), None] {
+            assert_eq!(
+                offered(os_release),
+                deb_url,
+                "deb-based or unknown {os_release:?} should keep the DEB"
+            );
+        }
     }
 
     #[test]
