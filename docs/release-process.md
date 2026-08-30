@@ -167,7 +167,7 @@ release with pending rows is not ready to publish.
 
 If the workflow fails, inspect it with `gh run view <tag-run-id> --log-failed`. Do not report the release as complete. If the public tag already exists, preserve it and either fix forward or ask the maintainer how to proceed. If only `mirror-oss` failed after the GitHub assets were published, fix the cause on `main`, then run `gh workflow run release.yml --ref main -f mirror_tag=vX.Y.Z`; monitor that repair run and verify the public mirror before continuing.
 
-The tag-only `prepare-update` job signs the exact Windows NSIS installer and produces `update.json`. Both `release` and `mirror-oss` depend on that prepared metadata but not on each other, so a GitHub Release failure does not block the mirror and vice versa. The mirror uploads the four installers, the Windows installer `.sig`, `update.json`, `packager.toml`, a generated `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/`. A signing, publication, or mirror failure is an incomplete release—correct or retry it before reporting completion.
+The tag-only `prepare-update` job signs the exact Windows NSIS installer and produces `update.json` naming the GitHub asset as the installer URL; that is the manifest the Release attaches. The `mirror-oss` job rewrites only that installer URL to the OSS `latest/` object and uploads the result, so each distribution channel serves a self-consistent manifest/installer pair with an identical signature. Both `release` and `mirror-oss` depend on that prepared metadata but not on each other, so a GitHub Release failure does not block the mirror and vice versa. The mirror uploads the four installers, the Windows installer `.sig`, the OSS-URL `update.json`, `packager.toml`, a generated `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/`. A signing, publication, or mirror failure is an incomplete release—correct or retry it before reporting completion.
 
 ## 7. Curate the release notes
 
@@ -272,9 +272,9 @@ Confirm that:
 - The Release is published, not a draft, and not an unintended prerelease.
 - The curated notes and full comparison link are present.
 - The assets include `markion_X.Y.Z_x64-setup.exe`, `Markion_X.Y.Z_aarch64.dmg`, `markion_X.Y.Z_amd64.deb`, and `markion_X.Y.Z_x86_64.AppImage`.
-- The assets also include `markion_X.Y.Z_x64-setup.exe.sig` and `update.json`; `update.json` has version `X.Y.Z`, a `windows-x86_64` entry with `format: "nsis"`, the full signature, and the intended OSS installer URL.
+- The assets also include `markion_X.Y.Z_x64-setup.exe.sig` and `update.json`; the Release's `update.json` has version `X.Y.Z`, a `windows-x86_64` entry with `format: "nsis"`, the full signature, and the GitHub asset URL `https://github.com/willmove/markion/releases/download/vX.Y.Z/markion_X.Y.Z_x64-setup.exe` as the installer URL.
 - The tag workflow succeeded on all three native platforms and in the publish job.
-- The `prepare-update` and `mirror-oss` jobs succeeded, and the Aliyun OSS path `${OSS_PREFIX}/latest/` contains the four installers, the Windows `.sig`, `update.json`, `packager.toml`, `manifest.json`, and `sha256sums.txt`. The version fields inside both manifests equal `X.Y.Z`.
+- The `prepare-update` and `mirror-oss` jobs succeeded, and the Aliyun OSS path `${OSS_PREFIX}/latest/` contains the four installers, the Windows `.sig`, `update.json`, `packager.toml`, `manifest.json`, and `sha256sums.txt`. The version fields inside both manifests equal `X.Y.Z`, the mirrored `update.json` names the OSS installer URL, and both manifests carry identical signature content.
 - From a clean Windows x86_64 installation of the previous version, the updater accepts the signature, starts the passive NSIS installer, and refuses to begin while any document is dirty. Manual download remains available when the signed path fails.
 - Local `main`, `origin/main`, the release commit, and the annotated tag resolve to the intended release state.
 - The local worktree is clean.

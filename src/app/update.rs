@@ -33,17 +33,36 @@ const GITHUB_LATEST_RELEASE_API_URL: &str =
 /// recoverable failure an actionable browser fallback.
 const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/willmove/markion/releases/latest";
 
-/// Signed update manifest on the Aliyun OSS mirror. The release workflow
-/// uploads and reachability-verifies this file (plus the installer it names)
-/// on every tagged build, so the whole signed Windows update path — manifest
-/// and installer download — stays on the domestic distribution channel.
-/// GitHub's release CDN requires `objects.githubusercontent.com`, which some
-/// networks cannot reach even though `api.github.com` works; those clients
-/// could discover the update but never fetch the manifest. GitHub's API
+/// Signed update manifest endpoints in fallback order. The release workflow
+/// publishes one manifest per host — the Aliyun OSS mirror and the GitHub
+/// Release — and each manifest names the signed installer on its own host
+/// with the identical minisign signature, so whichever endpoint succeeds can
+/// serve the whole update from a single channel. OSS goes first: Markion's
+/// mirror exists for networks where GitHub's release CDN
+/// (`objects.githubusercontent.com`) is unreachable even though
+/// `api.github.com` works, and cargo-packager-updater falls through to the
+/// next endpoint on a network failure or non-success status. GitHub's API
 /// remains the version authority for the initial update check.
 #[cfg_attr(not(windows), allow(dead_code))]
-const SIGNED_UPDATE_MANIFEST_URL: &str =
+const OSS_SIGNED_UPDATE_MANIFEST_URL: &str =
     "https://marknice.oss-cn-heyuan.aliyuncs.com/markion-releases/latest/update.json";
+
+/// GitHub-hosted fallback manifest for clients that cannot reach the OSS
+/// mirror at all.
+#[cfg_attr(not(windows), allow(dead_code))]
+const GITHUB_SIGNED_UPDATE_MANIFEST_URL: &str =
+    "https://github.com/willmove/markion/releases/latest/download/update.json";
+
+/// Ordered manifest endpoints consumed by the signed updater and asserted by
+/// the unit tests. Non-Windows builds keep these reachable for the tests
+/// without tripping the dead-code lint that CI's `-D warnings` rejects.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn signed_update_manifest_endpoints() -> [&'static str; 2] {
+    [
+        OSS_SIGNED_UPDATE_MANIFEST_URL,
+        GITHUB_SIGNED_UPDATE_MANIFEST_URL,
+    ]
+}
 
 /// Subset of GitHub's release response used by the update checker. Serde
 /// ignores the API's other fields, keeping this model resilient to additions.
@@ -328,10 +347,12 @@ fn install_signed_update() -> Result<()> {
         .ok_or_else(|| anyhow!("this build does not contain an updater public key"))?;
     let current_version =
         Version::parse(env!("CARGO_PKG_VERSION")).context("parsing the running Markion version")?;
-    let endpoint =
-        Url::parse(SIGNED_UPDATE_MANIFEST_URL).context("parsing the signed update manifest URL")?;
+    let endpoints = signed_update_manifest_endpoints()
+        .into_iter()
+        .map(|url| Url::parse(url).context("parsing the signed update manifest URL"))
+        .collect::<Result<Vec<_>>>()?;
     let config = Config {
-        endpoints: vec![endpoint],
+        endpoints,
         pubkey: public_key.to_string(),
         windows: Some(WindowsConfig {
             installer_args: None,
@@ -542,7 +563,9 @@ mod tests {
         assert!(source.contains("background_executor()"));
         assert!(source.contains("catch_unwind"));
         assert!(source.contains("Msg::DialogButtonDownloadManually"));
-        assert!(SIGNED_UPDATE_MANIFEST_URL.ends_with("/markion-releases/latest/update.json"));
+        let endpoints = signed_update_manifest_endpoints();
+        assert!(endpoints[0].ends_with("/markion-releases/latest/update.json"));
+        assert!(endpoints[1].ends_with("/latest/download/update.json"));
     }
 
     #[test]

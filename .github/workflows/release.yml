@@ -193,10 +193,12 @@ jobs:
 
       - name: Build update.json
         shell: bash
-        env:
-          OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
-          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
         run: |
+          # GitHub-Release variant: the manifest attached to the Release names
+          # the GitHub asset as the installer. The mirror-oss job derives the
+          # OSS variant by rewriting only this URL, so both variants share the
+          # identical version, signature, and format for the same signed file.
+          # This job runs only on v* tag refs, so GITHUB_REF_NAME is the tag.
           python3 - <<'PY'
           import datetime
           import json
@@ -206,11 +208,9 @@ jobs:
           version = os.environ["VERSION"]
           installer = f"markion_{version}_x64-setup.exe"
           signature = pathlib.Path(f"dist/{installer}.sig").read_text().strip()
-          base = (
-              os.environ["OSS_PUBLIC_BASE"].rstrip("/")
-              + "/"
-              + os.environ["OSS_PREFIX"].strip("/")
-              + "/latest"
+          url = (
+              f"https://github.com/{os.environ['GITHUB_REPOSITORY']}"
+              f"/releases/download/{os.environ['GITHUB_REF_NAME']}/{installer}"
           )
           out = {
               "version": version,
@@ -220,7 +220,7 @@ jobs:
               .replace("+00:00", "Z"),
               "platforms": {
                   "windows-x86_64": {
-                      "url": f"{base}/{installer}",
+                      "url": url,
                       "signature": signature,
                       "format": "nsis",
                   }
@@ -269,6 +269,9 @@ jobs:
   # Mirrors the tagged release's installers and packaging config to a domestic
   # Aliyun OSS Bucket at a stable `${OSS_PREFIX}/latest/` path, alongside a
   # generated `manifest.json` for mirror metadata and future clients.
+  # The mirrored `update.json` is the Release's manifest with its installer
+  # URL rewritten to the OSS host, so each distribution channel serves a
+  # self-consistent manifest/installer pair with identical signatures.
   # Independent of the `release` job: a GitHub Release failure does not block
   # the mirror, and vice versa. Runs only on `v*` tags.
   #
@@ -344,6 +347,37 @@ jobs:
           cd dist
           sha256sum *.exe *.dmg *.deb *.AppImage > sha256sums.txt
           cat sha256sums.txt
+
+      - name: Rewrite update.json installer URL to the OSS host
+        shell: bash
+        env:
+          OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          # OSS variant of the updater manifest: take the manifest published on
+          # the GitHub Release (or downloaded from it in mirror-repair mode)
+          # and point its installer URL at the OSS `latest/` object. Everything
+          # else — version, pub_date, signature, format — stays identical
+          # because both hosts serve the same signed installer file.
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          version = os.environ["VERSION"]
+          installer = f"markion_{version}_x64-setup.exe"
+          base = (
+              os.environ["OSS_PUBLIC_BASE"].rstrip("/")
+              + "/"
+              + os.environ["OSS_PREFIX"].strip("/")
+              + "/latest"
+          )
+          path = pathlib.Path("dist/update.json")
+          manifest = json.loads(path.read_text(encoding="utf-8"))
+          manifest["platforms"]["windows-x86_64"]["url"] = f"{base}/{installer}"
+          path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(manifest, indent=2))
+          PY
 
       - name: Build manifest.json
         shell: bash
@@ -476,6 +510,10 @@ jobs:
           done
           curl -fsSL "${base}/update.json" | grep -q "\"version\": \"${VERSION}\"" || {
             echo "Mirror verification failed: update.json version != ${VERSION}" >&2
+            exit 1
+          }
+          curl -fsSL "${base}/update.json" | grep -q "\"url\": \"${base}/markion_${VERSION}_x64-setup.exe\"" || {
+            echo "Mirror verification failed: update.json installer URL is not on the OSS host" >&2
             exit 1
           }
           echo "All mirrored assets verified at ${base}/"
