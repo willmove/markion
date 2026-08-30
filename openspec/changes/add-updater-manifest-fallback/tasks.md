@@ -23,4 +23,4 @@
 ## 5. Validation
 
 - [x] 5.1 Run `openspec validate add-updater-manifest-fallback` and `cargo test --workspace` with zero failures
-- [ ] 5.2 On the next tagged release, confirm the GitHub Release's `update.json` names `github.com`, the OSS `update.json` names the OSS host, both carry the same signature, and the manual-download fallback still works
+- [x] 5.2 On the next tagged release, confirm the GitHub Release's `update.json` names `github.com`, the OSS `update.json` names the OSS host, both carry the same signature, and the manual-download fallback still works (verified on v0.2.4: GitHub manifest names the `github.com` asset URL, OSS manifest names the `marknice.oss-cn-heyuan.aliyuncs.com` installer URL, signatures are byte-identical, and all Release assets plus the nine OSS `latest/` objects return HTTP 200)
