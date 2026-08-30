@@ -33,15 +33,17 @@ const GITHUB_LATEST_RELEASE_API_URL: &str =
 /// recoverable failure an actionable browser fallback.
 const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/willmove/markion/releases/latest";
 
-/// Stable metadata asset attached to each tagged GitHub Release. The manifest
-/// points at the OSS-mirrored NSIS installer so the large download uses the
-/// domestic distribution channel while GitHub remains the version authority.
-/// Only the Windows updater path consumes it directly, so non-Windows builds
-/// (and the cross-platform unit tests that reference it) keep the constant
-/// without tripping the dead-code lint that CI's `-D warnings` rejects.
+/// Signed update manifest on the Aliyun OSS mirror. The release workflow
+/// uploads and reachability-verifies this file (plus the installer it names)
+/// on every tagged build, so the whole signed Windows update path — manifest
+/// and installer download — stays on the domestic distribution channel.
+/// GitHub's release CDN requires `objects.githubusercontent.com`, which some
+/// networks cannot reach even though `api.github.com` works; those clients
+/// could discover the update but never fetch the manifest. GitHub's API
+/// remains the version authority for the initial update check.
 #[cfg_attr(not(windows), allow(dead_code))]
 const SIGNED_UPDATE_MANIFEST_URL: &str =
-    "https://github.com/willmove/markion/releases/latest/download/update.json";
+    "https://marknice.oss-cn-heyuan.aliyuncs.com/markion-releases/latest/update.json";
 
 /// Subset of GitHub's release response used by the update checker. Serde
 /// ignores the API's other fields, keeping this model resilient to additions.
@@ -540,7 +542,7 @@ mod tests {
         assert!(source.contains("background_executor()"));
         assert!(source.contains("catch_unwind"));
         assert!(source.contains("Msg::DialogButtonDownloadManually"));
-        assert!(SIGNED_UPDATE_MANIFEST_URL.ends_with("/latest/download/update.json"));
+        assert!(SIGNED_UPDATE_MANIFEST_URL.ends_with("/markion-releases/latest/update.json"));
     }
 
     #[test]
