@@ -3223,6 +3223,9 @@ pub(super) fn whitespace_source_at_y(
 /// line height so a caret on the last visible pixel has room for the next
 /// glyph without pulling mid-pane clicks. Call sites pass the live
 /// `preview_row_line_height` so custom typography stays aligned.
+// Consumed only by the caret-viewport tests; production call sites pass the
+// live typography metrics instead of this default.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) const VISUAL_CARET_VIEWPORT_INSET: f32 = PREVIEW_LINE_HEIGHT;
 
 /// How the Visual Edit list should move to keep a caret usable.
