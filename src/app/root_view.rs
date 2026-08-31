@@ -51,23 +51,15 @@ impl Render for MarkionApp {
             if !active_is_image && matches!(self.view_mode, ViewMode::VisualEdit) {
                 let blocks = self.active_tab().document.visual_blocks_shared();
                 self.active_tab_mut().sync_visual_list(&blocks);
+                self.active_tab_mut().refresh_visual_end_padding();
                 if let Some(index) = self
                     .active_tab_mut()
                     .take_visual_cursor_reveal_index(&blocks)
                 {
+                    let inset = px(self.typography_metrics().preview_row_line_height);
                     let list = self.active_tab().visual_list.clone();
-                    let top = list.logical_scroll_top();
-                    if index > top.item_ix {
-                        // Unmeasured rows below the viewport contribute 0
-                        // height, so reveal-by-bounds cannot walk to a newly
-                        // created tail block. Pin the caret's item first.
-                        list.scroll_to(gpui::ListOffset {
-                            item_ix: index,
-                            offset_in_item: px(0.),
-                        });
-                    } else if index < top.item_ix {
-                        list.scroll_to_reveal_item(index);
-                    }
+                    let caret = self.active_tab().visual_caret_bounds;
+                    apply_visual_caret_reveal(&list, index, caret, inset);
                     self.active_tab_mut().visual_caret_follow_frames = 2;
                 }
                 blocks
@@ -1477,6 +1469,9 @@ pub(super) fn visual_edit_surface_view(
     let scrollbar_list = list_state.clone();
     let preview_row_line_height = typography.preview_row_line_height;
     let row_processor = cx.processor(move |app, ix: usize, _window, cx| {
+        if ix >= items.len() {
+            return visual_end_padding_view(app, cx).into_any_element();
+        }
         let row = div()
             .debug_selector(move || format!("visual-document-row-{ix}"))
             .w_full()

@@ -2158,6 +2158,66 @@ fn whitespace_row_height_grows_with_blank_lines_without_the_old_cap() {
 }
 
 #[test]
+fn visual_caret_scroll_action_keeps_an_in_inset_caret_still() {
+    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(400.), px(400.)));
+    let inset = px(VISUAL_CARET_VIEWPORT_INSET);
+    let caret = Bounds::new(point(px(20.), px(80.)), size(px(2.), px(23.)));
+    assert_eq!(
+        visual_caret_scroll_action(viewport, Some(caret), None, inset, false),
+        VisualCaretScrollAction::None
+    );
+}
+
+#[test]
+fn visual_caret_scroll_action_scrolls_only_the_overflowing_delta() {
+    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(400.), px(400.)));
+    let inset = px(VISUAL_CARET_VIEWPORT_INSET);
+    let below = Bounds::new(point(px(20.), px(390.)), size(px(2.), px(23.)));
+    assert_eq!(
+        visual_caret_scroll_action(viewport, Some(below), None, inset, false),
+        VisualCaretScrollAction::Pixel(px(36.))
+    );
+    let above = Bounds::new(point(px(20.), px(5.)), size(px(2.), px(23.)));
+    assert_eq!(
+        visual_caret_scroll_action(viewport, Some(above), None, inset, false),
+        VisualCaretScrollAction::Pixel(px(-18.))
+    );
+}
+
+#[test]
+fn visual_caret_scroll_action_uses_measured_item_when_caret_is_missing() {
+    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(400.), px(400.)));
+    let inset = px(VISUAL_CARET_VIEWPORT_INSET);
+    let item = Bounds::new(point(px(0.), px(40.)), size(px(400.), px(40.)));
+    assert_eq!(
+        visual_caret_scroll_action(viewport, None, Some(item), inset, false),
+        VisualCaretScrollAction::None
+    );
+}
+
+#[test]
+fn visual_caret_scroll_action_pins_unmeasured_rows_below_the_window() {
+    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(400.), px(400.)));
+    let inset = px(VISUAL_CARET_VIEWPORT_INSET);
+    assert_eq!(
+        visual_caret_scroll_action(viewport, None, None, inset, true),
+        VisualCaretScrollAction::PinItem
+    );
+}
+
+#[test]
+fn visual_list_item_count_adds_a_spacer_only_for_non_empty_documents() {
+    assert_eq!(visual_list_item_count(0), 0);
+    assert_eq!(visual_list_item_count(3), 4);
+}
+
+#[test]
+fn visual_end_padding_height_is_half_the_viewport() {
+    assert_eq!(visual_end_padding_height(px(0.)), px(0.));
+    assert_eq!(visual_end_padding_height(px(400.)), px(200.));
+}
+
+#[test]
 fn whitespace_row_height_respects_the_pathological_bound() {
     assert_eq!(
         whitespace_row_height(WHITESPACE_ROW_MAX_LINES),
@@ -5712,10 +5772,286 @@ fn visual_edit_tail_typing_stays_visible_at_the_viewport_bottom(cx: &mut TestApp
         );
         let caret = tab.visual_caret_bounds.expect("caret after tail typing");
         let viewport = tab.visual_list.viewport_bounds();
+        let inset = px(VISUAL_CARET_VIEWPORT_INSET);
         assert!(
             caret.top() >= viewport.top() - px(1.) && caret.bottom() <= viewport.bottom() + px(1.),
             "caret {caret:?} must stay inside visual viewport {viewport:?}"
         );
+        // Pixel-follow may use the inset, but must not pin a mid-document row
+        // to the top just because the tail index is greater than scroll top.
+        let top = tab.visual_list.logical_scroll_top();
+        assert!(
+            top.item_ix + 2 >= tab.visual_list_blocks.len().saturating_sub(1)
+                || caret.bottom() <= viewport.bottom() - inset + px(1.),
+            "tail follow should stay near the end or inside the inset, not pin a mid row: {top:?}"
+        );
+    });
+}
+
+fn visual_edit_paragraph_source(count: usize) -> String {
+    (0..count)
+        .map(|index| format!("Paragraph {index}"))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+#[gpui::test]
+fn visual_edit_click_on_visible_mid_row_does_not_scroll(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(24);
+    let click_offset = source.find("Paragraph 8").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (anchor, click_index, version, visual) = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let click_index = visual_block_index_for_offset(&blocks, click_offset, source.len())
+            .expect("clicked paragraph owns a visual row");
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 2,
+            offset_in_item: px(0.),
+        });
+        (
+            app.active_tab().visual_list.logical_scroll_top(),
+            click_index,
+            app.active_tab().document.version(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+    cx.run_until_parked();
+
+    let row = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-document-row-{click_index}"
+        )))
+        .expect("clicked Visual Edit row should be painted");
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let range = tab.visual_list_blocks[click_index].source_range.clone();
+        assert!(
+            range.contains(&tab.cursor_offset()) || tab.cursor_offset() == range.end,
+            "click should place the caret in the hit row, got {} in {range:?}",
+            tab.cursor_offset()
+        );
+        let top = tab.visual_list.logical_scroll_top();
+        assert_eq!(top.item_ix, anchor.item_ix);
+        assert_eq!(top.offset_in_item, anchor.offset_in_item);
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(&tab.document.visual_blocks_shared(), &visual));
+        assert!(!tab.document.is_dirty());
+        let _ = click_offset;
+    });
+}
+
+#[gpui::test]
+fn visual_edit_click_on_visible_lower_row_does_not_pin_to_top(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(24);
+    let click_offset = source.find("Paragraph 4").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let click_index = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let click_index = visual_block_index_for_offset(&blocks, click_offset, source.len())
+            .expect("clicked paragraph owns a visual row");
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
+        click_index
+    });
+    cx.run_until_parked();
+
+    let row = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-document-row-{click_index}"
+        )))
+        .expect("lower Visual Edit row should be painted");
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let range = tab.visual_list_blocks[click_index].source_range.clone();
+        assert!(
+            range.contains(&tab.cursor_offset()) || tab.cursor_offset() == range.end,
+            "click should place the caret in the hit row, got {} in {range:?}",
+            tab.cursor_offset()
+        );
+        let top = tab.visual_list.logical_scroll_top();
+        assert_ne!(
+            (top.item_ix, top.offset_in_item),
+            (click_index, px(0.)),
+            "clicking a later visible row must not pin that row to the viewport top"
+        );
+        assert_eq!(top.item_ix, 0);
+        assert_eq!(top.offset_in_item, px(0.));
+        let _ = click_offset;
+    });
+}
+
+#[gpui::test]
+fn visual_edit_offscreen_navigation_reveals_then_manual_scroll_stays(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(40);
+    let target_offset = source.find("Paragraph 35").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
+        app.move_to(target_offset, cx);
+    });
+    cx.run_until_parked();
+    cx.run_until_parked();
+
+    let target_index = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let index = visual_block_index_for_offset(&blocks, target_offset, source.len())
+            .expect("target paragraph owns a visual row");
+        assert_eq!(tab.cursor_offset(), target_offset);
+        assert!(
+            tab.visual_list.bounds_for_item(index).is_some()
+                || tab.visual_list.logical_scroll_top().item_ix > 0,
+            "off-screen caret move must reveal the target row"
+        );
+        index
+    });
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab_mut();
+        tab.visual_cursor_reveal_pending = false;
+        tab.visual_caret_follow_frames = 0;
+        tab.visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(top.item_ix, 0);
+        assert_eq!(top.offset_in_item, px(0.));
+        assert!(
+            app.active_tab()
+                .visual_list
+                .bounds_for_item(target_index)
+                .is_none()
+                || top.item_ix == 0,
+            "manual scroll away from the caret must not snap back"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_edit_end_padding_is_presentation_only_and_places_eof_caret(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(4);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let (version, visual, spacer_ix, viewport_height) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let spacer_ix = blocks.len();
+        assert_eq!(tab.visual_list.item_count(), spacer_ix + 1);
+        assert_eq!(
+            visual_list_item_count(blocks.len()),
+            tab.visual_list.item_count()
+        );
+        (
+            tab.document.version(),
+            blocks,
+            spacer_ix,
+            tab.visual_list.viewport_bounds().size.height,
+        )
+    });
+    assert!(f32::from(viewport_height) > 80.);
+
+    let padding = cx
+        .debug_bounds(test_debug_selector(
+            "visual-document-end-padding".to_string(),
+        ))
+        .expect("document-end padding should be painted");
+    let expected = visual_end_padding_height(viewport_height);
+    assert!(
+        (f32::from(padding.size.height) - f32::from(expected)).abs() < 8.,
+        "end padding {padding:?} should be about half the viewport {viewport_height:?} (expected {expected:?})"
+    );
+
+    let scroll_before = app.update(cx, |app, _| {
+        app.active_tab().visual_list.logical_scroll_top()
+    });
+    cx.simulate_click(padding.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.cursor_offset(), source.len());
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.document.text(), source);
+        assert!(!tab.document.is_dirty());
+        assert!(Arc::ptr_eq(&tab.document.visual_blocks_shared(), &visual));
+        assert!(
+            tab.document.visual_blocks_shared().len() == spacer_ix,
+            "spacer must not appear in the visual-block cache"
+        );
+        let top = tab.visual_list.logical_scroll_top();
+        assert_ne!(
+            (top.item_ix, top.offset_in_item),
+            (spacer_ix.saturating_sub(1), px(0.)),
+            "clicking the end padding must not pin the last content row to the top"
+        );
+        assert_eq!(top.item_ix, scroll_before.item_ix);
+        assert_eq!(top.offset_in_item, scroll_before.offset_in_item);
     });
 }
 
@@ -10501,10 +10837,7 @@ fn autosave_enabled_false_does_not_run_due_work(cx: &mut TestAppContext) {
     });
     assert_eq!(fs::read_to_string(&path).unwrap(), "v1");
     let recovery_dir = dir.path().join("recovery");
-    assert!(
-        !recovery_dir.exists()
-            || fs::read_dir(&recovery_dir).unwrap().next().is_none()
-    );
+    assert!(!recovery_dir.exists() || fs::read_dir(&recovery_dir).unwrap().next().is_none());
 }
 
 #[gpui::test]

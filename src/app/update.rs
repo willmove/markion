@@ -652,15 +652,19 @@ mod tests {
         let appimage_url = "https://github.com/willmove/markion/releases/download/v9.9.9/appimage";
         let deb_url = "https://github.com/willmove/markion/releases/download/v9.9.9/linux";
         let offered = |os_release: Option<&str>| {
-            browser_download_url_with_os_release(&release, "linux", "x86_64", os_release)
-                .unwrap()
+            browser_download_url_with_os_release(&release, "linux", "x86_64", os_release).unwrap()
         };
         let arch_id = "ID=arch\n";
         let omarchy_id = "ID=omarchy\nID_LIKE=arch\n";
         let quoted_manjaro = "NAME=\"Manjaro Linux\"\nID=manjaro\nID_LIKE=\"arch\"\n";
         let endeavour = "ID=endeavouros\nID_LIKE=\"arch\"\n";
         let debian = "ID=debian\nID_LIKE=debian\n";
-        for os_release in [Some(arch_id), Some(omarchy_id), Some(quoted_manjaro), Some(endeavour)] {
+        for os_release in [
+            Some(arch_id),
+            Some(omarchy_id),
+            Some(quoted_manjaro),
+            Some(endeavour),
+        ] {
             assert_eq!(
                 offered(os_release),
                 appimage_url,

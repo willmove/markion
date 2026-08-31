@@ -602,6 +602,9 @@ pub(super) struct DocumentTabState {
     /// only guarantees the *block* is visible and uses pre-layout heights,
     /// so a growing last row still needs a post-paint follow.
     pub(super) visual_caret_follow_frames: u8,
+    /// Last applied document-end spacer height. Used to remasure the trailing
+    /// list item when the Visual Edit viewport resizes.
+    pub(super) visual_end_padding_height: Option<Pixels>,
     /// Ephemeral screen-space geometry produced by the focused visual row.
     pub(super) visual_caret_bounds: Option<Bounds<Pixels>>,
     pub(super) visual_marked_range_bounds: Option<(Range<usize>, Bounds<Pixels>)>,
@@ -855,6 +858,7 @@ impl DocumentTabState {
             retain_visual_source_expand: None,
             visual_cursor_reveal_pending: false,
             visual_caret_follow_frames: 0,
+            visual_end_padding_height: None,
             visual_caret_bounds: None,
             visual_marked_range_bounds: None,
             visual_caret_affinity: None,
@@ -953,6 +957,7 @@ impl DocumentTabState {
             self.visual_list.splice(range, count);
         }
         self.visual_list_blocks = blocks.clone();
+        ensure_visual_list_spacer(&self.visual_list, blocks.len());
         let live_ids: HashSet<VisualBlockId> = blocks.iter().map(|block| block.id).collect();
         self.expanded_visual_source_blocks
             .retain(|id| live_ids.contains(id));
@@ -975,6 +980,27 @@ impl DocumentTabState {
         });
         self.visual_navigation_snapshot_ids
             .retain(|index, id| blocks.get(*index).is_some_and(|block| block.id == *id));
+    }
+
+    /// Keep the trailing document-end spacer item in sync with the current
+    /// Visual Edit viewport. Presentation-only: does not touch document text
+    /// or derived Markdown caches.
+    pub(super) fn refresh_visual_end_padding(&mut self) {
+        let block_count = self.visual_list_blocks.len();
+        ensure_visual_list_spacer(&self.visual_list, block_count);
+        if block_count == 0 {
+            self.visual_end_padding_height = None;
+            return;
+        }
+        let desired = visual_end_padding_height(self.visual_list.viewport_bounds().size.height);
+        if self.visual_end_padding_height == Some(desired) {
+            return;
+        }
+        self.visual_end_padding_height = Some(desired);
+        let spacer_ix = block_count;
+        if self.visual_list.item_count() > spacer_ix {
+            self.visual_list.splice(spacer_ix..spacer_ix + 1, 1);
+        }
     }
 
     pub(super) fn take_visual_cursor_reveal_index(
@@ -1040,6 +1066,7 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.retain_visual_source_expand = None;
+        self.visual_end_padding_height = None;
         self.visual_caret_bounds = None;
         self.visual_marked_range_bounds = None;
         self.visual_caret_follow_frames = 0;
@@ -1088,6 +1115,7 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.retain_visual_source_expand = None;
+        self.visual_end_padding_height = None;
         self.visual_cursor_reveal_pending = true;
         self.visual_caret_follow_frames = 2;
         self.visual_caret_bounds = None;

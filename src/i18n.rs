@@ -3724,7 +3724,9 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusOpenInCurrentTabOn => "Ouvrir dans l'onglet actif activé",
         Msg::StatusOpenInCurrentTabOff => "Ouvrir dans l'onglet actif désactivé",
         Msg::StatusSilentSaveOn => "Enregistrement auto vers le fichier activé",
-        Msg::StatusSilentSaveOff => "Enregistrement auto vers le fichier désactivé (récupération seule)",
+        Msg::StatusSilentSaveOff => {
+            "Enregistrement auto vers le fichier désactivé (récupération seule)"
+        }
         Msg::StatusAutoSaveDelay => "Délai d'enregistrement auto : {0}s",
         Msg::StatusEditorFontSize => "Taille de la source : {0}",
         Msg::StatusRenderedFontSize => "Taille de lecture : {0}",

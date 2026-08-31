@@ -668,6 +668,7 @@ impl Element for VisualInputElement {
             cx,
         );
         self.app.update(cx, |app, cx| {
+            let inset = px(app.typography_metrics().preview_row_line_height);
             let tab = app.active_tab_mut();
             tab.visual_input_bounds = Some(bounds);
             if tab.visual_caret_follow_frames == 0 {
@@ -678,7 +679,7 @@ impl Element for VisualInputElement {
                 return;
             };
             let list = tab.visual_list.clone();
-            if follow_visual_caret_in_list(&list, caret) {
+            if follow_visual_caret_in_list(&list, caret, inset) {
                 cx.notify();
             }
         });
@@ -3218,21 +3219,123 @@ pub(super) fn whitespace_source_at_y(
     whitespace_source_at_line(source_range, line, text)
 }
 
-/// Scroll the Visual Edit list just enough to keep `caret` inside the
-/// viewport. Returns true when a scroll was requested.
-pub(super) fn follow_visual_caret_in_list(list: &ListState, caret: Bounds<Pixels>) -> bool {
-    let viewport = list.viewport_bounds();
-    if viewport.size.height <= px(0.) || caret.size.height <= px(0.) {
-        return false;
+/// Viewport inset for the Visual Edit caret geometry gate. One default preview
+/// line height so a caret on the last visible pixel has room for the next
+/// glyph without pulling mid-pane clicks. Call sites pass the live
+/// `preview_row_line_height` so custom typography stays aligned.
+pub(super) const VISUAL_CARET_VIEWPORT_INSET: f32 = PREVIEW_LINE_HEIGHT;
+
+/// How the Visual Edit list should move to keep a caret usable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum VisualCaretScrollAction {
+    None,
+    /// Target row has no measured height and sits below the measured window.
+    PinItem,
+    /// Item is known but has no usable bounds (typically above the scroll top).
+    RevealItem,
+    /// Scroll the current logical top by this pixel delta (positive = down).
+    Pixel(Pixels),
+}
+
+/// Pure geometry gate: no document or derived-cache access.
+pub(super) fn visual_caret_scroll_action(
+    viewport: Bounds<Pixels>,
+    caret: Option<Bounds<Pixels>>,
+    item_bounds: Option<Bounds<Pixels>>,
+    inset: Pixels,
+    unmeasured_below: bool,
+) -> VisualCaretScrollAction {
+    if unmeasured_below {
+        return VisualCaretScrollAction::PinItem;
     }
-    let margin = px(2.);
-    let view_top = viewport.top() + margin;
-    let view_bottom = viewport.bottom() - margin;
-    let delta = if caret.bottom() > view_bottom {
-        caret.bottom() - view_bottom
-    } else if caret.top() < view_top {
-        caret.top() - view_top
+    let target = caret
+        .filter(|bounds| bounds.size.height > px(0.))
+        .or(item_bounds.filter(|bounds| bounds.size.height > px(0.)));
+    match target {
+        Some(rect) => visual_caret_pixel_delta(viewport, rect, inset)
+            .map(VisualCaretScrollAction::Pixel)
+            .unwrap_or(VisualCaretScrollAction::None),
+        None => {
+            if viewport.size.height <= px(0.) {
+                VisualCaretScrollAction::None
+            } else {
+                VisualCaretScrollAction::RevealItem
+            }
+        }
+    }
+}
+
+/// Minimal pixel delta that places `target` inside `viewport` inset by `inset`.
+/// `None` when the target is already inside, or when either rect has no height.
+pub(super) fn visual_caret_pixel_delta(
+    viewport: Bounds<Pixels>,
+    target: Bounds<Pixels>,
+    inset: Pixels,
+) -> Option<Pixels> {
+    if viewport.size.height <= px(0.) || target.size.height <= px(0.) {
+        return None;
+    }
+    let mut view_top = viewport.top() + inset;
+    let mut view_bottom = viewport.bottom() - inset;
+    if view_bottom <= view_top {
+        view_top = viewport.top();
+        view_bottom = viewport.bottom();
+    }
+    if target.bottom() > view_bottom {
+        Some(target.bottom() - view_bottom)
+    } else if target.top() < view_top {
+        Some(target.top() - view_top)
     } else {
+        None
+    }
+}
+
+/// Apply the geometry gate to a pending Visual Edit caret reveal.
+/// Returns true when a scroll was requested.
+pub(super) fn apply_visual_caret_reveal(
+    list: &ListState,
+    item_ix: usize,
+    caret: Option<Bounds<Pixels>>,
+    inset: Pixels,
+) -> bool {
+    let viewport = list.viewport_bounds();
+    let item_bounds = list.bounds_for_item(item_ix);
+    let top = list.logical_scroll_top();
+    let unmeasured_below = item_bounds.is_none() && item_ix > top.item_ix;
+    match visual_caret_scroll_action(viewport, caret, item_bounds, inset, unmeasured_below) {
+        VisualCaretScrollAction::None => false,
+        VisualCaretScrollAction::PinItem => {
+            list.scroll_to(gpui::ListOffset {
+                item_ix,
+                offset_in_item: px(0.),
+            });
+            true
+        }
+        VisualCaretScrollAction::RevealItem => {
+            list.scroll_to_reveal_item(item_ix);
+            true
+        }
+        VisualCaretScrollAction::Pixel(delta) => {
+            if delta == px(0.) {
+                return false;
+            }
+            list.scroll_to(gpui::ListOffset {
+                item_ix: top.item_ix,
+                offset_in_item: top.offset_in_item + delta,
+            });
+            true
+        }
+    }
+}
+
+/// Scroll the Visual Edit list just enough to keep `caret` inside the
+/// viewport inset. Returns true when a scroll was requested.
+pub(super) fn follow_visual_caret_in_list(
+    list: &ListState,
+    caret: Bounds<Pixels>,
+    inset: Pixels,
+) -> bool {
+    let Some(delta) = visual_caret_pixel_delta(list.viewport_bounds(), caret, inset) else {
         return false;
     };
     if delta == px(0.) {
@@ -3244,6 +3347,70 @@ pub(super) fn follow_visual_caret_in_list(list: &ListState, caret: Bounds<Pixels
         offset_in_item: top.offset_in_item + delta,
     });
     true
+}
+
+/// Trailing Visual Edit list item after the last `VisualBlock`. Empty
+/// documents keep the placeholder surface and have no spacer.
+pub(super) fn visual_list_item_count(block_count: usize) -> usize {
+    if block_count == 0 { 0 } else { block_count + 1 }
+}
+
+/// Half the current Visual Edit viewport; 0 before the first layout.
+pub(super) fn visual_end_padding_height(viewport_height: Pixels) -> Pixels {
+    if viewport_height <= px(0.) {
+        px(0.)
+    } else {
+        px(f32::from(viewport_height) * 0.5)
+    }
+}
+
+pub(super) fn ensure_visual_list_spacer(list: &ListState, block_count: usize) {
+    let desired = visual_list_item_count(block_count);
+    let current = list.item_count();
+    if current == desired {
+        return;
+    }
+    if current < desired {
+        list.splice(current..current, desired - current);
+    } else {
+        list.splice(desired..current, 0);
+    }
+}
+
+pub(super) fn visual_end_padding_view(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    let height = app
+        .active_tab()
+        .visual_end_padding_height
+        .unwrap_or_else(|| {
+            visual_end_padding_height(app.active_tab().visual_list.viewport_bounds().size.height)
+        });
+    div()
+        .id("visual-document-end-padding")
+        .debug_selector(|| "visual-document-end-padding".to_string())
+        .w_full()
+        .h(height)
+        .cursor(CursorStyle::IBeam)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|app, event: &MouseDownEvent, window, cx| {
+                let focus_handle = app.focus_handle.clone();
+                window.focus(&focus_handle);
+                app.file_tree_query_focused = false;
+                app.search_focus = None;
+                app.search_control_focus = None;
+                app.input_marked_len = 0;
+                app.active_tab_mut().clear_preview_selection();
+                let end = app.active_tab().document.text().len();
+                if event.modifiers.shift {
+                    app.select_to(end, cx);
+                } else {
+                    app.move_to(end, cx);
+                }
+            }),
+        )
 }
 
 pub(super) fn visual_block_view(
