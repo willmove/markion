@@ -5387,8 +5387,9 @@ fn html_preview_block_view(
 /// Renders a resolved HTML table grid. Uses GPUI's CSS-grid layout so that
 /// `colspan` (via `col_span`) and `rowspan` (via `row_span`) are handled
 /// natively: a spanning cell covers the rows/columns below/beside it without
-/// bespoke overlay logic. Reuses the GFM pipe-table styling (borders, header
-/// shading, table font size).
+/// bespoke overlay logic. Column tracks are weighted by cell content
+/// (browser auto-layout approximation) and styling reuses the GFM pipe-table
+/// look (borders, header shading, table font size).
 fn html_table_grid_view(
     app: &MarkionApp,
     grid: &HtmlTableGrid,
@@ -5413,6 +5414,11 @@ fn html_table_grid_view(
     let mut cell_views = Vec::new();
     let row_count = grid.rows.len();
     for (row_index, row) in grid.rows.iter().enumerate() {
+        // Header emphasis is a per-row decision: an all-empty `<th>` frame
+        // (Word-exported cover tables) renders as body cells, while a header
+        // row with any visible content keeps every `<th>` emphasized,
+        // including an empty matrix corner.
+        let row_has_header = html_table_row_has_visible_header(row);
         let mut col: i16 = 1;
         for (cell_index, cell) in row.iter().enumerate() {
             if cell.is_spacer {
@@ -5422,8 +5428,8 @@ fn html_table_grid_view(
             let colspan = cell.colspan.max(1).min(u16::MAX as usize) as u16;
             let rowspan = cell.rowspan.max(1).min(u16::MAX as usize) as u16;
             let col_start = col;
+            let is_header = cell.is_header && row_has_header;
             let row_start = ((row_index + 1).min(i16::MAX as usize)) as i16;
-            let is_header = cell.is_header;
             // Internal grid lines: right border unless the cell touches the last
             // column, bottom border unless it touches the last row. The outer
             // container border draws the top/left/bottom/right edges.
@@ -5482,10 +5488,12 @@ fn html_table_grid_view(
             col = col.saturating_add(colspan as i16);
         }
     }
-
     div()
         .grid()
-        .grid_cols(columns)
+        // Content-proportional column tracks approximate browser auto table
+        // layout: empty spacer columns collapse to slivers instead of taking
+        // an equal fraction of the table width.
+        .grid_col_weights(html_table_column_weights(grid))
         .border_1()
         .border_color(outer_border)
         .rounded_md()

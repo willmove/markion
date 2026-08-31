@@ -198,7 +198,8 @@ pub use i18n::{
 pub use math::{render_math, validate_latex};
 pub use parse::{
     HtmlAlign, HtmlListMarker, HtmlPreviewPart, HtmlTableCell, HtmlTableCellImage, HtmlTableGrid,
-    html_preview_parts, html_preview_plain_text, resolve_html_img_display_size,
+    html_preview_parts, html_preview_plain_text, html_table_column_weights,
+    html_table_row_has_visible_header, resolve_html_img_display_size,
 };
 pub use publishing::build_publishing_snapshot;
 

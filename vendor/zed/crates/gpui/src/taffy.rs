@@ -316,6 +316,17 @@ impl ToTaffy<taffy::style::Style> for Style {
                 .unwrap_or_default()
         }
 
+        fn to_weighted_grid_columns<T: taffy::style::CheapCloneStr>(
+            weights: &[f32],
+        ) -> Vec<taffy::GridTemplateComponent<T>> {
+            // grid-template-columns: minmax(0, fr(weight)) per entry, so
+            // wider-weighted columns get proportionally more width.
+            weights
+                .iter()
+                .map(|weight| minmax(length(0.0_f32), fr(*weight)))
+                .collect()
+        }
+
         taffy::style::Style {
             display: self.display.into(),
             overflow: self.overflow.into(),
@@ -340,7 +351,11 @@ impl ToTaffy<taffy::style::Style> for Style {
             flex_grow: self.flex_grow,
             flex_shrink: self.flex_shrink,
             grid_template_rows: to_grid_repeat(&self.grid_rows),
-            grid_template_columns: to_grid_repeat(&self.grid_cols),
+            grid_template_columns: self
+                .grid_col_weights
+                .as_ref()
+                .map(|weights| to_weighted_grid_columns(weights))
+                .unwrap_or_else(|| to_grid_repeat(&self.grid_cols)),
             grid_row: self
                 .grid_location
                 .as_ref()

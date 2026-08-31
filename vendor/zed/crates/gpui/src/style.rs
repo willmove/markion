@@ -264,6 +264,11 @@ pub struct Style {
     /// Equivalent to the Tailwind `grid-cols-<number>`
     pub grid_cols: Option<u16>,
 
+    /// Weighted grid column tracks of this element: one `minmax(0, fr(weight))`
+    /// track per entry, so columns with larger weights receive proportionally
+    /// more width. Takes precedence over `grid_cols` when set.
+    pub grid_col_weights: Option<Vec<f32>>,
+
     /// The row span of this element
     /// Equivalent to the Tailwind `grid-rows-<number>`
     pub grid_rows: Option<u16>,
@@ -771,6 +776,7 @@ impl Default for Style {
             opacity: None,
             grid_rows: None,
             grid_cols: None,
+            grid_col_weights: None,
             grid_location: None,
 
             #[cfg(debug_assertions)]

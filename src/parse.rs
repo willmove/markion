@@ -61,8 +61,9 @@ pub enum HtmlPreviewPart {
 pub struct HtmlTableGrid {
     /// Total number of logical columns in the table.
     pub columns: usize,
-    /// True if any cell declares `rowspan > 1`. The renderer uses a fixed row
-    /// height in that case so spanning cells align with the rows they cover.
+    /// True if any cell declares `rowspan > 1`. Exporters use it to pick a
+    /// span-aware representation (DOCX `vMerge`); the GPUI renderer places
+    /// spans natively via `row_span` and ignores it.
     pub has_rowspan: bool,
     /// One `Vec` of slots per visual row, in top-to-bottom order.
     pub rows: Vec<Vec<HtmlTableCell>>,
@@ -107,6 +108,98 @@ impl HtmlAlign {
 pub(crate) enum ListItemDestination {
     Document,
     BlockQuote,
+}
+
+/// Nominal content-width score for a cell image. Images have no text to
+/// measure and their intrinsic size is resolved later at paint time, so they
+/// contribute a fixed mid-width score to their column.
+const HTML_TABLE_IMAGE_SCORE: f32 = 12.0;
+
+/// Effective cap on a single cell's content score. Cells longer than this
+/// wrap inside their span instead of demanding proportional width, so a long
+/// paragraph cell must not inflate every column it touches.
+const HTML_TABLE_CELL_SCORE_CAP: f32 = 24.0;
+
+/// Approximates browser auto table layout: one fractional width weight per
+/// logical column, proportional to the widest content covering that column.
+///
+/// Each cell contributes `min(content score, cap) / colspan` to every column
+/// it covers, and a column keeps the maximum contribution it receives (a
+/// column needs to fit its widest single cell, not the sum of stacked narrow
+/// ones — mirroring how browsers distribute max-content widths). Cells
+/// spanning the full table width are ignored: they can always wrap within the
+/// whole table and therefore constrain no individual column (the Word-export
+/// cover-sheet pattern puts a `colspan="columns"` copyright banner under an
+/// otherwise-empty frame). Columns whose cells are all empty are floored to a
+/// narrow sliver instead of collapsing, so adjacent cell borders stay
+/// visually distinct. The result always holds exactly `columns.max(1)`
+/// finite positive weights; a table with no scorable content yields equal
+/// weights, matching the previous equal-track layout.
+pub fn html_table_column_weights(grid: &HtmlTableGrid) -> Vec<f32> {
+    let columns = grid.columns.max(1);
+    let mut weights = vec![0f32; columns];
+    for row in &grid.rows {
+        let mut col = 0usize;
+        for cell in row {
+            let colspan = cell.colspan.max(1);
+            if !cell.is_spacer && colspan < columns {
+                let mut score = html_table_text_width_score(&cell.content.text);
+                if cell.image.is_some() {
+                    score += HTML_TABLE_IMAGE_SCORE;
+                }
+                let per_column = score.min(HTML_TABLE_CELL_SCORE_CAP) / colspan as f32;
+                for weight in &mut weights[col..(col + colspan).min(columns)] {
+                    *weight = (*weight).max(per_column);
+                }
+            }
+            col = col.saturating_add(colspan);
+        }
+    }
+    let max_weight = weights.iter().copied().fold(0f32, f32::max);
+    if max_weight <= 0f32 {
+        return vec![1f32; columns];
+    }
+    let floor = (max_weight * 0.1).clamp(0.75, 3.0);
+    weights.into_iter().map(|weight| weight.max(floor)).collect()
+}
+
+/// True when a table row contains at least one header cell with visible
+/// content (non-whitespace text or an image). The renderer applies header
+/// emphasis per row using this predicate, so an all-empty `<th>` frame —
+/// common in Word-exported cover tables — renders as plain body cells, while
+/// a genuine header row keeps its empty matrix corner shaded.
+pub fn html_table_row_has_visible_header(row: &[HtmlTableCell]) -> bool {
+    row.iter().any(|cell| {
+        !cell.is_spacer
+            && cell.is_header
+            && (!cell.content.text.trim().is_empty() || cell.image.is_some())
+    })
+}
+
+/// Sums per-glyph width units for column weighting: East Asian wide and
+/// fullwidth glyphs count 2, everything else counts 1.
+fn html_table_text_width_score(text: &str) -> f32 {
+    text.chars()
+        .map(|ch| if is_east_asian_wide(ch) { 2.0 } else { 1.0 })
+        .sum()
+}
+
+/// Dependency-free East Asian Wide/Fullwidth approximation (the ranges
+/// terminal emulators use). Only feeds proportional column weights, so
+/// precision beyond "roughly double width" is unnecessary.
+fn is_east_asian_wide(ch: char) -> bool {
+    matches!(u32::from(ch),
+        0x1100..=0x115F        // Hangul Jamo
+        | 0x2E80..=0xA4CF      // CJK radicals through Yi
+        | 0xA960..=0xA97F      // Hangul Jamo Extended-A
+        | 0xAC00..=0xD7A3      // Hangul syllables
+        | 0xF900..=0xFAFF      // CJK compatibility ideographs
+        | 0xFE10..=0xFE19      // Vertical forms
+        | 0xFE30..=0xFE6F      // CJK compatibility forms
+        | 0xFF00..=0xFF60      // Fullwidth forms
+        | 0xFFE0..=0xFFE6      // Fullwidth signs
+        | 0x20000..=0x3FFFD    // CJK extensions
+    )
 }
 
 pub(crate) struct ListItemDraft {
@@ -2564,6 +2657,125 @@ mod html_table_tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn cover_table_weights_content_over_empty_spacers() {
+        // The reported cover-sheet table: empty `<th>` frame columns at both
+        // edges, content in the middle columns, a full-width banner row at the
+        // bottom, and an empty full-width strut row.
+        let html = "<table>\n\
+<tr><th rowspan=\"5\"></th><th colspan=\"3\"></th><th></th></tr>\n\
+<tr><td colspan=\"3\">瀚博载天VA16 AIGC大模型训推一体加速卡</td><td rowspan=\"4\"></td></tr>\n\
+<tr><td colspan=\"3\">测试报告</td></tr>\n\
+<tr><td>文档版本</td><td colspan=\"2\">01</td></tr>\n\
+<tr><td>发布日期</td><td colspan=\"2\">2026-08-10</td></tr>\n\
+<tr><td colspan=\"5\"></td></tr>\n\
+<tr><td></td><td colspan=\"2\"></td><td></td><td></td></tr>\n\
+<tr><td colspan=\"5\">版权所有 瀚博半导体（上海）股份有限公司2026。</td></tr>\n\
+</table>";
+        let parts = html_preview_parts(html);
+        let HtmlPreviewPart::Table { grid } = &parts[0] else {
+            panic!("expected a table part, got {parts:?}");
+        };
+        assert_eq!(grid.columns, 5);
+        let weights = super::html_table_column_weights(grid);
+        assert_eq!(weights.len(), 5);
+        assert!(
+            weights.iter().all(|weight| weight.is_finite() && *weight > 0f32),
+            "weights must be finite and positive, got {weights:?}"
+        );
+        // The empty frame columns are floored to slivers while the content
+        // columns keep the width.
+        let content_min = weights[1..=3].iter().copied().fold(f32::MAX, f32::min);
+        assert!(
+            weights[0] < content_min / 2f32 && weights[4] < content_min / 2f32,
+            "empty edge columns must be far narrower than content columns, got {weights:?}"
+        );
+        // The full-width copyright banner constrains no column: the edge
+        // columns stay at the floor even though that row spans all five.
+        let floor = (weights[1..=3].iter().copied().fold(0f32, f32::max) * 0.1).clamp(0.75, 3.0);
+        assert!(
+            (weights[0] - floor).abs() < f32::EPSILON && (weights[4] - floor).abs() < f32::EPSILON,
+            "full-width banner must not inflate edge columns, got {weights:?} (floor {floor})"
+        );
+    }
+
+    #[test]
+    fn table_without_visible_content_keeps_equal_weights() {
+        let html = "<table><tr><td></td><td></td></tr><tr><td colspan=\"2\"> </td></tr></table>";
+        let parts = html_preview_parts(html);
+        let HtmlPreviewPart::Table { grid } = &parts[0] else {
+            panic!("expected a table part, got {parts:?}");
+        };
+        assert_eq!(
+            super::html_table_column_weights(grid),
+            vec![1f32, 1f32],
+            "no scorable content yields equal weights"
+        );
+    }
+
+    #[test]
+    fn long_banner_row_constrains_no_column() {
+        // A three-column table of short labels plus a very long full-width
+        // banner row: the banner must not change column proportions at all,
+        // so weights equal those of the same table without the banner.
+        let with_banner = "<table>\n\
+<tr><td>名称</td><td>数值</td><td>单位</td></tr>\n\
+<tr><td>voltage</td><td>0.8</td><td>V</td></tr>\n\
+<tr><td colspan=\"3\">averylongunbreakableidentifiervalueusedinbannerposition0123456789</td></tr>\n\
+</table>";
+        let without_banner = "<table>\n\
+<tr><td>名称</td><td>数值</td><td>单位</td></tr>\n\
+<tr><td>voltage</td><td>0.8</td><td>V</td></tr>\n\
+</table>";
+        let mut expected = None;
+        for html in [without_banner, with_banner] {
+            let parts = html_preview_parts(html);
+            let HtmlPreviewPart::Table { grid } = &parts[0] else {
+                panic!("expected a table part, got {parts:?}");
+            };
+            let weights = super::html_table_column_weights(grid);
+            match &expected {
+                None => expected = Some(weights),
+                Some(baseline) => assert_eq!(
+                    &weights, baseline,
+                    "banner row must not change column weights"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn header_row_visibility_predicate_separates_frame_from_matrix() {
+        let frame = "<table><tr><th rowspan=\"2\"></th><th colspan=\"3\"></th><th></th></tr></table>";
+        let matrix = "<table><tr><th></th><th>峰值电流</th><th>单位</th></tr></table>";
+        let body_only = "<table><tr><td>名称</td><td>数值</td></tr></table>";
+        for (html, expected) in [(frame, false), (matrix, true), (body_only, false)] {
+            let parts = html_preview_parts(html);
+            let HtmlPreviewPart::Table { grid } = &parts[0] else {
+                panic!("expected a table part, got {parts:?}");
+            };
+            assert_eq!(
+                super::html_table_row_has_visible_header(&grid.rows[0]),
+                expected,
+                "{html}"
+            );
+        }
+    }
+
+    #[test]
+    fn image_bearing_cell_outranks_empty_column() {
+        let html = "<table><tr><td><img src=\"a.png\" alt=\"logo\"></td><td></td></tr></table>";
+        let parts = html_preview_parts(html);
+        let HtmlPreviewPart::Table { grid } = &parts[0] else {
+            panic!("expected a table part, got {parts:?}");
+        };
+        let weights = super::html_table_column_weights(grid);
+        assert!(
+            weights[0] > weights[1],
+            "image column must outweigh the empty column: {weights:?}"
+        );
     }
 
     #[test]

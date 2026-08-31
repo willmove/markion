@@ -660,6 +660,14 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets weighted grid columns: one `minmax(0, fr(weight))` track per
+    /// entry, so columns with larger weights receive proportionally more
+    /// width. Takes precedence over `grid_cols`.
+    fn grid_col_weights(mut self, weights: Vec<f32>) -> Self {
+        self.style().grid_col_weights = Some(weights);
+        self
+    }
+
     /// Sets the grid rows of this element.
     fn grid_rows(mut self, rows: u16) -> Self {
         self.style().grid_rows = Some(rows);
