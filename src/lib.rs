@@ -215,8 +215,8 @@ pub use storage::{
 
 use table::{
     TableDraft, format_markdown_table, formatted_table_cell_range, parse_markdown_table,
-    table_cell_source_ranges, table_position_at, table_range_at as table_range_at_fn,
-    table_ranges as table_ranges_fn,
+    table_cell_source_ranges, table_position_at, table_preview_source_range,
+    table_range_at as table_range_at_fn, table_ranges as table_ranges_fn,
 };
 
 use parse::{
@@ -2844,7 +2844,6 @@ impl MarkdownDocument {
         let mut code: Option<(Option<String>, String, std::ops::Range<usize>)> = None;
         let mut table: Option<TableDraft> = None;
         let mut inline = InlineStateDraft::default();
-        let mut table_ranges = table_ranges_fn(text).into_iter();
         let mut footnote: Option<(String, Vec<InlineSpan>, std::ops::Range<usize>)> = None;
 
         for (event, range) in Parser::new_ext(body, markdown_options()).into_offset_iter() {
@@ -3135,7 +3134,10 @@ impl MarkdownDocument {
                     if let Some(table) = table.take()
                         && !table.rows.is_empty()
                     {
-                        let table_range = table_ranges.next().unwrap_or(0..0);
+                        let table_range = table_preview_source_range(text, source_range);
+                        if table_range.is_empty() {
+                            continue;
+                        }
                         if list_item.is_some() {
                             item_nested_block_start =
                                 Some(item_nested_block_start.map_or(table_range.start, |start| {
@@ -6157,7 +6159,268 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(tables, ranges);
+        assert_eq!(tables.len(), 2);
+        assert!(
+            doc.text()[tables[0].clone()].contains("| A | B |"),
+            "preview table range covers the first parser-emitted table"
+        );
+        assert!(
+            doc.text()[tables[1].clone()].contains("| C | D |"),
+            "preview table range covers the second parser-emitted table"
+        );
+        assert!(
+            tables.iter().all(|range| !range.is_empty()),
+            "preview table ranges must not be empty placeholders"
+        );
+    }
+
+    #[test]
+    fn table_ranges_editing_index_skips_one_column_tables() {
+        let source = "\
+| A | B |
+| --- | --- |
+| 1 | 2 |
+
+| only-one |
+| --- |
+
+| C | D |
+| --- | --- |
+| 3 | 4 |
+";
+        let doc = MarkdownDocument::from_text(source);
+        let edit_ranges = doc.table_ranges();
+        assert_eq!(edit_ranges.len(), 2, "editing index stays 2+-column");
+        assert!(source[edit_ranges[0].clone()].contains("| A | B |"));
+        assert!(source[edit_ranges[1].clone()].contains("| C | D |"));
+        assert!(!source[edit_ranges[0].clone()].contains("only-one"));
+        assert!(!source[edit_ranges[1].clone()].contains("only-one"));
+
+        let preview_headers: Vec<String> = doc
+            .preview_blocks()
+            .iter()
+            .filter_map(|block| match block {
+                PreviewBlock::Table { rows, .. } => Some(rows[0][0].text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(preview_headers, ["A", "only-one", "C"]);
+    }
+
+    #[test]
+    fn edit_table_at_targets_the_caret_two_column_table() {
+        let mut doc = MarkdownDocument::from_text(
+            "| Left | L |\n| --- | --- |\n| keep | me |\n\n| cmd |\n| --- |\n\n| Right | R |\n| --- | --- |\n| Ada | 10 |\n",
+        );
+        let cursor = doc.text().find("Ada").unwrap();
+        let result = doc.edit_table_at(cursor, TableEdit::AddRow).unwrap();
+
+        assert!(
+            doc.text()[result.table_range.clone()].contains("Ada"),
+            "edit must stay inside the caret's two-column table"
+        );
+        assert!(
+            !doc.text()[result.table_range.clone()].contains("keep"),
+            "must not mutate the earlier two-column table"
+        );
+        assert!(
+            doc.text().contains("| keep | me |") || doc.text().contains("| keep"),
+            "the neighbor two-column table must remain"
+        );
+        assert!(doc.text().contains("cmd"), "one-column table must remain");
+        assert_eq!(
+            doc.text()[result.table_range.clone()]
+                .matches("Ada")
+                .count(),
+            1
+        );
+        let right_table = &doc.text()[result.table_range.clone()];
+        assert!(
+            right_table
+                .lines()
+                .filter(|line| line.contains('|'))
+                .count()
+                >= 4,
+            "AddRow should grow the caret's table, got {right_table:?}"
+        );
+    }
+
+    #[test]
+    fn list_item_with_nested_table_stays_in_document_order() {
+        let source = "- first\n\n  | A | B |\n  | --- | --- |\n  | 1 | 2 |\n\n- second\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+        let kinds = blocks
+            .iter()
+            .map(|block| match block {
+                PreviewBlock::ListItem { .. } => "item",
+                PreviewBlock::Table { .. } => "table",
+                _ => "other",
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            kinds
+                .windows(3)
+                .any(|window| window == ["item", "table", "item"]),
+            "nested table should sit between its item and the next item, got {kinds:?}"
+        );
+
+        let table_index = blocks
+            .iter()
+            .position(|block| matches!(block, PreviewBlock::Table { .. }))
+            .expect("nested table");
+        let item_index = table_index
+            .checked_sub(1)
+            .filter(|&index| matches!(blocks[index], PreviewBlock::ListItem { .. }))
+            .expect("list item before nested table");
+        assert!(
+            blocks[item_index].source_range().end <= blocks[table_index].source_range().start,
+            "list item must not swallow the nested table: {:?} then {:?}",
+            blocks[item_index].source_range(),
+            blocks[table_index].source_range()
+        );
+        assert!(!blocks[table_index].source_range().is_empty());
+        assert!(source[blocks[table_index].source_range().clone()].contains("| A | B |"));
+    }
+
+    #[test]
+    fn mixed_one_and_multi_column_tables_keep_authored_order() {
+        // Compact shape of the VA16 hoist bug: ordinary 2-col tables, then
+        // one-column `| command |\n| --- |` tables that `table_ranges()` skips,
+        // then later Dies result tables. Those later tables must not land at
+        // offset 0 between the leading H2 and H3.
+        let source = "\
+## 1. Preface
+
+### 1.1 Purpose
+
+Intro.
+
+### 1.2 Versions
+
+| Version | Note |
+| --- | --- |
+| 01 | First |
+
+## 2. Setup
+
+| Name | Value |
+| --- | --- |
+| OS | Ubuntu |
+
+| vasmi setconfig dpm=enable -d all |
+| --- |
+
+| cd /home/username |
+| --- |
+
+## 3. Results
+
+| Dies | Throughput (qps) |
+| --- | --- |
+| 0-3 | 3971.93 |
+
+| Dies | Throughput (qps) |
+| --- | --- |
+| 0-3 | 19023.2 |
+";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+
+        let h2 = blocks.iter().position(|block| {
+            matches!(
+                block,
+                PreviewBlock::Heading {
+                    level: 2,
+                    text,
+                    ..
+                } if text.text == "1. Preface"
+            )
+        });
+        let h3 = blocks.iter().position(|block| {
+            matches!(
+                block,
+                PreviewBlock::Heading {
+                    level: 3,
+                    text,
+                    ..
+                } if text.text == "1.1 Purpose"
+            )
+        });
+        let (h2, h3) = (h2.expect("H2"), h3.expect("H3"));
+        assert!(h2 < h3);
+        assert!(
+            blocks[h2 + 1..h3]
+                .iter()
+                .all(|block| !matches!(block, PreviewBlock::Table { .. })),
+            "no table between leading H2 and H3 when the source gap is only whitespace, got {:?}",
+            blocks[h2 + 1..h3]
+                .iter()
+                .map(|block| format!("{:?}", std::mem::discriminant(block)))
+                .collect::<Vec<_>>()
+        );
+
+        let tables: Vec<&PreviewBlock> = blocks
+            .iter()
+            .filter(|block| matches!(block, PreviewBlock::Table { .. }))
+            .collect();
+        assert_eq!(tables.len(), 6, "expected six GFM tables, got {tables:?}");
+
+        let headers: Vec<String> = tables
+            .iter()
+            .map(|block| match block {
+                PreviewBlock::Table { rows, .. } => rows[0][0].text.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            headers,
+            [
+                "Version",
+                "Name",
+                "vasmi setconfig dpm=enable -d all",
+                "cd /home/username",
+                "Dies",
+                "Dies",
+            ]
+        );
+
+        for table in &tables {
+            let range = table.source_range();
+            assert!(!range.is_empty(), "table source_range must not be 0..0");
+            match table {
+                PreviewBlock::Table { rows, .. } => {
+                    let header = &rows[0][0].text;
+                    assert!(
+                        source[range.clone()].contains(header),
+                        "source[{range:?}] should contain header {header:?}, got {:?}",
+                        &source[range.clone()]
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        let dies_ranges: Vec<_> = tables
+            .iter()
+            .filter_map(|block| match block {
+                PreviewBlock::Table {
+                    rows, source_range, ..
+                } if rows[0][0].text == "Dies" => Some(source_range.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dies_ranges.len(), 2);
+        assert!(
+            dies_ranges.iter().all(|range| range.start > 0),
+            "Dies tables must not be assigned offset 0, got {dies_ranges:?}"
+        );
+        assert!(source[dies_ranges[0].clone()].contains("3971.93"));
+        assert!(source[dies_ranges[1].clone()].contains("19023.2"));
+        assert!(
+            source[tables[2].source_range().clone()].contains("vasmi"),
+            "one-column command table should keep its authored range"
+        );
     }
 
     #[test]

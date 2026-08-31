@@ -120,6 +120,22 @@ pub(crate) fn table_ranges(text: &str) -> Vec<Range<usize>> {
     ranges
 }
 
+/// Drop trailing CR/LF from a pulldown-cmark table event range so the
+/// preview block owns table lines only. Cell mapping and whole-table
+/// replacement use this slice; the event *start* is what keeps tables
+/// from sorting to offset 0.
+pub(crate) fn table_preview_source_range(text: &str, event_range: Range<usize>) -> Range<usize> {
+    let start = event_range.start.min(text.len());
+    let mut end = event_range.end.min(text.len());
+    if start > end {
+        return start..start;
+    }
+    while end > start && matches!(text.as_bytes().get(end - 1), Some(b'\n' | b'\r')) {
+        end -= 1;
+    }
+    start..end
+}
+
 pub(crate) fn table_position_at(source: &str, byte_index: usize) -> Option<TablePosition> {
     let index = clamp_to_char_boundary(source, byte_index);
     let (line_start, line_end) = line_bounds_for_table_lookup(source, index)?;
@@ -502,6 +518,18 @@ mod tests {
         let range = formatted_table_cell_range(&table, 1, 0).expect("formatted cell");
         assert_eq!(&formatted[range], "宽字符 and longer");
         assert_eq!(parse_markdown_table(&formatted).expect("round trip"), table);
+    }
+
+    #[test]
+    fn preview_source_range_drops_trailing_newlines_keeps_start() {
+        let text = "intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nafter";
+        let start = text.find("| A | B |").unwrap();
+        let table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+        let table_end = start + table.len();
+        let event = start..table_end + 2;
+        let range = table_preview_source_range(text, event);
+        assert_eq!(range.start, start);
+        assert_eq!(&text[range], table);
     }
 
     #[test]
