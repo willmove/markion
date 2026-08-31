@@ -3634,7 +3634,9 @@ pub(super) fn visual_block_view(
                 )
                 .child(div().mt(px(5.)).h(px(1.)).bg(rgb(0xcbd5e1)))
         }
-        VisualBlockKind::Table { rows, .. } => visual_table_view(app, block, block_index, rows, cx),
+        VisualBlockKind::Table { rows, .. } => {
+            div().child(visual_table_view(app, block, block_index, rows, cx))
+        }
         VisualBlockKind::CalloutTitle { kind } => {
             if owns_caret {
                 // Focused, the projection reveals the authored marker line
@@ -5058,57 +5060,114 @@ pub(super) fn revalidate_visual_table_toolbar_target(
         .then_some(current.source_offset)
 }
 
+pub(super) fn visual_table_toolbar_is_visible(
+    hovered: Option<VisualBlockId>,
+    block_id: VisualBlockId,
+    has_caret_target: bool,
+) -> bool {
+    hovered == Some(block_id) || has_caret_target
+}
+
+pub(super) fn visual_table_delete_available(
+    blocks: &[VisualBlock],
+    block_id: VisualBlockId,
+) -> bool {
+    blocks
+        .iter()
+        .position(|block| block.id == block_id)
+        .is_some_and(|index| block_can_reorder_at(blocks, index))
+}
+
+pub(super) fn revalidate_visual_table_delete_target(
+    target: BlockTarget,
+    document_version: u64,
+    blocks: &[VisualBlock],
+) -> Option<BlockTarget> {
+    let (index, _) = validate_block_target(document_version, blocks, &target).ok()?;
+    block_can_reorder_at(blocks, index).then_some(target)
+}
+
 pub(super) fn visual_table_view(
     app: &MarkionApp,
     block: &VisualBlock,
     block_index: usize,
     rows: &[Vec<RichText>],
     cx: &mut Context<MarkionApp>,
-) -> Div {
+) -> Stateful<Div> {
     let typography = app.typography_metrics();
     let table_offset = block.source_range.start;
-    let toolbar_target = visual_table_toolbar_target(
-        app.active_tab().document.version(),
-        block,
-        app.active_tab().cursor_offset(),
+    let block_id = block.id;
+    let document_version = app.active_tab().document.version();
+    let toolbar_target =
+        visual_table_toolbar_target(document_version, block, app.active_tab().cursor_offset());
+    let show_toolbar = visual_table_toolbar_is_visible(
+        app.active_tab().hovered_visual_table_block,
+        block_id,
+        toolbar_target.is_some(),
     );
+    let delete_target = BlockTarget::from_block(document_version, block);
+    let delete_enabled =
+        visual_table_delete_available(&app.active_tab().document.visual_blocks_shared(), block_id);
     let cells = match block.editor.as_ref() {
         Some(VisualBlockEditor::Table { cells }) => Some(cells),
         _ => None,
     };
     div()
+        .id(ElementId::from(("visual-table", block_id.as_u64())))
+        .debug_selector(move || format!("visual-table-chrome-{block_index}"))
         .mb_3()
         .border_1()
         .border_color(rgb(0xcbd5e1))
         .rounded_md()
         .overflow_hidden()
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .gap_1()
-                .items_center()
-                .bg(rgb(0xf8fafc))
-                .border_b_1()
-                .border_color(rgb(0xe2e8f0))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(px(11.))
-                        .text_color(rgb(0x64748b))
-                        .child(app.tr(Msg::LabelTable)),
-                )
-                .children(
-                    table_toolbar_actions_for_view_mode(ViewMode::VisualEdit)
-                        .iter()
-                        .map(|&(label, edit, status)| {
-                            let target = toolbar_target
-                                .filter(|target| table_toolbar_action_available(*target, edit));
-                            preview_table_button(label, edit, status, target, cx)
-                        }),
-                ),
-        )
+        .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+            let tab = app.active_tab_mut();
+            let next = hovered.then_some(block_id);
+            let changed = if *hovered {
+                tab.hovered_visual_table_block != Some(block_id)
+            } else {
+                tab.hovered_visual_table_block == Some(block_id)
+            };
+            if !changed {
+                return;
+            }
+            tab.hovered_visual_table_block = next;
+            cx.notify();
+        }))
+        .when(show_toolbar, |table| {
+            table.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .flex()
+                    .gap_1()
+                    .items_center()
+                    .bg(rgb(0xf8fafc))
+                    .border_b_1()
+                    .border_color(rgb(0xe2e8f0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(11.))
+                            .text_color(rgb(0x64748b))
+                            .child(app.tr(Msg::LabelTable)),
+                    )
+                    .children(
+                        table_toolbar_actions_for_view_mode(ViewMode::VisualEdit)
+                            .iter()
+                            .map(|&(label, edit, status)| {
+                                let target = toolbar_target
+                                    .filter(|target| table_toolbar_action_available(*target, edit));
+                                preview_table_button(label, edit, status, target, cx)
+                            }),
+                    )
+                    .child(preview_table_delete_button(
+                        app.tr(Msg::VisualTableDeleteTable),
+                        delete_enabled.then(|| delete_target.clone()),
+                        cx,
+                    )),
+            )
+        })
         .children(rows.iter().enumerate().map(|(row_index, row)| {
             let background = if row_index == 0 {
                 rgb(0xf1f5f9)
@@ -6016,6 +6075,68 @@ pub(super) fn preview_table_button(
                 };
                 if let Some(offset) = offset {
                     app.apply_table_edit_at(offset, edit, t(app.language, status).into(), cx);
+                } else {
+                    cx.notify();
+                }
+            }),
+        )
+}
+
+pub(super) fn preview_table_delete_button(
+    label: &'static str,
+    target: Option<BlockTarget>,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let enabled = target.is_some();
+    let button = div()
+        .flex_none()
+        .px(px(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_X_PX))
+        .py(px(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_Y_PX))
+        .rounded_sm()
+        .border_1()
+        .text_size(px(VISUAL_TABLE_TOOLBAR_BUTTON_FONT_SIZE_PX))
+        .child(label)
+        .debug_selector(move || {
+            if enabled {
+                "visual-table-delete-table".to_string()
+            } else {
+                "visual-table-delete-table-disabled".to_string()
+            }
+        });
+
+    let Some(target) = target else {
+        return button
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xf8fafc))
+            .text_color(rgb(0x94a3b8));
+    };
+
+    button
+        .border_color(rgb(0xcbd5e1))
+        .bg(rgb(0xffffff))
+        .text_color(rgb(0x334155))
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                window.focus(&app.focus_handle);
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                cx.stop_propagation();
+                let confirmed = {
+                    let tab = app.active_tab();
+                    revalidate_visual_table_delete_target(
+                        target.clone(),
+                        tab.document.version(),
+                        &tab.document.visual_blocks_shared(),
+                    )
+                };
+                if let Some(target) = confirmed {
+                    app.delete_visual_block(target, cx);
                 } else {
                     cx.notify();
                 }
