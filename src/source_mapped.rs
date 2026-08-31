@@ -63,6 +63,23 @@ impl SourceEdit {
         }
         None
     }
+
+    /// Map a range that may contain this edit. A wholly interior edit (including
+    /// an insertion at the range start or end) expands the range by the edit
+    /// delta. Overlap that crosses a range boundary returns `None`. Edits
+    /// wholly outside behave like [`Self::map_unchanged_range`].
+    pub fn map_containing_range(&self, range: &Range<usize>) -> Option<Range<usize>> {
+        if self.old_range.start >= range.start && self.old_range.end <= range.end {
+            return Some(range.start..shift_offset(range.end, self.delta()?)?);
+        }
+        if range.end <= self.old_range.start {
+            return Some(range.clone());
+        }
+        if range.start >= self.old_range.end {
+            return shift_range(range, self.delta()?);
+        }
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -568,6 +585,15 @@ pub(crate) fn map_range_through_edits(
     })
 }
 
+fn map_containing_range_through_edits(
+    range: &Range<usize>,
+    edits: &[SourceEdit],
+) -> Option<Range<usize>> {
+    edits.iter().try_fold(range.clone(), |current, edit| {
+        edit.map_containing_range(&current)
+    })
+}
+
 pub(crate) fn reconcile_visual_block_ids(
     old_source: &str,
     new_source: &str,
@@ -575,6 +601,7 @@ pub(crate) fn reconcile_visual_block_ids(
     new_blocks: &mut [VisualBlock],
     edits: &[SourceEdit],
 ) {
+    let mut claimed = vec![false; new_blocks.len()];
     for old in old_blocks {
         let Some(mapped_range) = map_range_through_edits(&old.source_range, edits) else {
             continue;
@@ -588,12 +615,15 @@ pub(crate) fn reconcile_visual_block_ids(
         if old_slice != new_slice {
             continue;
         }
-        let Some(candidate) = new_blocks
-            .iter_mut()
-            .find(|block| block.source_range == mapped_range)
+        let Some(index) = new_blocks
+            .iter()
+            .position(|block| block.source_range == mapped_range)
         else {
             continue;
         };
+        if claimed[index] {
+            continue;
+        }
         let mut shifted = old.clone();
         let Some(delta) = isize::try_from(mapped_range.start)
             .ok()
@@ -610,7 +640,7 @@ pub(crate) fn reconcile_visual_block_ids(
         }
         if let (Some(shifted_quote), Some(candidate_quote)) = (
             shifted.quote_context.as_mut(),
-            candidate.quote_context.as_ref(),
+            new_blocks[index].quote_context.as_ref(),
         ) {
             // The containing quote range may grow because of an edit in an
             // earlier sibling even when this leaf's own source is unchanged.
@@ -618,10 +648,35 @@ pub(crate) fn reconcile_visual_block_ids(
             // depth, marker, and leaf ranges must still match exactly.
             shifted_quote.group_source_range = candidate_quote.group_source_range.clone();
         }
-        shifted.id = candidate.id;
-        if shifted == *candidate {
-            candidate.id = old.id;
+        shifted.id = new_blocks[index].id;
+        if shifted == new_blocks[index] {
+            new_blocks[index].id = old.id;
+            claimed[index] = true;
         }
+    }
+
+    for old in old_blocks {
+        if new_blocks.iter().any(|block| block.id == old.id) {
+            continue;
+        }
+        let Some(mapped_range) = map_containing_range_through_edits(&old.source_range, edits)
+        else {
+            continue;
+        };
+        let matches: Vec<usize> = new_blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, block)| {
+                !claimed[*index] && block.source_range == mapped_range && block.kind == old.kind
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if matches.len() != 1 {
+            continue;
+        }
+        let index = matches[0];
+        new_blocks[index].id = old.id;
+        claimed[index] = true;
     }
 }
 
@@ -837,6 +892,31 @@ mod tests {
     }
 
     #[test]
+    fn containing_range_expands_interior_edits_and_rejects_boundary_overlap() {
+        let source = "alpha\n\n中间\n\nomega";
+        let insertion = source.find("中").unwrap();
+        let edit = SourceEdit::new(source, insertion..insertion, "新".len(), 4, 5).unwrap();
+        let block = (source.find("中").unwrap() - 1)..(source.find("间").unwrap() + 3);
+        assert_eq!(
+            edit.map_containing_range(&block),
+            Some(block.start..block.end + 3)
+        );
+        assert_eq!(edit.map_containing_range(&(0..5)), Some(0..5));
+        let suffix = source.find("omega").unwrap();
+        assert_eq!(
+            edit.map_containing_range(&(suffix..source.len())),
+            Some(suffix + 3..source.len() + 3)
+        );
+        let overlap = SourceEdit::new("abcdefghij", 3..8, 2, 1, 2).unwrap();
+        assert_eq!(overlap.map_containing_range(&(0..5)), None);
+
+        let end_insert = SourceEdit::new(source, 5..5, 1, 1, 2).unwrap();
+        assert_eq!(end_insert.map_containing_range(&(0..5)), Some(0..6));
+        let start_insert = SourceEdit::new(source, 0..0, 1, 1, 2).unwrap();
+        assert_eq!(start_insert.map_containing_range(&(0..5)), Some(0..6));
+    }
+
+    #[test]
     fn incremental_regions_equal_full_derivation_and_reuse_suffix() {
         let old = "# One\n\nFirst paragraph.\n\nSecond paragraph.\n";
         let previous = SourceMappedCache::derive_full(old, 10);
@@ -891,7 +971,7 @@ mod tests {
 
         document.replace_range(0..4, "changed");
         let updated = document.visual_blocks();
-        assert_ne!(updated[0].id, first_id);
+        assert_eq!(updated[0].id, first_id);
         assert_eq!(updated[2].id, second_id);
         assert_eq!(updated[4].id, tail_id);
         assert_eq!(updated[2].source_range.start, 9);
@@ -921,7 +1001,7 @@ mod tests {
         let one = document.text().find("one").unwrap();
         document.replace_range(one..one + 3, "changed-one");
         let updated = document.visual_blocks();
-        assert_ne!(id_for(&updated, document.text(), "changed-one"), one_id);
+        assert_eq!(id_for(&updated, document.text(), "changed-one"), one_id);
         assert_eq!(id_for(&updated, document.text(), "two"), two_id);
         assert_eq!(id_for(&updated, document.text(), "outro"), outro_id);
 
@@ -929,6 +1009,158 @@ mod tests {
         document.insert(outro, "\n>\n> ");
         let split = document.visual_blocks();
         assert!(!split.iter().any(|block| block.id == outro_id));
+    }
+
+    #[test]
+    fn in_place_same_kind_edits_keep_visual_block_ids() {
+        let mut document = MarkdownDocument::from_text("# Title\n\nbody text\n\n- item\n- other\n");
+        let original = document.visual_blocks();
+        let heading_id = original[0].id;
+        let body_id = original
+            .iter()
+            .find(|block| document.text()[block.source_range.clone()].contains("body"))
+            .unwrap()
+            .id;
+        let item_id = original
+            .iter()
+            .find(|block| document.text()[block.source_range.clone()].contains("item"))
+            .unwrap()
+            .id;
+        let other_id = original
+            .iter()
+            .find(|block| document.text()[block.source_range.clone()].contains("other"))
+            .unwrap()
+            .id;
+
+        let title = document.text().find("Title").unwrap();
+        document.replace_range(title..title + 5, "Hello");
+        let after_heading = document.visual_blocks();
+        assert_eq!(after_heading[0].id, heading_id);
+        assert_eq!(
+            after_heading
+                .iter()
+                .find(|block| document.text()[block.source_range.clone()].contains("body"))
+                .unwrap()
+                .id,
+            body_id
+        );
+
+        let body = document.text().find("body").unwrap();
+        document.replace_range(body..body + 4, "plain");
+        let after_body = document.visual_blocks();
+        assert_eq!(
+            after_body
+                .iter()
+                .find(|block| document.text()[block.source_range.clone()].contains("plain"))
+                .unwrap()
+                .id,
+            body_id
+        );
+        assert_eq!(
+            after_body
+                .iter()
+                .find(|block| document.text()[block.source_range.clone()].contains("item"))
+                .unwrap()
+                .id,
+            item_id
+        );
+
+        let item = document.text().find("item").unwrap();
+        document.replace_range(item..item + 4, "entry");
+        let after_item = document.visual_blocks();
+        assert_eq!(
+            after_item
+                .iter()
+                .find(|block| document.text()[block.source_range.clone()].contains("entry"))
+                .unwrap()
+                .id,
+            item_id
+        );
+        assert_eq!(
+            after_item
+                .iter()
+                .find(|block| document.text()[block.source_range.clone()].contains("other"))
+                .unwrap()
+                .id,
+            other_id
+        );
+
+        let second = MarkdownDocument::from_text("first\n\nsecond\n\nthird\n");
+        let mut typed = second;
+        let before = typed.visual_blocks();
+        let second_id = before[2].id;
+        let third_id = before[4].id;
+        let at = typed.text().find("second").unwrap();
+        typed.replace_range(at..at, "x");
+        let after = typed.visual_blocks();
+        assert_eq!(after[2].id, second_id);
+        assert_eq!(after[4].id, third_id);
+    }
+
+    #[test]
+    fn in_place_edit_rebuilds_visual_blocks_once_per_version() {
+        let mut document = MarkdownDocument::from_text("first\n\nsecond\n\nthird\n");
+        let first = document.visual_blocks_shared();
+        let before = document.source_mapped_derivation_counters();
+        let at = document.text().find("second").unwrap() + "second".len();
+        document.replace_range(at..at, "!");
+        let second = document.visual_blocks_shared();
+        assert!(!Arc::ptr_eq(&first, &second));
+        let second_again = document.visual_blocks_shared();
+        assert!(Arc::ptr_eq(&second, &second_again));
+        let after = document.source_mapped_derivation_counters();
+        assert_eq!(after.full_fallbacks, before.full_fallbacks);
+        assert_eq!(second[2].id, first[2].id);
+    }
+
+    #[test]
+    fn split_merge_and_kind_change_assign_new_visual_block_ids() {
+        let mut split_doc = MarkdownDocument::from_text("Hello world\n");
+        let original = split_doc.visual_blocks();
+        let para_id = original[0].id;
+        let mid = split_doc.text().find(" ").unwrap();
+        split_doc.replace_range(mid..mid + 1, "\n\n");
+        let split = split_doc.visual_blocks();
+        assert!(split.len() > original.len());
+        assert!(!split.iter().any(|block| block.id == para_id));
+
+        let mut merge_doc = MarkdownDocument::from_text("one\n\ntwo\n");
+        let merge_original = merge_doc.visual_blocks();
+        let first_id = merge_original[0].id;
+        let second_id = merge_original[2].id;
+        let gap = merge_doc.text().find("\n\n").unwrap();
+        merge_doc.replace_range(gap..gap + 2, " ");
+        let merged = merge_doc.visual_blocks();
+        assert_eq!(merged.len(), 1);
+        assert_ne!(merged[0].id, first_id);
+        assert_ne!(merged[0].id, second_id);
+
+        let mut heading = MarkdownDocument::from_text("Hello\n\nunchanged\n");
+        let heading_original = heading.visual_blocks();
+        let hello_id = heading_original[0].id;
+        let unchanged_id = heading_original[2].id;
+        heading.replace_range(0..0, "# ");
+        let after_kind = heading.visual_blocks();
+        assert_ne!(after_kind[0].id, hello_id);
+        assert_eq!(after_kind[2].id, unchanged_id);
+        assert!(matches!(
+            after_kind[0].kind,
+            crate::VisualBlockKind::Heading { level: 1 }
+        ));
+
+        let mut list = MarkdownDocument::from_text("Hello\n");
+        let list_id = list.visual_blocks()[0].id;
+        list.replace_range(0..0, "- ");
+        assert_ne!(list.visual_blocks()[0].id, list_id);
+
+        let mut dup = MarkdownDocument::from_text("same\n\nsame\n");
+        let dup_original = dup.visual_blocks();
+        let first = dup_original[0].id;
+        let second = dup_original[2].id;
+        dup.replace_range(0..4, "edit");
+        let dup_updated = dup.visual_blocks();
+        assert_eq!(dup_updated[0].id, first);
+        assert_eq!(dup_updated[2].id, second);
     }
 
     #[test]

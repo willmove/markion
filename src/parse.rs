@@ -151,16 +151,18 @@ pub(crate) struct ListLevelDraft {
 pub(crate) fn flush_list_item(blocks: &mut Vec<PreviewBlock>, item: Option<ListItemDraft>) {
     if let Some(item) = item {
         let text = finish_rich_text(item.spans);
-        if !text.is_empty() || item.checked.is_some() {
-            blocks.push(PreviewBlock::ListItem {
-                level: item.level,
-                ordered: item.ordered,
-                index: item.index,
-                checked: item.checked,
-                text,
-                source_range: item.source_range,
-            });
-        }
+        // Empty unordered/ordered items still own their marker line (`- `,
+        // `1. `) so Visual Edit can keep them as list rows instead of
+        // Unsupported source islands. Task items were already kept via the
+        // checkbox even when the payload was empty.
+        blocks.push(PreviewBlock::ListItem {
+            level: item.level,
+            ordered: item.ordered,
+            index: item.index,
+            checked: item.checked,
+            text,
+            source_range: item.source_range,
+        });
     }
 }
 
@@ -429,10 +431,16 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
 
 pub(crate) fn push_nonempty_block(blocks: &mut Vec<PreviewBlock>, block: PreviewBlock) {
     match &block {
-        PreviewBlock::Heading { text, .. } | PreviewBlock::Paragraph { text, .. } => {
+        PreviewBlock::Paragraph { text, .. } => {
             if !text.is_empty() {
                 blocks.push(block);
             }
+        }
+        PreviewBlock::Heading { .. } => {
+            // Empty ATX headings (`##`, `###     `) are valid CommonMark and
+            // must stay in the block stream so Visual Edit / Read can reserve
+            // heading-row height instead of treating the marker as a gap.
+            blocks.push(block);
         }
         PreviewBlock::BlockQuote {
             children, alert, ..

@@ -2991,9 +2991,9 @@ pub(super) fn visual_source_island_view(
     let source_len = source.len();
     div()
         .mb_2()
-        .p_3()
-        .rounded_md()
-        .border_1()
+        .px_2()
+        .py_1()
+        .border_l_2()
         .border_color(rgb(0xcbd5e1))
         .bg(rgb(0xf8fafc))
         .font(code_slot_font(&app.resolved_font_families.code))
@@ -3248,23 +3248,21 @@ pub(super) fn visual_caret_scroll_action(
     inset: Pixels,
     unmeasured_below: bool,
 ) -> VisualCaretScrollAction {
-    if unmeasured_below {
-        return VisualCaretScrollAction::PinItem;
-    }
     let target = caret
         .filter(|bounds| bounds.size.height > px(0.))
         .or(item_bounds.filter(|bounds| bounds.size.height > px(0.)));
-    match target {
-        Some(rect) => visual_caret_pixel_delta(viewport, rect, inset)
+    if let Some(rect) = target {
+        return visual_caret_pixel_delta(viewport, rect, inset)
             .map(VisualCaretScrollAction::Pixel)
-            .unwrap_or(VisualCaretScrollAction::None),
-        None => {
-            if viewport.size.height <= px(0.) {
-                VisualCaretScrollAction::None
-            } else {
-                VisualCaretScrollAction::RevealItem
-            }
-        }
+            .unwrap_or(VisualCaretScrollAction::None);
+    }
+    if unmeasured_below {
+        return VisualCaretScrollAction::PinItem;
+    }
+    if viewport.size.height <= px(0.) {
+        VisualCaretScrollAction::None
+    } else {
+        VisualCaretScrollAction::RevealItem
     }
 }
 
@@ -3456,13 +3454,18 @@ pub(super) fn visual_block_view(
     // is painted as a thin caret line in the `Whitespace` arm below.
     // Link reference definitions keep a muted editable row without island
     // chrome even when they own the caret (empty editable_runs by design).
+    // Empty editable_runs alone must not island a rendered kind: empty ATX
+    // headings and empty list items keep heading/list typography and reveal
+    // their structural prefix. Island chrome is reserved for blocks that
+    // actually carry a source_island kind (front matter, unclosed code,
+    // residual unsupported gaps).
     let focused_conservative = owns_caret
         && !is_whitespace
         && !is_reference_definition
         && !is_callout_title
         && block.editor.is_none()
         && !has_html_image
-        && (block.source_island.is_some() || block.editable_runs.is_empty());
+        && block.source_island.is_some();
     if focused_conservative || always_source {
         let row = visual_source_island_view(app, block, block_index, cx);
         let blocks = app.active_tab().document.visual_blocks_shared();
@@ -3475,11 +3478,13 @@ pub(super) fn visual_block_view(
 
     let row = match &block.kind {
         VisualBlockKind::Heading { level } => {
-            let size = px(typography.heading_font_size((*level).into()));
+            let heading_size = typography.heading_font_size((*level).into());
+            let size = px(heading_size);
             div()
                 .mt_2()
                 .mb_2()
                 .text_size(size)
+                .line_height(px(default_text_line_height(heading_size)))
                 .font_weight(FontWeight::BOLD)
                 .child(visual_text_with_math_element(
                     block,
@@ -3508,10 +3513,11 @@ pub(super) fn visual_block_view(
             index,
             checked,
         } => {
+            let cursor = app.active_tab().cursor_offset();
             let prefix_revealed = block.block_prefix.as_ref().is_some_and(|prefix| {
-                prefix
-                    .source_range
-                    .contains(&app.active_tab().cursor_offset())
+                prefix.source_range.contains(&cursor)
+                    || cursor == prefix.source_range.end
+                    || (owns_caret && block.editable_runs.is_empty())
             });
             let marker = if prefix_revealed {
                 String::new()
@@ -5620,6 +5626,7 @@ pub(super) fn preview_block_view(
                 .mt_2()
                 .mb_2()
                 .text_size(size)
+                .line_height(px(default_text_line_height(heading_size)))
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(rich_text_with_math_element(
                     app,
@@ -5745,9 +5752,6 @@ pub(super) fn preview_block_view(
                 else {
                     continue;
                 };
-                if text.is_empty() && checked.is_none() {
-                    continue;
-                }
                 let marker = match checked {
                     Some(true) => "☑".to_string(),
                     Some(false) => "☐".to_string(),

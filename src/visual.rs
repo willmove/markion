@@ -301,10 +301,20 @@ pub fn build_visual_projection_with_marked_range(
         })
         .map(|group| group.source_range.clone())
         .collect::<Vec<_>>();
-    if let Some(prefix) = &block.block_prefix
-        && endpoint_is_active(&prefix.source_range, false)
-    {
-        revealed_source_ranges.push(prefix.source_range.clone());
+    if let Some(prefix) = &block.block_prefix {
+        // Caret at prefix.end is the first title position (and the usual
+        // caret for an empty heading/list). Empty payload rows also reveal
+        // the whole prefix whenever the caret owns the block.
+        let empty_payload = block.editable_runs.is_empty();
+        let caret_on_empty_row = empty_payload
+            && (block.source_range.contains(&source_cursor)
+                || source_cursor == block.source_range.end
+                || (!source_selection.is_empty()
+                    && source_selection.start < block.source_range.end
+                    && source_selection.end > block.source_range.start));
+        if endpoint_is_active(&prefix.source_range, true) || caret_on_empty_row {
+            revealed_source_ranges.push(prefix.source_range.clone());
+        }
     }
     if let Some(quote) = &block.quote_context {
         revealed_source_ranges.extend(
@@ -3072,9 +3082,11 @@ mod tests {
         build_visual_projection, build_visual_projection_with_marked_range, fenced_payload_ranges,
     };
     use crate::{
-        AlertKind, MarkdownDocument, MarkdownFormat, TableEdit, VisualBlockEditor, VisualBlockKind,
-        VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind, VisualNavigationTarget,
-        VisualQuoteGroupEdge, VisualRevealKind, VisualSourceIslandKind,
+        AlertKind, BlockTarget, BlockTransform, MarkdownDocument, MarkdownFormat, PreviewBlock,
+        SlashCommand, TableEdit, VisualBlockEditor, VisualBlockKind, VisualBlockPrefixKind,
+        VisualCaretAffinity, VisualEditorFieldKind, VisualNavigationTarget, VisualQuoteGroupEdge,
+        VisualRevealKind, VisualSourceIslandKind, slash_command_edit, slash_query_at,
+        transform_block,
     };
 
     #[test]
@@ -3420,7 +3432,11 @@ mod tests {
             .iter()
             .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
             .map(|block| {
-                let cursor = block.editable_runs[0].content_range.start;
+                let run = &block.editable_runs[0];
+                // Interior of the payload: caret at content start == prefix.end
+                // now reveals the list marker (Typora-style). Duplicate-text
+                // checks must not use that boundary.
+                let cursor = run.content_range.start + 1;
                 build_visual_projection(source, block, cursor..cursor, cursor).text
             })
             .collect::<Vec<_>>();
@@ -3461,7 +3477,7 @@ mod tests {
         );
         assert_eq!(&source[list.source_range.clone()], "3. ");
 
-        let content_cursor = source.find("item").unwrap();
+        let content_cursor = source.find("item").unwrap() + 1;
         let hidden = build_visual_projection(
             source,
             block,
@@ -3484,6 +3500,219 @@ mod tests {
         let list_revealed =
             build_visual_projection(source, block, list_cursor..list_cursor, list_cursor);
         assert_eq!(list_revealed.text, "3. item");
+    }
+
+    fn assert_empty_atx_heading(source: &str, level: u8) {
+        let doc = MarkdownDocument::from_text(source);
+        let preview = doc.preview_blocks();
+        let heading = preview
+            .iter()
+            .find(|block| matches!(block, PreviewBlock::Heading { .. }))
+            .unwrap_or_else(|| panic!("expected preview heading for {source:?}, got {preview:?}"));
+        match heading {
+            PreviewBlock::Heading {
+                level: got,
+                text,
+                source_range,
+            } => {
+                assert_eq!(*got, level, "source: {source:?}");
+                assert!(text.is_empty(), "source: {source:?}");
+                let slice = source[source_range.clone()].trim_end_matches(['\n', '\r']);
+                assert!(
+                    slice.chars().all(|ch| ch == '#' || ch == ' ' || ch == '\t'),
+                    "heading range {slice:?} for {source:?}"
+                );
+            }
+            other => panic!("expected heading, got {other:?}"),
+        }
+        let outline = doc.outline();
+        assert!(
+            outline.iter().any(|heading| heading.level == level),
+            "outline should keep empty heading {source:?}: {outline:?}"
+        );
+        let blocks = doc.visual_blocks();
+        let block = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Heading { .. }))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected visual heading for {source:?}, got {:?}",
+                    blocks.iter().map(|block| &block.kind).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(block.source_island, None, "source: {source:?}");
+        assert!(
+            !matches!(block.kind, VisualBlockKind::Unsupported),
+            "source: {source:?}"
+        );
+        let prefix = block.block_prefix.as_ref().expect("heading prefix");
+        assert_eq!(
+            prefix.kind,
+            VisualBlockPrefixKind::Heading { level },
+            "source: {source:?}"
+        );
+        assert!(
+            source[prefix.source_range.clone()].starts_with(&"#".repeat(level as usize)),
+            "prefix {:?} for {source:?}",
+            &source[prefix.source_range.clone()]
+        );
+    }
+
+    fn assert_empty_list_item(source: &str) {
+        let doc = MarkdownDocument::from_text(source);
+        let preview = doc.preview_blocks();
+        assert!(
+            preview.iter().any(|block| {
+                matches!(block, PreviewBlock::ListItem { text, .. } if text.is_empty())
+            }),
+            "expected empty preview list item for {source:?}, got {preview:?}"
+        );
+        let blocks = doc.visual_blocks();
+        let block = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected visual list item for {source:?}, got {:?}",
+                    blocks.iter().map(|block| &block.kind).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(block.source_island, None, "source: {source:?}");
+        assert!(
+            !matches!(block.kind, VisualBlockKind::Unsupported),
+            "source: {source:?}"
+        );
+        assert!(
+            block.block_prefix.is_some(),
+            "empty list item should keep a structural prefix: {source:?}"
+        );
+    }
+
+    #[test]
+    fn empty_atx_headings_stay_heading_blocks_not_source_islands() {
+        for (source, level) in [
+            ("#", 1_u8),
+            ("#\n", 1),
+            ("##", 2),
+            ("##\n", 2),
+            ("## ", 2),
+            ("###", 3),
+            ("###     ", 3),
+            ("###     \n", 3),
+            ("######", 6),
+            ("######\n", 6),
+        ] {
+            assert_empty_atx_heading(source, level);
+        }
+    }
+
+    #[test]
+    fn empty_list_items_stay_list_rows_not_source_islands() {
+        for source in ["- ", "* ", "1. ", "1) ", "- [ ] "] {
+            assert_empty_list_item(source);
+            assert_empty_list_item(&format!("{source}\n"));
+        }
+    }
+
+    #[test]
+    fn empty_heading_and_list_prefix_reveal_on_caret() {
+        let source = "###";
+        let doc = MarkdownDocument::from_text(source);
+        let block = &doc.visual_blocks()[0];
+        let prefix = block.block_prefix.as_ref().expect("heading prefix");
+        let at_end = prefix.source_range.end;
+        let revealed = build_visual_projection(source, block, at_end..at_end, at_end);
+        assert!(
+            revealed.text.starts_with("###"),
+            "empty heading should reveal hashes, got {:?}",
+            revealed.text
+        );
+        assert!(
+            revealed
+                .revealed_source_ranges
+                .iter()
+                .any(|range| range == &prefix.source_range)
+        );
+
+        let titled = "# Hello";
+        let doc = MarkdownDocument::from_text(titled);
+        let block = &doc.visual_blocks()[0];
+        let prefix = block.block_prefix.as_ref().expect("heading prefix");
+        assert_eq!(&titled[prefix.source_range.clone()], "# ");
+        let at_title_start = prefix.source_range.end;
+        let at_start = build_visual_projection(
+            titled,
+            block,
+            at_title_start..at_title_start,
+            at_title_start,
+        );
+        assert!(
+            at_start.text.starts_with("# "),
+            "caret at first title character should reveal prefix, got {:?}",
+            at_start.text
+        );
+        let interior = titled.find('e').unwrap();
+        let hidden = build_visual_projection(titled, block, interior..interior, interior);
+        assert_eq!(hidden.text, "Hello");
+        assert!(hidden.revealed_source_ranges.is_empty());
+    }
+
+    #[test]
+    fn slash_heading_template_stays_a_visual_heading() {
+        let source = "/h2";
+        let query = slash_query_at(source, source.len(), 1).unwrap();
+        let edit = slash_command_edit(source, 1, &query, SlashCommand::Heading(2)).unwrap();
+        assert_eq!(edit.replacement, "## ");
+        let doc = MarkdownDocument::from_text(&edit.replacement);
+        let block = &doc.visual_blocks()[0];
+        assert!(matches!(block.kind, VisualBlockKind::Heading { level: 2 }));
+        assert_eq!(block.source_island, None);
+
+        let paragraph = MarkdownDocument::from_text("body");
+        let blocks = paragraph.visual_blocks_shared();
+        let target = BlockTarget::from_block(paragraph.version(), &blocks[0]);
+        let edit = transform_block(
+            paragraph.text(),
+            paragraph.version(),
+            &blocks,
+            &target,
+            BlockTransform::Heading(2),
+        )
+        .unwrap();
+        let mut text = paragraph.text().to_string();
+        text.replace_range(edit.range.clone(), &edit.replacement);
+        let after = MarkdownDocument::from_text(&text);
+        let heading = after
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Heading { level: 2 }))
+            .expect("transformed heading");
+        assert_eq!(heading.source_island, None);
+    }
+
+    #[test]
+    fn remaining_source_islands_stay_source_backed() {
+        let front = MarkdownDocument::from_text("---\ntitle: Demo\n---\n\nBody");
+        let island = front
+            .visual_blocks()
+            .into_iter()
+            .find(|block| block.source_island == Some(VisualSourceIslandKind::FrontMatter))
+            .expect("front matter island");
+        assert!(
+            front.text()[island.source_range.clone()].starts_with("---"),
+            "front matter island should cover the YAML region"
+        );
+        assert!(front.text()[island.source_range.clone()].contains("title: Demo"));
+
+        let unclosed = "```rust\nfn main() {}\n";
+        let block = MarkdownDocument::from_text(unclosed)
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("unclosed fence");
+        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Code));
+        assert!(block.editor.is_none());
+        assert_eq!(&unclosed[block.source_range.clone()], unclosed);
     }
 
     #[test]
@@ -4269,12 +4498,8 @@ mod tests {
         let projected = list_blocks
             .iter()
             .map(|block| {
-                let cursor = block
-                    .editable_runs
-                    .first()
-                    .expect("list item content")
-                    .content_range
-                    .start;
+                let run = block.editable_runs.first().expect("list item content");
+                let cursor = run.content_range.start + 1;
                 build_visual_projection(source, block, cursor..cursor, cursor).text
             })
             .collect::<Vec<_>>();

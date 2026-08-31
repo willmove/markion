@@ -2046,11 +2046,11 @@ fn visual_block_splice_preserves_shifted_rows_by_identity() {
     document.replace_range(0..5, "changed");
     let new = document.visual_blocks();
 
-    assert_ne!(old[0].id, new[0].id);
+    assert_eq!(old[0].id, new[0].id);
     assert_eq!(old[1].id, new[1].id);
     assert_eq!(old[2].id, new[2].id);
     assert_ne!(old[2].source_range, new[2].source_range);
-    assert_eq!(visual_block_splice(&old, &new), (0..1, 1));
+    assert_eq!(visual_block_splice(&old, &new), (old.len()..old.len(), 0));
 }
 
 /// The tail whitespace row is the row whose covered blank-line count changes
@@ -2218,6 +2218,22 @@ fn visual_caret_scroll_action_pins_unmeasured_rows_below_the_window() {
     assert_eq!(
         visual_caret_scroll_action(viewport, None, None, inset, true),
         VisualCaretScrollAction::PinItem
+    );
+}
+
+#[test]
+fn visual_caret_scroll_action_prefers_last_caret_over_unmeasured_pin() {
+    let viewport = Bounds::new(point(px(0.), px(0.)), size(px(400.), px(400.)));
+    let inset = px(VISUAL_CARET_VIEWPORT_INSET);
+    let caret = Bounds::new(point(px(20.), px(80.)), size(px(2.), px(23.)));
+    assert_eq!(
+        visual_caret_scroll_action(viewport, Some(caret), None, inset, true),
+        VisualCaretScrollAction::None
+    );
+    let below = Bounds::new(point(px(20.), px(390.)), size(px(2.), px(23.)));
+    assert_eq!(
+        visual_caret_scroll_action(viewport, Some(below), None, inset, true),
+        VisualCaretScrollAction::Pixel(px(36.))
     );
 }
 
@@ -6187,6 +6203,104 @@ fn visual_edit_paragraph_enter_shows_caret_not_source_island(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn visual_edit_empty_heading_is_not_a_source_island(cx: &mut TestAppContext) {
+    let source = "###     ";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (version, visual) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("empty heading should own the caret");
+        assert!(
+            matches!(
+                blocks[block_index].kind,
+                VisualBlockKind::Heading { level: 3 }
+            ),
+            "empty ATX heading must stay a heading, got {:?}",
+            blocks[block_index].kind
+        );
+        assert_eq!(blocks[block_index].source_island, None);
+        assert!(tab.visual_caret_bounds.is_some());
+        assert!(tab.visual_input_bounds.is_some());
+        (tab.document.version(), tab.document.visual_blocks_shared())
+    });
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(&visual, &tab.document.visual_blocks_shared()));
+    });
+
+    cx.simulate_input("Hi");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "###     Hi");
+        assert!(tab.document.is_dirty());
+        let blocks = tab.document.visual_blocks_shared();
+        assert!(blocks.iter().any(|block| {
+            matches!(block.kind, VisualBlockKind::Heading { level: 3 })
+                && block.source_island.is_none()
+        }));
+    });
+}
+
+#[gpui::test]
+fn visual_edit_empty_list_item_is_not_a_source_island(cx: &mut TestAppContext) {
+    let source = "- ";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("empty list item should own the caret");
+        assert!(
+            matches!(blocks[block_index].kind, VisualBlockKind::ListItem { .. }),
+            "empty list marker must stay a list item, got {:?}",
+            blocks[block_index].kind
+        );
+        assert_eq!(blocks[block_index].source_island, None);
+        assert!(tab.visual_caret_bounds.is_some());
+        assert!(tab.visual_input_bounds.is_some());
+    });
+
+    cx.simulate_input("item");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "- item");
+        assert!(tab.document.is_dirty());
+    });
+}
+
+#[gpui::test]
 fn visual_edit_tail_enter_moves_caret_down_the_whitespace_row(cx: &mut TestAppContext) {
     // Repeated Enter at the document tail must move the painted caret down
     // the growing whitespace row. Painting it at the row origin made every
@@ -6446,6 +6560,208 @@ fn visual_edit_click_on_visible_lower_row_does_not_pin_to_top(cx: &mut TestAppCo
         assert_eq!(top.item_ix, 0);
         assert_eq!(top.offset_in_item, px(0.));
         let _ = click_offset;
+    });
+}
+
+#[gpui::test]
+fn visual_edit_typing_in_visible_mid_row_does_not_scroll(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(24);
+    let click_offset = source.find("Paragraph 8").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let click_index = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let click_index = visual_block_index_for_offset(&blocks, click_offset, source.len())
+            .expect("typed paragraph owns a visual row");
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 2,
+            offset_in_item: px(0.),
+        });
+        click_index
+    });
+    cx.run_until_parked();
+
+    let row = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-document-row-{click_index}"
+        )))
+        .expect("typed Visual Edit row should be painted");
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    let (anchor, version) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(
+            tab.visual_caret_bounds.is_some(),
+            "caret must be painted before typing"
+        );
+        (tab.visual_list.logical_scroll_top(), tab.document.version())
+    });
+
+    cx.simulate_input("X");
+    cx.run_until_parked();
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(
+            tab.document.text().contains("X"),
+            "typed text must land in the source: {}",
+            tab.document.text()
+        );
+        let top = tab.visual_list.logical_scroll_top();
+        assert_eq!(top.item_ix, anchor.item_ix);
+        assert_eq!(top.offset_in_item, anchor.offset_in_item);
+        assert_ne!(
+            (top.item_ix, top.offset_in_item),
+            (click_index, px(0.)),
+            "typing a later visible row must not pin that row to the viewport top"
+        );
+        assert_eq!(tab.document.version(), version + 1);
+        let visual = tab.document.visual_blocks_shared();
+        assert!(
+            Arc::ptr_eq(&visual, &tab.document.visual_blocks_shared()),
+            "in-place typing must not rebuild visual blocks again without a version change"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_edit_ime_replacement_in_visible_mid_row_does_not_pin(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(24);
+    let click_offset = source.find("Paragraph 8").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let click_index = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let click_index = visual_block_index_for_offset(&blocks, click_offset, source.len())
+            .expect("IME paragraph owns a visual row");
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 2,
+            offset_in_item: px(0.),
+        });
+        click_index
+    });
+    cx.run_until_parked();
+
+    let row = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-document-row-{click_index}"
+        )))
+        .expect("IME Visual Edit row should be painted");
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    let anchor = app.update(cx, |app, _| {
+        app.active_tab().visual_list.logical_scroll_top()
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_text_in_range(app, None, "你", window, cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(
+            tab.document.text().contains('你'),
+            "IME replacement must land in the source: {}",
+            tab.document.text()
+        );
+        let top = tab.visual_list.logical_scroll_top();
+        assert_eq!(top.item_ix, anchor.item_ix);
+        assert_eq!(top.offset_in_item, anchor.offset_in_item);
+        assert_ne!((top.item_ix, top.offset_in_item), (click_index, px(0.)));
+    });
+}
+
+#[gpui::test]
+fn visual_edit_enter_in_visible_mid_row_does_not_pin(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(24);
+    let click_offset = source.find("Paragraph 8").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let click_index = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let click_index = visual_block_index_for_offset(&blocks, click_offset, source.len())
+            .expect("Enter paragraph owns a visual row");
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 2,
+            offset_in_item: px(0.),
+        });
+        click_index
+    });
+    cx.run_until_parked();
+
+    let row = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-document-row-{click_index}"
+        )))
+        .expect("Enter Visual Edit row should be painted");
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    let anchor = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(tab.visual_caret_bounds.is_some());
+        tab.visual_list.logical_scroll_top()
+    });
+
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let top = tab.visual_list.logical_scroll_top();
+        assert_eq!(top.item_ix, anchor.item_ix);
+        assert_eq!(top.item_ix, 2);
+        let caret_row = tab.visual_list_blocks.iter().position(|block| {
+            let cursor = tab.cursor_offset();
+            block.source_range.contains(&cursor) || block.source_range.end == cursor
+        });
+        assert_ne!(
+            caret_row,
+            Some(top.item_ix),
+            "Enter must not pin the successor row to the viewport top"
+        );
+        let _ = anchor.offset_in_item;
     });
 }
 

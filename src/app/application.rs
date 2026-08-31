@@ -730,7 +730,6 @@ impl MarkionApp {
         tab.visual_navigation_snapshots.clear();
         tab.visual_navigation_snapshot_ids.clear();
         tab.visual_cursor_reveal_pending = true;
-        tab.visual_caret_bounds = None;
         tab.visual_marked_range_bounds = None;
         #[cfg(test)]
         {
