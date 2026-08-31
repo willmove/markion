@@ -6,6 +6,8 @@ GFM tables in Visual Edit, Split Preview, and Read mode currently give every col
 
 - Size GFM table columns from cell content instead of an equal split, in Visual Edit, Split Preview, and Read mode.
 - Keep the table stretched to the document content column; extra width goes to columns that need it, and long cells still wrap rather than overflowing the pane.
+- Cap any one column at three times the equal share (`3 / n` of the table) so a long body cell cannot collapse unit headers such as `实际功率（W）` into a four-line sliver.
+- Size header columns so a parenthesis pair whose inner text is 1–3 characters stays on one line, and so the header’s recommended width is enough for at most three wrapped lines.
 - Share one GPUI-free width-recommendation helper so Visual Edit and the read-only preview grid stay in lockstep.
 - **Non-goals:** user-draggable column handles; persisting widths in Markdown or settings; changing GFM table syntax, cell editing, toolbars, or alignment markers; DOCX/PDF/LaTeX/HTML export column grids (those stay equal/proportional as they are today); HTML `<table>` grids (CSS-grid equal tracks plus rowspan/colspan stay out of this change); measuring real GPUI glyph runs (a CJK-aware character heuristic is enough).
 
@@ -17,7 +19,7 @@ None.
 
 ### Modified Capabilities
 
-- `tables-outline`: GFM tables in Visual Edit, Split Preview, and Read mode SHALL allocate column widths from recommended content widths rather than an equal split, while remaining inside the document content column and wrapping overflow.
+- `tables-outline`: GFM tables in Visual Edit, Split Preview, and Read mode SHALL allocate column widths from recommended content widths rather than an equal split, while remaining inside the document content column, wrapping overflow, capping any column at three equal-shares, and keeping short header parenthesis units and a three-line header budget.
 
 ## Impact
 

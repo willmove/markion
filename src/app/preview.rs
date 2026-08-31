@@ -5087,6 +5087,25 @@ pub(super) fn revalidate_visual_table_delete_target(
     block_can_reorder_at(blocks, index).then_some(target)
 }
 
+/// Flex recipe matching `.flex_1().min_w_0()` with a content-based grow weight.
+/// GPUI's public `flex_grow()` helper only sets `1.0`, so the weight is applied
+/// on the style refinement the same way other preview views poke `style.size`.
+fn preview_table_cell_flex(weight: f32) -> Div {
+    let mut cell = div().min_w_0();
+    let style = cell.style();
+    style.flex_grow = Some(weight.max(0.0));
+    style.flex_shrink = Some(1.0);
+    style.flex_basis = Some(gpui::relative(0.).into());
+    cell
+}
+
+fn preview_table_column_weights(
+    rows: &[Vec<RichText>],
+    typography: &DocumentTypographyMetrics,
+) -> Vec<f32> {
+    table_column_flex_weights(rows, typography.table_font_size)
+}
+
 pub(super) fn visual_table_view(
     app: &MarkionApp,
     block: &VisualBlock,
@@ -5095,6 +5114,7 @@ pub(super) fn visual_table_view(
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
     let typography = app.typography_metrics();
+    let column_weights = preview_table_column_weights(rows, &typography);
     let table_offset = block.source_range.start;
     let block_id = block.id;
     let document_version = app.active_tab().document.version();
@@ -5190,9 +5210,7 @@ pub(super) fn visual_table_view(
                             .find(|cell| cell.row == row_index && cell.column == cell_index)
                             .map(|cell| &cell.field)
                     });
-                    div()
-                        .flex_1()
-                        .min_w_0()
+                    preview_table_cell_flex(column_weights.get(cell_index).copied().unwrap_or(1.0))
                         .p_2()
                         .when(!is_last_cell, |style| {
                             style.border_r_1().border_color(rgb(0xe2e8f0))
@@ -5972,6 +5990,7 @@ pub(super) fn preview_block_view(
             // Split Preview and Read mode share this branch. Table mutation
             // belongs in Visual Edit or the source commands, so the preview
             // grid intentionally has no editing header or callbacks.
+            let column_weights = preview_table_column_weights(rows, &typography);
             div()
                 .mb_3()
                 .border_1()
@@ -5993,30 +6012,30 @@ pub(super) fn preview_block_view(
                         })
                         .children(row.iter().enumerate().map(|(cell_index, cell)| {
                             let is_last_cell = cell_index + 1 == row.len();
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .p_2()
-                                .when(!is_last_cell, |style| {
-                                    style.border_r_1().border_color(rgb(0xe2e8f0))
-                                })
-                                .text_size(px(typography.table_font_size))
-                                .child(rich_text_element(
-                                    app,
-                                    ElementId::from((
-                                        "preview-table-cell",
-                                        ((block_index as u64) << 32)
-                                            | (((row_index as u64) & 0xffff) << 16)
-                                            | ((cell_index as u64) & 0xffff),
-                                    )),
-                                    cell,
-                                    block_index,
-                                    PreviewTextRunId::TableCell {
-                                        row: row_index,
-                                        col: cell_index,
-                                    },
-                                    cx,
-                                ))
+                            preview_table_cell_flex(
+                                column_weights.get(cell_index).copied().unwrap_or(1.0),
+                            )
+                            .p_2()
+                            .when(!is_last_cell, |style| {
+                                style.border_r_1().border_color(rgb(0xe2e8f0))
+                            })
+                            .text_size(px(typography.table_font_size))
+                            .child(rich_text_element(
+                                app,
+                                ElementId::from((
+                                    "preview-table-cell",
+                                    ((block_index as u64) << 32)
+                                        | (((row_index as u64) & 0xffff) << 16)
+                                        | ((cell_index as u64) & 0xffff),
+                                )),
+                                cell,
+                                block_index,
+                                PreviewTextRunId::TableCell {
+                                    row: row_index,
+                                    col: cell_index,
+                                },
+                                cx,
+                            ))
                         }))
                 }))
         }

@@ -8,6 +8,8 @@ Column recommendations SHALL be derived from each cell's rendered plain text (no
 
 One-column tables SHALL continue to occupy the full content column. Empty or missing cells SHALL NOT collapse their column below a readable minimum share.
 
+No column in a table of `n` columns (`n` ≥ 2) SHALL receive more than three equal-shares (`3 / n` of the recommended width sum), except when that column’s header minimum itself exceeds the cap. Header recommendations SHALL keep a parenthesis pair whose inner non-whitespace text is 1–3 characters on one line when that unit fits, and SHALL be wide enough that the header’s recommended wrap is at most three lines.
+
 #### Scenario: Unequal content yields unequal columns
 
 - **WHEN** a GFM table has a short-text column (for example header `名称` and cells such as `操作系统`) beside a long-text column (for example header `说明` and a multi-word technical description)
@@ -41,3 +43,20 @@ One-column tables SHALL continue to occupy the full content column. Empty or mis
 - **WHEN** a GFM table has a single column, or a column whose cells are empty
 - **THEN** that column still occupies a usable share of the table
 - **AND** a one-column table still spans the document content column
+
+#### Scenario: Long body columns cannot exceed three equal-shares
+
+- **WHEN** a GFM table has six columns and two of them contain paragraph-length body text
+- **THEN** neither column’s recommended share exceeds half of the table (`3 / 6`)
+- **AND** a short unit header such as `实际功率（W）` still receives a larger share than it would under an uncapped linear split of the same preferred widths
+
+#### Scenario: Short header parenthesis units stay together
+
+- **WHEN** a table header cell contains a parenthesis pair whose inner non-whitespace text is 1–3 characters (for example `实际功率（W）` or `Power (W)`)
+- **THEN** that column’s recommended minimum is at least as wide as the parenthesis unit plus cell padding
+- **AND** Visual Edit and Read mode use that same minimum
+
+#### Scenario: Header wrap stays within three recommended lines
+
+- **WHEN** a table header cell’s unwrapped content is wider than three times a single-line glyph run
+- **THEN** that column’s recommended minimum is at least one third of the unwrapped header content width plus cell padding

@@ -3380,6 +3380,61 @@ fn table_edit_toolbar_is_available_only_in_visual_edit() {
     );
 }
 
+#[test]
+fn visual_and_preview_tables_share_content_column_weights() {
+    let source = concat!(
+        "| 名称 | 说明 |\n",
+        "| --- | --- |\n",
+        "| 操作系统 | Ubuntu |\n",
+        "| CPU | Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz |\n",
+        "| **强调** | long description text for wrapping |\n",
+    );
+    let document = MarkdownDocument::from_text(source);
+    let version = document.version();
+    let preview_rows = document
+        .preview_blocks()
+        .into_iter()
+        .find_map(|block| match block {
+            PreviewBlock::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .expect("preview table");
+    let visual_rows = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.kind {
+            VisualBlockKind::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .expect("visual table");
+    assert_eq!(
+        preview_rows, visual_rows,
+        "Visual Edit tables clone preview rows, so column weights stay aligned"
+    );
+    assert_eq!(preview_rows[3][0].text, "强调");
+    assert!(
+        !preview_rows[3][0].text.contains('*'),
+        "weights must see rendered cell text, not `**强调**` source markup"
+    );
+
+    let font_size = DocumentTypographyMetrics::new(
+        DEFAULT_EDITOR_FONT_SIZE,
+        DEFAULT_RENDERED_FONT_SIZE,
+        markion::DEFAULT_PARAGRAPH_SPACING,
+    )
+    .table_font_size;
+    let preview_weights = table_column_flex_weights(&preview_rows, font_size);
+    let visual_weights = table_column_flex_weights(&visual_rows, font_size);
+    assert_eq!(preview_weights, visual_weights);
+    assert_eq!(preview_weights.len(), 2);
+    assert!(
+        preview_weights[0] < preview_weights[1],
+        "名称 column should be narrower than 说明: {preview_weights:?}"
+    );
+    assert_eq!(document.version(), version);
+    assert!(!document.is_dirty());
+}
+
 fn visual_table_cell_range(
     document: &MarkdownDocument,
     table_index: usize,

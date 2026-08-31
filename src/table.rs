@@ -466,6 +466,155 @@ fn unescaped_pipe_count(text: &str) -> usize {
     count
 }
 
+/// Horizontal padding already applied by GFM table cells (`p_2` on each side).
+const TABLE_CELL_HORIZONTAL_PADDING_PX: f32 = 16.0;
+const TABLE_COLUMN_ASCII_EM: f32 = 0.55;
+const TABLE_COLUMN_WIDE_EM: f32 = 1.0;
+const TABLE_COLUMN_MIN_EMS: f32 = 2.0;
+/// Hard ceiling: no column may exceed this many equal-shares of the table.
+const TABLE_COLUMN_MAX_SHARE_MULTIPLE: f32 = 3.0;
+/// Header wrap budget used to raise a column's minimum recommended width.
+const TABLE_HEADER_MAX_WRAP_LINES: f32 = 3.0;
+
+/// Recommended flex-grow weights for GFM table columns, one per column.
+///
+/// Estimates each cell from its rendered plain text (not focused Visual Edit
+/// source markup): ASCII glyphs at `0.55em`, other scalars at `1em`, plus cell
+/// padding. A column's preferred width is the max over its cells, then raised
+/// to a header minimum (short parenthesis units and a three-line wrap budget),
+/// with leftover body width compressed so long paragraphs cannot linearly
+/// starve unit headers. Finally each column is capped at three equal-shares of
+/// the table (`3 / n`). Callers apply these as `flex_grow` with `flex_basis 0`
+/// so the table still fills the document content column.
+pub fn table_column_flex_weights(rows: &[Vec<RichText>], table_font_size: f32) -> Vec<f32> {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if columns == 0 {
+        return Vec::new();
+    }
+    let font_size = table_font_size.max(1.0);
+    let floor = table_column_min_width(font_size);
+    let mut preferred = vec![floor; columns];
+    for row in rows {
+        for (index, cell) in row.iter().enumerate() {
+            preferred[index] =
+                preferred[index].max(estimate_table_cell_width(&cell.text, font_size));
+        }
+    }
+    let mut mins = vec![floor; columns];
+    if let Some(header) = rows.first() {
+        for (index, cell) in header.iter().enumerate() {
+            mins[index] = mins[index].max(header_column_min_width(&cell.text, font_size, floor));
+        }
+    }
+    for (weight, min) in preferred.iter_mut().zip(mins.iter()) {
+        *weight = (*weight).max(*min);
+        let extra = (*weight - *min).max(0.0);
+        *weight = *min + compress_column_extra(extra, floor);
+    }
+    clamp_column_share_cap(&mut preferred, &mins);
+    preferred
+}
+
+fn table_column_min_width(font_size: f32) -> f32 {
+    TABLE_CELL_HORIZONTAL_PADDING_PX + TABLE_COLUMN_MIN_EMS * font_size
+}
+
+fn estimate_table_cell_width(text: &str, font_size: f32) -> f32 {
+    estimate_text_content_width(text, font_size) + TABLE_CELL_HORIZONTAL_PADDING_PX
+}
+
+fn estimate_text_content_width(text: &str, font_size: f32) -> f32 {
+    text.chars().map(|ch| glyph_em_width(ch) * font_size).sum()
+}
+
+fn glyph_em_width(ch: char) -> f32 {
+    if ch.is_ascii() {
+        TABLE_COLUMN_ASCII_EM
+    } else {
+        TABLE_COLUMN_WIDE_EM
+    }
+}
+
+fn header_column_min_width(text: &str, font_size: f32, floor: f32) -> f32 {
+    let content = estimate_text_content_width(text, font_size);
+    let three_line = TABLE_CELL_HORIZONTAL_PADDING_PX + content / TABLE_HEADER_MAX_WRAP_LINES;
+    let unsplittable =
+        TABLE_CELL_HORIZONTAL_PADDING_PX + max_short_paren_unit_width(text, font_size);
+    floor.max(three_line).max(unsplittable)
+}
+
+fn max_short_paren_unit_width(text: &str, font_size: f32) -> f32 {
+    let chars: Vec<char> = text.chars().collect();
+    let mut max_width = 0.0f32;
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(close) = matching_short_paren_close(&chars, index) {
+            let width: f32 = chars[index..=close]
+                .iter()
+                .map(|ch| glyph_em_width(*ch) * font_size)
+                .sum();
+            max_width = max_width.max(width);
+            index = close + 1;
+        } else {
+            index += 1;
+        }
+    }
+    max_width
+}
+
+fn matching_short_paren_close(chars: &[char], open_at: usize) -> Option<usize> {
+    let open = *chars.get(open_at)?;
+    let close = matching_close_paren(open)?;
+    for (offset, &ch) in chars.iter().enumerate().skip(open_at + 1) {
+        if ch == open {
+            return None;
+        }
+        if ch == close {
+            let inner_len = chars[open_at + 1..offset]
+                .iter()
+                .filter(|c| !c.is_whitespace())
+                .count();
+            return ((1..=3).contains(&inner_len)).then_some(offset);
+        }
+    }
+    None
+}
+
+fn matching_close_paren(open: char) -> Option<char> {
+    match open {
+        '(' => Some(')'),
+        '（' => Some('）'),
+        _ => None,
+    }
+}
+
+fn compress_column_extra(extra: f32, typical: f32) -> f32 {
+    if extra <= 0.0 || typical <= 0.0 {
+        return 0.0;
+    }
+    (extra * typical).sqrt()
+}
+
+fn clamp_column_share_cap(weights: &mut [f32], mins: &[f32]) {
+    let columns = weights.len();
+    if columns <= 1 {
+        return;
+    }
+    for _ in 0..2 {
+        let total: f32 = weights.iter().sum();
+        if total <= 0.0 {
+            return;
+        }
+        let cap = TABLE_COLUMN_MAX_SHARE_MULTIPLE / columns as f32 * total;
+        for (weight, min) in weights.iter_mut().zip(mins.iter()) {
+            let allowed = cap.max(*min);
+            if *weight > allowed {
+                *weight = allowed;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +693,171 @@ mod tests {
         assert_eq!(
             table_position_at(source, second_cell),
             Some(TablePosition { row: 1, column: 1 })
+        );
+    }
+
+    #[test]
+    fn content_column_weights_prefer_long_description_columns() {
+        let rows = vec![
+            vec![RichText::plain("名称"), RichText::plain("说明")],
+            vec![RichText::plain("操作系统"), RichText::plain("Ubuntu")],
+            vec![
+                RichText::plain("CPU"),
+                RichText::plain("Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz"),
+            ],
+        ];
+        let weights = table_column_flex_weights(&rows, 12.0);
+        assert_eq!(weights.len(), 2);
+        assert!(
+            weights[0] < weights[1],
+            "short 名称 column should be narrower than 说明: {weights:?}"
+        );
+    }
+
+    #[test]
+    fn one_column_table_keeps_a_positive_weight() {
+        let weights = table_column_flex_weights(&[vec![RichText::plain("command")]], 12.0);
+        assert_eq!(weights.len(), 1);
+        assert!(weights[0] > 0.0);
+    }
+
+    #[test]
+    fn empty_and_ragged_columns_stay_at_the_readable_floor() {
+        let font_size = 12.0;
+        let floor = table_column_min_width(font_size);
+        let empty = table_column_flex_weights(
+            &[vec![RichText::plain("a"), RichText::plain("")]],
+            font_size,
+        );
+        assert_eq!(empty[1], floor);
+
+        let ragged = table_column_flex_weights(
+            &[
+                vec![RichText::plain("aa")],
+                vec![RichText::plain("b"), RichText::plain("")],
+            ],
+            font_size,
+        );
+        assert_eq!(ragged.len(), 2);
+        assert_eq!(ragged[1], floor);
+        assert!(table_column_flex_weights(&[], font_size).is_empty());
+    }
+
+    #[test]
+    fn wide_scalars_count_heavier_than_the_same_number_of_ascii_letters() {
+        let font_size = 12.0;
+        let ascii = table_column_flex_weights(&[vec![RichText::plain("aaa")]], font_size);
+        let cjk = table_column_flex_weights(&[vec![RichText::plain("甲甲甲")]], font_size);
+        assert!(
+            cjk[0] > ascii[0],
+            "CJK cells should out-weigh equal-length ASCII: ascii={ascii:?} cjk={cjk:?}"
+        );
+    }
+
+    #[test]
+    fn column_weights_use_rendered_plain_text_not_source_markup() {
+        let font_size = 12.0;
+        let rendered = table_column_flex_weights(&[vec![RichText::plain("bold")]], font_size);
+        let markup = table_column_flex_weights(&[vec![RichText::plain("**bold**")]], font_size);
+        assert!(
+            rendered[0] < markup[0],
+            "callers must pass rendered cell text, not source markup: {rendered:?} vs {markup:?}"
+        );
+    }
+
+    fn six_column_server_spec_rows() -> Vec<Vec<RichText>> {
+        let long_config = "CPU: Intel Xeon Gold 64C; 内存: 1TB; 系统盘: 480G SSD; 数据盘: 16TB";
+        let long_note = "整机尺寸 875×447×44mm，满载重量约 32kg，需预留前后维护通道";
+        vec![
+            vec![
+                RichText::plain("设备类型"),
+                RichText::plain("关键配置"),
+                RichText::plain("品牌型号"),
+                RichText::plain("实际功率（W）"),
+                RichText::plain("数量"),
+                RichText::plain("备注"),
+            ],
+            vec![
+                RichText::plain("训练服务器"),
+                RichText::plain(long_config),
+                RichText::plain("浪潮 CS5868H3"),
+                RichText::plain("245"),
+                RichText::plain("102台"),
+                RichText::plain(long_note),
+            ],
+        ]
+    }
+
+    fn linear_content_weights(rows: &[Vec<RichText>], font_size: f32) -> Vec<f32> {
+        let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let floor = table_column_min_width(font_size);
+        let mut weights = vec![floor; columns];
+        for row in rows {
+            for (index, cell) in row.iter().enumerate() {
+                weights[index] =
+                    weights[index].max(estimate_table_cell_width(&cell.text, font_size));
+            }
+        }
+        weights
+    }
+
+    fn share(weights: &[f32], index: usize) -> f32 {
+        let total: f32 = weights.iter().sum();
+        weights[index] / total
+    }
+
+    #[test]
+    fn six_column_table_caps_long_columns_and_protects_unit_headers() {
+        let font_size = 12.0;
+        let rows = six_column_server_spec_rows();
+        let weights = table_column_flex_weights(&rows, font_size);
+        let linear = linear_content_weights(&rows, font_size);
+        let total: f32 = weights.iter().sum();
+        assert_eq!(weights.len(), 6);
+        for (index, weight) in weights.iter().enumerate() {
+            assert!(
+                *weight / total <= 0.5 + 1e-4,
+                "column {index} share {} exceeds 3/6",
+                *weight / total
+            );
+        }
+        assert!(
+            share(&weights, 3) > share(&linear, 3),
+            "实际功率（W） should gain share vs an uncapped linear split: balanced={weights:?} linear={linear:?}"
+        );
+        assert!(
+            share(&weights, 1) <= 0.5 + 1e-4,
+            "关键配置 must stay within three equal-shares"
+        );
+    }
+
+    #[test]
+    fn short_header_parenthesis_units_set_a_one_line_minimum() {
+        let font_size = 12.0;
+        let unit = max_short_paren_unit_width("实际功率（W）", font_size);
+        let ascii = max_short_paren_unit_width("Power (W)", font_size);
+        assert!(unit > 0.0, "fullwidth （W） should be unsplittable");
+        assert!(ascii > 0.0, "ASCII (W) should be unsplittable");
+        let min = header_column_min_width(
+            "实际功率（W）",
+            font_size,
+            table_column_min_width(font_size),
+        );
+        assert!(
+            min + 1e-4 >= unit + TABLE_CELL_HORIZONTAL_PADDING_PX,
+            "header min {min} should cover the parenthesis unit {unit}"
+        );
+    }
+
+    #[test]
+    fn long_header_minimum_covers_a_three_line_wrap_budget() {
+        let font_size = 12.0;
+        let header = "这是一段需要折行的很长列表头文字内容";
+        let content = estimate_text_content_width(header, font_size);
+        let min = header_column_min_width(header, font_size, table_column_min_width(font_size));
+        assert!(
+            min + 1e-4 >= TABLE_CELL_HORIZONTAL_PADDING_PX + content / 3.0,
+            "header min {min} should be at least one third of unwrapped width {content}"
         );
     }
 }

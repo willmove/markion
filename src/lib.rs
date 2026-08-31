@@ -213,6 +213,7 @@ pub use storage::{
     render_theme_definition, save_app_preferences, save_session_state, save_theme_definition,
 };
 
+pub use table::table_column_flex_weights;
 use table::{
     TableDraft, format_markdown_table, formatted_table_cell_range, parse_markdown_table,
     table_cell_source_ranges, table_position_at, table_preview_source_range,

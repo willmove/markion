@@ -16,6 +16,7 @@ GPUI's public `flex_grow()` helper always sets `1.0`. Custom grow weights are se
 - Allocate GFM table column widths from cell content so a short label column stays narrow and a long description column takes the remaining space.
 - Keep Visual Edit and Read/Split Preview visually aligned.
 - Keep the table stretched to the document content column; long cells wrap instead of overflowing.
+- Cap any column at three times the equal share (`3 / n`) and keep short header parenthesis units on one line, with a three-line header wrap budget.
 - Compute weights in a GPUI-free helper so the algorithm is unit-testable and does not touch derived Markdown caches.
 
 **Non-Goals:**
@@ -80,11 +81,21 @@ No write to document text, dirty flag, undo, or per-version caches.
 
 **Rationale:** The WYSIWYG contract already requires Visual Edit to match the reading surface. Duplicating the heuristic would drift.
 
-### Decision 5: No column-share cap beyond the floor
+### Decision 5: Cap any column at three equal-shares
 
-**Choice:** Only the empty-column floor (Decision 2). A very long column may take most of the row; that is the desired 名称/说明 behavior.
+**Choice:** After preferred widths and header minima, clamp each column to `3 / n` of the current weight sum (`n` = column count). Never clamp below that column’s header minimum. One-column tables skip the cap. A 6-column table therefore never gives one column more than half the row.
 
-**Rationale:** An 80% ceiling would re-introduce spare space on short columns, which is the bug. Wrapping on the long column is the overflow strategy.
+**Rationale:** Uncapped content weights let a “关键配置” / “备注” paragraph take most of a six-column row, so a unit header like `实际功率（W）` wraps onto four lines. Three times the equal share is enough for a true description column and still leaves room for the other headers. A hard 80% ceiling on two-column 名称/说明 tables does not bite (`3/2 = 150%`).
+
+**Alternative considered:** Cap at `2 / n`. Rejected — two legitimate description columns in a six-column grid would both want ~33% and would fight the cap instead of wrapping their body text.
+
+### Decision 6: Header minima, then compress leftover body width
+
+**Choice:** Row 0 is the GFM header. Each column’s minimum is the max of (a) the empty-column floor, (b) the width of a `(`…`)` / `（`…`）` unit whose inner non-whitespace span is 1–3 characters, (c) unwrapped header content width ÷ 3 plus padding. Preferred width is `max(content, min)`. Extra width above the min is compressed with `sqrt(extra × floor)` so a paragraph-sized body cell grows faster than a header but not linearly. Then apply Decision 5.
+
+**Rationale:** The 3-line and short-paren rules are “as far as possible”: they raise the column’s requested share so `（W）` stays on one line and `实际功率（W）` wraps in at most three lines. Linear extras still starve those mins when two body columns are long; geometric compression makes the mins occupy a real fraction of the flex sum without flattening 名称/说明 back to 50/50.
+
+**Alternative considered:** Real GPUI line-count measurement against the laid-out column. Rejected — needs a second layout pass and window/cx; the helper stays GPUI-free.
 
 ## Risks / Trade-offs
 
@@ -93,6 +104,7 @@ No write to document text, dirty flag, undo, or per-version caches.
 - **[Risk] Custom `flex_grow` via style refinement is slightly off the public Styled helpers** → Mitigation: isolate in one cell-style helper used by both views; if GPUI later grows a `flex_grow(f32)` API, swap the poke.
 - **[Risk] HTML tables stay equal-width** → Mitigation: documented non-goal; they use CSS grid for rowspan/colspan and cannot take flex weights without a separate layout rewrite.
 - **[Trade-off] Table still stretches full width** — a two-cell table of short words will have leftover space inside the columns (distributed by weight, not 50/50). That leftover is still better than equal split when weights differ.
+- **[Trade-off] Header minima can exceed `3 / n` when every header is long** — mins win; the cap is best-effort. Geometric extra compression is a heuristic, not glyph-accurate wrapping.
 
 ## Migration Plan
 

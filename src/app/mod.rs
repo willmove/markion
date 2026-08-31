@@ -57,7 +57,7 @@ use markion::{
     reorder_block, resolve_font_family, resolve_html_img_display_size, save_app_preferences,
     save_session_state, save_text_snapshot, save_theme_definition, serialize_inline_image,
     serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
-    t, tf, title_from_path, transform_block, validate_block_target,
+    t, table_column_flex_weights, tf, title_from_path, transform_block, validate_block_target,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
