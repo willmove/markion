@@ -707,7 +707,9 @@ impl MarkionApp {
             | PaneScrollTarget::PreferencesGeneral
             | PaneScrollTarget::PreferencesShortcutCategories
             | PaneScrollTarget::PreferencesShortcutActions
-            | PaneScrollTarget::PreferencesExport => return,
+            | PaneScrollTarget::PreferencesExport
+            | PaneScrollTarget::FileTree
+            | PaneScrollTarget::Outline => return,
         }
         cx.notify();
     }

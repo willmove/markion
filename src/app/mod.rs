@@ -1752,6 +1752,10 @@ enum PaneScrollTarget {
     PreferencesShortcutActions,
     /// Preferences panel Export tab body. Drag identity only.
     PreferencesExport,
+    /// Files sidebar tree list. Drag identity only; never a Sync scroll driver.
+    FileTree,
+    /// Outline sidebar heading list. Drag identity only; never a Sync scroll driver.
+    Outline,
 }
 
 /// Identity of a selectable plain-text run inside one preview list item.

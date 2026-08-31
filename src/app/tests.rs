@@ -1571,6 +1571,22 @@ fn nested_file_tree_fixture(root: &Path) -> FileTree {
     }
 }
 
+fn overflowing_flat_file_tree(root: &Path, count: usize) -> FileTree {
+    FileTree {
+        root: root.to_path_buf(),
+        show_hidden: false,
+        entries: (0..count)
+            .map(|index| FileTreeEntry {
+                path: root.join(format!("note-{index:03}.md")),
+                name: format!("note-{index:03}.md"),
+                depth: 0,
+                kind: FileTreeEntryKind::File,
+                file_kind: Some(FileTreeFileKind::Markdown),
+            })
+            .collect(),
+    }
+}
+
 fn visible_tree_entry_names(
     tree: &FileTree,
     query: &str,
@@ -3073,6 +3089,218 @@ fn preferences_scrollbar_thumbs_drag_their_own_region(cx: &mut TestAppContext) {
     });
 }
 
+#[test]
+fn file_tree_content_width_includes_scrollbar_gutter() {
+    let entries = [FileTreeEntry {
+        path: PathBuf::from("note.md"),
+        name: "note.md".to_string(),
+        depth: 0,
+        kind: FileTreeEntryKind::File,
+        file_kind: Some(FileTreeFileKind::Markdown),
+    }];
+    let expected = 34. + estimate_file_tree_text_width("note.md") + PANE_SCROLLBAR_RESERVED_WIDTH;
+    assert_eq!(file_tree_content_width(&entries), expected);
+    assert_eq!(
+        file_tree_content_width(&[]),
+        1. + PANE_SCROLLBAR_RESERVED_WIDTH
+    );
+}
+
+#[gpui::test]
+fn sidebar_scrollbar_thumbs_drag_their_own_region(cx: &mut TestAppContext) {
+    let root = PathBuf::from("/tmp/markion-sidebar-scroll");
+    let mut outline_source = String::new();
+    for index in 0..80 {
+        outline_source.push_str(&format!("# Heading {index}\n\n"));
+    }
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&outline_source))];
+        app.workspace_root = root.clone();
+        app.file_tree = Some(overflowing_flat_file_tree(&root, 80));
+        app.sidebar_visible = true;
+        app.sidebar_tab = SidebarTab::Files;
+        app.sync_scroll = true;
+        app.view_mode = ViewMode::Split;
+        app
+    });
+    cx.simulate_resize(size(px(900.), px(300.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let thumb_geometry = |handle: &ScrollHandle| {
+        let bounds = handle.bounds();
+        let viewport = f32::from(bounds.size.height);
+        let max_scroll = f32::from(handle.max_offset().height).max(0.);
+        let track = viewport - 2. * PANE_SCROLLBAR_EDGE_INSET;
+        let thumb_height = (track * viewport / (viewport + max_scroll))
+            .clamp(PANE_SCROLLBAR_MIN_THUMB_HEIGHT, track);
+        let thumb_travel = (track - thumb_height).max(0.);
+        let center_x = f32::from(bounds.right()) - 2. - PANE_SCROLLBAR_THUMB_WIDTH / 2.;
+        (
+            center_x,
+            f32::from(bounds.top()),
+            thumb_height,
+            thumb_travel,
+            max_scroll,
+        )
+    };
+
+    let (center_x, top, thumb_height, thumb_travel, max_scroll) =
+        app.update(cx, |app, _| thumb_geometry(&app.file_tree_scroll.clone()));
+    assert!(
+        max_scroll > 1.,
+        "file tree must overflow in the test window"
+    );
+
+    let grab_y = top + PANE_SCROLLBAR_EDGE_INSET + thumb_height / 2.;
+    cx.simulate_mouse_down(
+        point(px(center_x), px(grab_y)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.pane_scrollbar_drag.as_ref().map(|drag| drag.target),
+            Some(PaneScrollTarget::FileTree),
+            "grabbing the Files thumb must start a file-tree drag"
+        );
+        assert!(app.active_tab().sync_scroll_state.driver_hint.is_none());
+    });
+    cx.simulate_event(MouseMoveEvent {
+        position: point(
+            px(center_x),
+            px(top + PANE_SCROLLBAR_EDGE_INSET + thumb_travel / 2. + thumb_height / 2.),
+        ),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let scrolled = f32::from(-app.file_tree_scroll.offset().y);
+        assert!(
+            (scrolled - max_scroll / 2.).abs() < 1.,
+            "halfway Files thumb drag should scroll halfway: expected {}, got {scrolled}",
+            max_scroll / 2.
+        );
+        assert!(app.active_tab().sync_scroll_state.driver_hint.is_none());
+    });
+    cx.simulate_event(MouseMoveEvent {
+        position: point(px(center_x), px(top)),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: point(px(center_x), px(top)),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.file_tree_scroll.offset().y, px(0.));
+        assert!(app.pane_scrollbar_drag.is_none());
+    });
+
+    app.update(cx, |app, cx| {
+        app.file_tree = Some(overflowing_flat_file_tree(&root, 1));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(
+            f32::from(app.file_tree_scroll.max_offset().height) <= 1.,
+            "fitting file tree must hide the vertical scrollbar"
+        );
+    });
+
+    app.update(cx, |app, cx| {
+        app.file_tree = Some(overflowing_flat_file_tree(&root, 80));
+        app.set_sidebar_tab(SidebarTab::Outline, cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let (center_x, top, thumb_height, thumb_travel, max_scroll) =
+        app.update(cx, |app, _| thumb_geometry(&app.outline_scroll.clone()));
+    assert!(max_scroll > 1., "outline must overflow in the test window");
+
+    let files_offset_before = app.update(cx, |app, _| app.file_tree_scroll.offset());
+    let grab_y = top + PANE_SCROLLBAR_EDGE_INSET + thumb_height / 2.;
+    cx.simulate_mouse_down(
+        point(px(center_x), px(grab_y)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.pane_scrollbar_drag.as_ref().map(|drag| drag.target),
+            Some(PaneScrollTarget::Outline),
+            "grabbing the Outline thumb must start an outline drag"
+        );
+        assert!(app.active_tab().sync_scroll_state.driver_hint.is_none());
+    });
+    cx.simulate_event(MouseMoveEvent {
+        position: point(
+            px(center_x),
+            px(top + PANE_SCROLLBAR_EDGE_INSET + thumb_travel / 2. + thumb_height / 2.),
+        ),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: Modifiers::none(),
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let scrolled = f32::from(-app.outline_scroll.offset().y);
+        assert!(
+            (scrolled - max_scroll / 2.).abs() < 1.,
+            "halfway Outline thumb drag should scroll halfway: expected {}, got {scrolled}",
+            max_scroll / 2.
+        );
+        assert_eq!(
+            app.file_tree_scroll.offset(),
+            files_offset_before,
+            "dragging the Outline thumb must not move the file tree"
+        );
+        assert!(app.active_tab().sync_scroll_state.driver_hint.is_none());
+    });
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: point(px(center_x), px(grab_y)),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.pane_scrollbar_drag.is_none());
+    });
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "# One\n\n# Two\n",
+        ))];
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(
+            f32::from(app.outline_scroll.max_offset().height) <= 1.,
+            "fitting outline must hide the vertical scrollbar"
+        );
+    });
+}
+
 #[gpui::test]
 fn live_rebind_dispatches_override_and_preserves_core_and_file_tree_keys(cx: &mut TestAppContext) {
     let mut overrides = BTreeMap::new();
@@ -3276,10 +3504,12 @@ fn list_scrollbar_marks_sync_driver_only_for_preview() {
         PaneScrollTarget::PreferencesGeneral,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
+        PaneScrollTarget::FileTree,
+        PaneScrollTarget::Outline,
     ] {
         assert!(
             !list_pane_scrollbar_marks_sync_driver(target),
-            "preferences scrollbar targets must never mark a sync driver"
+            "non-preview scrollbar targets must never mark a sync driver"
         );
     }
 }
@@ -3298,13 +3528,15 @@ fn preferences_scrollbar_targets_are_no_op_for_sync_scroll(cx: &mut TestAppConte
         PaneScrollTarget::PreferencesGeneral,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
+        PaneScrollTarget::FileTree,
+        PaneScrollTarget::Outline,
     ] {
         app.update(cx, |app, _| {
             app.mark_sync_scroll_driver(target);
             let tab = app.active_tab();
             assert!(
                 tab.sync_scroll_state.driver_hint.is_none(),
-                "preferences scrollbar drag must not drive sync scroll"
+                "{target:?} scrollbar drag must not drive sync scroll"
             );
             assert!(tab.sync_scroll_state.deferred_driver.is_none());
         });

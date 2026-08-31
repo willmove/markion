@@ -2432,38 +2432,54 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
         )
         .child(
             div()
-                .id("file-tree-scroll")
+                .relative()
                 .flex_1()
                 .min_h_0()
-                .overflow_x_scroll()
-                .overflow_y_scroll()
-                .scrollbar_width(px(8.))
-                .track_scroll(&app.file_tree_scroll)
-                .on_mouse_up(MouseButton::Right, move |event, _, cx| {
-                    background_app_entity.update(cx, |app, cx| {
-                        app.show_file_tree_context_menu(
-                            FileTreeContextTarget::Workspace,
-                            event.position,
-                            cx,
-                        );
-                    });
-                })
-                .children(file_tree_rows(
-                    app,
-                    cx,
-                    &entries,
-                    &active_path,
-                    &selected_path,
-                    tree_content_width,
-                ))
-                .children((hidden_entries > 0).then(|| {
+                .child(
                     div()
-                        .mt_1()
-                        .px_2()
-                        .text_size(px(11.))
-                        .text_color(palette.muted)
-                        .child(app.trf(Msg::FileTreeMoreHidden, &[&hidden_entries.to_string()]))
-                })),
+                        .id("file-tree-scroll")
+                        .size_full()
+                        .overflow_x_scroll()
+                        .overflow_y_scroll()
+                        .scrollbar_width(px(PANE_SCROLLBAR_RESERVED_WIDTH))
+                        .track_scroll(&app.file_tree_scroll)
+                        .on_mouse_up(MouseButton::Right, move |event, _, cx| {
+                            background_app_entity.update(cx, |app, cx| {
+                                app.show_file_tree_context_menu(
+                                    FileTreeContextTarget::Workspace,
+                                    event.position,
+                                    cx,
+                                );
+                            });
+                        })
+                        .children(file_tree_rows(
+                            app,
+                            cx,
+                            &entries,
+                            &active_path,
+                            &selected_path,
+                            tree_content_width,
+                        ))
+                        .children((hidden_entries > 0).then(|| {
+                            div()
+                                .mt_1()
+                                .px_2()
+                                .text_size(px(11.))
+                                .text_color(palette.muted)
+                                .child(
+                                    app.trf(
+                                        Msg::FileTreeMoreHidden,
+                                        &[&hidden_entries.to_string()],
+                                    ),
+                                )
+                        })),
+                )
+                .child(pane_scrollbar_view(
+                    PaneScrollTarget::FileTree,
+                    &app.file_tree_scroll,
+                    palette,
+                    cx,
+                )),
         )
 }
 
@@ -2524,6 +2540,7 @@ pub(super) fn file_tree_content_width(entries: &[FileTreeEntry]) -> f32 {
         .iter()
         .map(|entry| entry.depth as f32 * 12. + 34. + estimate_file_tree_text_width(&entry.name))
         .fold(1., f32::max)
+        + PANE_SCROLLBAR_RESERVED_WIDTH
 }
 
 pub(super) fn estimate_file_tree_text_width(text: &str) -> f32 {
@@ -2583,101 +2600,118 @@ pub(super) fn outline_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>)
 
     div().flex_1().min_h_0().flex().flex_col().child(
         div()
-            .id("outline-scroll")
-            .debug_selector(|| "outline-scroll".to_string())
+            .relative()
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
-            .scrollbar_width(px(8.))
-            .track_scroll(&app.outline_scroll)
-            .children(projection.rows.into_iter().map(|row| {
-                let heading = &outline[row.outline_index];
-                let disclosure_app_entity = app_entity.clone();
-                let label_app_entity = app_entity.clone();
-                let index = row.outline_index;
-                let offset = heading.offset;
-                let title = heading.title.clone();
-                let background = if row.active {
-                    palette.active_bg
-                } else {
-                    palette.panel_bg
-                };
-                let text_color = if row.active {
-                    palette.active_text
-                } else {
-                    palette.text
-                };
-                let disclosure = if row.has_children {
-                    let icon = if row.collapsed {
-                        crate::ui::icon::Icon::ChevronRight
-                    } else {
-                        crate::ui::icon::Icon::ChevronDown
-                    };
-                    let key = row.key.clone();
-                    div()
-                        .debug_selector(move || format!("outline-heading-disclosure-{index}"))
-                        .size(px(OUTLINE_DISCLOSURE_SLOT_SIZE))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(palette.surface_bg))
-                        .child(crate::ui::icon::icon(
-                            icon,
-                            OUTLINE_DISCLOSURE_ICON_SIZE,
-                            text_color,
-                        ))
-                        .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                            cx.stop_propagation();
-                            let focus_handle = disclosure_app_entity.read(cx).focus_handle.clone();
-                            window.focus(&focus_handle);
-                            disclosure_app_entity.update(cx, |app, cx| {
-                                app.toggle_outline_section(key.clone(), cx);
-                            });
-                        })
-                } else {
-                    div()
-                        .debug_selector(move || {
-                            format!("outline-heading-disclosure-placeholder-{index}")
-                        })
-                        .size(px(OUTLINE_DISCLOSURE_SLOT_SIZE))
-                        .flex_none()
-                };
-
+            .child(
                 div()
-                    .debug_selector(move || format!("outline-heading-row-{index}"))
-                    .mb(px(OUTLINE_ROW_GAP))
-                    .ml(px((heading.level.saturating_sub(1) as f32) * 12.))
-                    .w_full()
-                    .px_2()
-                    .py(px(OUTLINE_ROW_VERTICAL_PADDING))
-                    .flex()
-                    .items_center()
-                    .rounded_md()
-                    .bg(background)
-                    .text_size(px(12.))
-                    .line_height(px(OUTLINE_ROW_LINE_HEIGHT))
-                    .text_color(text_color)
-                    .hover(move |style| style.bg(palette.active_bg))
-                    .child(disclosure)
-                    .child(
+                    .id("outline-scroll")
+                    .debug_selector(|| "outline-scroll".to_string())
+                    .size_full()
+                    .overflow_y_scroll()
+                    .scrollbar_width(px(PANE_SCROLLBAR_RESERVED_WIDTH))
+                    .track_scroll(&app.outline_scroll)
+                    .children(projection.rows.into_iter().map(|row| {
+                        let heading = &outline[row.outline_index];
+                        let disclosure_app_entity = app_entity.clone();
+                        let label_app_entity = app_entity.clone();
+                        let index = row.outline_index;
+                        let offset = heading.offset;
+                        let title = heading.title.clone();
+                        let background = if row.active {
+                            palette.active_bg
+                        } else {
+                            palette.panel_bg
+                        };
+                        let text_color = if row.active {
+                            palette.active_text
+                        } else {
+                            palette.text
+                        };
+                        let disclosure = if row.has_children {
+                            let icon = if row.collapsed {
+                                crate::ui::icon::Icon::ChevronRight
+                            } else {
+                                crate::ui::icon::Icon::ChevronDown
+                            };
+                            let key = row.key.clone();
+                            div()
+                                .debug_selector(move || {
+                                    format!("outline-heading-disclosure-{index}")
+                                })
+                                .size(px(OUTLINE_DISCLOSURE_SLOT_SIZE))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .hover(move |style| style.bg(palette.surface_bg))
+                                .child(crate::ui::icon::icon(
+                                    icon,
+                                    OUTLINE_DISCLOSURE_ICON_SIZE,
+                                    text_color,
+                                ))
+                                .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    let focus_handle =
+                                        disclosure_app_entity.read(cx).focus_handle.clone();
+                                    window.focus(&focus_handle);
+                                    disclosure_app_entity.update(cx, |app, cx| {
+                                        app.toggle_outline_section(key.clone(), cx);
+                                    });
+                                })
+                        } else {
+                            div()
+                                .debug_selector(move || {
+                                    format!("outline-heading-disclosure-placeholder-{index}")
+                                })
+                                .size(px(OUTLINE_DISCLOSURE_SLOT_SIZE))
+                                .flex_none()
+                        };
+
                         div()
-                            .debug_selector(move || format!("outline-heading-label-{index}"))
-                            .flex_1()
-                            .min_w_0()
-                            .cursor_pointer()
-                            .child(title)
-                            .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                                let focus_handle = label_app_entity.read(cx).focus_handle.clone();
-                                window.focus(&focus_handle);
-                                label_app_entity.update(cx, |app, cx| {
-                                    app.navigate_to_outline_heading(offset, cx);
-                                });
-                            }),
-                    )
-            })),
+                            .debug_selector(move || format!("outline-heading-row-{index}"))
+                            .mb(px(OUTLINE_ROW_GAP))
+                            .ml(px((heading.level.saturating_sub(1) as f32) * 12.))
+                            .w_full()
+                            .px_2()
+                            .py(px(OUTLINE_ROW_VERTICAL_PADDING))
+                            .flex()
+                            .items_center()
+                            .rounded_md()
+                            .bg(background)
+                            .text_size(px(12.))
+                            .line_height(px(OUTLINE_ROW_LINE_HEIGHT))
+                            .text_color(text_color)
+                            .hover(move |style| style.bg(palette.active_bg))
+                            .child(disclosure)
+                            .child(
+                                div()
+                                    .debug_selector(move || {
+                                        format!("outline-heading-label-{index}")
+                                    })
+                                    .flex_1()
+                                    .min_w_0()
+                                    .cursor_pointer()
+                                    .child(title)
+                                    .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                                        let focus_handle =
+                                            label_app_entity.read(cx).focus_handle.clone();
+                                        window.focus(&focus_handle);
+                                        label_app_entity.update(cx, |app, cx| {
+                                            app.navigate_to_outline_heading(offset, cx);
+                                        });
+                                    }),
+                            )
+                    })),
+            )
+            .child(pane_scrollbar_view(
+                PaneScrollTarget::Outline,
+                &app.outline_scroll,
+                palette,
+                cx,
+            )),
     )
 }
 
@@ -2822,6 +2856,8 @@ pub(super) fn pane_scrollbar_view(
         PaneScrollTarget::PreferencesShortcutCategories => "preferences-categories-scrollbar",
         PaneScrollTarget::PreferencesShortcutActions => "preferences-actions-scrollbar",
         PaneScrollTarget::PreferencesExport => "preferences-export-scrollbar",
+        PaneScrollTarget::FileTree => "file-tree-scrollbar",
+        PaneScrollTarget::Outline => "outline-scrollbar",
     };
     let viewport_height = scroll_handle.bounds().size.height;
     let max_scroll = scroll_handle.max_offset().height.max(px(0.));
