@@ -3246,7 +3246,7 @@ impl MarkdownDocument {
                         && code.is_none()
                         && table.is_none();
                     if standalone_html {
-                        push_html_block(&mut blocks, html_string, source_range);
+                        push_html_block(&mut blocks, text, source_range);
                     } else if nested_container {
                         if let Some(item) = list_item.as_mut() {
                             item.record_nested_block_start(source_range.start);
@@ -3256,7 +3256,7 @@ impl MarkdownDocument {
                         } else {
                             &mut blocks
                         };
-                        push_html_block(target, html_string, source_range);
+                        push_html_block(target, text, source_range);
                     } else {
                         let text = html_preview_plain_text(&html_string);
                         if !text.is_empty() {
@@ -3286,7 +3286,7 @@ impl MarkdownDocument {
                         && code.is_none()
                         && table.is_none();
                     if standalone_html {
-                        push_html_block(&mut blocks, html.to_string(), source_range);
+                        push_html_block(&mut blocks, text, source_range);
                     } else {
                         let text = html_preview_plain_text(&html);
                         if !text.is_empty() {
@@ -3948,11 +3948,7 @@ fn emit_finished_paragraph(
     paragraph_range: Range<usize>,
 ) {
     if html_only_paragraph_source(&text[paragraph_range.clone()]) {
-        push_html_block(
-            blocks,
-            text[paragraph_range.clone()].to_string(),
-            paragraph_range,
-        );
+        push_html_block(blocks, text, paragraph_range);
         return;
     }
     let rich = finish_rich_text(spans);
@@ -3979,22 +3975,41 @@ fn emit_finished_paragraph(
     );
 }
 
-fn push_html_block(blocks: &mut Vec<PreviewBlock>, html: String, source_range: Range<usize>) {
-    if html.is_empty() {
+/// True when consecutive `Event::Html` ranges should become one preview
+/// block. pulldown-cmark 0.13 omits `\r` from CRLF line ranges, leaving a
+/// CR-only hole that is not a CommonMark block boundary. A `\n` in the gap
+/// is a real line neither event owns (typically the blank line that ends a
+/// type-6 HTML block).
+fn html_preview_gap_should_merge(gap: &str) -> bool {
+    if gap.is_empty() {
+        return true;
+    }
+    if !gap.chars().all(|ch| ch.is_ascii_whitespace()) {
+        return false;
+    }
+    !gap.contains('\n')
+}
+
+fn push_html_block(blocks: &mut Vec<PreviewBlock>, text: &str, source_range: Range<usize>) {
+    if source_range.start >= source_range.end || source_range.end > text.len() {
         return;
     }
     if let Some(PreviewBlock::Html {
         html: existing_html,
         source_range: existing_range,
     }) = blocks.last_mut()
-        && existing_range.end == source_range.start
+        && source_range.start >= existing_range.end
+        && html_preview_gap_should_merge(&text[existing_range.end..source_range.start])
     {
-        existing_html.push_str(&html);
         existing_range.end = source_range.end;
+        *existing_html = text[existing_range.start..existing_range.end].to_string();
         return;
     }
 
-    blocks.push(PreviewBlock::Html { html, source_range });
+    blocks.push(PreviewBlock::Html {
+        html: text[source_range.clone()].to_string(),
+        source_range,
+    });
 }
 
 fn html_only_paragraph_source(source: &str) -> bool {
@@ -4190,6 +4205,159 @@ mod tests {
                 .iter()
                 .any(|span| span.text == "简体中文"
                     && span.link.as_deref() == Some("README.zh-CN.md"))
+        );
+    }
+
+    fn cover_sheet_html_table(line_ending: &str) -> String {
+        [
+            "<table>",
+            "<tr><th rowspan=\"5\"></th><th colspan=\"3\"></th><th></th></tr>",
+            "<tr><td colspan=\"3\">瀚博载天VA16 AIGC大模型训推一体加速卡</td><td rowspan=\"4\"></td></tr>",
+            "<tr><td colspan=\"3\">测试报告</td></tr>",
+            "<tr><td>文档版本</td><td colspan=\"2\">01</td></tr>",
+            "<tr><td>发布日期</td><td colspan=\"2\">2026-08-10</td></tr>",
+            "<tr><td colspan=\"5\"></td></tr>",
+            "<tr><td></td><td colspan=\"2\"></td><td></td><td></td></tr>",
+            "</table>",
+        ]
+        .join(line_ending)
+    }
+
+    fn assert_cover_sheet_is_one_html_table(source: &str) {
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+        let html_blocks: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                PreviewBlock::Html { html, source_range } => Some((html, source_range)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            html_blocks.len(),
+            1,
+            "expected one HTML preview block, got {} from {blocks:?}",
+            html_blocks.len()
+        );
+        let (html, source_range) = html_blocks[0];
+        assert!(
+            source[source_range.clone()].contains("<table")
+                && source[source_range.clone()].contains("</table>"),
+            "source_range must cover the table, got {:?}",
+            &source[source_range.clone()]
+        );
+        assert_eq!(html, &source[source_range.clone()]);
+
+        let parts = html_preview_parts(html);
+        let HtmlPreviewPart::Table { grid } = &parts[0] else {
+            panic!("expected a table part, got {parts:?}");
+        };
+        assert_eq!(grid.columns, 5);
+        let version = grid
+            .rows
+            .iter()
+            .flat_map(|row| row.iter())
+            .find(|cell| !cell.is_spacer && cell.content.text == "文档版本")
+            .expect("文档版本 cell");
+        let value = grid
+            .rows
+            .iter()
+            .flat_map(|row| row.iter())
+            .find(|cell| !cell.is_spacer && cell.content.text == "01")
+            .expect("01 cell");
+        assert_eq!(
+            version.colspan, 1,
+            "文档版本 stays a single column, not concatenated with 01"
+        );
+        assert_eq!(value.colspan, 2);
+        let version_row = grid
+            .rows
+            .iter()
+            .position(|row| {
+                row.iter()
+                    .any(|cell| !cell.is_spacer && cell.content.text == "文档版本")
+            })
+            .expect("文档版本 row");
+        let value_row = grid
+            .rows
+            .iter()
+            .position(|row| {
+                row.iter()
+                    .any(|cell| !cell.is_spacer && cell.content.text == "01")
+            })
+            .expect("01 row");
+        assert_eq!(version_row, value_row);
+        let version_col = grid.rows[version_row]
+            .iter()
+            .take_while(|cell| cell.content.text != "文档版本")
+            .map(|cell| cell.colspan)
+            .sum::<usize>();
+        let value_col = grid.rows[value_row]
+            .iter()
+            .take_while(|cell| cell.content.text != "01")
+            .map(|cell| cell.colspan)
+            .sum::<usize>();
+        assert_ne!(
+            version_col, value_col,
+            "文档版本 and 01 must occupy different columns"
+        );
+    }
+
+    #[test]
+    fn html_preview_gap_should_merge_crlf_hole_but_not_blank_line() {
+        assert!(html_preview_gap_should_merge(""));
+        assert!(html_preview_gap_should_merge("\r"));
+        assert!(html_preview_gap_should_merge(" \t"));
+        assert!(!html_preview_gap_should_merge("\n"));
+        assert!(!html_preview_gap_should_merge("\n\n"));
+        assert!(!html_preview_gap_should_merge("\r\n\r\n"));
+        assert!(!html_preview_gap_should_merge("\n   \n"));
+        assert!(!html_preview_gap_should_merge("not-whitespace"));
+    }
+
+    #[test]
+    fn cover_sheet_html_table_stays_one_preview_block_on_lf_and_crlf() {
+        let lf = cover_sheet_html_table("\n");
+        let crlf = cover_sheet_html_table("\r\n");
+        assert_cover_sheet_is_one_html_table(&lf);
+        assert_cover_sheet_is_one_html_table(&crlf);
+    }
+
+    #[test]
+    fn blank_line_keeps_two_html_preview_blocks_apart() {
+        let doc = MarkdownDocument::from_text("<p>one</p>\n\n<p>two</p>");
+        let html_blocks: Vec<_> = doc
+            .preview_blocks()
+            .into_iter()
+            .filter_map(|block| match block {
+                PreviewBlock::Html { html, .. } => Some(html),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(html_blocks.len(), 2, "got {html_blocks:?}");
+        assert!(html_blocks[0].contains("one"));
+        assert!(html_blocks[1].contains("two"));
+    }
+
+    #[test]
+    fn visual_edit_maps_crlf_cover_sheet_to_one_html_block() {
+        let doc = MarkdownDocument::from_text(cover_sheet_html_table("\r\n"));
+        let html_visual: Vec<_> = doc
+            .visual_blocks()
+            .into_iter()
+            .filter(|block| matches!(block.kind, VisualBlockKind::Html { .. }))
+            .collect();
+        assert_eq!(
+            html_visual.len(),
+            1,
+            "CRLF cover sheet must be one Visual Html block, got {:?}",
+            html_visual
+                .iter()
+                .map(|block| match &block.kind {
+                    VisualBlockKind::Html { html } => html.chars().take(40).collect::<String>(),
+                    _ => String::new(),
+                })
+                .collect::<Vec<_>>()
         );
     }
 
