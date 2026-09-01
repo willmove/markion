@@ -64,6 +64,11 @@ pub(crate) fn rich_text_bytes(text: &RichText) -> usize {
         if let Some(math) = &span.math {
             total += math_source_bytes(math);
         }
+        if let Some(image) = &span.image {
+            total += string_bytes(&image.alt)
+                + string_bytes(&image.url)
+                + option_string_bytes(image.title.as_deref());
+        }
     }
     total
 }
@@ -201,6 +206,22 @@ pub(crate) fn image_refs_from_preview(blocks: &[PreviewBlock], out: &mut Vec<Str
     for block in blocks {
         match block {
             PreviewBlock::Image { url, .. } => out.push(url.clone()),
+            PreviewBlock::Paragraph { text, .. }
+            | PreviewBlock::Heading { text, .. }
+            | PreviewBlock::ListItem { text, .. }
+            | PreviewBlock::FootnoteDefinition { text, .. } => {
+                crate::parse::collect_rich_image_urls(text, out);
+            }
+            PreviewBlock::BlockQuote { children, .. } => {
+                image_refs_from_preview(children, out);
+            }
+            PreviewBlock::Table { rows, .. } => {
+                for row in rows {
+                    for cell in row {
+                        crate::parse::collect_rich_image_urls(cell, out);
+                    }
+                }
+            }
             PreviewBlock::Html { html, .. } => {
                 for url in html_img_srcs(html) {
                     out.push(url);
@@ -215,6 +236,11 @@ pub(crate) fn image_refs_from_visual(blocks: &[VisualBlock], out: &mut Vec<Strin
     for block in blocks {
         if let VisualBlockKind::Image { url, .. } = &block.kind {
             out.push(url.clone());
+        }
+        for run in &block.editable_runs {
+            if let Some(image) = &run.html_image {
+                out.push(image.url.clone());
+            }
         }
     }
 }

@@ -310,6 +310,13 @@ pub(crate) fn render_latex_rich_text(rich: &RichText) -> String {
     }
     let mut output = String::new();
     for span in &rich.spans {
+        if let Some(image) = &span.image {
+            output.push_str(&format!(
+                "\\includegraphics{{{}}}",
+                escape_latex_path(&image.url)
+            ));
+            continue;
+        }
         let mut piece = if span.style.code {
             format!("\\texttt{{{}}}", escape_latex(&span.text))
         } else {

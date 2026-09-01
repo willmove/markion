@@ -1804,10 +1804,15 @@ pub(super) fn rich_text_with_math_element(
     display_scale: f32,
     font_size: f32,
     line_height: f32,
+    document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let typography = app.typography_metrics();
-    if !rich.spans.iter().any(|span| span.math.is_some()) {
+    if !rich
+        .spans
+        .iter()
+        .any(|span| span.math.is_some() || span.image.is_some())
+    {
         return rich_text_element(
             app,
             ElementId::from((id_prefix, block_index)),
@@ -1828,6 +1833,14 @@ pub(super) fn rich_text_with_math_element(
     for span in &rich.spans {
         let span_range = offset..offset + span.text.len();
         offset = span_range.end;
+        if let Some(image) = &span.image {
+            children.push(
+                preview_inline_image_view(app, &image.url, &image.alt, document_dir, None, None)
+                    .into_any_element(),
+            );
+            fragment_index += 1;
+            continue;
+        }
         if let Some(math) = &span.math {
             match app.math_entry(
                 &math.latex,
@@ -5645,6 +5658,7 @@ pub(super) fn preview_block_view(
                     display_scale,
                     heading_size,
                     default_text_line_height(heading_size),
+                    document_dir,
                     cx,
                 ))
         }
@@ -5661,6 +5675,7 @@ pub(super) fn preview_block_view(
                 display_scale,
                 typography.rendered_font_size,
                 typography.paragraph_line_height,
+                document_dir,
                 cx,
             )),
         PreviewBlock::ListItem {
@@ -5710,6 +5725,7 @@ pub(super) fn preview_block_view(
                     display_scale,
                     typography.rendered_font_size,
                     typography.list_line_height,
+                    document_dir,
                     cx,
                 )))
         }
@@ -5724,7 +5740,7 @@ pub(super) fn preview_block_view(
                 .line_height(px(typography.quote_line_height));
             for (child_index, child) in children.iter().enumerate() {
                 if let PreviewBlock::Paragraph { text, .. } = child {
-                    if !text.is_empty() {
+                    if !text.is_empty() || text.spans.iter().any(|span| span.image.is_some()) {
                         container = container.child(rich_text_with_math_element(
                             app,
                             "preview-quote",
@@ -5734,6 +5750,7 @@ pub(super) fn preview_block_view(
                             display_scale,
                             typography.quote_font_size,
                             typography.quote_line_height,
+                            document_dir,
                             cx,
                         ));
                     }
@@ -5797,6 +5814,7 @@ pub(super) fn preview_block_view(
                             display_scale,
                             typography.quote_font_size,
                             typography.quote_line_height,
+                            document_dir,
                             cx,
                         ))),
                 );
@@ -5999,6 +6017,7 @@ pub(super) fn preview_block_view(
                 display_scale,
                 typography.rendered_font_size,
                 typography.paragraph_line_height,
+                document_dir,
                 cx,
             ))),
         PreviewBlock::Table { rows, .. } => {

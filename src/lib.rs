@@ -120,7 +120,7 @@ pub use model::{
     DEFAULT_RENDERED_FONT_SIZE, DocumentStats, DocxExportOptions, DocxImagePolicy, DocxPageSize,
     EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory, ExportBackend, ExportBackendPreference,
     ExportFormat, ExportOutcome, ExportPreferences, Footnote, FrontMatterError, Heading,
-    HighlightKind, HighlightedSpan, HtmlImgLength, InlineSpan, InlineStyle,
+    HighlightKind, HighlightedSpan, HtmlImgLength, InlineImage, InlineSpan, InlineStyle,
     MAX_AUTO_SAVE_DELAY_SECS, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES,
     MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
     MIN_RENDERED_FONT_SIZE, MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle,
@@ -222,10 +222,10 @@ use table::{
 };
 
 use parse::{
-    ImageDraft, InlineStateDraft, ListItemDestination, ListItemDraft, ListLevelDraft, append_span,
-    clean_preview_text, finish_rich_text, flush_list_item, gfm_alert_kind, heading_level_to_u8,
-    markdown_options, push_nonempty_block, push_preview_math, push_preview_rich,
-    render_extended_html_text_nodes, slugify,
+    ImageDraft, InlineStateDraft, ListItemDestination, ListItemDraft, ListLevelDraft,
+    append_preview_image, append_span, clean_preview_text, finish_rich_text, flush_list_item,
+    gfm_alert_kind, heading_level_to_u8, markdown_options, push_nonempty_block, push_preview_math,
+    push_preview_rich, render_extended_html_text_nodes, slugify, standalone_inline_images,
 };
 
 use diagram::collect_html_diagrams;
@@ -2472,9 +2472,30 @@ impl MarkdownDocument {
         };
         match block {
             PreviewBlock::Image { url, .. } => push(url, urls),
+            PreviewBlock::Paragraph { text, .. }
+            | PreviewBlock::Heading { text, .. }
+            | PreviewBlock::ListItem { text, .. }
+            | PreviewBlock::FootnoteDefinition { text, .. } => {
+                for span in &text.spans {
+                    if let Some(image) = &span.image {
+                        push(&image.url, urls);
+                    }
+                }
+            }
             PreviewBlock::BlockQuote { children, .. } => {
                 for child in children {
                     Self::collect_remote_image_urls_from(child, urls);
+                }
+            }
+            PreviewBlock::Table { rows, .. } => {
+                for row in rows {
+                    for cell in row {
+                        for span in &cell.spans {
+                            if let Some(image) = &span.image {
+                                push(&image.url, urls);
+                            }
+                        }
+                    }
                 }
             }
             PreviewBlock::Html { html, .. } => {
@@ -2892,41 +2913,19 @@ impl MarkdownDocument {
                             footnote_spans.extend(spans);
                         } else if let Some(item) = list_item.as_mut() {
                             // Keep a line break between sibling paragraphs that get
-                            // flattened into one list item.
+                            // flattened into one list item. Image spans already
+                            // land on `item.spans` via `append_preview_image`.
                             append_span(&mut item.spans, "\n", InlineStyle::default(), None);
                             let _ = spans;
                         } else if quote_depth > 0 {
-                            if html_only_paragraph_source(&text[paragraph_range.clone()]) {
-                                push_html_block(
-                                    &mut quote_children,
-                                    text[paragraph_range.clone()].to_string(),
-                                    paragraph_range,
-                                );
-                            } else {
-                                push_nonempty_block(
-                                    &mut quote_children,
-                                    PreviewBlock::Paragraph {
-                                        text: finish_rich_text(spans),
-                                        source_range: paragraph_range,
-                                    },
-                                );
-                            }
+                            emit_finished_paragraph(
+                                &mut quote_children,
+                                text,
+                                spans,
+                                paragraph_range,
+                            );
                         } else if table.is_none() {
-                            if html_only_paragraph_source(&text[paragraph_range.clone()]) {
-                                push_html_block(
-                                    &mut blocks,
-                                    text[paragraph_range.clone()].to_string(),
-                                    paragraph_range,
-                                );
-                            } else {
-                                push_nonempty_block(
-                                    &mut blocks,
-                                    PreviewBlock::Paragraph {
-                                        text: finish_rich_text(spans),
-                                        source_range: paragraph_range,
-                                    },
-                                );
-                            }
+                            emit_finished_paragraph(&mut blocks, text, spans, paragraph_range);
                         }
                     }
                 }
@@ -3064,12 +3063,22 @@ impl MarkdownDocument {
                 }
                 Event::End(TagEnd::Image) => {
                     if let Some(image) = image.take() {
-                        blocks.push(PreviewBlock::Image {
-                            alt: clean_preview_text(&image.alt),
-                            url: image.url,
-                            title: image.title,
-                            source_range: image.source_range,
-                        });
+                        if let Err(image) = append_preview_image(
+                            &mut heading,
+                            &mut paragraph,
+                            &mut quote,
+                            quote_depth,
+                            &mut list_item,
+                            &mut table,
+                            image,
+                        ) {
+                            blocks.push(PreviewBlock::Image {
+                                alt: clean_preview_text(&image.alt),
+                                url: image.url,
+                                title: image.title,
+                                source_range: image.source_range,
+                            });
+                        }
                     }
                 }
                 Event::Start(Tag::CodeBlock(kind)) => {
@@ -3930,6 +3939,44 @@ fn clamp_range_to_char_boundaries(
 
 fn offset_with_delta(offset: usize, delta: isize) -> usize {
     crate::text_util::offset_with_delta(offset, delta)
+}
+
+fn emit_finished_paragraph(
+    blocks: &mut Vec<PreviewBlock>,
+    text: &str,
+    spans: Vec<InlineSpan>,
+    paragraph_range: Range<usize>,
+) {
+    if html_only_paragraph_source(&text[paragraph_range.clone()]) {
+        push_html_block(
+            blocks,
+            text[paragraph_range.clone()].to_string(),
+            paragraph_range,
+        );
+        return;
+    }
+    let rich = finish_rich_text(spans);
+    if let Some(images) = standalone_inline_images(&rich) {
+        for image in images {
+            push_nonempty_block(
+                blocks,
+                PreviewBlock::Image {
+                    alt: image.alt,
+                    url: image.url,
+                    title: image.title,
+                    source_range: image.source_range,
+                },
+            );
+        }
+        return;
+    }
+    push_nonempty_block(
+        blocks,
+        PreviewBlock::Paragraph {
+            text: rich,
+            source_range: paragraph_range,
+        },
+    );
 }
 
 fn push_html_block(blocks: &mut Vec<PreviewBlock>, html: String, source_range: Range<usize>) {
@@ -5096,6 +5143,7 @@ mod tests {
                         },
                         link: None,
                         math: None,
+                        image: None,
                     },
                     InlineSpan {
                         text: " text.".into(),
@@ -5938,6 +5986,42 @@ mod tests {
                 && url == "images/arch.png"
                 && title == "System overview"
         ));
+    }
+
+    #[test]
+    fn preview_keeps_mixed_markdown_image_inline_with_trailing_prose() {
+        let source = "![image.png](https://example.com/a.png)和其他瀚博半导体商标均为瀚博。";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+        assert_eq!(blocks.len(), 1, "got {blocks:?}");
+        let PreviewBlock::Paragraph { text, .. } = &blocks[0] else {
+            panic!("expected one mixed paragraph, got {blocks:?}");
+        };
+        assert_eq!(text.text, "和其他瀚博半导体商标均为瀚博。");
+        let image = text
+            .spans
+            .iter()
+            .find_map(|span| span.image.as_ref())
+            .unwrap_or_else(|| panic!("missing inline image span in {:?}", text.spans));
+        assert_eq!(image.alt, "image.png");
+        assert_eq!(image.url, "https://example.com/a.png");
+        assert!(text.spans.iter().any(
+            |span| span.image.is_none() && span.text.contains("和其他瀚博半导体商标均为瀚博。")
+        ));
+
+        let hello = MarkdownDocument::from_text("hello ![alt](url) world");
+        let blocks = hello.preview_blocks();
+        let PreviewBlock::Paragraph { text, .. } = &blocks[0] else {
+            panic!("expected mixed paragraph, got {blocks:?}");
+        };
+        assert_eq!(text.text, "hello  world");
+        assert_eq!(
+            text.spans
+                .iter()
+                .filter_map(|span| span.image.as_ref().map(|image| image.url.as_str()))
+                .collect::<Vec<_>>(),
+            ["url"]
+        );
     }
 
     #[test]

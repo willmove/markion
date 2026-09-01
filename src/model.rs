@@ -873,6 +873,16 @@ impl InlineStyle {
     }
 }
 
+/// A Markdown `![alt](url)` (or equivalent) kept inside a prose construct
+/// instead of being extracted as a block-level [`PreviewBlock::Image`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineImage {
+    pub alt: String,
+    pub url: String,
+    pub title: Option<String>,
+    pub source_range: Range<usize>,
+}
+
 /// A run of preview text sharing one inline style (and optional link target).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InlineSpan {
@@ -880,6 +890,7 @@ pub struct InlineSpan {
     pub style: InlineStyle,
     pub link: Option<String>,
     pub math: Option<MathSource>,
+    pub image: Option<InlineImage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1296,6 +1307,7 @@ impl RichText {
                 style: InlineStyle::default(),
                 link: None,
                 math: None,
+                image: None,
             }],
             text,
         }

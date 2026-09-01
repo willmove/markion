@@ -9,9 +9,9 @@ use crate::model::{
     AlertKind, InlineStyle, MathDelimiter, MathLayoutStyle, MathSource, PreviewBlock, VisualBlock,
     VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
     VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualInlineRun, VisualNavigationTarget, VisualProjection, VisualProjectionSegment,
-    VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge, VisualRevealGroup,
-    VisualRevealKind, VisualSourceIslandKind, VisualTableCell,
+    VisualHtmlImage, VisualInlineRun, VisualNavigationTarget, VisualProjection,
+    VisualProjectionSegment, VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge,
+    VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualTableCell,
 };
 use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fence};
 use crate::table::table_cell_source_ranges;
@@ -685,42 +685,78 @@ pub(crate) fn build_visual_blocks(
     blocks
 }
 
+fn is_image_partition_parent(leaf: &VisualLeaf<'_>) -> bool {
+    !leaf.marker_only
+        && matches!(
+            leaf.block,
+            PreviewBlock::Paragraph { .. } | PreviewBlock::Heading { .. }
+        )
+}
+
+fn image_range_contained_in_parent(image: &Range<usize>, parent: &Range<usize>) -> bool {
+    image.start >= parent.start && image.end <= parent.end
+}
+
+fn later_partition_parent_owns_image(
+    expanded: &[VisualLeaf<'_>],
+    source_ranges: &[Range<usize>],
+    image_index: usize,
+) -> bool {
+    let image_range = &source_ranges[image_index];
+    expanded
+        .iter()
+        .zip(source_ranges.iter())
+        .skip(image_index + 1)
+        .any(|(leaf, parent_range)| {
+            is_image_partition_parent(leaf)
+                && image_range_contained_in_parent(image_range, parent_range)
+        })
+}
+
 fn partition_prose_around_nested_images<'a>(
     expanded: Vec<VisualLeaf<'a>>,
     source_ranges: Vec<Range<usize>>,
 ) -> (Vec<VisualLeaf<'a>>, Vec<Range<usize>>) {
     let mut out_leaves = Vec::with_capacity(expanded.len());
     let mut out_ranges = Vec::with_capacity(source_ranges.len());
+    let mut consumed = vec![false; expanded.len()];
     let mut index = 0;
     while index < expanded.len() {
         let leaf = &expanded[index];
         let parent_range = source_ranges[index].clone();
-        let is_prose_parent = !leaf.marker_only
-            && matches!(
-                leaf.block,
-                PreviewBlock::Paragraph { .. } | PreviewBlock::Heading { .. }
-            );
-        if !is_prose_parent {
+
+        if matches!(leaf.block, PreviewBlock::Image { .. }) {
+            if consumed[index]
+                || later_partition_parent_owns_image(&expanded, &source_ranges, index)
+            {
+                index += 1;
+                continue;
+            }
             out_leaves.push(leaf.clone());
             out_ranges.push(parent_range);
             index += 1;
             continue;
         }
 
-        let mut nested = Vec::new();
-        let mut look = index + 1;
-        while look < expanded.len() {
-            if !matches!(expanded[look].block, PreviewBlock::Image { .. }) {
-                break;
-            }
-            let image_range = source_ranges[look].clone();
-            if image_range.start >= parent_range.start && image_range.end <= parent_range.end {
-                nested.push((look, image_range));
-                look += 1;
-            } else {
-                break;
-            }
+        if !is_image_partition_parent(leaf) {
+            out_leaves.push(leaf.clone());
+            out_ranges.push(parent_range);
+            index += 1;
+            continue;
         }
+
+        let mut nested: Vec<(usize, Range<usize>)> = expanded
+            .iter()
+            .zip(source_ranges.iter())
+            .enumerate()
+            .filter(|(look, (nested_leaf, image_range))| {
+                !consumed[*look]
+                    && matches!(nested_leaf.block, PreviewBlock::Image { .. })
+                    && image_range_contained_in_parent(image_range, &parent_range)
+            })
+            .map(|(look, (_, image_range))| (look, image_range.clone()))
+            .collect();
+        nested.sort_by_key(|(_, image_range)| image_range.start);
 
         if nested.is_empty() {
             out_leaves.push(leaf.clone());
@@ -744,13 +780,14 @@ fn partition_prose_around_nested_images<'a>(
             }
             out_leaves.push(image_leaf);
             out_ranges.push(image_range.clone());
+            consumed[*image_index] = true;
             cursor = cursor.max(image_range.end);
         }
         if cursor < parent_range.end {
             out_leaves.push(leaf.clone());
             out_ranges.push(cursor..parent_range.end);
         }
-        index = look;
+        index += 1;
     }
     (out_leaves, out_ranges)
 }
@@ -1490,6 +1527,7 @@ fn inline_runs(
     // uncovered one-byte `\` gap before a Text event starting with ASCII
     // punctuation marks an escape whose character must be claimed separately.
     let mut previous_leaf_end = 0usize;
+    let mut image_open: Option<(String, Option<String>, Range<usize>, String)> = None;
 
     for (event, relative_range) in
         Parser::new_ext(parse_input, visual_markdown_options()).into_offset_iter()
@@ -1578,52 +1616,105 @@ fn inline_runs(
             Event::End(TagEnd::Link) => {
                 link_stack.pop();
             }
-            Event::Text(visible) => {
-                let mut visible_text = visible.as_ref();
-                let mut text_start = relative_range.start;
-                // Claim a leading escaped character merged into this Text
-                // event: the backslash gap sits uncovered before the event and
-                // the first source byte is the escaped ASCII punctuation.
-                if relative_range.start == previous_leaf_end + 1
-                    && source.as_bytes().get(previous_leaf_end) == Some(&b'\\')
-                    && source
-                        .as_bytes()
-                        .get(relative_range.start)
-                        .is_some_and(|byte| byte.is_ascii_punctuation())
-                    && visible_text
-                        .starts_with(&source[relative_range.start..relative_range.start + 1])
-                {
-                    candidates.push(RevealCandidate {
-                        kind: VisualRevealKind::Escape,
-                        source_range: block_range.start + previous_leaf_end
-                            ..block_range.start + relative_range.start + 1,
-                        link_target_range: None,
-                    });
-                    push_run(
-                        &mut runs,
-                        text,
-                        &source[relative_range.start..relative_range.start + 1],
-                        block_range.start + relative_range.start
-                            ..block_range.start + relative_range.start + 1,
-                        style,
-                        current_link_target.clone(),
-                        current_link_nav.clone(),
-                        false,
-                    );
-                    visible_text = &visible_text[1..];
-                    text_start = relative_range.start + 1;
+            Event::Start(Tag::Image {
+                dest_url, title, ..
+            }) => {
+                image_open = Some((
+                    dest_url.to_string(),
+                    (!title.is_empty()).then(|| title.to_string()),
+                    event_range,
+                    String::new(),
+                ));
+            }
+            Event::End(TagEnd::Image) => {
+                if let Some((url, title, start_range, alt)) = image_open.take() {
+                    let range = if start_range.end > start_range.start {
+                        start_range.start..start_range.end.max(event_range.end)
+                    } else {
+                        event_range.clone()
+                    };
+                    let range = range.start.max(block_range.start)..range.end.min(block_range.end);
+                    if range.start < range.end
+                        && text.is_char_boundary(range.start)
+                        && text.is_char_boundary(range.end)
+                    {
+                        candidates.push(RevealCandidate {
+                            kind: VisualRevealKind::HtmlImage,
+                            source_range: range.clone(),
+                            link_target_range: None,
+                        });
+                        runs.push(VisualInlineRun {
+                            visible_text: text[range.clone()].to_string(),
+                            source_range: range.clone(),
+                            content_range: range.clone(),
+                            style,
+                            link_target_range: current_link_target,
+                            navigation: current_link_nav,
+                            math: None,
+                            html_image: Some(VisualHtmlImage {
+                                alt: alt.trim().to_string(),
+                                url,
+                                title,
+                                width: None,
+                                height: None,
+                            }),
+                            conservative_fallback: false,
+                        });
+                        previous_leaf_end = previous_leaf_end
+                            .max((range.end - block_range.start).min(source.len()));
+                    }
                 }
-                if text_start < relative_range.end {
-                    push_text_runs(
-                        &mut runs,
-                        &mut candidates,
-                        text,
-                        visible_text,
-                        block_range.start + text_start..block_range.start + relative_range.end,
-                        style,
-                        current_link_target,
-                        current_link_nav,
-                    );
+            }
+            Event::Text(visible) => {
+                if let Some((_, _, _, alt)) = image_open.as_mut() {
+                    alt.push_str(visible.as_ref());
+                } else {
+                    let mut visible_text = visible.as_ref();
+                    let mut text_start = relative_range.start;
+                    // Claim a leading escaped character merged into this Text
+                    // event: the backslash gap sits uncovered before the event and
+                    // the first source byte is the escaped ASCII punctuation.
+                    if relative_range.start == previous_leaf_end + 1
+                        && source.as_bytes().get(previous_leaf_end) == Some(&b'\\')
+                        && source
+                            .as_bytes()
+                            .get(relative_range.start)
+                            .is_some_and(|byte| byte.is_ascii_punctuation())
+                        && visible_text
+                            .starts_with(&source[relative_range.start..relative_range.start + 1])
+                    {
+                        candidates.push(RevealCandidate {
+                            kind: VisualRevealKind::Escape,
+                            source_range: block_range.start + previous_leaf_end
+                                ..block_range.start + relative_range.start + 1,
+                            link_target_range: None,
+                        });
+                        push_run(
+                            &mut runs,
+                            text,
+                            &source[relative_range.start..relative_range.start + 1],
+                            block_range.start + relative_range.start
+                                ..block_range.start + relative_range.start + 1,
+                            style,
+                            current_link_target.clone(),
+                            current_link_nav.clone(),
+                            false,
+                        );
+                        visible_text = &visible_text[1..];
+                        text_start = relative_range.start + 1;
+                    }
+                    if text_start < relative_range.end {
+                        push_text_runs(
+                            &mut runs,
+                            &mut candidates,
+                            text,
+                            visible_text,
+                            block_range.start + text_start..block_range.start + relative_range.end,
+                            style,
+                            current_link_target,
+                            current_link_nav,
+                        );
+                    }
                 }
             }
             Event::Code(visible) => {
@@ -1645,16 +1736,22 @@ fn inline_runs(
                     false,
                 );
             }
-            Event::SoftBreak | Event::HardBreak => push_run(
-                &mut runs,
-                text,
-                "\n",
-                event_range,
-                style,
-                current_link_target,
-                current_link_nav,
-                false,
-            ),
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some((_, _, _, alt)) = image_open.as_mut() {
+                    alt.push(' ');
+                } else {
+                    push_run(
+                        &mut runs,
+                        text,
+                        "\n",
+                        event_range,
+                        style,
+                        current_link_target,
+                        current_link_nav,
+                        false,
+                    );
+                }
+            }
             Event::FootnoteReference(visible) => {
                 let mut footnote_style = style;
                 footnote_style.superscript = true;
@@ -2670,6 +2767,14 @@ fn build_reveal_groups(
 /// slice must open with a supported style tag and end with the closing tag of
 /// the same kind. Content between the tags may contain anything, including
 /// nested supported pairs.
+fn looks_like_markdown_image(source: &str) -> bool {
+    let source = source.trim();
+    source.starts_with("![")
+        && source.len() >= 5
+        && ((source.contains("](") && source.ends_with(')'))
+            || (source.contains("][") && source.ends_with(']')))
+}
+
 fn inline_html_pair_is_exact(source: &str) -> bool {
     let Some(open_end) = source.find('>') else {
         return false;
@@ -2717,7 +2822,9 @@ fn reveal_candidate_is_exact(
             source.starts_with("~~") && source.ends_with("~~") && source.len() >= 4
         }
         VisualRevealKind::InlineCode => source.starts_with('`') && source.ends_with('`'),
-        VisualRevealKind::HtmlImage => parse_inline_html_image(source).is_some(),
+        VisualRevealKind::HtmlImage => {
+            parse_inline_html_image(source).is_some() || looks_like_markdown_image(source)
+        }
         VisualRevealKind::Escape => {
             source.len() == 2
                 && source.as_bytes()[0] == b'\\'
@@ -5234,7 +5341,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_paragraph_image_without_blank_line_partitions_without_island() {
+    fn mixed_paragraph_image_without_blank_line_keeps_inline_atom() {
         let source = "**已订阅Google AI Pro**\n![image.png](https://example.com/a.png)";
         let blocks = MarkdownDocument::from_text(source).visual_blocks();
         assert_complete_disjoint_coverage(&blocks, source);
@@ -5243,33 +5350,49 @@ mod tests {
             .iter()
             .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
             .collect::<Vec<_>>();
-        assert_eq!(content.len(), 2, "kinds: {:?}", content_kinds(&blocks));
+        assert_eq!(content.len(), 1, "kinds: {:?}", content_kinds(&blocks));
         assert!(
             matches!(content[0].kind, VisualBlockKind::Paragraph),
-            "leading row should be a paragraph, got {:?}",
+            "mixed image should stay in the parent paragraph, got {:?}",
             content[0].kind
-        );
-        assert!(
-            matches!(content[1].kind, VisualBlockKind::Image { .. }),
-            "nested image should stay VisualBlockKind::Image, got {:?}",
-            content[1].kind
-        );
-        assert_ne!(
-            content[1].source_island,
-            Some(VisualSourceIslandKind::Unsupported)
         );
         assert!(
             content[0]
                 .editable_runs
                 .iter()
-                .all(|run| !run.visible_text.contains("image.png")),
-            "alt text leaked into paragraph runs: {:?}",
+                .any(|run| run.html_image.as_ref().is_some_and(|image| {
+                    image.url == "https://example.com/a.png" && image.alt == "image.png"
+                })),
+            "expected an inline markdown image atom, got {:?}",
             content[0].editable_runs
+        );
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text.contains("已订阅Google AI Pro")
+                    && run.html_image.is_none()),
+            "leading prose missing: {:?}",
+            content[0].editable_runs
+        );
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .filter(|run| run.html_image.is_none())
+                .all(|run| !run.visible_text.contains("![")
+                    && !run.visible_text.contains("https://example.com/a.png")),
+            "image syntax leaked into prose runs: {:?}",
+            content[0].editable_runs
+        );
+        assert_ne!(
+            content[0].source_island,
+            Some(VisualSourceIslandKind::Unsupported)
         );
     }
 
     #[test]
-    fn same_line_and_multiple_inline_images_partition_into_disjoint_rows() {
+    fn same_line_and_multiple_inline_images_stay_in_one_row() {
         let source = "hello ![alt](url) world";
         let blocks = MarkdownDocument::from_text(source).visual_blocks();
         assert_complete_disjoint_coverage(&blocks, source);
@@ -5277,25 +5400,24 @@ mod tests {
             .iter()
             .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
             .collect::<Vec<_>>();
-        assert_eq!(content.len(), 3, "kinds: {:?}", content_kinds(&blocks));
+        assert_eq!(content.len(), 1, "kinds: {:?}", content_kinds(&blocks));
         assert!(matches!(content[0].kind, VisualBlockKind::Paragraph));
-        assert!(matches!(content[1].kind, VisualBlockKind::Image { .. }));
-        assert!(matches!(content[2].kind, VisualBlockKind::Paragraph));
-        assert_ne!(
-            content[1].source_island,
-            Some(VisualSourceIslandKind::Unsupported)
+        assert!(content[0].editable_runs.iter().any(|run| {
+            run.html_image
+                .as_ref()
+                .is_some_and(|image| image.url == "url")
+        }));
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text.contains("hello") && run.html_image.is_none())
         );
         assert!(
             content[0]
                 .editable_runs
                 .iter()
-                .any(|run| run.visible_text.contains("hello"))
-        );
-        assert!(
-            content[2]
-                .editable_runs
-                .iter()
-                .any(|run| run.visible_text.contains("world"))
+                .any(|run| run.visible_text.contains("world") && run.html_image.is_none())
         );
 
         let source = "a ![one](one.png) b ![two](two.png) c";
@@ -5305,12 +5427,13 @@ mod tests {
             .iter()
             .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
             .collect::<Vec<_>>();
-        assert_eq!(content.len(), 5, "kinds: {:?}", content_kinds(&blocks));
-        assert!(matches!(content[0].kind, VisualBlockKind::Paragraph));
-        assert!(matches!(content[1].kind, VisualBlockKind::Image { .. }));
-        assert!(matches!(content[2].kind, VisualBlockKind::Paragraph));
-        assert!(matches!(content[3].kind, VisualBlockKind::Image { .. }));
-        assert!(matches!(content[4].kind, VisualBlockKind::Paragraph));
+        assert_eq!(content.len(), 1, "kinds: {:?}", content_kinds(&blocks));
+        let images = content[0]
+            .editable_runs
+            .iter()
+            .filter_map(|run| run.html_image.as_ref().map(|image| image.url.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(images, ["one.png", "two.png"]);
         assert!(
             content
                 .iter()
@@ -5352,11 +5475,13 @@ mod tests {
             .iter()
             .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
             .collect::<Vec<_>>();
+        assert_eq!(content.len(), 1, "kinds: {:?}", content_kinds(&blocks));
         assert!(
-            content
-                .iter()
-                .any(|block| matches!(block.kind, VisualBlockKind::Image { .. })),
-            "expected an image row, got {:?}",
+            content[0].editable_runs.iter().any(|run| run
+                .html_image
+                .as_ref()
+                .is_some_and(|image| image.url == "url")),
+            "expected an inline image atom in the quoted paragraph, got {:?}",
             content_kinds(&blocks)
         );
         assert!(content.iter().all(|block| block.quote_context.is_some()));
@@ -5364,6 +5489,168 @@ mod tests {
             content
                 .iter()
                 .all(|block| { block.source_island != Some(VisualSourceIslandKind::Unsupported) })
+        );
+    }
+
+    #[test]
+    fn leading_same_line_image_plus_trailing_prose_stays_inline() {
+        let source = "![image.png](https://example.com/a.png)和其他瀚博半导体商标均为瀚博。";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        assert_complete_disjoint_coverage(&blocks, source);
+
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert_eq!(content.len(), 1, "kinds: {:?}", content_kinds(&blocks));
+        assert!(
+            matches!(content[0].kind, VisualBlockKind::Paragraph),
+            "leading image plus trailing prose should stay one paragraph, got {:?}",
+            content[0].kind
+        );
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.html_image.as_ref().is_some_and(|image| {
+                    image.url == "https://example.com/a.png" && image.alt == "image.png"
+                })),
+            "expected an inline markdown image atom: {:?}",
+            content[0].editable_runs
+        );
+        assert!(
+            content
+                .iter()
+                .all(|block| block.source_island != Some(VisualSourceIslandKind::Unsupported)),
+            "leading image must not overlap into an Unsupported island"
+        );
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .filter(|run| run.html_image.is_none())
+                .all(|run| !run.visible_text.contains("![")
+                    && !run.visible_text.contains("https://example.com/a.png")
+                    && !run.visible_text.contains("image.png")),
+            "image syntax leaked into trailing prose: {:?}",
+            content[0].editable_runs
+        );
+        assert!(
+            content[0].editable_runs.iter().any(|run| run
+                .visible_text
+                .contains("和其他瀚博半导体商标均为瀚博。")
+                && run.html_image.is_none()),
+            "trailing prose missing: {:?}",
+            content[0].editable_runs
+        );
+    }
+
+    #[test]
+    fn leading_image_in_heading_and_quoted_paragraph_stays_inline() {
+        let heading = "# ![alt](url) heading rest";
+        let blocks = MarkdownDocument::from_text(heading).visual_blocks();
+        assert_complete_disjoint_coverage(&blocks, heading);
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert_eq!(content.len(), 1, "kinds: {:?}", content_kinds(&blocks));
+        assert!(
+            matches!(content[0].kind, VisualBlockKind::Heading { .. }),
+            "expected a single heading row, got {:?}",
+            content_kinds(&blocks)
+        );
+        assert!(content[0].editable_runs.iter().any(|run| {
+            run.html_image
+                .as_ref()
+                .is_some_and(|image| image.url == "url")
+        }));
+        assert!(
+            content
+                .iter()
+                .all(|block| block.source_island != Some(VisualSourceIslandKind::Unsupported))
+        );
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .filter(|run| run.html_image.is_none())
+                .all(|run| !run.visible_text.contains("![") && !run.visible_text.contains("url")),
+            "image syntax leaked into heading runs"
+        );
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text.contains("heading rest") && run.html_image.is_none())
+        );
+
+        let quoted = "> ![alt](url) quoted rest";
+        let blocks = MarkdownDocument::from_text(quoted).visual_blocks();
+        assert_complete_disjoint_coverage(&blocks, quoted);
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert_eq!(content.len(), 1, "kinds: {:?}", content_kinds(&blocks));
+        assert!(
+            content[0].editable_runs.iter().any(|run| run
+                .html_image
+                .as_ref()
+                .is_some_and(|image| image.url == "url")),
+            "expected an inline image atom in the quote, got {:?}",
+            content_kinds(&blocks)
+        );
+        assert!(content.iter().all(|block| block.quote_context.is_some()));
+        assert!(
+            content
+                .iter()
+                .all(|block| block.source_island != Some(VisualSourceIslandKind::Unsupported))
+        );
+        assert!(
+            content[0]
+                .editable_runs
+                .iter()
+                .filter(|run| run.html_image.is_none())
+                .all(|run| !run.visible_text.contains("![") && !run.visible_text.contains("url")),
+            "image syntax leaked into quoted prose"
+        );
+    }
+
+    #[test]
+    fn list_item_inline_markdown_image_stays_unpartitioned() {
+        let source = "- hello ![alt](url) world";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        let content = blocks
+            .iter()
+            .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
+            .collect::<Vec<_>>();
+        assert!(
+            content
+                .iter()
+                .any(|block| matches!(block.kind, VisualBlockKind::ListItem { .. })),
+            "list item row must remain, got {:?}",
+            content_kinds(&blocks)
+        );
+        assert!(
+            content
+                .iter()
+                .all(|block| !matches!(block.kind, VisualBlockKind::Paragraph)),
+            "inline image must not emit a continuation paragraph (second bullet), got {:?}",
+            content_kinds(&blocks)
+        );
+        assert!(
+            content[0].editable_runs.iter().any(|run| run
+                .html_image
+                .as_ref()
+                .is_some_and(|image| image.url == "url")),
+            "list item should keep the markdown image as an inline atom, got {:?}",
+            content[0].editable_runs
+        );
+        assert!(
+            content
+                .iter()
+                .all(|block| block.source_island != Some(VisualSourceIslandKind::Unsupported))
         );
     }
 

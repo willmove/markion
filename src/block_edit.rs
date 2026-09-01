@@ -797,7 +797,7 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_image_continuation_delete_does_not_swallow_the_image() {
+    fn mixed_inline_image_deletes_as_one_prose_row() {
         let source = "hello ![alt](url) world";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
@@ -805,47 +805,27 @@ mod tests {
             .iter()
             .filter(|block| !matches!(block.kind, VisualBlockKind::Whitespace))
             .collect::<Vec<_>>();
-        let image = content
-            .iter()
-            .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
-            .expect("partitioned image row");
-        let trailing = content
-            .iter()
-            .rev()
-            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
-            .expect("trailing prose slice");
+        assert_eq!(content.len(), 1, "mixed image should be one row");
+        assert!(matches!(content[0].kind, VisualBlockKind::Paragraph));
         assert!(
-            trailing.source_range.start >= image.source_range.end,
-            "continuation must start after the image slice"
-        );
-        assert!(
-            trailing.source_range.end <= image.source_range.start
-                || trailing.source_range.start >= image.source_range.end,
-            "continuation range must not cover the image"
+            content[0]
+                .editable_runs
+                .iter()
+                .any(|run| run.html_image.is_some())
         );
 
-        let target = BlockTarget::from_block(doc.version(), trailing);
-        match delete_block(doc.text(), doc.version(), &blocks, &target) {
-            Ok(edit) => {
-                assert!(
-                    edit.range.end <= image.source_range.start
-                        || edit.range.start >= image.source_range.end,
-                    "delete range {:?} swallowed image {:?}",
-                    edit.range,
-                    image.source_range
-                );
-                let mut remaining = source.to_string();
-                remaining.replace_range(edit.range, &edit.replacement);
-                assert!(
-                    remaining.contains("![alt](url)"),
-                    "deleting leftover prose must keep the image syntax, got {remaining:?}"
-                );
-            }
-            Err(BlockEditError::Ambiguous | BlockEditError::Unsupported) => {}
-            Err(other) => panic!("unexpected delete error: {other:?}"),
-        }
+        let target = BlockTarget::from_block(doc.version(), content[0]);
+        let edit = delete_block(doc.text(), doc.version(), &blocks, &target)
+            .expect("a single mixed paragraph is a deletable block");
+        let mut remaining = source.to_string();
+        remaining.replace_range(edit.range, &edit.replacement);
+        assert!(
+            !remaining.contains("![alt](url)"),
+            "deleting the mixed row removes the image syntax, got {remaining:?}"
+        );
+        assert!(!remaining.contains("hello"));
 
-        let adjacent = "**已订阅Google AI Pro**\n![image.png](https://example.com/a.png)";
+        let adjacent = "Intro\n\n![solo](solo.png)";
         let doc = MarkdownDocument::from_text(adjacent);
         let blocks = doc.visual_blocks_shared();
         let content = blocks
@@ -859,7 +839,7 @@ mod tests {
         let image = content
             .iter()
             .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
-            .expect("image row");
+            .expect("standalone image row");
         let target = BlockTarget::from_block(doc.version(), leading);
         let edit = delete_block(doc.text(), doc.version(), &blocks, &target)
             .expect("leading paragraph starts at a line boundary");
@@ -871,8 +851,8 @@ mod tests {
         );
         let mut remaining = adjacent.to_string();
         remaining.replace_range(edit.range, &edit.replacement);
-        assert!(remaining.contains("![image.png](https://example.com/a.png)"));
-        assert!(!remaining.contains("已订阅Google AI Pro"));
+        assert!(remaining.contains("![solo](solo.png)"));
+        assert!(!remaining.contains("Intro"));
     }
 
     #[test]

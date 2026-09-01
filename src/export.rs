@@ -437,6 +437,17 @@ fn pdf_run(span: &InlineSpan, footnotes: &[String]) -> Option<PdfRun> {
     if let Some(math) = &span.math {
         return Some(pdf_inline_math(math, span.link.as_deref()));
     }
+    if let Some(image) = &span.image {
+        let label = if image.alt.is_empty() {
+            image.url.clone()
+        } else {
+            image.alt.clone()
+        };
+        return Some(PdfRun {
+            text: label,
+            ..PdfRun::default()
+        });
+    }
     if span.text.is_empty() {
         return None;
     }
@@ -1387,6 +1398,19 @@ impl DocxRenderState {
                 runs.push_str(&format!("<m:oMath>{}</m:oMath>", omml_inner(&math.latex)));
                 continue;
             }
+            if let Some(image) = &span.image {
+                if let Some(drawing) = self.embed_image(&image.alt, &image.url) {
+                    runs.push_str(&drawing);
+                } else {
+                    let label = if image.alt.is_empty() {
+                        image.url.as_str()
+                    } else {
+                        image.alt.as_str()
+                    };
+                    runs.push_str(&docx_plain_runs(label));
+                }
+                continue;
+            }
             if span.text.is_empty() {
                 continue;
             }
@@ -1807,6 +1831,7 @@ fn bolded(rich: &RichText) -> RichText {
                 },
                 link: None,
                 math: None,
+                image: None,
             });
         }
         return rich;
@@ -2782,6 +2807,7 @@ mod tests {
                 },
                 link: None,
                 math: None,
+                image: None,
             }],
         };
         let runs = state.rich_runs(&rich);
@@ -2801,6 +2827,7 @@ mod tests {
                 style: InlineStyle::default(),
                 link: Some(String::new()),
                 math: None,
+                image: None,
             }],
         };
         let runs = state.rich_runs(&rich);

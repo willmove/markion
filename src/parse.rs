@@ -12,7 +12,8 @@ use pulldown_cmark::{BlockQuoteKind, HeadingLevel, Options};
 
 use crate::escape::escape_html_attribute;
 use crate::model::{
-    HtmlImgLength, InlineSpan, InlineStyle, MathSource, PreviewBlock, RichText, VisualHtmlImage,
+    HtmlImgLength, InlineImage, InlineSpan, InlineStyle, MathSource, PreviewBlock, RichText,
+    VisualHtmlImage,
 };
 use crate::table::TableDraft;
 
@@ -160,7 +161,10 @@ pub fn html_table_column_weights(grid: &HtmlTableGrid) -> Vec<f32> {
         return vec![1f32; columns];
     }
     let floor = (max_weight * 0.1).clamp(0.75, 3.0);
-    weights.into_iter().map(|weight| weight.max(floor)).collect()
+    weights
+        .into_iter()
+        .map(|weight| weight.max(floor))
+        .collect()
 }
 
 /// True when a table row contains at least one header cell with visible
@@ -405,6 +409,7 @@ pub(crate) fn push_preview_math(
             style,
             link: link.map(str::to_string),
             math: Some(math),
+            image: None,
         });
         return;
     }
@@ -426,6 +431,7 @@ pub(crate) fn push_preview_math(
         style,
         link: link.map(str::to_string),
         math: Some(math),
+        image: None,
     });
 }
 
@@ -444,6 +450,7 @@ pub(crate) fn append_span(
         && last.style == style
         && last.link.as_deref() == link
         && last.math.is_none()
+        && last.image.is_none()
     {
         last.text.push_str(text);
         return;
@@ -453,7 +460,67 @@ pub(crate) fn append_span(
         style,
         link: link.map(str::to_string),
         math: None,
+        image: None,
     });
+}
+
+pub(crate) fn append_preview_image(
+    heading: &mut Option<(u8, Vec<InlineSpan>, Range<usize>)>,
+    paragraph: &mut Option<(Vec<InlineSpan>, Range<usize>)>,
+    quote: &mut Vec<InlineSpan>,
+    quote_depth: usize,
+    list_item: &mut Option<ListItemDraft>,
+    table: &mut Option<TableDraft>,
+    image: ImageDraft,
+) -> Result<(), ImageDraft> {
+    let spans = if let Some(table) = table.as_mut() {
+        &mut table.current_cell
+    } else if let Some((_, spans, _)) = heading.as_mut() {
+        spans
+    } else if let Some(item) = list_item.as_mut() {
+        &mut item.spans
+    } else if let Some((paragraph, _)) = paragraph.as_mut() {
+        paragraph
+    } else if quote_depth > 0 {
+        quote
+    } else {
+        return Err(image);
+    };
+    spans.push(InlineSpan {
+        text: String::new(),
+        style: InlineStyle::default(),
+        link: None,
+        math: None,
+        image: Some(InlineImage {
+            alt: clean_preview_text(&image.alt),
+            url: image.url,
+            title: image.title,
+            source_range: image.source_range,
+        }),
+    });
+    Ok(())
+}
+
+/// Images that are the only content of a paragraph, so the paragraph can
+/// still flush as block-level [`PreviewBlock::Image`] rows.
+pub(crate) fn standalone_inline_images(rich: &RichText) -> Option<Vec<InlineImage>> {
+    let mut images = Vec::new();
+    for span in &rich.spans {
+        if let Some(image) = &span.image {
+            images.push(image.clone());
+        } else if !span.text.trim().is_empty() {
+            return None;
+        }
+    }
+    (!images.is_empty()).then_some(images)
+}
+
+pub(crate) fn collect_rich_image_urls(rich: &RichText, out: &mut Vec<String>) {
+    for span in &rich.spans {
+        if let Some(image) = &span.image {
+            out.push(image.url.clone());
+        }
+    }
 }
 
 /// Parses extended inline syntax (`==highlight==`, `^sup^`, `~sub~`, emoji
@@ -516,6 +583,10 @@ fn append_extended_segment(
 pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
     let mut lines: Vec<Vec<InlineSpan>> = vec![Vec::new()];
     for span in spans {
+        if span.image.is_some() {
+            lines.last_mut().expect("lines is non-empty").push(span);
+            continue;
+        }
         let mut first = true;
         for part in span.text.split('\n') {
             if !first {
@@ -533,6 +604,7 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
                         math: (!span.text.contains('\n') && part == span.text)
                             .then(|| span.math.clone())
                             .flatten(),
+                        image: None,
                     });
             }
         }
@@ -543,10 +615,10 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
     for mut line in lines {
         while let Some(first) = line.first_mut() {
             let trimmed = first.text.trim_start();
-            if trimmed.is_empty() {
+            if trimmed.is_empty() && first.image.is_none() {
                 line.remove(0);
             } else {
-                if trimmed.len() != first.text.len() {
+                if trimmed.len() != first.text.len() && first.image.is_none() {
                     first.text = trimmed.to_string();
                 }
                 break;
@@ -554,10 +626,10 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
         }
         while let Some(last) = line.last_mut() {
             let trimmed = last.text.trim_end();
-            if trimmed.is_empty() {
+            if trimmed.is_empty() && last.image.is_none() {
                 line.pop();
             } else {
-                if trimmed.len() != last.text.len() {
+                if trimmed.len() != last.text.len() && last.image.is_none() {
                     last.text = trimmed.to_string();
                 }
                 break;
@@ -571,7 +643,7 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
         }
         emitted_line = true;
         for span in line {
-            if span.math.is_some() {
+            if span.math.is_some() || span.image.is_some() {
                 merged.push(span);
             } else {
                 append_span(&mut merged, &span.text, span.style, span.link.as_deref());
@@ -589,7 +661,7 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
 pub(crate) fn push_nonempty_block(blocks: &mut Vec<PreviewBlock>, block: PreviewBlock) {
     match &block {
         PreviewBlock::Paragraph { text, .. } => {
-            if !text.is_empty() {
+            if !text.is_empty() || text.spans.iter().any(|span| span.image.is_some()) {
                 blocks.push(block);
             }
         }
@@ -2682,7 +2754,9 @@ mod html_table_tests {
         let weights = super::html_table_column_weights(grid);
         assert_eq!(weights.len(), 5);
         assert!(
-            weights.iter().all(|weight| weight.is_finite() && *weight > 0f32),
+            weights
+                .iter()
+                .all(|weight| weight.is_finite() && *weight > 0f32),
             "weights must be finite and positive, got {weights:?}"
         );
         // The empty frame columns are floored to slivers while the content
@@ -2748,7 +2822,8 @@ mod html_table_tests {
 
     #[test]
     fn header_row_visibility_predicate_separates_frame_from_matrix() {
-        let frame = "<table><tr><th rowspan=\"2\"></th><th colspan=\"3\"></th><th></th></tr></table>";
+        let frame =
+            "<table><tr><th rowspan=\"2\"></th><th colspan=\"3\"></th><th></th></tr></table>";
         let matrix = "<table><tr><th></th><th>峰值电流</th><th>单位</th></tr></table>";
         let body_only = "<table><tr><td>名称</td><td>数值</td></tr></table>";
         for (html, expected) in [(frame, false), (matrix, true), (body_only, false)] {

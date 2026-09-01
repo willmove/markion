@@ -812,6 +812,30 @@ fn collect_preview_image_urls(
     for block in preview {
         match block {
             PreviewBlock::Image { url, .. } => out.push(url.clone()),
+            PreviewBlock::Paragraph { text, .. }
+            | PreviewBlock::Heading { text, .. }
+            | PreviewBlock::ListItem { text, .. }
+            | PreviewBlock::FootnoteDefinition { text, .. } => {
+                for span in &text.spans {
+                    if let Some(image) = &span.image {
+                        out.push(image.url.clone());
+                    }
+                }
+            }
+            PreviewBlock::BlockQuote { children, .. } => {
+                collect_preview_image_urls(children, &[], out);
+            }
+            PreviewBlock::Table { rows, .. } => {
+                for row in rows {
+                    for cell in row {
+                        for span in &cell.spans {
+                            if let Some(image) = &span.image {
+                                out.push(image.url.clone());
+                            }
+                        }
+                    }
+                }
+            }
             PreviewBlock::Html { html, .. } => {
                 for part in html_preview_parts(html) {
                     if let HtmlPreviewPart::Image { url, .. } = part {
@@ -896,6 +920,56 @@ pub(super) fn preview_image_view(
                 P0Msg::MissingImage,
                 &[url, message.as_ref()],
             )),
+    }
+}
+
+/// Compact inline Markdown / HTML image for mixed prose (same line as
+/// adjacent text). Unlike [`preview_image_view`], this is `flex_none` and
+/// does not stretch to the full column width.
+pub(super) fn preview_inline_image_view(
+    app: &MarkionApp,
+    url: &str,
+    alt: &str,
+    document_dir: Option<&Path>,
+    width: Option<HtmlImgLength>,
+    height: Option<HtmlImgLength>,
+) -> Div {
+    match app.preview_image_entry(url, document_dir) {
+        PreviewImageEntry::Ready(ready) => {
+            let supersampled = ready.display_width != ready.width;
+            let sized = resolve_html_img_display_size(
+                width,
+                height,
+                ready.display_width as f32,
+                ready.display_height as f32,
+            );
+            let image = img(ImageSource::Render(ready.image)).max_w_full();
+            let image = if let Some((width, height)) = sized {
+                image.w(px(width)).h(px(height))
+            } else if supersampled {
+                image.w(px(ready.display_width as f32))
+            } else {
+                image
+            };
+            div().flex_none().max_w_full().child(image)
+        }
+        PreviewImageEntry::Pending | PreviewImageEntry::Error(_) => {
+            let label = if alt.is_empty() { url } else { alt };
+            div()
+                .flex_none()
+                .max_w(px(240.))
+                .overflow_x_hidden()
+                .truncate()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0xcbd5e1))
+                .bg(rgb(0xf8fafc))
+                .text_size(px(11.))
+                .text_color(rgb(0x64748b))
+                .child(label.to_string())
+        }
     }
 }
 
