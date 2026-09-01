@@ -221,10 +221,10 @@ use table::{
 };
 
 use parse::{
-    ImageDraft, InlineStateDraft, ListItemDraft, ListLevelDraft, append_span, clean_preview_text,
-    finish_rich_text, flush_list_item, gfm_alert_kind, heading_level_to_u8, markdown_options,
-    push_nonempty_block, push_preview_math, push_preview_rich, render_extended_html_text_nodes,
-    slugify,
+    ImageDraft, InlineStateDraft, ListItemDestination, ListItemDraft, ListLevelDraft, append_span,
+    clean_preview_text, finish_rich_text, flush_list_item, gfm_alert_kind, heading_level_to_u8,
+    markdown_options, push_nonempty_block, push_preview_math, push_preview_rich,
+    render_extended_html_text_nodes, slugify,
 };
 
 use diagram::collect_html_diagrams;
@@ -2833,14 +2833,6 @@ impl MarkdownDocument {
         let mut quote_alert: Option<AlertKind> = None;
         let mut list_stack: Vec<ListLevelDraft> = Vec::new();
         let mut list_item: Option<ListItemDraft> = None;
-        // While a list item draft is open, block-level constructs nested inside
-        // the item (fenced code, tables) are still pushed to the top-level block
-        // stream at their own End events. pulldown-cmark reports the item's tag
-        // range as the whole subtree, so without adjustment the flushed item
-        // would swallow the nested block's range. Track the earliest nested
-        // start and truncate the item there at flush time; the final stable
-        // sort below then restores document order for the whole stream.
-        let mut item_nested_block_start: Option<usize> = None;
         let mut image: Option<ImageDraft> = None;
         let mut code: Option<(Option<String>, String, std::ops::Range<usize>)> = None;
         let mut table: Option<TableDraft> = None;
@@ -2938,6 +2930,16 @@ impl MarkdownDocument {
                     }
                 }
                 Event::Start(Tag::BlockQuote(kind)) => {
+                    // A top-level blockquote can be a block nested inside an
+                    // open list item. Whether the item's direct source
+                    // ownership really ends where the quote begins is decided
+                    // when the quote closes (see TagEnd::BlockQuote); until
+                    // then the boundary stays tentative on the draft.
+                    if quote_depth == 0
+                        && let Some(item) = list_item.as_mut()
+                    {
+                        item.record_open_quote_start(source_range.start);
+                    }
                     quote_depth += 1;
                     if quote_depth == 1 {
                         quote.clear();
@@ -2960,13 +2962,26 @@ impl MarkdownDocument {
                         let alert = quote_alert.take();
                         let children = std::mem::take(&mut quote_children);
                         if !children.is_empty() || alert.is_some() {
+                            let quote_range = quote_source_range.take().unwrap_or(source_range);
+                            // The quote materializes as its own block, so a
+                            // list item containing it stops owning source at
+                            // the quote's start.
+                            if let Some(item) = list_item.as_mut() {
+                                item.close_open_quote(Some(quote_range.start));
+                            }
                             blocks.push(PreviewBlock::BlockQuote {
                                 children,
                                 alert,
-                                source_range: quote_source_range.take().unwrap_or(source_range),
+                                source_range: quote_range,
                             });
                         } else {
                             quote_source_range = None;
+                            // Nothing was emitted for this quote (its content
+                            // folded back into the open list item), so the
+                            // item keeps owning the quote's bytes.
+                            if let Some(item) = list_item.as_mut() {
+                                item.close_open_quote(None);
+                            }
                         }
                     }
                     quote_depth = quote_depth.saturating_sub(1);
@@ -2984,19 +2999,7 @@ impl MarkdownDocument {
                     // A new item can begin while the previous one is still
                     // open (a nested list follows the item's own text). Flush
                     // the open draft so the parent item is not lost.
-                    let target = if quote_depth > 0 {
-                        &mut quote_children
-                    } else {
-                        &mut blocks
-                    };
-                    if let Some(item) = list_item.as_mut()
-                        && let Some(nested_start) = item_nested_block_start.take()
-                        && nested_start > item.source_range.start
-                        && nested_start < item.source_range.end
-                    {
-                        item.source_range.end = nested_start;
-                    }
-                    flush_list_item(target, list_item.take());
+                    flush_list_item(&mut blocks, &mut quote_children, list_item.take());
                     let index = list_stack.last_mut().and_then(|level| {
                         level.ordered.then(|| {
                             let index = level.next_index;
@@ -3014,24 +3017,20 @@ impl MarkdownDocument {
                         checked: None,
                         spans: Vec::new(),
                         source_range,
+                        destination: if quote_depth > 0 {
+                            ListItemDestination::BlockQuote
+                        } else {
+                            ListItemDestination::Document
+                        },
+                        nested_block_start: None,
+                        open_quote_start: None,
                     });
                 }
                 Event::End(TagEnd::Item) => {
                     if let Some(item) = list_item.as_mut() {
                         item.source_range = source_range;
-                        if let Some(nested_start) = item_nested_block_start.take()
-                            && nested_start > item.source_range.start
-                            && nested_start < item.source_range.end
-                        {
-                            item.source_range.end = nested_start;
-                        }
                     }
-                    let target = if quote_depth > 0 {
-                        &mut quote_children
-                    } else {
-                        &mut blocks
-                    };
-                    flush_list_item(target, list_item.take());
+                    flush_list_item(&mut blocks, &mut quote_children, list_item.take());
                 }
                 Event::TaskListMarker(checked) => {
                     if let Some(item) = list_item.as_mut() {
@@ -3085,11 +3084,8 @@ impl MarkdownDocument {
                 }
                 Event::End(TagEnd::CodeBlock) => {
                     if let Some((language, code, code_range)) = code.take() {
-                        if list_item.is_some() {
-                            item_nested_block_start = Some(
-                                item_nested_block_start
-                                    .map_or(code_range.start, |start| start.min(code_range.start)),
-                            );
+                        if let Some(item) = list_item.as_mut() {
+                            item.record_nested_block_start(code_range.start);
                         }
                         let code = code.trim_end_matches('\n').to_string();
                         if language
@@ -3139,11 +3135,8 @@ impl MarkdownDocument {
                         if table_range.is_empty() {
                             continue;
                         }
-                        if list_item.is_some() {
-                            item_nested_block_start =
-                                Some(item_nested_block_start.map_or(table_range.start, |start| {
-                                    start.min(table_range.start)
-                                }));
+                        if let Some(item) = list_item.as_mut() {
+                            item.record_nested_block_start(table_range.start);
                         }
                         blocks.push(PreviewBlock::Table {
                             rows: table.rows,
@@ -3245,11 +3238,8 @@ impl MarkdownDocument {
                     if standalone_html {
                         push_html_block(&mut blocks, html_string, source_range);
                     } else if nested_container {
-                        if list_item.is_some() {
-                            item_nested_block_start =
-                                Some(item_nested_block_start.map_or(source_range.start, |start| {
-                                    start.min(source_range.start)
-                                }));
+                        if let Some(item) = list_item.as_mut() {
+                            item.record_nested_block_start(source_range.start);
                         }
                         let target = if quote_depth > 0 {
                             &mut quote_children
@@ -5310,6 +5300,228 @@ mod tests {
         assert!(matches!(
             &children[1],
             PreviewBlock::ListItem { level: 2, text, .. } if text.text == "inner"
+        ));
+    }
+
+    #[test]
+    fn list_nested_blockquote_list_preserves_container_ownership() {
+        let source = "- outer\n\n  > - inner\n";
+        let blocks = MarkdownDocument::from_text(source).preview_blocks();
+
+        assert_eq!(blocks.len(), 2, "unexpected preview blocks: {blocks:#?}");
+        let PreviewBlock::ListItem {
+            text: outer,
+            source_range: outer_range,
+            ..
+        } = &blocks[0]
+        else {
+            panic!("outer item must remain document-level: {blocks:#?}");
+        };
+        assert_eq!(outer.text, "outer");
+
+        let PreviewBlock::BlockQuote {
+            children,
+            source_range: quote_range,
+            ..
+        } = &blocks[1]
+        else {
+            panic!("nested quote must remain a document-level block: {blocks:#?}");
+        };
+        assert!(matches!(
+            children.as_slice(),
+            [PreviewBlock::ListItem { text, .. }] if text.text == "inner"
+        ));
+        assert!(
+            outer_range.end <= quote_range.start,
+            "outer item {outer_range:?} overlaps nested quote {quote_range:?}"
+        );
+    }
+
+    #[test]
+    fn list_nested_blockquote_list_variants_keep_ownership_and_order() {
+        // UTF-8 content, CRLF line endings, ordered markers, and task items
+        // all exercise the same destination-ownership path as the minimal
+        // fixture.
+        for (source, outer_text, inner_text) in [
+            ("- 外层 🌍\n\n  > - 内层\n", "外层 🌍", "内层"),
+            ("- outer\r\n\r\n  > - inner\r\n", "outer", "inner"),
+            ("1. outer\n\n   > 1. inner\n", "outer", "inner"),
+            ("- [x] outer\n\n  > - [ ] inner\n", "outer", "inner"),
+        ] {
+            let blocks = MarkdownDocument::from_text(source).preview_blocks();
+            assert_eq!(blocks.len(), 2, "source: {source:?}\nblocks: {blocks:#?}");
+            let PreviewBlock::ListItem {
+                text: outer,
+                source_range: outer_range,
+                ..
+            } = &blocks[0]
+            else {
+                panic!("outer item must remain document-level: {source:?}");
+            };
+            assert_eq!(outer.text, outer_text, "source: {source:?}");
+            let PreviewBlock::BlockQuote {
+                children,
+                source_range: quote_range,
+                ..
+            } = &blocks[1]
+            else {
+                panic!("nested quote must remain a document-level block: {source:?}");
+            };
+            assert!(
+                matches!(
+                    children.as_slice(),
+                    [PreviewBlock::ListItem { text, .. }] if text.text == inner_text
+                ),
+                "inner item must remain a quote child: {source:?}"
+            );
+            assert!(
+                outer_range.end <= quote_range.start,
+                "outer item {outer_range:?} overlaps nested quote {quote_range:?}: {source:?}"
+            );
+            for range in [outer_range, quote_range] {
+                assert!(
+                    range.start <= range.end
+                        && range.end <= source.len()
+                        && source.is_char_boundary(range.start)
+                        && source.is_char_boundary(range.end),
+                    "invalid range {range:?} for source: {source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn list_siblings_around_nested_blockquote_keep_ownership() {
+        let source = "- first\n- second\n\n  > - quoted\n- third\n";
+        let blocks = MarkdownDocument::from_text(source).preview_blocks();
+
+        let texts = blocks
+            .iter()
+            .map(PreviewBlock::plain_text)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            texts,
+            ["first", "second", "quoted", "third"],
+            "unexpected preview blocks: {blocks:#?}"
+        );
+        assert!(
+            matches!(
+                blocks.as_slice(),
+                [
+                    PreviewBlock::ListItem { .. },
+                    PreviewBlock::ListItem { .. },
+                    PreviewBlock::BlockQuote { .. },
+                    PreviewBlock::ListItem { .. },
+                ]
+            ),
+            "siblings must stay document-level around the nested quote: {blocks:#?}"
+        );
+        let PreviewBlock::BlockQuote { children, .. } = &blocks[2] else {
+            unreachable!();
+        };
+        assert!(matches!(
+            children.as_slice(),
+            [PreviewBlock::ListItem { text, .. }] if text.text == "quoted"
+        ));
+        for pair in blocks.windows(2) {
+            let (before, after) = (pair[0].source_range(), pair[1].source_range());
+            assert!(
+                before.end <= after.start,
+                "blocks out of order or overlapping: {blocks:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_item_continuation_before_nested_blockquote_keeps_ownership() {
+        let source = "- outer\n  continued\n\n  > - inner\n";
+        let blocks = MarkdownDocument::from_text(source).preview_blocks();
+
+        assert_eq!(blocks.len(), 2, "unexpected preview blocks: {blocks:#?}");
+        let PreviewBlock::ListItem {
+            text: outer,
+            source_range: outer_range,
+            ..
+        } = &blocks[0]
+        else {
+            panic!("outer item must remain document-level: {blocks:#?}");
+        };
+        assert_eq!(outer.text, "outer\ncontinued");
+        let PreviewBlock::BlockQuote {
+            children,
+            source_range: quote_range,
+            ..
+        } = &blocks[1]
+        else {
+            panic!("nested quote must remain a document-level block: {blocks:#?}");
+        };
+        assert!(matches!(
+            children.as_slice(),
+            [PreviewBlock::ListItem { text, .. }] if text.text == "inner"
+        ));
+        assert!(
+            outer_range.end <= quote_range.start,
+            "outer item {outer_range:?} overlaps nested quote {quote_range:?}"
+        );
+    }
+
+    #[test]
+    fn list_nested_blockquote_with_paragraph_only_keeps_ownership() {
+        // A paragraph-only quote nested in a list item is not emitted as a
+        // separate block: its text folds into the item, which keeps owning
+        // the quote's bytes. This preserves the existing rendered semantics
+        // and introduces no new unsupported source fallback.
+        let source = "- item\n\n  > just text\n";
+        let blocks = MarkdownDocument::from_text(source).preview_blocks();
+
+        assert_eq!(blocks.len(), 1, "unexpected preview blocks: {blocks:#?}");
+        let PreviewBlock::ListItem {
+            text: item_text,
+            source_range: item_range,
+            ..
+        } = &blocks[0]
+        else {
+            panic!("item must remain document-level: {blocks:#?}");
+        };
+        assert_eq!(item_text.text, "item\njust text");
+        assert_eq!(item_range.clone(), 0..source.len());
+    }
+
+    #[test]
+    fn top_level_blockquote_after_list_does_not_steal_item() {
+        // A quote at column 0 cannot belong to the preceding list item, so
+        // the item is flushed before the quote opens; both stay
+        // document-level and the quoted item remains a quote child.
+        let source = "- top\n\n> - quoted\n";
+        let blocks = MarkdownDocument::from_text(source).preview_blocks();
+
+        assert_eq!(blocks.len(), 2, "unexpected preview blocks: {blocks:#?}");
+        assert!(matches!(
+            &blocks[0],
+            PreviewBlock::ListItem { text, .. } if text.text == "top"
+        ));
+        let PreviewBlock::BlockQuote { children, .. } = &blocks[1] else {
+            panic!("quote must remain a document-level block: {blocks:#?}");
+        };
+        assert!(matches!(
+            children.as_slice(),
+            [PreviewBlock::ListItem { text, .. }] if text.text == "quoted"
+        ));
+    }
+
+    #[test]
+    fn nested_list_items_remain_document_level() {
+        let source = "- parent\n  - child\n";
+        let blocks = MarkdownDocument::from_text(source).preview_blocks();
+
+        assert_eq!(blocks.len(), 2, "unexpected preview blocks: {blocks:#?}");
+        assert!(matches!(
+            &blocks[0],
+            PreviewBlock::ListItem { level: 1, text, .. } if text.text == "parent"
+        ));
+        assert!(matches!(
+            &blocks[1],
+            PreviewBlock::ListItem { level: 2, text, .. } if text.text == "child"
         ));
     }
 

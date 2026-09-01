@@ -103,6 +103,12 @@ impl HtmlAlign {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListItemDestination {
+    Document,
+    BlockQuote,
+}
+
 pub(crate) struct ListItemDraft {
     pub level: usize,
     pub ordered: bool,
@@ -110,6 +116,55 @@ pub(crate) struct ListItemDraft {
     pub checked: Option<bool>,
     pub spans: Vec<InlineSpan>,
     pub source_range: Range<usize>,
+    pub destination: ListItemDestination,
+    /// Earliest start of a nested block (code, table, HTML, or a blockquote
+    /// that materialized as its own block) whose source is owned separately
+    /// from this item.
+    pub nested_block_start: Option<usize>,
+    /// Start of the top-level blockquote currently open inside this item.
+    /// Tentative until that quote closes: an emitted quote confirms the
+    /// boundary, while a quote whose content folded back into this item
+    /// never became a separate block and discards it.
+    pub open_quote_start: Option<usize>,
+}
+
+impl ListItemDraft {
+    pub fn record_nested_block_start(&mut self, start: usize) {
+        self.nested_block_start = Some(
+            self.nested_block_start
+                .map_or(start, |current| current.min(start)),
+        );
+    }
+
+    pub fn record_open_quote_start(&mut self, start: usize) {
+        // Only the outermost quote bounds the item; quotes nested inside it
+        // start later and share that ownership boundary.
+        if self.open_quote_start.is_none() {
+            self.open_quote_start = Some(start);
+        }
+    }
+
+    pub fn close_open_quote(&mut self, emitted_quote_start: Option<usize>) {
+        if let Some(start) = emitted_quote_start {
+            self.record_nested_block_start(start);
+        }
+        self.open_quote_start = None;
+    }
+
+    fn truncate_at_nested_block(&mut self) {
+        let boundary = match (self.nested_block_start, self.open_quote_start) {
+            (Some(block), Some(quote)) => Some(block.min(quote)),
+            (Some(block), None) => Some(block),
+            (None, Some(quote)) => Some(quote),
+            (None, None) => None,
+        };
+        if let Some(nested_start) = boundary
+            && nested_start > self.source_range.start
+            && nested_start < self.source_range.end
+        {
+            self.source_range.end = nested_start;
+        }
+    }
 }
 
 pub(crate) struct ImageDraft {
@@ -148,21 +203,30 @@ pub(crate) struct ListLevelDraft {
     pub next_index: u64,
 }
 
-pub(crate) fn flush_list_item(blocks: &mut Vec<PreviewBlock>, item: Option<ListItemDraft>) {
-    if let Some(item) = item {
+pub(crate) fn flush_list_item(
+    blocks: &mut Vec<PreviewBlock>,
+    quote_children: &mut Vec<PreviewBlock>,
+    item: Option<ListItemDraft>,
+) {
+    if let Some(mut item) = item {
+        item.truncate_at_nested_block();
         let text = finish_rich_text(item.spans);
         // Empty unordered/ordered items still own their marker line (`- `,
         // `1. `) so Visual Edit can keep them as list rows instead of
         // Unsupported source islands. Task items were already kept via the
         // checkbox even when the payload was empty.
-        blocks.push(PreviewBlock::ListItem {
+        let block = PreviewBlock::ListItem {
             level: item.level,
             ordered: item.ordered,
             index: item.index,
             checked: item.checked,
             text,
             source_range: item.source_range,
-        });
+        };
+        match item.destination {
+            ListItemDestination::Document => blocks.push(block),
+            ListItemDestination::BlockQuote => quote_children.push(block),
+        }
     }
 }
 

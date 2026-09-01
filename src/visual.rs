@@ -499,7 +499,19 @@ pub(crate) fn build_visual_blocks(
         }
     }
 
-    let mut source_ranges = expanded
+    // A malformed preview, quote-group, or derived visual range must never
+    // reach the string slicing below. Drop such leaves from semantic
+    // projection; the coverage loop then represents their canonical bytes
+    // through the ordinary source-backed gap fallback instead of panicking.
+    expanded.retain(|leaf| {
+        is_valid_source_range(text, leaf.block.source_range())
+            && leaf
+                .quote_group
+                .as_ref()
+                .is_none_or(|group| is_valid_source_range(text, group))
+    });
+
+    let source_ranges = expanded
         .iter()
         .map(|leaf| {
             if leaf.marker_only {
@@ -514,6 +526,11 @@ pub(crate) fn build_visual_blocks(
             })
         })
         .collect::<Vec<_>>();
+    let (expanded, mut source_ranges): (Vec<_>, Vec<_>) = expanded
+        .into_iter()
+        .zip(source_ranges)
+        .filter(|(_, range)| is_valid_source_range(text, range))
+        .unzip();
     for index in 0..source_ranges.len().saturating_sub(1) {
         let nested_list_start = match (expanded[index].block, expanded[index + 1].block) {
             (
@@ -736,6 +753,15 @@ fn partition_prose_around_nested_images<'a>(
         index = look;
     }
     (out_leaves, out_ranges)
+}
+
+/// A range may index the canonical text only when it is ordered, in-bounds,
+/// and both endpoints land on UTF-8 character boundaries.
+fn is_valid_source_range(text: &str, range: &Range<usize>) -> bool {
+    range.start <= range.end
+        && range.end <= text.len()
+        && text.is_char_boundary(range.start)
+        && text.is_char_boundary(range.end)
 }
 
 fn quoted_leaf_source_range(
@@ -3079,14 +3105,15 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        build_visual_projection, build_visual_projection_with_marked_range, fenced_payload_ranges,
+        build_visual_blocks, build_visual_projection, build_visual_projection_with_marked_range,
+        fenced_payload_ranges,
     };
     use crate::{
         AlertKind, BlockTarget, BlockTransform, MarkdownDocument, MarkdownFormat, PreviewBlock,
-        SlashCommand, TableEdit, VisualBlockEditor, VisualBlockKind, VisualBlockPrefixKind,
-        VisualCaretAffinity, VisualEditorFieldKind, VisualNavigationTarget, VisualQuoteGroupEdge,
-        VisualRevealKind, VisualSourceIslandKind, slash_command_edit, slash_query_at,
-        transform_block,
+        RichText, SlashCommand, TableEdit, VisualBlockEditor, VisualBlockId, VisualBlockKind,
+        VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind, VisualNavigationTarget,
+        VisualQuoteGroupEdge, VisualRevealKind, VisualSourceIslandKind, slash_command_edit,
+        slash_query_at, transform_block,
     };
 
     #[test]
@@ -3441,6 +3468,110 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(projected, ["parent", "child", "done", "outro"]);
+    }
+
+    #[test]
+    fn list_nested_blockquote_list_has_complete_safe_visual_coverage() {
+        let source = "- outer\n\n  > - inner\n";
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+
+        assert_eq!(blocks.first().unwrap().source_range.start, 0);
+        assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+        assert!(blocks.iter().all(|block| {
+            block.source_range.start <= block.source_range.end
+                && block.source_range.end <= source.len()
+                && source.is_char_boundary(block.source_range.start)
+                && source.is_char_boundary(block.source_range.end)
+        }));
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].source_range.end == pair[1].source_range.start),
+            "visual coverage is not contiguous: {blocks:#?}"
+        );
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.source_island != Some(VisualSourceIslandKind::Unsupported)),
+            "supported nesting degraded to an unsupported source island: {blocks:#?}"
+        );
+    }
+
+    #[test]
+    fn malformed_preview_ranges_fall_back_without_panicking() {
+        // Reversed, out-of-bounds, and non-UTF-8-boundary leaves must be
+        // omitted from semantic projection; the coverage loop then keeps
+        // every canonical byte through the source-backed gap fallback.
+        // `café` is 5 bytes, so 0..4 splits `é` mid-character.
+        let source = "café\nalpha\n";
+        let preview = [
+            PreviewBlock::Paragraph {
+                text: RichText::plain("split"),
+                source_range: 0..4,
+            },
+            PreviewBlock::Paragraph {
+                text: RichText::plain("reversed"),
+                source_range: 9..6,
+            },
+            PreviewBlock::Paragraph {
+                text: RichText::plain("out-of-bounds"),
+                source_range: 6..(source.len() + 8),
+            },
+        ];
+        let blocks = build_visual_blocks(source, &preview, VisualBlockId::fresh);
+        assert_eq!(blocks.first().unwrap().source_range.start, 0);
+        assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].source_range.end == pair[1].source_range.start),
+            "malformed leaves broke contiguous coverage: {blocks:#?}"
+        );
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.source_island == Some(VisualSourceIslandKind::Unsupported)),
+            "malformed leaves must degrade to source-backed islands: {blocks:#?}"
+        );
+    }
+
+    #[test]
+    fn quoted_leaf_outside_its_group_falls_back_without_panicking() {
+        // The original crash topology at the projection layer: a valid child
+        // range that lies entirely before its quote group clamps to a
+        // reversed range. The leaf must be dropped and its bytes covered by
+        // source-backed fallback instead of slicing the reversed range.
+        let source = "- outer\n\n  > - inner\n";
+        let preview = [PreviewBlock::BlockQuote {
+            children: vec![PreviewBlock::ListItem {
+                level: 0,
+                ordered: false,
+                index: None,
+                checked: None,
+                text: RichText::plain("outer"),
+                source_range: 0..7,
+            }],
+            alert: None,
+            source_range: 9..source.len(),
+        }];
+        let blocks = build_visual_blocks(source, &preview, VisualBlockId::fresh);
+        assert_eq!(blocks.first().unwrap().source_range.start, 0);
+        assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].source_range.end == pair[1].source_range.start),
+            "reversed quoted leaf broke contiguous coverage: {blocks:#?}"
+        );
+        assert!(
+            blocks.iter().all(|block| {
+                block.source_range.start <= block.source_range.end
+                    && block.source_range.end <= source.len()
+                    && source.is_char_boundary(block.source_range.start)
+                    && source.is_char_boundary(block.source_range.end)
+            }),
+            "coverage contains an invalid range: {blocks:#?}"
+        );
     }
 
     #[test]
