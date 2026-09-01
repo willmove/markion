@@ -165,7 +165,9 @@ impl MarkionApp {
             if shortcut.id == action_id {
                 continue;
             }
-            let other = shortcut.effective_binding(&self.shortcut_overrides);
+            let Some(other) = shortcut.effective_binding(&self.shortcut_overrides) else {
+                continue;
+            };
             if KeystrokeParts::parse(other, platform).is_some_and(|candidate| candidate == parts) {
                 let name = self
                     .shortcut_action_name(shortcut.id)
@@ -225,11 +227,9 @@ impl MarkionApp {
         };
         let platform = ShortcutPlatform::current();
         if shortcut_by_id(&capture.action_id).is_some_and(|shortcut| {
-            bindings_equivalent(
-                &binding,
-                shortcut.effective_binding(&self.shortcut_overrides),
-                platform,
-            )
+            shortcut
+                .effective_binding(&self.shortcut_overrides)
+                .is_some_and(|current| bindings_equivalent(&binding, current, platform))
         }) {
             // Pressed the binding it already has: just close capture.
             self.cancel_shortcut_capture(cx);
@@ -245,7 +245,9 @@ impl MarkionApp {
             None => {
                 self.shortcut_capture = None;
                 if shortcut_by_id(&capture.action_id).is_some_and(|shortcut| {
-                    bindings_equivalent(&binding, shortcut.binding, platform)
+                    shortcut
+                        .binding
+                        .is_some_and(|default| bindings_equivalent(&binding, default, platform))
                 }) {
                     // Same as the default: store nothing, drop any override.
                     self.shortcut_overrides.remove(&capture.action_id);
@@ -330,8 +332,11 @@ mod tests {
         // Every reserved binding must stay out of the registry defaults, or a
         // default shortcut would be flagged as conflicting with itself.
         for shortcut in menu_shortcuts::ALL {
+            let Some(binding) = shortcut.binding else {
+                continue;
+            };
             assert!(
-                !RESERVED_BINDINGS.contains(&shortcut.binding),
+                !RESERVED_BINDINGS.contains(&binding),
                 "{} is both reserved and a registry default",
                 shortcut.id
             );

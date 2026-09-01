@@ -705,11 +705,13 @@ impl MarkionApp {
             }
             PaneScrollTarget::Visual
             | PaneScrollTarget::PreferencesGeneral
+            | PaneScrollTarget::PreferencesTheme
             | PaneScrollTarget::PreferencesShortcutCategories
             | PaneScrollTarget::PreferencesShortcutActions
             | PaneScrollTarget::PreferencesExport
             | PaneScrollTarget::FileTree
-            | PaneScrollTarget::Outline => return,
+            | PaneScrollTarget::Outline
+            | PaneScrollTarget::MarkdownReference => return,
         }
         cx.notify();
     }

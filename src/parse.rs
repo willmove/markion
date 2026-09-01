@@ -64,7 +64,7 @@ pub struct HtmlTableGrid {
     pub columns: usize,
     /// True if any cell declares `rowspan > 1`. Exporters use it to pick a
     /// span-aware representation (DOCX `vMerge`); the GPUI renderer places
-    /// spans natively via `row_span` and ignores it.
+    /// spans with exclusive `row_start`/`row_end` grid lines.
     pub has_rowspan: bool,
     /// One `Vec` of slots per visual row, in top-to-bottom order.
     pub rows: Vec<Vec<HtmlTableCell>>,
@@ -178,6 +178,18 @@ pub fn html_table_row_has_visible_header(row: &[HtmlTableCell]) -> bool {
             && cell.is_header
             && (!cell.content.text.trim().is_empty() || cell.image.is_some())
     })
+}
+
+/// Exclusive CSS/GPUI grid line after `span` tracks that start at `start`
+/// (1-based, matching `col_start` / `row_start`).
+///
+/// HTML table cells MUST be placed with `col_end` / `row_end` from this
+/// helper. GPUI's `col_span` / `row_span` replace the entire placement with
+/// `Span..Span`, which wipes `col_start` / `row_start` and falls back to
+/// auto-placement — the cover-sheet failure mode where sibling cells stack
+/// as one concatenated run.
+pub fn html_table_grid_line_end(start: i16, span: u16) -> i16 {
+    start.saturating_add(span as i16)
 }
 
 /// Sums per-glyph width units for column weighting: East Asian wide and
@@ -2704,7 +2716,9 @@ mod inline_html_style_tag_tests {
 
 #[cfg(test)]
 mod html_table_tests {
-    use super::{HtmlPreviewPart, html_preview_parts, parse_html_table_grid};
+    use super::{
+        HtmlPreviewPart, html_preview_parts, html_table_grid_line_end, parse_html_table_grid,
+    };
 
     /// Returns `(row_index, col_index, text, colspan, rowspan, is_header)` for
     /// every non-spacer cell in the grid, in document order.
@@ -2773,6 +2787,65 @@ mod html_table_tests {
             (weights[0] - floor).abs() < f32::EPSILON && (weights[4] - floor).abs() < f32::EPSILON,
             "full-width banner must not inflate edge columns, got {weights:?} (floor {floor})"
         );
+    }
+
+    #[test]
+    fn cover_sheet_label_and_value_use_non_overlapping_grid_lines() {
+        // Reported Word cover sheet: a left rowspan strut, a right rowspan
+        // strut, and a body row with a label plus a colspan value.
+        let html = "<table>\n\
+<tr><th rowspan=\"5\"></th><th colspan=\"3\"></th><th></th></tr>\n\
+<tr><td colspan=\"3\">瀚博载天VA16 AIGC大模型训推一体加速卡</td><td rowspan=\"4\"></td></tr>\n\
+<tr><td colspan=\"3\">测试报告</td></tr>\n\
+<tr><td>文档版本</td><td colspan=\"2\">01</td></tr>\n\
+<tr><td>发布日期</td><td colspan=\"2\">2026-08-10</td></tr>\n\
+<tr><td colspan=\"5\"></td></tr>\n\
+<tr><td></td><td colspan=\"2\"></td><td></td><td></td></tr>\n\
+</table>";
+        let grid = parse_html_table_grid(html).expect("table should parse");
+        let cells = grid_cells(&grid);
+        let version = cells
+            .iter()
+            .find(|cell| cell.2 == "文档版本")
+            .unwrap_or_else(|| panic!("文档版本 missing; got {cells:?}"));
+        let value = cells
+            .iter()
+            .find(|cell| cell.2 == "01")
+            .unwrap_or_else(|| panic!("01 missing; got {cells:?}"));
+        assert_eq!(version.0, value.0, "label and value share a row");
+        assert_ne!(
+            version.1, value.1,
+            "label and value must occupy different columns, got {cells:?}"
+        );
+        assert_eq!(
+            version.1, 1,
+            "文档版本 is column 1 (0-based) after the strut"
+        );
+        assert_eq!(value.1, 2, "01 starts at column 2");
+        assert_eq!(version.3, 1);
+        assert_eq!(value.3, 2);
+
+        let version_start = (version.1 + 1) as i16;
+        let value_start = (value.1 + 1) as i16;
+        let version_end = html_table_grid_line_end(version_start, version.3 as u16);
+        let value_end = html_table_grid_line_end(value_start, value.3 as u16);
+        assert_eq!((version_start, version_end), (2, 3));
+        assert_eq!((value_start, value_end), (3, 5));
+        assert!(
+            version_end <= value_start || value_end <= version_start,
+            "exclusive line ranges must not overlap: {version_start}..{version_end} vs {value_start}..{value_end}"
+        );
+
+        let left_strut = cells
+            .iter()
+            .find(|cell| cell.0 == 0 && cell.1 == 0 && cell.4 == 5)
+            .unwrap_or_else(|| panic!("left rowspan=5 strut missing; got {cells:?}"));
+        let right_strut = cells
+            .iter()
+            .find(|cell| cell.0 == 1 && cell.4 == 4)
+            .unwrap_or_else(|| panic!("right rowspan=4 strut missing; got {cells:?}"));
+        assert_eq!(left_strut.1, 0);
+        assert_eq!(right_strut.1, 4);
     }
 
     #[test]
@@ -2889,6 +2962,20 @@ mod html_table_tests {
         let thirteen = cells.iter().find(|c| c.2 == "13 A").unwrap();
         assert_eq!(thirteen.0, 3);
         assert_eq!(thirteen.1, 1);
+
+        // Renderer placement uses exclusive 1-based lines. The `12 V` cell
+        // occupies column 0 for three rows; following-row cells stay to its right.
+        let twelve_start = (twelve.1 + 1) as i16;
+        let twelve_col_end = html_table_grid_line_end(twelve_start, twelve.3 as u16);
+        let twelve_row_start = (twelve.0 + 1) as i16;
+        let twelve_row_end = html_table_grid_line_end(twelve_row_start, twelve.4 as u16);
+        assert_eq!((twelve_start, twelve_col_end), (1, 2));
+        assert_eq!((twelve_row_start, twelve_row_end), (2, 5));
+        let seventeen_start = (seventeen.1 + 1) as i16;
+        assert!(
+            seventeen_start >= twelve_col_end,
+            "17 A must start at or after the 12 V column end, got col line {seventeen_start}"
+        );
     }
 
     #[test]

@@ -174,6 +174,10 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
             items: vec![
                 MenuItem::action(t(language, Msg::ItemCheckForUpdates), CheckForUpdates),
                 MenuItem::separator(),
+                MenuItem::action(
+                    t(language, Msg::ItemMarkdownReference),
+                    ShowMarkdownReference,
+                ),
                 MenuItem::action(t(language, Msg::ItemReportIssue), ReportIssue),
                 MenuItem::action(t(language, Msg::ItemOnlineDocs), OpenOnlineDocs),
                 MenuItem::separator(),
@@ -197,7 +201,11 @@ fn startup_shortcut_overrides() -> BTreeMap<String, String> {
 /// runtime must `clear_key_bindings()` first; this function is the single
 /// binding code path so a rebind restores the full set.
 pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) {
-    let eff = |shortcut: &MenuShortcut| shortcut.effective_binding(overrides);
+    let eff = |shortcut: &MenuShortcut| {
+        shortcut
+            .effective_binding(overrides)
+            .expect("factory-bound shortcut must resolve to a keystroke")
+    };
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, None),
         KeyBinding::new("delete", Delete, None),
@@ -242,6 +250,7 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new("shift-tab", Outdent, None),
         KeyBinding::new(eff(&menu_shortcuts::NEW_DOCUMENT), NewDocument, None),
         KeyBinding::new(eff(&menu_shortcuts::OPEN_DOCUMENT), OpenDocument, None),
+        KeyBinding::new(eff(&menu_shortcuts::OPEN_FOLDER), OpenFolder, None),
         KeyBinding::new(eff(&menu_shortcuts::SAVE_DOCUMENT), SaveDocument, None),
         KeyBinding::new(eff(&menu_shortcuts::SAVE_DOCUMENT_AS), SaveDocumentAs, None),
         KeyBinding::new(eff(&menu_shortcuts::EXPORT_HTML), ExportHtml, None),
@@ -328,15 +337,24 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
             ShowPreferences,
             None,
         ),
-        KeyBinding::new(eff(&menu_shortcuts::SHOW_SHORTCUTS), ShowShortcuts, None),
+        KeyBinding::new(
+            eff(&menu_shortcuts::SHOW_MARKDOWN_REFERENCE),
+            ShowMarkdownReference,
+            None,
+        ),
         KeyBinding::new(eff(&menu_shortcuts::QUIT), Quit, None),
         KeyBinding::new(eff(&menu_shortcuts::NEXT_TAB), NextTab, None),
         KeyBinding::new(eff(&menu_shortcuts::PREV_TAB), PrevTab, None),
+        KeyBinding::new(eff(&menu_shortcuts::NEW_TAB), NewTab, None),
         KeyBinding::new(eff(&menu_shortcuts::OPEN_IN_NEW_TAB), OpenInNewTab, None),
         KeyBinding::new(eff(&menu_shortcuts::CLOSE_TAB), CloseTab, None),
         // Developer diagnostic — not listed in menus or the shortcut reference.
         KeyBinding::new("ctrl-shift-alt-m", ReportMemory, None),
     ]);
+    // Factory-unbound: install only when the user has assigned an override.
+    if let Some(binding) = menu_shortcuts::SHOW_SHORTCUTS.effective_binding(overrides) {
+        cx.bind_keys([KeyBinding::new(binding, ShowShortcuts, None)]);
+    }
 }
 
 pub(super) fn run() {

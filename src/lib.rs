@@ -191,15 +191,15 @@ pub use block_edit::{
 pub use diagram::{builtin_diagram_registry, diagram_backend_id};
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
 pub use i18n::{
-    Language, Msg, P0Msg, P1Msg, ShortcutAction, ShortcutCatalog, ShortcutCategory,
-    ShortcutPlatform, ShortcutSection, p0_t, p0_tf, p1_t, p1_tf, shortcut_catalog,
-    sidebar_tab_label, t, tf,
+    Language, MarkdownReferenceSection, Msg, P0Msg, P1Msg, ShortcutAction, ShortcutCatalog,
+    ShortcutCategory, ShortcutPlatform, ShortcutSection, markdown_reference, p0_t, p0_tf, p1_t,
+    p1_tf, shortcut_catalog, sidebar_tab_label, t, tf,
 };
 pub use math::{render_math, validate_latex};
 pub use parse::{
     HtmlAlign, HtmlListMarker, HtmlPreviewPart, HtmlTableCell, HtmlTableCellImage, HtmlTableGrid,
     html_preview_parts, html_preview_plain_text, html_table_column_weights,
-    html_table_row_has_visible_header, resolve_html_img_display_size,
+    html_table_grid_line_end, html_table_row_has_visible_header, resolve_html_img_display_size,
 };
 pub use publishing::build_publishing_snapshot;
 

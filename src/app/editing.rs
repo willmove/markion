@@ -2783,7 +2783,7 @@ impl MarkionApp {
         cx: &mut Context<Self>,
     ) -> bool {
         let Some((block_index, snapshot)) = self.current_visual_navigation_snapshot() else {
-            return false;
+            return self.move_visual_vertical_from_whitespace(direction, extend_selection, cx);
         };
         let cursor = self.cursor_offset();
         let line_index = self
@@ -2839,43 +2839,85 @@ impl MarkionApp {
             return true;
         };
 
-        // Up/Down move directly between rendered content blocks. A blank-line
-        // `Whitespace` gap row is pure inter-block spacing, not a navigation
-        // stop: parking the caret on it looked like "Up/Down did nothing"
-        // because the row paints as an empty strip, and it forced an extra
-        // keypress to cross each blank line between two visible blocks. Skip
-        // past consecutive gap rows to the next rendered block and hand off
-        // through `pending_visual_navigation`, preserving `preferred_x`. Blank
-        // lines stay reachable by clicking them or pressing Enter. Only when
-        // nothing but whitespace remains before the document edge do we land on
-        // the gap row itself, so the caret can still reach a leading/trailing
-        // blank line instead of the arrow key becoming a dead no-op.
-        let mut target_block = first_target;
-        let mut edge_gap_offset = None;
-        while self
+        // A blank-line `Whitespace` row is a first-class empty line: land on
+        // an existing newline in that range instead of skipping it. Landing
+        // is source-offset based (no layout snapshot), so it works even when
+        // the row has not been measured yet. A further Up/Down from the gap
+        // uses `move_visual_vertical_from_whitespace` because whitespace rows
+        // do not register wrapped-line snapshots.
+        if self
             .active_tab()
             .visual_list_blocks
-            .get(target_block)
+            .get(first_target)
             .is_some_and(|block| matches!(block.kind, VisualBlockKind::Whitespace))
         {
-            let gap_start = self.active_tab().visual_list_blocks[target_block]
+            let range = self.active_tab().visual_list_blocks[first_target]
                 .source_range
-                .start;
-            let next = match direction {
-                VisualNavigationDirection::Up => target_block.checked_sub(1),
-                VisualNavigationDirection::Down => (target_block + 1
-                    < self.active_tab().visual_list_blocks.len())
-                .then_some(target_block + 1),
-            };
-            match next {
-                Some(next) => target_block = next,
-                None => {
-                    edge_gap_offset = Some(gap_start);
-                    break;
-                }
+                .clone();
+            let text = self.active_tab().document.text();
+            let from_above = matches!(direction, VisualNavigationDirection::Down);
+            let target = whitespace_navigation_offset(range, text, from_above);
+            if extend_selection {
+                self.select_to(target, cx);
+            } else {
+                self.move_to(target, cx);
             }
+            let tab = self.active_tab_mut();
+            tab.visual_preferred_x = Some(preferred_x);
+            tab.visual_list.scroll_to_reveal_item(first_target);
+            return true;
         }
-        if let Some(target) = edge_gap_offset {
+
+        let version = self.active_tab().document.version();
+        let pending = PendingVisualNavigation {
+            document_version: version,
+            target_block: first_target,
+            direction,
+            extend_selection,
+            preferred_x,
+        };
+        let tab = self.active_tab_mut();
+        tab.visual_preferred_x = Some(preferred_x);
+        tab.pending_visual_navigation = Some(pending);
+        tab.visual_list.scroll_to_reveal_item(first_target);
+        cx.notify();
+        true
+    }
+
+    /// Whitespace rows do not register wrapped-line snapshots. Walk covered
+    /// newlines, then hand off to the adjacent visual block while keeping
+    /// `preferred_x`.
+    fn move_visual_vertical_from_whitespace(
+        &mut self,
+        direction: VisualNavigationDirection,
+        extend_selection: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let cursor = self.cursor_offset();
+        let Some(block_index) = visual_block_index_for_offset(
+            &self.active_tab().visual_list_blocks,
+            cursor,
+            self.active_tab().document.text().len(),
+        ) else {
+            return false;
+        };
+        let Some(block) = self.active_tab().visual_list_blocks.get(block_index) else {
+            return false;
+        };
+        if !matches!(block.kind, VisualBlockKind::Whitespace) {
+            return false;
+        }
+        let range = block.source_range.clone();
+        let text = self.active_tab().document.text().to_string();
+        let line = whitespace_caret_line(range.clone(), cursor, &text);
+        let line_count = whitespace_painted_line_count(range.clone(), &text);
+        let preferred_x = self.active_tab().visual_preferred_x.unwrap_or(Pixels::ZERO);
+        let adjacent_line = match direction {
+            VisualNavigationDirection::Up => line.checked_sub(1),
+            VisualNavigationDirection::Down => (line + 1 < line_count).then_some(line + 1),
+        };
+        if let Some(line) = adjacent_line {
+            let target = whitespace_source_at_line(range, line, &text);
             if extend_selection {
                 self.select_to(target, cx);
             } else {
@@ -2884,10 +2926,42 @@ impl MarkionApp {
             self.active_tab_mut().visual_preferred_x = Some(preferred_x);
             return true;
         }
+
+        let Some(first_target) = (match direction {
+            VisualNavigationDirection::Up => block_index.checked_sub(1),
+            VisualNavigationDirection::Down => (block_index + 1
+                < self.active_tab().visual_list_blocks.len())
+            .then_some(block_index + 1),
+        }) else {
+            return true;
+        };
+
+        if self
+            .active_tab()
+            .visual_list_blocks
+            .get(first_target)
+            .is_some_and(|block| matches!(block.kind, VisualBlockKind::Whitespace))
+        {
+            let range = self.active_tab().visual_list_blocks[first_target]
+                .source_range
+                .clone();
+            let from_above = matches!(direction, VisualNavigationDirection::Down);
+            let target = whitespace_navigation_offset(range, &text, from_above);
+            if extend_selection {
+                self.select_to(target, cx);
+            } else {
+                self.move_to(target, cx);
+            }
+            let tab = self.active_tab_mut();
+            tab.visual_preferred_x = Some(preferred_x);
+            tab.visual_list.scroll_to_reveal_item(first_target);
+            return true;
+        }
+
         let version = self.active_tab().document.version();
         let pending = PendingVisualNavigation {
             document_version: version,
-            target_block,
+            target_block: first_target,
             direction,
             extend_selection,
             preferred_x,
@@ -2895,7 +2969,7 @@ impl MarkionApp {
         let tab = self.active_tab_mut();
         tab.visual_preferred_x = Some(preferred_x);
         tab.pending_visual_navigation = Some(pending);
-        tab.visual_list.scroll_to_reveal_item(target_block);
+        tab.visual_list.scroll_to_reveal_item(first_target);
         cx.notify();
         true
     }
@@ -2970,6 +3044,30 @@ impl MarkionApp {
             })
             .cloned()
         else {
+            // Whitespace rows and callout titles have no wrapped-line
+            // snapshot. Park on an existing source offset instead of dropping
+            // the pending move.
+            if let Some(block) = self
+                .active_tab()
+                .visual_list_blocks
+                .get(pending.target_block)
+                .filter(|block| matches!(block.kind, VisualBlockKind::Whitespace))
+            {
+                let from_above = matches!(pending.direction, VisualNavigationDirection::Down);
+                let target = whitespace_navigation_offset(
+                    block.source_range.clone(),
+                    self.active_tab().document.text(),
+                    from_above,
+                );
+                self.active_tab_mut().pending_visual_navigation = None;
+                self.active_tab_mut().visual_preferred_x = Some(pending.preferred_x);
+                if pending.extend_selection {
+                    self.select_to(target, cx);
+                } else {
+                    self.move_to(target, cx);
+                }
+                return;
+            }
             // A callout title row has no rendered text runs, so no layout
             // snapshot exists to land on. Park the caret just inside the
             // marker line's end instead — the reveal projection then shows

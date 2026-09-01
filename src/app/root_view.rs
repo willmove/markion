@@ -189,6 +189,7 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::confirm_pending_name))
             .on_action(cx.listener(Self::cycle_theme))
             .on_action(cx.listener(Self::show_shortcuts))
+            .on_action(cx.listener(Self::show_markdown_reference))
             .on_action(cx.listener(Self::show_preferences))
             .on_action(cx.listener(Self::reset_preferences))
             .on_action(cx.listener(Self::check_for_updates))
@@ -729,6 +730,9 @@ impl Render for MarkionApp {
             .when(self.about_dialog_open, |root| {
                 root.child(about_dialog_view(self, cx))
             })
+            .when(self.markdown_reference_open, |root| {
+                root.child(markdown_reference_view(self, cx))
+            })
     }
 }
 
@@ -823,6 +827,132 @@ pub(super) fn about_dialog_view(
                                 MouseButton::Left,
                                 cx.listener(|app, _: &MouseUpEvent, _window, cx| {
                                     app.close_about_dialog(cx);
+                                }),
+                            ),
+                    ),
+                ),
+        )
+}
+
+/// Root-hosted Markdown syntax reference overlay. Presentation-only: it never
+/// opens a document tab or touches derived Markdown caches.
+pub(super) fn markdown_reference_view(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let palette = app.palette();
+    let sections = markdown_reference(app.language);
+    let mut body = div()
+        .id("markdown-reference-body")
+        .debug_selector(|| "markdown-reference-body".to_string())
+        .w_full()
+        .max_h(px(420.))
+        .overflow_y_scroll()
+        .scrollbar_width(px(PANE_SCROLLBAR_RESERVED_WIDTH))
+        .track_scroll(&app.markdown_reference_scroll)
+        .flex()
+        .flex_col()
+        .gap_3();
+    for (index, section) in sections.into_iter().enumerate() {
+        let mut example_block = div()
+            .rounded_sm()
+            .px_2()
+            .py_1()
+            .bg(palette.surface_bg)
+            .border_1()
+            .border_color(palette.border)
+            .font_family(DEFAULT_CODE_FONT_FAMILY)
+            .text_size(px(12.))
+            .flex()
+            .flex_col()
+            .gap_0();
+        for line in section.example.lines() {
+            example_block = example_block.child(div().child(line.to_string()));
+        }
+        body = body.child(
+            div()
+                .id(ElementId::from(("markdown-reference-section", index)))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(section.title),
+                )
+                .child(example_block)
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(palette.muted)
+                        .child(section.caption),
+                ),
+        );
+    }
+
+    div()
+        .id("markdown-reference-overlay")
+        .debug_selector(|| "markdown-reference-overlay".to_string())
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .bg(rgba(0x00000055))
+        .px_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .id("markdown-reference-panel")
+                .debug_selector(|| "markdown-reference-panel".to_string())
+                .occlude()
+                .w_full()
+                .max_w(px(560.))
+                .p_5()
+                .bg(palette.panel_bg)
+                .border_1()
+                .border_color(palette.border)
+                .rounded_lg()
+                .shadow_lg()
+                .text_color(palette.text)
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
+                    div()
+                        .debug_selector(|| "markdown-reference-title".to_string())
+                        .text_size(px(17.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(app.tr(Msg::DialogMarkdownReferenceTitle)),
+                )
+                .child(div().relative().w_full().max_h(px(420.)).child(body).child(
+                    pane_scrollbar_view(
+                        PaneScrollTarget::MarkdownReference,
+                        &app.markdown_reference_scroll,
+                        palette,
+                        cx,
+                    ),
+                ))
+                .child(
+                    div().flex().justify_end().child(
+                        div()
+                            .id("markdown-reference-ok")
+                            .debug_selector(|| "markdown-reference-ok".to_string())
+                            .px_4()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(palette.active_bg)
+                            .text_color(palette.active_text)
+                            .hover(|style| style.bg(palette.surface_bg))
+                            .child(app.tr(Msg::DialogButtonOk))
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                    app.close_markdown_reference(cx);
                                 }),
                             ),
                     ),
@@ -2853,11 +2983,13 @@ pub(super) fn pane_scrollbar_view(
         PaneScrollTarget::Preview => "preview-pane-scrollbar",
         PaneScrollTarget::Visual => "visual-pane-scrollbar",
         PaneScrollTarget::PreferencesGeneral => "preferences-general-scrollbar",
+        PaneScrollTarget::PreferencesTheme => "preferences-theme-scrollbar",
         PaneScrollTarget::PreferencesShortcutCategories => "preferences-categories-scrollbar",
         PaneScrollTarget::PreferencesShortcutActions => "preferences-actions-scrollbar",
         PaneScrollTarget::PreferencesExport => "preferences-export-scrollbar",
         PaneScrollTarget::FileTree => "file-tree-scrollbar",
         PaneScrollTarget::Outline => "outline-scrollbar",
+        PaneScrollTarget::MarkdownReference => "markdown-reference-scrollbar",
     };
     let viewport_height = scroll_handle.bounds().size.height;
     let max_scroll = scroll_handle.max_offset().height.max(px(0.));
@@ -3648,7 +3780,8 @@ pub(super) fn active_menu_dropdown(
             .child(file_action_item!(
                 Msg::ItemOpenFolder,
                 open_folder,
-                OpenFolder
+                OpenFolder,
+                menu_shortcuts::OPEN_FOLDER
             ))
             .child(menu_separator(palette))
             .child(menu_submenu_parent_button(
@@ -3680,7 +3813,12 @@ pub(super) fn active_menu_dropdown(
                 panel.child(image_action_unavailable_menu_row(language, palette))
             })
             .child(menu_separator(palette))
-            .child(file_action_item!(Msg::ItemNewTab, new_tab, NewTab))
+            .child(file_action_item!(
+                Msg::ItemNewTab,
+                new_tab,
+                NewTab,
+                menu_shortcuts::NEW_TAB
+            ))
             .child(file_action_item!(
                 Msg::ItemOpenInNewTab,
                 open_in_new_tab_action,
@@ -4096,6 +4234,12 @@ pub(super) fn active_menu_dropdown(
             ))
             .child(menu_separator(palette))
             .child(action_item!(
+                Msg::ItemMarkdownReference,
+                show_markdown_reference,
+                ShowMarkdownReference,
+                menu_shortcuts::SHOW_MARKDOWN_REFERENCE
+            ))
+            .child(action_item!(
                 Msg::ItemReportIssue,
                 report_issue,
                 ReportIssue
@@ -4185,9 +4329,6 @@ pub(super) fn open_recent_submenu_panel(
 /// through the existing preferences path.
 pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let palette = app.palette();
-    let app_entity = cx.entity();
-    let themes = app.available_themes();
-    let active_name = app.selected_theme_name.clone();
     let active_tab = app.preferences_tab;
     let panel_width = if active_tab == PreferencesTab::Shortcuts {
         720.
@@ -4304,111 +4445,6 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                     },
                                                 ),
                                             )
-                                                }),
-                                            )),
-                                    )
-                                    // Theme grid.
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.))
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(palette.muted)
-                                                    .child(app.tr(Msg::PrefPanelThemeSection)),
-                                            )
-                                            .child(div().flex().flex_wrap().gap_2().children(
-                                                themes.iter().map(|theme| {
-                                                    let theme_name = theme.name.clone();
-                                                    let is_active = theme
-                                                        .name
-                                                        .eq_ignore_ascii_case(&active_name);
-                                                    let colors = theme.colors;
-                                                    let app_entity = app_entity.clone();
-                                                    let border = if is_active {
-                                                        palette.active_bg
-                                                    } else {
-                                                        palette.border
-                                                    };
-                                                    div()
-                                                        .w(px(120.))
-                                                        .p_2()
-                                                        .rounded_md()
-                                                        .border_1()
-                                                        .border_color(border)
-                                                        .bg(rgb(colors.panel_bg))
-                                                        .cursor_pointer()
-                                                        .hover(move |style| {
-                                                            style.border_color(palette.active_bg)
-                                                        })
-                                                        .flex()
-                                                        .flex_col()
-                                                        .gap_1()
-                                                        .on_mouse_up(
-                                                            MouseButton::Left,
-                                                            move |_, _, cx| {
-                                                                app_entity.update(cx, |app, cx| {
-                                                                    app.apply_theme_by_name(
-                                                                        &theme_name,
-                                                                        cx,
-                                                                    );
-                                                                });
-                                                            },
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .h(px(28.))
-                                                                .rounded_sm()
-                                                                .flex()
-                                                                .child(
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .bg(rgb(colors.app_bg)),
-                                                                )
-                                                                .child(
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .bg(rgb(colors.surface_bg)),
-                                                                )
-                                                                .child(
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .bg(rgb(colors.active_bg)),
-                                                                )
-                                                                .child(
-                                                                    div().w(px(6.)).bg(rgb(
-                                                                        colors.active_text
-                                                                    )),
-                                                                ),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .flex()
-                                                                .items_center()
-                                                                .justify_between()
-                                                                .gap_1()
-                                                                .text_size(px(11.))
-                                                                .child(
-                                                                    div()
-                                                                        .min_w_0()
-                                                                        .text_color(
-                                                                            rgb(colors.text),
-                                                                        )
-                                                                        .child(theme.name.clone()),
-                                                                )
-                                                                .when(is_active, |row| {
-                                                                    row.child(
-                                                                        div()
-                                                                            .text_color(
-                                                                                palette.active_bg,
-                                                                            )
-                                                                            .child("✓"),
-                                                                    )
-                                                                }),
-                                                        )
                                                 }),
                                             )),
                                     )
@@ -4716,6 +4752,9 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                             )),
                     )
                 })
+                .when(active_tab == PreferencesTab::Theme, |panel| {
+                    panel.child(preferences_theme_body(app, palette, cx))
+                })
                 .when(active_tab == PreferencesTab::Shortcuts, |panel| {
                     panel.child(preferences_shortcuts_body(app, palette, cx))
                 })
@@ -4743,6 +4782,14 @@ fn preferences_tab_strip(
             palette,
             cx.listener(|app, _: &MouseUpEvent, _window, cx| {
                 app.select_preferences_tab(PreferencesTab::General, cx);
+            }),
+        ))
+        .child(preferences_tab_button(
+            app.tr(Msg::PrefPanelTabTheme),
+            app.preferences_tab == PreferencesTab::Theme,
+            palette,
+            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                app.select_preferences_tab(PreferencesTab::Theme, cx);
             }),
         ))
         .child(preferences_tab_button(
@@ -4801,6 +4848,112 @@ fn preferences_tab_button(
         .hover(move |style| style.border_color(palette.active_bg))
         .on_mouse_up(MouseButton::Left, listener)
         .child(label)
+}
+
+/// Preferences panel Theme tab body: the swatch grid of built-in and custom
+/// themes. Selecting a card applies immediately and persists.
+fn preferences_theme_body(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let app_entity = cx.entity();
+    let themes = app.available_themes();
+    let active_name = app.selected_theme_name.clone();
+
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .child(
+            div()
+                .id("preferences-theme-body")
+                .size_full()
+                .px_4()
+                .py_3()
+                .overflow_y_scroll()
+                .scrollbar_width(px(PANE_SCROLLBAR_RESERVED_WIDTH))
+                .track_scroll(&app.preferences_theme_scroll)
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(palette.muted)
+                        .child(app.tr(Msg::PrefPanelThemeSection)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .children(themes.iter().map(|theme| {
+                            let theme_name = theme.name.clone();
+                            let is_active = theme.name.eq_ignore_ascii_case(&active_name);
+                            let colors = theme.colors;
+                            let app_entity = app_entity.clone();
+                            let border = if is_active {
+                                palette.active_bg
+                            } else {
+                                palette.border
+                            };
+                            div()
+                                .w(px(120.))
+                                .p_2()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(border)
+                                .bg(rgb(colors.panel_bg))
+                                .cursor_pointer()
+                                .hover(move |style| style.border_color(palette.active_bg))
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                                    app_entity.update(cx, |app, cx| {
+                                        app.apply_theme_by_name(&theme_name, cx);
+                                    });
+                                })
+                                .child(
+                                    div()
+                                        .h(px(28.))
+                                        .rounded_sm()
+                                        .flex()
+                                        .child(div().flex_1().bg(rgb(colors.app_bg)))
+                                        .child(div().flex_1().bg(rgb(colors.surface_bg)))
+                                        .child(div().flex_1().bg(rgb(colors.active_bg)))
+                                        .child(div().w(px(6.)).bg(rgb(colors.active_text))),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap_1()
+                                        .text_size(px(11.))
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .text_color(rgb(colors.text))
+                                                .child(theme.name.clone()),
+                                        )
+                                        .when(is_active, |row| {
+                                            row.child(
+                                                div().text_color(palette.active_bg).child("✓"),
+                                            )
+                                        }),
+                                )
+                        })),
+                ),
+        )
+        .child(pane_scrollbar_view(
+            PaneScrollTarget::PreferencesTheme,
+            &app.preferences_theme_scroll,
+            palette,
+            cx,
+        ))
 }
 
 /// Preferences panel Export tab body: backend choice with the pandoc

@@ -300,6 +300,30 @@ impl MarkionApp {
         cx.notify();
     }
 
+    pub(super) fn show_markdown_reference(
+        &mut self,
+        _: &ShowMarkdownReference,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.markdown_reference_open = true;
+        self.markdown_reference_scroll
+            .set_offset(point(px(0.), px(0.)));
+        self.status = t(self.language, Msg::StatusMarkdownReference).into();
+        self.active_menu = None;
+        cx.notify();
+    }
+
+    pub(super) fn close_markdown_reference(&mut self, cx: &mut Context<Self>) {
+        if !self.markdown_reference_open {
+            return;
+        }
+        self.markdown_reference_open = false;
+        self.markdown_reference_scroll
+            .set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    }
+
     pub(super) fn open_about_link(&mut self, link: AboutLink, cx: &mut Context<Self>) {
         cx.open_url(link.url());
     }

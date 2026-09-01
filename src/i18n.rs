@@ -203,6 +203,7 @@ pub enum Msg {
     ItemResetPreferences,
     ItemKeyboardShortcuts,
     ItemCheckForUpdates,
+    ItemMarkdownReference,
     ItemReportIssue,
     ItemOnlineDocs,
     ItemAboutMarkion,
@@ -279,6 +280,7 @@ pub enum Msg {
     StatusWaitingDeleteConfirm,
     StatusDeleteCanceled,
     StatusAboutMarkion,
+    StatusMarkdownReference,
     StatusUpdateChecking,
     StatusUpdateUpToDate,
     StatusUpdateAvailable,
@@ -516,6 +518,8 @@ pub enum Msg {
 
     /// About Markion dialog title.
     DialogAboutTitle,
+    /// Markdown Reference overlay title.
+    DialogMarkdownReferenceTitle,
     /// About version line. {0}=running version.
     DialogAboutVersion,
     /// About product description.
@@ -706,6 +710,8 @@ pub enum Msg {
     PrefPanelClose,
     /// "General" tab label in the Preferences panel tab strip.
     PrefPanelTabGeneral,
+    /// "Theme" tab label in the Preferences panel tab strip.
+    PrefPanelTabTheme,
     /// "Shortcuts" tab label in the Preferences panel tab strip.
     PrefPanelTabShortcuts,
     /// "Export" tab label in the Preferences panel tab strip.
@@ -1660,19 +1666,402 @@ pub fn shortcut_catalog(lang: Language, heading_menu_max_level: u8) -> ShortcutC
         .expect("shortcut catalog contains View")
         .actions
         .push(ShortcutAction {
-            label: t(lang, Msg::ItemKeyboardShortcuts),
-            ids: &["show-shortcuts"],
+            label: t(lang, Msg::ItemMarkdownReference),
+            ids: &["show-markdown-reference"],
             windows_linux: &["F1"],
             macos: &["F1"],
         });
 
     catalog
+        .section_mut(ShortcutCategory::View)
+        .expect("shortcut catalog contains View")
+        .actions
+        .push(ShortcutAction {
+            label: t(lang, Msg::ItemKeyboardShortcuts),
+            ids: &["show-shortcuts"],
+            // Factory-unbound; Preferences capture can still assign a key.
+            windows_linux: &[""],
+            macos: &[""],
+        });
+
+    catalog
+}
+
+/// One section of the Help → Markdown Reference overlay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownReferenceSection {
+    pub title: &'static str,
+    pub example: &'static str,
+    pub caption: &'static str,
+}
+
+/// Localized Markdown syntax cheat sheet for the Help overlay.
+pub fn markdown_reference(lang: Language) -> Vec<MarkdownReferenceSection> {
+    match lang {
+        Language::En => markdown_reference_en(),
+        Language::ZhHans => markdown_reference_zh_hans(),
+        Language::ZhHant => markdown_reference_zh_hant(),
+        Language::Ja => markdown_reference_ja(),
+        Language::Fr => markdown_reference_fr(),
+        Language::De => markdown_reference_de(),
+        Language::Es => markdown_reference_es(),
+    }
+}
+
+fn markdown_reference_en() -> Vec<MarkdownReferenceSection> {
+    vec![
+        MarkdownReferenceSection {
+            title: "Headings",
+            example: "# H1\n## H2\n### H3",
+            caption: "Use one to six # characters for heading levels.",
+        },
+        MarkdownReferenceSection {
+            title: "Inline formatting",
+            example: "*italic* **bold** ~~strike~~ `code`\n==highlight== H~2~O x^2^",
+            caption: "Emphasis, strong, strikethrough, inline code, highlight, subscript, and superscript.",
+        },
+        MarkdownReferenceSection {
+            title: "Links and images",
+            example: "[text](https://example.com)\n![alt](image.png \"title\")",
+            caption: "Inline links and images with optional titles.",
+        },
+        MarkdownReferenceSection {
+            title: "Quotes and breaks",
+            example: "> quoted paragraph\n\n---",
+            caption: "Block quotes and thematic breaks.",
+        },
+        MarkdownReferenceSection {
+            title: "Lists",
+            example: "- item\n  - nested\n1. ordered\n- [ ] task\n- [x] done",
+            caption: "Unordered, ordered, nested, and task lists.",
+        },
+        MarkdownReferenceSection {
+            title: "Tables",
+            example: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            caption: "GFM pipe tables with optional alignment markers.",
+        },
+        MarkdownReferenceSection {
+            title: "Code",
+            example: "```rust\nfn main() {}\n```",
+            caption: "Fenced code blocks with an optional language tag.",
+        },
+        MarkdownReferenceSection {
+            title: "Math",
+            example: "Inline $E = mc^2$\n\n$$\n\\sum_{n=1}^{10} n\n$$",
+            caption: "Inline and display math with TeX-style delimiters.",
+        },
+        MarkdownReferenceSection {
+            title: "Footnotes and references",
+            example: "See note.[^1]\n\n[^1]: Footnote text.\n\n[label]: https://example.com",
+            caption: "Footnote markers and reference-style link definitions.",
+        },
+    ]
+}
+
+fn markdown_reference_zh_hans() -> Vec<MarkdownReferenceSection> {
+    vec![
+        MarkdownReferenceSection {
+            title: "标题",
+            example: "# H1\n## H2\n### H3",
+            caption: "用 1 到 6 个 # 表示标题级别。",
+        },
+        MarkdownReferenceSection {
+            title: "行内格式",
+            example: "*斜体* **粗体** ~~删除线~~ `代码`\n==高亮== H~2~O x^2^",
+            caption: "强调、加粗、删除线、行内代码、高亮、下标与上标。",
+        },
+        MarkdownReferenceSection {
+            title: "链接与图片",
+            example: "[文本](https://example.com)\n![替代文本](image.png \"标题\")",
+            caption: "行内链接与图片，标题可选。",
+        },
+        MarkdownReferenceSection {
+            title: "引用与分隔线",
+            example: "> 引用段落\n\n---",
+            caption: "引用块与主题分隔线。",
+        },
+        MarkdownReferenceSection {
+            title: "列表",
+            example: "- 项目\n  - 嵌套\n1. 有序\n- [ ] 待办\n- [x] 完成",
+            caption: "无序、有序、嵌套与任务列表。",
+        },
+        MarkdownReferenceSection {
+            title: "表格",
+            example: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            caption: "GFM 管道表格，可含对齐标记。",
+        },
+        MarkdownReferenceSection {
+            title: "代码",
+            example: "```rust\nfn main() {}\n```",
+            caption: "围栏代码块，可指定语言。",
+        },
+        MarkdownReferenceSection {
+            title: "数学公式",
+            example: "行内 $E = mc^2$\n\n$$\n\\sum_{n=1}^{10} n\n$$",
+            caption: "行内与独立公式，使用 TeX 风格定界符。",
+        },
+        MarkdownReferenceSection {
+            title: "脚注与引用链接",
+            example: "见注释。[^1]\n\n[^1]: 脚注内容。\n\n[label]: https://example.com",
+            caption: "脚注标记与参考式链接定义。",
+        },
+    ]
+}
+
+fn markdown_reference_zh_hant() -> Vec<MarkdownReferenceSection> {
+    vec![
+        MarkdownReferenceSection {
+            title: "標題",
+            example: "# H1\n## H2\n### H3",
+            caption: "用 1 到 6 個 # 表示標題層級。",
+        },
+        MarkdownReferenceSection {
+            title: "行內格式",
+            example: "*斜體* **粗體** ~~刪除線~~ `程式碼`\n==反白== H~2~O x^2^",
+            caption: "強調、粗體、刪除線、行內程式碼、反白、下標與上標。",
+        },
+        MarkdownReferenceSection {
+            title: "連結與圖片",
+            example: "[文字](https://example.com)\n![替代文字](image.png \"標題\")",
+            caption: "行內連結與圖片，標題可選。",
+        },
+        MarkdownReferenceSection {
+            title: "引用與分隔線",
+            example: "> 引用段落\n\n---",
+            caption: "引用區塊與主題分隔線。",
+        },
+        MarkdownReferenceSection {
+            title: "清單",
+            example: "- 項目\n  - 巢狀\n1. 有序\n- [ ] 待辦\n- [x] 完成",
+            caption: "無序、有序、巢狀與工作清單。",
+        },
+        MarkdownReferenceSection {
+            title: "表格",
+            example: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            caption: "GFM 管線表格，可含對齊標記。",
+        },
+        MarkdownReferenceSection {
+            title: "程式碼",
+            example: "```rust\nfn main() {}\n```",
+            caption: "圍欄程式碼區塊，可指定語言。",
+        },
+        MarkdownReferenceSection {
+            title: "數學公式",
+            example: "行內 $E = mc^2$\n\n$$\n\\sum_{n=1}^{10} n\n$$",
+            caption: "行內與獨立公式，使用 TeX 風格定界符。",
+        },
+        MarkdownReferenceSection {
+            title: "腳註與參考連結",
+            example: "見註解。[^1]\n\n[^1]: 腳註內容。\n\n[label]: https://example.com",
+            caption: "腳註標記與參考式連結定義。",
+        },
+    ]
+}
+
+fn markdown_reference_ja() -> Vec<MarkdownReferenceSection> {
+    vec![
+        MarkdownReferenceSection {
+            title: "見出し",
+            example: "# H1\n## H2\n### H3",
+            caption: "# を 1〜6 個付けて見出しレベルを指定します。",
+        },
+        MarkdownReferenceSection {
+            title: "インライン書式",
+            example: "*斜体* **太字** ~~取消線~~ `コード`\n==ハイライト== H~2~O x^2^",
+            caption: "強調、太字、取消線、インラインコード、ハイライト、下付き、上付き。",
+        },
+        MarkdownReferenceSection {
+            title: "リンクと画像",
+            example: "[テキスト](https://example.com)\n![代替テキスト](image.png \"タイトル\")",
+            caption: "インラインのリンクと画像。タイトルは任意です。",
+        },
+        MarkdownReferenceSection {
+            title: "引用と区切り線",
+            example: "> 引用段落\n\n---",
+            caption: "引用ブロックと水平線。",
+        },
+        MarkdownReferenceSection {
+            title: "リスト",
+            example: "- 項目\n  - ネスト\n1. 順序付き\n- [ ] タスク\n- [x] 完了",
+            caption: "箇条書き、番号付き、ネスト、タスクリスト。",
+        },
+        MarkdownReferenceSection {
+            title: "表",
+            example: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            caption: "GFM のパイプ表。配置記号も使えます。",
+        },
+        MarkdownReferenceSection {
+            title: "コード",
+            example: "```rust\nfn main() {}\n```",
+            caption: "言語タグ付きのフェンスコードブロック。",
+        },
+        MarkdownReferenceSection {
+            title: "数式",
+            example: "インライン $E = mc^2$\n\n$$\n\\sum_{n=1}^{10} n\n$$",
+            caption: "インラインとディスプレイ数式（TeX 風区切り）。",
+        },
+        MarkdownReferenceSection {
+            title: "脚注と参照リンク",
+            example: "注を参照。[^1]\n\n[^1]: 脚注本文。\n\n[label]: https://example.com",
+            caption: "脚注マーカーと参照形式のリンク定義。",
+        },
+    ]
+}
+
+fn markdown_reference_fr() -> Vec<MarkdownReferenceSection> {
+    vec![
+        MarkdownReferenceSection {
+            title: "Titres",
+            example: "# H1\n## H2\n### H3",
+            caption: "Utilisez un à six # pour le niveau de titre.",
+        },
+        MarkdownReferenceSection {
+            title: "Mise en forme en ligne",
+            example: "*italique* **gras** ~~barré~~ `code`\n==surligné== H~2~O x^2^",
+            caption: "Emphase, gras, barré, code en ligne, surlignage, indice et exposant.",
+        },
+        MarkdownReferenceSection {
+            title: "Liens et images",
+            example: "[texte](https://example.com)\n![alt](image.png \"titre\")",
+            caption: "Liens et images en ligne, titre optionnel.",
+        },
+        MarkdownReferenceSection {
+            title: "Citations et séparateurs",
+            example: "> paragraphe cité\n\n---",
+            caption: "Citations et lignes thématiques.",
+        },
+        MarkdownReferenceSection {
+            title: "Listes",
+            example: "- élément\n  - imbriqué\n1. ordonnée\n- [ ] tâche\n- [x] fait",
+            caption: "Listes non ordonnées, ordonnées, imbriquées et de tâches.",
+        },
+        MarkdownReferenceSection {
+            title: "Tableaux",
+            example: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            caption: "Tableaux GFM avec alignement optionnel.",
+        },
+        MarkdownReferenceSection {
+            title: "Code",
+            example: "```rust\nfn main() {}\n```",
+            caption: "Blocs de code délimités, langage optionnel.",
+        },
+        MarkdownReferenceSection {
+            title: "Mathématiques",
+            example: "En ligne $E = mc^2$\n\n$$\n\\sum_{n=1}^{10} n\n$$",
+            caption: "Formules en ligne et affichées, délimiteurs style TeX.",
+        },
+        MarkdownReferenceSection {
+            title: "Notes et références",
+            example: "Voir la note.[^1]\n\n[^1]: Texte de note.\n\n[label]: https://example.com",
+            caption: "Marqueurs de notes de bas de page et définitions de liens.",
+        },
+    ]
+}
+
+fn markdown_reference_de() -> Vec<MarkdownReferenceSection> {
+    vec![
+        MarkdownReferenceSection {
+            title: "Überschriften",
+            example: "# H1\n## H2\n### H3",
+            caption: "Ein bis sechs # für die Überschriftenebene.",
+        },
+        MarkdownReferenceSection {
+            title: "Inline-Formatierung",
+            example: "*kursiv* **fett** ~~durchgestrichen~~ `Code`\n==hervorgehoben== H~2~O x^2^",
+            caption: "Betonung, Fett, Durchgestrichen, Inline-Code, Markierung, Index und Exponent.",
+        },
+        MarkdownReferenceSection {
+            title: "Links und Bilder",
+            example: "[Text](https://example.com)\n![Alt](image.png \"Titel\")",
+            caption: "Inline-Links und Bilder mit optionalem Titel.",
+        },
+        MarkdownReferenceSection {
+            title: "Zitate und Trenner",
+            example: "> zitierter Absatz\n\n---",
+            caption: "Zitatblöcke und thematische Trenner.",
+        },
+        MarkdownReferenceSection {
+            title: "Listen",
+            example: "- Eintrag\n  - verschachtelt\n1. nummeriert\n- [ ] Aufgabe\n- [x] erledigt",
+            caption: "Ungeordnete, geordnete, verschachtelte und Aufgabenlisten.",
+        },
+        MarkdownReferenceSection {
+            title: "Tabellen",
+            example: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            caption: "GFM-Pipe-Tabellen mit optionaler Ausrichtung.",
+        },
+        MarkdownReferenceSection {
+            title: "Code",
+            example: "```rust\nfn main() {}\n```",
+            caption: "Eingezäunte Codeblöcke mit optionaler Sprache.",
+        },
+        MarkdownReferenceSection {
+            title: "Mathematik",
+            example: "Inline $E = mc^2$\n\n$$\n\\sum_{n=1}^{10} n\n$$",
+            caption: "Inline- und Display-Mathematik mit TeX-artigen Begrenzern.",
+        },
+        MarkdownReferenceSection {
+            title: "Fußnoten und Referenzen",
+            example: "Siehe Hinweis.[^1]\n\n[^1]: Fußnotentext.\n\n[label]: https://example.com",
+            caption: "Fußnotenmarker und referenzartige Linkdefinitionen.",
+        },
+    ]
+}
+
+fn markdown_reference_es() -> Vec<MarkdownReferenceSection> {
+    vec![
+        MarkdownReferenceSection {
+            title: "Encabezados",
+            example: "# H1\n## H2\n### H3",
+            caption: "Use de uno a seis # para el nivel de encabezado.",
+        },
+        MarkdownReferenceSection {
+            title: "Formato en línea",
+            example: "*cursiva* **negrita** ~~tachado~~ `código`\n==resaltado== H~2~O x^2^",
+            caption: "Énfasis, negrita, tachado, código en línea, resaltado, subíndice y superíndice.",
+        },
+        MarkdownReferenceSection {
+            title: "Enlaces e imágenes",
+            example: "[texto](https://example.com)\n![alt](image.png \"título\")",
+            caption: "Enlaces e imágenes en línea, con título opcional.",
+        },
+        MarkdownReferenceSection {
+            title: "Citas y separadores",
+            example: "> párrafo citado\n\n---",
+            caption: "Citas en bloque y saltos temáticos.",
+        },
+        MarkdownReferenceSection {
+            title: "Listas",
+            example: "- elemento\n  - anidado\n1. ordenada\n- [ ] tarea\n- [x] hecho",
+            caption: "Listas sin orden, ordenadas, anidadas y de tareas.",
+        },
+        MarkdownReferenceSection {
+            title: "Tablas",
+            example: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+            caption: "Tablas GFM con alineación opcional.",
+        },
+        MarkdownReferenceSection {
+            title: "Código",
+            example: "```rust\nfn main() {}\n```",
+            caption: "Bloques de código cercados, lenguaje opcional.",
+        },
+        MarkdownReferenceSection {
+            title: "Matemáticas",
+            example: "En línea $E = mc^2$\n\n$$\n\\sum_{n=1}^{10} n\n$$",
+            caption: "Fórmulas en línea y en bloque con delimitadores estilo TeX.",
+        },
+        MarkdownReferenceSection {
+            title: "Notas y referencias",
+            example: "Ver nota.[^1]\n\n[^1]: Texto de nota.\n\n[label]: https://example.com",
+            caption: "Marcadores de notas al pie y definiciones de enlace por referencia.",
+        },
+    ]
 }
 
 struct ShortcutLabels {
     sections: [&'static str; 7],
-    files: [&'static str; 5],
-    tabs: [&'static str; 3],
+    files: [&'static str; 6],
+    tabs: [&'static str; 4],
     editing: [&'static str; 7],
     view: [&'static str; 14],
     search: [&'static str; 3],
@@ -1683,15 +2072,17 @@ struct ShortcutLabels {
 /// Stable action ids per catalog row, parallel to the `*_KEYS` tables below.
 /// These are the `config.toml` `[shortcuts]` keys, so the settings UI can map
 /// a displayed combination back to the action it belongs to.
-const FILE_IDS: [&[&str]; 5] = [
+const FILE_IDS: [&[&str]; 6] = [
     &["new-document"],
     &["open-document"],
+    &["open-folder"],
     &["save-document"],
     &["save-document-as"],
     &["quit"],
 ];
 
-const TAB_IDS: [&[&str]; 3] = [
+const TAB_IDS: [&[&str]; 4] = [
+    &["new-tab"],
     &["open-in-new-tab"],
     &["close-tab"],
     &["next-tab", "prev-tab"],
@@ -1770,7 +2161,7 @@ const EXPORT_IDS: [&[&str]; 7] = [
     &["export-jpeg"],
 ];
 
-const FILE_KEYS: [ShortcutKeys; 5] = [
+const FILE_KEYS: [ShortcutKeys; 6] = [
     ShortcutKeys {
         windows_linux: &["Ctrl+N"],
         macos: &["Cmd+N"],
@@ -1778,6 +2169,10 @@ const FILE_KEYS: [ShortcutKeys; 5] = [
     ShortcutKeys {
         windows_linux: &["Ctrl+O"],
         macos: &["Cmd+O"],
+    },
+    ShortcutKeys {
+        windows_linux: &["Ctrl+Shift+O"],
+        macos: &["Cmd+Shift+O"],
     },
     ShortcutKeys {
         windows_linux: &["Ctrl+S"],
@@ -1793,7 +2188,11 @@ const FILE_KEYS: [ShortcutKeys; 5] = [
     },
 ];
 
-const TAB_KEYS: [ShortcutKeys; 3] = [
+const TAB_KEYS: [ShortcutKeys; 4] = [
+    ShortcutKeys {
+        windows_linux: &["Ctrl+Shift+N"],
+        macos: &["Cmd+Shift+N"],
+    },
     ShortcutKeys {
         windows_linux: &["Ctrl+T"],
         macos: &["Cmd+T"],
@@ -1818,8 +2217,8 @@ const EDITING_KEYS: [ShortcutKeys; 7] = [
         macos: &["Cmd+I"],
     },
     ShortcutKeys {
-        windows_linux: &["Ctrl+E"],
-        macos: &["Cmd+E"],
+        windows_linux: &["Ctrl+Shift+`"],
+        macos: &["Cmd+Shift+`"],
     },
     ShortcutKeys {
         windows_linux: &["Ctrl+K"],
@@ -1849,8 +2248,8 @@ const EDITING_KEYS_EXTENDED: [ShortcutKeys; 7] = [
         macos: &["Cmd+I"],
     },
     ShortcutKeys {
-        windows_linux: &["Ctrl+E"],
-        macos: &["Cmd+E"],
+        windows_linux: &["Ctrl+Shift+`"],
+        macos: &["Cmd+Shift+`"],
     },
     ShortcutKeys {
         windows_linux: &["Ctrl+K"],
@@ -1876,20 +2275,20 @@ const VIEW_KEYS: [ShortcutKeys; 14] = [
         macos: &["Cmd+Shift+V"],
     },
     ShortcutKeys {
-        windows_linux: &["Ctrl+Alt+1"],
-        macos: &["Cmd+Option+1"],
+        windows_linux: &["Ctrl+/"],
+        macos: &["Cmd+/"],
     },
     ShortcutKeys {
-        windows_linux: &["Ctrl+Alt+4"],
-        macos: &["Cmd+Option+4"],
+        windows_linux: &["Ctrl+E"],
+        macos: &["Cmd+E"],
     },
     ShortcutKeys {
-        windows_linux: &["Ctrl+Alt+2"],
-        macos: &["Cmd+Option+2"],
+        windows_linux: &["Ctrl+P"],
+        macos: &["Cmd+P"],
     },
     ShortcutKeys {
-        windows_linux: &["Ctrl+Alt+3"],
-        macos: &["Cmd+Option+3"],
+        windows_linux: &["Ctrl+R"],
+        macos: &["Cmd+R"],
     },
     ShortcutKeys {
         windows_linux: &["Ctrl+Shift+B"],
@@ -2094,8 +2493,13 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
             sections: [
                 "Files", "Tabs", "Editing", "View", "Search", "Tables", "Export",
             ],
-            files: ["New", "Open", "Save", "Save As", "Exit"],
-            tabs: ["Open in New Tab", "Close Tab", "Next/Previous Tab"],
+            files: ["New", "Open", "Open Folder", "Save", "Save As", "Exit"],
+            tabs: [
+                "New Tab",
+                "Open in New Tab",
+                "Close Tab",
+                "Next/Previous Tab",
+            ],
             editing: [
                 "Bold",
                 "Italic",
@@ -2132,8 +2536,13 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
         },
         Language::ZhHans => ShortcutLabels {
             sections: ["文件", "标签页", "编辑", "视图", "搜索", "表格", "导出"],
-            files: ["新建", "打开", "保存", "另存为", "退出"],
-            tabs: ["在新标签页中打开", "关闭标签页", "下一个/上一个标签页"],
+            files: ["新建", "打开", "打开文件夹", "保存", "另存为", "退出"],
+            tabs: [
+                "新建标签页",
+                "在新标签页中打开",
+                "关闭标签页",
+                "下一个/上一个标签页",
+            ],
             editing: [
                 "粗体",
                 "斜体",
@@ -2165,8 +2574,13 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
         },
         Language::ZhHant => ShortcutLabels {
             sections: ["檔案", "分頁", "編輯", "檢視", "搜尋", "表格", "匯出"],
-            files: ["新增", "開啟", "儲存", "另存新檔", "結束"],
-            tabs: ["在新分頁中開啟", "關閉分頁", "下一個/上一個分頁"],
+            files: ["新增", "開啟", "開啟資料夾", "儲存", "另存新檔", "結束"],
+            tabs: [
+                "新增分頁",
+                "在新分頁中開啟",
+                "關閉分頁",
+                "下一個/上一個分頁",
+            ],
             editing: [
                 "粗體",
                 "斜體",
@@ -2206,8 +2620,20 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
                 "表",
                 "エクスポート",
             ],
-            files: ["新規作成", "開く", "保存", "名前を付けて保存", "終了"],
-            tabs: ["新しいタブで開く", "タブを閉じる", "次/前のタブ"],
+            files: [
+                "新規作成",
+                "開く",
+                "フォルダーを開く",
+                "保存",
+                "名前を付けて保存",
+                "終了",
+            ],
+            tabs: [
+                "新しいタブ",
+                "新しいタブで開く",
+                "タブを閉じる",
+                "次/前のタブ",
+            ],
             editing: [
                 "太字",
                 "斜体",
@@ -2258,11 +2684,13 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
             files: [
                 "Nouveau",
                 "Ouvrir",
+                "Ouvrir un dossier",
                 "Enregistrer",
                 "Enregistrer sous",
                 "Quitter",
             ],
             tabs: [
+                "Nouvel onglet",
                 "Ouvrir dans un nouvel onglet",
                 "Fermer l'onglet",
                 "Onglet suivant/precedent",
@@ -2315,8 +2743,16 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
                 "Tabellen",
                 "Export",
             ],
-            files: ["Neu", "Oeffnen", "Speichern", "Speichern unter", "Beenden"],
+            files: [
+                "Neu",
+                "Oeffnen",
+                "Ordner oeffnen",
+                "Speichern",
+                "Speichern unter",
+                "Beenden",
+            ],
             tabs: [
+                "Neuer Tab",
                 "In neuem Tab oeffnen",
                 "Tab schliessen",
                 "Naechster/Vorheriger Tab",
@@ -2367,8 +2803,16 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
             sections: [
                 "Archivos", "Pestanas", "Edicion", "Ver", "Busqueda", "Tablas", "Exportar",
             ],
-            files: ["Nuevo", "Abrir", "Guardar", "Guardar como", "Salir"],
+            files: [
+                "Nuevo",
+                "Abrir",
+                "Abrir carpeta",
+                "Guardar",
+                "Guardar como",
+                "Salir",
+            ],
             tabs: [
+                "Nueva pestana",
                 "Abrir en nueva pestana",
                 "Cerrar pestana",
                 "Pestana siguiente/anterior",
@@ -2534,6 +2978,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "Keyboard Shortcuts",
         Msg::ItemAboutMarkion => "About Markion",
         Msg::ItemCheckForUpdates => "Check for Updates…",
+        Msg::ItemMarkdownReference => "Markdown Reference",
         Msg::ItemReportIssue => "Report an Issue",
         Msg::ItemOnlineDocs => "Online Documentation",
 
@@ -2605,6 +3050,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "Waiting for delete confirmation...",
         Msg::StatusDeleteCanceled => "Delete canceled",
         Msg::StatusAboutMarkion => "About Markion",
+        Msg::StatusMarkdownReference => "Markdown reference",
         Msg::StatusUpdateChecking => "Checking for updates…",
         Msg::StatusUpdateUpToDate => "Markion is up to date",
         Msg::StatusUpdateAvailable => "Update available: {0}",
@@ -2763,6 +3209,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "Later",
 
         Msg::DialogAboutTitle => "About Markion",
+        Msg::DialogMarkdownReferenceTitle => "Markdown Reference",
         Msg::DialogAboutVersion => "Version: {0}",
         Msg::DialogAboutDescription => "A local-first Markdown editor built with Rust and GPUI.",
         Msg::DialogAboutProjectWebsite => "Project website",
@@ -2884,6 +3331,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Close",
         Msg::PrefPanelTabGeneral => "General",
+        Msg::PrefPanelTabTheme => "Theme",
         Msg::PrefPanelTabShortcuts => "Shortcuts",
         Msg::PrefPanelTabExport => "Export",
         Msg::PrefExportEngineSection => "Export engine",
@@ -3059,6 +3507,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "キーボードショートカット",
         Msg::ItemAboutMarkion => "Markionについて",
         Msg::ItemCheckForUpdates => "更新を確認…",
+        Msg::ItemMarkdownReference => "Markdownリファレンス",
         Msg::ItemReportIssue => "問題を報告",
         Msg::ItemOnlineDocs => "オンラインドキュメント",
 
@@ -3130,6 +3579,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "削除の確認待ち...",
         Msg::StatusDeleteCanceled => "削除をキャンセルしました",
         Msg::StatusAboutMarkion => "Markionについて",
+        Msg::StatusMarkdownReference => "Markdownリファレンス",
         Msg::StatusUpdateChecking => "更新を確認しています…",
         Msg::StatusUpdateUpToDate => "Markion は最新です",
         Msg::StatusUpdateAvailable => "更新があります: {0}",
@@ -3290,6 +3740,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "後で",
 
         Msg::DialogAboutTitle => "Markionについて",
+        Msg::DialogMarkdownReferenceTitle => "Markdownリファレンス",
         Msg::DialogAboutVersion => "バージョン: {0}",
         Msg::DialogAboutDescription => {
             "RustとGPUIで構築されたローカルファーストのMarkdownエディタです。"
@@ -3413,6 +3864,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "閉じる",
         Msg::PrefPanelTabGeneral => "一般",
+        Msg::PrefPanelTabTheme => "テーマ",
         Msg::PrefPanelTabShortcuts => "ショートカット",
         Msg::PrefPanelTabExport => "エクスポート",
         Msg::PrefExportEngineSection => "エクスポートエンジン",
@@ -3575,6 +4027,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "Raccourcis clavier",
         Msg::ItemAboutMarkion => "À propos de Markion",
         Msg::ItemCheckForUpdates => "Rechercher des mises à jour…",
+        Msg::ItemMarkdownReference => "Référence Markdown",
         Msg::ItemReportIssue => "Signaler un problème",
         Msg::ItemOnlineDocs => "Documentation en ligne",
         Msg::LabelEditor => "Éditeur",
@@ -3643,6 +4096,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "En attente de confirmation de suppression...",
         Msg::StatusDeleteCanceled => "Suppression annulée",
         Msg::StatusAboutMarkion => "À propos de Markion",
+        Msg::StatusMarkdownReference => "Référence Markdown",
         Msg::StatusUpdateChecking => "Recherche de mises à jour…",
         Msg::StatusUpdateUpToDate => "Markion est à jour",
         Msg::StatusUpdateAvailable => "Mise à jour disponible : {0}",
@@ -3803,6 +4257,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogButtonDownloadManually => "Télécharger manuellement",
         Msg::DialogButtonLater => "Plus tard",
         Msg::DialogAboutTitle => "À propos de Markion",
+        Msg::DialogMarkdownReferenceTitle => "Référence Markdown",
         Msg::DialogAboutVersion => "Version : {0}",
         Msg::DialogAboutDescription => {
             "Un éditeur Markdown local-first construit avec Rust et GPUI."
@@ -3930,6 +4385,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Fermer",
         Msg::PrefPanelTabGeneral => "Général",
+        Msg::PrefPanelTabTheme => "Thème",
         Msg::PrefPanelTabShortcuts => "Raccourcis",
         Msg::PrefPanelTabExport => "Exporter",
         Msg::PrefExportEngineSection => "Moteur d'export",
@@ -4096,6 +4552,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "Tastenkürzel",
         Msg::ItemAboutMarkion => "Über Markion",
         Msg::ItemCheckForUpdates => "Nach Updates suchen…",
+        Msg::ItemMarkdownReference => "Markdown-Referenz",
         Msg::ItemReportIssue => "Problem melden",
         Msg::ItemOnlineDocs => "Online-Dokumentation",
         Msg::LabelEditor => "Editor",
@@ -4164,6 +4621,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "Warte auf Löschbestätigung...",
         Msg::StatusDeleteCanceled => "Löschen abgebrochen",
         Msg::StatusAboutMarkion => "Über Markion",
+        Msg::StatusMarkdownReference => "Markdown-Referenz",
         Msg::StatusUpdateChecking => "Suche nach Updates…",
         Msg::StatusUpdateUpToDate => "Markion ist aktuell",
         Msg::StatusUpdateAvailable => "Update verfügbar: {0}",
@@ -4320,6 +4778,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogButtonDownloadManually => "Manuell herunterladen",
         Msg::DialogButtonLater => "Später",
         Msg::DialogAboutTitle => "Über Markion",
+        Msg::DialogMarkdownReferenceTitle => "Markdown-Referenz",
         Msg::DialogAboutVersion => "Version: {0}",
         Msg::DialogAboutDescription => {
             "Ein lokal-first Markdown-Editor, entwickelt mit Rust und GPUI."
@@ -4447,6 +4906,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Schließen",
         Msg::PrefPanelTabGeneral => "Allgemein",
+        Msg::PrefPanelTabTheme => "Design",
         Msg::PrefPanelTabShortcuts => "Tastenkürzel",
         Msg::PrefPanelTabExport => "Exportieren",
         Msg::PrefExportEngineSection => "Export-Engine",
@@ -4613,6 +5073,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "Atajos de teclado",
         Msg::ItemAboutMarkion => "Acerca de Markion",
         Msg::ItemCheckForUpdates => "Buscar actualizaciones…",
+        Msg::ItemMarkdownReference => "Referencia de Markdown",
         Msg::ItemReportIssue => "Informar de un problema",
         Msg::ItemOnlineDocs => "Documentación en línea",
         Msg::LabelEditor => "Editor",
@@ -4681,6 +5142,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "Esperando confirmación de eliminación...",
         Msg::StatusDeleteCanceled => "Eliminación cancelada",
         Msg::StatusAboutMarkion => "Acerca de Markion",
+        Msg::StatusMarkdownReference => "Referencia de Markdown",
         Msg::StatusUpdateChecking => "Buscando actualizaciones…",
         Msg::StatusUpdateUpToDate => "Markion está actualizado",
         Msg::StatusUpdateAvailable => "Actualización disponible: {0}",
@@ -4837,6 +5299,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogButtonDownloadManually => "Descargar manualmente",
         Msg::DialogButtonLater => "Más tarde",
         Msg::DialogAboutTitle => "Acerca de Markion",
+        Msg::DialogMarkdownReferenceTitle => "Referencia de Markdown",
         Msg::DialogAboutVersion => "Versión: {0}",
         Msg::DialogAboutDescription => "Un editor Markdown local-first construido con Rust y GPUI.",
         Msg::DialogAboutProjectWebsite => "Sitio web del proyecto",
@@ -4952,6 +5415,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "Cerrar",
         Msg::PrefPanelTabGeneral => "General",
+        Msg::PrefPanelTabTheme => "Tema",
         Msg::PrefPanelTabShortcuts => "Atajos",
         Msg::PrefPanelTabExport => "Exportar",
         Msg::PrefExportEngineSection => "Motor de exportación",
@@ -5122,6 +5586,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "键盘快捷键",
         Msg::ItemAboutMarkion => "关于 Markion",
         Msg::ItemCheckForUpdates => "检查更新…",
+        Msg::ItemMarkdownReference => "Markdown 参考",
         Msg::ItemReportIssue => "反馈问题",
         Msg::ItemOnlineDocs => "在线文档",
 
@@ -5191,6 +5656,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "等待删除确认…",
         Msg::StatusDeleteCanceled => "已取消删除",
         Msg::StatusAboutMarkion => "关于 Markion",
+        Msg::StatusMarkdownReference => "Markdown 参考",
         Msg::StatusUpdateChecking => "正在检查更新…",
         Msg::StatusUpdateUpToDate => "Markion 已是最新版本",
         Msg::StatusUpdateAvailable => "发现新版本：{0}",
@@ -5347,6 +5813,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "稍后",
 
         Msg::DialogAboutTitle => "关于 Markion",
+        Msg::DialogMarkdownReferenceTitle => "Markdown 参考",
         Msg::DialogAboutVersion => "版本：{0}",
         Msg::DialogAboutDescription => "一款使用 Rust 与 GPUI 构建的本地优先 Markdown 编辑器。",
         Msg::DialogAboutProjectWebsite => "项目网站",
@@ -5462,6 +5929,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "关闭",
         Msg::PrefPanelTabGeneral => "常规",
+        Msg::PrefPanelTabTheme => "主题",
         Msg::PrefPanelTabShortcuts => "快捷键",
         Msg::PrefPanelTabExport => "导出",
         Msg::PrefExportEngineSection => "导出引擎",
@@ -5626,6 +6094,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemKeyboardShortcuts => "鍵盤快速鍵",
         Msg::ItemAboutMarkion => "關於 Markion",
         Msg::ItemCheckForUpdates => "檢查更新…",
+        Msg::ItemMarkdownReference => "Markdown 參考",
         Msg::ItemReportIssue => "回報問題",
         Msg::ItemOnlineDocs => "線上文件",
 
@@ -5695,6 +6164,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusWaitingDeleteConfirm => "等待刪除確認…",
         Msg::StatusDeleteCanceled => "已取消刪除",
         Msg::StatusAboutMarkion => "關於 Markion",
+        Msg::StatusMarkdownReference => "Markdown 參考",
         Msg::StatusUpdateChecking => "正在檢查更新…",
         Msg::StatusUpdateUpToDate => "Markion 已是最新版本",
         Msg::StatusUpdateAvailable => "發現新版本：{0}",
@@ -5851,6 +6321,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "稍後",
 
         Msg::DialogAboutTitle => "關於 Markion",
+        Msg::DialogMarkdownReferenceTitle => "Markdown 參考",
         Msg::DialogAboutVersion => "版本：{0}",
         Msg::DialogAboutDescription => "一款使用 Rust 與 GPUI 打造的本機優先 Markdown 編輯器。",
         Msg::DialogAboutProjectWebsite => "專案網站",
@@ -5966,6 +6437,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
         Msg::PrefPanelClose => "關閉",
         Msg::PrefPanelTabGeneral => "一般",
+        Msg::PrefPanelTabTheme => "佈景主題",
         Msg::PrefPanelTabShortcuts => "快速鍵",
         Msg::PrefPanelTabExport => "匯出",
         Msg::PrefExportEngineSection => "匯出引擎",
@@ -6320,8 +6792,8 @@ mod tests {
             &catalog,
             ShortcutCategory::View,
             "Source Mode",
-            &["Ctrl+Alt+1"],
-            &["Cmd+Option+1"],
+            &["Ctrl+/"],
+            &["Cmd+/"],
         );
         assert_shortcut_action(
             &catalog,
@@ -6529,6 +7001,7 @@ mod tests {
             Msg::ItemResetPreferences,
             Msg::ItemKeyboardShortcuts,
             Msg::ItemCheckForUpdates,
+            Msg::ItemMarkdownReference,
             Msg::ItemAboutMarkion,
             Msg::LabelEditor,
             Msg::LabelPreview,
@@ -6588,6 +7061,7 @@ mod tests {
             Msg::StatusWaitingDeleteConfirm,
             Msg::StatusDeleteCanceled,
             Msg::StatusAboutMarkion,
+            Msg::StatusMarkdownReference,
             Msg::StatusUpdateChecking,
             Msg::StatusUpdateUpToDate,
             Msg::StatusUpdateAvailable,
@@ -6740,6 +7214,7 @@ mod tests {
             Msg::DialogButtonDownloadManually,
             Msg::DialogButtonLater,
             Msg::DialogAboutTitle,
+            Msg::DialogMarkdownReferenceTitle,
             Msg::DialogAboutVersion,
             Msg::DialogAboutDescription,
             Msg::DialogAboutProjectWebsite,
@@ -6825,6 +7300,7 @@ mod tests {
             Msg::PrefPanelSidebar,
             Msg::PrefPanelHeadingMenu,
             Msg::PrefPanelTabGeneral,
+            Msg::PrefPanelTabTheme,
             Msg::PrefPanelTabShortcuts,
             Msg::PrefPanelTabExport,
             Msg::ShortcutCapturePrompt,

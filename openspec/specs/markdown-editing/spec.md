@@ -515,15 +515,25 @@ Visual Edit SHALL render byte-exact supported inline formatting in prose blocks 
 - **AND** the editor does not guess a rendered-tree mutation for that construct
 
 ### Requirement: Visual Edit whitespace activation
-The system SHALL keep source-backed whitespace ranges available for exact caret mapping while treating whitespace between rendered blocks as passive layout until the source caret intentionally enters that range. When the source caret owns a whitespace row — whether because the user pressed Enter at the end of a paragraph (whose source range excludes the trailing newline) or because keyboard navigation moved the caret into a whitespace-only range — Visual Edit SHALL present the row as the same passive-height layout it uses when unfocused, plus a thin insertion caret line visually consistent with the caret in a paragraph or heading, and SHALL accept subsequent typed text at the exact source caret position. Visual Edit SHALL NOT wrap a whitespace row that owns the caret in a source-island box (border, padding, monospace styling, or differentiated background), because such chrome misrepresents ordinary inter-paragraph spacing as a code-like block. Source islands SHALL remain reserved for blocks whose source has no rendered visual form (frontmatter, code, HTML, unsupported constructs) or for inline runs whose source/display mapping is ambiguous and therefore requires a conservative source-editing fallback.
+The system SHALL keep source-backed whitespace ranges available for exact caret mapping. In Visual Edit, a `Whitespace` row SHALL behave as a first-class empty line: it occupies the rendered body paragraph line height (one painted line per covered newline, floored at one line and capped at the existing pathological bound), presents an I-beam pointer, and accepts pointer placement onto an existing offset inside its source range. Clicking a whitespace row SHALL move the caret into that range and MUST NOT insert a newline or otherwise mutate the document text, version, dirty state, undo history, or derived Markdown caches. When the source caret owns a whitespace row — because the user clicked it, pressed Enter onto a new insertion line, or moved into it with keyboard navigation — Visual Edit SHALL present the same empty-paragraph-height layout plus a thin insertion caret line visually consistent with the caret in a paragraph or heading, and SHALL accept subsequent typed text at the exact source caret position. Visual Edit SHALL NOT wrap a whitespace row in a source-island box (border, padding, monospace styling, or differentiated background). Source islands SHALL remain reserved for blocks whose source has no rendered visual form (frontmatter, code, HTML, unsupported constructs) or for inline runs whose source/display mapping is ambiguous. Landing offsets SHALL lie inside the whitespace source range. For a single-newline gap between two rendered blocks, the caret SHALL land at `Whitespace.source_range.start` (the authored separator newline), not the first content byte of the following block.
 
-#### Scenario: Clicking a passive gap between headings does not activate editing
-- **WHEN** the Visual Edit caret belongs to a rendered heading and the user clicks the whitespace gap between that heading and another heading
-- **THEN** the source selection and document content remain unchanged and the gap does not present an insertion caret
+#### Scenario: Clicking a blank line between headings places the caret without mutation
+- **WHEN** the Visual Edit caret belongs to a rendered heading and the user clicks the blank-line `Whitespace` row between that heading and another heading
+- **THEN** the caret moves onto an existing offset inside that whitespace range (`source_range.start` for a single-newline gap)
+- **AND** the document text, version, dirty state, undo history, and derived Markdown cache identity remain unchanged
+- **AND** the gap row presents an insertion caret
 
-#### Scenario: Clicking a passive gap before a paragraph does not activate editing
-- **WHEN** the Visual Edit caret belongs to a rendered block and the user clicks the whitespace gap between a heading and a paragraph
-- **THEN** the source selection and document content remain unchanged and the gap does not become an editable typing area
+#### Scenario: Clicking a blank line between a heading and a paragraph places the caret without mutation
+- **WHEN** the Visual Edit caret belongs to a rendered block and the user clicks the blank-line `Whitespace` row between a heading and a paragraph
+- **THEN** the caret moves onto an existing offset inside that whitespace range
+- **AND** the document text, version, dirty state, undo history, and derived Markdown cache identity remain unchanged
+- **AND** the gap row becomes the caret-owning typing surface
+
+#### Scenario: Typing after a gap click inserts at the existing newline
+- **WHEN** the user clicks the blank-line row between `## [Unreleased]` and `## [16.1.7]` in a changelog-like document and types text
+- **THEN** the typed bytes insert at the existing separator newline so a paragraph appears between the two headings
+- **AND** the following heading’s first content byte is not consumed
+- **AND** the edit does not insert an extra blank line beyond the newline that was already authored
 
 #### Scenario: Structural Enter activates an insertion line
 - **WHEN** the user presses Enter from a heading in Visual Edit and the structural edit creates a new source-backed insertion line
@@ -534,13 +544,14 @@ The system SHALL keep source-backed whitespace ranges available for exact caret 
 - **THEN** the owning whitespace row provides the source-backed editing affordance without recomputing the document's cached Markdown-derived state
 
 #### Scenario: Whitespace row owning the caret renders a caret line, not a source island
-- **WHEN** the source caret owns a whitespace row in Visual Edit — for example after creating a blank line by pressing Enter (so a second newline lands outside any paragraph range), or after pressing Down arrow across an existing blank line
-- **THEN** the row is rendered as passive-height layout with a thin insertion caret line and no border, padding, monospace styling, or differentiated background
+- **WHEN** the source caret owns a whitespace row in Visual Edit — for example after clicking it, after creating a blank line by pressing Enter, or after pressing Down or Up onto an existing blank line
+- **THEN** the row is rendered at empty-paragraph height with a thin insertion caret line and no border, padding, monospace styling, or differentiated background
 - **AND** typed text is inserted into the canonical Markdown source at the caret position through the same dirty-state, undo/redo, autosave, and per-tab isolation paths as any other edit
 
-#### Scenario: Whitespace row not owning the caret remains passive
+#### Scenario: Whitespace row not owning the caret stays an empty line
 - **WHEN** a whitespace row does not own the source caret
-- **THEN** it renders as passive layout without a caret, exactly as before, regardless of whether it owns the caret on other frames
+- **THEN** it still occupies empty-paragraph height and remains pointer-editable
+- **AND** it does not paint an insertion caret until it owns the caret
 
 ### Requirement: Progressive Markdown marker reveal in Visual Edit
 Visual Edit SHALL keep supported paragraph, heading, list-item, and blockquote content visually rendered while it is focused. When precise editing requires Markdown syntax, the editor SHALL reveal only the smallest complete inline syntax group whose source mapping is proven exact, while `MarkdownDocument.text` remains the canonical representation. Display-to-source and source-to-display mappings SHALL remain UTF-8-safe and monotonic for pointer placement, selection, keyboard navigation, platform text input, and IME caret geometry. Syntax whose mapping is nested, overlapping, byte-inexact, or otherwise ambiguous MUST use a conservative source-backed edit island.
@@ -643,7 +654,7 @@ Visual Edit SHALL preserve which canonical source side owns a collapsed caret wh
 - **AND** source offsets remain clamped to valid UTF-8 boundaries
 
 ### Requirement: Layout-aware Visual Edit navigation
-When Visual Edit is active, vertical and line-boundary navigation SHALL follow the painted visual layout rather than only logical Markdown source lines. Up/Down and their selection variants SHALL retain a preferred horizontal coordinate across wrapped lines and adjacent visual blocks, while Home/End SHALL target the active painted line in rendered content. Vertical navigation SHALL move directly between rendered content blocks: a blank-line (`Whitespace`) gap row is pure inter-block spacing and SHALL NOT capture the caret as a navigation stop. A single Up (or Down) SHALL skip past any consecutive gap rows and land in the next rendered block on the far side, preserving the preferred horizontal coordinate, so the caret never parks on an empty gap row where the move would look like it did nothing. A blank line remains reachable for editing by clicking it or by pressing Enter — not by arrow navigation. Only when nothing but whitespace remains before the document edge SHALL a vertical move land on the gap row itself, so the arrow key still reaches a leading/trailing blank line instead of becoming a dead no-op.
+When Visual Edit is active, vertical and line-boundary navigation SHALL follow the painted visual layout rather than only logical Markdown source lines. Up/Down and their selection variants SHALL retain a preferred horizontal coordinate across wrapped lines and adjacent visual blocks, while Home/End SHALL target the active painted line in rendered content. Vertical navigation SHALL treat a blank-line (`Whitespace`) row as a navigation stop: moving Up from the lower rendered block and moving Down from the upper rendered block SHALL both land on an existing offset inside the gap row so the user can type into that authored blank line from either direction. A subsequent vertical move SHALL continue into the rendered block on the far side, or walk additional painted lines inside a multi-line whitespace row, while preserving the preferred horizontal coordinate. Leading and trailing blank lines at the document edge SHALL remain reachable the same way instead of becoming a dead no-op.
 
 #### Scenario: Up and Down traverse wrapped visual lines
 - **WHEN** a rendered paragraph or other editable visual block wraps onto multiple painted lines
@@ -661,26 +672,33 @@ When Visual Edit is active, vertical and line-boundary navigation SHALL follow t
 - **THEN** the caret moves to the closest source-backed position in the adjacent visual block
 - **AND** a virtualized target row is revealed before the pending movement is completed
 
-#### Scenario: Vertical navigation skips a blank-line gap row between content blocks
+#### Scenario: Vertical navigation lands on a blank-line row between content blocks
 - **WHEN** the user presses Up from a paragraph whose rendered block above is separated by a blank-line `Whitespace` gap row (for example a heading above, paragraph below)
 - **OR** the user presses Down from a heading whose rendered block below is separated by a blank-line gap row
-- **THEN** a single move skips the gap row and lands the caret in the rendered block on the far side of the gap, not on the gap row
+- **THEN** the caret lands on an existing offset inside the gap row (`Whitespace.source_range.start` for a single-newline gap)
+- **AND** the gap row becomes the caret-owning row and accepts subsequent typed text at that source position through the standard source-backed input path
+- **AND** the resolved target does not land on the start offset of the lower rendered block when that byte is outside the whitespace range
 - **AND** the preferred horizontal coordinate is retained across the gap-row crossing
-- **AND** the caret never parks on the empty gap row, where the move would look like it did nothing
+
+#### Scenario: A second vertical move continues past the gap row
+- **WHEN** the caret already owns a blank-line gap row and the user presses Up (or Down) again
+- **THEN** the caret moves into the rendered block on the far side of the gap, or onto the next painted line if the whitespace row covers multiple newlines
+- **AND** the preferred horizontal coordinate is retained across the crossing
 
 #### Scenario: Up from the start of a paragraph whose line above is a heading
 - **WHEN** the caret is at the first source offset of a paragraph (paragraph start) and the user presses Up
-- **AND** the block immediately above is a blank-line gap row followed by a heading
-- **THEN** the caret moves directly into the heading in a single press rather than staying at the paragraph start or parking on the gap row
+- **AND** the block immediately above is a blank-line gap row
+- **THEN** the caret moves onto the gap row instead of staying at the paragraph start or jumping into the heading
+- **AND** subsequent typed text inserts at the gap row's source position
 
-#### Scenario: A blank line remains reachable for editing without arrows
+#### Scenario: A blank line is reachable by arrows as well as click and Enter
 - **WHEN** the user wants to type into an existing blank line between two rendered blocks
-- **THEN** the caret reaches the blank-line gap row by clicking it or by pressing Enter, and the gap row becomes the caret-owning row that accepts typed text at its source position
-- **AND** arrow navigation is not required to reach the blank line and does not park on it
+- **THEN** the caret reaches that `Whitespace` row by clicking it, by pressing Up or Down onto it, or by pressing Enter, and the row becomes the caret-owning row that accepts typed text at its source position
+- **AND** a single Up or Down from an adjacent content block parks on the blank line instead of skipping it
 
 #### Scenario: A vertical move reaches a leading or trailing blank line at the document edge
 - **WHEN** the only rows beyond the active block in the move direction are blank-line gap rows up to the start or end of the document
-- **THEN** the move lands on the gap row's source offset (`Whitespace.source_range.start`) instead of becoming a dead no-op
+- **THEN** the move lands on an existing offset inside the gap row (`Whitespace.source_range.start` for a single-newline gap) instead of becoming a dead no-op
 
 #### Scenario: Selection navigation uses visual targets
 - **WHEN** the user invokes Select Up or Select Down in Visual Edit
@@ -764,6 +782,35 @@ Every derived Visual Edit block SHALL carry an opaque, non-persisted identity th
 - **WHEN** a document is saved, reopened, recovered, cloned for undo, or replaced wholesale
 - **THEN** visual identities and incremental region caches are rebuilt rather than persisted
 - **AND** Markdown file contents and undo snapshot formats remain unchanged
+
+### Requirement: Mixed Markdown images stay inline with adjacent prose
+When a paragraph, heading, quoted paragraph, or list item contains a Markdown image together with any other prose in the same construct, Visual Edit, Read mode, and Split Preview SHALL present the image as an inline atom on the same visual line as the adjacent text (wrapping only when the line does not fit). The authored `![alt](url)` bytes SHALL belong only to that atom. Those surfaces SHALL NOT stack the image on its own row above leftover prose, SHALL NOT paint the complete image syntax as a source island under the preview, and SHALL NOT leak alt text or the destination URL as ordinary copy. Image-only paragraphs and images separated by a blank line remain block-level image rows with the existing image presentation.
+
+#### Scenario: Leading same-line image plus trailing prose
+
+- **WHEN** the document contains a paragraph of the form `![alt](url)trailing text`
+- **THEN** Read mode and Split Preview show the image and the trailing text on the same line
+- **AND** Visual Edit shows the same inline layout in one paragraph row
+- **AND** the complete authored `![alt](url)` syntax does not appear as a source island or as visible copy under the preview while the atom is unfocused
+
+#### Scenario: Text surrounding an image on one line
+
+- **WHEN** the document contains `text ![alt](url) more`
+- **THEN** Visual Edit, Read mode, and Split Preview keep leading text, the image atom, and trailing text in one prose row
+- **AND** no row is force-marked as an unsupported source island due to range overlap
+
+#### Scenario: Heading, quote, and list item keep the parent construct
+
+- **WHEN** a heading, a blockquote paragraph, or a list item starts with or contains a mixed Markdown image and trailing prose
+- **THEN** the image stays an inline atom inside that heading, quoted paragraph, or list item
+- **AND** a list item does not emit a second bullet or a continuation paragraph
+- **AND** quoted rows keep the same quote boundary
+
+#### Scenario: Image-only and blank-line-separated images stay block-level
+
+- **WHEN** Visual Edit, Read mode, or Split Preview displays a paragraph that is only a Markdown image, or a prose paragraph separated from an image by a blank line
+- **THEN** the image still renders as a block-level image row
+- **AND** the prose paragraph (when present) remains a separate row whose source range does not overlap the image
 
 ### Requirement: Direct Markdown image editing in Visual Edit
 Visual Edit SHALL present an exactly ranged inline Markdown image as its image preview together with direct text controls for alt text, destination, and optional title. Each control SHALL edit only its validated authored field range, preserve unrelated delimiters and escaping, and use the canonical source selection, platform input, IME, history, dirty-state, and multi-tab paths. Reference-style images, multiline or malformed syntax, and field forms whose exact boundaries cannot be proven MUST retain the complete source-backed image island.
@@ -1091,4 +1138,25 @@ The parser SHALL assign each `PreviewBlock::Table` the source range of the pulld
 - **WHEN** a list item contains a nested GFM table
 - **THEN** the preview stream places the list item block before that table
 - **AND** the list item’s source range ends no later than the nested table’s source range start
+
+### Requirement: CRLF HTML events coalesce into one preview block
+
+When pulldown-cmark emits consecutive `Event::Html` pieces whose source ranges are separated only by whitespace that is not a CommonMark blank line (including a lone CR left after CRLF normalization), the parser SHALL emit a single `PreviewBlock::Html`. That block’s `source_range` SHALL be the contiguous span from the first piece through the last, and its `html` string SHALL be the corresponding slice of canonical document text (not a concatenation of event payloads that omit CR). Two HTML blocks separated by a blank line SHALL remain two preview blocks. The same coalescing SHALL apply to HTML accumulated into list items and blockquotes. Incremental source-mapped derivation SHALL match this full-parse result.
+
+#### Scenario: CRLF table lines become one HTML preview block
+
+- **WHEN** the document contains a multi-line raw HTML `<table>…</table>` whose line endings are CRLF and which contains no blank line between tags
+- **THEN** `preview_blocks()` contains exactly one `PreviewBlock::Html` for that table
+- **AND** that block’s `source_range` covers the authored `<table` through `</table>`
+- **AND** the block’s `html` matches the document slice for that range
+
+#### Scenario: LF table lines stay one HTML preview block
+
+- **WHEN** the same table markup uses LF line endings
+- **THEN** `preview_blocks()` still contains exactly one `PreviewBlock::Html` for that table
+
+#### Scenario: Blank line keeps two HTML blocks apart
+
+- **WHEN** the document contains two complete raw HTML blocks separated by a blank line (for example two `<p>…</p>` blocks)
+- **THEN** `preview_blocks()` contains two `PreviewBlock::Html` entries in document order
 

@@ -49,16 +49,16 @@ use markion::{
     check_path_state, default_preferences_path, default_recovery_dir, default_session_path,
     default_themes_dir, delete_block, delete_recovery_file, diagram_backend_id, duplicate_block,
     highlight_code, html_preview_parts, html_preview_plain_text, html_table_column_weights,
-    html_table_row_has_visible_header, image_extension_supported, import_image_bytes,
-    import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
-    is_text_path, list_theme_definitions, load_app_preferences, load_recovery_file,
-    load_session_state, normalize_auto_save_delay_secs, normalize_editor_font_size,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
-    p0_t, p0_tf, p1_t, p1_tf, pandoc_available, read_document_source, reorder_block,
-    resolve_font_family, resolve_html_img_display_size, save_app_preferences, save_session_state,
-    save_text_snapshot, save_theme_definition, serialize_inline_image, serialize_inline_link,
-    shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at, t,
-    table_column_flex_weights, tf, title_from_path, transform_block, validate_block_target,
+    html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
+    import_image_bytes, import_image_file, inline_image_at, inline_link_at, inspect_recovery_files,
+    is_markdown_path, is_text_path, list_theme_definitions, load_app_preferences,
+    load_recovery_file, load_session_state, markdown_reference, normalize_auto_save_delay_secs,
+    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
+    normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, read_document_source,
+    reorder_block, resolve_font_family, resolve_html_img_display_size, save_app_preferences,
+    save_session_state, save_text_snapshot, save_theme_definition, serialize_inline_image,
+    serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
+    t, table_column_flex_weights, tf, title_from_path, transform_block, validate_block_target,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -154,6 +154,7 @@ actions!(
         ToggleFindCaseSensitive,
         ToggleFindRegex,
         ShowShortcuts,
+        ShowMarkdownReference,
         ShowPreferences,
         ResetPreferences,
         CheckForUpdates,
@@ -239,10 +240,14 @@ fn menu_after_hover(active: Option<AppMenu>, hovered: AppMenu) -> Option<AppMenu
 /// reference. Explicit platform labels keep GPUI's internal `secondary`
 /// modifier out of user-facing chrome; overridden bindings are rendered
 /// through `markion::keystroke::format_keystroke_label` instead.
+///
+/// `binding` is `None` for factory-unbound actions (currently
+/// `show-shortcuts`): they stay in the registry for Preferences capture but
+/// are not installed in the keymap unless a valid override exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MenuShortcut {
     id: &'static str,
-    binding: &'static str,
+    binding: Option<&'static str>,
     windows_linux: &'static str,
     macos: &'static str,
 }
@@ -256,9 +261,18 @@ impl MenuShortcut {
     ) -> Self {
         Self {
             id,
-            binding,
+            binding: Some(binding),
             windows_linux,
             macos,
+        }
+    }
+
+    const fn unbound(id: &'static str) -> Self {
+        Self {
+            id,
+            binding: None,
+            windows_linux: "",
+            macos: "",
         }
     }
 
@@ -270,21 +284,22 @@ impl MenuShortcut {
     }
 
     /// The binding that should dispatch this action: a valid stored override
-    /// when present, otherwise the default.
-    fn effective_binding<'a>(&self, overrides: &'a BTreeMap<String, String>) -> &'a str {
-        overrides
-            .get(self.id)
-            .filter(|binding| {
-                markion::keystroke::KeystrokeParts::parse(binding, ShortcutPlatform::current())
-                    .is_some()
-                    && gpui::Keystroke::parse(binding).is_ok()
-            })
-            .map(String::as_str)
-            .unwrap_or(self.binding)
+    /// when present, otherwise the factory default. `None` means the action
+    /// has no keystroke until the user assigns one.
+    fn effective_binding<'a>(&self, overrides: &'a BTreeMap<String, String>) -> Option<&'a str> {
+        if let Some(binding) = overrides.get(self.id).filter(|binding| {
+            markion::keystroke::KeystrokeParts::parse(binding, ShortcutPlatform::current())
+                .is_some()
+                && gpui::Keystroke::parse(binding).is_ok()
+        }) {
+            return Some(binding.as_str());
+        }
+        self.binding
     }
 
     /// The label shown in menus and the shortcut reference: the curated
-    /// default label, or a formatted rendering of the override.
+    /// default label, or a formatted rendering of the override. Empty when
+    /// the action is factory-unbound and has no override.
     fn effective_label(
         &self,
         overrides: &BTreeMap<String, String>,
@@ -318,6 +333,12 @@ mod menu_shortcuts {
         MenuShortcut::new("new-document", "secondary-n", "Ctrl+N", "Cmd+N");
     pub const OPEN_DOCUMENT: MenuShortcut =
         MenuShortcut::new("open-document", "secondary-o", "Ctrl+O", "Cmd+O");
+    pub const OPEN_FOLDER: MenuShortcut = MenuShortcut::new(
+        "open-folder",
+        "secondary-shift-o",
+        "Ctrl+Shift+O",
+        "Cmd+Shift+O",
+    );
     pub const SAVE_DOCUMENT: MenuShortcut =
         MenuShortcut::new("save-document", "secondary-s", "Ctrl+S", "Cmd+S");
     pub const SAVE_DOCUMENT_AS: MenuShortcut = MenuShortcut::new(
@@ -328,6 +349,12 @@ mod menu_shortcuts {
     );
     pub const OPEN_IN_NEW_TAB: MenuShortcut =
         MenuShortcut::new("open-in-new-tab", "secondary-t", "Ctrl+T", "Cmd+T");
+    pub const NEW_TAB: MenuShortcut = MenuShortcut::new(
+        "new-tab",
+        "secondary-shift-n",
+        "Ctrl+Shift+N",
+        "Cmd+Shift+N",
+    );
     pub const CLOSE_TAB: MenuShortcut =
         MenuShortcut::new("close-tab", "secondary-w", "Ctrl+W", "Cmd+W");
     pub const NEXT_TAB: MenuShortcut =
@@ -356,30 +383,14 @@ mod menu_shortcuts {
         "Ctrl+Shift+V",
         "Cmd+Shift+V",
     );
-    pub const SET_EDIT_MODE: MenuShortcut = MenuShortcut::new(
-        "set-edit-mode",
-        "secondary-alt-1",
-        "Ctrl+Alt+1",
-        "Cmd+Option+1",
-    );
-    pub const SET_VISUAL_EDIT_MODE: MenuShortcut = MenuShortcut::new(
-        "set-visual-edit-mode",
-        "secondary-alt-4",
-        "Ctrl+Alt+4",
-        "Cmd+Option+4",
-    );
-    pub const SET_SPLIT_PREVIEW_MODE: MenuShortcut = MenuShortcut::new(
-        "set-split-preview-mode",
-        "secondary-alt-2",
-        "Ctrl+Alt+2",
-        "Cmd+Option+2",
-    );
-    pub const SET_READ_MODE: MenuShortcut = MenuShortcut::new(
-        "set-read-mode",
-        "secondary-alt-3",
-        "Ctrl+Alt+3",
-        "Cmd+Option+3",
-    );
+    pub const SET_EDIT_MODE: MenuShortcut =
+        MenuShortcut::new("set-edit-mode", "secondary-/", "Ctrl+/", "Cmd+/");
+    pub const SET_VISUAL_EDIT_MODE: MenuShortcut =
+        MenuShortcut::new("set-visual-edit-mode", "secondary-e", "Ctrl+E", "Cmd+E");
+    pub const SET_SPLIT_PREVIEW_MODE: MenuShortcut =
+        MenuShortcut::new("set-split-preview-mode", "secondary-p", "Ctrl+P", "Cmd+P");
+    pub const SET_READ_MODE: MenuShortcut =
+        MenuShortcut::new("set-read-mode", "secondary-r", "Ctrl+R", "Cmd+R");
     pub const TOGGLE_SIDEBAR: MenuShortcut = MenuShortcut::new(
         "toggle-sidebar",
         "secondary-shift-b",
@@ -425,8 +436,12 @@ mod menu_shortcuts {
 
     pub const BOLD: MenuShortcut = MenuShortcut::new("bold", "secondary-b", "Ctrl+B", "Cmd+B");
     pub const ITALIC: MenuShortcut = MenuShortcut::new("italic", "secondary-i", "Ctrl+I", "Cmd+I");
-    pub const INLINE_CODE: MenuShortcut =
-        MenuShortcut::new("inline-code", "secondary-e", "Ctrl+E", "Cmd+E");
+    pub const INLINE_CODE: MenuShortcut = MenuShortcut::new(
+        "inline-code",
+        "secondary-shift-`",
+        "Ctrl+Shift+`",
+        "Cmd+Shift+`",
+    );
     pub const INSERT_LINK: MenuShortcut =
         MenuShortcut::new("insert-link", "secondary-k", "Ctrl+K", "Cmd+K");
     pub const INSERT_IMAGE: MenuShortcut = MenuShortcut::new(
@@ -563,16 +578,22 @@ mod menu_shortcuts {
         "Cmd+Option+Shift+G",
     );
 
-    pub const SHOW_SHORTCUTS: MenuShortcut = MenuShortcut::new("show-shortcuts", "f1", "F1", "F1");
+    pub const SHOW_MARKDOWN_REFERENCE: MenuShortcut =
+        MenuShortcut::new("show-markdown-reference", "f1", "F1", "F1");
+    /// Factory-unbound: Preferences → Shortcuts remains reachable from the
+    /// Preferences panel; users may assign a keystroke later.
+    pub const SHOW_SHORTCUTS: MenuShortcut = MenuShortcut::unbound("show-shortcuts");
 
     /// Every customizable action, in registry order. Used for rebinding,
     /// conflict detection, and validating stored overrides.
     pub const ALL: &[MenuShortcut] = &[
         NEW_DOCUMENT,
         OPEN_DOCUMENT,
+        OPEN_FOLDER,
         SAVE_DOCUMENT,
         SAVE_DOCUMENT_AS,
         OPEN_IN_NEW_TAB,
+        NEW_TAB,
         CLOSE_TAB,
         NEXT_TAB,
         PREV_TAB,
@@ -631,6 +652,7 @@ mod menu_shortcuts {
         EXPORT_DOCX,
         EXPORT_PNG,
         EXPORT_JPEG,
+        SHOW_MARKDOWN_REFERENCE,
         SHOW_SHORTCUTS,
     ];
 }
@@ -688,7 +710,7 @@ impl AppMenu {
             AppMenu::View => px(304.),
             AppMenu::Format => px(344.),
             AppMenu::Export => px(288.),
-            AppMenu::Help => px(236.),
+            AppMenu::Help => px(280.),
         }
     }
 }
@@ -1747,6 +1769,8 @@ enum PaneScrollTarget {
     Visual,
     /// Preferences panel General tab body. Drag identity only.
     PreferencesGeneral,
+    /// Preferences panel Theme tab body. Drag identity only.
+    PreferencesTheme,
     /// Preferences panel Shortcuts tab category sidebar. Drag identity only.
     PreferencesShortcutCategories,
     /// Preferences panel Shortcuts tab action list. Drag identity only.
@@ -1757,6 +1781,8 @@ enum PaneScrollTarget {
     FileTree,
     /// Outline sidebar heading list. Drag identity only; never a Sync scroll driver.
     Outline,
+    /// Help → Markdown Reference overlay body. Drag identity only.
+    MarkdownReference,
 }
 
 /// Identity of a selectable plain-text run inside one preview list item.
@@ -1923,6 +1949,7 @@ const TAB_CONTEXT_ACTION_GROUPS: &[&[TabContextAction]] = &[
 enum PreferencesTab {
     #[default]
     General,
+    Theme,
     Shortcuts,
     Export,
 }
@@ -2017,6 +2044,10 @@ struct MarkionApp {
     /// Whether the transient, root-hosted About Markion modal is visible.
     /// This is application chrome only and is never persisted.
     about_dialog_open: bool,
+    markdown_reference_open: bool,
+    /// Scroll handle for the Markdown Reference overlay body so it can show a
+    /// draggable right-side scrollbar when content overflows.
+    markdown_reference_scroll: ScrollHandle,
     status: SharedString,
     /// Process-owned, lazily created loopback publishing service. `None`
     /// keeps ordinary startup/editing entirely free of bundle and socket work.
@@ -2049,6 +2080,7 @@ struct MarkionApp {
     /// Scroll handles for the Preferences panel's scrollable regions, so each
     /// region can show a draggable overlay scrollbar and keep its position.
     preferences_general_scroll: ScrollHandle,
+    preferences_theme_scroll: ScrollHandle,
     preferences_categories_scroll: ScrollHandle,
     preferences_actions_scroll: ScrollHandle,
     preferences_export_scroll: ScrollHandle,

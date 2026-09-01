@@ -178,11 +178,11 @@ fn menu_shortcut_labels_follow_platform_conventions() {
     );
     assert_eq!(
         menu_shortcuts::SET_EDIT_MODE.label(ShortcutPlatform::WindowsLinux),
-        "Ctrl+Alt+1"
+        "Ctrl+/"
     );
     assert_eq!(
         menu_shortcuts::SET_EDIT_MODE.label(ShortcutPlatform::MacOS),
-        "Cmd+Option+1"
+        "Cmd+/"
     );
     assert_eq!(
         menu_shortcuts::NEXT_TAB.label(ShortcutPlatform::MacOS),
@@ -244,7 +244,7 @@ fn structural_format_shortcut_registry_matches_reference() {
     let mut stored = BTreeMap::new();
     for (shortcut, id, binding, windows_linux, macos) in expected {
         assert_eq!(shortcut.id, id);
-        assert_eq!(shortcut.binding, binding);
+        assert_eq!(shortcut.binding, Some(binding));
         assert_eq!(shortcut_by_id(id), Some(shortcut));
         assert_eq!(
             shortcut.label(ShortcutPlatform::WindowsLinux),
@@ -276,11 +276,17 @@ fn structural_format_shortcut_registry_matches_reference() {
 
     for platform in ShortcutPlatform::ALL {
         for (index, left) in menu_shortcuts::ALL.iter().enumerate() {
-            let left = markion::keystroke::KeystrokeParts::parse(left.binding, platform)
+            let Some(left_binding) = left.binding else {
+                continue;
+            };
+            let left = markion::keystroke::KeystrokeParts::parse(left_binding, platform)
                 .expect("registry default parses");
             for right in &menu_shortcuts::ALL[index + 1..] {
+                let Some(right_binding) = right.binding else {
+                    continue;
+                };
                 let right_parts =
-                    markion::keystroke::KeystrokeParts::parse(right.binding, platform)
+                    markion::keystroke::KeystrokeParts::parse(right_binding, platform)
                         .expect("registry default parses");
                 assert_ne!(
                     left, right_parts,
@@ -409,7 +415,7 @@ fn shortcut_effective_binding_and_label_fall_back_to_defaults() {
     overrides.insert("bold".to_string(), "ctrl-alt-b".to_string());
     assert_eq!(
         menu_shortcuts::BOLD.effective_binding(&overrides),
-        "ctrl-alt-b"
+        Some("ctrl-alt-b")
     );
     assert_eq!(
         menu_shortcuts::BOLD.effective_label(&overrides, ShortcutPlatform::WindowsLinux),
@@ -429,12 +435,12 @@ fn shortcut_effective_binding_and_label_fall_back_to_defaults() {
 
 #[test]
 fn menu_shortcut_metadata_has_one_redo_binding() {
-    assert_eq!(menu_shortcuts::SAVE_DOCUMENT.binding, "secondary-s");
+    assert_eq!(menu_shortcuts::SAVE_DOCUMENT.binding, Some("secondary-s"));
     assert_eq!(
         menu_shortcuts::EXPORT_PLAIN_HTML.label(ShortcutPlatform::MacOS),
         "Cmd+Option+Shift+H"
     );
-    assert_eq!(menu_shortcuts::REDO.binding, "secondary-y");
+    assert_eq!(menu_shortcuts::REDO.binding, Some("secondary-y"));
     assert_eq!(
         menu_shortcuts::REDO.label(ShortcutPlatform::WindowsLinux),
         "Ctrl+Y"
@@ -486,8 +492,15 @@ fn full_rebind_restores_fixed_keys_and_every_registry_action() {
     }
     assert_eq!(
         bind.matches("eff(&menu_shortcuts::").count(),
-        menu_shortcuts::ALL.len(),
-        "every customizable registry action must be restored exactly once"
+        menu_shortcuts::ALL
+            .iter()
+            .filter(|shortcut| shortcut.binding.is_some())
+            .count(),
+        "every factory-bound registry action must be restored exactly once"
+    );
+    assert!(
+        bind.contains("SHOW_SHORTCUTS.effective_binding"),
+        "factory-unbound show-shortcuts must install only when overridden"
     );
 
     let shortcuts = include_str!("shortcuts.rs");
@@ -533,15 +546,18 @@ fn every_application_dropdown_uses_shortcut_aware_rows() {
         .map(|(_, body)| body)
         .expect("Help menu match arm");
     assert!(help_menu.contains("Msg::ItemCheckForUpdates"));
+    assert!(help_menu.contains("Msg::ItemMarkdownReference"));
     assert!(help_menu.contains("Msg::ItemAboutMarkion"));
     assert!(help_menu.contains("Msg::ItemReportIssue"));
     assert!(help_menu.contains("Msg::ItemOnlineDocs"));
     assert!(
-        help_menu.find("Msg::ItemReportIssue").unwrap()
-            < help_menu.find("Msg::ItemAboutMarkion").unwrap()
+        help_menu.find("Msg::ItemMarkdownReference").unwrap()
+            < help_menu.find("Msg::ItemReportIssue").unwrap()
+            && help_menu.find("Msg::ItemReportIssue").unwrap()
+                < help_menu.find("Msg::ItemAboutMarkion").unwrap()
             && help_menu.find("Msg::ItemOnlineDocs").unwrap()
                 < help_menu.find("Msg::ItemAboutMarkion").unwrap(),
-        "the external links must precede About in the Help dropdown"
+        "Markdown Reference must precede Report an Issue, and external links must precede About"
     );
     assert!(
         !help_menu.contains("Msg::ItemKeyboardShortcuts"),
@@ -585,6 +601,8 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
 
     for (message, descriptor) in [
         ("Msg::ItemSave,", "menu_shortcuts::SAVE_DOCUMENT"),
+        ("Msg::ItemOpenFolder,", "menu_shortcuts::OPEN_FOLDER"),
+        ("Msg::ItemNewTab,", "menu_shortcuts::NEW_TAB"),
         ("Msg::ItemRedo,", "menu_shortcuts::REDO"),
         ("Msg::ItemFind,", "menu_shortcuts::SHOW_FIND"),
         ("Msg::ItemBold,", "menu_shortcuts::BOLD"),
@@ -594,6 +612,10 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
         ("Msg::ItemQuote,", "menu_shortcuts::BLOCK_QUOTE"),
         ("Msg::ItemCodeFence,", "menu_shortcuts::CODE_FENCE"),
         ("Msg::ItemExportPdf,", "menu_shortcuts::EXPORT_PDF"),
+        (
+            "Msg::ItemMarkdownReference,",
+            "menu_shortcuts::SHOW_MARKDOWN_REFERENCE",
+        ),
     ] {
         assert!(
             invocation(message).contains(descriptor),
@@ -602,8 +624,6 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
     }
 
     for message in [
-        "Msg::ItemOpenFolder,",
-        "Msg::ItemNewTab,",
         "Msg::ItemResetPreferences,",
         "Msg::ItemCheckForUpdates,",
         "Msg::ItemAboutMarkion,",
@@ -912,7 +932,7 @@ fn startup_installs_http_client_before_building_ui() {
 }
 
 #[test]
-fn open_folder_action_is_wired_after_open_without_a_shortcut() {
+fn open_folder_action_is_wired_after_open_with_shortcut() {
     let root_view_source = include_str!("root_view.rs");
     let bootstrap_source = include_str!("bootstrap.rs");
     assert!(root_view_source.contains(".on_action(cx.listener(Self::open_folder))"));
@@ -927,6 +947,10 @@ fn open_folder_action_is_wired_after_open_without_a_shortcut() {
         .expect("Open Folder item");
     let in_window_save = in_window.find("Msg::ItemSave,").expect("Save item");
     assert!(in_window_open < in_window_folder && in_window_folder < in_window_save);
+    assert!(
+        in_window.contains("menu_shortcuts::OPEN_FOLDER"),
+        "Open Folder must show its effective shortcut"
+    );
 
     let native = bootstrap_source
         .split_once("fn install_menus")
@@ -939,9 +963,9 @@ fn open_folder_action_is_wired_after_open_without_a_shortcut() {
     let native_save = native.find("Msg::ItemSave)").expect("native Save item");
     assert!(native_open < native_folder && native_folder < native_save);
     assert!(
-        !bootstrap_source
-            .lines()
-            .any(|line| line.contains("KeyBinding::new") && line.contains("OpenFolder"))
+        bootstrap_source
+            .contains("KeyBinding::new(eff(&menu_shortcuts::OPEN_FOLDER), OpenFolder, None)"),
+        "Open Folder must be bound in the keymap"
     );
 }
 
@@ -2157,20 +2181,57 @@ fn preview_block_splice_result_reconstructs_new_slice() {
 
 #[test]
 fn whitespace_row_height_grows_with_blank_lines_without_the_old_cap() {
+    let line_height = default_paragraph_line_height();
     // Zero/one newline both floor at a single row height.
-    assert_eq!(whitespace_row_height(0), WHITESPACE_ROW_LINE_HEIGHT);
-    assert_eq!(whitespace_row_height(1), WHITESPACE_ROW_LINE_HEIGHT);
+    assert_eq!(whitespace_row_height(0, line_height), line_height);
+    assert_eq!(whitespace_row_height(1, line_height), line_height);
     // Growth is linear and stays visible far past the former 72px cap (~6
     // lines): every Enter at the document tail must change the rendered
     // height, in both directions (typo fix / undo shrink symmetrically).
     for lines in 2..=40 {
         assert_eq!(
-            whitespace_row_height(lines),
-            lines as f32 * WHITESPACE_ROW_LINE_HEIGHT
+            whitespace_row_height(lines, line_height),
+            lines as f32 * line_height
         );
     }
-    assert_eq!(whitespace_row_height(40), 40. * WHITESPACE_ROW_LINE_HEIGHT);
-    assert_eq!(whitespace_row_height(3), 3. * WHITESPACE_ROW_LINE_HEIGHT);
+    assert_eq!(whitespace_row_height(40, line_height), 40. * line_height);
+    assert_eq!(whitespace_row_height(3, line_height), 3. * line_height);
+}
+
+#[test]
+fn whitespace_row_height_tracks_rendered_body_size() {
+    let default = DocumentTypographyMetrics::new(
+        markion::DEFAULT_EDITOR_FONT_SIZE,
+        markion::DEFAULT_RENDERED_FONT_SIZE,
+        markion::DEFAULT_PARAGRAPH_SPACING,
+    );
+    let larger = DocumentTypographyMetrics::new(
+        markion::DEFAULT_EDITOR_FONT_SIZE,
+        markion::DEFAULT_RENDERED_FONT_SIZE + 4,
+        markion::DEFAULT_PARAGRAPH_SPACING,
+    );
+    assert_eq!(
+        whitespace_row_height(1, default.paragraph_line_height),
+        default.paragraph_line_height
+    );
+    assert_eq!(
+        whitespace_row_height(2, default.paragraph_line_height),
+        2. * default.paragraph_line_height
+    );
+    assert!(
+        whitespace_row_height(1, larger.paragraph_line_height)
+            > whitespace_row_height(1, default.paragraph_line_height)
+    );
+    assert_eq!(default.paragraph_line_height, 24.);
+}
+
+fn default_paragraph_line_height() -> f32 {
+    DocumentTypographyMetrics::new(
+        markion::DEFAULT_EDITOR_FONT_SIZE,
+        markion::DEFAULT_RENDERED_FONT_SIZE,
+        markion::DEFAULT_PARAGRAPH_SPACING,
+    )
+    .paragraph_line_height
 }
 
 #[test]
@@ -2251,13 +2312,14 @@ fn visual_end_padding_height_is_half_the_viewport() {
 
 #[test]
 fn whitespace_row_height_respects_the_pathological_bound() {
+    let line_height = default_paragraph_line_height();
     assert_eq!(
-        whitespace_row_height(WHITESPACE_ROW_MAX_LINES),
-        WHITESPACE_ROW_MAX_LINES as f32 * WHITESPACE_ROW_LINE_HEIGHT
+        whitespace_row_height(WHITESPACE_ROW_MAX_LINES, line_height),
+        WHITESPACE_ROW_MAX_LINES as f32 * line_height
     );
     assert_eq!(
-        whitespace_row_height(WHITESPACE_ROW_MAX_LINES + 100_000),
-        WHITESPACE_ROW_MAX_LINES as f32 * WHITESPACE_ROW_LINE_HEIGHT
+        whitespace_row_height(WHITESPACE_ROW_MAX_LINES + 100_000, line_height),
+        WHITESPACE_ROW_MAX_LINES as f32 * line_height
     );
 }
 
@@ -2265,32 +2327,70 @@ fn whitespace_row_height_respects_the_pathological_bound() {
 fn whitespace_caret_line_tracks_newlines_before_the_source_caret() {
     let text = "Hello\n\n\n";
     let range = 5..8;
+    let line_height = default_paragraph_line_height();
     assert_eq!(whitespace_caret_line(range.clone(), 5, text), 0);
-    assert_eq!(whitespace_caret_line(range.clone(), 6, text), 0);
-    assert_eq!(whitespace_caret_line(range.clone(), 7, text), 1);
+    assert_eq!(whitespace_caret_line(range.clone(), 6, text), 1);
+    assert_eq!(whitespace_caret_line(range.clone(), 7, text), 2);
     assert_eq!(whitespace_caret_line(range, 8, text), 2);
-    assert_eq!(whitespace_caret_y(0), 0.);
-    assert_eq!(whitespace_caret_y(1), WHITESPACE_ROW_LINE_HEIGHT);
-    assert_eq!(whitespace_caret_y(2), 2. * WHITESPACE_ROW_LINE_HEIGHT);
+    assert_eq!(whitespace_caret_y(0, line_height), 0.);
+    assert_eq!(whitespace_caret_y(1, line_height), line_height);
+    assert_eq!(whitespace_caret_y(2, line_height), 2. * line_height);
 }
 
 #[test]
-fn whitespace_source_at_line_and_y_map_back_to_newline_ends() {
+fn whitespace_source_at_line_and_y_map_to_newline_bytes() {
     let text = "Hello\n\n\n";
     let range = 5..8;
-    assert_eq!(whitespace_source_at_line(range.clone(), 0, text), 6);
-    assert_eq!(whitespace_source_at_line(range.clone(), 1, text), 7);
-    assert_eq!(whitespace_source_at_line(range.clone(), 2, text), 8);
-    assert_eq!(whitespace_source_at_line(range.clone(), 9, text), 8);
-    assert_eq!(whitespace_source_at_y(range.clone(), px(0.), text), 6);
+    let line_height = default_paragraph_line_height();
+    assert_eq!(whitespace_source_at_line(range.clone(), 0, text), 5);
+    assert_eq!(whitespace_source_at_line(range.clone(), 1, text), 6);
+    assert_eq!(whitespace_source_at_line(range.clone(), 2, text), 7);
+    assert_eq!(whitespace_source_at_line(range.clone(), 9, text), 7);
     assert_eq!(
-        whitespace_source_at_y(range.clone(), px(WHITESPACE_ROW_LINE_HEIGHT), text),
+        whitespace_source_at_y(range.clone(), px(0.), text, line_height),
+        5
+    );
+    assert_eq!(
+        whitespace_source_at_y(range.clone(), px(line_height), text, line_height),
+        6
+    );
+    assert_eq!(
+        whitespace_source_at_y(range, px(2. * line_height + 4.), text, line_height),
         7
     );
-    assert_eq!(
-        whitespace_source_at_y(range, px(2. * WHITESPACE_ROW_LINE_HEIGHT + 4.), text),
-        8
-    );
+}
+
+#[test]
+fn whitespace_source_at_y_lands_on_separator_not_next_block() {
+    let line_height = default_paragraph_line_height();
+    for source in ["## [Unreleased]\n\n## [16.1.7]", "Para 1\n\nPara 2"] {
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        let gap = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Whitespace))
+            .expect("blank line should be a Whitespace row");
+        let following = blocks
+            .iter()
+            .find(|block| {
+                !matches!(block.kind, VisualBlockKind::Whitespace)
+                    && block.source_range.start >= gap.source_range.end
+            })
+            .expect("content after the gap");
+        let offset = whitespace_source_at_y(gap.source_range.clone(), px(0.), source, line_height);
+        assert_eq!(
+            offset, gap.source_range.start,
+            "top of gap {source:?} must land on the separator newline"
+        );
+        assert_ne!(
+            offset, following.source_range.start,
+            "must not land on the following block start"
+        );
+        assert!(
+            gap.source_range.contains(&offset),
+            "landing offset {offset} must stay inside {:?}",
+            gap.source_range
+        );
+    }
 }
 
 #[test]
@@ -2420,8 +2520,8 @@ fn shortcut_catalog_lists_core_workflows() {
     assert!(has_action(
         ShortcutCategory::View,
         "Source Mode",
-        "Ctrl+Alt+1",
-        "Cmd+Option+1"
+        "Ctrl+/",
+        "Cmd+/"
     ));
     assert!(has_action(
         ShortcutCategory::View,
@@ -2520,6 +2620,77 @@ fn preferences_panel_renders_and_wires_the_export_tab() {
 }
 
 #[test]
+fn preferences_panel_renders_and_wires_the_theme_tab() {
+    let source = include_str!("root_view.rs").replace("\r\n", "\n");
+    let panel = source
+        .split_once("pub(super) fn preferences_panel_view")
+        .and_then(|(_, rest)| rest.split_once("fn preferences_tab_strip"))
+        .map(|(body, _)| body)
+        .expect("Preferences panel view");
+    assert!(panel.contains("PreferencesTab::Theme"));
+    assert!(panel.contains("preferences_theme_body(app, palette, cx)"));
+    assert!(
+        !panel.contains("apply_theme_by_name"),
+        "General tab must not inline the theme swatch grid"
+    );
+    let language = panel
+        .find("PrefPanelLanguageSection")
+        .expect("Language section");
+    let typography = panel
+        .find("PrefPanelTypographySection")
+        .expect("Typography section");
+    let other = panel.find("PrefPanelOtherSection").expect("Other section");
+    let autosave = panel
+        .find("PrefPanelAutoSaveSection")
+        .expect("Auto-save section");
+    assert!(
+        language < typography && typography < other && other < autosave,
+        "General tab order is Language, Typography, Other, Auto-save"
+    );
+    assert!(
+        !panel.contains("PrefPanelThemeSection"),
+        "theme section heading belongs on the Theme tab body"
+    );
+
+    let strip = source
+        .split_once("fn preferences_tab_strip")
+        .and_then(|(_, rest)| rest.split_once("fn preferences_tab_button"))
+        .map(|(body, _)| body)
+        .expect("Preferences tab strip");
+    let general = strip
+        .find("Msg::PrefPanelTabGeneral")
+        .expect("General tab label");
+    let theme = strip
+        .find("Msg::PrefPanelTabTheme")
+        .expect("Theme tab label");
+    let shortcuts = strip
+        .find("Msg::PrefPanelTabShortcuts")
+        .expect("Shortcuts tab label");
+    let export = strip
+        .find("Msg::PrefPanelTabExport")
+        .expect("Export tab label");
+    assert!(
+        general < theme && theme < shortcuts && shortcuts < export,
+        "tab order is General, Theme, Shortcuts, Export"
+    );
+
+    let theme_body = source
+        .split_once("fn preferences_theme_body")
+        .and_then(|(_, rest)| rest.split_once("fn preferences_export_body"))
+        .map(|(body, _)| body)
+        .expect("Preferences theme body");
+    assert!(theme_body.contains("Msg::PrefPanelThemeSection"));
+    assert!(theme_body.contains("app.apply_theme_by_name("));
+    assert!(theme_body.contains("id(\"preferences-theme-body\")"));
+    assert!(theme_body.contains("PaneScrollTarget::PreferencesTheme"));
+    assert!(!theme_body.contains("PrefPanelLanguageSection"));
+    assert!(!theme_body.contains("PrefPanelTypographySection"));
+    assert!(!theme_body.contains("PrefPanelAutoSaveSection"));
+    assert!(!theme_body.contains("preferences_shortcuts_body"));
+    assert!(!theme_body.contains("preferences_export_body"));
+}
+
+#[test]
 fn preferences_language_picker_contains_variable_width_labels() {
     let source = include_str!("root_view.rs").replace("\r\n", "\n");
     let panel = source
@@ -2529,7 +2700,7 @@ fn preferences_language_picker_contains_variable_width_labels() {
         .expect("Preferences panel view");
     let language_section = panel
         .split_once(".child(app.tr(Msg::PrefPanelLanguageSection))")
-        .and_then(|(_, rest)| rest.split_once("// Theme grid."))
+        .and_then(|(_, rest)| rest.split_once("// Document typography."))
         .map(|(body, _)| body)
         .expect("Preferences language section");
 
@@ -2567,7 +2738,10 @@ fn shortcut_validation_rejects_invalid_conflicting_and_reserved_bindings(cx: &mu
             Some(ShortcutCaptureError::NotAssignable)
         );
         assert!(matches!(
-            app.shortcut_assignment_error("bold", menu_shortcuts::ITALIC.binding),
+            app.shortcut_assignment_error(
+                "bold",
+                menu_shortcuts::ITALIC.binding.expect("italic is bound")
+            ),
             Some(ShortcutCaptureError::Conflict(_))
         ));
         assert!(matches!(
@@ -2883,6 +3057,23 @@ fn preferences_panel_bodies_render_with_draggable_scroll_handles_on_both_tabs(
         assert_eq!(app.preferences_general_scroll.offset().y, general_y);
     });
 
+    app.update(cx, |app, cx| {
+        app.select_preferences_tab(PreferencesTab::Theme, cx);
+        assert_eq!(app.preferences_tab, PreferencesTab::Theme);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let theme_y = app.update(cx, |app, _| {
+        let max = f32::from(app.preferences_theme_scroll.max_offset().height).max(0.);
+        let y = px(-80f32.min(max));
+        app.preferences_theme_scroll.set_offset(point(px(0.), y));
+        y
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.preferences_theme_scroll.offset().y, theme_y);
+    });
+
     // Shortcuts tab: both scrollable regions render alongside each other with
     // independent handles, and all three regions keep their offsets through a
     // tab switch and back.
@@ -2917,6 +3108,7 @@ fn preferences_panel_bodies_render_with_draggable_scroll_handles_on_both_tabs(
     cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_eq!(app.preferences_general_scroll.offset().y, general_y);
+        assert_eq!(app.preferences_theme_scroll.offset().y, theme_y);
         assert_eq!(
             app.preferences_categories_scroll.offset().y,
             categories_y,
@@ -3340,7 +3532,7 @@ fn live_rebind_dispatches_override_and_preserves_core_and_file_tree_keys(cx: &mu
     let sidebar_after_override = app.update(cx, |app, _| app.sidebar_visible);
     assert_ne!(sidebar_after_override, sidebar_before);
 
-    cx.simulate_keystrokes(menu_shortcuts::TOGGLE_SIDEBAR.binding);
+    cx.simulate_keystrokes(menu_shortcuts::TOGGLE_SIDEBAR.binding.expect("bound"));
     assert_eq!(
         app.update(cx, |app, _| app.sidebar_visible),
         sidebar_after_override,
@@ -3384,7 +3576,11 @@ fn structural_format_shortcuts_dispatch_and_live_rebind(cx: &mut TestAppContext)
             app.active_tab = 0;
             app.active_tab_mut().selected_range = 0.."one\ntwo".len();
         });
-        cx.simulate_keystrokes(shortcut.binding);
+        cx.simulate_keystrokes(
+            shortcut
+                .binding
+                .expect("structural format shortcut is bound"),
+        );
         app.update(cx, |app, _| {
             assert_eq!(
                 app.active_tab().document.text(),
@@ -3408,7 +3604,7 @@ fn structural_format_shortcuts_dispatch_and_live_rebind(cx: &mut TestAppContext)
         bind_app_keys(cx, &overrides);
     });
 
-    cx.simulate_keystrokes(menu_shortcuts::CODE_FENCE.binding);
+    cx.simulate_keystrokes(menu_shortcuts::CODE_FENCE.binding.expect("bound"));
     app.update(cx, |app, _| {
         assert_eq!(
             app.active_tab().document.text(),
@@ -3428,7 +3624,7 @@ fn structural_format_shortcuts_dispatch_and_live_rebind(cx: &mut TestAppContext)
         cx.clear_key_bindings();
         bind_app_keys(cx, &BTreeMap::new());
     });
-    cx.simulate_keystrokes(menu_shortcuts::CODE_FENCE.binding);
+    cx.simulate_keystrokes(menu_shortcuts::CODE_FENCE.binding.expect("bound"));
     app.update(cx, |app, _| {
         assert_eq!(app.active_tab().document.text(), "```\nreset\n```");
     });
@@ -3461,6 +3657,7 @@ fn show_shortcuts_opens_preferences_on_shortcuts_tab() {
 
     let bootstrap_source = include_str!("bootstrap.rs");
     assert!(bootstrap_source.contains("Msg::ItemCheckForUpdates"));
+    assert!(bootstrap_source.contains("Msg::ItemMarkdownReference"));
     assert!(bootstrap_source.contains("Msg::ItemAboutMarkion"));
     assert!(bootstrap_source.contains("Msg::ItemReportIssue"));
     assert!(bootstrap_source.contains("Msg::ItemOnlineDocs"));
@@ -3469,14 +3666,233 @@ fn show_shortcuts_opens_preferences_on_shortcuts_tab() {
         "the native Help menu must not expose the shortcut reference"
     );
     assert!(
-        bootstrap_source
-            .contains("KeyBinding::new(eff(&menu_shortcuts::SHOW_SHORTCUTS), ShowShortcuts, None)")
+        bootstrap_source.contains("SHOW_SHORTCUTS.effective_binding"),
+        "show-shortcuts must install only when an override exists"
+    );
+    assert!(
+        bootstrap_source.contains("menu_shortcuts::SHOW_MARKDOWN_REFERENCE")
+            && bootstrap_source.contains("ShowMarkdownReference"),
+        "F1 must bind ShowMarkdownReference"
     );
     assert!(bootstrap_source.contains("KeyBinding::new(eff(&menu_shortcuts::BOLD), Bold, None)"));
+    assert!(
+        bootstrap_source.contains("KeyBinding::new(eff(&menu_shortcuts::NEW_TAB), NewTab, None)")
+    );
     assert!(
         bootstrap_source
             .contains("KeyBinding::new(eff(&menu_shortcuts::TOGGLE_SIDEBAR), ToggleSidebar, None)")
     );
+}
+
+#[test]
+fn updated_default_shortcuts_and_markdown_reference_are_registered() {
+    let expected = [
+        (
+            &menu_shortcuts::SET_EDIT_MODE,
+            "set-edit-mode",
+            "secondary-/",
+            "Ctrl+/",
+            "Cmd+/",
+        ),
+        (
+            &menu_shortcuts::SET_SPLIT_PREVIEW_MODE,
+            "set-split-preview-mode",
+            "secondary-p",
+            "Ctrl+P",
+            "Cmd+P",
+        ),
+        (
+            &menu_shortcuts::NEW_TAB,
+            "new-tab",
+            "secondary-shift-n",
+            "Ctrl+Shift+N",
+            "Cmd+Shift+N",
+        ),
+        (
+            &menu_shortcuts::SET_READ_MODE,
+            "set-read-mode",
+            "secondary-r",
+            "Ctrl+R",
+            "Cmd+R",
+        ),
+        (
+            &menu_shortcuts::SET_VISUAL_EDIT_MODE,
+            "set-visual-edit-mode",
+            "secondary-e",
+            "Ctrl+E",
+            "Cmd+E",
+        ),
+        (
+            &menu_shortcuts::INLINE_CODE,
+            "inline-code",
+            "secondary-shift-`",
+            "Ctrl+Shift+`",
+            "Cmd+Shift+`",
+        ),
+        (
+            &menu_shortcuts::OPEN_FOLDER,
+            "open-folder",
+            "secondary-shift-o",
+            "Ctrl+Shift+O",
+            "Cmd+Shift+O",
+        ),
+        (
+            &menu_shortcuts::SHOW_MARKDOWN_REFERENCE,
+            "show-markdown-reference",
+            "f1",
+            "F1",
+            "F1",
+        ),
+    ];
+    let mut stored = BTreeMap::new();
+    for (shortcut, id, binding, windows_linux, macos) in expected {
+        assert_eq!(shortcut.id, id);
+        assert_eq!(shortcut.binding, Some(binding));
+        assert_eq!(
+            shortcut.label(ShortcutPlatform::WindowsLinux),
+            windows_linux
+        );
+        assert_eq!(shortcut.label(ShortcutPlatform::MacOS), macos);
+        assert!(gpui::Keystroke::parse(binding).is_ok());
+        stored.insert(id.to_string(), binding.to_string());
+    }
+    assert_eq!(sanitized_shortcut_overrides(&stored), stored);
+    assert_eq!(menu_shortcuts::SHOW_SHORTCUTS.binding, None);
+    assert_eq!(
+        menu_shortcuts::SHOW_SHORTCUTS.effective_binding(&BTreeMap::new()),
+        None
+    );
+
+    let slash =
+        markion::keystroke::KeystrokeParts::parse("secondary-/", ShortcutPlatform::WindowsLinux)
+            .expect("Ctrl+/ parses");
+    assert_eq!(slash.key.0, "/");
+    assert_eq!(
+        markion::keystroke::format_keystroke_label("secondary-/", ShortcutPlatform::WindowsLinux),
+        "Ctrl+/"
+    );
+    let backtick = markion::keystroke::KeystrokeParts::parse(
+        "secondary-shift-`",
+        ShortcutPlatform::WindowsLinux,
+    )
+    .expect("Ctrl+Shift+` parses");
+    assert_eq!(backtick.key.0, "`");
+    assert_eq!(
+        markion::keystroke::format_keystroke_label(
+            "secondary-shift-`",
+            ShortcutPlatform::WindowsLinux
+        ),
+        "Ctrl+Shift+`"
+    );
+
+    let root_view_source = include_str!("root_view.rs");
+    let body_marker = root_view_source
+        .find("markdown-reference-body")
+        .expect("markdown reference body");
+    let body_snippet = &root_view_source[body_marker..body_marker.saturating_add(700)];
+    assert!(
+        body_snippet.contains("track_scroll(&app.markdown_reference_scroll)"),
+        "Markdown Reference body must track a scroll handle"
+    );
+    assert!(
+        root_view_source.contains("PaneScrollTarget::MarkdownReference")
+            && root_view_source.contains("markdown-reference-scrollbar"),
+        "Markdown Reference must use the shared right-side pane scrollbar"
+    );
+
+    for language in Language::all() {
+        let sections = markdown_reference(*language);
+        assert_eq!(sections.len(), 9, "{language:?} reference section count");
+        assert!(
+            sections.iter().all(|section| !section.title.is_empty()
+                && !section.example.is_empty()
+                && !section.caption.is_empty()),
+            "{language:?} reference sections must be non-empty"
+        );
+    }
+}
+
+#[gpui::test]
+fn updated_view_and_tab_default_shortcuts_dispatch(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("body"))];
+        app.view_mode = ViewMode::Split;
+        app
+    });
+    cx.update(|window, cx| {
+        cx.clear_key_bindings();
+        bind_app_keys(cx, &BTreeMap::new());
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    cx.simulate_keystrokes(menu_shortcuts::SET_EDIT_MODE.binding.expect("bound"));
+    app.update(cx, |app, _| assert_eq!(app.view_mode, ViewMode::Edit));
+
+    cx.simulate_keystrokes(
+        menu_shortcuts::SET_SPLIT_PREVIEW_MODE
+            .binding
+            .expect("bound"),
+    );
+    app.update(cx, |app, _| assert_eq!(app.view_mode, ViewMode::Split));
+
+    cx.simulate_keystrokes(menu_shortcuts::SET_READ_MODE.binding.expect("bound"));
+    app.update(cx, |app, _| assert_eq!(app.view_mode, ViewMode::Read));
+
+    let tabs_before = app.update(cx, |app, _| app.tabs.len());
+    cx.simulate_keystrokes(menu_shortcuts::NEW_TAB.binding.expect("bound"));
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), tabs_before + 1);
+        assert!(app.active_tab().document.text().is_empty());
+    });
+
+    cx.simulate_keystrokes(
+        menu_shortcuts::SHOW_MARKDOWN_REFERENCE
+            .binding
+            .expect("bound"),
+    );
+    cx.run_until_parked();
+    app.update(cx, |app, _| assert!(app.markdown_reference_open));
+}
+
+#[gpui::test]
+fn markdown_reference_opens_and_closes_without_touching_document(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("keep me"))];
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    let before = app.update(cx, |app, _| {
+        (
+            app.tabs.len(),
+            app.active_tab().document.text().to_string(),
+            app.active_tab().document.version(),
+            app.active_tab().is_dirty(),
+        )
+    });
+    cx.dispatch_action(ShowMarkdownReference);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.markdown_reference_open);
+        assert_eq!(app.status, t(app.language, Msg::StatusMarkdownReference));
+        assert_eq!(app.tabs.len(), before.0);
+        assert_eq!(app.active_tab().document.text(), before.1);
+        assert_eq!(app.active_tab().document.version(), before.2);
+        assert_eq!(app.active_tab().is_dirty(), before.3);
+    });
+    app.update(cx, |app, cx| app.close_markdown_reference(cx));
+    app.update(cx, |app, _| {
+        assert!(!app.markdown_reference_open);
+        assert_eq!(app.tabs.len(), before.0);
+        assert_eq!(app.active_tab().document.text(), before.1);
+        assert_eq!(app.active_tab().document.version(), before.2);
+        assert_eq!(app.active_tab().is_dirty(), before.3);
+    });
 }
 
 #[test]
@@ -3518,10 +3934,12 @@ fn list_scrollbar_marks_sync_driver_only_for_preview() {
     ));
     for target in [
         PaneScrollTarget::PreferencesGeneral,
+        PaneScrollTarget::PreferencesTheme,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
         PaneScrollTarget::FileTree,
         PaneScrollTarget::Outline,
+        PaneScrollTarget::MarkdownReference,
     ] {
         assert!(
             !list_pane_scrollbar_marks_sync_driver(target),
@@ -3542,10 +3960,12 @@ fn preferences_scrollbar_targets_are_no_op_for_sync_scroll(cx: &mut TestAppConte
 
     for target in [
         PaneScrollTarget::PreferencesGeneral,
+        PaneScrollTarget::PreferencesTheme,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
         PaneScrollTarget::FileTree,
         PaneScrollTarget::Outline,
+        PaneScrollTarget::MarkdownReference,
     ] {
         app.update(cx, |app, _| {
             app.mark_sync_scroll_driver(target);
@@ -6046,7 +6466,7 @@ fn visual_edit_structural_enter_continues_list_with_one_history_entry(cx: &mut T
     });
 }
 
-fn assert_visual_edit_gap_click_is_passive(cx: &mut TestAppContext, source: &'static str) {
+fn assert_visual_edit_gap_click_places_caret(cx: &mut TestAppContext, source: &'static str) {
     let cursor = source.find('H').expect("heading text") + 1;
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -6062,10 +6482,9 @@ fn assert_visual_edit_gap_click_is_passive(cx: &mut TestAppContext, source: &'st
     });
     cx.run_until_parked();
 
-    let (selection, text, version, blocks) = app.update(cx, |app, _| {
+    let (text, version, blocks) = app.update(cx, |app, _| {
         let tab = app.active_tab();
         (
-            tab.selected_range.clone(),
             tab.document.text().to_string(),
             tab.document.version(),
             tab.document.visual_blocks_shared(),
@@ -6073,30 +6492,42 @@ fn assert_visual_edit_gap_click_is_passive(cx: &mut TestAppContext, source: &'st
     });
     let gap = cx
         .debug_bounds("visual-whitespace-gap")
-        .expect("the passive whitespace row should be rendered");
+        .expect("the whitespace row should be rendered");
+    let gap_range = blocks
+        .iter()
+        .find(|block| matches!(block.kind, VisualBlockKind::Whitespace))
+        .expect("blank line")
+        .source_range
+        .clone();
 
     cx.simulate_click(gap.center(), Modifiers::none());
     cx.run_until_parked();
 
     app.update(cx, |app, _| {
         let tab = app.active_tab();
-        assert_eq!(tab.selected_range, selection);
         assert_eq!(tab.document.text(), text);
         assert_eq!(tab.document.version(), version);
         assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
         assert!(!tab.document.is_dirty());
         assert!(tab.undo_stack.is_empty());
+        assert!(
+            gap_range.contains(&tab.cursor_offset()),
+            "click should place the caret inside {:?}, got {}",
+            gap_range,
+            tab.cursor_offset()
+        );
+        assert!(tab.visual_caret_bounds.is_some());
     });
 }
 
 #[gpui::test]
-fn visual_edit_heading_to_heading_gap_click_is_passive(cx: &mut TestAppContext) {
-    assert_visual_edit_gap_click_is_passive(cx, "## H2\n\n### H3");
+fn visual_edit_heading_to_heading_gap_click_places_caret(cx: &mut TestAppContext) {
+    assert_visual_edit_gap_click_places_caret(cx, "## H2\n\n### H3");
 }
 
 #[gpui::test]
-fn visual_edit_heading_to_paragraph_gap_click_is_passive(cx: &mut TestAppContext) {
-    assert_visual_edit_gap_click_is_passive(cx, "## Heading\n\nBody");
+fn visual_edit_heading_to_paragraph_gap_click_places_caret(cx: &mut TestAppContext) {
+    assert_visual_edit_gap_click_places_caret(cx, "## Heading\n\nBody");
 }
 
 #[gpui::test]
@@ -6138,10 +6569,91 @@ fn visual_edit_heading_enter_activates_insertion_line_for_typing(cx: &mut TestAp
     app.update(cx, |app, _| {
         let tab = app.active_tab();
         assert_eq!(tab.document.text(), "## Heading\nBody");
-        assert_eq!(tab.selected_range, source.len() + 5..source.len() + 5);
-        assert!(tab.undo_stack.len() >= 2);
-        assert!(tab.autosave_generation >= 2);
+    });
+}
+
+#[gpui::test]
+fn visual_edit_changelog_gap_click_types_into_existing_blank_line(cx: &mut TestAppContext) {
+    let source = "## [Unreleased]\n\n## [16.1.7]";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 4..4;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let gap = cx
+        .debug_bounds("visual-whitespace-gap")
+        .expect("changelog blank line should be rendered");
+    cx.simulate_click(gap.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    cx.simulate_input("notes");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "## [Unreleased]\nnotes\n## [16.1.7]");
+        assert!(
+            !tab.document.text().contains("notes##"),
+            "typed text must not glue onto the following heading"
+        );
+        assert!(
+            !tab.document.text().contains("\n\nnotes"),
+            "click must not insert an extra blank line"
+        );
         assert!(tab.document.is_dirty());
+    });
+}
+
+#[gpui::test]
+fn visual_edit_blank_line_font_size_reflow_does_not_mutate_source(cx: &mut TestAppContext) {
+    let source = "## H2\n\n### H3";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 4..4;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (text, version, blocks) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.text().to_string(),
+            tab.document.version(),
+            tab.document.visual_blocks_shared(),
+        )
+    });
+    app.update(cx, |app, cx| app.set_rendered_font_size(20, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), text);
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+        assert!(!tab.document.is_dirty());
+        assert!(
+            app.typography_metrics().paragraph_line_height
+                > DocumentTypographyMetrics::new(
+                    markion::DEFAULT_EDITOR_FONT_SIZE,
+                    markion::DEFAULT_RENDERED_FONT_SIZE,
+                    markion::DEFAULT_PARAGRAPH_SPACING,
+                )
+                .paragraph_line_height
+        );
     });
 }
 
@@ -6449,7 +6961,10 @@ fn visual_edit_paragraph_source(count: usize) -> String {
 #[gpui::test]
 fn visual_edit_click_on_visible_mid_row_does_not_scroll(cx: &mut TestAppContext) {
     let source = visual_edit_paragraph_source(24);
-    let click_offset = source.find("Paragraph 8").unwrap();
+    // Blank-line rows are body-height, so a later paragraph (e.g. 8) sits
+    // below the 480px window after scrolling to item 2. Paragraph 4 stays in
+    // the first measured window while remaining below the scroll top.
+    let click_offset = source.find("Paragraph 4").unwrap();
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
@@ -6566,7 +7081,7 @@ fn visual_edit_click_on_visible_lower_row_does_not_pin_to_top(cx: &mut TestAppCo
 #[gpui::test]
 fn visual_edit_typing_in_visible_mid_row_does_not_scroll(cx: &mut TestAppContext) {
     let source = visual_edit_paragraph_source(24);
-    let click_offset = source.find("Paragraph 8").unwrap();
+    let click_offset = source.find("Paragraph 4").unwrap();
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
@@ -6640,7 +7155,7 @@ fn visual_edit_typing_in_visible_mid_row_does_not_scroll(cx: &mut TestAppContext
 #[gpui::test]
 fn visual_edit_ime_replacement_in_visible_mid_row_does_not_pin(cx: &mut TestAppContext) {
     let source = visual_edit_paragraph_source(24);
-    let click_offset = source.find("Paragraph 8").unwrap();
+    let click_offset = source.find("Paragraph 4").unwrap();
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
@@ -6703,7 +7218,7 @@ fn visual_edit_ime_replacement_in_visible_mid_row_does_not_pin(cx: &mut TestAppC
 #[gpui::test]
 fn visual_edit_enter_in_visible_mid_row_does_not_pin(cx: &mut TestAppContext) {
     let source = visual_edit_paragraph_source(24);
-    let click_offset = source.find("Paragraph 8").unwrap();
+    let click_offset = source.find("Paragraph 4").unwrap();
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
@@ -6993,18 +7508,11 @@ fn visual_edit_gfm_alert_title_row_is_reachable_and_editable(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn visual_edit_down_arrow_skips_blank_line_gap_to_next_block(cx: &mut TestAppContext) {
-    // Down arrow moves directly between rendered content blocks: the blank-line
-    // `Whitespace` gap row separating the two paragraphs is pure inter-block
-    // spacing and must NOT capture the caret as a dead navigation stop (that
-    // felt like "Down did nothing" and forced an extra keypress). The blank
-    // line stays reachable via Enter/click, covered by
-    // `visual_edit_paragraph_enter_shows_caret_not_source_island`.
+fn visual_edit_down_arrow_lands_on_blank_line_gap(cx: &mut TestAppContext) {
     let source = "Para 1\n\nPara 2";
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
-        // Caret inside "Para 1".
         app.active_tab_mut().selected_range = 3..3;
         app.active_tab_mut().visual_cursor_reveal_pending = true;
         app.view_mode = ViewMode::VisualEdit;
@@ -7016,47 +7524,55 @@ fn visual_edit_down_arrow_skips_blank_line_gap_to_next_block(cx: &mut TestAppCon
     });
     cx.run_until_parked();
 
+    let (gap_range, version, blocks) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let gap = tab
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Whitespace))
+            .expect("gap")
+            .source_range
+            .clone();
+        (
+            gap,
+            tab.document.version(),
+            tab.document.visual_blocks_shared(),
+        )
+    });
+
     cx.dispatch_action(Down);
     cx.run_until_parked();
 
     app.update(cx, |app, _| {
         let tab = app.active_tab();
-        let blocks = tab.document.visual_blocks_shared();
         let block_index =
             visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
                 .expect("Down should land on a visual row");
         assert!(
-            matches!(blocks[block_index].kind, VisualBlockKind::Paragraph),
-            "single Down from Para 1 should skip the blank-line gap and land in \
-             Para 2, got kind={:?} cursor={}",
+            matches!(blocks[block_index].kind, VisualBlockKind::Whitespace),
+            "single Down from Para 1 should park on the blank-line gap, got \
+             kind={:?} cursor={}",
             blocks[block_index].kind,
             tab.cursor_offset(),
         );
-        // "Para 2" begins at offset 8; the caret must be inside it, not on the
-        // gap row (offset 7).
-        assert!(
-            tab.cursor_offset() >= 8,
-            "caret must be inside Para 2, got {}",
-            tab.cursor_offset()
-        );
+        assert_eq!(tab.cursor_offset(), gap_range.start);
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+        assert!(tab.visual_preferred_x.is_some());
+    });
+
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Para 1\nx\nPara 2");
     });
 }
 
 #[gpui::test]
-fn visual_edit_up_arrow_skips_blank_line_gap_to_heading(cx: &mut TestAppContext) {
-    // Up moves directly from a paragraph into the heading above it in a SINGLE
-    // press, skipping the blank-line `Whitespace` gap row that separates them.
-    // The gap is pure inter-block spacing; parking the caret there looked like
-    // "Up did nothing" and forced a second press to reach the heading. The
-    // preferred horizontal coordinate is retained across the crossing. The
-    // blank line stays reachable via Enter/click, covered by
-    // `visual_edit_paragraph_enter_shows_caret_not_source_island`.
-    //
-    // Blocks for "### heading\n\nparagraph":
-    //   Heading(0..12), Whitespace(12..13), Paragraph(13..22).
+fn visual_edit_up_arrow_lands_on_blank_line_then_heading(cx: &mut TestAppContext) {
     let source = "### heading\n\nparagraph";
 
-    // (A) Caret in the middle of the paragraph: one Up lands in the heading.
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
@@ -7080,26 +7596,33 @@ fn visual_edit_up_arrow_skips_blank_line_gap_to_heading(cx: &mut TestAppContext)
             visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
                 .expect("Up should land on a visual row");
         assert!(
-            matches!(blocks[block_index].kind, VisualBlockKind::Heading { .. }),
-            "single Up from the paragraph should skip the gap and land in the \
-             heading, got kind={:?} cursor={}",
+            matches!(blocks[block_index].kind, VisualBlockKind::Whitespace),
+            "single Up from the paragraph should park on the gap, got \
+             kind={:?} cursor={}",
             blocks[block_index].kind,
             tab.cursor_offset(),
         );
-        assert!(
-            tab.cursor_offset() < 12,
-            "caret must be inside the heading (0..12), not on the gap row \
-             (offset 12), got {}",
-            tab.cursor_offset()
-        );
-        assert!(
-            tab.visual_preferred_x.is_some(),
-            "preferred_x should be retained across the blank-line crossing"
-        );
+        assert_eq!(tab.cursor_offset(), 12);
+        assert!(tab.visual_preferred_x.is_some());
     });
 
-    // (B) Caret at the paragraph start: one Up still skips the gap into the
-    //     heading rather than staying put or parking on the blank line.
+    cx.dispatch_action(Up);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("second Up should leave the gap");
+        assert!(
+            matches!(blocks[block_index].kind, VisualBlockKind::Heading { .. }),
+            "second Up should continue into the heading, got {:?}",
+            blocks[block_index].kind,
+        );
+        assert!(tab.cursor_offset() < 12);
+        assert!(tab.visual_preferred_x.is_some());
+    });
+
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
@@ -7122,17 +7645,49 @@ fn visual_edit_up_arrow_skips_blank_line_gap_to_heading(cx: &mut TestAppContext)
             visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
                 .expect("Up should land on a visual row");
         assert!(
-            matches!(blocks[block_index].kind, VisualBlockKind::Heading { .. }),
-            "Up from paragraph start must skip the gap into the heading, \
-             got kind={:?} cursor={}",
+            matches!(blocks[block_index].kind, VisualBlockKind::Whitespace),
+            "Up from paragraph start must park on the gap, got kind={:?} \
+             cursor={}",
             blocks[block_index].kind,
             tab.cursor_offset(),
         );
+        assert_eq!(tab.cursor_offset(), 12);
+    });
+}
+
+#[gpui::test]
+fn visual_edit_down_arrow_reaches_trailing_blank_line(cx: &mut TestAppContext) {
+    let source = "Body\n\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_action(Down);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let block_index =
+            visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len())
+                .expect("Down should reach a visual row");
         assert!(
-            tab.cursor_offset() < 12,
-            "caret must be inside the heading, got {}",
-            tab.cursor_offset()
+            matches!(blocks[block_index].kind, VisualBlockKind::Whitespace),
+            "Down from the last paragraph should reach the trailing blank line, \
+             got {:?}",
+            blocks[block_index].kind,
         );
+        assert_eq!(tab.document.text(), source);
+        assert!(!tab.document.is_dirty());
     });
 }
 

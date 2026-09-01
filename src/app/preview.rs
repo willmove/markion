@@ -725,6 +725,7 @@ struct VisualEditableText {
 struct WhitespaceCaretLayout {
     caret_shift: Pixels,
     source_range: Range<usize>,
+    line_height: f32,
 }
 
 impl Element for VisualEditableText {
@@ -793,7 +794,7 @@ impl Element for VisualEditableText {
             self.caret_active.then(|| {
                 Bounds::new(
                     point(bounds.origin.x, bounds.origin.y + whitespace.caret_shift),
-                    size(px(2.), px(WHITESPACE_ROW_LINE_HEIGHT)),
+                    size(px(2.), px(whitespace.line_height)),
                 )
             })
         } else {
@@ -816,7 +817,11 @@ impl Element for VisualEditableText {
                     let line_height = layout
                         .as_ref()
                         .map(|layout| layout.line_height())
-                        .unwrap_or(px(WHITESPACE_ROW_LINE_HEIGHT));
+                        .unwrap_or(px(self
+                            .entity
+                            .read(cx)
+                            .typography_metrics()
+                            .paragraph_line_height));
                     Bounds::new(position, size(px(2.), line_height))
                 })
         };
@@ -931,6 +936,7 @@ impl Element for VisualEditableText {
                         whitespace.source_range.clone(),
                         event.position.y - row_top,
                         &text,
+                        whitespace.line_height,
                     ),
                     None,
                 )
@@ -994,6 +1000,7 @@ impl Element for VisualEditableText {
                     whitespace.source_range.clone(),
                     event.position.y - row_top,
                     &text,
+                    whitespace.line_height,
                 )
             } else if let Some(text_layout) = text_layout.as_ref() {
                 let visible = preview_index_for_position(text_layout, event.position);
@@ -2060,12 +2067,12 @@ pub(super) fn preview_block_splice(
 /// Visual rows reconcile by stable source lineage rather than byte ranges.
 /// The row builder still reads the fresh block slice after the splice, so
 /// preserved rows receive current offsets without losing cached heights.
-/// Height-mutable rows (whitespace) additionally compare their rendered
-/// height — identity alone would let a grown or shrunk whitespace row keep
-/// a stale cached list height and under-report the scroll extent. The
-/// signature maps through [`whitespace_row_height`] so growth past the
-/// sanity bound (which no longer changes the rendered height) also stops
-/// forcing re-measures.
+/// Height-mutable rows (whitespace) additionally compare their clamped line
+/// count — identity alone would let a grown or shrunk whitespace row keep
+/// a stale cached list height and under-report the scroll extent. Pixel
+/// height is a render-time `paragraph_line_height` multiplier; splice only
+/// needs the clamped line count so growth past the sanity bound (which no
+/// longer changes the rendered height) also stops forcing re-measures.
 pub(super) fn visual_block_splice(
     old: &[VisualBlock],
     new: &[VisualBlock],
@@ -2075,7 +2082,7 @@ pub(super) fn visual_block_splice(
             block.id,
             block
                 .height_signature
-                .map(|lines| whitespace_row_height(lines as usize)),
+                .map(|lines| whitespace_clamped_line_count(lines as usize)),
         )
     };
     let old_ids = old.iter().map(row_identity).collect::<Vec<_>>();
@@ -3041,16 +3048,17 @@ pub(super) fn visual_source_island_view(
         })
 }
 
-/// Paints a thin insertion caret on a `Whitespace` row that owns the document
-/// caret, without wrapping the row in a source-island box. The caret Y is
-/// derived from how many covered newlines sit before the source caret, so
-/// repeated Enter at the document tail moves the insertion line down the
-/// row. Clicks map the same way. IME bounds still fall back to
-/// `visual_input_bounds` before the row has painted.
+/// Hit-testable empty-paragraph surface for a `Whitespace` row. The caret
+/// Y is derived from how many covered newlines sit before the source caret,
+/// so repeated Enter at the document tail moves the insertion line down
+/// the row. Clicks map the same way even when the row does not own the
+/// caret. IME bounds still fall back to `visual_input_bounds` before the
+/// row has painted.
 pub(super) fn visual_whitespace_caret_element(
     app: &MarkionApp,
     block: &VisualBlock,
     block_index: usize,
+    line_height: f32,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let text = app.active_tab().document.text();
@@ -3081,8 +3089,9 @@ pub(super) fn visual_whitespace_caret_element(
         navigation_active: false,
         entity: cx.entity(),
         whitespace_caret: Some(WhitespaceCaretLayout {
-            caret_shift: px(whitespace_caret_y(caret_line)),
+            caret_shift: px(whitespace_caret_y(caret_line, line_height)),
             source_range,
+            line_height,
         }),
         #[cfg(test)]
         test_projection: None,
@@ -3160,24 +3169,48 @@ pub(super) fn visual_block_index_for_offset(
     })
 }
 
-/// Visual Edit whitespace rows use a compact 12px per covered blank line.
-pub(super) const WHITESPACE_ROW_LINE_HEIGHT: f32 = 12.;
 /// Sanity bound for pathological documents; ~49k px of tail whitespace is far
 /// beyond any real document while keeping row heights bounded.
 pub(super) const WHITESPACE_ROW_MAX_LINES: usize = 4096;
 
-/// Height of a Visual Edit whitespace row: 12px per covered blank line,
-/// floored at one line. Uncapped up to the sanity bound so trailing blank
-/// lines stay visible no matter how many the source carries — a small fixed
-/// cap here previously made every Enter past the cap silently invisible.
-pub(super) fn whitespace_row_height(line_count: usize) -> f32 {
-    line_count.clamp(1, WHITESPACE_ROW_MAX_LINES) as f32 * WHITESPACE_ROW_LINE_HEIGHT
+/// Covered-newline count used for virtual-list splice identity. Pixel height
+/// is `count * paragraph_line_height` at render time.
+pub(super) fn whitespace_clamped_line_count(line_count: usize) -> usize {
+    line_count.clamp(1, WHITESPACE_ROW_MAX_LINES)
+}
+
+/// Height of a Visual Edit whitespace row: one body paragraph line per
+/// covered newline, floored at one line. Uncapped up to the sanity bound so
+/// trailing blank lines stay visible no matter how many the source carries.
+pub(super) fn whitespace_row_height(line_count: usize, line_height: f32) -> f32 {
+    whitespace_clamped_line_count(line_count) as f32 * line_height
+}
+
+pub(super) fn whitespace_painted_line_count(source_range: Range<usize>, text: &str) -> usize {
+    let end = source_range.end.min(text.len());
+    let start = source_range.start.min(end);
+    whitespace_clamped_line_count(
+        text[start..end]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count(),
+    )
+}
+
+fn whitespace_newline_offsets(source_range: Range<usize>, text: &str) -> Vec<usize> {
+    let end = source_range.end.min(text.len());
+    let start = source_range.start.min(end);
+    text[start..end]
+        .bytes()
+        .enumerate()
+        .filter(|(_, byte)| *byte == b'\n')
+        .map(|(index, _)| start + index)
+        .collect()
 }
 
 /// Line index within a whitespace row for a source caret. Each covered
-/// newline is one 12px line: the caret after the first newline sits on
-/// line 0 (the top of the row); each additional newline moves it down
-/// one line so repeated Enter at the tail is visible.
+/// newline is one painted empty-paragraph line: the caret on the first
+/// newline sits on line 0; each later newline in the range moves it down.
 pub(super) fn whitespace_caret_line(
     source_range: Range<usize>,
     cursor: usize,
@@ -3190,45 +3223,65 @@ pub(super) fn whitespace_caret_line(
         .bytes()
         .filter(|byte| *byte == b'\n')
         .count();
-    newlines_before.saturating_sub(1)
+    let max_line = whitespace_clamped_line_count(
+        text[start..end]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count(),
+    )
+    .saturating_sub(1);
+    newlines_before.min(max_line)
 }
 
-pub(super) fn whitespace_caret_y(line: usize) -> f32 {
+pub(super) fn whitespace_caret_y(line: usize, line_height: f32) -> f32 {
     let max_line = WHITESPACE_ROW_MAX_LINES.saturating_sub(1);
-    line.min(max_line) as f32 * WHITESPACE_ROW_LINE_HEIGHT
+    line.min(max_line) as f32 * line_height
 }
 
-/// Source offset for insertion line `line` inside a whitespace range.
-/// Line 0 is the first covered newline; later lines walk subsequent newlines.
+/// Source offset of painted line `line` inside a whitespace range. Line 0 is
+/// the first covered newline byte; later lines walk subsequent newlines. The
+/// result stays inside `[start, end)` so typing does not glue onto the next
+/// block's first content byte.
 pub(super) fn whitespace_source_at_line(
     source_range: Range<usize>,
     line: usize,
     text: &str,
 ) -> usize {
-    let end = source_range.end.min(text.len());
-    let start = source_range.start.min(end);
-    let newline_ends: Vec<usize> = text[start..end]
-        .bytes()
-        .enumerate()
-        .filter(|(_, byte)| *byte == b'\n')
-        .map(|(index, _)| start + index + 1)
-        .collect();
-    if newline_ends.is_empty() {
-        return start;
+    let offsets = whitespace_newline_offsets(source_range.clone(), text);
+    if offsets.is_empty() {
+        return source_range.start.min(text.len());
     }
-    newline_ends
+    offsets
         .get(line)
         .copied()
-        .unwrap_or(*newline_ends.last().expect("non-empty newline list"))
-        .min(end)
+        .unwrap_or(*offsets.last().expect("non-empty newline list"))
+}
+
+/// Near-side landing offset when Up/Down enters a whitespace row: the first
+/// covered newline when arriving from above, the last when arriving from below.
+pub(super) fn whitespace_navigation_offset(
+    source_range: Range<usize>,
+    text: &str,
+    from_above: bool,
+) -> usize {
+    let offsets = whitespace_newline_offsets(source_range.clone(), text);
+    if offsets.is_empty() {
+        return source_range.start.min(text.len());
+    }
+    if from_above {
+        offsets[0]
+    } else {
+        *offsets.last().expect("non-empty newline list")
+    }
 }
 
 pub(super) fn whitespace_source_at_y(
     source_range: Range<usize>,
     rel_y: Pixels,
     text: &str,
+    line_height: f32,
 ) -> usize {
-    let line = (f32::from(rel_y).max(0.) / WHITESPACE_ROW_LINE_HEIGHT).floor() as usize;
+    let line = (f32::from(rel_y).max(0.) / line_height.max(1.)).floor() as usize;
     whitespace_source_at_line(source_range, line, text)
 }
 
@@ -3701,25 +3754,23 @@ pub(super) fn visual_block_view(
                 .bytes()
                 .filter(|byte| *byte == b'\n')
                 .count();
-            let row_height = whitespace_row_height(line_count);
+            let line_height = typography.paragraph_line_height;
+            let row_height = whitespace_row_height(line_count, line_height);
 
-            if owns_caret {
-                // Whitespace owning the caret is painted as the same
-                // passive-height row it uses when unfocused, plus a thin
-                // caret line (no border, padding, monospace, or background).
-                // The caret itself is drawn by `VisualEditableText` against
-                // an empty projection, and clicks land the caret at the
-                // row's source start.
-                div()
-                    .h(px(row_height))
-                    .cursor(CursorStyle::IBeam)
-                    .child(visual_whitespace_caret_element(app, block, block_index, cx))
-            } else {
-                // Passive layout when the row does not own the caret.
-                div()
-                    .h(px(row_height))
-                    .debug_selector(|| "visual-whitespace-gap".to_string())
-            }
+            // First-class empty line: body paragraph height, I-beam, and
+            // click mapping whether or not the row owns the caret. The
+            // caret itself is painted only when `owns_caret`.
+            div()
+                .h(px(row_height))
+                .cursor(CursorStyle::IBeam)
+                .debug_selector(|| "visual-whitespace-gap".to_string())
+                .child(visual_whitespace_caret_element(
+                    app,
+                    block,
+                    block_index,
+                    line_height,
+                    cx,
+                ))
         }
         VisualBlockKind::MathBlock { latex, .. } => {
             if let Some(VisualBlockEditor::Math { payload, .. }) = block.editor.as_ref() {
@@ -4623,6 +4674,7 @@ fn visual_math_editor(
         block.id,
         payload,
         forced,
+        true,
         presentation.into_any_element(),
         payload_editor.into_any_element(),
         cx,
@@ -4640,6 +4692,9 @@ fn visual_html_editor(
 ) -> Div {
     let typography = app.typography_metrics();
     let presentation = html_preview_block_view(app, html, block_index, document_dir, cx);
+    let bordered = !html_preview_parts(html)
+        .iter()
+        .any(|part| matches!(part, HtmlPreviewPart::Table { .. }));
     let payload_editor = div()
         .border_t_1()
         .border_color(rgb(0xe2e8f0))
@@ -4662,6 +4717,7 @@ fn visual_html_editor(
         block.id,
         payload,
         false,
+        bordered,
         presentation.into_any_element(),
         payload_editor.into_any_element(),
         cx,
@@ -4755,6 +4811,7 @@ fn visual_diagram_editor(
         block.id,
         payload,
         forced,
+        true,
         presentation.into_any_element(),
         payload_editor.into_any_element(),
         cx,
@@ -4890,6 +4947,7 @@ fn visual_collapsible_source_block(
     block_id: VisualBlockId,
     payload: &VisualEditorField,
     forced: bool,
+    bordered: bool,
     presentation: gpui::AnyElement,
     payload_editor: gpui::AnyElement,
     cx: &mut Context<MarkionApp>,
@@ -4912,10 +4970,13 @@ fn visual_collapsible_source_block(
         )))
         .relative()
         .mb_3()
-        .border_1()
-        .border_color(rgb(0xcbd5e1))
-        .rounded_md()
-        .overflow_hidden()
+        .when(bordered, |chrome| {
+            chrome
+                .border_1()
+                .border_color(rgb(0xcbd5e1))
+                .rounded_md()
+                .overflow_hidden()
+        })
         .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
             let tab = app.active_tab_mut();
             let next = hovered.then_some(block_id);
@@ -5398,11 +5459,12 @@ fn html_preview_block_view(
 }
 
 /// Renders a resolved HTML table grid. Uses GPUI's CSS-grid layout so that
-/// `colspan` (via `col_span`) and `rowspan` (via `row_span`) are handled
-/// natively: a spanning cell covers the rows/columns below/beside it without
-/// bespoke overlay logic. Column tracks are weighted by cell content
-/// (browser auto-layout approximation) and styling reuses the GFM pipe-table
-/// look (borders, header shading, table font size).
+/// `colspan` / `rowspan` occupy exclusive start/end lines (`col_start`/`col_end`,
+/// `row_start`/`row_end`). GPUI `col_span`/`row_span` must not be used here:
+/// they wipe the start line and fall back to auto-placement. Column tracks
+/// are weighted by cell content (browser auto-layout approximation) and
+/// styling reuses the GFM pipe-table look (borders, header shading, table
+/// font size) on cells that have visible content.
 fn html_table_grid_view(
     app: &MarkionApp,
     grid: &HtmlTableGrid,
@@ -5441,19 +5503,26 @@ fn html_table_grid_view(
             let colspan = cell.colspan.max(1).min(u16::MAX as usize) as u16;
             let rowspan = cell.rowspan.max(1).min(u16::MAX as usize) as u16;
             let col_start = col;
+            let col_end = html_table_grid_line_end(col_start, colspan);
             let is_header = cell.is_header && row_has_header;
             let row_start = ((row_index + 1).min(i16::MAX as usize)) as i16;
+            let row_end = html_table_grid_line_end(row_start, rowspan);
+            let paint_empty = cell.image.is_none() && cell.content.text.trim().is_empty();
             // Internal grid lines: right border unless the cell touches the last
             // column, bottom border unless it touches the last row. The outer
             // container border draws the top/left/bottom/right edges.
-            let touches_last_col = col_start + colspan as i16 > columns as i16;
-            let touches_last_row = row_start as usize + rowspan as usize > row_count;
-            cell_views.push(
-                div()
-                    .col_start(col_start)
-                    .row_start(row_start)
-                    .col_span(colspan)
-                    .row_span(rowspan)
+            let touches_last_col = col_end > columns as i16;
+            let touches_last_row = row_end as usize > row_count;
+            let mut cell_view = div()
+                .col_start(col_start)
+                .col_end(col_end)
+                .row_start(row_start)
+                .row_end(row_end);
+            if paint_empty {
+                cell_views.push(cell_view);
+            } else {
+                cell_view = cell_view
+                    .min_w_0()
                     .p(px(padding))
                     .text_size(px(font_size))
                     .when(is_header, |style| {
@@ -5471,6 +5540,7 @@ fn html_table_grid_view(
                             .flex()
                             .flex_col()
                             .gap_1()
+                            .min_w_0()
                             .children(cell.image.as_ref().map(|image| {
                                 preview_image_view(
                                     app,
@@ -5496,12 +5566,14 @@ fn html_table_grid_view(
                                     cx,
                                 ))
                             }),
-                    ),
-            );
+                    );
+                cell_views.push(cell_view);
+            }
             col = col.saturating_add(colspan as i16);
         }
     }
     div()
+        .w_full()
         .grid()
         // Content-proportional column tracks approximate browser auto table
         // layout: empty spacer columns collapse to slivers instead of taking

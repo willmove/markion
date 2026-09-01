@@ -39,12 +39,12 @@ Markion uses [`pulldown-cmark`](https://github.com/pulldown-cmark/pulldown-cmark
 
 ## View modes
 
-Markion cycles through four modes with **Ctrl+Shift+V** (default is Split), or jumps straight to one with Ctrl+Alt+1/4/2/3:
+Markion cycles through four modes with **Ctrl+Shift+V** (default is Split), or jumps straight to one with the mode shortcuts:
 
-1. **Edit** (Ctrl+Alt+1) — raw Markdown source text only.
-2. **Visual Edit** (Ctrl+Alt+4) — a WYSIWYG-first, source-backed editing surface; see [README: Editing modes](../README.md#editing-modes) for what it covers.
-3. **Split** (Ctrl+Alt+2) — source on the left, rendered preview on the right (default).
-4. **Read** (Ctrl+Alt+3) — rendered preview only, non-editing.
+1. **Edit** (Ctrl+/) — raw Markdown source text only.
+2. **Visual Edit** (Ctrl+E) — a WYSIWYG-first, source-backed editing surface; see [README: Editing modes](../README.md#editing-modes) for what it covers.
+3. **Split** (Ctrl+P) — source on the left, rendered preview on the right (default).
+4. **Read** (Ctrl+R) — rendered preview only, non-editing.
 
 Switching modes preserves the active document, cursor/selection, undo history, and per-tab scroll state.
 
@@ -126,7 +126,7 @@ The title bar shows a `*` suffix next to the file name when there are unsaved ch
 
 ## Themes
 
-Markion ships **fourteen built-in themes**: the original six (Paper, Ink, Solar, Forest, Rose, Graphite) plus GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light. Pick one in the **Preferences** panel (Ctrl+,) by swatch.
+Markion ships **fourteen built-in themes**: the original six (Paper, Ink, Solar, Forest, Rose, Graphite) plus GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light. Pick one in **Preferences → Theme** (Ctrl+,) by swatch.
 
 ### Custom themes
 
