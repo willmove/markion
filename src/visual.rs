@@ -5691,9 +5691,13 @@ mod tests {
         assert!(crate::DEFAULT_WELCOME_MARKDOWN.starts_with("# Welcome to Markion\n"));
         for marker in [
             "**bold**",
-            "![Local image placeholder]",
+            "![Markion logo](assets/markion.png",
             "- [ ] Export when ready",
             "| Syntax | Example | Purpose |",
+            "<table",
+            "colspan=\"2\"",
+            "rowspan=\"2\"",
+            "<kbd>Ctrl</kbd>",
             "```rust",
             "$E = mc^2$",
             "[^links]:",
@@ -5777,6 +5781,25 @@ mod tests {
                     .iter()
                     .all(|run| !run.conservative_fallback)
         }));
+    }
+
+    #[test]
+    fn welcome_html_table_parses_as_a_spanned_grid() {
+        let source = crate::DEFAULT_WELCOME_MARKDOWN;
+        let start = source.find("<table>").expect("welcome HTML table");
+        let end = source
+            .find("</table>")
+            .map(|index| index + "</table>".len())
+            .expect("welcome HTML table end");
+        let parts = crate::html_preview_parts(&source[start..end]);
+        let crate::HtmlPreviewPart::Table { grid } =
+            parts.first().expect("HTML table preview part")
+        else {
+            panic!("welcome HTML table must parse as a grid, got {parts:?}");
+        };
+        assert!(grid.has_rowspan);
+        assert!(grid.columns >= 3);
+        assert!(grid.rows.len() >= 3);
     }
 
     #[test]

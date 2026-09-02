@@ -62,7 +62,7 @@ This starter document is a quick tour of Markdown in Markion. Edit the source on
 
 Write with *italic*, **bold**, ***bold italic***, ~~strikethrough~~, `inline code`, ==highlighted text==, H~2~O, and x^2^. Visit the [Markion project page](https://github.com/willmove/markion), or use the reference link below.[^links]
 
-![Local image placeholder](markion-example.png "Replace with your image")
+![Markion logo](assets/markion.png "Markion")
 
 ## Quotes and lists
 
@@ -88,6 +88,38 @@ Write with *italic*, **bold**, ***bold italic***, ~~strikethrough~~, `inline cod
 | `**bold**` | **bold** | Emphasis |
 | `[text](url)` | [link](https://github.com/willmove/markion) | Navigation |
 | `- [ ] task` | - [ ] | Checklist |
+
+## HTML table
+
+Raw HTML tables render as a grid, including cells that span columns or rows.
+
+<table>
+<tr>
+<th>Mode</th>
+<th colspan="2">What you see</th>
+</tr>
+<tr>
+<td rowspan="2">Split</td>
+<td>Source</td>
+<td>Preview</td>
+</tr>
+<tr>
+<td>Left pane</td>
+<td>Right pane</td>
+</tr>
+</table>
+
+## Other HTML
+
+<div>
+<p>HTML inline styles: <strong>strong</strong>, <em>emphasis</em>, <u>underline</u>, and <kbd>Ctrl</kbd>+<kbd>S</kbd>.</p>
+<p>A hard line break:<br>continues on the next visual line.</p>
+<ul>
+<li>HTML list item</li>
+<li>Another item</li>
+</ul>
+<p align="center"><img src="assets/markion.png" alt="Markion logo" width="128" height="128"></p>
+</div>
 
 ## Code and math
 
@@ -3908,6 +3940,10 @@ pub fn default_session_path() -> PathBuf {
 
 pub fn default_themes_dir() -> PathBuf {
     crate::paths::default_themes_dir()
+}
+
+pub fn bundled_resource_path(relative: impl AsRef<Path>) -> Option<PathBuf> {
+    crate::paths::bundled_resource_path(relative)
 }
 
 fn escape_html_text(text: &str) -> String {

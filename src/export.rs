@@ -11,7 +11,7 @@
 
 use std::{
     collections::HashMap,
-    env, fs, io,
+    fs, io,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
@@ -797,16 +797,7 @@ fn parse_svg_length(value: &str) -> Option<f32> {
 /// `resources`); development builds resolve the repository copy via the
 /// compile-time manifest dir.
 fn bundled_reference_doc_path() -> Option<PathBuf> {
-    if let Ok(exe) = env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let candidate = dir.join("assets/templates/reference.docx");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    let candidate = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/templates/reference.docx");
-    candidate.is_file().then_some(candidate)
+    crate::paths::bundled_resource_path("assets/templates/reference.docx")
 }
 
 /// Reference document for the DOCX engine: the configured path when it names
