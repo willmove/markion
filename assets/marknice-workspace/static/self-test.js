@@ -281,6 +281,222 @@ async function runExportChecks(docxFixture) {
   assert(markdownEl.value === stateBefore.markdown && themeSelect.value === stateBefore.theme && fontSizeOffset === stateBefore.fontSizeOffset && paraSpacingOffset === stateBefore.paraSpacingOffset, 'export checks mutated live workspace state');
 }
 
+function setPreviewMode(phone) {
+  document.getElementById('previewContainer')?.classList.toggle('phone-mode', phone);
+  document.querySelectorAll('.mode-btn').forEach(button => button.classList.remove('active'));
+  document.getElementById(phone ? 'phoneModeBtn' : 'desktopModeBtn')?.classList.add('active');
+}
+
+async function runLocaleChecks() {
+  const bridge = await fetch('bridge.js').then(response => response.text());
+  ['importWord', 'importWordSuccess', 'savePdf', 'pdfPrintOpened', 'copyMarkdown', 'downloadHtml', 'downloadDocx', 'editorTitle', 'toggleMode']
+    .forEach(key => {
+      const count = bridge.split(`${key}:`).length - 1;
+      assert(count >= 7, `locale key ${key} is missing from some languages (${count})`);
+    });
+}
+
+async function loadWorkspaceShell() {
+  const candidates = ['/', '../index.html'];
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) continue;
+      const text = await response.text();
+      if (text.includes('editor-panel')) return text;
+    } catch (_) { /* try the next shell location */ }
+  }
+  throw new Error('workspace shell is missing editor-panel');
+}
+
+async function runSkinChecks() {
+  const [shell, css] = await Promise.all([
+    loadWorkspaceShell(),
+    fetch('workspace.css').then(response => response.text()),
+  ]);
+  ['editor-panel', 'panel-header', 'panel-dot', 'mode-btn', 'preview-container', 'format-btn', 'font-size-ctrl', 'wordFileInput', 'savePdfBtn', 'importWordLabel']
+    .forEach(token => assert(shell.includes(token), `workspace shell is missing ${token}`));
+  assert(css.includes('--accent: #6366f1'), 'editor skin is missing the indigo accent');
+  assert(css.includes('Inter') && css.includes('PingFang SC') && css.includes('Microsoft YaHei'), 'chrome font stack is incomplete');
+  assert(css.includes('SF Mono') && css.includes('Fira Code'), 'editor font stack is incomplete');
+  assert(/width:\s*375px/.test(css), 'phone frame is not 375px wide');
+  assert(css.includes('.preview-container.phone-mode .preview-area::before'), 'phone frame is missing the notch');
+  assert(!/(?:id=["'](?:fileInput|imageFileInput|importPdf|sampleBtn)["']|class=["'](?:navbar|hero|features|footer)["'])/.test(shell), 'workspace restored marketing or excluded import chrome');
+  assert(!shell.includes('Import MD') && !shell.includes('导入 Markdown') && !shell.includes('Import PDF') && !shell.includes('导入 PDF'), 'workspace includes excluded import actions');
+  assert(shell.includes('<svg') && shell.includes('data-md-action="italic"'), 'formatting toolbar is missing SVG icons');
+  const italicButton = document.querySelector('#skinFixture .format-btn[data-md-action="italic"]');
+  assert(italicButton?.querySelector('svg'), 'self-test skin fixture is missing an SVG format icon');
+  setPreviewMode(true);
+  assert(document.getElementById('previewContainer').classList.contains('phone-mode'), 'phone mode did not apply the device frame class');
+  assert(document.querySelectorAll('.mode-btn.active').length === 1 && document.getElementById('phoneModeBtn').classList.contains('active'), 'phone mode left a stale desktop active state');
+  setPreviewMode(false);
+  assert(!document.getElementById('previewContainer').classList.contains('phone-mode'), 'desktop mode did not leave the preview card undressed');
+  assert(document.querySelectorAll('.mode-btn.active').length === 1 && document.getElementById('desktopModeBtn').classList.contains('active'), 'desktop mode is not exclusive');
+}
+
+async function buildWordImportFixture() {
+  assert(typeof JSZip === 'function', 'pinned JSZip did not load');
+  assert(typeof MarkionWordImportRuntime?.parseDocx === 'function', 'Word import runtime did not load');
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="gif" ContentType="image/gif"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+</Types>`);
+  zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`);
+  zip.file('word/_rels/document.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdNum" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+  <Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.gif"/>
+</Relationships>`);
+  zip.file('word/numbering.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+</w:numbering>`);
+  zip.file('word/media/image1.gif', fixtureGif);
+  zip.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Imported Title</w:t></w:r></w:p>
+    <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Bullet item</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>Alpha</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Beta</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>One</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Two</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:p>
+      <m:oMath>
+        <m:sSup>
+          <m:e><m:r><m:t>x</m:t></m:r></m:e>
+          <m:sup><m:r><m:t>2</m:t></m:r></m:sup>
+        </m:sSup>
+      </m:oMath>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:drawing>
+          <wp:inline>
+            <wp:docPr descr="fixture-gif"/>
+            <a:graphic>
+              <a:graphicData>
+                <pic:pic>
+                  <pic:blipFill>
+                    <a:blip r:embed="rIdImg"/>
+                  </pic:blipFill>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>`);
+  return zip.generateAsync({ type: 'blob' });
+}
+
+async function runWordImportChecks() {
+  const stateBefore = {
+    markdown: markdownEl.value,
+    selectionStart: markdownEl.selectionStart,
+    selectionEnd: markdownEl.selectionEnd,
+  };
+  markdownEl.value = 'keep on failure';
+  render();
+  const preserved = markdownEl.value;
+  assert(!(await MarkionWorkspaceExports.importWordFile(new File(['plain'], 'notes.md', { type: 'text/markdown' }))), 'non-docx import was accepted');
+  assert(markdownEl.value === preserved, 'invalid import replaced session Markdown');
+  assert(/docx/i.test(statusEl.textContent), 'invalid import did not explain the .docx requirement');
+  const oversized = {
+    name: 'huge.docx',
+    size: MarkionWorkspaceExports.WORD_IMPORT_MAX_BYTES + 1,
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    arrayBuffer() { throw new Error('oversized Word file was read'); },
+  };
+  assert(!(await MarkionWorkspaceExports.importWordFile(oversized)), 'oversized import was accepted');
+  assert(markdownEl.value === preserved, 'oversized import replaced session Markdown');
+  assert(/20/.test(statusEl.textContent), 'oversized import did not mention the size bound');
+  assert(!(await MarkionWorkspaceExports.importWordFile(new File(['not-a-zip'], 'broken.docx'))), 'unreadable docx was accepted');
+  assert(markdownEl.value === preserved, 'failed parse replaced session Markdown');
+  const blob = await buildWordImportFixture();
+  const file = new File([blob], 'fixture.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  assert(await MarkionWorkspaceExports.importWordFile(file), 'representative Word import failed');
+  const imported = markdownEl.value;
+  assert(imported.includes('# Imported Title'), 'imported Markdown lost the heading');
+  assert(imported.includes('- Bullet item') || imported.includes('• Bullet item'), 'imported Markdown lost the list');
+  assert(imported.includes('| Alpha | Beta |') && imported.includes('| One | Two |'), 'imported Markdown lost the table');
+  assert(/\$\$?x\^\{2\}/.test(imported) || imported.includes('$x^{2}$') || imported.includes('$$x^{2}$$'), 'imported Markdown lost math');
+  assert(imported.includes('data:image/gif;base64,'), 'imported Markdown lost the embedded image data URI');
+  assert(!/(?:file:|[A-Za-z]:\\|note\.assets\/|127\.0\.0\.1|localhost)/i.test(imported), 'imported Markdown leaked a filesystem or loopback path');
+  assert(/session|tab|Copy Markdown|Markdown/i.test(statusEl.textContent), 'successful import did not disclose the session-local recovery path');
+  markdownEl.value = stateBefore.markdown;
+  render();
+  markdownEl.setSelectionRange(stateBefore.selectionStart, stateBefore.selectionEnd);
+}
+
+async function runPdfChecks() {
+  const stateBefore = {
+    markdown: markdownEl.value,
+    theme: themeSelect.value,
+    fontSizeOffset,
+    paraSpacingOffset,
+  };
+  const fetches = [];
+  const originalFetch = window.fetch;
+  const originalPrint = window.print;
+  let printInvoked = false;
+  window.print = () => { printInvoked = true; };
+  window.fetch = function patchedFetch(resource, init) {
+    fetches.push(String(resource));
+    return originalFetch.call(this, resource, init);
+  };
+  try {
+    markdownEl.value = '';
+    render();
+    assert(!(await MarkionWorkspaceExports.savePdf({ capturePrintHtml() { throw new Error('empty print captured'); } })), 'empty content opened print');
+    assert(!printInvoked, 'empty content invoked the print dialog');
+    themeSelect.value = 'night';
+    fontSizeOffset = 2;
+    paraSpacingOffset = 4;
+    markdownEl.value = '# Print title\n\nParagraph for themed PDF.';
+    document.getElementById('previewContainer')?.classList.add('phone-mode');
+    let captured = '';
+    assert(await MarkionWorkspaceExports.savePdf({ capturePrintHtml: html => { captured = html; } }), 'themed print capture failed');
+    assert(!printInvoked, 'capture path still invoked window.print');
+    assert(captured.includes('background:#0f1220') && captured.includes('font-size:17px'), 'print clone lost the selected theme or typography offsets');
+    assert(!/h1\s*\{[^}]*font-size:\s*24px/.test(captured) && !/body\s*\{[^}]*color:\s*#333/.test(captured), 'print clone used a generic unthemed article stylesheet');
+    assert(!captured.includes('phone-mode') && !captured.includes('preview-container') && !captured.includes('sessionDisclosure') && !captured.includes('markdown-format-toolbar'), 'print clone included workspace chrome or the phone bezel');
+    assert(!/(?:blob:|file:|127\.0\.0\.1|localhost|markion\.wechat\.session)/i.test(captured), 'print clone leaked a session or local URL');
+    assert(!/(?:pandoc|\/api\/pdf|native pdf)/i.test(captured), 'print clone referenced a native PDF path');
+    assert(/Save as PDF|print dialog|打印|列印/i.test(statusEl.textContent), 'status claimed a PDF file was written');
+    assert(!/saved as pdf|pdf download started|已保存为 PDF/i.test(statusEl.textContent), 'status claimed a PDF was saved');
+    assert(!fetches.some(url => /pdf|pandoc/i.test(url)), 'Save as PDF contacted a native PDF endpoint');
+  } finally {
+    window.fetch = originalFetch;
+    window.print = originalPrint;
+    document.getElementById('previewContainer')?.classList.remove('phone-mode');
+    markdownEl.value = stateBefore.markdown;
+    themeSelect.value = stateBefore.theme;
+    fontSizeOffset = stateBefore.fontSizeOffset;
+    paraSpacingOffset = stateBefore.paraSpacingOffset;
+    render();
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   const [corpus, golden, docxFixture] = await Promise.all([
     fetch('compatibility-corpus.json').then(response => response.json()),
@@ -316,8 +532,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch (error) {
     results.push({ export: 'browser artifacts', pass: false, error: String(error?.message || error) });
   }
+  try {
+    await runLocaleChecks();
+  } catch (error) {
+    results.push({ locales: 'workspace locales', pass: false, error: String(error?.message || error) });
+  }
+  try {
+    await runSkinChecks();
+  } catch (error) {
+    results.push({ skin: 'editor chrome', pass: false, error: String(error?.message || error) });
+  }
+  try {
+    await runWordImportChecks();
+  } catch (error) {
+    results.push({ import: 'Word import', pass: false, error: String(error?.message || error) });
+  }
+  try {
+    await runPdfChecks();
+  } catch (error) {
+    results.push({ pdf: 'themed print-to-PDF', pass: false, error: String(error?.message || error) });
+  }
   const passed = results.every(result => result.pass);
-  statusEl.textContent = passed ? `PASS (${themeCount} themes + formatting + exports)` : 'FAIL';
+  statusEl.textContent = passed ? `PASS (${themeCount} themes + formatting + exports + skin + word + pdf)` : 'FAIL';
   statusEl.dataset.result = passed ? 'pass' : 'fail';
   document.getElementById('results').textContent = JSON.stringify(results, null, 2);
 });

@@ -20,7 +20,7 @@ const messages = {
     omitPrompt: n => `${n} local image(s) cannot be pasted directly into WeChat. Choose OK to copy without them, or Cancel to keep editing.`,
     copied: 'Copied rich HTML and plain text.', partial: n => `Copied without ${n} local image(s).`,
     denied: 'Clipboard access was denied. Allow clipboard permission and try again.', empty: 'Enter content before copying.',
-    copyMarkdown: 'Copy Markdown', downloadHtml: 'Download HTML', downloadDocx: 'Download DOCX',
+    copyMarkdown: 'Copy MD', downloadHtml: 'Save as HTML', downloadDocx: 'Save as Word',
     markdownCopied: 'Copied Markdown source.', markdownDenied: 'Markdown could not be copied. Allow clipboard permission and try again.',
     htmlPreparing: 'Preparing themed HTML…', htmlDownloaded: 'Themed HTML download started.',
     docxPreparing: 'Preparing browser-generated DOCX…', docxDownloaded: 'Browser-generated DOCX download started.',
@@ -28,8 +28,15 @@ const messages = {
     exportFallback: n => `${n} local image(s) could not be embedded and were replaced with text.`,
     exportRemote: n => `${n} remote image(s) remain linked to their authored host.`,
     docxNote: 'Browser-generated DOCX targets Microsoft Word; it is distinct from Markion native DOCX export.',
-    desktop: 'Desktop', phone: 'Phone', copy: 'Copy for WeChat', theme: 'Theme', font: 'Font size', spacing: 'Spacing',
-    fontDown: 'Decrease font size', fontUp: 'Increase font size', spacingDown: 'Decrease paragraph spacing', spacingUp: 'Increase paragraph spacing'
+    desktop: 'Desktop', phone: 'Phone', copy: 'Copy for WeChat', theme: 'Template', font: 'Font size', spacing: 'Spacing',
+    fontDown: 'Decrease font size', fontUp: 'Increase font size', spacingDown: 'Decrease paragraph spacing', spacingUp: 'Increase paragraph spacing',
+    importWord: 'Import Word', importWordTitle: 'Import a Word document (.docx)', importWordPreparing: 'Importing Word document…',
+    importWordSuccess: 'Imported into this browser tab only. Copy Markdown or save the session Markdown to keep it in Markion.',
+    importWordInvalid: 'Import failed. Choose a .docx file.', importWordTooLarge: 'The Word file is too large for this workspace (20 MB limit).',
+    savePdf: 'Save as PDF', pdfPreparing: 'Preparing themed preview for print…',
+    pdfPrintOpened: 'Choose “Save as PDF” in the print dialog. This prints the MarkNice preview, not Markion’s native PDF export.',
+    pdfNote: 'Browser print-to-PDF of the themed MarkNice preview; distinct from Markion Export → PDF.',
+    editorTitle: 'Markdown input', previewTitle: 'WeChat preview', toggleMode: 'Toggle dark mode'
   },
   'zh-hans': {
     session: '浏览器中的修改仅保留在当前标签页，不会保存回 Markion。',
@@ -40,7 +47,7 @@ const messages = {
     omitPrompt: n => `${n} 张本地图片无法直接粘贴到公众号。确定“复制但不含本地图片”，取消则继续编辑。`,
     copied: '已复制富文本和纯文本。', partial: n => `复制成功，已省略 ${n} 张本地图片。`,
     denied: '剪贴板权限被拒绝，请允许权限后重试。', empty: '请先输入内容再复制。',
-    copyMarkdown: '复制 Markdown', downloadHtml: '下载 HTML', downloadDocx: '下载 DOCX',
+    copyMarkdown: '复制 MD', downloadHtml: '存为 HTML', downloadDocx: '存为 Word',
     markdownCopied: 'Markdown 源码已复制。', markdownDenied: 'Markdown 复制失败，请允许剪贴板权限后重试。',
     htmlPreparing: '正在准备主题 HTML…', htmlDownloaded: '主题 HTML 已开始下载。',
     docxPreparing: '正在准备浏览器生成的 DOCX…', docxDownloaded: '浏览器生成的 DOCX 已开始下载。',
@@ -48,22 +55,36 @@ const messages = {
     exportFallback: n => `${n} 张本地图片无法嵌入，已替换为文字。`,
     exportRemote: n => `${n} 张远程图片仍链接到其原始主机。`,
     docxNote: '浏览器生成的 DOCX 以 Microsoft Word 为目标，与 Markion 原生 DOCX 导出不同。',
-    desktop: '桌面', phone: '手机', copy: '复制到公众号', theme: '主题', font: '字号', spacing: '段距',
-    fontDown: '减小字号', fontUp: '增大字号', spacingDown: '减小段距', spacingUp: '增大段距'
+    desktop: '桌面', phone: '手机', copy: '复制到公众号', theme: '模板', font: '字号', spacing: '段距',
+    fontDown: '减小字号', fontUp: '增大字号', spacingDown: '减小段距', spacingUp: '增大段距',
+    importWord: '导入 Word', importWordTitle: '导入 Word 文档（.docx）', importWordPreparing: '正在导入 Word 文档…',
+    importWordSuccess: '已导入当前浏览器标签页，不会写回 Markion。请复制 Markdown 或自行另存 MD 后再带回编辑器。',
+    importWordInvalid: '导入失败，请选择 .docx 文件。', importWordTooLarge: 'Word 文件过大（上限 20 MB）。',
+    savePdf: '存为 PDF', pdfPreparing: '正在准备主题化预览以便打印…',
+    pdfPrintOpened: '请在打印对话框中选择“另存为 PDF”。这是打印 MarkNice 预览，不是 Markion 的原生 PDF 导出。',
+    pdfNote: '浏览器将主题化 MarkNice 预览打印为 PDF，与 Markion「导出 → PDF」不同。',
+    editorTitle: 'Markdown 输入', previewTitle: '公众号预览', toggleMode: '切换深色/浅色模式'
   },
   'zh-hant': {
     session: '瀏覽器中的修改只保留在目前分頁，不會儲存回 Markion。', privacy: '應用資源完全在本機；文件中的遠端圖片可能連線至原始站點。',
     opened: '本機發佈工作區已開啟', expired: '發佈工作階段已過期，請回到 Markion 重新開啟。', setup: '發佈工作區載入失敗，請回到 Markion 重新開啟。',
     unresolved: n => `${n} 張本機圖片無法解析。`, resolved: n => `已保護載入 ${n} 張本機預覽圖片`, omitPrompt: n => `${n} 張本機圖片無法直接貼到公眾號。確定會略過圖片複製，取消則繼續編輯。`,
     copied: '已複製富文字和純文字。', partial: n => `複製成功，已略過 ${n} 張本機圖片。`, denied: '剪貼簿權限遭拒，請允許後重試。', empty: '請先輸入內容。',
-    copyMarkdown: '複製 Markdown', downloadHtml: '下載 HTML', downloadDocx: '下載 DOCX', markdownCopied: 'Markdown 原始碼已複製。', markdownDenied: 'Markdown 複製失敗，請允許剪貼簿權限後重試。', htmlPreparing: '正在準備主題 HTML…', htmlDownloaded: '主題 HTML 已開始下載。', docxPreparing: '正在準備瀏覽器產生的 DOCX…', docxDownloaded: '瀏覽器產生的 DOCX 已開始下載。', exportFailed: '匯出未完成，請保持此分頁開啟後重試。', exportFallback: n => `${n} 張本機圖片無法嵌入，已替換為文字。`, exportRemote: n => `${n} 張遠端圖片仍連結到原始主機。`, docxNote: '瀏覽器產生的 DOCX 以 Microsoft Word 為目標，與 Markion 原生 DOCX 匯出不同。',
-    desktop: '桌面', phone: '手機', copy: '複製到公眾號', theme: '主題', font: '字號', spacing: '段距',
-    fontDown: '縮小字號', fontUp: '放大字號', spacingDown: '縮小段距', spacingUp: '放大段距'
+    copyMarkdown: '複製 MD', downloadHtml: '存為 HTML', downloadDocx: '存為 Word', markdownCopied: 'Markdown 原始碼已複製。', markdownDenied: 'Markdown 複製失敗，請允許剪貼簿權限後重試。', htmlPreparing: '正在準備主題 HTML…', htmlDownloaded: '主題 HTML 已開始下載。', docxPreparing: '正在準備瀏覽器產生的 DOCX…', docxDownloaded: '瀏覽器產生的 DOCX 已開始下載。', exportFailed: '匯出未完成，請保持此分頁開啟後重試。', exportFallback: n => `${n} 張本機圖片無法嵌入，已替換為文字。`, exportRemote: n => `${n} 張遠端圖片仍連結到原始主機。`, docxNote: '瀏覽器產生的 DOCX 以 Microsoft Word 為目標，與 Markion 原生 DOCX 匯出不同。',
+    desktop: '桌面', phone: '手機', copy: '複製到公眾號', theme: '範本', font: '字號', spacing: '段距',
+    fontDown: '縮小字號', fontUp: '放大字號', spacingDown: '縮小段距', spacingUp: '放大段距',
+    importWord: '匯入 Word', importWordTitle: '匯入 Word 文件（.docx）', importWordPreparing: '正在匯入 Word 文件…',
+    importWordSuccess: '已匯入目前瀏覽器分頁，不會寫回 Markion。請複製 Markdown 或自行另存 MD。',
+    importWordInvalid: '匯入失敗，請選擇 .docx 檔案。', importWordTooLarge: 'Word 檔案過大（上限 20 MB）。',
+    savePdf: '存為 PDF', pdfPreparing: '正在準備主題化預覽以便列印…',
+    pdfPrintOpened: '請在列印對話框選擇「另存為 PDF」。這是列印 MarkNice 預覽，不是 Markion 原生 PDF。',
+    pdfNote: '瀏覽器將主題化 MarkNice 預覽列印為 PDF，與 Markion「匯出 → PDF」不同。',
+    editorTitle: 'Markdown 輸入', previewTitle: '公眾號預覽', toggleMode: '切換深色/淺色模式'
   },
-  ja: { session: 'ブラウザーの編集はこのタブだけに保持され、Markion には保存されません。', privacy: 'アプリ資産はローカルです。文書のリモート画像は配信元へ接続する場合があります。', opened: '公開ワークスペースを開きました', expired: 'セッションの期限が切れました。Markion から開き直してください。', setup: 'ワークスペースを読み込めません。Markion から開き直してください。', unresolved: n => `${n} 件のローカル画像を解決できません。`, resolved: n => `${n} 件の保護された画像`, omitPrompt: n => `${n} 件のローカル画像は貼り付けできません。画像なしでコピーするには OK、編集を続けるにはキャンセルを選択してください。`, copied: 'リッチ HTML とテキストをコピーしました。', partial: n => `${n} 件の画像を除いてコピーしました。`, denied: 'クリップボード権限が拒否されました。', empty: '先に内容を入力してください。', copyMarkdown: 'Markdown をコピー', downloadHtml: 'HTML をダウンロード', downloadDocx: 'DOCX をダウンロード', markdownCopied: 'Markdown ソースをコピーしました。', markdownDenied: 'Markdown をコピーできませんでした。クリップボード権限を確認してください。', htmlPreparing: 'テーマ付き HTML を準備しています…', htmlDownloaded: 'テーマ付き HTML のダウンロードを開始しました。', docxPreparing: 'ブラウザー生成 DOCX を準備しています…', docxDownloaded: 'ブラウザー生成 DOCX のダウンロードを開始しました。', exportFailed: 'エクスポートを完了できませんでした。このタブを開いたまま再試行してください。', exportFallback: n => `${n} 件のローカル画像を埋め込めず、テキストに置き換えました。`, exportRemote: n => `${n} 件のリモート画像は作成元ホストへのリンクのままです。`, docxNote: 'ブラウザー生成 DOCX は Microsoft Word を対象とし、Markion ネイティブ DOCX とは異なります。', desktop: 'デスクトップ', phone: 'スマートフォン', copy: 'WeChat 用にコピー', theme: 'テーマ', font: '文字サイズ', spacing: '間隔', fontDown: '文字を小さく', fontUp: '文字を大きく', spacingDown: '段落間隔を縮小', spacingUp: '段落間隔を拡大' },
-  fr: { session: 'Les modifications restent dans cet onglet et ne sont pas enregistrées dans Markion.', privacy: 'Les ressources de l’application restent locales. Les images distantes peuvent contacter leur hôte.', opened: 'Espace de publication ouvert', expired: 'La session a expiré. Relancez-la depuis Markion.', setup: 'Impossible de charger l’espace. Relancez-le depuis Markion.', unresolved: n => `${n} image(s) locale(s) non résolue(s).`, resolved: n => `${n} image(s) locale(s) protégée(s)`, omitPrompt: n => `${n} image(s) locale(s) ne peut pas être collée. OK pour copier sans elles, Annuler pour continuer.`, copied: 'HTML enrichi et texte copiés.', partial: n => `Copié sans ${n} image(s) locale(s).`, denied: 'Accès au presse-papiers refusé.', empty: 'Saisissez du contenu avant de copier.', copyMarkdown: 'Copier le Markdown', downloadHtml: 'Télécharger HTML', downloadDocx: 'Télécharger DOCX', markdownCopied: 'Source Markdown copiée.', markdownDenied: 'Impossible de copier le Markdown. Autorisez le presse-papiers et réessayez.', htmlPreparing: 'Préparation du HTML thématisé…', htmlDownloaded: 'Téléchargement du HTML thématisé lancé.', docxPreparing: 'Préparation du DOCX généré par le navigateur…', docxDownloaded: 'Téléchargement du DOCX généré par le navigateur lancé.', exportFailed: 'L’exportation n’a pas pu être terminée. Gardez cet onglet ouvert et réessayez.', exportFallback: n => `${n} image(s) locale(s) n’ont pas pu être incorporée(s) et ont été remplacées par du texte.`, exportRemote: n => `${n} image(s) distante(s) reste(nt) liée(s) à leur hôte d’origine.`, docxNote: 'Le DOCX généré par le navigateur cible Microsoft Word et diffère de l’export DOCX natif de Markion.', desktop: 'Bureau', phone: 'Téléphone', copy: 'Copier pour WeChat', theme: 'Thème', font: 'Taille', spacing: 'Espacement', fontDown: 'Réduire la taille', fontUp: 'Augmenter la taille', spacingDown: 'Réduire l’espacement', spacingUp: 'Augmenter l’espacement' },
-  de: { session: 'Browser-Änderungen bleiben in diesem Tab und werden nicht in Markion gespeichert.', privacy: 'App-Ressourcen bleiben lokal. Entfernte Dokumentbilder können ihren Host kontaktieren.', opened: 'Veröffentlichungsbereich geöffnet', expired: 'Die Sitzung ist abgelaufen. Bitte aus Markion neu öffnen.', setup: 'Der Bereich konnte nicht geladen werden. Bitte aus Markion neu öffnen.', unresolved: n => `${n} lokale Bilder nicht aufgelöst.`, resolved: n => `${n} geschützte lokale Bilder`, omitPrompt: n => `${n} lokale Bilder können nicht eingefügt werden. OK kopiert ohne Bilder, Abbrechen setzt die Bearbeitung fort.`, copied: 'Rich-HTML und Text kopiert.', partial: n => `Ohne ${n} lokale Bilder kopiert.`, denied: 'Zwischenablagezugriff verweigert.', empty: 'Bitte zuerst Inhalt eingeben.', copyMarkdown: 'Markdown kopieren', downloadHtml: 'HTML herunterladen', downloadDocx: 'DOCX herunterladen', markdownCopied: 'Markdown-Quelltext kopiert.', markdownDenied: 'Markdown konnte nicht kopiert werden. Bitte Zwischenablagezugriff erlauben.', htmlPreparing: 'Formatiertes HTML wird vorbereitet…', htmlDownloaded: 'Download des formatierten HTML gestartet.', docxPreparing: 'Browser-generiertes DOCX wird vorbereitet…', docxDownloaded: 'Download des browser-generierten DOCX gestartet.', exportFailed: 'Export konnte nicht abgeschlossen werden. Lassen Sie diesen Tab geöffnet und versuchen Sie es erneut.', exportFallback: n => `${n} lokale Bilder konnten nicht eingebettet werden und wurden durch Text ersetzt.`, exportRemote: n => `${n} entfernte Bilder bleiben mit ihrem ursprünglichen Host verknüpft.`, docxNote: 'Browser-generiertes DOCX richtet sich an Microsoft Word und unterscheidet sich vom nativen Markion-DOCX-Export.', desktop: 'Desktop', phone: 'Telefon', copy: 'Für WeChat kopieren', theme: 'Design', font: 'Schrift', spacing: 'Abstand', fontDown: 'Schrift verkleinern', fontUp: 'Schrift vergrößern', spacingDown: 'Absatzabstand verkleinern', spacingUp: 'Absatzabstand vergrößern' },
-  es: { session: 'Los cambios del navegador permanecen en esta pestaña y no se guardan en Markion.', privacy: 'Los recursos de la aplicación son locales. Las imágenes remotas pueden contactar su servidor.', opened: 'Espacio de publicación abierto', expired: 'La sesión caducó. Vuelve a abrirla desde Markion.', setup: 'No se pudo cargar el espacio. Vuelve a abrirlo desde Markion.', unresolved: n => `${n} imagen(es) local(es) sin resolver.`, resolved: n => `${n} imagen(es) local(es) protegida(s)`, omitPrompt: n => `${n} imagen(es) local(es) no se pueden pegar. Acepta para copiar sin ellas o cancela para seguir editando.`, copied: 'HTML enriquecido y texto copiados.', partial: n => `Copiado sin ${n} imagen(es) local(es).`, denied: 'Se denegó el acceso al portapapeles.', empty: 'Escribe contenido antes de copiar.', copyMarkdown: 'Copiar Markdown', downloadHtml: 'Descargar HTML', downloadDocx: 'Descargar DOCX', markdownCopied: 'Código Markdown copiado.', markdownDenied: 'No se pudo copiar Markdown. Permite el acceso al portapapeles e inténtalo de nuevo.', htmlPreparing: 'Preparando HTML con tema…', htmlDownloaded: 'Se inició la descarga del HTML con tema.', docxPreparing: 'Preparando DOCX generado por el navegador…', docxDownloaded: 'Se inició la descarga del DOCX generado por el navegador.', exportFailed: 'No se pudo completar la exportación. Mantén esta pestaña abierta e inténtalo de nuevo.', exportFallback: n => `${n} imagen(es) local(es) no se pudieron incrustar y se reemplazaron por texto.`, exportRemote: n => `${n} imagen(es) remota(s) permanecen vinculadas a su host original.`, docxNote: 'El DOCX generado por el navegador está destinado a Microsoft Word y es distinto de la exportación DOCX nativa de Markion.', desktop: 'Escritorio', phone: 'Teléfono', copy: 'Copiar para WeChat', theme: 'Tema', font: 'Tamaño', spacing: 'Espacio', fontDown: 'Reducir tamaño', fontUp: 'Aumentar tamaño', spacingDown: 'Reducir espacio', spacingUp: 'Aumentar espacio' }
+  ja: { session: 'ブラウザーの編集はこのタブだけに保持され、Markion には保存されません。', privacy: 'アプリ資産はローカルです。文書のリモート画像は配信元へ接続する場合があります。', opened: '公開ワークスペースを開きました', expired: 'セッションの期限が切れました。Markion から開き直してください。', setup: 'ワークスペースを読み込めません。Markion から開き直してください。', unresolved: n => `${n} 件のローカル画像を解決できません。`, resolved: n => `${n} 件の保護された画像`, omitPrompt: n => `${n} 件のローカル画像は貼り付けできません。画像なしでコピーするには OK、編集を続けるにはキャンセルを選択してください。`, copied: 'リッチ HTML とテキストをコピーしました。', partial: n => `${n} 件の画像を除いてコピーしました。`, denied: 'クリップボード権限が拒否されました。', empty: '先に内容を入力してください。', copyMarkdown: 'MD をコピー', downloadHtml: 'HTML として保存', downloadDocx: 'Word として保存', markdownCopied: 'Markdown ソースをコピーしました。', markdownDenied: 'Markdown をコピーできませんでした。クリップボード権限を確認してください。', htmlPreparing: 'テーマ付き HTML を準備しています…', htmlDownloaded: 'テーマ付き HTML のダウンロードを開始しました。', docxPreparing: 'ブラウザー生成 DOCX を準備しています…', docxDownloaded: 'ブラウザー生成 DOCX のダウンロードを開始しました。', exportFailed: 'エクスポートを完了できませんでした。このタブを開いたまま再試行してください。', exportFallback: n => `${n} 件のローカル画像を埋め込めず、テキストに置き換えました。`, exportRemote: n => `${n} 件のリモート画像は作成元ホストへのリンクのままです。`, docxNote: 'ブラウザー生成 DOCX は Microsoft Word を対象とし、Markion ネイティブ DOCX とは異なります。', desktop: 'デスクトップ', phone: 'スマートフォン', copy: 'WeChat 用にコピー', theme: 'テンプレート', font: '文字サイズ', spacing: '間隔', fontDown: '文字を小さく', fontUp: '文字を大きく', spacingDown: '段落間隔を縮小', spacingUp: '段落間隔を拡大', importWord: 'Word を取り込み', importWordTitle: 'Word 文書（.docx）を取り込む', importWordPreparing: 'Word 文書を取り込んでいます…', importWordSuccess: 'このブラウザタブにだけ取り込みました。Markion には保存されません。Markdown をコピーするか、セッションの Markdown を別途保存してください。', importWordInvalid: '取り込みに失敗しました。.docx ファイルを選んでください。', importWordTooLarge: 'Word ファイルが大きすぎます（上限 20 MB）。', savePdf: 'PDF として保存', pdfPreparing: 'テーマ付きプレビューを印刷用に準備しています…', pdfPrintOpened: '印刷ダイアログで「PDF に保存」を選んでください。これは MarkNice プレビューの印刷であり、Markion のネイティブ PDF 書き出しではありません。', pdfNote: 'テーマ付き MarkNice プレビューをブラウザ印刷で PDF 化します。Markion の「エクスポート → PDF」とは異なります。', editorTitle: 'Markdown 入力', previewTitle: 'WeChat プレビュー', toggleMode: 'ダークモード切替' },
+  fr: { session: 'Les modifications restent dans cet onglet et ne sont pas enregistrées dans Markion.', privacy: 'Les ressources de l’application restent locales. Les images distantes peuvent contacter leur hôte.', opened: 'Espace de publication ouvert', expired: 'La session a expiré. Relancez-la depuis Markion.', setup: 'Impossible de charger l’espace. Relancez-le depuis Markion.', unresolved: n => `${n} image(s) locale(s) non résolue(s).`, resolved: n => `${n} image(s) locale(s) protégée(s)`, omitPrompt: n => `${n} image(s) locale(s) ne peut pas être collée. OK pour copier sans elles, Annuler pour continuer.`, copied: 'HTML enrichi et texte copiés.', partial: n => `Copié sans ${n} image(s) locale(s).`, denied: 'Accès au presse-papiers refusé.', empty: 'Saisissez du contenu avant de copier.', copyMarkdown: 'Copier MD', downloadHtml: 'Enregistrer en HTML', downloadDocx: 'Enregistrer en Word', markdownCopied: 'Source Markdown copiée.', markdownDenied: 'Impossible de copier le Markdown. Autorisez le presse-papiers et réessayez.', htmlPreparing: 'Préparation du HTML thématisé…', htmlDownloaded: 'Téléchargement du HTML thématisé lancé.', docxPreparing: 'Préparation du DOCX généré par le navigateur…', docxDownloaded: 'Téléchargement du DOCX généré par le navigateur lancé.', exportFailed: 'L’exportation n’a pas pu être terminée. Gardez cet onglet ouvert et réessayez.', exportFallback: n => `${n} image(s) locale(s) n’ont pas pu être incorporée(s) et ont été remplacées par du texte.`, exportRemote: n => `${n} image(s) distante(s) reste(nt) liée(s) à leur hôte d’origine.`, docxNote: 'Le DOCX généré par le navigateur cible Microsoft Word et diffère de l’export DOCX natif de Markion.', desktop: 'Bureau', phone: 'Téléphone', copy: 'Copier pour WeChat', theme: 'Modèle', font: 'Taille', spacing: 'Espacement', fontDown: 'Réduire la taille', fontUp: 'Augmenter la taille', spacingDown: 'Réduire l’espacement', spacingUp: 'Augmenter l’espacement', importWord: 'Importer Word', importWordTitle: 'Importer un document Word (.docx)', importWordPreparing: 'Importation du document Word…', importWordSuccess: 'Importé uniquement dans cet onglet, pas dans Markion. Copiez le Markdown ou enregistrez-le pour le conserver.', importWordInvalid: 'Échec de l’importation. Choisissez un fichier .docx.', importWordTooLarge: 'Le fichier Word dépasse la limite de 20 Mo.', savePdf: 'Enregistrer en PDF', pdfPreparing: 'Préparation de l’aperçu thématisé pour l’impression…', pdfPrintOpened: 'Choisissez « Enregistrer au format PDF » dans la boîte de dialogue d’impression. Ceci imprime l’aperçu MarkNice, pas l’export PDF natif de Markion.', pdfNote: 'Impression navigateur de l’aperçu MarkNice thématisé, distincte de Exportation → PDF dans Markion.', editorTitle: 'Saisie Markdown', previewTitle: 'Aperçu WeChat', toggleMode: 'Basculer le mode sombre' },
+  de: { session: 'Browser-Änderungen bleiben in diesem Tab und werden nicht in Markion gespeichert.', privacy: 'App-Ressourcen bleiben lokal. Entfernte Dokumentbilder können ihren Host kontaktieren.', opened: 'Veröffentlichungsbereich geöffnet', expired: 'Die Sitzung ist abgelaufen. Bitte aus Markion neu öffnen.', setup: 'Der Bereich konnte nicht geladen werden. Bitte aus Markion neu öffnen.', unresolved: n => `${n} lokale Bilder nicht aufgelöst.`, resolved: n => `${n} geschützte lokale Bilder`, omitPrompt: n => `${n} lokale Bilder können nicht eingefügt werden. OK kopiert ohne Bilder, Abbrechen setzt die Bearbeitung fort.`, copied: 'Rich-HTML und Text kopiert.', partial: n => `Ohne ${n} lokale Bilder kopiert.`, denied: 'Zwischenablagezugriff verweigert.', empty: 'Bitte zuerst Inhalt eingeben.', copyMarkdown: 'MD kopieren', downloadHtml: 'Als HTML speichern', downloadDocx: 'Als Word speichern', markdownCopied: 'Markdown-Quelltext kopiert.', markdownDenied: 'Markdown konnte nicht kopiert werden. Bitte Zwischenablagezugriff erlauben.', htmlPreparing: 'Formatiertes HTML wird vorbereitet…', htmlDownloaded: 'Download des formatierten HTML gestartet.', docxPreparing: 'Browser-generiertes DOCX wird vorbereitet…', docxDownloaded: 'Download des browser-generierten DOCX gestartet.', exportFailed: 'Export konnte nicht abgeschlossen werden. Lassen Sie diesen Tab geöffnet und versuchen Sie es erneut.', exportFallback: n => `${n} lokale Bilder konnten nicht eingebettet werden und wurden durch Text ersetzt.`, exportRemote: n => `${n} entfernte Bilder bleiben mit ihrem ursprünglichen Host verknüpft.`, docxNote: 'Browser-generiertes DOCX richtet sich an Microsoft Word und unterscheidet sich vom nativen Markion-DOCX-Export.', desktop: 'Desktop', phone: 'Telefon', copy: 'Für WeChat kopieren', theme: 'Vorlage', font: 'Schrift', spacing: 'Abstand', fontDown: 'Schrift verkleinern', fontUp: 'Schrift vergrößern', spacingDown: 'Absatzabstand verkleinern', spacingUp: 'Absatzabstand vergrößern', importWord: 'Word importieren', importWordTitle: 'Word-Dokument (.docx) importieren', importWordPreparing: 'Word-Dokument wird importiert…', importWordSuccess: 'Nur in diesem Browser-Tab importiert, nicht nach Markion. Markdown kopieren oder die Sitzung separat speichern.', importWordInvalid: 'Import fehlgeschlagen. Bitte eine .docx-Datei wählen.', importWordTooLarge: 'Die Word-Datei ist zu groß (Grenze 20 MB).', savePdf: 'Als PDF speichern', pdfPreparing: 'Themenvorschau wird für den Druck vorbereitet…', pdfPrintOpened: 'Wählen Sie im Druckdialog „Als PDF speichern“. Das druckt die MarkNice-Vorschau, nicht Markions natives PDF.', pdfNote: 'Browser-Druck der thematisierten MarkNice-Vorschau, unabhängig von Markion „Exportieren → PDF“.', editorTitle: 'Markdown-Eingabe', previewTitle: 'WeChat-Vorschau', toggleMode: 'Dunkelmodus umschalten' },
+  es: { session: 'Los cambios del navegador permanecen en esta pestaña y no se guardan en Markion.', privacy: 'Los recursos de la aplicación son locales. Las imágenes remotas pueden contactar su servidor.', opened: 'Espacio de publicación abierto', expired: 'La sesión caducó. Vuelve a abrirla desde Markion.', setup: 'No se pudo cargar el espacio. Vuelve a abrirlo desde Markion.', unresolved: n => `${n} imagen(es) local(es) sin resolver.`, resolved: n => `${n} imagen(es) local(es) protegida(s)`, omitPrompt: n => `${n} imagen(es) local(es) no se pueden pegar. Acepta para copiar sin ellas o cancela para seguir editando.`, copied: 'HTML enriquecido y texto copiados.', partial: n => `Copiado sin ${n} imagen(es) local(es).`, denied: 'Se denegó el acceso al portapapeles.', empty: 'Escribe contenido antes de copiar.', copyMarkdown: 'Copiar MD', downloadHtml: 'Guardar como HTML', downloadDocx: 'Guardar como Word', markdownCopied: 'Código Markdown copiado.', markdownDenied: 'No se pudo copiar Markdown. Permite el acceso al portapapeles e inténtalo de nuevo.', htmlPreparing: 'Preparando HTML con tema…', htmlDownloaded: 'Se inició la descarga del HTML con tema.', docxPreparing: 'Preparando DOCX generado por el navegador…', docxDownloaded: 'Se inició la descarga del DOCX generado por el navegador.', exportFailed: 'No se pudo completar la exportación. Mantén esta pestaña abierta e inténtalo de nuevo.', exportFallback: n => `${n} imagen(es) local(es) no se pudieron incrustar y se reemplazaron por texto.`, exportRemote: n => `${n} imagen(es) remota(s) permanecen vinculadas a su host original.`, docxNote: 'El DOCX generado por el navegador está destinado a Microsoft Word y es distinto de la exportación DOCX nativa de Markion.', desktop: 'Escritorio', phone: 'Teléfono', copy: 'Copiar para WeChat', theme: 'Plantilla', font: 'Tamaño', spacing: 'Espacio', fontDown: 'Reducir tamaño', fontUp: 'Aumentar tamaño', spacingDown: 'Reducir espacio', spacingUp: 'Aumentar espacio', importWord: 'Importar Word', importWordTitle: 'Importar un documento Word (.docx)', importWordPreparing: 'Importando el documento Word…', importWordSuccess: 'Importado solo en esta pestaña, no en Markion. Copia el Markdown o guárdalo para conservarlo.', importWordInvalid: 'Error al importar. Elige un archivo .docx.', importWordTooLarge: 'El archivo Word supera el límite de 20 MB.', savePdf: 'Guardar como PDF', pdfPreparing: 'Preparando la vista previa con tema para imprimir…', pdfPrintOpened: 'Elige «Guardar como PDF» en el cuadro de impresión. Esto imprime la vista previa de MarkNice, no el PDF nativo de Markion.', pdfNote: 'Impresión del navegador de la vista previa MarkNice con tema, distinta de Exportar → PDF en Markion.', editorTitle: 'Entrada Markdown', previewTitle: 'Vista previa de WeChat', toggleMode: 'Alternar modo oscuro' }
 };
 
 const markdownFormatMessages = {
@@ -137,7 +158,10 @@ const localeMessageKeys = Object.keys(messages.en).sort().join('\u0000');
 const requiredExportMessageKeys = [
   'copyMarkdown', 'downloadHtml', 'downloadDocx', 'markdownCopied',
   'markdownDenied', 'htmlPreparing', 'htmlDownloaded', 'docxPreparing',
-  'docxDownloaded', 'exportFailed', 'exportFallback', 'exportRemote', 'docxNote'
+  'docxDownloaded', 'exportFailed', 'exportFallback', 'exportRemote', 'docxNote',
+  'importWord', 'importWordTitle', 'importWordPreparing', 'importWordSuccess',
+  'importWordInvalid', 'importWordTooLarge', 'savePdf', 'pdfPreparing',
+  'pdfPrintOpened', 'pdfNote', 'editorTitle', 'previewTitle', 'toggleMode'
 ];
 for (const [language, localized] of Object.entries(messages)) {
   if (Object.keys(localized).sort().join('\u0000') !== localeMessageKeys) {
@@ -261,28 +285,67 @@ async function copyCurrentPreview() {
   }
 }
 
+function setLocalizedText(id, value) {
+  const node = document.getElementById(id);
+  if (node) node.textContent = value;
+}
+
+function setLocalizedAttr(id, name, value) {
+  const node = document.getElementById(id);
+  if (node) node.setAttribute(name, value);
+}
+
+function applyColorMode(dark) {
+  if (dark) document.body.setAttribute('data-mode', 'dark');
+  else document.body.removeAttribute('data-mode');
+}
+
+function initColorMode() {
+  const media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  applyColorMode(!!media?.matches);
+  document.getElementById('modeToggleBtn')?.addEventListener('click', () => {
+    applyColorMode(document.body.getAttribute('data-mode') !== 'dark');
+  });
+}
+
+function setPreviewMode(phone) {
+  document.getElementById('previewContainer')?.classList.toggle('phone-mode', phone);
+  document.querySelectorAll('.mode-btn').forEach(button => button.classList.remove('active'));
+  document.getElementById(phone ? 'phoneModeBtn' : 'desktopModeBtn')?.classList.add('active');
+}
+
 function localize(language) {
   locale = messages[language] || messages.en;
   markdownFormatLocale = markdownFormatMessages[language] || markdownFormatMessages.en;
   document.documentElement.lang = language;
-  document.getElementById('sessionDisclosure').textContent = locale.session;
-  document.getElementById('privacyDisclosure').textContent = locale.privacy;
-  document.getElementById('themeLabel').textContent = locale.theme;
-  document.getElementById('fontSizeText').textContent = locale.font;
-  document.getElementById('spacingText').textContent = locale.spacing;
-  document.getElementById('desktopModeBtn').textContent = locale.desktop;
-  document.getElementById('phoneModeBtn').textContent = locale.phone;
-  document.getElementById('copyMarkdownBtn').textContent = locale.copyMarkdown;
-  document.getElementById('downloadHtmlBtn').textContent = locale.downloadHtml;
-  document.getElementById('downloadDocxBtn').textContent = locale.downloadDocx;
-  document.getElementById('copyBtn').textContent = locale.copy;
+  setLocalizedText('sessionDisclosure', locale.session);
+  setLocalizedText('privacyDisclosure', locale.privacy);
+  setLocalizedText('themeLabel', locale.theme);
+  setLocalizedText('fontSizeText', locale.font);
+  setLocalizedText('spacingText', locale.spacing);
+  setLocalizedText('copyBtnLabel', locale.copy);
+  setLocalizedText('copyMarkdownLabel', locale.copyMarkdown);
+  setLocalizedText('downloadHtmlLabel', locale.downloadHtml);
+  setLocalizedText('savePdfLabel', locale.savePdf);
+  setLocalizedText('downloadDocxLabel', locale.downloadDocx);
+  setLocalizedText('importWordText', locale.importWord);
+  setLocalizedText('editorHeading', locale.editorTitle);
+  setLocalizedText('previewHeading', locale.previewTitle);
   fontSizeDown.setAttribute('aria-label', locale.fontDown);
   fontSizeUp.setAttribute('aria-label', locale.fontUp);
-  document.getElementById('paraSpacingDown').setAttribute('aria-label', locale.spacingDown);
-  document.getElementById('paraSpacingUp').setAttribute('aria-label', locale.spacingUp);
-  document.getElementById('copyMarkdownBtn').setAttribute('aria-label', locale.copyMarkdown);
-  document.getElementById('downloadHtmlBtn').setAttribute('aria-label', locale.downloadHtml);
-  document.getElementById('downloadDocxBtn').setAttribute('aria-label', locale.downloadDocx);
+  setLocalizedAttr('paraSpacingDown', 'aria-label', locale.spacingDown);
+  setLocalizedAttr('paraSpacingUp', 'aria-label', locale.spacingUp);
+  setLocalizedAttr('copyBtn', 'aria-label', locale.copy);
+  setLocalizedAttr('copyMarkdownBtn', 'aria-label', locale.copyMarkdown);
+  setLocalizedAttr('downloadHtmlBtn', 'aria-label', locale.downloadHtml);
+  setLocalizedAttr('savePdfBtn', 'aria-label', locale.savePdf);
+  setLocalizedAttr('downloadDocxBtn', 'aria-label', locale.downloadDocx);
+  setLocalizedAttr('desktopModeBtn', 'aria-label', locale.desktop);
+  setLocalizedAttr('desktopModeBtn', 'title', locale.desktop);
+  setLocalizedAttr('phoneModeBtn', 'aria-label', locale.phone);
+  setLocalizedAttr('phoneModeBtn', 'title', locale.phone);
+  setLocalizedAttr('modeToggleBtn', 'aria-label', locale.toggleMode);
+  setLocalizedAttr('importWordLabel', 'title', locale.importWordTitle);
   const formatToolbar = document.getElementById('markdownFormatToolbar');
   formatToolbar.setAttribute('aria-label', markdownFormatLocale.toolbar);
   formatToolbar.querySelectorAll('[data-md-action]').forEach(button => {
@@ -328,6 +391,7 @@ async function bootstrapWorkspace() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  initColorMode();
   themeSelect.addEventListener('change', render);
   fontSizeDown.addEventListener('click', () => { fontSizeOffset = Math.max(-6, fontSizeOffset - 1); fontSizeLabel.textContent = fontSizeOffset; render(); });
   fontSizeUp.addEventListener('click', () => { fontSizeOffset = Math.min(6, fontSizeOffset + 1); fontSizeLabel.textContent = fontSizeOffset; render(); });
@@ -336,8 +400,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('paraSpacingUp').addEventListener('click', () => { paraSpacingOffset = Math.min(24, paraSpacingOffset + 2); spacingLabel.textContent = paraSpacingOffset; render(); });
   markdownEl.addEventListener('input', () => { clearTimeout(window.__markionRenderTimer); window.__markionRenderTimer = setTimeout(render, 180); });
   document.getElementById('copyBtn').addEventListener('click', copyCurrentPreview);
-  document.getElementById('desktopModeBtn').addEventListener('click', event => { document.getElementById('previewContainer').classList.remove('phone-mode'); document.querySelectorAll('.mode-btn').forEach(button => button.classList.remove('active')); event.currentTarget.classList.add('active'); });
-  document.getElementById('phoneModeBtn').addEventListener('click', event => { document.getElementById('previewContainer').classList.add('phone-mode'); document.getElementById('desktopModeBtn').classList.remove('active'); event.currentTarget.classList.add('active'); });
+  document.getElementById('desktopModeBtn').addEventListener('click', () => setPreviewMode(false));
+  document.getElementById('phoneModeBtn').addEventListener('click', () => setPreviewMode(true));
   bootstrapWorkspace();
 });
 window.addEventListener('pagehide', () => objectUrls.forEach(url => URL.revokeObjectURL(url)));

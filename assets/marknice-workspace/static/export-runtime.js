@@ -3,6 +3,9 @@
   const MAX_EMBEDDED_IMAGE_BYTES = 8 * 1024 * 1024;
   const MAX_EMBEDDED_IMAGE_TOTAL_BYTES = 24 * 1024 * 1024;
   const MAX_MANAGED_EXPORT_RESOURCES = 64;
+  const WORD_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
+  const WORD_DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const PRINT_PAGE_CSS = '@page{margin:15mm 10mm}html,body{margin:0}body{padding:0 20px}img{max-width:100%;height:auto}table,figure,pre,blockquote{break-inside:avoid}';
   const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=\s]+$/i;
   const BLOCKED_EXPORT_ELEMENTS = 'script,style,link,base,iframe,frame,frameset,object,embed,applet,form,input,button,select,textarea,meta,template';
 
@@ -18,7 +21,7 @@
 
   function setBusy(button, busy) {
     if (!button) return;
-    button.disabled = busy;
+    if ('disabled' in button) button.disabled = busy;
     button.setAttribute('aria-busy', String(busy));
   }
 
@@ -338,6 +341,117 @@ body{font-family:'PingFang SC','Microsoft YaHei',SimHei,sans-serif;font-size:14p
     }
   }
 
+  function isSupportedWordFile(file) {
+    if (!file) return false;
+    const name = String(file.name || '').toLowerCase();
+    return name.endsWith('.docx') || String(file.type || '').toLowerCase() === WORD_DOCX_TYPE;
+  }
+
+  async function importWordFile(file) {
+    const previous = markdownEl.value;
+    const label = document.getElementById('importWordLabel');
+    if (label?.getAttribute('aria-busy') === 'true') return false;
+    setBusy(label, true);
+    try {
+      if (!isSupportedWordFile(file)) {
+        updateStatus(exportedMessage('importWordInvalid', 'Import failed. Choose a .docx file.'));
+        return false;
+      }
+      if ((file.size || 0) > WORD_IMPORT_MAX_BYTES) {
+        updateStatus(exportedMessage('importWordTooLarge', 'The Word file is too large for this workspace (20 MB limit).'));
+        return false;
+      }
+      const runtime = window.MarkionWordImportRuntime;
+      if (typeof JSZip === 'undefined' || typeof runtime?.parseDocx !== 'function' || typeof runtime?.htmlToMarkdown !== 'function') {
+        throw new Error('Word import runtime unavailable');
+      }
+      updateStatus(exportedMessage('importWordPreparing', 'Importing Word document…'));
+      const html = await runtime.parseDocx(await file.arrayBuffer());
+      const markdown = runtime.htmlToMarkdown(html);
+      if (!String(markdown || '').trim()) throw new Error('empty conversion');
+      markdownEl.value = markdown;
+      render();
+      updateStatus(exportedMessage(
+        'importWordSuccess',
+        'Imported into this browser tab only. Copy Markdown or save the session Markdown to keep it in Markion.'
+      ));
+      return true;
+    } catch (error) {
+      console.error(error);
+      markdownEl.value = previous;
+      render();
+      updateStatus(exportedMessage('importWordInvalid', 'Import failed. Choose a .docx file.'));
+      return false;
+    } finally {
+      setBusy(label, false);
+      const input = document.getElementById('wordFileInput');
+      if (input) input.value = '';
+    }
+  }
+
+  function buildPrintHtml(snapshot, prepared) {
+    return `<!doctype html>
+<html lang="${escapeHtml(snapshot.language)}">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(snapshot.title)}</title>
+<style>${PRINT_PAGE_CSS}</style>
+</head>
+<body>
+${prepared.articleHtml}
+</body>
+</html>`;
+  }
+
+  function openHiddenPrintDialog(html, title) {
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('title', title);
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:800px;height:600px;border:none;';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument || iframe.contentWindow.document;
+    doc.open();
+    doc.write(html);
+    doc.close();
+    doc.title = title;
+    const win = iframe.contentWindow;
+    const cleanup = () => { if (iframe.parentNode) iframe.remove(); };
+    if (win) win.onafterprint = cleanup;
+    window.setTimeout(() => {
+      win?.print();
+      window.setTimeout(cleanup, 60_000);
+    }, 300);
+  }
+
+  async function savePdf(options = {}) {
+    const button = document.getElementById('savePdfBtn');
+    if (button?.disabled) return false;
+    setBusy(button, true);
+    try {
+      const snapshot = buildExportSnapshot();
+      if (!hasRenderableContent(snapshot)) {
+        updateStatus(exportedMessage('empty', 'Enter content before exporting.'));
+        return false;
+      }
+      updateStatus(exportedMessage('pdfPreparing', 'Preparing themed preview for print…'));
+      const prepared = await prepareExportArticle(snapshot);
+      const html = buildPrintHtml(snapshot, prepared);
+      if (typeof options.capturePrintHtml === 'function') {
+        options.capturePrintHtml(html);
+      } else {
+        openHiddenPrintDialog(html, snapshot.title);
+      }
+      updateStatus(`${exportedMessage('pdfPrintOpened', 'Choose “Save as PDF” in the print dialog. This prints the MarkNice preview, not Markion’s native PDF export.')}${appendExportResourceStatus(prepared)}`);
+      return true;
+    } catch (error) {
+      console.error(error);
+      updateStatus(exportedMessage('exportFailed', 'Export could not be completed.'));
+      return false;
+    } finally {
+      setBusy(button, false);
+    }
+  }
+
   window.MarkionWorkspaceExports = Object.freeze({
     buildExportSnapshot,
     filenameFor,
@@ -349,14 +463,23 @@ body{font-family:'PingFang SC','Microsoft YaHei',SimHei,sans-serif;font-size:14p
     copyMarkdown,
     downloadHtml,
     downloadDocx,
+    importWordFile,
+    buildPrintHtml,
+    savePdf,
     MAX_EMBEDDED_IMAGE_BYTES,
     MAX_EMBEDDED_IMAGE_TOTAL_BYTES,
     MAX_MANAGED_EXPORT_RESOURCES,
+    WORD_IMPORT_MAX_BYTES,
   });
 
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('copyMarkdownBtn')?.addEventListener('click', copyMarkdown);
     document.getElementById('downloadHtmlBtn')?.addEventListener('click', downloadHtml);
     document.getElementById('downloadDocxBtn')?.addEventListener('click', downloadDocx);
+    document.getElementById('savePdfBtn')?.addEventListener('click', () => savePdf());
+    document.getElementById('wordFileInput')?.addEventListener('change', event => {
+      const file = event.target.files && event.target.files[0];
+      if (file) importWordFile(file);
+    });
   });
 })();

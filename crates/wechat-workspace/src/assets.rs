@@ -16,8 +16,11 @@ const REQUIRED_EXPORT_FILES: &[&str] = &[
     "static/export-runtime.js",
     "static/marknice-format-runtime.js",
     "static/marknice-word-runtime.js",
+    "static/marknice-word-import-runtime.js",
     "static/vendor/html-docx.js",
     "LICENSE.html-docx-js.txt",
+    "static/vendor/jszip.min.js",
+    "LICENSE.jszip.txt",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -298,7 +301,17 @@ fn validate_marknice_export_artifacts(manifest: &BundleManifest) -> Result<(), B
                 && component.license == "MIT"
                 && component.license_file == "LICENSE.html-docx-js.txt"
         });
+    let jszip = manifest
+        .third_party
+        .iter()
+        .find(|component| component.name == "JSZip")
+        .filter(|component| {
+            component.version == "3.10.1"
+                && component.license == "MIT"
+                && component.license_file == "LICENSE.jszip.txt"
+        });
     if converter.is_none()
+        || jszip.is_none()
         || REQUIRED_EXPORT_FILES
             .iter()
             .any(|required| !manifest.files.iter().any(|file| file.path == *required))
@@ -833,6 +846,12 @@ mod tests {
                 && component.license == "MIT"
                 && component.license_file == "LICENSE.html-docx-js.txt"
         }));
+        assert!(manifest.third_party.iter().any(|component| {
+            component.name == "JSZip"
+                && component.version == "3.10.1"
+                && component.license == "MIT"
+                && component.license_file == "LICENSE.jszip.txt"
+        }));
     }
 
     #[test]
@@ -850,5 +869,6 @@ mod tests {
             );
         }
         assert!(!is_prohibited_export_artifact("static/vendor/html-docx.js"));
+        assert!(!is_prohibited_export_artifact("static/vendor/jszip.min.js"));
     }
 }

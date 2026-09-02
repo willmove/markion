@@ -24,6 +24,6 @@ No font files are modified by Markion.
 The packaged browser workspace is derived from MarkNice commit
 `c009c1ec7e7c92f89afa5a32edcb126b5296bda7` and is distributed under the MIT
 License. It includes pinned browser builds of marked 15.0.12 (MIT), MathJax
-3.2.2 (Apache-2.0), and html-docx-js 0.3.1 (MIT).
+3.2.2 (Apache-2.0), html-docx-js 0.3.1 (MIT), and JSZip 3.10.1 (MIT).
 Exact provenance, SHA-256 digests, and complete license texts are shipped in
 `assets/marknice-workspace/`.

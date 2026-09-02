@@ -34,10 +34,19 @@ fn publishing_browser_handoff_preserves_gpui_tab_and_document_state(cx: &mut Tes
         let undo_len = tab.undo_stack.len();
         let highlight_count = app.highlight_cache.borrow().len();
 
-        // All export outcomes happen inside the browser. Markion's complete
+        // All export outcomes happen inside the browser, including session-local
+        // Word import and Save as PDF print-to-PDF. Markion's complete
         // contribution is this read-only immutable handoff, so successful,
         // failed, and cancelled browser work must have the same app state.
-        for _browser_outcome in ["success", "failure", "cancelled"] {
+        for _browser_outcome in [
+            "success",
+            "failure",
+            "cancelled",
+            "word-import-success",
+            "word-import-failure",
+            "save-pdf-print",
+            "save-pdf-cancel",
+        ] {
             let snapshot = build_publishing_snapshot(&tab.document, app.language.code());
             assert_eq!(snapshot.markdown.as_ref(), text);
         }
@@ -3068,7 +3077,8 @@ fn preferences_panel_bodies_render_with_draggable_scroll_handles_on_both_tabs(
     let appearance_y = app.update(cx, |app, _| {
         let max = f32::from(app.preferences_appearance_scroll.max_offset().height).max(0.);
         let y = px(-80f32.min(max));
-        app.preferences_appearance_scroll.set_offset(point(px(0.), y));
+        app.preferences_appearance_scroll
+            .set_offset(point(px(0.), y));
         y
     });
     cx.run_until_parked();

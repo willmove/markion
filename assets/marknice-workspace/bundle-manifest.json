@@ -1,113 +1,131 @@
 {
-  "import_format_version": 1,
-  "source_repository": "https://github.com/willmove/marknice",
-  "source_commit": "c009c1ec7e7c92f89afa5a32edcb126b5296bda7",
-  "third_party": [
-    {
-      "name": "MarkNice",
-      "version": "c009c1ec7e7c92f89afa5a32edcb126b5296bda7",
-      "license": "MIT",
-      "license_file": "LICENSE.marknice.txt"
-    },
-    {
-      "name": "marked",
-      "version": "15.0.12",
-      "license": "MIT",
-      "license_file": "LICENSE.marked.txt"
-    },
-    {
-      "name": "MathJax",
-      "version": "3.2.2",
-      "license": "Apache-2.0",
-      "license_file": "LICENSE.mathjax.txt"
-    },
-    {
-      "name": "html-docx-js",
-      "version": "0.3.1",
-      "license": "MIT",
-      "license_file": "LICENSE.html-docx-js.txt"
-    }
-  ],
-  "files": [
-    {
-      "path": "index.html",
-      "sha256": "06970562916de419e97eb149b225e2e9b8002c0da5b56ee8347a4c32555340f1"
-    },
-    {
-      "path": "LICENSE.html-docx-js.txt",
-      "sha256": "5746fa04896076c29db8ed46105d6ca2fe9b596550e8a7e0194c5fe2dd3e8a01"
-    },
-    {
-      "path": "LICENSE.marked.txt",
-      "sha256": "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
-    },
-    {
-      "path": "LICENSE.marknice.txt",
-      "sha256": "48e43d00c3a2ae3aff3b5ef23825064ece9efe9d8f27bd4421a2e0df35c4bd39"
-    },
-    {
-      "path": "LICENSE.mathjax.txt",
-      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
-    },
-    {
-      "path": "static/bridge.js",
-      "sha256": "175f249729c8e318845f7970e0a63b00cf0d615e09a32fd34608d12b2ac0ac01"
-    },
-    {
-      "path": "static/compatibility-corpus.json",
-      "sha256": "a7b3e78ae5db5b956ba6557c3fc080dce6fc55efd3330ffdba45e7a3275e34aa"
-    },
-    {
-      "path": "static/compatibility-golden.json",
-      "sha256": "0c4045714c837051b078f08165814ac04fc9ed23c921e6f062b206ab921b26d5"
-    },
-    {
-      "path": "static/docx-compatibility-fixture.json",
-      "sha256": "658fa1b6c54498e4646570f3d6874d30512d49036ddc5601ade47fd1ded6bb3c"
-    },
-    {
-      "path": "static/export-runtime.js",
-      "sha256": "54270f685bb690fe7da1bcb50fa58d823edb35bd207d9ac9289190a12a7cf477"
-    },
-    {
-      "path": "static/marknice-format-runtime.js",
-      "sha256": "b8583f9713374348173f5309e6826d3452fd9096144957bf6c5d4f345fc8dcb6"
-    },
-    {
-      "path": "static/marknice-word-runtime.js",
-      "sha256": "7a68555795b74fd7df4e644bc4c3a7e7c570cec05be4790771466b611f20c929"
-    },
-    {
-      "path": "static/math-runtime.js",
-      "sha256": "cbfb5d80eb094ef542897e49d86555f91146371dace87c0706704b5426e5aa38"
-    },
-    {
-      "path": "static/self-test.html",
-      "sha256": "330020be3f0aeface6fdb78b488a5897e970093b51312eb69010256d8e6d8e18"
-    },
-    {
-      "path": "static/self-test.js",
-      "sha256": "32150e169b68b693c6f96b02d4c6603338dcc3f7a0eff2b7e304a8c79029c203"
-    },
-    {
-      "path": "static/theme-runtime.js",
-      "sha256": "46b698699d618ad3518d83b5d81bb425cd42f317b4e3e4c468cf65429cc56628"
-    },
-    {
-      "path": "static/vendor/html-docx.js",
-      "sha256": "e5b9717420117a9ee585538c8263e8cf3f56822cd3994b9402a08e8f1dd81cb9"
-    },
-    {
-      "path": "static/vendor/marked.umd.js",
-      "sha256": "d7931d1cd7bf727dd756c871637edcc9e0f8538003b927368400ec1ee47a9dd9"
-    },
-    {
-      "path": "static/vendor/tex-svg-full.js",
-      "sha256": "a4354ff94fd868aea0cc6eaaa79a57fda0588646fc46ee3700a349ee0a11cbe6"
-    },
-    {
-      "path": "static/workspace.css",
-      "sha256": "de18a9fb81ad0799f879e1f8563a681cc8e1fbf2f042512cae64d4c070ca81c9"
-    }
-  ]
+    "import_format_version":  1,
+    "source_repository":  "https://github.com/willmove/marknice",
+    "source_commit":  "c009c1ec7e7c92f89afa5a32edcb126b5296bda7",
+    "third_party":  [
+                        {
+                            "name":  "MarkNice",
+                            "version":  "c009c1ec7e7c92f89afa5a32edcb126b5296bda7",
+                            "license":  "MIT",
+                            "license_file":  "LICENSE.marknice.txt"
+                        },
+                        {
+                            "name":  "marked",
+                            "version":  "15.0.12",
+                            "license":  "MIT",
+                            "license_file":  "LICENSE.marked.txt"
+                        },
+                        {
+                            "name":  "MathJax",
+                            "version":  "3.2.2",
+                            "license":  "Apache-2.0",
+                            "license_file":  "LICENSE.mathjax.txt"
+                        },
+                        {
+                            "name":  "html-docx-js",
+                            "version":  "0.3.1",
+                            "license":  "MIT",
+                            "license_file":  "LICENSE.html-docx-js.txt"
+                        },
+                        {
+                            "name":  "JSZip",
+                            "version":  "3.10.1",
+                            "license":  "MIT",
+                            "license_file":  "LICENSE.jszip.txt"
+                        }
+                    ],
+    "files":  [
+                  {
+                      "path":  "index.html",
+                      "sha256":  "a6fe0494278648e32409a61b9a7c2feb750848ac1f94c6a4d09c409491ea9d69"
+                  },
+                  {
+                      "path":  "LICENSE.html-docx-js.txt",
+                      "sha256":  "5746fa04896076c29db8ed46105d6ca2fe9b596550e8a7e0194c5fe2dd3e8a01"
+                  },
+                  {
+                      "path":  "LICENSE.jszip.txt",
+                      "sha256":  "566c953c6090b1218ca6217dd7359d45dde46581968586dc607d59a78af6a9c4"
+                  },
+                  {
+                      "path":  "LICENSE.marked.txt",
+                      "sha256":  "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
+                  },
+                  {
+                      "path":  "LICENSE.marknice.txt",
+                      "sha256":  "48e43d00c3a2ae3aff3b5ef23825064ece9efe9d8f27bd4421a2e0df35c4bd39"
+                  },
+                  {
+                      "path":  "LICENSE.mathjax.txt",
+                      "sha256":  "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+                  },
+                  {
+                      "path":  "static/bridge.js",
+                      "sha256":  "6c5c25aadf048636180a96e60e95507224ce23a631476902905499cec5f026d5"
+                  },
+                  {
+                      "path":  "static/compatibility-corpus.json",
+                      "sha256":  "a7b3e78ae5db5b956ba6557c3fc080dce6fc55efd3330ffdba45e7a3275e34aa"
+                  },
+                  {
+                      "path":  "static/compatibility-golden.json",
+                      "sha256":  "0c4045714c837051b078f08165814ac04fc9ed23c921e6f062b206ab921b26d5"
+                  },
+                  {
+                      "path":  "static/docx-compatibility-fixture.json",
+                      "sha256":  "658fa1b6c54498e4646570f3d6874d30512d49036ddc5601ade47fd1ded6bb3c"
+                  },
+                  {
+                      "path":  "static/export-runtime.js",
+                      "sha256":  "7c5a8ef23686cac89e038bc158c041657830e0e47dc8042b5de38b616ae57d36"
+                  },
+                  {
+                      "path":  "static/marknice-format-runtime.js",
+                      "sha256":  "b8583f9713374348173f5309e6826d3452fd9096144957bf6c5d4f345fc8dcb6"
+                  },
+                  {
+                      "path":  "static/marknice-word-import-runtime.js",
+                      "sha256":  "db88f665dc95711b2c3f5ec49d6e01072e3b1237003db460a89dc09e2ea8b68a"
+                  },
+                  {
+                      "path":  "static/marknice-word-runtime.js",
+                      "sha256":  "7a68555795b74fd7df4e644bc4c3a7e7c570cec05be4790771466b611f20c929"
+                  },
+                  {
+                      "path":  "static/math-runtime.js",
+                      "sha256":  "cbfb5d80eb094ef542897e49d86555f91146371dace87c0706704b5426e5aa38"
+                  },
+                  {
+                      "path":  "static/self-test.html",
+                      "sha256":  "3b9d506ac73421534fb5a6ae3bb449f3306f2b33adc6194d551f89323ccbbe0c"
+                  },
+                  {
+                      "path":  "static/self-test.js",
+                      "sha256":  "50e621a51a5735a436d2f1088260cd608796dbeeb45b80d1b6810b2cb2d7f9d6"
+                  },
+                  {
+                      "path":  "static/theme-runtime.js",
+                      "sha256":  "46b698699d618ad3518d83b5d81bb425cd42f317b4e3e4c468cf65429cc56628"
+                  },
+                  {
+                      "path":  "static/vendor/html-docx.js",
+                      "sha256":  "e5b9717420117a9ee585538c8263e8cf3f56822cd3994b9402a08e8f1dd81cb9"
+                  },
+                  {
+                      "path":  "static/vendor/jszip.min.js",
+                      "sha256":  "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e"
+                  },
+                  {
+                      "path":  "static/vendor/marked.umd.js",
+                      "sha256":  "d7931d1cd7bf727dd756c871637edcc9e0f8538003b927368400ec1ee47a9dd9"
+                  },
+                  {
+                      "path":  "static/vendor/tex-svg-full.js",
+                      "sha256":  "a4354ff94fd868aea0cc6eaaa79a57fda0588646fc46ee3700a349ee0a11cbe6"
+                  },
+                  {
+                      "path":  "static/workspace.css",
+                      "sha256":  "953379bbb25c182c959d25e508186afbd632c52f98725ed38737717473691a50"
+                  }
+              ]
 }

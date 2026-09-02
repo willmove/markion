@@ -12,17 +12,25 @@
   <script defer src="static/bridge.js"></script>
   <script defer src="static/theme-runtime.js"></script>
   <script defer src="static/marknice-format-runtime.js"></script>
+  <script defer src="static/vendor/jszip.min.js"></script>
+  <script defer src="static/marknice-word-import-runtime.js"></script>
   <script defer src="static/vendor/html-docx.js"></script>
   <script defer src="static/marknice-word-runtime.js"></script>
   <script defer src="static/export-runtime.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <div>
+    <div class="topbar-brand">
       <strong>Markion · MarkNice</strong>
       <span id="documentName" class="document-name"></span>
     </div>
-    <span id="status" role="status" aria-live="polite"></span>
+    <div class="topbar-actions">
+      <span id="status" role="status" aria-live="polite"></span>
+      <button id="modeToggleBtn" class="mode-toggle" type="button" aria-label="Toggle dark mode">
+        <svg id="sunIcon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg id="moonIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
   </header>
   <aside class="disclosure">
     <strong id="sessionDisclosure"></strong>
@@ -30,31 +38,47 @@
   </aside>
   <main class="workspace">
     <section class="editor-panel">
-      <h1 id="editorHeading">Markdown</h1>
+      <div class="panel-header">
+        <div class="panel-dot red"></div>
+        <div class="panel-dot yellow"></div>
+        <div class="panel-dot green"></div>
+        <span class="panel-title" id="editorHeading">Markdown</span>
+      </div>
+      <div class="panel-toolbar">
+        <label class="file-upload-btn" id="importWordLabel" title="Import Word (.docx)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span id="importWordText">导入 Word</span>
+          <input type="file" id="wordFileInput" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+        </label>
+      </div>
       <div id="markdownFormatToolbar" class="markdown-format-toolbar" role="toolbar" aria-label="Markdown formatting">
-        <button type="button" data-md-action="heading1"><span aria-hidden="true">H1</span></button>
-        <button type="button" data-md-action="heading2"><span aria-hidden="true">H2</span></button>
-        <button type="button" data-md-action="heading3"><span aria-hidden="true">H3</span></button>
-        <span class="format-separator" aria-hidden="true"></span>
-        <button type="button" data-md-action="bold"><strong aria-hidden="true">B</strong></button>
-        <button type="button" data-md-action="italic"><em aria-hidden="true">I</em></button>
-        <button type="button" data-md-action="underline"><u aria-hidden="true">U</u></button>
-        <span class="format-separator" aria-hidden="true"></span>
-        <button type="button" data-md-action="orderedList"><span aria-hidden="true">1.</span></button>
-        <button type="button" data-md-action="unorderedList"><span aria-hidden="true">•</span></button>
-        <button type="button" data-md-action="code"><span aria-hidden="true">&lt;/&gt;</span></button>
-        <button type="button" data-md-action="link"><span aria-hidden="true">↗</span></button>
-        <button type="button" data-md-action="quote"><span aria-hidden="true">❞</span></button>
-        <button type="button" data-md-action="codeBlock"><span aria-hidden="true">{ }</span></button>
-        <button type="button" data-md-action="image"><span aria-hidden="true">▧</span></button>
-        <button type="button" data-md-action="table"><span aria-hidden="true">▦</span></button>
+        <button type="button" class="format-btn heading-btn" data-md-action="heading1">H1</button>
+        <button type="button" class="format-btn heading-btn" data-md-action="heading2">H2</button>
+        <button type="button" class="format-btn heading-btn" data-md-action="heading3">H3</button>
+        <button type="button" class="format-btn" data-md-action="bold"><span class="format-bold-letter" aria-hidden="true">B</span></button>
+        <button type="button" class="format-btn" data-md-action="italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4h8"/><path d="M6 20h8"/><path d="M14 4l-4 16"/></svg></button>
+        <button type="button" class="format-btn" data-md-action="underline"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v7a5 5 0 0 0 10 0V4"/><path d="M5 21h14"/></svg></button>
+        <button type="button" class="format-btn" data-md-action="orderedList"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h9"/><path d="M10 12h9"/><path d="M10 18h9"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M4 14h2l-2 4h2"/></svg></button>
+        <button type="button" class="format-btn" data-md-action="unorderedList"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/></svg></button>
+        <button type="button" class="format-btn" data-md-action="code"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 8l-4 4 4 4"/><path d="M14 8l4 4-4 4"/></svg></button>
+        <button type="button" class="format-btn" data-md-action="link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20l1.2-1.2"/></svg></button>
+        <button type="button" class="format-btn" data-md-action="quote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 11H6a4 4 0 0 0 4 4v2a6 6 0 0 1-6-6V7h6z"/><path d="M20 11h-4a4 4 0 0 0 4 4v2a6 6 0 0 1-6-6V7h6z"/></svg></button>
+        <button type="button" class="format-btn" data-md-action="codeBlock"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 13l-2 2 2 2"/><path d="M14 13l2 2-2 2"/></svg></button>
+        <button type="button" class="format-btn" data-md-action="image"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8.5 11a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/><path d="M21 16l-5-5L5 19"/></svg></button>
+        <button type="button" class="format-btn" data-md-action="table"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M3 16h18"/><path d="M9 4v16"/><path d="M15 4v16"/></svg></button>
       </div>
       <textarea id="markdown" spellcheck="true"></textarea>
     </section>
-    <section class="preview-panel">
-      <div class="toolbar">
-        <label for="themeSelect" id="themeLabel">主题</label>
-        <select id="themeSelect">
+    <section class="editor-panel">
+      <div class="panel-header">
+        <div class="panel-dot red"></div>
+        <div class="panel-dot yellow"></div>
+        <div class="panel-dot green"></div>
+        <span class="panel-title" id="previewHeading">公众号预览</span>
+      </div>
+      <div class="panel-toolbar">
+        <label class="toolbar-label" for="themeSelect" id="themeLabel">模板</label>
+        <select id="themeSelect" class="toolbar-select">
           <option value="claude">暖陶米白</option>
           <option value="minimal">极简留白</option>
           <option value="night">暗夜深色</option>
@@ -71,24 +95,50 @@
           <option value="newspaper">报刊体</option>
           <option value="warmred">暖阳红</option>
         </select>
-        <span id="fontSizeText">字号</span>
-        <button id="fontSizeDown" type="button" aria-label="减小字号">−</button>
-        <output id="fontSizeLabel">0</output>
-        <button id="fontSizeUp" type="button" aria-label="增大字号">+</button>
-        <span id="spacingText">段距</span>
-        <button id="paraSpacingDown" type="button" aria-label="减小段距">−</button>
-        <output id="paraSpacingLabel">0</output>
-        <button id="paraSpacingUp" type="button" aria-label="增大段距">+</button>
-        <button id="desktopModeBtn" class="active" type="button">桌面</button>
-        <button id="phoneModeBtn" type="button">手机</button>
-        <button id="copyMarkdownBtn" type="button">复制 Markdown</button>
-        <button id="downloadHtmlBtn" type="button">下载 HTML</button>
-        <button id="downloadDocxBtn" type="button">下载 DOCX</button>
-        <button id="copyBtn" class="primary" type="button">复制到公众号</button>
+        <span class="toolbar-label" id="fontSizeText">字号</span>
+        <div class="font-size-ctrl">
+          <button id="fontSizeDown" class="font-size-btn" type="button" aria-label="减小字号">−</button>
+          <span id="fontSizeLabel" class="font-size-label">0</span>
+          <button id="fontSizeUp" class="font-size-btn" type="button" aria-label="增大字号">+</button>
+        </div>
+        <span class="toolbar-label" id="spacingText">段距</span>
+        <div class="font-size-ctrl">
+          <button id="paraSpacingDown" class="font-size-btn" type="button" aria-label="减小段距">−</button>
+          <span id="paraSpacingLabel" class="font-size-label">0</span>
+          <button id="paraSpacingUp" class="font-size-btn" type="button" aria-label="增大段距">+</button>
+        </div>
+        <div class="preview-mode-toggle">
+          <button id="desktopModeBtn" class="mode-btn active" type="button" title="桌面预览">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </button>
+          <button id="phoneModeBtn" class="mode-btn" type="button" title="手机预览">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+          </button>
+        </div>
+        <button id="copyBtn" class="copy-btn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+          <span id="copyBtnLabel">复制到公众号</span>
+        </button>
+        <button id="copyMarkdownBtn" class="toolbar-btn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+          <span id="copyMarkdownLabel">复制 MD</span>
+        </button>
+        <button id="downloadHtmlBtn" class="toolbar-btn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span id="downloadHtmlLabel">存为 HTML</span>
+        </button>
+        <button id="savePdfBtn" class="toolbar-btn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+          <span id="savePdfLabel">存为 PDF</span>
+        </button>
+        <button id="downloadDocxBtn" class="toolbar-btn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span id="downloadDocxLabel">存为 Word</span>
+        </button>
       </div>
       <div id="warning" class="warning" hidden></div>
       <div id="previewContainer" class="preview-container">
-        <article id="preview"></article>
+        <article id="preview" class="preview-area"></article>
       </div>
     </section>
   </main>

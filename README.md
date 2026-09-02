@@ -123,19 +123,23 @@ PDF and DOCX try the absorbed Typune/pandoc export engine first. If pandoc or th
 
 Choose **Export → Publish for WeChat (MarkNice)** to open the active in-memory
 document in a private loopback workspace in your default browser. The bundled
-themes, renderer, math typesetting, and application scripts work offline.
-Formulas are typeset as self-contained inline SVG (MathJax), so they survive
-the WeChat editor's paste-time filtering without duplication. Browser
-edits stay in that tab and never write back to Markion. Managed local images
+editor skin tracks the pinned MarkNice editor section (dual cards, traffic-light
+headers, SVG toolbar, 375px phone frame) as closely as a local, non-marketing
+shell allows. Themes, renderer, math typesetting, and application scripts work
+offline. Formulas are typeset as self-contained inline SVG (MathJax), so they
+survive the WeChat editor's paste-time filtering without duplication. Browser
+edits stay in that tab and never write back to Markion. **Import Word** converts
+a `.docx` file only inside that browser session; recover it into Markion with
+**Copy MD** or by saving the session Markdown elsewhere. Managed local images
 can be previewed, but copying requires explicitly omitting them because a local
 blob cannot be published by WeChat; remote images may still contact their
-authored hosts. The workspace can also copy its exact current Markdown and
-download standalone themed HTML or a browser-generated MarkNice DOCX. HTML
-embeds self-contained SVG formulas and safely readable managed images; remote
-images remain
-remote. Browser DOCX targets Microsoft Word desktop and is distinct from
-Markion's native/Pandoc DOCX export. If clipboard permission or the two-hour
-session expires, allow the permission or relaunch from Markion.
+authored hosts. The workspace can also copy its exact current Markdown, save
+standalone themed HTML, save a browser-generated MarkNice Word file, or **Save
+as PDF** by printing the current themed sanitized preview (choose “Save as PDF”
+in the print dialog). Browser Word and PDF are distinct from Markion's
+native/Pandoc exporters. The workspace does not import Markdown files, PDFs, or
+local images, and it has no sample-document action. If clipboard permission or
+the two-hour session expires, allow the permission or relaunch from Markion.
 
 ## Performance
 

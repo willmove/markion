@@ -11,6 +11,8 @@
   <script defer src="self-test.js"></script>
   <script defer src="theme-runtime.js"></script>
   <script defer src="marknice-format-runtime.js"></script>
+  <script defer src="vendor/jszip.min.js"></script>
+  <script defer src="marknice-word-import-runtime.js"></script>
   <script defer src="vendor/html-docx.js"></script>
   <script defer src="marknice-word-runtime.js"></script>
   <script defer src="export-runtime.js"></script>
@@ -31,6 +33,42 @@
     <span id="fontSizeLabel"></span><button id="fontSizeDown"></button><button id="fontSizeUp"></button>
     <span id="documentName" hidden>launch.name.md</span>
     <article id="preview"></article>
+    <section id="skinFixture" class="workspace" hidden>
+      <section class="editor-panel">
+        <div class="panel-header">
+          <div class="panel-dot red"></div>
+          <div class="panel-dot yellow"></div>
+          <div class="panel-dot green"></div>
+          <span class="panel-title" id="editorHeading">Markdown input</span>
+        </div>
+        <label class="file-upload-btn" id="importWordLabel">
+          <span id="importWordText">Import Word</span>
+          <input type="file" id="wordFileInput" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+        </label>
+        <div class="markdown-format-toolbar">
+          <button type="button" class="format-btn heading-btn" data-md-action="heading1">H1</button>
+          <button type="button" class="format-btn" data-md-action="italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4h8"/></svg></button>
+        </div>
+      </section>
+      <section class="editor-panel">
+        <div class="panel-header">
+          <div class="panel-dot red"></div>
+          <div class="panel-dot yellow"></div>
+          <div class="panel-dot green"></div>
+          <span class="panel-title" id="previewHeading">WeChat preview</span>
+        </div>
+        <button id="desktopModeBtn" class="mode-btn active" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/></svg>
+        </button>
+        <button id="phoneModeBtn" class="mode-btn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/></svg>
+        </button>
+        <button id="savePdfBtn" class="toolbar-btn" type="button"><span id="savePdfLabel">Save as PDF</span></button>
+        <div id="previewContainer" class="preview-container">
+          <article class="preview-area"></article>
+        </div>
+      </section>
+    </section>
     <pre id="results"></pre>
   </main>
 </body>

@@ -10,7 +10,9 @@ $bundleRoot = Join-Path $repoRoot "assets\marknice-workspace"
 $staticRoot = Join-Path $bundleRoot "static"
 $vendorRoot = Join-Path $staticRoot "vendor"
 $htmlDocxVersion = "0.3.1"
+$jszipVersion = "3.10.1"
 $mathjaxVersion = "3.2.2"
+$wordImportMaxBytes = 20 * 1024 * 1024
 
 if ((git -C $Source rev-parse HEAD).Trim() -ne $expectedCommit) {
     throw "MarkNice source must be pinned at $expectedCommit"
@@ -104,6 +106,16 @@ Set-Content -LiteralPath (Join-Path $staticRoot "marknice-format-runtime.js") -V
 $wordRuntime = "/* Generated from MarkNice $expectedCommit by scripts/sync-marknice-workspace.ps1. */`n" +
     (Get-UniqueSourceRegion -Text $sourceText -StartMarker "// ===== Word export helpers =====" -EndMarker "// ===== Save as Word =====")
 Set-Content -LiteralPath (Join-Path $staticRoot "marknice-word-runtime.js") -Value $wordRuntime -Encoding utf8NoBOM
+$cssText = [System.IO.File]::ReadAllText((Join-Path $Source "src\styles.css"))
+$null = Get-UniqueSourceRegion -Text $cssText -StartMarker "/* ===== Editor Section ===== */" -EndMarker "/* ===== Footer ===== */"
+$null = Get-UniqueSourceRegion -Text $sourceText -StartMarker "// ===== Word (.docx) import =====" -EndMarker "// ===== Save as HTML ====="
+$htmlToMarkdown = Get-UniqueSourceRegion -Text $sourceText -StartMarker "// ===== HTML to Markdown converter =====" -EndMarker "// ===== Word (.docx) import ====="
+$mathNodeTex = Get-UniqueSourceRegion -Text $sourceText -StartMarker "function mathNodeTex(node, displayMode) {" -EndMarker "// Math extension for marked:"
+$parserText = [System.IO.File]::ReadAllText((Join-Path $Source "src\docx-parser.js"))
+$wordImportRuntime = "/* Generated from MarkNice $expectedCommit by scripts/sync-marknice-workspace.ps1. */`n" +
+    $parserText.TrimEnd() + "`n`n" + $mathNodeTex.TrimEnd() + "`n`n" + $htmlToMarkdown.TrimEnd() +
+    "`n`nwindow.MarkionWordImportRuntime = Object.freeze({ parseDocx: window.parseDocx, htmlToMarkdown });`n"
+[System.IO.File]::WriteAllText((Join-Path $staticRoot "marknice-word-import-runtime.js"), $wordImportRuntime, [System.Text.UTF8Encoding]::new($false))
 Copy-Item -LiteralPath (Join-Path $Source "LICENSE") -Destination (Join-Path $bundleRoot "LICENSE.marknice.txt") -Force
 
 if ($RefreshThirdParty) {
@@ -116,22 +128,27 @@ if ($RefreshThirdParty) {
         $markedArchive = (& npm pack marked@15.0.12 --pack-destination $refreshRoot --silent | Select-Object -Last 1).Trim()
         $mathjaxArchive = (& npm pack "mathjax@$mathjaxVersion" --pack-destination $refreshRoot --silent | Select-Object -Last 1).Trim()
         $htmlDocxArchive = (& npm pack "html-docx-js@$htmlDocxVersion" --pack-destination $refreshRoot --silent | Select-Object -Last 1).Trim()
-        if ($LASTEXITCODE -ne 0 -or -not $markedArchive -or -not $mathjaxArchive -or -not $htmlDocxArchive) {
+        $jszipArchive = (& npm pack "jszip@$jszipVersion" --pack-destination $refreshRoot --silent | Select-Object -Last 1).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $markedArchive -or -not $mathjaxArchive -or -not $htmlDocxArchive -or -not $jszipArchive) {
             throw "npm could not fetch the pinned renderer packages"
         }
         $markedExtract = Join-Path $refreshRoot "marked"
         $mathjaxExtract = Join-Path $refreshRoot "mathjax"
         $htmlDocxExtract = Join-Path $refreshRoot "html-docx-js"
-        New-Item -ItemType Directory -Path $markedExtract, $mathjaxExtract, $htmlDocxExtract | Out-Null
+        $jszipExtract = Join-Path $refreshRoot "jszip"
+        New-Item -ItemType Directory -Path $markedExtract, $mathjaxExtract, $htmlDocxExtract, $jszipExtract | Out-Null
         tar -xf (Join-Path $refreshRoot $markedArchive) -C $markedExtract
         tar -xf (Join-Path $refreshRoot $mathjaxArchive) -C $mathjaxExtract
         tar -xf (Join-Path $refreshRoot $htmlDocxArchive) -C $htmlDocxExtract
+        tar -xf (Join-Path $refreshRoot $jszipArchive) -C $jszipExtract
         Copy-Item -LiteralPath (Join-Path $markedExtract "package\lib\marked.umd.js") -Destination (Join-Path $vendorRoot "marked.umd.js") -Force
         Copy-Item -LiteralPath (Join-Path $markedExtract "package\LICENSE.md") -Destination (Join-Path $bundleRoot "LICENSE.marked.txt") -Force
         Copy-Item -LiteralPath (Join-Path $mathjaxExtract "package\es5\tex-svg-full.js") -Destination (Join-Path $vendorRoot "tex-svg-full.js") -Force
         Copy-Item -LiteralPath (Join-Path $mathjaxExtract "package\LICENSE") -Destination (Join-Path $bundleRoot "LICENSE.mathjax.txt") -Force
         Copy-Item -LiteralPath (Join-Path $htmlDocxExtract "package\dist\html-docx.js") -Destination (Join-Path $vendorRoot "html-docx.js") -Force
         Copy-Item -LiteralPath (Join-Path $htmlDocxExtract "package\LICENSE") -Destination (Join-Path $bundleRoot "LICENSE.html-docx-js.txt") -Force
+        Copy-Item -LiteralPath (Join-Path $jszipExtract "package\dist\jszip.min.js") -Destination (Join-Path $vendorRoot "jszip.min.js") -Force
+        Copy-Item -LiteralPath (Join-Path $jszipExtract "package\LICENSE.markdown") -Destination (Join-Path $bundleRoot "LICENSE.jszip.txt") -Force
     } finally {
         $resolvedRefresh = [System.IO.Path]::GetFullPath($refreshRoot)
         $resolvedTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
@@ -141,7 +158,7 @@ if ($RefreshThirdParty) {
     }
 }
 
-$requiredThirdParty = @("marked.umd.js", "tex-svg-full.js", "html-docx.js")
+$requiredThirdParty = @("marked.umd.js", "tex-svg-full.js", "html-docx.js", "jszip.min.js")
 foreach ($file in $requiredThirdParty) {
     if (-not (Test-Path -LiteralPath (Join-Path $vendorRoot $file) -PathType Leaf)) {
         throw "Missing vendored dependency $file; rerun with -RefreshThirdParty"
@@ -223,6 +240,7 @@ $manifest = [ordered]@{
         [ordered]@{ name = "marked"; version = "15.0.12"; license = "MIT"; license_file = "LICENSE.marked.txt" }
         [ordered]@{ name = "MathJax"; version = $mathjaxVersion; license = "Apache-2.0"; license_file = "LICENSE.mathjax.txt" }
         [ordered]@{ name = "html-docx-js"; version = $htmlDocxVersion; license = "MIT"; license_file = "LICENSE.html-docx-js.txt" }
+        [ordered]@{ name = "JSZip"; version = $jszipVersion; license = "MIT"; license_file = "LICENSE.jszip.txt" }
     )
     files = @($files)
 }
