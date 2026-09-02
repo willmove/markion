@@ -164,6 +164,7 @@ impl MarkionApp {
             markdown_reference_open: false,
             markdown_reference_scroll: ScrollHandle::new(),
             status: t(Language::default(), Msg::StatusReady).into(),
+            applied_window_title: None,
             publishing_service: None,
             browser_launcher: Arc::new(publishing::DefaultBrowserLauncher),
             git_branch_state: GitBranchState::default(),

@@ -2049,6 +2049,9 @@ struct MarkionApp {
     /// draggable right-side scrollbar when content overflows.
     markdown_reference_scroll: ScrollHandle,
     status: SharedString,
+    /// Last caption sent to the native window title. Compared before
+    /// `set_window_title` so unchanged identity does not hit the platform.
+    applied_window_title: Option<String>,
     /// Process-owned, lazily created loopback publishing service. `None`
     /// keeps ordinary startup/editing entirely free of bundle and socket work.
     publishing_service: Option<wechat_workspace::WorkspaceService>,

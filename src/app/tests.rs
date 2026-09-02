@@ -13260,6 +13260,58 @@ fn status_bar_context_follows_active_tab_switches(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui::test]
+fn window_title_follows_active_tab_and_dirty_state(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update_in(cx, |app, window, _| {
+        assert_eq!(app.desired_window_title(), "Markion - Untitled.md");
+        app.sync_window_title(window);
+        assert!(
+            !app.sync_window_title(window),
+            "unchanged identity must not hit the platform again"
+        );
+    });
+    assert_eq!(cx.window_title().as_deref(), Some("Markion - Untitled.md"));
+
+    app.update_in(cx, |app, window, _| {
+        let version = app.active_tab().document.version();
+        app.active_tab_mut().document.insert(0, "x");
+        assert!(app.active_tab().is_dirty());
+        assert_eq!(app.desired_window_title(), "Markion - Untitled.md *");
+        assert!(app.sync_window_title(window));
+        assert!(!app.sync_window_title(window));
+        assert_eq!(
+            app.active_tab().document.version(),
+            version + 1,
+            "title sync must not insert extra document versions"
+        );
+    });
+    assert_eq!(
+        cx.window_title().as_deref(),
+        Some("Markion - Untitled.md *")
+    );
+
+    app.update_in(cx, |app, window, cx| {
+        let named = MarkdownDocument::recovered("two", Some(PathBuf::from("notes.md")));
+        app.open_in_new_tab(named, cx);
+        assert_eq!(app.desired_window_title(), "Markion - notes.md *");
+        assert!(app.sync_window_title(window));
+    });
+    assert_eq!(cx.window_title().as_deref(), Some("Markion - notes.md *"));
+
+    app.update_in(cx, |app, window, cx| {
+        app.switch_active_tab(0, cx);
+        assert_eq!(app.desired_window_title(), "Markion - Untitled.md *");
+        assert!(app.sync_window_title(window));
+        assert!(!app.sync_window_title(window));
+    });
+    assert_eq!(
+        cx.window_title().as_deref(),
+        Some("Markion - Untitled.md *")
+    );
+}
+
 fn write_symbolic_git_head(git_dir: &Path, branch: &str) {
     fs::create_dir_all(git_dir).unwrap();
     fs::write(git_dir.join("HEAD"), format!("ref: refs/heads/{branch}\n")).unwrap();
@@ -13469,8 +13521,10 @@ fn localized_status_context_preserves_values_and_transient_feedback() {
         "5 matches",
         "Save failed: denied",
     ] {
-        let rendered = status_bar_feedback("note.md", true, "Modified", feedback);
-        assert!(rendered.contains("note.md *"));
+        let rendered = status_bar_feedback("Modified", feedback);
+        assert!(!rendered.contains("Markion -"));
+        assert!(!rendered.contains("note.md *"));
+        assert!(rendered.starts_with("Modified | "));
         assert!(rendered.ends_with(feedback));
     }
 
@@ -13480,6 +13534,22 @@ fn localized_status_context_preserves_values_and_transient_feedback() {
     }
     .localized(Language::En);
     assert_eq!(without_git.branch, None);
+}
+
+#[test]
+fn window_title_formats_brand_filename_and_dirty_marker() {
+    assert_eq!(window_title("notes.md", false), "Markion - notes.md");
+    assert_eq!(window_title("notes.md", true), "Markion - notes.md *");
+    assert_eq!(
+        window_title(markion::title_from_path(None).as_ref(), false),
+        "Markion - Untitled.md"
+    );
+    assert_eq!(
+        window_title(markion::title_from_path(None).as_ref(), true),
+        "Markion - Untitled.md *"
+    );
+    assert_eq!(window_title("photo.png", false), "Markion - photo.png");
+    assert!(!window_title("photo.png", false).contains('*'));
 }
 
 #[test]
@@ -13501,6 +13571,8 @@ fn status_bar_layout_is_single_row_clipped_and_keeps_io_out_of_render() {
     assert!(status_bar.contains(".max_w(px(160.))"));
     assert!(status_bar.contains(".overflow_hidden()"));
     assert!(!root_view.contains("resolve_git_branch"));
+    assert!(root_view.contains("sync_window_title"));
+    assert!(!root_view.contains("Markion - {title}"));
 
     let status_source = include_str!("status_bar.rs");
     assert!(status_source.contains("background_executor()"));

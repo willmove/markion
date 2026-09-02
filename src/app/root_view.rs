@@ -113,7 +113,7 @@ impl Render for MarkionApp {
                 });
             self.reconcile_sync_scroll(cx);
         }
-        let title = self.active_tab().title();
+        self.sync_window_title(window);
         let is_dirty = self.active_tab().is_dirty();
         let save_state = t(
             self.language,
@@ -124,9 +124,9 @@ impl Render for MarkionApp {
             },
         );
         let status_feedback = if active_is_image {
-            format!("Markion - {title} | {}", self.status)
+            self.status.to_string()
         } else {
-            status_bar_feedback(title.as_str(), is_dirty, save_state, self.status.as_ref())
+            status_bar_feedback(save_state, self.status.as_ref())
         };
         let LocalizedStatusBarContext {
             characters: status_characters,

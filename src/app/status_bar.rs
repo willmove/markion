@@ -66,14 +66,13 @@ pub(super) fn status_bar_context(
     }
 }
 
-pub(super) fn status_bar_feedback(
-    title: &str,
-    is_dirty: bool,
-    save_state: &str,
-    status: &str,
-) -> String {
+pub(super) fn window_title(title: &str, is_dirty: bool) -> String {
     let dirty_marker = if is_dirty { " *" } else { "" };
-    format!("Markion - {title}{dirty_marker} | {save_state} | {status}")
+    format!("{MARKION_WINDOW_TITLE} - {title}{dirty_marker}")
+}
+
+pub(super) fn status_bar_feedback(save_state: &str, status: &str) -> String {
+    format!("{save_state} | {status}")
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -200,6 +199,23 @@ fn symbolic_branch_from_head(head: &str) -> Option<String> {
 }
 
 impl MarkionApp {
+    pub(super) fn desired_window_title(&self) -> String {
+        let tab = self.active_tab();
+        window_title(&tab.title(), tab.is_dirty())
+    }
+
+    /// Apply the native window caption when it differs from the last value
+    /// sent to the platform. Returns whether a platform update ran.
+    pub(super) fn sync_window_title(&mut self, window: &mut Window) -> bool {
+        let desired = self.desired_window_title();
+        if self.applied_window_title.as_deref() == Some(desired.as_str()) {
+            return false;
+        }
+        window.set_window_title(&desired);
+        self.applied_window_title = Some(desired);
+        true
+    }
+
     pub(super) fn current_status_bar_context(&self) -> StatusBarContext {
         status_bar_context(
             self.active_tab(),

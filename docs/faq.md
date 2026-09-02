@@ -122,7 +122,7 @@ delay_secs = 5        # idle interval in seconds, 1–300 (Preferences stepper)
 
 Untitled documents always use recovery copies only. If Markion exits unexpectedly, the next launch offers to restore work from the recovery directory.
 
-The title bar shows a `*` suffix next to the file name when there are unsaved changes.
+The native window title shows the active file name after Markion, and appends a `*` suffix when there are unsaved changes.
 
 ## Themes
 
