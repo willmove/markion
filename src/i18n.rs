@@ -520,6 +520,8 @@ pub enum Msg {
     DialogAboutTitle,
     /// Markdown Reference overlay title.
     DialogMarkdownReferenceTitle,
+    /// Markdown Reference overlay Kenhuang tutorial link label.
+    DialogMarkdownReferenceTutorial,
     /// About version line. {0}=running version.
     DialogAboutVersion,
     /// About product description.
@@ -3210,6 +3212,7 @@ fn en(msg: Msg) -> &'static str {
 
         Msg::DialogAboutTitle => "About Markion",
         Msg::DialogMarkdownReferenceTitle => "Markdown Reference",
+        Msg::DialogMarkdownReferenceTutorial => "Kenhuang Markdown Tutorial",
         Msg::DialogAboutVersion => "Version: {0}",
         Msg::DialogAboutDescription => "A local-first Markdown editor built with Rust and GPUI.",
         Msg::DialogAboutProjectWebsite => "Project website",
@@ -3741,6 +3744,7 @@ fn ja(msg: Msg) -> &'static str {
 
         Msg::DialogAboutTitle => "Markionについて",
         Msg::DialogMarkdownReferenceTitle => "Markdownリファレンス",
+        Msg::DialogMarkdownReferenceTutorial => "Kenhuang Markdownチュートリアル",
         Msg::DialogAboutVersion => "バージョン: {0}",
         Msg::DialogAboutDescription => {
             "RustとGPUIで構築されたローカルファーストのMarkdownエディタです。"
@@ -4258,6 +4262,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "Plus tard",
         Msg::DialogAboutTitle => "À propos de Markion",
         Msg::DialogMarkdownReferenceTitle => "Référence Markdown",
+        Msg::DialogMarkdownReferenceTutorial => "Tutoriel Markdown Kenhuang",
         Msg::DialogAboutVersion => "Version : {0}",
         Msg::DialogAboutDescription => {
             "Un éditeur Markdown local-first construit avec Rust et GPUI."
@@ -4779,6 +4784,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "Später",
         Msg::DialogAboutTitle => "Über Markion",
         Msg::DialogMarkdownReferenceTitle => "Markdown-Referenz",
+        Msg::DialogMarkdownReferenceTutorial => "Kenhuang Markdown-Tutorial",
         Msg::DialogAboutVersion => "Version: {0}",
         Msg::DialogAboutDescription => {
             "Ein lokal-first Markdown-Editor, entwickelt mit Rust und GPUI."
@@ -5300,6 +5306,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogButtonLater => "Más tarde",
         Msg::DialogAboutTitle => "Acerca de Markion",
         Msg::DialogMarkdownReferenceTitle => "Referencia de Markdown",
+        Msg::DialogMarkdownReferenceTutorial => "Tutorial de Markdown Kenhuang",
         Msg::DialogAboutVersion => "Versión: {0}",
         Msg::DialogAboutDescription => "Un editor Markdown local-first construido con Rust y GPUI.",
         Msg::DialogAboutProjectWebsite => "Sitio web del proyecto",
@@ -5814,6 +5821,7 @@ fn zh(msg: Msg) -> &'static str {
 
         Msg::DialogAboutTitle => "关于 Markion",
         Msg::DialogMarkdownReferenceTitle => "Markdown 参考",
+        Msg::DialogMarkdownReferenceTutorial => "垦荒学园 Markdown 教程",
         Msg::DialogAboutVersion => "版本：{0}",
         Msg::DialogAboutDescription => "一款使用 Rust 与 GPUI 构建的本地优先 Markdown 编辑器。",
         Msg::DialogAboutProjectWebsite => "项目网站",
@@ -6322,6 +6330,7 @@ fn zh_hant(msg: Msg) -> &'static str {
 
         Msg::DialogAboutTitle => "關於 Markion",
         Msg::DialogMarkdownReferenceTitle => "Markdown 參考",
+        Msg::DialogMarkdownReferenceTutorial => "墾荒學園 Markdown 教程",
         Msg::DialogAboutVersion => "版本：{0}",
         Msg::DialogAboutDescription => "一款使用 Rust 與 GPUI 打造的本機優先 Markdown 編輯器。",
         Msg::DialogAboutProjectWebsite => "專案網站",
@@ -7215,6 +7224,7 @@ mod tests {
             Msg::DialogButtonLater,
             Msg::DialogAboutTitle,
             Msg::DialogMarkdownReferenceTitle,
+            Msg::DialogMarkdownReferenceTutorial,
             Msg::DialogAboutVersion,
             Msg::DialogAboutDescription,
             Msg::DialogAboutProjectWebsite,

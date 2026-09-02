@@ -928,6 +928,7 @@ pub(super) fn markdown_reference_view(
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(app.tr(Msg::DialogMarkdownReferenceTitle)),
                 )
+                .child(markdown_tutorial_link_row(app, palette, cx))
                 .child(div().relative().w_full().max_h(px(420.)).child(body).child(
                     pane_scrollbar_view(
                         PaneScrollTarget::MarkdownReference,
@@ -956,6 +957,44 @@ pub(super) fn markdown_reference_view(
                                 }),
                             ),
                     ),
+                ),
+        )
+}
+
+fn markdown_tutorial_link_row(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let url = super::kenhuang_markdown_tutorial_url(app.language);
+    div()
+        .debug_selector(|| "markdown-reference-tutorial-row".to_string())
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(palette.muted)
+                .child(app.tr(Msg::DialogMarkdownReferenceTutorial)),
+        )
+        .child(
+            div()
+                .id("markdown-reference-tutorial-link")
+                .debug_selector(|| "markdown-reference-tutorial-link".to_string())
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .text_color(palette.active_text)
+                .underline()
+                .hover(|style| style.bg(palette.active_bg))
+                .child(url)
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                        app.open_markdown_tutorial_link(cx);
+                    }),
                 ),
         )
 }

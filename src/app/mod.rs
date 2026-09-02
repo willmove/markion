@@ -181,6 +181,15 @@ const MARKION_PROJECT_WEBSITE_URL: &str = "https://markion.app";
 const GITHUB_REPO_URL: &str = "https://github.com/willmove/markion";
 const GITHUB_ISSUES_URL: &str = "https://github.com/willmove/markion/issues/new";
 const GITHUB_DOCS_URL: &str = "https://github.com/willmove/markion#readme";
+const KENHUANG_MARKDOWN_TUTORIAL_ZH_URL: &str = "https://kenhuang.com/markdown/";
+const KENHUANG_MARKDOWN_TUTORIAL_EN_URL: &str = "https://kenhuang.com/en/markdown/";
+
+fn kenhuang_markdown_tutorial_url(language: Language) -> &'static str {
+    match language {
+        Language::ZhHans | Language::ZhHant => KENHUANG_MARKDOWN_TUTORIAL_ZH_URL,
+        _ => KENHUANG_MARKDOWN_TUTORIAL_EN_URL,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AboutLink {

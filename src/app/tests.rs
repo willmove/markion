@@ -3801,6 +3801,11 @@ fn updated_default_shortcuts_and_markdown_reference_are_registered() {
             && root_view_source.contains("markdown-reference-scrollbar"),
         "Markdown Reference must use the shared right-side pane scrollbar"
     );
+    assert!(
+        root_view_source.contains("markdown-reference-tutorial-row")
+            && root_view_source.contains("markdown-reference-tutorial-link"),
+        "Markdown Reference must expose the Kenhuang tutorial link row"
+    );
 
     for language in Language::all() {
         let sections = markdown_reference(*language);
@@ -3895,6 +3900,125 @@ fn markdown_reference_opens_and_closes_without_touching_document(cx: &mut TestAp
         assert_eq!(app.active_tab().document.version(), before.2);
         assert_eq!(app.active_tab().is_dirty(), before.3);
     });
+}
+
+#[test]
+fn kenhuang_markdown_tutorial_url_follows_interface_language() {
+    assert_eq!(
+        kenhuang_markdown_tutorial_url(Language::ZhHans),
+        KENHUANG_MARKDOWN_TUTORIAL_ZH_URL
+    );
+    assert_eq!(
+        kenhuang_markdown_tutorial_url(Language::ZhHant),
+        KENHUANG_MARKDOWN_TUTORIAL_ZH_URL
+    );
+    for language in [
+        Language::En,
+        Language::Ja,
+        Language::Fr,
+        Language::De,
+        Language::Es,
+    ] {
+        assert_eq!(
+            kenhuang_markdown_tutorial_url(language),
+            KENHUANG_MARKDOWN_TUTORIAL_EN_URL,
+            "{language:?} should use the English tutorial URL"
+        );
+    }
+}
+
+#[test]
+fn markdown_reference_tutorial_messages_cover_every_supported_language() {
+    for &language in Language::all() {
+        assert!(
+            !t(language, Msg::DialogMarkdownReferenceTutorial)
+                .trim()
+                .is_empty(),
+            "empty tutorial label for {language:?}"
+        );
+        assert_eq!(
+            kenhuang_markdown_tutorial_url(language),
+            if matches!(language, Language::ZhHans | Language::ZhHant) {
+                KENHUANG_MARKDOWN_TUTORIAL_ZH_URL
+            } else {
+                KENHUANG_MARKDOWN_TUTORIAL_EN_URL
+            }
+        );
+    }
+}
+
+#[gpui::test]
+fn markdown_reference_tutorial_link_opens_url_and_keeps_overlay_open(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("keep me"))];
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    let before = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.text().to_string(),
+            app.active_tab().document.version(),
+            app.active_tab().is_dirty(),
+        )
+    });
+
+    cx.dispatch_action(ShowMarkdownReference);
+    cx.run_until_parked();
+
+    let tutorial = cx
+        .debug_bounds("markdown-reference-tutorial-link")
+        .expect("tutorial link should render");
+    let body = cx
+        .debug_bounds("markdown-reference-body")
+        .expect("syntax body should render");
+    assert!(
+        tutorial.center().y < body.origin.y,
+        "tutorial link must render above the scrollable syntax body"
+    );
+
+    cx.simulate_click(tutorial.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some(KENHUANG_MARKDOWN_TUTORIAL_EN_URL)
+    );
+    app.update(cx, |app, _| {
+        assert!(app.markdown_reference_open);
+        assert_eq!(app.active_tab().document.text(), before.0);
+        assert_eq!(app.active_tab().document.version(), before.1);
+        assert_eq!(app.active_tab().is_dirty(), before.2);
+    });
+}
+
+#[gpui::test]
+fn markdown_reference_tutorial_link_uses_chinese_url_for_zh_hans(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::ZhHans;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    cx.dispatch_action(ShowMarkdownReference);
+    cx.run_until_parked();
+
+    let tutorial = cx
+        .debug_bounds("markdown-reference-tutorial-link")
+        .expect("tutorial link should render");
+    cx.simulate_click(tutorial.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some(KENHUANG_MARKDOWN_TUTORIAL_ZH_URL)
+    );
+    app.update(cx, |app, _| assert!(app.markdown_reference_open));
 }
 
 #[test]

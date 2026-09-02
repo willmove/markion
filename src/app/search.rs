@@ -328,6 +328,10 @@ impl MarkionApp {
         cx.open_url(link.url());
     }
 
+    pub(super) fn open_markdown_tutorial_link(&mut self, cx: &mut Context<Self>) {
+        cx.open_url(super::kenhuang_markdown_tutorial_url(self.language));
+    }
+
     pub(super) fn report_issue(
         &mut self,
         _: &ReportIssue,
