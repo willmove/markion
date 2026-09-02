@@ -358,9 +358,10 @@ impl MarkionApp {
     /// Tab target for a non-explicit open (File → Open, file-tree click,
     /// drag-drop, Open Recent), resolved from the persisted
     /// open-in-current-tab preference. While the preference is on, only a
-    /// safe-to-replace active tab (image, untitled, or clean document) is
-    /// replaced in place; a dirty editable tab diverts the open to a new tab
-    /// so gestures never prompt and never discard unsaved work.
+    /// safe-to-replace active tab (image or a clean, non-dirty document) is
+    /// replaced in place; a dirty editable tab — named or untitled — diverts
+    /// the open to a new tab so gestures never prompt and never discard
+    /// unsaved work.
     pub(super) fn default_open_intent(&self) -> OpenPathIntent {
         if !self.open_in_current_tab || !self.active_tab().is_safe_to_replace() {
             OpenPathIntent::OpenInNewTab

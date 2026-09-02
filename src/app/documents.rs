@@ -26,24 +26,13 @@ impl MarkionApp {
     pub(super) fn open_document(
         &mut self,
         _: &OpenDocument,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // File → Open follows the default open-target preference. A dirty
-        // guard is needed only when that resolution can replace the active
-        // tab (open-in-current-tab on); the OS picker is modal, so the
-        // resolution cannot drift between this guard and the open below.
-        if self.default_open_intent() == OpenPathIntent::ReplaceActive {
-            self.confirm_discard_then(
-                window,
-                cx,
-                Msg::DialogDiscardTitle,
-                Msg::DialogDiscardOpenDetail,
-                Self::open_document_confirmed,
-            );
-        } else {
-            Self::open_document_confirmed(self, cx);
-        }
+        // active document (named or untitled) resolves to OpenInNewTab, so
+        // this never replaces unsaved work and needs no discard guard.
+        Self::open_document_confirmed(self, cx);
     }
 
     pub(super) fn open_document_confirmed(&mut self, cx: &mut Context<Self>) {
@@ -194,16 +183,49 @@ impl MarkionApp {
         .detach();
     }
 
-    /// Action: close the active tab. If it is dirty, confirm first. Closing the
-    /// last tab leaves a fresh untitled document so the window stays open.
+    /// Action: close the active tab. If it is dirty, offer Save / Don't Save /
+    /// Cancel. Closing the last tab leaves a fresh untitled document so the
+    /// window stays open.
     pub(super) fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
-        self.confirm_discard_then(
-            window,
-            cx,
-            Msg::DialogDiscardTitle,
-            Msg::DialogDiscardNewDetail,
-            Self::close_tab_confirmed,
-        );
+        if !self.active_tab().requires_discard_confirmation() {
+            self.close_tab_confirmed(cx);
+            return;
+        }
+
+        let target = TabContextTarget::capture(self.active_tab, self.active_tab());
+        let title = self.trf(Msg::DialogCloseUnsavedTitle, &[&self.active_tab().title()]);
+        let detail = t(self.language, Msg::DialogCloseUnsavedDetail);
+        let buttons = self.unsaved_choice_buttons();
+        let answer = window.prompt(PromptLevel::Warning, &title, Some(detail), &buttons, cx);
+        self.active_menu = None;
+        self.confirming_close = true;
+        self.status = t(self.language, Msg::StatusWaitingConfirm).into();
+        cx.notify();
+        let window_handle = window.window_handle();
+
+        cx.spawn(async move |this, cx| {
+            let choice = UnsavedChoice::from_prompt(answer.await);
+            match choice {
+                UnsavedChoice::Save => {
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |app, cx| {
+                            app.save_then_close_tab(target, window, cx);
+                        });
+                    });
+                }
+                UnsavedChoice::Discard => {
+                    let _ = this.update(cx, |app, cx| {
+                        app.close_tab_if_target(&target, cx);
+                    });
+                }
+                UnsavedChoice::Cancel => {
+                    let _ = this.update(cx, |app, cx| {
+                        app.abort_unsaved_prompt(true, cx);
+                    });
+                }
+            }
+        })
+        .detach();
     }
 
     pub(super) fn close_tab_confirmed(&mut self, cx: &mut Context<Self>) {
@@ -237,6 +259,306 @@ impl MarkionApp {
         self.status = t(self.language, Msg::StatusNewDocument).into();
         self.reveal_active_tab_in_strip();
         cx.notify();
+    }
+
+    fn index_of_target(&self, target: &TabContextTarget) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| target.matches_document_identity(tab))
+    }
+
+    fn close_tab_if_target(&mut self, target: &TabContextTarget, cx: &mut Context<Self>) {
+        let Some(index) = self.index_of_target(target) else {
+            self.confirming_close = false;
+            cx.notify();
+            return;
+        };
+        if index != self.active_tab {
+            self.switch_active_tab(index, cx);
+        }
+        self.confirming_close = false;
+        self.close_tab_confirmed(cx);
+    }
+
+    pub(super) fn try_save_named_tab(&mut self, index: usize) -> NamedSave {
+        let (display_path, saved_path, save_result) = {
+            let Some(state) = self
+                .tabs
+                .get_mut(index)
+                .and_then(|tab| tab.document_tab_mut())
+            else {
+                return NamedSave::Missing;
+            };
+            if state.document.path().is_none() {
+                return NamedSave::Untitled;
+            }
+            let display_path = state
+                .document
+                .path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
+            let saved_path = state.document.path().map(Path::to_path_buf);
+            let save_result = state.document.save();
+            if save_result.is_ok() {
+                state.external_conflict = None;
+                if let Some(recovery) = state.last_recovery_file.take() {
+                    let _ = delete_recovery_file(recovery);
+                }
+            }
+            (display_path, saved_path, save_result)
+        };
+        match save_result {
+            Ok(()) => {
+                if let Some(path) = saved_path.as_ref() {
+                    self.record_recent_path(path);
+                } else {
+                    self.sync_and_persist_session();
+                }
+                self.status = self.trf(Msg::StatusSaved, &[&display_path]);
+                NamedSave::Saved
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => NamedSave::Conflict,
+            Err(err) => {
+                self.status = self.trf(Msg::StatusSaveFailed, &[&err.to_string()]);
+                NamedSave::Failed
+            }
+        }
+    }
+
+    fn apply_save_as_on_target(
+        &mut self,
+        target: &TabContextTarget,
+        path: &Path,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(index) = self.index_of_target(target) else {
+            return false;
+        };
+        if index != self.active_tab {
+            self.switch_active_tab(index, cx);
+        }
+        let display_path = path.display().to_string();
+        let save_result = self.tabs[index]
+            .document_tab_mut()
+            .map(|tab| tab.document.save_as(path));
+        match save_result {
+            Some(Ok(())) => {
+                if let Some(state) = self.tabs[index].document_tab_mut() {
+                    state.external_conflict = None;
+                    if let Some(recovery) = state.last_recovery_file.take() {
+                        let _ = delete_recovery_file(recovery);
+                    }
+                }
+                self.update_workspace_root_from_document(cx);
+                self.record_recent_path(path);
+                self.status = self.trf(Msg::StatusSaved, &[&display_path]);
+                true
+            }
+            Some(Err(err)) => {
+                self.status = self.trf(Msg::StatusSaveFailed, &[&err.to_string()]);
+                false
+            }
+            None => false,
+        }
+    }
+
+    fn present_external_save_conflict(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if index != self.active_tab {
+            self.switch_active_tab(index, cx);
+        }
+        if let Some(state) = self
+            .tabs
+            .get_mut(index)
+            .and_then(|tab| tab.document_tab_mut())
+        {
+            state.external_conflict = Some(DiskState::Modified);
+        }
+        self.confirming_close = false;
+        self.prompt_external_save_conflict(window, cx);
+    }
+
+    fn save_then_close_tab(
+        &mut self,
+        target: TabContextTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.index_of_target(&target) else {
+            self.confirming_close = false;
+            return;
+        };
+        match self.try_save_named_tab(index) {
+            NamedSave::Saved => self.close_tab_if_target(&target, cx),
+            NamedSave::Untitled => self.begin_save_as_then_close(target, window, cx),
+            NamedSave::Conflict => self.present_external_save_conflict(index, window, cx),
+            NamedSave::Failed | NamedSave::Missing => {
+                self.confirming_close = false;
+                cx.notify();
+            }
+        }
+    }
+
+    fn begin_save_as_then_close(
+        &mut self,
+        target: TabContextTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.index_of_target(&target) else {
+            self.confirming_close = false;
+            return;
+        };
+        if index != self.active_tab {
+            self.switch_active_tab(index, cx);
+        }
+        let directory = self.suggested_directory();
+        let suggested_name = self
+            .active_tab()
+            .document
+            .path()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled.md")
+            .to_string();
+        let save_future = prompt_for_save_path(
+            window,
+            &directory,
+            &suggested_name,
+            self.language,
+            SaveTarget::Markdown,
+        );
+        self.status = t(self.language, Msg::StatusChoosingSaveLocation).into();
+        cx.notify();
+        cx.spawn(async move |this, cx| match save_future.await {
+            Some(path) => {
+                let _ = this.update(cx, |app, cx| {
+                    if app.apply_save_as_on_target(&target, &path, cx) {
+                        app.close_tab_if_target(&target, cx);
+                    } else {
+                        app.confirming_close = false;
+                        cx.notify();
+                    }
+                });
+            }
+            None => {
+                let _ = this.update(cx, |app, cx| {
+                    app.abort_unsaved_prompt(true, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn prompt_save_as_for_target(
+        &mut self,
+        target: &TabContextTarget,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<std::pin::Pin<Box<dyn std::future::Future<Output = Option<PathBuf>> + 'static>>>
+    {
+        let index = self.index_of_target(target)?;
+        if index != self.active_tab {
+            self.switch_active_tab(index, cx);
+        }
+        let directory = self.suggested_directory();
+        let suggested_name = self
+            .active_tab()
+            .document
+            .path()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled.md")
+            .to_string();
+        self.status = t(self.language, Msg::StatusChoosingSaveLocation).into();
+        cx.notify();
+        Some(prompt_for_save_path(
+            window,
+            &directory,
+            &suggested_name,
+            self.language,
+            SaveTarget::Markdown,
+        ))
+    }
+
+    pub(super) async fn save_dirty_tabs_then_exit(
+        this: gpui::WeakEntity<Self>,
+        cx: &mut gpui::AsyncApp,
+        window_handle: gpui::AnyWindowHandle,
+        kind: UnsavedExitKind,
+        targets: Vec<TabContextTarget>,
+    ) {
+        for target in targets {
+            let named = match this.update(cx, |app, _| {
+                app.index_of_target(&target)
+                    .map(|index| app.try_save_named_tab(index))
+                    .unwrap_or(NamedSave::Missing)
+            }) {
+                Ok(named) => named,
+                Err(_) => return,
+            };
+            match named {
+                NamedSave::Saved | NamedSave::Missing => continue,
+                NamedSave::Untitled => {
+                    let save_future = match window_handle.update(cx, |_, window, cx| {
+                        this.update(cx, |app, cx| {
+                            app.prompt_save_as_for_target(&target, window, cx)
+                        })
+                    }) {
+                        Ok(Ok(Some(future))) => future,
+                        _ => {
+                            let _ = this.update(cx, |app, cx| app.abort_unsaved_prompt(true, cx));
+                            return;
+                        }
+                    };
+                    match save_future.await {
+                        Some(path) => {
+                            let saved = this
+                                .update(cx, |app, cx| {
+                                    app.apply_save_as_on_target(&target, &path, cx)
+                                })
+                                .unwrap_or(false);
+                            if !saved {
+                                let _ =
+                                    this.update(cx, |app, cx| app.abort_unsaved_prompt(true, cx));
+                                return;
+                            }
+                        }
+                        None => {
+                            let _ = this.update(cx, |app, cx| app.abort_unsaved_prompt(true, cx));
+                            return;
+                        }
+                    }
+                }
+                NamedSave::Conflict => {
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |app, cx| {
+                            if let Some(index) = app.index_of_target(&target) {
+                                app.present_external_save_conflict(index, window, cx);
+                            } else {
+                                app.abort_unsaved_prompt(true, cx);
+                            }
+                        });
+                    });
+                    return;
+                }
+                NamedSave::Failed => {
+                    let _ = this.update(cx, |app, cx| {
+                        app.confirming_close = false;
+                        cx.notify();
+                    });
+                    return;
+                }
+            }
+        }
+        let _ = this.update(cx, |app, cx| {
+            app.discard_all_tab_recovery_files();
+            app.finish_unsaved_exit(window_handle, kind, cx);
+        });
     }
 
     /// Close the tabs identity-matched by `targets` (indexes may have shifted

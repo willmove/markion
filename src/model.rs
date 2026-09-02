@@ -202,9 +202,10 @@ pub struct AppPreferences {
     pub show_hidden_files: bool,
     /// When enabled, opening a supported document or image through a
     /// non-explicit entry (File → Open, file-tree click, drag-and-drop,
-    /// Open Recent) replaces the active tab when that is safe (an image,
-    /// untitled, or clean document tab); a dirty active tab makes the open
-    /// divert to a new tab instead. Enabled by default.
+    /// Open Recent) replaces the active tab when that is safe (an image or
+    /// a clean, non-dirty document tab, including a pristine untitled or
+    /// welcome document); a dirty active tab — named or untitled — makes
+    /// the open divert to a new tab instead. Enabled by default.
     pub open_in_current_tab: bool,
     pub sidebar_visible: bool,
     pub sidebar_tab: SidebarTab,

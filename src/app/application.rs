@@ -1247,10 +1247,10 @@ impl MarkionApp {
         cx: &mut Context<Self>,
     ) {
         // Opening from the file tree follows the default open-target
-        // preference: a safe-to-replace active tab (image, untitled, or clean
-        // document) is replaced in place, anything else — including a dirty
-        // document — appends a new tab, so no dirty-guard prompt is ever
-        // needed here.
+        // preference: a safe-to-replace active tab (image or a clean
+        // document, including a pristine untitled/welcome tab) is replaced
+        // in place; a dirty document — named or untitled — appends a new
+        // tab, so no dirty-guard prompt is ever needed here.
         self.open_tree_file_confirmed(path, cx);
     }
 

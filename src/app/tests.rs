@@ -8586,7 +8586,11 @@ fn default_open_intent_replaces_only_safe_active_tabs(cx: &mut TestAppContext) {
         app
     });
     app.update(cx, |app, cx| {
-        // Untitled welcome tab → replace in place.
+        // Untitled welcome tab (pristine, not dirty) → replace in place.
+        assert!(
+            !app.active_tab().is_dirty(),
+            "welcome document starts clean"
+        );
         assert_eq!(app.default_open_intent(), OpenPathIntent::ReplaceActive);
         app.open_tree_file_confirmed(alpha.clone(), cx);
         assert_eq!(app.tabs.len(), 1);
@@ -8667,6 +8671,237 @@ fn gesture_open_with_dirty_tab_appends_and_preserves_work(cx: &mut TestAppContex
             Some(recovery.as_path()),
             "a gesture open must never delete a dirty tab's recovery snapshot"
         );
+    });
+}
+
+#[gpui::test]
+fn untitled_dirty_open_appends_and_preserves_work(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let other = dir.path().join("other.md");
+    let recent = dir.path().join("recent.md");
+    fs::write(&other, "other content").unwrap();
+    fs::write(&recent, "recent content").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = config_dir.path().join("config.toml");
+        app.open_in_current_tab = true;
+        app
+    });
+
+    let recovery = dir.path().join("recovery-untitled.md");
+    app.update(cx, |app, cx| {
+        assert!(app.active_tab().document.path().is_none());
+        app.active_tab_mut().push_undo_snapshot();
+        app.active_tab_mut()
+            .document
+            .set_text("unsaved untitled draft");
+        fs::write(&recovery, "recovery bytes").unwrap();
+        app.active_tab_mut().last_recovery_file = Some(recovery.clone());
+        assert!(app.active_tab().document.is_dirty());
+        assert_eq!(app.default_open_intent(), OpenPathIntent::OpenInNewTab);
+
+        app.open_tree_file_confirmed(other.clone(), cx);
+        assert_eq!(app.tabs.len(), 2, "untitled dirty must divert on tree open");
+        assert_eq!(app.active_tab().path(), Some(other.as_path()));
+        let draft = app.tabs[0].document_tab().unwrap();
+        assert_eq!(draft.document.text(), "unsaved untitled draft");
+        assert!(draft.document.is_dirty());
+        assert!(!draft.undo_stack.is_empty());
+        assert_eq!(
+            draft.last_recovery_file.as_deref(),
+            Some(recovery.as_path())
+        );
+        let preview = draft.document.preview_blocks_shared();
+        assert!(Arc::ptr_eq(
+            &preview,
+            &app.tabs[0].document.preview_blocks_shared()
+        ));
+
+        app.switch_active_tab(0, cx);
+        app.open_recent_path(recent.clone(), cx);
+        assert_eq!(
+            app.tabs.len(),
+            3,
+            "untitled dirty must divert on Open Recent"
+        );
+        assert_eq!(app.tabs[0].document.text(), "unsaved untitled draft");
+        assert!(app.tabs[0].document.is_dirty());
+
+        app.switch_active_tab(0, cx);
+        app.open_supported_path(other.clone(), app.default_open_intent(), cx)
+            .unwrap();
+        assert_eq!(
+            app.tabs.len(),
+            3,
+            "already-open path still dedupes; File → Open intent must not replace the draft"
+        );
+        assert_eq!(app.tabs[0].document.text(), "unsaved untitled draft");
+        assert!(app.tabs[0].document.is_dirty());
+        assert_eq!(
+            app.tabs[0]
+                .document_tab()
+                .unwrap()
+                .last_recovery_file
+                .as_deref(),
+            Some(recovery.as_path())
+        );
+    });
+}
+
+#[test]
+fn unsaved_close_and_quit_use_three_way_save_prompt() {
+    let editing = include_str!("editing.rs");
+    assert!(
+        editing.contains("PromptButton::new(self.tr(Msg::DialogButtonDontSave))"),
+        "Don't Save must use PromptButton::new (Other) so Windows IDs stay unique"
+    );
+    assert!(editing.contains("PromptButton::ok(self.tr(Msg::DialogButtonSave))"));
+    assert!(editing.contains("discard_all_tab_recovery_files()"));
+    assert!(
+        !editing.contains("discard_current_recovery_file()"),
+        "menu Quit must discard every dirty tab's recovery snapshot"
+    );
+
+    let documents = include_str!("documents.rs");
+    assert!(documents.contains("Msg::DialogCloseUnsavedTitle"));
+    assert!(documents.contains("unsaved_choice_buttons"));
+    let close_tab = documents
+        .split_once("pub(super) fn close_tab(")
+        .expect("close_tab")
+        .1
+        .split_once("pub(super) fn close_tab_confirmed")
+        .expect("close_tab end")
+        .0;
+    assert!(
+        !close_tab.contains("DialogDiscardNewDetail"),
+        "close tab must not reuse the File → New discard copy"
+    );
+
+    let bootstrap = include_str!("bootstrap.rs");
+    assert!(bootstrap.contains("begin_unsaved_exit"));
+    assert!(bootstrap.contains("UnsavedExitKind::WindowClose"));
+}
+
+#[gpui::test]
+fn save_named_dirty_tab_then_close_writes_and_removes(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.md");
+    fs::write(&path, "saved base").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.open_in_current_tab = true;
+        app.open_tree_file_confirmed(path.clone(), cx);
+        app.active_tab_mut().document.set_text("edited notes");
+        assert!(app.active_tab().is_dirty());
+        assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
+        assert!(!app.active_tab().is_dirty());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "edited notes");
+        app.close_tab_confirmed(cx);
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().document.path().is_none());
+        assert!(!app.active_tab().is_dirty());
+    });
+}
+
+#[gpui::test]
+fn dont_save_close_deletes_recovery_and_keeps_last_untitled(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let recovery = dir.path().join("recovery-close.md");
+    fs::write(&recovery, "recovery bytes").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("discard me");
+        app.active_tab_mut().last_recovery_file = Some(recovery.clone());
+        assert!(app.active_tab().is_dirty());
+        app.close_tab_confirmed(cx);
+        assert!(!recovery.exists(), "Don't Save must retire the recovery snapshot");
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().document.path().is_none());
+        assert_eq!(app.active_tab().document.text(), "");
+    });
+}
+
+#[gpui::test]
+fn abort_unsaved_prompt_leaves_dirty_tab_intact(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("keep this draft");
+        let preview = app.active_tab().document.preview_blocks_shared();
+        app.confirming_close = true;
+        app.abort_unsaved_prompt(true, cx);
+        assert!(!app.confirming_close);
+        assert!(app.active_tab().is_dirty());
+        assert_eq!(app.active_tab().document.text(), "keep this draft");
+        assert!(Arc::ptr_eq(
+            &preview,
+            &app.active_tab().document.preview_blocks_shared()
+        ));
+    });
+}
+
+#[gpui::test]
+fn save_all_named_dirty_tabs_writes_both_before_teardown(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.md");
+    let second = dir.path().join("second.md");
+    fs::write(&first, "one").unwrap();
+    fs::write(&second, "two").unwrap();
+    let recovery_a = dir.path().join("recovery-a.md");
+    let recovery_b = dir.path().join("recovery-b.md");
+    fs::write(&recovery_a, "a").unwrap();
+    fs::write(&recovery_b, "b").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.open_in_current_tab = false;
+        app.open_supported_path(first.clone(), OpenPathIntent::OpenInNewTab, cx)
+            .unwrap();
+        app.open_supported_path(second.clone(), OpenPathIntent::OpenInNewTab, cx)
+            .unwrap();
+        app.tabs[1].document.set_text("one edited");
+        app.tabs[2].document.set_text("two edited");
+        app.tabs[1].last_recovery_file = Some(recovery_a.clone());
+        app.tabs[2].last_recovery_file = Some(recovery_b.clone());
+        let preview = app.tabs[1].document.preview_blocks_shared();
+        assert_eq!(app.try_save_named_tab(1), NamedSave::Saved);
+        assert_eq!(app.try_save_named_tab(2), NamedSave::Saved);
+        assert!(!app.tabs[1].is_dirty());
+        assert!(!app.tabs[2].is_dirty());
+        assert_eq!(fs::read_to_string(&first).unwrap(), "one edited");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "two edited");
+        assert!(
+            !recovery_a.exists() && !recovery_b.exists(),
+            "successful save retires each tab's recovery snapshot"
+        );
+        assert!(Arc::ptr_eq(
+            &preview,
+            &app.tabs[1].document.preview_blocks_shared()
+        ));
+        app.discard_all_tab_recovery_files();
+    });
+}
+
+#[gpui::test]
+fn discard_all_recovery_files_covers_every_dirty_tab(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let recovery_a = dir.path().join("rec-a.md");
+    let recovery_b = dir.path().join("rec-b.md");
+    fs::write(&recovery_a, "a").unwrap();
+    fs::write(&recovery_b, "b").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.open_in_new_tab(MarkdownDocument::from_text("second"), cx);
+        app.tabs[0].document.set_text("dirty a");
+        app.tabs[1].document.set_text("dirty b");
+        app.tabs[0].last_recovery_file = Some(recovery_a.clone());
+        app.tabs[1].last_recovery_file = Some(recovery_b.clone());
+        app.discard_all_tab_recovery_files();
+        assert!(!recovery_a.exists());
+        assert!(!recovery_b.exists());
+        assert!(app.tabs[0].last_recovery_file.is_none());
+        assert!(app.tabs[1].last_recovery_file.is_none());
+        assert!(app.tabs[0].is_dirty());
+        assert!(app.tabs[1].is_dirty());
     });
 }
 
@@ -13867,13 +14102,14 @@ fn tab_context_close_tab_switches_then_closes_clicked_tab(cx: &mut TestAppContex
         assert!(app.tab_context_menu.is_none());
     });
 
-    // Dirty close asks first; Cancel keeps the tab, Discard closes it.
+    // Dirty close asks Save / Don't Save / Cancel; Cancel keeps the tab,
+    // Don't Save closes it.
     app.update(cx, |app, _| {
         app.active_tab_mut().document.replace_range(0..0, "dirty ");
     });
-    let (discard_label, cancel_label) = app.update(cx, |app, _| {
+    let (dont_save_label, cancel_label) = app.update(cx, |app, _| {
         (
-            t(app.language, Msg::DialogButtonDiscard).to_string(),
+            t(app.language, Msg::DialogButtonDontSave).to_string(),
             t(app.language, Msg::DialogButtonCancel).to_string(),
         )
     });
@@ -13894,7 +14130,7 @@ fn tab_context_close_tab_switches_then_closes_clicked_tab(cx: &mut TestAppContex
             app.handle_tab_context_action(TabContextAction::CloseTab, window, cx);
         });
     });
-    cx.simulate_prompt_answer(&discard_label);
+    cx.simulate_prompt_answer(&dont_save_label);
     cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_eq!(app.tabs.len(), 1);

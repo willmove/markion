@@ -1342,53 +1342,117 @@ impl MarkionApp {
         .detach();
     }
 
+    /// Save / Don't Save / Cancel. Don't Save uses `PromptButton::new` (Other)
+    /// so Windows TaskDialog IDs stay unique — three `ok` buttons all map to
+    /// IDOK and the first would win.
+    pub(super) fn unsaved_choice_buttons(&self) -> [PromptButton; 3] {
+        [
+            PromptButton::ok(self.tr(Msg::DialogButtonSave)),
+            PromptButton::new(self.tr(Msg::DialogButtonDontSave)),
+            PromptButton::cancel(self.tr(Msg::DialogButtonCancel)),
+        ]
+    }
+
+    pub(super) fn abort_unsaved_prompt(&mut self, canceled: bool, cx: &mut Context<Self>) {
+        self.confirming_close = false;
+        self.active_menu = None;
+        self.status = t(
+            self.language,
+            if canceled {
+                Msg::StatusCanceled
+            } else {
+                Msg::StatusExitCanceled
+            },
+        )
+        .into();
+        cx.notify();
+    }
+
+    pub(super) fn finish_unsaved_exit(
+        &mut self,
+        window_handle: gpui::AnyWindowHandle,
+        kind: UnsavedExitKind,
+        cx: &mut Context<Self>,
+    ) {
+        self.confirming_close = false;
+        self.allow_close = true;
+        self.status = t(self.language, Msg::StatusExitingMarkion).into();
+        cx.notify();
+        match kind {
+            UnsavedExitKind::MenuQuit => {
+                let _ = window_handle.update(cx, |_, window, _| window.remove_window());
+                cx.quit();
+            }
+            UnsavedExitKind::WindowClose => {
+                cx.quit();
+            }
+        }
+    }
+
     pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.begin_unsaved_exit(window, cx, UnsavedExitKind::MenuQuit);
+    }
+
+    pub(super) fn begin_unsaved_exit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        kind: UnsavedExitKind,
+    ) {
         if self.confirming_close {
             return;
         }
 
         self.active_menu = None;
         if !self.tabs.iter().any(EditorTab::is_dirty) {
-            self.allow_close = true;
-            self.status = t(self.language, Msg::StatusExitingMarkion).into();
-            cx.notify();
-            window.remove_window();
-            cx.quit();
+            self.finish_unsaved_exit(window.window_handle(), kind, cx);
             return;
         }
 
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            self.tr(Msg::DialogExitTitle),
-            Some(self.tr(Msg::DialogExitDetail)),
-            &[
-                PromptButton::ok(self.tr(Msg::DialogButtonExitWithoutSaving)),
-                PromptButton::cancel(self.tr(Msg::DialogButtonCancel)),
-            ],
-            cx,
-        );
-
+        let count = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.is_dirty())
+            .count()
+            .to_string();
+        let title = t(self.language, Msg::DialogExitTitle);
+        let detail = tf(self.language, Msg::DialogExitDetail, &[&count]);
+        let buttons = self.unsaved_choice_buttons();
+        let waiting = match kind {
+            UnsavedExitKind::MenuQuit => Msg::StatusWaitingExitConfirm,
+            UnsavedExitKind::WindowClose => Msg::StatusWaitingQuitConfirm,
+        };
+        let answer = window.prompt(PromptLevel::Warning, title, Some(&detail), &buttons, cx);
+        self.status = t(self.language, waiting).into();
         self.confirming_close = true;
-        self.status = t(self.language, Msg::StatusWaitingExitConfirm).into();
         cx.notify();
         let window_handle = window.window_handle();
+        let targets: Vec<TabContextTarget> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| tab.is_dirty())
+            .map(|(index, tab)| TabContextTarget::capture(index, tab))
+            .collect();
 
         cx.spawn(async move |this, cx| {
-            let confirmed = matches!(answer.await, Ok(0));
-            let _ = this.update(cx, |app, cx| {
-                app.confirming_close = false;
-                if confirmed {
-                    app.discard_current_recovery_file();
-                    app.allow_close = true;
-                    app.status = t(app.language, Msg::StatusExitingMarkion).into();
-                    cx.notify();
-                    let _ = window_handle.update(cx, |_, window, _| window.remove_window());
-                    cx.quit();
-                } else {
-                    app.status = t(app.language, Msg::StatusExitCanceled).into();
-                    cx.notify();
+            let choice = UnsavedChoice::from_prompt(answer.await);
+            match choice {
+                UnsavedChoice::Save => {
+                    Self::save_dirty_tabs_then_exit(this, cx, window_handle, kind, targets).await;
                 }
-            });
+                UnsavedChoice::Discard => {
+                    let _ = this.update(cx, |app, cx| {
+                        app.discard_all_tab_recovery_files();
+                        app.finish_unsaved_exit(window_handle, kind, cx);
+                    });
+                }
+                UnsavedChoice::Cancel => {
+                    let _ = this.update(cx, |app, cx| {
+                        app.abort_unsaved_prompt(false, cx);
+                    });
+                }
+            }
         })
         .detach();
     }

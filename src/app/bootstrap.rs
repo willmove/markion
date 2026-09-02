@@ -6,13 +6,12 @@ pub(super) fn install_window_close_guard(
     cx: &mut App,
 ) {
     window.on_window_should_close(cx, move |window, cx| {
-        let (allow_close, is_dirty, confirming_close, language) = {
+        let (allow_close, is_dirty, confirming_close) = {
             let app = app_entity.read(cx);
             (
                 app.allow_close,
                 app.tabs.iter().any(EditorTab::is_dirty),
                 app.confirming_close,
-                app.language,
             )
         };
 
@@ -24,42 +23,9 @@ pub(super) fn install_window_close_guard(
             return false;
         }
 
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            t(language, Msg::DialogExitTitle),
-            Some(t(language, Msg::DialogExitDetail)),
-            &[
-                PromptButton::ok(t(language, Msg::DialogButtonExitWithoutSaving)),
-                PromptButton::cancel(t(language, Msg::DialogButtonCancel)),
-            ],
-            cx,
-        );
-
         app_entity.update(cx, |app, cx| {
-            app.confirming_close = true;
-            app.active_menu = None;
-            app.status = t(app.language, Msg::StatusWaitingQuitConfirm).into();
-            cx.notify();
+            app.begin_unsaved_exit(window, cx, UnsavedExitKind::WindowClose);
         });
-
-        let app_entity = app_entity.clone();
-        cx.spawn(async move |cx| {
-            let confirmed = matches!(answer.await, Ok(0));
-            let _ = cx.update(|cx| {
-                app_entity.update(cx, |app, cx| {
-                    app.confirming_close = false;
-                    if confirmed {
-                        app.discard_all_tab_recovery_files();
-                        app.allow_close = true;
-                        cx.quit();
-                    } else {
-                        app.status = t(app.language, Msg::StatusExitCanceled).into();
-                        cx.notify();
-                    }
-                });
-            });
-        })
-        .detach();
 
         false
     });

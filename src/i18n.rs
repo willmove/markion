@@ -508,6 +508,8 @@ pub enum Msg {
     DialogButtonDelete,
     DialogButtonReset,
     DialogButtonRestore,
+    DialogButtonSave,
+    DialogButtonDontSave,
     DialogButtonExitWithoutSaving,
     DialogButtonDiscardAndCloseTabs,
     DialogButtonKeepOpen,
@@ -568,10 +570,14 @@ pub enum Msg {
     DialogDiscardOpenDetail,
     /// Discard detail for opening a tree file. {0}=path.
     DialogDiscardOpenTreeDetail,
-    /// Exit-without-saving prompt title.
+    /// Exit with unsaved changes: three-way prompt title.
     DialogExitTitle,
-    /// Exit-without-saving detail. (static)
+    /// Exit with unsaved changes: detail. {0}=dirty document count.
     DialogExitDetail,
+    /// Close-tab unsaved-changes prompt title. {0}=tab title.
+    DialogCloseUnsavedTitle,
+    /// Close-tab unsaved-changes detail. (static)
+    DialogCloseUnsavedDetail,
     /// Kept-dirty-tabs title for Close Others / Close to the Right. (static)
     DialogCloseTabsDirtyTitle,
     /// Kept-dirty-tabs detail. {0}=count.
@@ -3202,6 +3208,8 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogButtonDelete => "Delete",
         Msg::DialogButtonReset => "Reset",
         Msg::DialogButtonRestore => "Restore",
+        Msg::DialogButtonSave => "Save",
+        Msg::DialogButtonDontSave => "Don't Save",
         Msg::DialogButtonExitWithoutSaving => "Exit Without Saving",
         Msg::DialogButtonDiscardAndCloseTabs => "Discard All and Close",
         Msg::DialogButtonKeepOpen => "Keep Open",
@@ -3246,8 +3254,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogDiscardNewDetail => "Create a new document without saving the current changes.",
         Msg::DialogDiscardOpenDetail => "Open another document without saving the current changes.",
         Msg::DialogDiscardOpenTreeDetail => "Open {0} without saving current changes.",
-        Msg::DialogExitTitle => "Exit Markion without saving?",
-        Msg::DialogExitDetail => "Unsaved changes will be lost.",
+        Msg::DialogExitTitle => "Save changes before exiting?",
+        Msg::DialogExitDetail => "You have unsaved changes in {0} document(s).",
+        Msg::DialogCloseUnsavedTitle => "Save changes to {0}?",
+        Msg::DialogCloseUnsavedDetail => "Your changes will be lost if you don't save.",
         Msg::DialogCloseTabsDirtyTitle => "Unsaved tabs kept open",
         Msg::DialogCloseTabsDirtyDetail => {
             "{0} tab(s) with unsaved changes were kept open. Save and close them individually, or discard all of their changes now."
@@ -3734,6 +3744,8 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogButtonDelete => "削除",
         Msg::DialogButtonReset => "リセット",
         Msg::DialogButtonRestore => "復元",
+        Msg::DialogButtonSave => "保存",
+        Msg::DialogButtonDontSave => "保存しない",
         Msg::DialogButtonExitWithoutSaving => "保存せずに終了",
         Msg::DialogButtonDiscardAndCloseTabs => "すべて破棄して閉じる",
         Msg::DialogButtonKeepOpen => "開いたままにする",
@@ -3780,8 +3792,10 @@ fn ja(msg: Msg) -> &'static str {
         Msg::DialogDiscardNewDetail => "現在の変更を保存せずに新しい文書を作成します。",
         Msg::DialogDiscardOpenDetail => "現在の変更を保存せずに別の文書を開きます。",
         Msg::DialogDiscardOpenTreeDetail => "現在の変更を保存せずに {0} を開きます。",
-        Msg::DialogExitTitle => "保存せずにMarkionを終了しますか？",
-        Msg::DialogExitDetail => "未保存の変更は失われます。",
+        Msg::DialogExitTitle => "終了する前に変更を保存しますか？",
+        Msg::DialogExitDetail => "{0} 件の文書に未保存の変更があります。",
+        Msg::DialogCloseUnsavedTitle => "{0} への変更を保存しますか？",
+        Msg::DialogCloseUnsavedDetail => "保存しない場合、変更は失われます。",
         Msg::DialogCloseTabsDirtyTitle => "未保存のタブを開いたままにしました",
         Msg::DialogCloseTabsDirtyDetail => {
             "未保存の変更がある {0} 個のタブを開いたままにしています。個別に保存して閉じるか、今すぐすべての変更を破棄して閉じられます。"
@@ -4253,6 +4267,8 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogButtonDelete => "Supprimer",
         Msg::DialogButtonReset => "Réinitialiser",
         Msg::DialogButtonRestore => "Restaurer",
+        Msg::DialogButtonSave => "Enregistrer",
+        Msg::DialogButtonDontSave => "Ne pas enregistrer",
         Msg::DialogButtonExitWithoutSaving => "Quitter sans enregistrer",
         Msg::DialogButtonDiscardAndCloseTabs => "Tout ignorer et fermer",
         Msg::DialogButtonKeepOpen => "Garder ouverts",
@@ -4306,8 +4322,14 @@ fn fr(msg: Msg) -> &'static str {
         Msg::DialogDiscardOpenTreeDetail => {
             "Ouvrir {0} sans enregistrer les modifications actuelles."
         }
-        Msg::DialogExitTitle => "Quitter Markion sans enregistrer ?",
-        Msg::DialogExitDetail => "Les modifications non enregistrées seront perdues.",
+        Msg::DialogExitTitle => "Enregistrer les modifications avant de quitter ?",
+        Msg::DialogExitDetail => {
+            "Vous avez des modifications non enregistrées dans {0} document(s)."
+        }
+        Msg::DialogCloseUnsavedTitle => "Enregistrer les modifications de {0} ?",
+        Msg::DialogCloseUnsavedDetail => {
+            "Vos modifications seront perdues si vous n'enregistrez pas."
+        }
         Msg::DialogCloseTabsDirtyTitle => "Onglets non enregistrés conservés",
         Msg::DialogCloseTabsDirtyDetail => {
             "{0} onglet(s) avec des modifications non enregistrées ont été conservés ouverts. Enregistrez et fermez-les un par un, ou ignorez toutes leurs modifications maintenant."
@@ -4775,6 +4797,8 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogButtonDelete => "Löschen",
         Msg::DialogButtonReset => "Zurücksetzen",
         Msg::DialogButtonRestore => "Wiederherstellen",
+        Msg::DialogButtonSave => "Speichern",
+        Msg::DialogButtonDontSave => "Nicht speichern",
         Msg::DialogButtonExitWithoutSaving => "Ohne Speichern beenden",
         Msg::DialogButtonDiscardAndCloseTabs => "Alle verwerfen und schließen",
         Msg::DialogButtonKeepOpen => "Offen lassen",
@@ -4828,8 +4852,12 @@ fn de(msg: Msg) -> &'static str {
         Msg::DialogDiscardOpenTreeDetail => {
             "{0} öffnen, ohne die aktuellen Änderungen zu speichern."
         }
-        Msg::DialogExitTitle => "Markion ohne Speichern beenden?",
-        Msg::DialogExitDetail => "Ungespeicherte Änderungen gehen verloren.",
+        Msg::DialogExitTitle => "Änderungen vor dem Beenden speichern?",
+        Msg::DialogExitDetail => "Sie haben ungespeicherte Änderungen in {0} Dokument(en).",
+        Msg::DialogCloseUnsavedTitle => "Änderungen an {0} speichern?",
+        Msg::DialogCloseUnsavedDetail => {
+            "Ihre Änderungen gehen verloren, wenn Sie nicht speichern."
+        }
         Msg::DialogCloseTabsDirtyTitle => "Ungespeicherte Tabs offengehalten",
         Msg::DialogCloseTabsDirtyDetail => {
             "{0} Tab(s) mit ungespeicherten Änderungen wurden offengehalten. Speichern und schließen Sie sie einzeln, oder verwerfen Sie jetzt alle ihre Änderungen."
@@ -5297,6 +5325,8 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogButtonDelete => "Eliminar",
         Msg::DialogButtonReset => "Restablecer",
         Msg::DialogButtonRestore => "Restaurar",
+        Msg::DialogButtonSave => "Guardar",
+        Msg::DialogButtonDontSave => "No guardar",
         Msg::DialogButtonExitWithoutSaving => "Salir sin guardar",
         Msg::DialogButtonDiscardAndCloseTabs => "Descartar todo y cerrar",
         Msg::DialogButtonKeepOpen => "Mantener abiertas",
@@ -5340,8 +5370,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogDiscardNewDetail => "Crear un nuevo documento sin guardar los cambios actuales.",
         Msg::DialogDiscardOpenDetail => "Abrir otro documento sin guardar los cambios actuales.",
         Msg::DialogDiscardOpenTreeDetail => "Abrir {0} sin guardar los cambios actuales.",
-        Msg::DialogExitTitle => "¿Salir de Markion sin guardar?",
-        Msg::DialogExitDetail => "Los cambios no guardados se perderán.",
+        Msg::DialogExitTitle => "¿Guardar los cambios antes de salir?",
+        Msg::DialogExitDetail => "Hay cambios sin guardar en {0} documento(s).",
+        Msg::DialogCloseUnsavedTitle => "¿Guardar los cambios de {0}?",
+        Msg::DialogCloseUnsavedDetail => "Los cambios se perderán si no los guardas.",
         Msg::DialogCloseTabsDirtyTitle => "Pestañas sin guardar mantenidas abiertas",
         Msg::DialogCloseTabsDirtyDetail => {
             "Se mantuvieron abiertas {0} pestaña(s) con cambios sin guardar. Guárdelas y ciérrelas una por una, o descarte ahora todos sus cambios."
@@ -5811,6 +5843,8 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogButtonDelete => "删除",
         Msg::DialogButtonReset => "重置",
         Msg::DialogButtonRestore => "恢复",
+        Msg::DialogButtonSave => "保存",
+        Msg::DialogButtonDontSave => "不保存",
         Msg::DialogButtonExitWithoutSaving => "不保存退出",
         Msg::DialogButtonDiscardAndCloseTabs => "全部放弃并关闭",
         Msg::DialogButtonKeepOpen => "保持打开",
@@ -5853,8 +5887,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogDiscardNewDetail => "新建文档而不保存当前更改。",
         Msg::DialogDiscardOpenDetail => "打开其他文档而不保存当前更改。",
         Msg::DialogDiscardOpenTreeDetail => "打开 {0} 而不保存当前更改。",
-        Msg::DialogExitTitle => "不保存就退出 Markion？",
-        Msg::DialogExitDetail => "未保存的更改将会丢失。",
+        Msg::DialogExitTitle => "退出前保存更改？",
+        Msg::DialogExitDetail => "有 {0} 个文档含未保存的更改。",
+        Msg::DialogCloseUnsavedTitle => "是否保存对 {0} 的更改？",
+        Msg::DialogCloseUnsavedDetail => "如果不保存，这些更改将会丢失。",
         Msg::DialogCloseTabsDirtyTitle => "已保留未保存的标签页",
         Msg::DialogCloseTabsDirtyDetail => {
             "已保留 {0} 个含未保存修改的标签页。可逐个保存后关闭，也可现在放弃全部修改并关闭。"
@@ -6320,6 +6356,8 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogButtonDelete => "刪除",
         Msg::DialogButtonReset => "重設",
         Msg::DialogButtonRestore => "復原",
+        Msg::DialogButtonSave => "儲存",
+        Msg::DialogButtonDontSave => "不儲存",
         Msg::DialogButtonExitWithoutSaving => "不儲存結束",
         Msg::DialogButtonDiscardAndCloseTabs => "全部捨棄並關閉",
         Msg::DialogButtonKeepOpen => "保持開啟",
@@ -6362,8 +6400,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogDiscardNewDetail => "新增文件而不儲存目前的變更。",
         Msg::DialogDiscardOpenDetail => "開啟其他文件而不儲存目前的變更。",
         Msg::DialogDiscardOpenTreeDetail => "開啟 {0} 而不儲存目前的變更。",
-        Msg::DialogExitTitle => "不儲存就結束 Markion？",
-        Msg::DialogExitDetail => "未儲存的變更將會遺失。",
+        Msg::DialogExitTitle => "結束前儲存變更？",
+        Msg::DialogExitDetail => "有 {0} 個文件含未儲存的變更。",
+        Msg::DialogCloseUnsavedTitle => "是否儲存對 {0} 的變更？",
+        Msg::DialogCloseUnsavedDetail => "如果不儲存，這些變更將會遺失。",
         Msg::DialogCloseTabsDirtyTitle => "已保留未儲存的分頁",
         Msg::DialogCloseTabsDirtyDetail => {
             "已保留 {0} 個含未儲存變更的分頁。可逐個儲存後關閉，也可現在捨棄全部變更並關閉。"
@@ -7217,6 +7257,8 @@ mod tests {
             Msg::DialogButtonDelete,
             Msg::DialogButtonReset,
             Msg::DialogButtonRestore,
+            Msg::DialogButtonSave,
+            Msg::DialogButtonDontSave,
             Msg::DialogButtonExitWithoutSaving,
             Msg::DialogButtonDownloadAndInstall,
             Msg::DialogButtonDownloadUpdate,
@@ -7250,6 +7292,8 @@ mod tests {
             Msg::DialogDiscardOpenTreeDetail,
             Msg::DialogExitTitle,
             Msg::DialogExitDetail,
+            Msg::DialogCloseUnsavedTitle,
+            Msg::DialogCloseUnsavedDetail,
             Msg::DialogDeleteTitle,
             Msg::DialogDeleteDetail,
             Msg::DialogDeleteFolderRecursiveTitle,

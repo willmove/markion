@@ -47,12 +47,13 @@ use markion::{
     block_can_transform_at, build_publishing_snapshot, build_visual_projection,
     build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
     bundled_resource_path, check_path_state, default_preferences_path, default_recovery_dir,
-    default_session_path, default_themes_dir, delete_block, delete_recovery_file, diagram_backend_id, duplicate_block,
-    highlight_code, html_preview_parts, html_preview_plain_text, html_table_column_weights,
-    html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
-    import_image_bytes, import_image_file, inline_image_at, inline_link_at, inspect_recovery_files,
-    is_markdown_path, is_text_path, list_theme_definitions, load_app_preferences,
-    load_recovery_file, load_session_state, markdown_reference, normalize_auto_save_delay_secs,
+    default_session_path, default_themes_dir, delete_block, delete_recovery_file,
+    diagram_backend_id, duplicate_block, highlight_code, html_preview_parts,
+    html_preview_plain_text, html_table_column_weights, html_table_grid_line_end,
+    html_table_row_has_visible_header, image_extension_supported, import_image_bytes,
+    import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
+    is_text_path, list_theme_definitions, load_app_preferences, load_recovery_file,
+    load_session_state, markdown_reference, normalize_auto_save_delay_secs,
     normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
     normalize_rendered_font_size, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, read_document_source,
     reorder_block, resolve_font_family, resolve_html_img_display_size, save_app_preferences,
@@ -1925,6 +1926,47 @@ impl TabContextTarget {
             _ => false,
         }
     }
+
+    /// Like [`Self::matches`], but follows a document across Save As (path
+    /// changes, `recovery_id` does not).
+    fn matches_document_identity(&self, tab: &EditorTab) -> bool {
+        match (tab.document_tab(), self.recovery_id) {
+            (Some(state), Some(id)) => state.recovery_id == id,
+            _ => self.matches(tab),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnsavedChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
+impl UnsavedChoice {
+    fn from_prompt(answer: Result<usize, impl Sized>) -> Self {
+        match answer {
+            Ok(0) => Self::Save,
+            Ok(1) => Self::Discard,
+            _ => Self::Cancel,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnsavedExitKind {
+    MenuQuit,
+    WindowClose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NamedSave {
+    Saved,
+    Untitled,
+    Conflict,
+    Failed,
+    Missing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
