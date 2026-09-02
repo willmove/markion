@@ -79,3 +79,42 @@ self-test page, and static assets over loopback. Before the gate split, the
 same directory failed with
 `the local publishing workspace contains an unlisted runtime file` on every
 publish attempt.
+
+## v0.2.7 source-tree evidence
+
+v0.2.6..v0.2.7 reworks the workspace bundle itself (MarkNice editor skin,
+session-local Word import, themed print-to-PDF, vendored JSZip), so the
+v0.2.2 byte-identical carry-over no longer applies. On 2026-09-02, before
+tagging, a ZCode agent session on Windows 10 x64 re-verified the changed
+bundle from the source tree:
+
+- `verify-bundle` passed on `assets/marknice-workspace`: 23 files,
+  3,141,109 bytes, MarkNice revision `c009c1ec7e7c92f89afa5a32edcb126b5296bda7`.
+- `preview-workspace` served a fresh session over loopback. The full
+  `static/self-test.html` suite reported
+  `PASS (15 themes + formatting + exports + skin + word + pdf)`: every theme
+  digest matched the golden corpus, and the formatting/shortcut, export,
+  locale, editor-skin, Word-import, and themed print-to-PDF checks (92
+  assertions) all passed in the ZCode 3.10.2 in-app Chromium 146.0.7680.80
+  (Electron 41.0.3) browser — not the OS default browser.
+- The live session exposed and rendered the new chrome: formatting toolbar,
+  Import Word control, 15-template selector, font-size/paragraph-spacing
+  steppers, Desktop/Phone modes, Copy for WeChat / Copy MD / Save as HTML /
+  Save as PDF / Save as Word actions, and the themed article (heading, list,
+  table, managed image). A screenshot confirmed the dual rounded cards,
+  traffic-light headers, indigo accent, and phone frame.
+
+Carry-overs that still apply, with their reasons:
+
+- The WeChat rich-paste payload path is unchanged in v0.2.7: the
+  `navigator.clipboard` write logic in `bridge.js` and the rich-HTML
+  generation in `export-runtime.js` received only label/locale changes, so the
+  2026-08-23 WeChat 4.1.13.7 Windows paste evidence carries over.
+- The default-browser dispatch and loopback/session service code are
+  unchanged (`crates/wechat-workspace` gained only manifest allowlist entries
+  for the new vendored files), so the v0.2.1 packaged Windows Edge dispatch
+  evidence carries over. The packaged-bundle extraction and digest rows re-ran
+  in the v0.2.7 tag workflow.
+- macOS and Linux manual browser checks remain deferred (maintainer-authorized
+  since v0.2.1), not represented as passes; their native packaging,
+  extraction, and digest verification remain mandatory in the tag workflow.
