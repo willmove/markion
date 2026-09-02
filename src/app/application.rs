@@ -182,7 +182,7 @@ impl MarkionApp {
             preferences_tab: PreferencesTab::default(),
             preferences_panel_focus: cx.focus_handle(),
             preferences_general_scroll: ScrollHandle::new(),
-            preferences_theme_scroll: ScrollHandle::new(),
+            preferences_appearance_scroll: ScrollHandle::new(),
             preferences_categories_scroll: ScrollHandle::new(),
             preferences_actions_scroll: ScrollHandle::new(),
             preferences_export_scroll: ScrollHandle::new(),

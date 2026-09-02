@@ -2983,7 +2983,7 @@ pub(super) fn pane_scrollbar_view(
         PaneScrollTarget::Preview => "preview-pane-scrollbar",
         PaneScrollTarget::Visual => "visual-pane-scrollbar",
         PaneScrollTarget::PreferencesGeneral => "preferences-general-scrollbar",
-        PaneScrollTarget::PreferencesTheme => "preferences-theme-scrollbar",
+        PaneScrollTarget::PreferencesAppearance => "preferences-appearance-scrollbar",
         PaneScrollTarget::PreferencesShortcutCategories => "preferences-categories-scrollbar",
         PaneScrollTarget::PreferencesShortcutActions => "preferences-actions-scrollbar",
         PaneScrollTarget::PreferencesExport => "preferences-export-scrollbar",
@@ -4448,137 +4448,6 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                 }),
                                             )),
                                     )
-                                    // Document typography.
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.))
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(palette.muted)
-                                                    .child(app.tr(Msg::PrefPanelTypographySection)),
-                                            )
-                                            .child(preference_numeric_row(
-                                                app.tr(Msg::PrefPanelEditorFontSize),
-                                                app.editor_font_size,
-                                                MIN_EDITOR_FONT_SIZE,
-                                                MAX_EDITOR_FONT_SIZE,
-                                                "px",
-                                                palette,
-                                                cx.listener(
-                                                    |app, _: &MouseUpEvent, _window, cx| {
-                                                        if let Some(value) = preference_step_value(
-                                                            app.editor_font_size,
-                                                            MIN_EDITOR_FONT_SIZE,
-                                                            MAX_EDITOR_FONT_SIZE,
-                                                            -1,
-                                                        ) {
-                                                            app.set_editor_font_size(
-                                                                value as i64,
-                                                                cx,
-                                                            );
-                                                        }
-                                                    },
-                                                ),
-                                                cx.listener(
-                                                    |app, _: &MouseUpEvent, _window, cx| {
-                                                        if let Some(value) = preference_step_value(
-                                                            app.editor_font_size,
-                                                            MIN_EDITOR_FONT_SIZE,
-                                                            MAX_EDITOR_FONT_SIZE,
-                                                            1,
-                                                        ) {
-                                                            app.set_editor_font_size(
-                                                                value as i64,
-                                                                cx,
-                                                            );
-                                                        }
-                                                    },
-                                                ),
-                                            ))
-                                            .child(preference_numeric_row(
-                                                app.tr(Msg::PrefPanelRenderedFontSize),
-                                                app.rendered_font_size,
-                                                MIN_RENDERED_FONT_SIZE,
-                                                MAX_RENDERED_FONT_SIZE,
-                                                "px",
-                                                palette,
-                                                cx.listener(
-                                                    |app, _: &MouseUpEvent, _window, cx| {
-                                                        if let Some(value) = preference_step_value(
-                                                            app.rendered_font_size,
-                                                            MIN_RENDERED_FONT_SIZE,
-                                                            MAX_RENDERED_FONT_SIZE,
-                                                            -1,
-                                                        ) {
-                                                            app.set_rendered_font_size(
-                                                                value as i64,
-                                                                cx,
-                                                            );
-                                                        }
-                                                    },
-                                                ),
-                                                cx.listener(
-                                                    |app, _: &MouseUpEvent, _window, cx| {
-                                                        if let Some(value) = preference_step_value(
-                                                            app.rendered_font_size,
-                                                            MIN_RENDERED_FONT_SIZE,
-                                                            MAX_RENDERED_FONT_SIZE,
-                                                            1,
-                                                        ) {
-                                                            app.set_rendered_font_size(
-                                                                value as i64,
-                                                                cx,
-                                                            );
-                                                        }
-                                                    },
-                                                ),
-                                            ))
-                                            .child(preference_numeric_row(
-                                                app.tr(Msg::PrefPanelParagraphSpacing),
-                                                app.paragraph_spacing,
-                                                MIN_PARAGRAPH_SPACING,
-                                                MAX_PARAGRAPH_SPACING,
-                                                "px",
-                                                palette,
-                                                cx.listener(
-                                                    |app, _: &MouseUpEvent, _window, cx| {
-                                                        if let Some(value) = preference_step_value(
-                                                            app.paragraph_spacing,
-                                                            MIN_PARAGRAPH_SPACING,
-                                                            MAX_PARAGRAPH_SPACING,
-                                                            -1,
-                                                        ) {
-                                                            app.set_paragraph_spacing(
-                                                                value as i64,
-                                                                cx,
-                                                            );
-                                                        }
-                                                    },
-                                                ),
-                                                cx.listener(
-                                                    |app, _: &MouseUpEvent, _window, cx| {
-                                                        if let Some(value) = preference_step_value(
-                                                            app.paragraph_spacing,
-                                                            MIN_PARAGRAPH_SPACING,
-                                                            MAX_PARAGRAPH_SPACING,
-                                                            1,
-                                                        ) {
-                                                            app.set_paragraph_spacing(
-                                                                value as i64,
-                                                                cx,
-                                                            );
-                                                        }
-                                                    },
-                                                ),
-                                            ))
-                                            .child(preference_font_row(app, FontSlot::Editor, cx))
-                                            .child(preference_font_row(app, FontSlot::Rendered, cx))
-                                            .child(preference_font_row(app, FontSlot::Code, cx)),
-                                    )
                                     // Other settings.
                                     .child(
                                         div()
@@ -4752,8 +4621,8 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                             )),
                     )
                 })
-                .when(active_tab == PreferencesTab::Theme, |panel| {
-                    panel.child(preferences_theme_body(app, palette, cx))
+                .when(active_tab == PreferencesTab::Appearance, |panel| {
+                    panel.child(preferences_appearance_body(app, palette, cx))
                 })
                 .when(active_tab == PreferencesTab::Shortcuts, |panel| {
                     panel.child(preferences_shortcuts_body(app, palette, cx))
@@ -4785,11 +4654,11 @@ fn preferences_tab_strip(
             }),
         ))
         .child(preferences_tab_button(
-            app.tr(Msg::PrefPanelTabTheme),
-            app.preferences_tab == PreferencesTab::Theme,
+            app.tr(Msg::PrefPanelTabAppearance),
+            app.preferences_tab == PreferencesTab::Appearance,
             palette,
             cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                app.select_preferences_tab(PreferencesTab::Theme, cx);
+                app.select_preferences_tab(PreferencesTab::Appearance, cx);
             }),
         ))
         .child(preferences_tab_button(
@@ -4850,9 +4719,9 @@ fn preferences_tab_button(
         .child(label)
 }
 
-/// Preferences panel Theme tab body: the swatch grid of built-in and custom
-/// themes. Selecting a card applies immediately and persists.
-fn preferences_theme_body(
+/// Preferences panel Appearance tab body: theme swatch grid plus document
+/// typography. Selecting a theme card applies immediately and persists.
+fn preferences_appearance_body(
     app: &MarkionApp,
     palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
@@ -4867,90 +4736,208 @@ fn preferences_theme_body(
         .min_h_0()
         .child(
             div()
-                .id("preferences-theme-body")
+                .id("preferences-appearance-body")
                 .size_full()
                 .px_4()
                 .py_3()
                 .overflow_y_scroll()
                 .scrollbar_width(px(PANE_SCROLLBAR_RESERVED_WIDTH))
-                .track_scroll(&app.preferences_theme_scroll)
+                .track_scroll(&app.preferences_appearance_scroll)
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap_4()
                 .child(
                     div()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(palette.muted)
-                        .child(app.tr(Msg::PrefPanelThemeSection)),
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(palette.muted)
+                                .child(app.tr(Msg::PrefPanelThemeSection)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .children(themes.iter().map(|theme| {
+                                    let theme_name = theme.name.clone();
+                                    let is_active = theme.name.eq_ignore_ascii_case(&active_name);
+                                    let colors = theme.colors;
+                                    let app_entity = app_entity.clone();
+                                    let border = if is_active {
+                                        palette.active_bg
+                                    } else {
+                                        palette.border
+                                    };
+                                    div()
+                                        .w(px(120.))
+                                        .p_2()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(border)
+                                        .bg(rgb(colors.panel_bg))
+                                        .cursor_pointer()
+                                        .hover(move |style| style.border_color(palette.active_bg))
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                                            app_entity.update(cx, |app, cx| {
+                                                app.apply_theme_by_name(&theme_name, cx);
+                                            });
+                                        })
+                                        .child(
+                                            div()
+                                                .h(px(28.))
+                                                .rounded_sm()
+                                                .flex()
+                                                .child(div().flex_1().bg(rgb(colors.app_bg)))
+                                                .child(div().flex_1().bg(rgb(colors.surface_bg)))
+                                                .child(div().flex_1().bg(rgb(colors.active_bg)))
+                                                .child(div().w(px(6.)).bg(rgb(colors.active_text))),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .gap_1()
+                                                .text_size(px(11.))
+                                                .child(
+                                                    div()
+                                                        .min_w_0()
+                                                        .text_color(rgb(colors.text))
+                                                        .child(theme.name.clone()),
+                                                )
+                                                .when(is_active, |row| {
+                                                    row.child(
+                                                        div().text_color(palette.active_bg).child("✓"),
+                                                    )
+                                                }),
+                                        )
+                                })),
+                        ),
                 )
                 .child(
                     div()
                         .flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .children(themes.iter().map(|theme| {
-                            let theme_name = theme.name.clone();
-                            let is_active = theme.name.eq_ignore_ascii_case(&active_name);
-                            let colors = theme.colors;
-                            let app_entity = app_entity.clone();
-                            let border = if is_active {
-                                palette.active_bg
-                            } else {
-                                palette.border
-                            };
+                        .flex_col()
+                        .gap_1()
+                        .child(
                             div()
-                                .w(px(120.))
-                                .p_2()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(border)
-                                .bg(rgb(colors.panel_bg))
-                                .cursor_pointer()
-                                .hover(move |style| style.border_color(palette.active_bg))
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .on_mouse_up(MouseButton::Left, move |_, _, cx| {
-                                    app_entity.update(cx, |app, cx| {
-                                        app.apply_theme_by_name(&theme_name, cx);
-                                    });
-                                })
-                                .child(
-                                    div()
-                                        .h(px(28.))
-                                        .rounded_sm()
-                                        .flex()
-                                        .child(div().flex_1().bg(rgb(colors.app_bg)))
-                                        .child(div().flex_1().bg(rgb(colors.surface_bg)))
-                                        .child(div().flex_1().bg(rgb(colors.active_bg)))
-                                        .child(div().w(px(6.)).bg(rgb(colors.active_text))),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .gap_1()
-                                        .text_size(px(11.))
-                                        .child(
-                                            div()
-                                                .min_w_0()
-                                                .text_color(rgb(colors.text))
-                                                .child(theme.name.clone()),
-                                        )
-                                        .when(is_active, |row| {
-                                            row.child(
-                                                div().text_color(palette.active_bg).child("✓"),
-                                            )
-                                        }),
-                                )
-                        })),
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(palette.muted)
+                                .child(app.tr(Msg::PrefPanelTypographySection)),
+                        )
+                        .child(preference_numeric_row(
+                            app.tr(Msg::PrefPanelEditorFontSize),
+                            app.editor_font_size,
+                            MIN_EDITOR_FONT_SIZE,
+                            MAX_EDITOR_FONT_SIZE,
+                            "px",
+                            palette,
+                            cx.listener(
+                                |app, _: &MouseUpEvent, _window, cx| {
+                                    if let Some(value) = preference_step_value(
+                                        app.editor_font_size,
+                                        MIN_EDITOR_FONT_SIZE,
+                                        MAX_EDITOR_FONT_SIZE,
+                                        -1,
+                                    ) {
+                                        app.set_editor_font_size(value as i64, cx);
+                                    }
+                                },
+                            ),
+                            cx.listener(
+                                |app, _: &MouseUpEvent, _window, cx| {
+                                    if let Some(value) = preference_step_value(
+                                        app.editor_font_size,
+                                        MIN_EDITOR_FONT_SIZE,
+                                        MAX_EDITOR_FONT_SIZE,
+                                        1,
+                                    ) {
+                                        app.set_editor_font_size(value as i64, cx);
+                                    }
+                                },
+                            ),
+                        ))
+                        .child(preference_numeric_row(
+                            app.tr(Msg::PrefPanelRenderedFontSize),
+                            app.rendered_font_size,
+                            MIN_RENDERED_FONT_SIZE,
+                            MAX_RENDERED_FONT_SIZE,
+                            "px",
+                            palette,
+                            cx.listener(
+                                |app, _: &MouseUpEvent, _window, cx| {
+                                    if let Some(value) = preference_step_value(
+                                        app.rendered_font_size,
+                                        MIN_RENDERED_FONT_SIZE,
+                                        MAX_RENDERED_FONT_SIZE,
+                                        -1,
+                                    ) {
+                                        app.set_rendered_font_size(value as i64, cx);
+                                    }
+                                },
+                            ),
+                            cx.listener(
+                                |app, _: &MouseUpEvent, _window, cx| {
+                                    if let Some(value) = preference_step_value(
+                                        app.rendered_font_size,
+                                        MIN_RENDERED_FONT_SIZE,
+                                        MAX_RENDERED_FONT_SIZE,
+                                        1,
+                                    ) {
+                                        app.set_rendered_font_size(value as i64, cx);
+                                    }
+                                },
+                            ),
+                        ))
+                        .child(preference_numeric_row(
+                            app.tr(Msg::PrefPanelParagraphSpacing),
+                            app.paragraph_spacing,
+                            MIN_PARAGRAPH_SPACING,
+                            MAX_PARAGRAPH_SPACING,
+                            "px",
+                            palette,
+                            cx.listener(
+                                |app, _: &MouseUpEvent, _window, cx| {
+                                    if let Some(value) = preference_step_value(
+                                        app.paragraph_spacing,
+                                        MIN_PARAGRAPH_SPACING,
+                                        MAX_PARAGRAPH_SPACING,
+                                        -1,
+                                    ) {
+                                        app.set_paragraph_spacing(value as i64, cx);
+                                    }
+                                },
+                            ),
+                            cx.listener(
+                                |app, _: &MouseUpEvent, _window, cx| {
+                                    if let Some(value) = preference_step_value(
+                                        app.paragraph_spacing,
+                                        MIN_PARAGRAPH_SPACING,
+                                        MAX_PARAGRAPH_SPACING,
+                                        1,
+                                    ) {
+                                        app.set_paragraph_spacing(value as i64, cx);
+                                    }
+                                },
+                            ),
+                        ))
+                        .child(preference_font_row(app, FontSlot::Editor, cx))
+                        .child(preference_font_row(app, FontSlot::Rendered, cx))
+                        .child(preference_font_row(app, FontSlot::Code, cx)),
                 ),
         )
         .child(pane_scrollbar_view(
-            PaneScrollTarget::PreferencesTheme,
-            &app.preferences_theme_scroll,
+            PaneScrollTarget::PreferencesAppearance,
+            &app.preferences_appearance_scroll,
             palette,
             cx,
         ))

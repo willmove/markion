@@ -1769,8 +1769,8 @@ enum PaneScrollTarget {
     Visual,
     /// Preferences panel General tab body. Drag identity only.
     PreferencesGeneral,
-    /// Preferences panel Theme tab body. Drag identity only.
-    PreferencesTheme,
+    /// Preferences panel Appearance tab body. Drag identity only.
+    PreferencesAppearance,
     /// Preferences panel Shortcuts tab category sidebar. Drag identity only.
     PreferencesShortcutCategories,
     /// Preferences panel Shortcuts tab action list. Drag identity only.
@@ -1949,7 +1949,7 @@ const TAB_CONTEXT_ACTION_GROUPS: &[&[TabContextAction]] = &[
 enum PreferencesTab {
     #[default]
     General,
-    Theme,
+    Appearance,
     Shortcuts,
     Export,
 }
@@ -2083,7 +2083,7 @@ struct MarkionApp {
     /// Scroll handles for the Preferences panel's scrollable regions, so each
     /// region can show a draggable overlay scrollbar and keep its position.
     preferences_general_scroll: ScrollHandle,
-    preferences_theme_scroll: ScrollHandle,
+    preferences_appearance_scroll: ScrollHandle,
     preferences_categories_scroll: ScrollHandle,
     preferences_actions_scroll: ScrollHandle,
     preferences_export_scroll: ScrollHandle,

@@ -73,7 +73,7 @@ Rendered preview supports:
 - Fourteen built-in themes: Paper, Ink, Solar, Forest, Rose, Graphite, GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light.
 - Custom themes use `.toml` files in Markion's local themes directory. On first use a `typewriter.toml` sample — including the optional `[fonts]` table (`editor`, `rendered`, `code`) that supplies font families for the Markdown source editor, rendered body text, and code surfaces whenever the user has no explicit preference — is installed there as a starting point. Legacy `.theme` files migrate automatically when first loaded.
 - Seven interface languages: English, Simplified Chinese, Traditional Chinese, Japanese, French, German, and Spanish.
-- The in-app Preferences panel covers theme, language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, show-hidden-files, heading-menu depth, and per-plane font families (source, reading, code) with a follow-theme default.
+- The in-app Preferences panel covers language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, show-hidden-files, and heading-menu depth on **General**; theme, per-plane font families (source, reading, code), font sizes, and paragraph spacing on **Appearance**.
 - Preferences persist in `config.toml`; legacy `preferences.conf` files migrate automatically.
 
 All configuration fields are optional. The main defaults and file-only settings are:

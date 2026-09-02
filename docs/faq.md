@@ -126,7 +126,7 @@ The native window title shows the active file name after Markion, and appends a 
 
 ## Themes
 
-Markion ships **fourteen built-in themes**: the original six (Paper, Ink, Solar, Forest, Rose, Graphite) plus GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light. Pick one in **Preferences → Theme** (Ctrl+,) by swatch.
+Markion ships **fourteen built-in themes**: the original six (Paper, Ink, Solar, Forest, Rose, Graphite) plus GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light. Pick one in **Preferences → Appearance** (Ctrl+,) by swatch. Source/reading font sizes, paragraph spacing, and per-plane font families live on the same tab.
 
 ### Custom themes
 

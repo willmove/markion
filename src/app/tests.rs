@@ -2620,36 +2620,37 @@ fn preferences_panel_renders_and_wires_the_export_tab() {
 }
 
 #[test]
-fn preferences_panel_renders_and_wires_the_theme_tab() {
+fn preferences_panel_renders_and_wires_the_appearance_tab() {
     let source = include_str!("root_view.rs").replace("\r\n", "\n");
     let panel = source
         .split_once("pub(super) fn preferences_panel_view")
         .and_then(|(_, rest)| rest.split_once("fn preferences_tab_strip"))
         .map(|(body, _)| body)
         .expect("Preferences panel view");
-    assert!(panel.contains("PreferencesTab::Theme"));
-    assert!(panel.contains("preferences_theme_body(app, palette, cx)"));
+    assert!(panel.contains("PreferencesTab::Appearance"));
+    assert!(panel.contains("preferences_appearance_body(app, palette, cx)"));
     assert!(
         !panel.contains("apply_theme_by_name"),
         "General tab must not inline the theme swatch grid"
     );
+    assert!(
+        !panel.contains("PrefPanelTypographySection"),
+        "General tab must not host typography controls"
+    );
     let language = panel
         .find("PrefPanelLanguageSection")
         .expect("Language section");
-    let typography = panel
-        .find("PrefPanelTypographySection")
-        .expect("Typography section");
     let other = panel.find("PrefPanelOtherSection").expect("Other section");
     let autosave = panel
         .find("PrefPanelAutoSaveSection")
         .expect("Auto-save section");
     assert!(
-        language < typography && typography < other && other < autosave,
-        "General tab order is Language, Typography, Other, Auto-save"
+        language < other && other < autosave,
+        "General tab order is Language, Other, Auto-save"
     );
     assert!(
         !panel.contains("PrefPanelThemeSection"),
-        "theme section heading belongs on the Theme tab body"
+        "theme section heading belongs on the Appearance tab body"
     );
 
     let strip = source
@@ -2660,9 +2661,9 @@ fn preferences_panel_renders_and_wires_the_theme_tab() {
     let general = strip
         .find("Msg::PrefPanelTabGeneral")
         .expect("General tab label");
-    let theme = strip
-        .find("Msg::PrefPanelTabTheme")
-        .expect("Theme tab label");
+    let appearance = strip
+        .find("Msg::PrefPanelTabAppearance")
+        .expect("Appearance tab label");
     let shortcuts = strip
         .find("Msg::PrefPanelTabShortcuts")
         .expect("Shortcuts tab label");
@@ -2670,24 +2671,25 @@ fn preferences_panel_renders_and_wires_the_theme_tab() {
         .find("Msg::PrefPanelTabExport")
         .expect("Export tab label");
     assert!(
-        general < theme && theme < shortcuts && shortcuts < export,
-        "tab order is General, Theme, Shortcuts, Export"
+        general < appearance && appearance < shortcuts && shortcuts < export,
+        "tab order is General, Appearance, Shortcuts, Export"
     );
 
-    let theme_body = source
-        .split_once("fn preferences_theme_body")
+    let appearance_body = source
+        .split_once("fn preferences_appearance_body")
         .and_then(|(_, rest)| rest.split_once("fn preferences_export_body"))
         .map(|(body, _)| body)
-        .expect("Preferences theme body");
-    assert!(theme_body.contains("Msg::PrefPanelThemeSection"));
-    assert!(theme_body.contains("app.apply_theme_by_name("));
-    assert!(theme_body.contains("id(\"preferences-theme-body\")"));
-    assert!(theme_body.contains("PaneScrollTarget::PreferencesTheme"));
-    assert!(!theme_body.contains("PrefPanelLanguageSection"));
-    assert!(!theme_body.contains("PrefPanelTypographySection"));
-    assert!(!theme_body.contains("PrefPanelAutoSaveSection"));
-    assert!(!theme_body.contains("preferences_shortcuts_body"));
-    assert!(!theme_body.contains("preferences_export_body"));
+        .expect("Preferences appearance body");
+    assert!(appearance_body.contains("Msg::PrefPanelThemeSection"));
+    assert!(appearance_body.contains("Msg::PrefPanelTypographySection"));
+    assert!(appearance_body.contains("app.apply_theme_by_name("));
+    assert!(appearance_body.contains("id(\"preferences-appearance-body\")"));
+    assert!(appearance_body.contains("PaneScrollTarget::PreferencesAppearance"));
+    assert!(appearance_body.contains("preference_font_row(app, FontSlot::Editor, cx)"));
+    assert!(!appearance_body.contains("PrefPanelLanguageSection"));
+    assert!(!appearance_body.contains("PrefPanelAutoSaveSection"));
+    assert!(!appearance_body.contains("preferences_shortcuts_body"));
+    assert!(!appearance_body.contains("preferences_export_body"));
 }
 
 #[test]
@@ -2700,7 +2702,7 @@ fn preferences_language_picker_contains_variable_width_labels() {
         .expect("Preferences panel view");
     let language_section = panel
         .split_once(".child(app.tr(Msg::PrefPanelLanguageSection))")
-        .and_then(|(_, rest)| rest.split_once("// Document typography."))
+        .and_then(|(_, rest)| rest.split_once("// Other settings."))
         .map(|(body, _)| body)
         .expect("Preferences language section");
 
@@ -3058,20 +3060,20 @@ fn preferences_panel_bodies_render_with_draggable_scroll_handles_on_both_tabs(
     });
 
     app.update(cx, |app, cx| {
-        app.select_preferences_tab(PreferencesTab::Theme, cx);
-        assert_eq!(app.preferences_tab, PreferencesTab::Theme);
+        app.select_preferences_tab(PreferencesTab::Appearance, cx);
+        assert_eq!(app.preferences_tab, PreferencesTab::Appearance);
         cx.notify();
     });
     cx.run_until_parked();
-    let theme_y = app.update(cx, |app, _| {
-        let max = f32::from(app.preferences_theme_scroll.max_offset().height).max(0.);
+    let appearance_y = app.update(cx, |app, _| {
+        let max = f32::from(app.preferences_appearance_scroll.max_offset().height).max(0.);
         let y = px(-80f32.min(max));
-        app.preferences_theme_scroll.set_offset(point(px(0.), y));
+        app.preferences_appearance_scroll.set_offset(point(px(0.), y));
         y
     });
     cx.run_until_parked();
     app.update(cx, |app, _| {
-        assert_eq!(app.preferences_theme_scroll.offset().y, theme_y);
+        assert_eq!(app.preferences_appearance_scroll.offset().y, appearance_y);
     });
 
     // Shortcuts tab: both scrollable regions render alongside each other with
@@ -3108,7 +3110,7 @@ fn preferences_panel_bodies_render_with_draggable_scroll_handles_on_both_tabs(
     cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_eq!(app.preferences_general_scroll.offset().y, general_y);
-        assert_eq!(app.preferences_theme_scroll.offset().y, theme_y);
+        assert_eq!(app.preferences_appearance_scroll.offset().y, appearance_y);
         assert_eq!(
             app.preferences_categories_scroll.offset().y,
             categories_y,
@@ -3934,7 +3936,7 @@ fn list_scrollbar_marks_sync_driver_only_for_preview() {
     ));
     for target in [
         PaneScrollTarget::PreferencesGeneral,
-        PaneScrollTarget::PreferencesTheme,
+        PaneScrollTarget::PreferencesAppearance,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
         PaneScrollTarget::FileTree,
@@ -3960,7 +3962,7 @@ fn preferences_scrollbar_targets_are_no_op_for_sync_scroll(cx: &mut TestAppConte
 
     for target in [
         PaneScrollTarget::PreferencesGeneral,
-        PaneScrollTarget::PreferencesTheme,
+        PaneScrollTarget::PreferencesAppearance,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
         PaneScrollTarget::FileTree,

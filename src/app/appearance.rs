@@ -705,7 +705,7 @@ impl MarkionApp {
             }
             PaneScrollTarget::Visual
             | PaneScrollTarget::PreferencesGeneral
-            | PaneScrollTarget::PreferencesTheme
+            | PaneScrollTarget::PreferencesAppearance
             | PaneScrollTarget::PreferencesShortcutCategories
             | PaneScrollTarget::PreferencesShortcutActions
             | PaneScrollTarget::PreferencesExport
