@@ -59,6 +59,10 @@ impl PreviewImageKey {
                 path
             } else if let Some(document_dir) = document_dir {
                 document_dir.join(path)
+            } else if path.is_file() {
+                path
+            } else if let Some(bundled) = bundled_resource_path(&path) {
+                bundled
             } else {
                 path
             };
@@ -1603,5 +1607,55 @@ mod tests {
             Err(_) => {}
             Ok(_) => panic!("invalid base64 data URI must not decode"),
         }
+    }
+
+    #[test]
+    fn untitled_welcome_logo_resolves_to_bundled_png() {
+        let bundled = bundled_resource_path("assets/markion.png").expect("bundled logo");
+        assert!(bundled.is_file());
+
+        let key = PreviewImageKey::from_url("assets/markion.png", None);
+        let resolved = key.local_path().expect("local identity");
+        assert!(
+            Path::new(&resolved).is_file(),
+            "untitled welcome logo must resolve to a real file, got {resolved:?}"
+        );
+        let ready = load_preview_image(&key).expect("decode bundled welcome png");
+        assert!(ready.width > 0 && ready.height > 0);
+    }
+
+    #[test]
+    fn untitled_missing_relative_image_does_not_use_bundled_assets() {
+        let key = PreviewImageKey::from_url("no-such-markion-welcome.png", None);
+        let display = key
+            .local_path()
+            .expect("local identity")
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        assert!(
+            !display.contains("/assets/no-such-markion-welcome.png"),
+            "missing relative URL must not be rewritten under bundled assets, got {display}"
+        );
+        assert!(
+            bundled_resource_path("no-such-markion-welcome.png").is_none(),
+            "a missing name must not invent a bundled path"
+        );
+    }
+
+    #[test]
+    fn saved_document_relative_image_still_joins_document_dir() {
+        let document_dir = Path::new("not-a-real-welcome-doc-dir");
+        let key = PreviewImageKey::from_url("assets/markion.png", Some(document_dir));
+        let display = key
+            .local_path()
+            .expect("local identity")
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        assert!(
+            display.contains("not-a-real-welcome-doc-dir"),
+            "named documents must keep document-dir resolution, got {display}"
+        );
     }
 }
