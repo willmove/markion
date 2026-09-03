@@ -481,7 +481,7 @@ pub fn build_visual_projection_with_marked_range(
                     // so a caret entering an inline image, `<img>` atom, or
                     // link destination never renders megabytes of base64.
                     let mut cursor = source_range.start;
-                    let mut push_verbatim =
+                    let push_verbatim =
                         |projection: &mut VisualProjection, verbatim: Range<usize>| {
                             let display_start = projection.text.len();
                             projection.text.push_str(&source[verbatim.clone()]);
