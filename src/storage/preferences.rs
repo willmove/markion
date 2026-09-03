@@ -12,11 +12,11 @@ use std::{collections::BTreeMap, fs, io, path::Path};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AppPreferences, AutoSavePreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_PARAGRAPH_SPACING,
-    DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy, DocxPageSize,
-    ExportBackendPreference, ExportPreferences, PdfExportOptions, PdfPageSize, SidebarTab,
-    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
-    normalize_rendered_font_size,
+    AppPreferences, AutoSavePreferences, CodeTheme, DEFAULT_EDITOR_FONT_SIZE,
+    DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy,
+    DocxPageSize, ExportBackendPreference, ExportPreferences, PdfExportOptions, PdfPageSize,
+    SidebarTab, normalize_code_font_size, normalize_editor_font_size,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
 };
 
 /// File name of the retired `key=value` preferences format, looked for next
@@ -40,6 +40,16 @@ struct PreferencesFile {
     focus_mode: bool,
     typewriter_mode: bool,
     code_line_numbers: bool,
+    /// "light" | "dark"; unknown values fall back to dark.
+    code_theme: String,
+    #[serde(deserialize_with = "deserialize_bool_or_true")]
+    code_long_line_wrap: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_code_font_size"
+    )]
+    code_font_size: Option<u16>,
     #[serde(deserialize_with = "deserialize_bool_or_false")]
     preview_adaptive_width: bool,
     #[serde(deserialize_with = "deserialize_editor_font_size")]
@@ -265,6 +275,11 @@ impl From<&AppPreferences> for PreferencesFile {
             focus_mode: preferences.focus_mode,
             typewriter_mode: preferences.typewriter_mode,
             code_line_numbers: preferences.code_line_numbers,
+            code_theme: preferences.code_theme.config_value().to_string(),
+            code_long_line_wrap: preferences.code_long_line_wrap,
+            code_font_size: preferences
+                .code_font_size
+                .map(|size| normalize_code_font_size(size as i64)),
             preview_adaptive_width: preferences.preview_adaptive_width,
             editor_font_size: normalize_editor_font_size(preferences.editor_font_size as i64),
             rendered_font_size: normalize_rendered_font_size(preferences.rendered_font_size as i64),
@@ -318,6 +333,11 @@ impl From<PreferencesFile> for AppPreferences {
             focus_mode: file.focus_mode,
             typewriter_mode: file.typewriter_mode,
             code_line_numbers: file.code_line_numbers,
+            code_theme: crate::model::CodeTheme::from_config(&file.code_theme),
+            code_long_line_wrap: file.code_long_line_wrap,
+            code_font_size: file
+                .code_font_size
+                .map(|size| normalize_code_font_size(size as i64)),
             preview_adaptive_width: file.preview_adaptive_width,
             editor_font_size: normalize_editor_font_size(file.editor_font_size as i64),
             rendered_font_size: normalize_rendered_font_size(file.rendered_font_size as i64),
@@ -545,6 +565,18 @@ where
     )?))
 }
 
+/// Explicit code font size: an integer is clamped to the supported range;
+/// any other value type (or absence) means "follow the reading size".
+fn deserialize_optional_code_font_size<'de, D>(deserializer: D) -> Result<Option<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_integer()
+        .map(|size| normalize_code_font_size(size)))
+}
+
 fn deserialize_integer_or<'de, D>(deserializer: D, default: i64) -> Result<i64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -674,6 +706,60 @@ mod tests {
     #[test]
     fn sync_scroll_defaults_to_false() {
         assert!(!AppPreferences::default().sync_scroll);
+    }
+
+    #[test]
+    fn code_display_preferences_round_trip() {
+        let preferences = AppPreferences {
+            code_theme: CodeTheme::Light,
+            code_long_line_wrap: false,
+            code_font_size: Some(16),
+            ..AppPreferences::default()
+        };
+        let rendered = render_app_preferences(&preferences);
+        assert!(rendered.contains("code_theme = \"light\""));
+        assert!(rendered.contains("code_long_line_wrap = false"));
+        assert!(rendered.contains("code_font_size = 16"));
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(parsed.code_theme, CodeTheme::Light);
+        assert!(!parsed.code_long_line_wrap);
+        assert_eq!(parsed.code_font_size, Some(16));
+
+        // The default (dark / wrapped / follow reading size) omits the size key.
+        let defaults = render_app_preferences(&AppPreferences::default());
+        assert!(defaults.contains("code_theme = \"dark\""));
+        assert!(defaults.contains("code_long_line_wrap = true"));
+        assert!(!defaults.contains("code_font_size"));
+    }
+
+    #[test]
+    fn code_display_preferences_default_when_missing() {
+        let missing = parse_app_preferences("theme = \"Paper\"\n").unwrap();
+        assert_eq!(missing.code_theme, CodeTheme::Dark);
+        assert!(missing.code_long_line_wrap);
+        assert_eq!(missing.code_font_size, None);
+    }
+
+    #[test]
+    fn code_display_preferences_invalid_values_are_safe() {
+        let invalid = parse_app_preferences(
+            "code_theme = \"solarized\"\ncode_long_line_wrap = \"maybe\"\ncode_font_size = \"big\"\n",
+        )
+        .unwrap();
+        assert_eq!(invalid.code_theme, CodeTheme::Dark);
+        assert!(invalid.code_long_line_wrap);
+        assert_eq!(invalid.code_font_size, None);
+
+        let bounded = parse_app_preferences("code_font_size = 999\n").unwrap();
+        assert_eq!(
+            bounded.code_font_size,
+            Some(crate::model::MAX_CODE_FONT_SIZE)
+        );
+        let floored = parse_app_preferences("code_font_size = 1\n").unwrap();
+        assert_eq!(
+            floored.code_font_size,
+            Some(crate::model::MIN_CODE_FONT_SIZE)
+        );
     }
 
     #[test]

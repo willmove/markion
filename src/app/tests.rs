@@ -117,15 +117,10 @@ fn publishing_action_and_statuses_are_localized_for_every_language() {
         ] {
             assert!(!t(language, message).trim().is_empty());
         }
+        assert!(!tf(language, Msg::DialogOrganizeImagesDetail, &["2"]).contains("{0}"));
+        assert!(!tf(language, Msg::StatusOrganizeCompleted, &["2"]).contains("{0}"));
         assert!(
-            !tf(language, Msg::DialogOrganizeImagesDetail, &["2"]).contains("{0}")
-        );
-        assert!(
-            !tf(language, Msg::StatusOrganizeCompleted, &["2"]).contains("{0}")
-        );
-        assert!(
-            !tf(language, Msg::StatusOrganizePartial, &["1", "1"])
-                .contains("{0}")
+            !tf(language, Msg::StatusOrganizePartial, &["1", "1"]).contains("{0}")
                 && !tf(language, Msg::StatusOrganizePartial, &["1", "1"]).contains("{1}")
         );
     }
@@ -187,11 +182,12 @@ fn organize_local_images_copies_and_rewrites_in_one_undo_step(cx: &mut TestAppCo
             undo_before,
             "a single undo step restores the pre-organize text"
         );
-        assert!(app
-            .active_tab()
-            .document
-            .text()
-            .contains("![icon](../../shared/logo.png)"));
+        assert!(
+            app.active_tab()
+                .document
+                .text()
+                .contains("![icon](../../shared/logo.png)")
+        );
         // The copied file remains: content-addressed imports are idempotent.
         assert_eq!(std::fs::read_dir(&managed).unwrap().count(), 1);
     });
@@ -238,9 +234,10 @@ fn organize_local_images_reports_partial_failure_and_keeps_failed_reference(
             text.contains("![gone](../../shared/missing.png)"),
             "the failed copy must leave its reference untouched: {text}"
         );
-        assert!(app
-            .status
-            .contains(&tf(app.language, Msg::StatusOrganizePartial, &["1", "1"])[..]));
+        assert!(
+            app.status
+                .contains(&tf(app.language, Msg::StatusOrganizePartial, &["1", "1"])[..])
+        );
     });
 }
 
@@ -264,9 +261,7 @@ fn organize_local_images_requires_a_saved_document(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn organize_local_images_reports_nothing_to_do_for_in_scope_references(
-    cx: &mut TestAppContext,
-) {
+fn organize_local_images_reports_nothing_to_do_for_in_scope_references(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let docs = temp.path().join("docs");
     std::fs::create_dir_all(&docs).unwrap();
@@ -2433,6 +2428,51 @@ fn default_paragraph_line_height() -> f32 {
         markion::DEFAULT_PARAGRAPH_SPACING,
     )
     .paragraph_line_height
+}
+
+#[test]
+fn code_font_size_follows_reading_size_when_unset() {
+    let default = DocumentTypographyMetrics::new_with_code_font_size(
+        markion::DEFAULT_EDITOR_FONT_SIZE,
+        markion::DEFAULT_RENDERED_FONT_SIZE,
+        markion::DEFAULT_PARAGRAPH_SPACING,
+        None,
+    );
+    assert_eq!(default.code_font_size, 12.);
+    assert_eq!(default.code_line_height, 19.);
+
+    // Reading-size changes keep rescaling code proportionally when no
+    // explicit code size is stored.
+    let larger = DocumentTypographyMetrics::new_with_code_font_size(
+        markion::DEFAULT_EDITOR_FONT_SIZE,
+        21,
+        markion::DEFAULT_PARAGRAPH_SPACING,
+        None,
+    );
+    assert_eq!(larger.code_font_size, 18.);
+    assert_eq!(larger.code_line_height, 18. * (19. / 12.));
+}
+
+#[test]
+fn explicit_code_font_size_overrides_and_scales_line_height() {
+    let explicit = DocumentTypographyMetrics::new_with_code_font_size(
+        markion::DEFAULT_EDITOR_FONT_SIZE,
+        21,
+        markion::DEFAULT_PARAGRAPH_SPACING,
+        Some(10),
+    );
+    // The explicit value wins regardless of the reading size, and
+    // out-of-range values clamp to the supported bounds.
+    assert_eq!(explicit.code_font_size, 10.);
+    assert_eq!(explicit.code_line_height, 10. * (19. / 12.));
+
+    let clamped = DocumentTypographyMetrics::new_with_code_font_size(
+        markion::DEFAULT_EDITOR_FONT_SIZE,
+        markion::DEFAULT_RENDERED_FONT_SIZE,
+        markion::DEFAULT_PARAGRAPH_SPACING,
+        Some(999),
+    );
+    assert_eq!(clamped.code_font_size, markion::MAX_CODE_FONT_SIZE as f32);
 }
 
 #[test]
@@ -9007,7 +9047,10 @@ fn dont_save_close_deletes_recovery_and_keeps_last_untitled(cx: &mut TestAppCont
         app.active_tab_mut().last_recovery_file = Some(recovery.clone());
         assert!(app.active_tab().is_dirty());
         app.close_tab_confirmed(cx);
-        assert!(!recovery.exists(), "Don't Save must retire the recovery snapshot");
+        assert!(
+            !recovery.exists(),
+            "Don't Save must retire the recovery snapshot"
+        );
         assert_eq!(app.tabs.len(), 1);
         assert!(app.active_tab().document.path().is_none());
         assert_eq!(app.active_tab().document.text(), "");

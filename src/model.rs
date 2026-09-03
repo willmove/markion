@@ -99,6 +99,14 @@ pub const MIN_PARAGRAPH_SPACING: u16 = 0;
 /// Largest supported rendered paragraph gap in logical pixels.
 pub const MAX_PARAGRAPH_SPACING: u16 = 32;
 
+/// Default fenced-code font size in logical pixels (the historical value at
+/// the 14px reading default; used only when no explicit size is stored).
+pub const DEFAULT_CODE_FONT_SIZE: u16 = 12;
+/// Smallest supported fenced-code font size in logical pixels.
+pub const MIN_CODE_FONT_SIZE: u16 = 10;
+/// Largest supported fenced-code font size in logical pixels.
+pub const MAX_CODE_FONT_SIZE: u16 = 32;
+
 /// Normalizes a persisted heading-menu depth to the supported values `5` or `6`.
 pub fn normalize_heading_menu_max_level(level: u8) -> u8 {
     if level >= EXTENDED_HEADING_MENU_MAX_LEVEL {
@@ -121,6 +129,39 @@ pub fn normalize_rendered_font_size(value: i64) -> u16 {
 /// Clamps a rendered paragraph gap read from UI or persisted configuration.
 pub fn normalize_paragraph_spacing(value: i64) -> u16 {
     value.clamp(MIN_PARAGRAPH_SPACING as i64, MAX_PARAGRAPH_SPACING as i64) as u16
+}
+
+/// Clamps an explicit fenced-code font size read from UI or configuration.
+pub fn normalize_code_font_size(value: i64) -> u16 {
+    value.clamp(MIN_CODE_FONT_SIZE as i64, MAX_CODE_FONT_SIZE as i64) as u16
+}
+
+/// Light/Dark code display theme for fenced code blocks: selects the token
+/// palette and block chrome. Default is Dark (the historical look).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CodeTheme {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl CodeTheme {
+    /// Parses a persisted `code_theme` value; unknown values fall back to Dark.
+    pub fn from_config(value: &str) -> Self {
+        if value.eq_ignore_ascii_case("light") {
+            Self::Light
+        } else {
+            Self::Dark
+        }
+    }
+
+    /// The value written back to `config.toml`.
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
 }
 
 /// Maximum number of paths kept in the recent-files list.
@@ -169,6 +210,16 @@ pub struct AppPreferences {
     pub focus_mode: bool,
     pub typewriter_mode: bool,
     pub code_line_numbers: bool,
+    /// Light/Dark palette and chrome for rendered fenced code blocks.
+    pub code_theme: CodeTheme,
+    /// When enabled, long code lines soft-wrap inside the block on reading
+    /// surfaces (Read mode, Split Preview's rendered pane); disabled exposes
+    /// the content through bounded horizontal scrolling. The Visual Edit
+    /// direct code editor always soft-wraps.
+    pub code_long_line_wrap: bool,
+    /// Explicit fenced-code font size in logical pixels. `None` derives the
+    /// size from the rendered body size (the historical behavior).
+    pub code_font_size: Option<u16>,
     pub preview_adaptive_width: bool,
     /// Source-editor font size in logical pixels.
     pub editor_font_size: u16,
@@ -240,6 +291,9 @@ impl Default for AppPreferences {
             focus_mode: false,
             typewriter_mode: false,
             code_line_numbers: true,
+            code_theme: CodeTheme::default(),
+            code_long_line_wrap: true,
+            code_font_size: None,
             preview_adaptive_width: false,
             editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
             rendered_font_size: DEFAULT_RENDERED_FONT_SIZE,

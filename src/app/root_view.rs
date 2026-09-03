@@ -144,6 +144,8 @@ impl Render for MarkionApp {
         let preview_items = preview_blocks.clone();
         let preview_items_doc_dir = document_dir.clone();
         let preview_code_line_numbers = self.code_line_numbers;
+        let preview_code_theme = self.code_theme;
+        let preview_code_wrap = self.code_long_line_wrap;
         let preview_display_scale = window.scale_factor();
         let preview_list_state = self
             .active_tab()
@@ -589,6 +591,8 @@ impl Render for MarkionApp {
                                                                     preview_items_doc_dir
                                                                         .as_deref(),
                                                                     preview_code_line_numbers,
+                                                                    preview_code_theme,
+                                                                    preview_code_wrap,
                                                                     preview_display_scale,
                                                                     cx,
                                                                 ));
@@ -4533,19 +4537,6 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                 }),
                                             ))
                                             .child(preference_boolean_row(
-                                                app.tr(Msg::PrefPanelCodeLineNumbers),
-                                                app.code_line_numbers,
-                                                app.language,
-                                                palette,
-                                                cx.listener(|app, _: &MouseUpEvent, window, cx| {
-                                                    app.toggle_code_line_numbers(
-                                                        &ToggleCodeLineNumbers,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }),
-                                            ))
-                                            .child(preference_boolean_row(
                                                 app.tr(Msg::PrefPanelPreviewAdaptiveWidth),
                                                 app.preview_adaptive_width,
                                                 app.language,
@@ -4960,7 +4951,168 @@ fn preferences_appearance_body(
                             }),
                         ))
                         .child(preference_font_row(app, FontSlot::Editor, cx))
-                        .child(preference_font_row(app, FontSlot::Rendered, cx))
+                        .child(preference_font_row(app, FontSlot::Rendered, cx)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(palette.muted)
+                                .child(app.tr(Msg::PrefPanelCodeSection)),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(12.))
+                                .px_1()
+                                .py_1()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(palette.muted)
+                                        .child(app.tr(Msg::PrefPanelCodeTheme)),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(preference_option_button(
+                                            app.tr(Msg::PrefPanelCodeThemeLight).to_string(),
+                                            app.code_theme == CodeTheme::Light,
+                                            palette,
+                                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                                app.set_code_theme(CodeTheme::Light, cx);
+                                            }),
+                                        ))
+                                        .child(preference_option_button(
+                                            app.tr(Msg::PrefPanelCodeThemeDark).to_string(),
+                                            app.code_theme == CodeTheme::Dark,
+                                            palette,
+                                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                                app.set_code_theme(CodeTheme::Dark, cx);
+                                            }),
+                                        )),
+                                ),
+                        )
+                        .child(preference_boolean_row(
+                            app.tr(Msg::PrefPanelCodeLineNumbers),
+                            app.code_line_numbers,
+                            app.language,
+                            palette,
+                            cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                                app.toggle_code_line_numbers(&ToggleCodeLineNumbers, window, cx);
+                            }),
+                        ))
+                        .child(preference_boolean_row(
+                            app.tr(Msg::PrefPanelCodeWrap),
+                            app.code_long_line_wrap,
+                            app.language,
+                            palette,
+                            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                app.toggle_code_wrap(cx);
+                            }),
+                        ))
+                        .child({
+                            // Stepper shows the effective size (explicit, or
+                            // derived from the reading size when unset).
+                            let effective_code_font_size = app
+                                .code_font_size
+                                .unwrap_or_else(|| {
+                                    app.typography_metrics().code_font_size.round() as u16
+                                })
+                                .clamp(MIN_CODE_FONT_SIZE, MAX_CODE_FONT_SIZE);
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(12.))
+                                .px_1()
+                                .py_1()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_color(palette.muted)
+                                        .child(app.tr(Msg::PrefPanelCodeFontSize)),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(preference_numeric_button(
+                                            "−",
+                                            effective_code_font_size > MIN_CODE_FONT_SIZE,
+                                            palette,
+                                            cx.listener(
+                                                move |app, _: &MouseUpEvent, _window, cx| {
+                                                    if let Some(value) = preference_step_value(
+                                                        effective_code_font_size,
+                                                        MIN_CODE_FONT_SIZE,
+                                                        MAX_CODE_FONT_SIZE,
+                                                        -1,
+                                                    ) {
+                                                        app.set_code_font_size(value as i64, cx);
+                                                    }
+                                                },
+                                            ),
+                                        ))
+                                        .child(
+                                            div()
+                                                .min_w(px(54.))
+                                                .h(px(26.))
+                                                .px_2()
+                                                .rounded_sm()
+                                                .border_1()
+                                                .border_color(palette.border)
+                                                .bg(palette.surface_bg)
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .text_color(palette.text)
+                                                .child(format!("{effective_code_font_size} px")),
+                                        )
+                                        .child(preference_numeric_button(
+                                            "+",
+                                            effective_code_font_size < MAX_CODE_FONT_SIZE,
+                                            palette,
+                                            cx.listener(
+                                                move |app, _: &MouseUpEvent, _window, cx| {
+                                                    if let Some(value) = preference_step_value(
+                                                        effective_code_font_size,
+                                                        MIN_CODE_FONT_SIZE,
+                                                        MAX_CODE_FONT_SIZE,
+                                                        1,
+                                                    ) {
+                                                        app.set_code_font_size(value as i64, cx);
+                                                    }
+                                                },
+                                            ),
+                                        ))
+                                        .when(app.code_font_size.is_some(), |row| {
+                                            row.child(preference_option_button(
+                                                app.tr(Msg::PrefPanelCodeFontFollowReading)
+                                                    .to_string(),
+                                                false,
+                                                palette,
+                                                cx.listener(
+                                                    |app, _: &MouseUpEvent, _window, cx| {
+                                                        app.clear_code_font_size(cx);
+                                                    },
+                                                ),
+                                            ))
+                                        }),
+                                )
+                        })
                         .child(preference_font_row(app, FontSlot::Code, cx)),
                 ),
         )

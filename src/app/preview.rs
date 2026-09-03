@@ -1993,7 +1993,10 @@ pub(super) fn selectable_plain_text(
 }
 
 /// One shaped line of highlighted code (used when line numbers are shown).
-pub(super) fn code_line_text(line: &[HighlightedSpan]) -> (StyledText, String) {
+pub(super) fn code_line_text(
+    line: &[HighlightedSpan],
+    palette: &CodePalette,
+) -> (StyledText, String) {
     let mut text = String::new();
     let mut highlights = Vec::new();
     for span in line {
@@ -2003,7 +2006,7 @@ pub(super) fn code_line_text(line: &[HighlightedSpan]) -> (StyledText, String) {
             highlights.push((
                 start..text.len(),
                 HighlightStyle {
-                    color: Some(highlight_color(span.kind).into()),
+                    color: Some(palette.token_color(span.kind).into()),
                     ..HighlightStyle::default()
                 },
             ));
@@ -2021,7 +2024,10 @@ pub(super) fn code_line_text(line: &[HighlightedSpan]) -> (StyledText, String) {
 
 /// All highlighted code lines joined into a single shaped text element (used
 /// when line numbers are hidden); one element instead of one per token.
-pub(super) fn code_block_text(lines: &[Vec<HighlightedSpan>]) -> (StyledText, String) {
+pub(super) fn code_block_text(
+    lines: &[Vec<HighlightedSpan>],
+    palette: &CodePalette,
+) -> (StyledText, String) {
     let mut text = String::new();
     let mut highlights = Vec::new();
     for (index, line) in lines.iter().enumerate() {
@@ -2035,7 +2041,7 @@ pub(super) fn code_block_text(lines: &[Vec<HighlightedSpan>]) -> (StyledText, St
                 highlights.push((
                     start..text.len(),
                     HighlightStyle {
-                        color: Some(highlight_color(span.kind).into()),
+                        color: Some(palette.token_color(span.kind).into()),
                         ..HighlightStyle::default()
                     },
                 ));
@@ -4585,19 +4591,26 @@ fn visual_code_editor(
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
+    let palette = code_palette(app.code_theme);
     let code = &app.active_tab().document.text()[payload.source_range.clone()];
     let highlighted = app.highlighted_code(language, code);
-    let (styled, _) = code_block_text(&highlighted);
+    let (styled, _) = code_block_text(&highlighted, palette);
     div()
         .mb_3()
         .p_3()
         .rounded_md()
-        .bg(rgb(0x0f172a))
-        .text_color(rgb(0xe2e8f0))
+        .bg(palette.bg)
+        .text_color(palette.text)
         .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
-        .child(code_block_header(app, language, code.to_string(), cx))
+        .child(code_block_header(
+            app,
+            language,
+            code.to_string(),
+            palette,
+            cx,
+        ))
         .child(visual_editor_field_element(
             app,
             block_index,
@@ -4796,7 +4809,13 @@ fn visual_diagram_editor(
         .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
-        .child(code_block_header(app, language, code, cx))
+        .child(code_block_header(
+            app,
+            language,
+            code,
+            code_palette(app.code_theme),
+            cx,
+        ))
         .child(visual_editor_field_element(
             app,
             block_index,
@@ -5590,15 +5609,20 @@ fn html_table_grid_view(
 /// writes the block's raw text to the clipboard in one step, so users no longer
 /// have to select the code manually. Works in preview, split, read, and Visual
 /// Edit modes.
-fn code_copy_button(app: &MarkionApp, code: String, cx: &mut Context<MarkionApp>) -> Div {
+fn code_copy_button(
+    app: &MarkionApp,
+    code: String,
+    palette: &CodePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
     let typography = app.typography_metrics();
     div()
         .flex_none()
         .px_2()
         .py_1()
         .rounded_sm()
-        .bg(rgb(0x1e293b))
-        .text_color(rgb(0x93c5fd))
+        .bg(palette.copy_bg)
+        .text_color(palette.accent)
         .text_size(px(typography.small_font_size))
         .cursor_pointer()
         .child(t(app.language, Msg::ItemCopyCode))
@@ -5618,6 +5642,7 @@ fn code_block_header(
     app: &MarkionApp,
     language: Option<&str>,
     code: String,
+    palette: &CodePalette,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
@@ -5629,10 +5654,10 @@ fn code_block_header(
         .child(
             div()
                 .text_size(px(typography.small_font_size))
-                .text_color(rgb(0x93c5fd))
+                .text_color(palette.accent)
                 .child(language.unwrap_or_default().to_string()),
         )
-        .child(code_copy_button(app, code, cx))
+        .child(code_copy_button(app, code, palette, cx))
 }
 
 fn code_block_view(
@@ -5641,16 +5666,19 @@ fn code_block_view(
     code: &str,
     block_index: usize,
     show_code_line_numbers: bool,
+    code_theme: CodeTheme,
+    wrap_long_lines: bool,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
+    let palette = code_palette(code_theme);
     let highlighted = app.highlighted_code(language.as_deref(), code);
     let body = div()
         .mb_3()
         .p_3()
         .rounded_md()
-        .bg(rgb(0x0f172a))
-        .text_color(rgb(0xe2e8f0))
+        .bg(palette.bg)
+        .text_color(palette.text)
         .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
@@ -5658,38 +5686,76 @@ fn code_block_view(
             app,
             language.as_deref(),
             code.to_string(),
+            palette,
             cx,
         ));
     if show_code_line_numbers {
-        body.children(highlighted.iter().enumerate().map(|(line_index, line)| {
-            let (styled, plain) = code_line_text(line);
-            div()
-                .flex()
-                .items_start()
-                .child(
-                    div()
-                        .w(px(36.))
-                        .flex_none()
-                        .pr_2()
-                        .text_color(rgb(0x64748b))
-                        .child(format!("{:>3}", line_index + 1)),
-                )
-                .child(div().flex_1().min_w_0().child(selectable_plain_text(
-                    app,
-                    ElementId::from((
-                        "preview-code-line",
-                        ((block_index as u64) << 32) | (line_index as u64),
-                    )),
-                    styled,
-                    plain,
-                    block_index,
-                    PreviewTextRunId::CodeLine(line_index),
-                    cx,
-                )))
-        }))
+        let rows = highlighted
+            .iter()
+            .enumerate()
+            .map(|(line_index, line)| {
+                let (styled, plain) = code_line_text(line, palette);
+                // Wrapping keeps the line flexible so it soft-wraps; with
+                // wrapping off the text keeps its intrinsic width so the
+                // scroll container can host it without shrinking.
+                let line_container = if wrap_long_lines {
+                    div().flex_1().min_w_0()
+                } else {
+                    div().flex_none()
+                };
+                div()
+                    .flex()
+                    .items_start()
+                    .min_w_full()
+                    .child(
+                        div()
+                            .w(px(36.))
+                            .flex_none()
+                            .pr_2()
+                            .text_color(palette.gutter)
+                            .child(format!("{:>3}", line_index + 1)),
+                    )
+                    .child(line_container.child(selectable_plain_text(
+                        app,
+                        ElementId::from((
+                            "preview-code-line",
+                            ((block_index as u64) << 32) | (line_index as u64),
+                        )),
+                        styled,
+                        plain,
+                        block_index,
+                        PreviewTextRunId::CodeLine(line_index),
+                        cx,
+                    )))
+            })
+            .collect::<Vec<_>>();
+        if wrap_long_lines {
+            body.child(div().children(rows))
+        } else {
+            // A block child would cap at the container width, so the scroll
+            // container is a flex row whose single `flex_none` child sizes to
+            // its (nowrap) content — gpui derives the scroll extent from that
+            // child's layout bounds.
+            body.child(
+                div()
+                    .id(ElementId::from(("preview-code-scroll", block_index)))
+                    .w_full()
+                    .flex()
+                    .overflow_x_scroll()
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w_full()
+                            .whitespace_nowrap()
+                            .flex()
+                            .flex_col()
+                            .children(rows),
+                    ),
+            )
+        }
     } else {
-        let (styled, plain) = code_block_text(&highlighted);
-        body.child(selectable_plain_text(
+        let (styled, plain) = code_block_text(&highlighted, palette);
+        let code_text = div().min_w_full().child(selectable_plain_text(
             app,
             ElementId::from(("preview-code", block_index)),
             styled,
@@ -5697,7 +5763,20 @@ fn code_block_view(
             block_index,
             PreviewTextRunId::CodeBody,
             cx,
-        ))
+        ));
+        if wrap_long_lines {
+            body.child(code_text)
+        } else {
+            // Flex row + `flex_none` content, as in the gutter path above.
+            body.child(
+                div()
+                    .id(ElementId::from(("preview-code-scroll", block_index)))
+                    .w_full()
+                    .flex()
+                    .overflow_x_scroll()
+                    .child(code_text.flex_none().whitespace_nowrap()),
+            )
+        }
     }
 }
 
@@ -5707,6 +5786,8 @@ pub(super) fn preview_block_view(
     block_index: usize,
     document_dir: Option<&Path>,
     show_code_line_numbers: bool,
+    code_theme: CodeTheme,
+    code_wrap: bool,
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
@@ -5929,6 +6010,8 @@ pub(super) fn preview_block_view(
                         code,
                         block_index,
                         show_code_line_numbers,
+                        code_theme,
+                        code_wrap,
                         cx,
                     )),
                 Some(DiagramCacheEntry::Error(error)) => div()
@@ -5950,11 +6033,20 @@ pub(super) fn preview_block_view(
                         code,
                         block_index,
                         show_code_line_numbers,
+                        code_theme,
+                        code_wrap,
                         cx,
                     )),
-                None => {
-                    code_block_view(app, language, code, block_index, show_code_line_numbers, cx)
-                }
+                None => code_block_view(
+                    app,
+                    language,
+                    code,
+                    block_index,
+                    show_code_line_numbers,
+                    code_theme,
+                    code_wrap,
+                    cx,
+                ),
             }
         }
         PreviewBlock::MathBlock {
@@ -6312,14 +6404,180 @@ fn is_http_resource(url: &str) -> bool {
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"))
 }
 
-pub(super) fn highlight_color(kind: HighlightKind) -> Rgba {
-    match kind {
-        HighlightKind::Plain => rgb(0xe2e8f0),
-        HighlightKind::Keyword => rgb(0xc084fc),
-        HighlightKind::String => rgb(0x86efac),
-        HighlightKind::Number => rgb(0xfbbf24),
-        HighlightKind::Comment => rgb(0x94a3b8),
-        HighlightKind::Type => rgb(0x67e8f9),
+/// Full color set for rendered fenced code blocks: block chrome plus one
+/// color per syntax token class. The Dark values are the historical look,
+/// copied verbatim; the Light token colors mirror the PDF-export light
+/// palette so a light code block matches its printed form.
+pub(super) struct CodePalette {
+    pub(super) bg: Rgba,
+    pub(super) text: Rgba,
+    pub(super) gutter: Rgba,
+    /// Language label and copy-button accent.
+    pub(super) accent: Rgba,
+    pub(super) copy_bg: Rgba,
+    plain: Rgba,
+    keyword: Rgba,
+    string: Rgba,
+    number: Rgba,
+    comment: Rgba,
+    r#type: Rgba,
+}
+
+pub(super) const CODE_PALETTE_DARK: CodePalette = CodePalette {
+    bg: Rgba {
+        r: 0.058823529,
+        g: 0.090196078,
+        b: 0.16470588,
+        a: 1.0,
+    },
+    text: Rgba {
+        r: 0.88627451,
+        g: 0.90980392,
+        b: 0.94117647,
+        a: 1.0,
+    },
+    gutter: Rgba {
+        r: 0.39215686,
+        g: 0.45490196,
+        b: 0.54509804,
+        a: 1.0,
+    },
+    accent: Rgba {
+        r: 0.57647059,
+        g: 0.77254902,
+        b: 0.99215686,
+        a: 1.0,
+    },
+    copy_bg: Rgba {
+        r: 0.11764706,
+        g: 0.16078431,
+        b: 0.23137255,
+        a: 1.0,
+    },
+    plain: Rgba {
+        r: 0.88627451,
+        g: 0.90980392,
+        b: 0.94117647,
+        a: 1.0,
+    },
+    keyword: Rgba {
+        r: 0.75294118,
+        g: 0.51764706,
+        b: 0.98823529,
+        a: 1.0,
+    },
+    string: Rgba {
+        r: 0.5254902,
+        g: 0.9372549,
+        b: 0.6745098,
+        a: 1.0,
+    },
+    number: Rgba {
+        r: 0.98431373,
+        g: 0.74901961,
+        b: 0.14117647,
+        a: 1.0,
+    },
+    comment: Rgba {
+        r: 0.58039216,
+        g: 0.63921569,
+        b: 0.72156863,
+        a: 1.0,
+    },
+    r#type: Rgba {
+        r: 0.40392157,
+        g: 0.90980392,
+        b: 0.97647059,
+        a: 1.0,
+    },
+};
+
+pub(super) const CODE_PALETTE_LIGHT: CodePalette = CodePalette {
+    bg: Rgba {
+        r: 0.96470588,
+        g: 0.97254902,
+        b: 0.98039216,
+        a: 1.0,
+    },
+    text: Rgba {
+        r: 0.14117647,
+        g: 0.16078431,
+        b: 0.18431373,
+        a: 1.0,
+    },
+    gutter: Rgba {
+        r: 0.54901961,
+        g: 0.58431373,
+        b: 0.62352941,
+        a: 1.0,
+    },
+    accent: Rgba {
+        r: 0.035294118,
+        g: 0.41176471,
+        b: 0.85490196,
+        a: 1.0,
+    },
+    copy_bg: Rgba {
+        r: 0.91764706,
+        g: 0.93333333,
+        b: 0.94901961,
+        a: 1.0,
+    },
+    plain: Rgba {
+        r: 0.14117647,
+        g: 0.16078431,
+        b: 0.18431373,
+        a: 1.0,
+    },
+    keyword: Rgba {
+        r: 0.81176471,
+        g: 0.13333333,
+        b: 0.18039216,
+        a: 1.0,
+    },
+    string: Rgba {
+        r: 0.058823529,
+        g: 0.4627451,
+        b: 0.16862745,
+        a: 1.0,
+    },
+    number: Rgba {
+        r: 0.035294118,
+        g: 0.33333333,
+        b: 0.64705882,
+        a: 1.0,
+    },
+    comment: Rgba {
+        r: 0.43137255,
+        g: 0.46666667,
+        b: 0.50196078,
+        a: 1.0,
+    },
+    r#type: Rgba {
+        r: 0.0,
+        g: 0.43921569,
+        b: 0.56470588,
+        a: 1.0,
+    },
+};
+
+pub(super) fn code_palette(theme: CodeTheme) -> &'static CodePalette {
+    match theme {
+        CodeTheme::Dark => &CODE_PALETTE_DARK,
+        CodeTheme::Light => &CODE_PALETTE_LIGHT,
+    }
+}
+
+impl CodePalette {
+    pub(super) fn token_color(&self, kind: HighlightKind) -> Rgba {
+        match kind {
+            HighlightKind::Plain => self.plain,
+            HighlightKind::Keyword => self.keyword,
+            HighlightKind::String => self.string,
+            HighlightKind::Number => self.number,
+            HighlightKind::Comment => self.comment,
+            HighlightKind::Type => self.r#type,
+        }
     }
 }
 

@@ -129,10 +129,11 @@ impl MarkionApp {
         } else {
             load_session_state(&session_path).unwrap_or_default()
         };
-        let typography = DocumentTypographyMetrics::new(
+        let typography = DocumentTypographyMetrics::new_with_code_font_size(
             preferences.editor_font_size,
             preferences.rendered_font_size,
             preferences.paragraph_spacing,
+            preferences.code_font_size,
         );
         let mut initial_tab = EditorTab::new(document);
         initial_tab.line_height = px(typography.editor_line_height);
@@ -194,6 +195,9 @@ impl MarkionApp {
             focus_mode: preferences.focus_mode,
             typewriter_mode: preferences.typewriter_mode,
             code_line_numbers: preferences.code_line_numbers,
+            code_theme: preferences.code_theme,
+            code_long_line_wrap: preferences.code_long_line_wrap,
+            code_font_size: preferences.code_font_size,
             preview_adaptive_width: preferences.preview_adaptive_width,
             editor_font_size: preferences.editor_font_size,
             rendered_font_size: preferences.rendered_font_size,
@@ -1805,6 +1809,9 @@ impl MarkionApp {
             focus_mode: self.focus_mode,
             typewriter_mode: self.typewriter_mode,
             code_line_numbers: self.code_line_numbers,
+            code_theme: self.code_theme,
+            code_long_line_wrap: self.code_long_line_wrap,
+            code_font_size: self.code_font_size,
             preview_adaptive_width: self.preview_adaptive_width,
             editor_font_size: self.editor_font_size,
             rendered_font_size: self.rendered_font_size,

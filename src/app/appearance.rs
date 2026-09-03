@@ -118,6 +118,9 @@ impl MarkionApp {
                     app.focus_mode = preferences.focus_mode;
                     app.typewriter_mode = preferences.typewriter_mode;
                     app.code_line_numbers = preferences.code_line_numbers;
+                    app.code_theme = preferences.code_theme;
+                    app.code_long_line_wrap = preferences.code_long_line_wrap;
+                    app.code_font_size = preferences.code_font_size;
                     app.preview_adaptive_width = preferences.preview_adaptive_width;
                     app.editor_font_size = preferences.editor_font_size;
                     app.rendered_font_size = preferences.rendered_font_size;
@@ -209,6 +212,66 @@ impl MarkionApp {
         .into();
         self.persist_preferences();
         self.active_menu = None;
+        cx.notify();
+    }
+
+    /// Selects the Light/Dark code display theme. Presentation-only: the
+    /// palette is applied at render time, so no measurement invalidation is
+    /// needed.
+    pub(super) fn set_code_theme(&mut self, theme: CodeTheme, cx: &mut Context<Self>) {
+        if self.code_theme == theme {
+            return;
+        }
+        self.code_theme = theme;
+        self.status = t(
+            self.language,
+            if theme == CodeTheme::Light {
+                Msg::StatusCodeThemeLight
+            } else {
+                Msg::StatusCodeThemeDark
+            },
+        )
+        .into();
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn toggle_code_wrap(&mut self, cx: &mut Context<Self>) {
+        self.code_long_line_wrap = !self.code_long_line_wrap;
+        self.status = t(
+            self.language,
+            if self.code_long_line_wrap {
+                Msg::StatusCodeWrapOn
+            } else {
+                Msg::StatusCodeWrapOff
+            },
+        )
+        .into();
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn set_code_font_size(&mut self, value: i64, cx: &mut Context<Self>) {
+        let value = normalize_code_font_size(value);
+        if self.code_font_size == Some(value) {
+            return;
+        }
+        self.code_font_size = Some(value);
+        self.refresh_typography_measurements(false, true);
+        self.status = self.trf(Msg::StatusCodeFontSize, &[&format!("{value}px")]);
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    /// Clears the explicit code size, returning to reading-size derivation.
+    pub(super) fn clear_code_font_size(&mut self, cx: &mut Context<Self>) {
+        if self.code_font_size.is_none() {
+            return;
+        }
+        self.code_font_size = None;
+        self.refresh_typography_measurements(false, true);
+        self.status = self.tr(Msg::StatusCodeFontSizeFollowReading).into();
+        self.persist_preferences();
         cx.notify();
     }
 

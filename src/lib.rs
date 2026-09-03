@@ -147,14 +147,15 @@ Reference-style links work too: [Markion repository][markion-repo].
 "#;
 
 pub use model::{
-    AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, DEFAULT_CODE_FONT_FAMILY,
-    DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING,
-    DEFAULT_RENDERED_FONT_SIZE, DocumentStats, DocxExportOptions, DocxImagePolicy, DocxPageSize,
-    EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory, ExportBackend, ExportBackendPreference,
-    ExportFormat, ExportOutcome, ExportPreferences, Footnote, FrontMatterError, Heading,
-    HighlightKind, HighlightedSpan, HtmlImgLength, InlineImage, InlineSpan, InlineStyle,
-    MAX_AUTO_SAVE_DELAY_SECS, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES,
-    MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
+    AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, CodeTheme,
+    DEFAULT_CODE_FONT_FAMILY, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL,
+    DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE, DocumentStats, DocxExportOptions,
+    DocxImagePolicy, DocxPageSize, EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory,
+    ExportBackend, ExportBackendPreference, ExportFormat, ExportOutcome, ExportPreferences,
+    Footnote, FrontMatterError, Heading, HighlightKind, HighlightedSpan, HtmlImgLength,
+    InlineImage, InlineSpan, InlineStyle, MAX_AUTO_SAVE_DELAY_SECS, MAX_CODE_FONT_SIZE,
+    MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES, MAX_RENDERED_FONT_SIZE,
+    MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
     MIN_RENDERED_FONT_SIZE, MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle,
     MathSource, PdfExportOptions, PdfPageSize, PreviewBlock, RecoveryDocument, RenderedMath,
     ReplaceResult, RichText, SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch, SearchMatchRange,
@@ -166,9 +167,9 @@ pub use model::{
     VisualProjectionSegment, VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge,
     VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit,
     VisualTableCell, YamlFrontMatter, builtin_theme_definitions, normalize_auto_save_delay_secs,
-    normalize_editor_font_size, normalize_font_family, normalize_heading_menu_max_level,
-    normalize_paragraph_spacing, normalize_rendered_font_size, resolve_font_family,
-    touch_recent_file,
+    normalize_code_font_size, normalize_editor_font_size, normalize_font_family,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    resolve_font_family, touch_recent_file,
 };
 pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
 
@@ -236,11 +237,11 @@ pub use parse::{
 pub use publishing::build_publishing_snapshot;
 
 pub use storage::{
-    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS,
-    MARKDOWN_EXTENSIONS, ImportedImage, OrganizeCandidate, RecoveryInventoryEntry,
-    RecoverySourceState, TEXT_EXTENSIONS, delete_recovery_file, document_asset_dir,
-    document_scope_root, image_extension_supported, import_image_bytes, import_image_file,
-    init_logging, inspect_recovery_files, is_markdown_path, is_text_path, list_recovery_files,
+    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS, ImportedImage,
+    MARKDOWN_EXTENSIONS, OrganizeCandidate, RecoveryInventoryEntry, RecoverySourceState,
+    TEXT_EXTENSIONS, delete_recovery_file, document_asset_dir, document_scope_root,
+    image_extension_supported, import_image_bytes, import_image_file, init_logging,
+    inspect_recovery_files, is_markdown_path, is_text_path, list_recovery_files,
     list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
     load_theme_definition, organize_candidates, parse_app_preferences,
     parse_legacy_app_preferences, parse_session_state, parse_theme_definition,
@@ -1586,8 +1587,7 @@ impl MarkdownDocument {
                     let Some(authored) = body.get(range.clone()) else {
                         continue;
                     };
-                    let Some(relative) =
-                        inline_edit::authored_image_destination_range(authored)
+                    let Some(relative) = inline_edit::authored_image_destination_range(authored)
                     else {
                         continue;
                     };
@@ -4299,8 +4299,14 @@ mod tests {
         );
         let version = doc.version();
         let rewrites = vec![
-            ("../../shared/logo.png".to_string(), "my-note.assets/logo-1.png".to_string()),
-            ("C:/pictures/banner.png".to_string(), "my-note.assets/banner-1.png".to_string()),
+            (
+                "../../shared/logo.png".to_string(),
+                "my-note.assets/logo-1.png".to_string(),
+            ),
+            (
+                "C:/pictures/banner.png".to_string(),
+                "my-note.assets/banner-1.png".to_string(),
+            ),
         ];
 
         let count = doc.rewrite_image_destinations(&rewrites);
@@ -4308,7 +4314,10 @@ mod tests {
         assert_eq!(count, 3);
         assert_eq!(doc.version(), version + 1);
         assert!(doc.text().contains("![icon](my-note.assets/logo-1.png)"));
-        assert!(doc.text().contains("![titled](my-note.assets/logo-1.png \"Caption\")"));
+        assert!(
+            doc.text()
+                .contains("![titled](my-note.assets/logo-1.png \"Caption\")")
+        );
         assert!(doc.text().contains("src=\"my-note.assets/banner-1.png\""));
         assert!(doc.text().contains("![keep](my-note.assets/ok.png)"));
         // A plain link sharing the destination is not an image destination.
@@ -7588,6 +7597,9 @@ Intro.
             focus_mode: true,
             typewriter_mode: true,
             code_line_numbers: false,
+            code_theme: CodeTheme::Light,
+            code_long_line_wrap: false,
+            code_font_size: Some(16),
             preview_adaptive_width: true,
             editor_font_size: 18,
             rendered_font_size: 20,

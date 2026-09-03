@@ -386,6 +386,18 @@ pub enum Msg {
     StatusRenderedFontSize,
     /// {0}=logical pixel value — rendered paragraph spacing changed.
     StatusParagraphSpacing,
+    /// Status: code display theme switched to Light.
+    StatusCodeThemeLight,
+    /// Status: code display theme switched to Dark.
+    StatusCodeThemeDark,
+    /// Status: long code lines soft-wrap inside the block.
+    StatusCodeWrapOn,
+    /// Status: code blocks no longer wrap; horizontal scrolling applies.
+    StatusCodeWrapOff,
+    /// {0}=logical pixel value — code font size changed.
+    StatusCodeFontSize,
+    /// Status: code size cleared, follows the reading size again.
+    StatusCodeFontSizeFollowReading,
     StatusPreferenceResetCanceled,
     StatusLanguageSet,
     StatusRecentFilesCleared,
@@ -714,6 +726,20 @@ pub enum Msg {
     PrefPanelTypewriterMode,
     /// "Code line numbers" row label.
     PrefPanelCodeLineNumbers,
+    /// Section header for code-block display controls on the Appearance tab.
+    PrefPanelCodeSection,
+    /// Code highlight theme (Light/Dark) row label.
+    PrefPanelCodeTheme,
+    /// "Light" code highlight theme choice.
+    PrefPanelCodeThemeLight,
+    /// "Dark" code highlight theme choice.
+    PrefPanelCodeThemeDark,
+    /// "Wrap long lines" toggle row label.
+    PrefPanelCodeWrap,
+    /// Code font-size row label.
+    PrefPanelCodeFontSize,
+    /// Button that clears an explicit code font size back to follow-reading.
+    PrefPanelCodeFontFollowReading,
     /// "Preview adaptive width" row label.
     PrefPanelPreviewAdaptiveWidth,
     /// "Sync scroll" row label.
@@ -3043,9 +3069,13 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusReady => "Ready",
         Msg::StatusContextBranch => "Branch {0}",
         Msg::DialogOrganizeImagesTitle => "Copy local images into the asset folder?",
-        Msg::DialogOrganizeImagesDetail => "{0} local image(s) outside the publishing preview scope will be copied into the document's asset folder and their links rewritten.",
+        Msg::DialogOrganizeImagesDetail => {
+            "{0} local image(s) outside the publishing preview scope will be copied into the document's asset folder and their links rewritten."
+        }
         Msg::DialogButtonOrganize => "Organize",
-        Msg::StatusOrganizeCompleted => "Organized {0} local image(s); the document is not saved yet.",
+        Msg::StatusOrganizeCompleted => {
+            "Organized {0} local image(s); the document is not saved yet."
+        }
         Msg::StatusOrganizePartial => "Organized {0} local image(s); {1} could not be copied.",
         Msg::StatusContextCharacters => "Chars {0}",
         Msg::StatusContextWords => "Words {0}",
@@ -3171,6 +3201,12 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusEditorFontSize => "Source font size: {0}",
         Msg::StatusRenderedFontSize => "Reading font size: {0}",
         Msg::StatusParagraphSpacing => "Paragraph spacing: {0}",
+        Msg::StatusCodeThemeLight => "Code highlight theme: Light",
+        Msg::StatusCodeThemeDark => "Code highlight theme: Dark",
+        Msg::StatusCodeWrapOn => "Code line wrapping on",
+        Msg::StatusCodeWrapOff => "Code line wrapping off",
+        Msg::StatusCodeFontSize => "Code font size: {0}",
+        Msg::StatusCodeFontSizeFollowReading => "Code font size now follows the reading size",
         Msg::StatusPreferenceResetCanceled => "Preference reset canceled",
         Msg::StatusLanguageSet => "Language set",
         Msg::StatusRecentFilesCleared => "Recent files cleared",
@@ -3360,6 +3396,13 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelFocusMode => "Focus mode",
         Msg::PrefPanelTypewriterMode => "Typewriter mode",
         Msg::PrefPanelCodeLineNumbers => "Code line numbers",
+        Msg::PrefPanelCodeSection => "Code blocks",
+        Msg::PrefPanelCodeTheme => "Code highlight theme",
+        Msg::PrefPanelCodeThemeLight => "Light",
+        Msg::PrefPanelCodeThemeDark => "Dark",
+        Msg::PrefPanelCodeWrap => "Wrap long lines",
+        Msg::PrefPanelCodeFontSize => "Code font size",
+        Msg::PrefPanelCodeFontFollowReading => "Follow reading size",
         Msg::PrefPanelPreviewAdaptiveWidth => "Preview adaptive width",
         Msg::PrefPanelSyncScroll => "Sync scroll",
         Msg::PrefPanelShowHiddenFiles => "Show hidden files",
@@ -3587,10 +3630,14 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusReady => "準備完了",
         Msg::StatusContextBranch => "ブランチ {0}",
         Msg::DialogOrganizeImagesTitle => "ローカル画像をアセットフォルダーにコピーしますか？",
-        Msg::DialogOrganizeImagesDetail => "プレビュー範囲外のローカル画像 {0} 枚を文書のアセットフォルダーにコピーし、リンクを書き換えます。",
+        Msg::DialogOrganizeImagesDetail => {
+            "プレビュー範囲外のローカル画像 {0} 枚を文書のアセットフォルダーにコピーし、リンクを書き換えます。"
+        }
         Msg::DialogButtonOrganize => "整理",
         Msg::StatusOrganizeCompleted => "ローカル画像 {0} 枚を整理しました。文書は未保存です。",
-        Msg::StatusOrganizePartial => "ローカル画像 {0} 枚を整理しました。{1} 枚はコピーできませんでした。",
+        Msg::StatusOrganizePartial => {
+            "ローカル画像 {0} 枚を整理しました。{1} 枚はコピーできませんでした。"
+        }
         Msg::StatusContextCharacters => "文字 {0}",
         Msg::StatusContextWords => "単語 {0}",
         Msg::StatusContextLineColumn => "行 {0}、列 {1}",
@@ -3715,6 +3762,12 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusEditorFontSize => "ソースのフォントサイズ: {0}",
         Msg::StatusRenderedFontSize => "閲覧フォントサイズ: {0}",
         Msg::StatusParagraphSpacing => "段落間隔: {0}",
+        Msg::StatusCodeThemeLight => "コードハイライト: ライト",
+        Msg::StatusCodeThemeDark => "コードハイライト: ダーク",
+        Msg::StatusCodeWrapOn => "コード行の折り返しオン",
+        Msg::StatusCodeWrapOff => "コード行の折り返しオフ",
+        Msg::StatusCodeFontSize => "コードフォントサイズ: {0}",
+        Msg::StatusCodeFontSizeFollowReading => "コードフォントサイズは閲覧サイズに追従します",
         Msg::StatusPreferenceResetCanceled => "設定リセットをキャンセルしました",
         Msg::StatusLanguageSet => "言語を設定しました",
         Msg::StatusRecentFilesCleared => "最近使ったファイルをクリアしました",
@@ -3908,6 +3961,13 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelFocusMode => "集中モード",
         Msg::PrefPanelTypewriterMode => "タイプライターモード",
         Msg::PrefPanelCodeLineNumbers => "コード行番号",
+        Msg::PrefPanelCodeSection => "コードブロック",
+        Msg::PrefPanelCodeTheme => "コードハイライトテーマ",
+        Msg::PrefPanelCodeThemeLight => "ライト",
+        Msg::PrefPanelCodeThemeDark => "ダーク",
+        Msg::PrefPanelCodeWrap => "長い行を折り返す",
+        Msg::PrefPanelCodeFontSize => "コードフォントサイズ",
+        Msg::PrefPanelCodeFontFollowReading => "閲覧サイズに追従",
         Msg::PrefPanelPreviewAdaptiveWidth => "プレビュー幅自動調整",
         Msg::PrefPanelSidebar => "サイドバー",
         Msg::PrefPanelSyncScroll => "同期スクロール",
@@ -4118,11 +4178,19 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusCaseInsensitiveFind => "Recherche insensible à la casse",
         Msg::StatusReady => "Prêt",
         Msg::StatusContextBranch => "Branche {0}",
-        Msg::DialogOrganizeImagesTitle => "Copier les images locales dans le dossier de ressources ?",
-        Msg::DialogOrganizeImagesDetail => "{0} image(s) locale(s) hors du périmètre d’aperçu seront copiées dans le dossier de ressources du document et leurs liens réécrits.",
+        Msg::DialogOrganizeImagesTitle => {
+            "Copier les images locales dans le dossier de ressources ?"
+        }
+        Msg::DialogOrganizeImagesDetail => {
+            "{0} image(s) locale(s) hors du périmètre d’aperçu seront copiées dans le dossier de ressources du document et leurs liens réécrits."
+        }
         Msg::DialogButtonOrganize => "Organiser",
-        Msg::StatusOrganizeCompleted => "{0} image(s) locale(s) organisée(s) ; le document n’est pas enregistré.",
-        Msg::StatusOrganizePartial => "{0} image(s) locale(s) organisée(s) ; {1} n’ont pas pu être copiées.",
+        Msg::StatusOrganizeCompleted => {
+            "{0} image(s) locale(s) organisée(s) ; le document n’est pas enregistré."
+        }
+        Msg::StatusOrganizePartial => {
+            "{0} image(s) locale(s) organisée(s) ; {1} n’ont pas pu être copiées."
+        }
         Msg::StatusContextCharacters => "Car. {0}",
         Msg::StatusContextWords => "Mots {0}",
         Msg::StatusContextLineColumn => "L {0}, C {1}",
@@ -4250,6 +4318,14 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusEditorFontSize => "Taille de la source : {0}",
         Msg::StatusRenderedFontSize => "Taille de lecture : {0}",
         Msg::StatusParagraphSpacing => "Espacement des paragraphes : {0}",
+        Msg::StatusCodeThemeLight => "Thème de code : clair",
+        Msg::StatusCodeThemeDark => "Thème de code : sombre",
+        Msg::StatusCodeWrapOn => "Retour à la ligne du code activé",
+        Msg::StatusCodeWrapOff => "Retour à la ligne du code désactivé",
+        Msg::StatusCodeFontSize => "Taille de police du code : {0}",
+        Msg::StatusCodeFontSizeFollowReading => {
+            "La taille du code suit désormais la taille de lecture"
+        }
         Msg::StatusPreferenceResetCanceled => "Réinitialisation des préférences annulée",
         Msg::StatusLanguageSet => "Langue définie",
         Msg::StatusRecentFilesCleared => "Fichiers récents effacés",
@@ -4281,9 +4357,13 @@ fn fr(msg: Msg) -> &'static str {
         }
         Msg::StatusExportFailed => "Échec de l'exportation : {0}",
         Msg::StatusPublishingOpening => "Ouverture de l’espace local de publication WeChat…",
-        Msg::StatusOrganizeRequiresSave => "Enregistrez le document avant d’organiser les images locales.",
+        Msg::StatusOrganizeRequiresSave => {
+            "Enregistrez le document avant d’organiser les images locales."
+        }
         Msg::StatusOrganizeNothingToDo => "Aucune image locale à organiser.",
-        Msg::StatusOrganizeWaitingConfirm => "En attente de confirmation pour organiser les images locales…",
+        Msg::StatusOrganizeWaitingConfirm => {
+            "En attente de confirmation pour organiser les images locales…"
+        }
         Msg::StatusOrganizeCanceled => "Organisation des images locales annulée.",
         Msg::StatusPublishingOpened => "Espace local de publication WeChat ouvert",
         Msg::StatusPublishSetupFailed => "Échec de la préparation de l’espace de publication : {0}",
@@ -4448,6 +4528,13 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelFocusMode => "Mode concentré",
         Msg::PrefPanelTypewriterMode => "Mode machine à écrire",
         Msg::PrefPanelCodeLineNumbers => "Numéros de ligne de code",
+        Msg::PrefPanelCodeSection => "Blocs de code",
+        Msg::PrefPanelCodeTheme => "Thème de coloration du code",
+        Msg::PrefPanelCodeThemeLight => "Clair",
+        Msg::PrefPanelCodeThemeDark => "Sombre",
+        Msg::PrefPanelCodeWrap => "Renvoyer les lignes longues",
+        Msg::PrefPanelCodeFontSize => "Taille de police du code",
+        Msg::PrefPanelCodeFontFollowReading => "Suivre la taille de lecture",
         Msg::PrefPanelPreviewAdaptiveWidth => "Largeur adaptative de l'aperçu",
         Msg::PrefPanelSidebar => "Barre latérale",
         Msg::PrefPanelSyncScroll => "Défilement synchronisé",
@@ -4663,10 +4750,16 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusReady => "Bereit",
         Msg::StatusContextBranch => "Branch {0}",
         Msg::DialogOrganizeImagesTitle => "Lokale Bilder in den Ressourcenordner kopieren?",
-        Msg::DialogOrganizeImagesDetail => "{0} lokale Bilder außerhalb des Vorschaubereichs werden in den Ressourcenordner des Dokuments kopiert und ihre Verweise neu geschrieben.",
+        Msg::DialogOrganizeImagesDetail => {
+            "{0} lokale Bilder außerhalb des Vorschaubereichs werden in den Ressourcenordner des Dokuments kopiert und ihre Verweise neu geschrieben."
+        }
         Msg::DialogButtonOrganize => "Ordnen",
-        Msg::StatusOrganizeCompleted => "{0} lokale Bilder geordnet; das Dokument ist nicht gespeichert.",
-        Msg::StatusOrganizePartial => "{0} lokale Bilder geordnet; {1} konnten nicht kopiert werden.",
+        Msg::StatusOrganizeCompleted => {
+            "{0} lokale Bilder geordnet; das Dokument ist nicht gespeichert."
+        }
+        Msg::StatusOrganizePartial => {
+            "{0} lokale Bilder geordnet; {1} konnten nicht kopiert werden."
+        }
         Msg::StatusContextCharacters => "Zeichen {0}",
         Msg::StatusContextWords => "Wörter {0}",
         Msg::StatusContextLineColumn => "Z. {0}, Sp. {1}",
@@ -4790,6 +4883,12 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusEditorFontSize => "Quelltext-Schriftgröße: {0}",
         Msg::StatusRenderedFontSize => "Leseschriftgröße: {0}",
         Msg::StatusParagraphSpacing => "Absatzabstand: {0}",
+        Msg::StatusCodeThemeLight => "Code-Design: Hell",
+        Msg::StatusCodeThemeDark => "Code-Design: Dunkel",
+        Msg::StatusCodeWrapOn => "Code-Zeilenumbruch ein",
+        Msg::StatusCodeWrapOff => "Code-Zeilenumbruch aus",
+        Msg::StatusCodeFontSize => "Code-Schriftgröße: {0}",
+        Msg::StatusCodeFontSizeFollowReading => "Code-Schriftgröße folgt nun der Lesegröße",
         Msg::StatusPreferenceResetCanceled => "Zurücksetzen der Einstellungen abgebrochen",
         Msg::StatusLanguageSet => "Sprache gesetzt",
         Msg::StatusRecentFilesCleared => "Zuletzt geöffnete Dateien geleert",
@@ -4821,7 +4920,9 @@ fn de(msg: Msg) -> &'static str {
         }
         Msg::StatusExportFailed => "Export fehlgeschlagen: {0}",
         Msg::StatusPublishingOpening => "Lokaler WeChat-Veröffentlichungsbereich wird geöffnet…",
-        Msg::StatusOrganizeRequiresSave => "Speichern Sie das Dokument, bevor Sie lokale Bilder ordnen.",
+        Msg::StatusOrganizeRequiresSave => {
+            "Speichern Sie das Dokument, bevor Sie lokale Bilder ordnen."
+        }
         Msg::StatusOrganizeNothingToDo => "Keine lokalen Bilder zu ordnen.",
         Msg::StatusOrganizeWaitingConfirm => "Warte auf Bestätigung zum Ordnen lokaler Bilder…",
         Msg::StatusOrganizeCanceled => "Ordnen lokaler Bilder abgebrochen.",
@@ -4986,6 +5087,13 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelFocusMode => "Fokusmodus",
         Msg::PrefPanelTypewriterMode => "Schreibmaschinenmodus",
         Msg::PrefPanelCodeLineNumbers => "Code-Zeilennummern",
+        Msg::PrefPanelCodeSection => "Codeblöcke",
+        Msg::PrefPanelCodeTheme => "Code-Hervorhebungsthema",
+        Msg::PrefPanelCodeThemeLight => "Hell",
+        Msg::PrefPanelCodeThemeDark => "Dunkel",
+        Msg::PrefPanelCodeWrap => "Lange Zeilen umbrechen",
+        Msg::PrefPanelCodeFontSize => "Code-Schriftgröße",
+        Msg::PrefPanelCodeFontFollowReading => "Lesegröße folgen",
         Msg::PrefPanelPreviewAdaptiveWidth => "Adaptive Vorschaubreite",
         Msg::PrefPanelSidebar => "Seitenleiste",
         Msg::PrefPanelSyncScroll => "Synchrones Scrollen",
@@ -5201,10 +5309,16 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusReady => "Listo",
         Msg::StatusContextBranch => "Rama {0}",
         Msg::DialogOrganizeImagesTitle => "¿Copiar las imágenes locales en la carpeta de recursos?",
-        Msg::DialogOrganizeImagesDetail => "Se copiarán {0} imagen(es) local(es) fuera del alcance de la vista previa en la carpeta de recursos del documento y se reescribirán sus enlaces.",
+        Msg::DialogOrganizeImagesDetail => {
+            "Se copiarán {0} imagen(es) local(es) fuera del alcance de la vista previa en la carpeta de recursos del documento y se reescribirán sus enlaces."
+        }
         Msg::DialogButtonOrganize => "Organizar",
-        Msg::StatusOrganizeCompleted => "Se organizaron {0} imagen(es) local(es); el documento no está guardado.",
-        Msg::StatusOrganizePartial => "Se organizaron {0} imagen(es) local(es); {1} no se pudieron copiar.",
+        Msg::StatusOrganizeCompleted => {
+            "Se organizaron {0} imagen(es) local(es); el documento no está guardado."
+        }
+        Msg::StatusOrganizePartial => {
+            "Se organizaron {0} imagen(es) local(es); {1} no se pudieron copiar."
+        }
         Msg::StatusContextCharacters => "Caracteres {0}",
         Msg::StatusContextWords => "Palabras {0}",
         Msg::StatusContextLineColumn => "Lín. {0}, Col. {1}",
@@ -5328,6 +5442,14 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusEditorFontSize => "Tamaño de fuente del código: {0}",
         Msg::StatusRenderedFontSize => "Tamaño de lectura: {0}",
         Msg::StatusParagraphSpacing => "Espacio entre párrafos: {0}",
+        Msg::StatusCodeThemeLight => "Tema de código: claro",
+        Msg::StatusCodeThemeDark => "Tema de código: oscuro",
+        Msg::StatusCodeWrapOn => "Ajuste de líneas de código activado",
+        Msg::StatusCodeWrapOff => "Ajuste de líneas de código desactivado",
+        Msg::StatusCodeFontSize => "Tamaño de fuente del código: {0}",
+        Msg::StatusCodeFontSizeFollowReading => {
+            "El tamaño del código ahora sigue el tamaño de lectura"
+        }
         Msg::StatusPreferenceResetCanceled => "Restablecimiento de preferencias cancelado",
         Msg::StatusLanguageSet => "Idioma establecido",
         Msg::StatusRecentFilesCleared => "Archivos recientes borrados",
@@ -5359,9 +5481,13 @@ fn es(msg: Msg) -> &'static str {
         }
         Msg::StatusExportFailed => "Error de exportación: {0}",
         Msg::StatusPublishingOpening => "Abriendo el espacio local de publicación de WeChat…",
-        Msg::StatusOrganizeRequiresSave => "Guarda el documento antes de organizar imágenes locales.",
+        Msg::StatusOrganizeRequiresSave => {
+            "Guarda el documento antes de organizar imágenes locales."
+        }
         Msg::StatusOrganizeNothingToDo => "No hay imágenes locales que organizar.",
-        Msg::StatusOrganizeWaitingConfirm => "Esperando confirmación para organizar imágenes locales…",
+        Msg::StatusOrganizeWaitingConfirm => {
+            "Esperando confirmación para organizar imágenes locales…"
+        }
         Msg::StatusOrganizeCanceled => "Se canceló la organización de imágenes locales.",
         Msg::StatusPublishingOpened => "Espacio local de publicación de WeChat abierto",
         Msg::StatusPublishSetupFailed => "Error al preparar el espacio de publicación: {0}",
@@ -5510,6 +5636,13 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelFocusMode => "Modo concentración",
         Msg::PrefPanelTypewriterMode => "Modo máquina de escribir",
         Msg::PrefPanelCodeLineNumbers => "Números de línea de código",
+        Msg::PrefPanelCodeSection => "Bloques de código",
+        Msg::PrefPanelCodeTheme => "Tema de resaltado de código",
+        Msg::PrefPanelCodeThemeLight => "Claro",
+        Msg::PrefPanelCodeThemeDark => "Oscuro",
+        Msg::PrefPanelCodeWrap => "Ajustar líneas largas",
+        Msg::PrefPanelCodeFontSize => "Tamaño de fuente del código",
+        Msg::PrefPanelCodeFontFollowReading => "Seguir tamaño de lectura",
         Msg::PrefPanelPreviewAdaptiveWidth => "Ancho adaptativo de vista previa",
         Msg::PrefPanelSidebar => "Barra lateral",
         Msg::PrefPanelSyncScroll => "Desplazamiento sincronizado",
@@ -5730,7 +5863,9 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusReady => "就绪",
         Msg::StatusContextBranch => "分支 {0}",
         Msg::DialogOrganizeImagesTitle => "将本地图片复制到资源文件夹？",
-        Msg::DialogOrganizeImagesDetail => "预览范围外的 {0} 张本地图片将被复制到文档的资源文件夹，并重写对应链接。",
+        Msg::DialogOrganizeImagesDetail => {
+            "预览范围外的 {0} 张本地图片将被复制到文档的资源文件夹，并重写对应链接。"
+        }
         Msg::DialogButtonOrganize => "整理",
         Msg::StatusOrganizeCompleted => "已整理 {0} 张本地图片；文档尚未保存。",
         Msg::StatusOrganizePartial => "已整理 {0} 张本地图片；{1} 张复制失败。",
@@ -5858,6 +5993,12 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusEditorFontSize => "源码字号：{0}",
         Msg::StatusRenderedFontSize => "阅读字号：{0}",
         Msg::StatusParagraphSpacing => "段落间距：{0}",
+        Msg::StatusCodeThemeLight => "代码高亮主题：浅色",
+        Msg::StatusCodeThemeDark => "代码高亮主题：深色",
+        Msg::StatusCodeWrapOn => "代码自动换行已开启",
+        Msg::StatusCodeWrapOff => "代码自动换行已关闭",
+        Msg::StatusCodeFontSize => "代码字号：{0}",
+        Msg::StatusCodeFontSizeFollowReading => "代码字号已跟随阅读字号",
         Msg::StatusPreferenceResetCanceled => "已取消重置首选项",
         Msg::StatusLanguageSet => "已设置语言",
         Msg::StatusRecentFilesCleared => "已清除最近文件",
@@ -6039,6 +6180,13 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelFocusMode => "专注模式",
         Msg::PrefPanelTypewriterMode => "打字机模式",
         Msg::PrefPanelCodeLineNumbers => "代码行号",
+        Msg::PrefPanelCodeSection => "代码块",
+        Msg::PrefPanelCodeTheme => "代码高亮主题",
+        Msg::PrefPanelCodeThemeLight => "浅色",
+        Msg::PrefPanelCodeThemeDark => "深色",
+        Msg::PrefPanelCodeWrap => "长行自动换行",
+        Msg::PrefPanelCodeFontSize => "代码字号",
+        Msg::PrefPanelCodeFontFollowReading => "跟随阅读字号",
         Msg::PrefPanelPreviewAdaptiveWidth => "预览自适应宽度",
         Msg::PrefPanelSyncScroll => "同步滚动",
         Msg::PrefPanelShowHiddenFiles => "显示隐藏的文件夹/文件",
@@ -6253,7 +6401,9 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusReady => "就緒",
         Msg::StatusContextBranch => "分支 {0}",
         Msg::DialogOrganizeImagesTitle => "將本機圖片複製到資源資料夾？",
-        Msg::DialogOrganizeImagesDetail => "預覽範圍外的 {0} 張本機圖片將被複製到文件的資源資料夾，並改寫對應連結。",
+        Msg::DialogOrganizeImagesDetail => {
+            "預覽範圍外的 {0} 張本機圖片將被複製到文件的資源資料夾，並改寫對應連結。"
+        }
         Msg::DialogButtonOrganize => "整理",
         Msg::StatusOrganizeCompleted => "已整理 {0} 張本機圖片；文件尚未儲存。",
         Msg::StatusOrganizePartial => "已整理 {0} 張本機圖片；{1} 張複製失敗。",
@@ -6381,6 +6531,12 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusEditorFontSize => "原始碼字號：{0}",
         Msg::StatusRenderedFontSize => "閱讀字號：{0}",
         Msg::StatusParagraphSpacing => "段落間距：{0}",
+        Msg::StatusCodeThemeLight => "程式碼高亮主題：淺色",
+        Msg::StatusCodeThemeDark => "程式碼高亮主題：深色",
+        Msg::StatusCodeWrapOn => "程式碼自動換行已開啟",
+        Msg::StatusCodeWrapOff => "程式碼自動換行已關閉",
+        Msg::StatusCodeFontSize => "程式碼字號：{0}",
+        Msg::StatusCodeFontSizeFollowReading => "程式碼字號已跟隨閱讀字號",
         Msg::StatusPreferenceResetCanceled => "已取消重設偏好設定",
         Msg::StatusLanguageSet => "已設定語言",
         Msg::StatusRecentFilesCleared => "已清除最近檔案",
@@ -6562,6 +6718,13 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelFocusMode => "專注模式",
         Msg::PrefPanelTypewriterMode => "打字機模式",
         Msg::PrefPanelCodeLineNumbers => "程式碼行號",
+        Msg::PrefPanelCodeSection => "程式碼區塊",
+        Msg::PrefPanelCodeTheme => "程式碼高亮主題",
+        Msg::PrefPanelCodeThemeLight => "淺色",
+        Msg::PrefPanelCodeThemeDark => "深色",
+        Msg::PrefPanelCodeWrap => "長行自動換行",
+        Msg::PrefPanelCodeFontSize => "程式碼字號",
+        Msg::PrefPanelCodeFontFollowReading => "跟隨閱讀字號",
         Msg::PrefPanelPreviewAdaptiveWidth => "預覽自適應寬度",
         Msg::PrefPanelSyncScroll => "同步捲動",
         Msg::PrefPanelShowHiddenFiles => "顯示隱藏的資料夾/檔案",
@@ -7286,6 +7449,12 @@ mod tests {
             Msg::StatusEditorFontSize,
             Msg::StatusRenderedFontSize,
             Msg::StatusParagraphSpacing,
+            Msg::StatusCodeThemeLight,
+            Msg::StatusCodeThemeDark,
+            Msg::StatusCodeWrapOn,
+            Msg::StatusCodeWrapOff,
+            Msg::StatusCodeFontSize,
+            Msg::StatusCodeFontSizeFollowReading,
             Msg::StatusPreferenceResetCanceled,
             Msg::StatusLanguageSet,
             Msg::StatusRecentFilesCleared,
@@ -7433,6 +7602,13 @@ mod tests {
             Msg::PrefPanelFocusMode,
             Msg::PrefPanelTypewriterMode,
             Msg::PrefPanelCodeLineNumbers,
+            Msg::PrefPanelCodeSection,
+            Msg::PrefPanelCodeTheme,
+            Msg::PrefPanelCodeThemeLight,
+            Msg::PrefPanelCodeThemeDark,
+            Msg::PrefPanelCodeWrap,
+            Msg::PrefPanelCodeFontSize,
+            Msg::PrefPanelCodeFontFollowReading,
             Msg::PrefPanelPreviewAdaptiveWidth,
             Msg::PrefPanelSyncScroll,
             Msg::PrefPanelShowHiddenFiles,
