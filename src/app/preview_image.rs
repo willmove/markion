@@ -745,6 +745,18 @@ impl MarkionApp {
                     .background_spawn(async move { load_preview_image(&load_key) })
                     .await;
                 let _ = this.update(cx, |app, cx| {
+                    if result.is_err()
+                        && let Some(url) = key.data_url()
+                        && let Some(fingerprint) = markion::destination_data_uri_fingerprint(url)
+                    {
+                        // Record the failure by content fingerprint so the
+                        // image source toggle can force its payload visible
+                        // without rebuilding the multi-megabyte key per frame.
+                        if app.failed_data_uri_fingerprints.len() >= 4096 {
+                            app.failed_data_uri_fingerprints.clear();
+                        }
+                        app.failed_data_uri_fingerprints.insert(fingerprint);
+                    }
                     for image in app.preview_image_cache.complete(&key, result) {
                         cx.drop_image(image, None);
                     }

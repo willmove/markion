@@ -46,14 +46,14 @@ use markion::{
     VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind, adjacent_reorder_target,
     backend_status_msg, block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
     build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
-    builtin_theme_definitions, bundled_resource_path, check_path_state, default_preferences_path,
-    default_recovery_dir, default_session_path, default_themes_dir, delete_block,
-    delete_recovery_file, diagram_backend_id, duplicate_block, highlight_code, html_preview_parts,
-    html_preview_plain_text, html_table_column_weights, html_table_grid_line_end,
-    html_table_row_has_visible_header, image_extension_supported, import_image_bytes,
-    import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
-    is_text_path, list_theme_definitions, load_app_preferences, load_recovery_file,
-    load_session_state, markdown_reference, normalize_auto_save_delay_secs,
+    builtin_theme_definitions, bundled_resource_path, check_path_state, data_uri_payload_ranges,
+    default_preferences_path, default_recovery_dir, default_session_path, default_themes_dir,
+    delete_block, delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
+    highlight_code, html_preview_parts, html_preview_plain_text, html_table_column_weights,
+    html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
+    import_image_bytes, import_image_file, inline_image_at, inline_link_at, inspect_recovery_files,
+    is_markdown_path, is_text_path, list_theme_definitions, load_app_preferences,
+    load_recovery_file, load_session_state, markdown_reference, normalize_auto_save_delay_secs,
     normalize_code_font_size, normalize_editor_font_size, normalize_heading_menu_max_level,
     normalize_paragraph_spacing, normalize_rendered_font_size, organize_candidates, p0_t, p0_tf,
     p1_t, p1_tf, pandoc_available, read_document_source, reorder_block, resolve_font_family,
@@ -2322,6 +2322,16 @@ struct MarkionApp {
     diagram_cache: DiagramCache,
     /// Decoded Markdown preview images owned by Markion (not GPUI loading_assets).
     preview_image_cache: PreviewImageCache,
+    /// Content fingerprints of data-URI destinations whose decode failed.
+    /// The image source toggle matches against this set to force the payload
+    /// editor visible without re-deriving a multi-megabyte cache key per
+    /// frame. Bounded by the number of distinct failed destinations seen.
+    pub(super) failed_data_uri_fingerprints: std::collections::HashSet<u64>,
+    /// Field projections built this session (interior-mutable: element
+    /// construction runs inside the render borrow). The collapsed-affordance
+    /// gate asserts this stays flat while payload editors are hidden.
+    #[cfg(test)]
+    pub(super) visual_field_projection_builds: std::cell::Cell<usize>,
     /// Presentation-only formula results shared across tabs and document versions.
     math_cache: MathCache,
     /// Active interface language. Persisted via `AppPreferences::language`.

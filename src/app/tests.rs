@@ -336,6 +336,7 @@ fn visual_pinyin_preedit_preserves_overlapped_inline_style() {
         segments: vec![markion::VisualProjectionSegment {
             display_range: 0..text.len(),
             source_range: 0..text.len(),
+            atomic: false,
         }],
         spans: vec![markion::VisualProjectionSpan {
             display_range: 0..text.len(),
@@ -4715,10 +4716,12 @@ fn visual_text_positions_map_to_source_content_ranges() {
             markion::VisualProjectionSegment {
                 display_range: 0..5,
                 source_range: 2..7,
+                atomic: false,
             },
             markion::VisualProjectionSegment {
                 display_range: 5..9,
                 source_range: 11..15,
+                atomic: false,
             },
         ],
         spans: Vec::new(),
@@ -4778,36 +4781,22 @@ fn visual_caret_affinity_is_ephemeral_and_preserves_derived_caches() {
 
 #[test]
 fn visual_navigation_lines_choose_nearest_preferred_x() {
-    let line = VisualNavigationLine {
-        y: px(20.),
-        carets: vec![
-            VisualNavigationCaret {
-                source_offset: 3,
-                x: px(10.),
-            },
-            VisualNavigationCaret {
-                source_offset: 8,
-                x: px(50.),
-            },
-            VisualNavigationCaret {
-                source_offset: 13,
-                x: px(90.),
-            },
-        ],
-    };
-    assert_eq!(line.closest_source(px(54.)), Some(8));
-    assert_eq!(line.closest_source(px(88.)), Some(13));
-
+    // With the line-window snapshot the nearest-caret behavior lives in
+    // `closest_source_on_line`, which needs a real layout; the behavioral
+    // coverage moved to the windowed Up/Down navigation tests. What stays
+    // here is the source lookup contract on windows that carry no lines.
     let snapshot = VisualNavigationSnapshot {
         document_version: 7,
         block_index: 2,
         source_selection: 8..8,
         marked_range: None,
         source_island: false,
-        lines: vec![line],
+        lines: Vec::new(),
     };
-    assert_eq!(snapshot.line_index_for_source(8), Some(0));
-    assert_eq!(snapshot.caret_x_for_source(8), Some(px(50.)));
+    assert_eq!(snapshot.line_index_for_source(8), None);
+    assert_eq!(snapshot.caret_x_for_source(8), None);
+    assert_eq!(snapshot.closest_source_on_line(0, px(54.)), None);
+    assert_eq!(snapshot.line_boundary_source(0, true), None);
 }
 
 #[test]
@@ -4833,13 +4822,7 @@ fn visual_interaction_state_does_not_invalidate_document_derived_state() {
         source_selection: 0..0,
         marked_range: Some(6..10),
         source_island: false,
-        lines: vec![VisualNavigationLine {
-            y: px(0.),
-            carets: vec![VisualNavigationCaret {
-                source_offset: 0,
-                x: px(0.),
-            }],
-        }],
+        lines: Vec::new(),
     });
 
     assert_eq!(tab.document.version(), version);
@@ -6511,6 +6494,167 @@ fn visual_edit_navigation_follows_wrapped_lines_without_reparsing(cx: &mut TestA
         assert!(!tab.selected_range.is_empty());
         assert_eq!(tab.document.version(), version);
         assert!(tab.visual_caret_paint_count <= tab.visual_projection_paint_count);
+    });
+}
+
+#[gpui::test]
+fn visual_navigation_line_windows_walk_wrapped_lines_both_ways(cx: &mut TestAppContext) {
+    let source = (0..160)
+        .map(|index| format!("word{index} "))
+        .collect::<String>();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // Expected caret offsets: the first source offset of every wrapped line,
+    // taken straight from the painted line windows.
+    let line_starts = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let snapshot = tab
+            .visual_navigation_snapshots
+            .get(&0)
+            .expect("focused visual row should register navigation geometry");
+        assert!(snapshot.lines.len() > 2, "paragraph must soft-wrap");
+        snapshot
+            .lines
+            .iter()
+            .map(|line| {
+                line.windows
+                    .first()
+                    .map(|window| {
+                        window
+                            .projection
+                            .boundary_candidates(window.start_display)
+                            .downstream_source
+                    })
+                    .expect("every line carries at least one window")
+            })
+            .collect::<Vec<_>>()
+    });
+
+    // Down walks every wrapped line, landing on each line's first source.
+    for expected in line_starts.iter().skip(1) {
+        cx.dispatch_action(Down);
+        cx.run_until_parked();
+        let cursor = app.update(cx, |app, _| app.active_tab().cursor_offset());
+        assert_eq!(
+            cursor, *expected,
+            "Down should land on the next wrapped line's start"
+        );
+    }
+
+    // Up walks back the same ladder.
+    for expected in line_starts.iter().rev().skip(1) {
+        cx.dispatch_action(Up);
+        cx.run_until_parked();
+        let cursor = app.update(cx, |app, _| app.active_tab().cursor_offset());
+        assert_eq!(cursor, *expected, "Up should land on the previous start");
+    }
+
+    // Home/End resolve against the same line windows: line boundaries are
+    // the row's first and last source offsets.
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let snapshot = tab.visual_navigation_snapshots.get(&0).unwrap();
+        assert_eq!(
+            snapshot.line_boundary_source(1, false),
+            Some(line_starts[1])
+        );
+        let end = snapshot
+            .line_boundary_source(1, true)
+            .expect("line end resolves");
+        assert!(end > line_starts[1]);
+        assert!(end <= line_starts[2]);
+    });
+}
+
+#[gpui::test]
+fn visual_navigation_snapshot_queries_stay_proportional_to_lines(cx: &mut TestAppContext) {
+    let source = (0..400)
+        .map(|index| format!("word{index} "))
+        .collect::<String>();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (line_count, before) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let snapshot = tab.visual_navigation_snapshots.get(&0).unwrap();
+        (snapshot.lines.len(), tab.visual_navigation_position_queries)
+    });
+    // The paragraph wraps into a handful of lines while carrying thousands of
+    // characters; a per-character snapshot would blow this bound instantly.
+    assert!(line_count * 40 < source.len(), "fixture must wrap heavily");
+
+    cx.dispatch_action(Down);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let delta = app.active_tab().visual_navigation_position_queries - before;
+        // A few repaints per action are fine; the count must scale with the
+        // wrapped lines, never with the character count.
+        assert!(
+            delta <= line_count * 8,
+            "delta {delta} vs lines {line_count}"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_data_uri_payload_navigation_stays_on_token_boundaries(cx: &mut TestAppContext) {
+    let payload = "QUJD".repeat(64);
+    let source = format!("![icon](data:image/png;base64,{payload})");
+    let document = MarkdownDocument::from_text(source);
+    let token_start = image_data_uri_token(&document).start;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| app.move_to(token_start, cx));
+    cx.run_until_parked();
+    // The payload spans one visual line; Up/Down leave the field (or clamp),
+    // and the caret never rests strictly inside the elided byte range.
+    for _ in 0..2 {
+        cx.dispatch_action(Down);
+        cx.run_until_parked();
+        cx.dispatch_action(Up);
+        cx.run_until_parked();
+    }
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let cursor = tab.cursor_offset();
+        let token_end = image_data_uri_token(&tab.document);
+        assert!(
+            cursor <= token_end.start || cursor >= token_end.end,
+            "caret must never rest inside the elided payload (cursor {cursor})"
+        );
     });
 }
 
@@ -12663,7 +12807,9 @@ fn visual_image_source_toggle_expands_collapses_and_edits_exactly(cx: &mut TestA
         .visual_blocks()
         .into_iter()
         .find_map(|block| match block.editor {
-            Some(VisualBlockEditor::Image { payload }) => Some((block.id, payload.source_range)),
+            Some(VisualBlockEditor::Image { payload, .. }) => {
+                Some((block.id, payload.source_range))
+            }
             _ => None,
         })
         .expect("image block should carry a whole-span payload editor");
@@ -12765,6 +12911,450 @@ fn visual_image_failed_load_forces_the_source_payload(cx: &mut TestAppContext) {
     });
 }
 
+fn image_data_uri_token(document: &MarkdownDocument) -> std::ops::Range<usize> {
+    document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match &block.editor {
+            Some(VisualBlockEditor::Image { payload, .. }) => {
+                let text = document.text().to_string();
+                data_uri_payload_ranges(&text, payload.source_range.clone()).pop()
+            }
+            _ => None,
+        })
+        .expect("data URI image payload carries one elided token")
+}
+
+#[test]
+fn visual_data_uri_island_projection_elides_via_scanner() {
+    // A title containing `)` defeats the exact-span proof, so the image falls
+    // back to a source island; the island's payload projection splices the
+    // same token as every other surface.
+    let payload = "QUJD".repeat(8);
+    let source = format!("![a](data:image/png;base64,{payload} \"ti)tle\")");
+    let field = VisualEditorField {
+        kind: VisualEditorFieldKind::HtmlSource,
+        source_range: 0..source.len(),
+    };
+    let (projection, tokens) = visual_payload_field_projection(&source, &field);
+    assert_eq!(tokens.len(), 1);
+    assert!(projection.text.starts_with("![a](data:image/png;base64,…"));
+    assert!(projection.text.ends_with("… \"ti)tle\")"));
+    assert!(!projection.text.contains(&payload));
+}
+
+#[gpui::test]
+fn visual_data_uri_html_block_payload_elides_src_token(cx: &mut TestAppContext) {
+    let payload = "QUJD".repeat(48);
+    let source = format!(r#"<p><img src="data:image/png;base64,{payload}" alt="icon"></p>"#);
+    let document = MarkdownDocument::from_text(source.clone());
+    let (block_id, field_range) = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Html { payload }) => {
+                Some((block.id, payload.source_range.clone()))
+            }
+            _ => None,
+        })
+        .expect("html block carries a payload editor");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().toggle_visual_source_expanded(block_id);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| app.move_to(field_range.start + 2, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let (text, _) = app
+            .active_tab()
+            .visual_last_projection
+            .as_ref()
+            .expect("html payload projection paints with the caret inside");
+        assert!(text.contains(r#"<img src="data:image/png;base64,…"#));
+        assert!(text.contains("192 B"));
+        assert!(text.ends_with(r#"" alt="icon"></p>"#));
+        assert!(!text.contains(&payload));
+    });
+}
+
+#[gpui::test]
+fn visual_data_uri_inline_image_reveal_elides_in_prose(cx: &mut TestAppContext) {
+    let payload = "QUJD".repeat(24);
+    let source = format!("lead ![img](data:image/png;base64,{payload}) tail");
+    let image_start = source.find("![img]").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source.clone()))];
+        app.active_tab_mut().selected_range = image_start + 3..image_start + 3;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let (text, revealed) = app
+            .active_tab()
+            .visual_last_projection
+            .as_ref()
+            .expect("focused prose should paint a visual projection");
+        assert_eq!(
+            revealed.len(),
+            1,
+            "the image atom reveals its authored span"
+        );
+        assert!(text.contains("lead ![img](data:image/png;base64,…"));
+        assert!(text.ends_with("…) tail"));
+        assert!(text.contains("96 B"));
+        assert!(!text.contains(&payload));
+    });
+}
+
+#[gpui::test]
+fn visual_data_uri_table_cell_reveal_elides_payload(cx: &mut TestAppContext) {
+    let payload = "QUJD".repeat(16);
+    let source =
+        format!("| a | b |\n| --- | --- |\n| x | ![img](data:image/png;base64,{payload}) |");
+    let payload_offset = source.find("![img]").unwrap() + 3;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source.clone()))];
+        app.active_tab_mut().selected_range = payload_offset..payload_offset;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let (text, _) = app
+            .active_tab()
+            .visual_last_projection
+            .as_ref()
+            .expect("focused table cell paints its source projection");
+        assert!(text.contains("data:image/png;base64,…"));
+        assert!(!text.contains(&payload), "payload bytes must never paste");
+    });
+}
+
+#[gpui::test]
+fn visual_data_uri_html_block_backspace_removes_whole_token(cx: &mut TestAppContext) {
+    let payload = "QUJD".repeat(8);
+    let source = format!(r#"<img src="data:image/png;base64,{payload}">"#);
+    let document = MarkdownDocument::from_text(source.clone());
+    let field_range = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Html { payload }) => Some(payload.source_range.clone()),
+            _ => None,
+        })
+        .expect("html payload editor");
+    let token_end = data_uri_payload_ranges(&source, field_range)
+        .pop()
+        .expect("one payload token")
+        .end;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| app.move_to(token_end, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.backspace(&Backspace, window, cx));
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            r#"<img src="data:image/png;base64,">"#
+        );
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), source);
+    });
+}
+
+#[gpui::test]
+fn visual_data_uri_source_toggle_paints_elided_token_and_edits_atomically(cx: &mut TestAppContext) {
+    let payload = "QUJD".repeat(32);
+    let source = format!("![icon](data:image/png;base64,{payload} \"Cap\")");
+    let document = MarkdownDocument::from_text(source.clone());
+    let image_id = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Image { .. }) => Some(block.id),
+            _ => None,
+        })
+        .expect("image block");
+    let token_range = image_data_uri_token(&document);
+    assert_eq!(&source[token_range.clone()], &payload);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // Expanding is presentation-only: no version, undo, or dirty movement.
+    let version = app.update(cx, |app, _| app.active_tab().document.version());
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().toggle_visual_source_expanded(image_id);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(app.active_tab().undo_stack.is_empty());
+        assert!(!app.active_tab().document.is_dirty());
+    });
+
+    // Caret entry into the payload paints the elided projection: verbatim
+    // head and tail, and one size-labeled token instead of the base64 bytes.
+    app.update(cx, |app, cx| app.move_to(token_range.start, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let (text, _) = app
+            .active_tab()
+            .visual_last_projection
+            .as_ref()
+            .expect("elided payload projection paints with the caret inside");
+        assert!(text.starts_with("![icon](data:image/png;base64,…"));
+        assert!(text.ends_with("… \"Cap\")"));
+        assert!(text.contains("128 B"));
+        assert!(!text.contains(&payload));
+    });
+
+    // A selection covering the token replaces the whole payload in one exact
+    // canonical replacement.
+    app.update(cx, |app, _| {
+        let edit = app
+            .active_tab()
+            .document
+            .direct_visual_block_edit(token_range.clone(), "R0JH")
+            .expect("token edit validates against the current version");
+        app.active_tab_mut()
+            .document
+            .replace_range(edit.range.clone(), &edit.replacement);
+        assert_eq!(
+            app.active_tab().document.text(),
+            "![icon](data:image/png;base64,R0JH \"Cap\")"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_data_uri_decode_failure_forces_payload_via_fingerprint(cx: &mut TestAppContext) {
+    let destination = "data:image/png;base64,!not-valid-base64!";
+    let source = format!("![broken]({destination})");
+    let document = MarkdownDocument::from_text(source.clone());
+    let fingerprint = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Image {
+                data_uri_fingerprint,
+                ..
+            }) => data_uri_fingerprint,
+            _ => None,
+        })
+        .expect("data URI destination carries a fingerprint");
+    // The fingerprint matches the shared helper so decode completion and the
+    // render layer agree on the failed destination's identity.
+    assert_eq!(
+        fingerprint,
+        markion::destination_data_uri_fingerprint(destination).unwrap()
+    );
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // The background decode lands as an error and records the fingerprint;
+    // the entry itself is Error, so the (elided) payload stays reachable.
+    app.update(cx, |app, _| {
+        assert!(app.failed_data_uri_fingerprints.contains(&fingerprint));
+        assert!(matches!(
+            app.preview_image_entry(destination, None),
+            PreviewImageEntry::Error(_)
+        ));
+    });
+
+    // Fixing the destination re-derives a different fingerprint, clearing the
+    // forced state for the corrected image.
+    let fixed = "![broken](data:image/png;base64,iVBORw0KGgo=)";
+    app.update(cx, |app, _| {
+        let len = app.active_tab().document.text().len();
+        app.active_tab_mut().document.replace_range(0..len, fixed);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let corrected = app
+            .active_tab()
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .find_map(|block| match &block.editor {
+                Some(VisualBlockEditor::Image {
+                    data_uri_fingerprint,
+                    ..
+                }) => *data_uri_fingerprint,
+                _ => None,
+            })
+            .expect("corrected image re-derives a fingerprint");
+        assert_ne!(corrected, fingerprint);
+        assert!(!app.failed_data_uri_fingerprints.contains(&corrected));
+    });
+}
+
+#[gpui::test]
+fn visual_collapsed_data_uri_source_skips_payload_projection_work(cx: &mut TestAppContext) {
+    let payload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    let source = format!(
+        "![icon](data:image/png;base64,{payload})
+
+Trailing paragraph."
+    );
+    let trailing = source.len() - "Trailing paragraph.".len();
+    let document = MarkdownDocument::from_text(source);
+    let image_id = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Image { .. }) => Some(block.id),
+            _ => None,
+        })
+        .expect("image block");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = trailing..trailing;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // While collapsed, unrelated repaints must not build the payload
+    // projection: the element is constructed lazily inside the affordance.
+    let before = app.update(cx, |app, _| app.visual_field_projection_builds.get());
+    for _ in 0..3 {
+        app.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.visual_field_projection_builds.get(),
+            before,
+            "collapsed data-URI image must not clone its span per frame"
+        );
+    });
+
+    // Expanding mounts the payload editor exactly once per paint, bounded by
+    // the display text rather than the payload length.
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().toggle_visual_source_expanded(image_id);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.visual_field_projection_builds.get() > before);
+    });
+}
+
+#[gpui::test]
+fn visual_data_uri_backspace_and_delete_remove_whole_token_atomically(cx: &mut TestAppContext) {
+    let payload = "QUJD".repeat(16);
+    let expected_source = format!("![icon](data:image/png;base64,{payload})");
+    let document = MarkdownDocument::from_text(expected_source.clone());
+    let token = image_data_uri_token(&document);
+    let (token_start, token_end) = (token.start, token.end);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // Backspace at the token's trailing edge removes the whole payload in one
+    // undoable replacement.
+    app.update(cx, |app, cx| app.move_to(token_end, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.backspace(&Backspace, window, cx));
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "![icon](data:image/png;base64,)"
+        );
+        assert_eq!(app.active_tab().selected_range, token_start..token_start);
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), expected_source);
+    });
+
+    // Forward-Delete at the token's leading edge removes it too.
+    app.update(cx, |app, cx| app.move_to(token_start, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.delete(&Delete, window, cx));
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "![icon](data:image/png;base64,)"
+        );
+    });
+}
+
 #[gpui::test]
 fn visual_fence_language_field_edits_only_the_info_token(cx: &mut TestAppContext) {
     let source = "```rust extra\nlet 名称 = 1;\n```";
@@ -12826,7 +13416,9 @@ fn visual_fence_language_inserts_on_a_bare_fence(cx: &mut TestAppContext) {
         .into_iter()
         .find_map(|block| match block.editor {
             Some(VisualBlockEditor::Code {
-                opening_fence, info, ..
+                opening_fence,
+                info,
+                ..
             }) => Some((info.source_range, opening_fence.end)),
             _ => None,
         })
@@ -12850,10 +13442,7 @@ fn visual_fence_language_inserts_on_a_bare_fence(cx: &mut TestAppContext) {
         app.active_tab_mut()
             .document
             .replace_range(edit.range.clone(), &edit.replacement);
-        assert_eq!(
-            app.active_tab().document.text(),
-            "```json\nlet x = 1;\n```"
-        );
+        assert_eq!(app.active_tab().document.text(), "```json\nlet x = 1;\n```");
     });
 }
 
@@ -12991,9 +13580,7 @@ fn visual_bare_fence_language_chip_click_lands_in_the_insertion_range(cx: &mut T
         .visual_blocks()
         .into_iter()
         .find_map(|block| match block.editor.as_ref() {
-            Some(VisualBlockEditor::Code { info, .. }) => {
-                Some((block.id, info.source_range.start))
-            }
+            Some(VisualBlockEditor::Code { info, .. }) => Some((block.id, info.source_range.start)),
             _ => None,
         })
         .expect("bare fence info field");
@@ -15953,9 +16540,7 @@ fn search_domain_tracks_all_four_view_modes_and_replacement_availability(cx: &mu
 }
 
 #[gpui::test]
-fn visual_edit_double_click_word_selection_changes_only_selection_state(
-    cx: &mut TestAppContext,
-) {
+fn visual_edit_double_click_word_selection_changes_only_selection_state(cx: &mut TestAppContext) {
     let source = "bold **word** tail\n";
     let document = MarkdownDocument::from_text(source);
     let (app, cx) = cx.add_window_view(|_, cx| {
@@ -15984,12 +16569,8 @@ fn visual_edit_double_click_word_selection_changes_only_selection_state(
             .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
             .expect("fixture should have one paragraph");
         let cursor = block.editable_runs[0].content_range.start;
-        let projection = build_visual_projection(
-            tab.document.text(),
-            block,
-            cursor..cursor,
-            cursor,
-        );
+        let projection =
+            build_visual_projection(tab.document.text(), block, cursor..cursor, cursor);
         let display = projection.text.find("word").expect("visible word") + 1;
         projection
             .word_selection_range(display)
@@ -16127,10 +16708,7 @@ fn visual_edit_double_click_selects_the_word_under_the_pointer(cx: &mut TestAppC
     let row = cx
         .debug_bounds(test_debug_selector("visual-document-row-6".to_string()))
         .expect("visual row should be painted");
-    let shift_point = point(
-        row.origin.x + row.size.width * 0.3,
-        row.center().y,
-    );
+    let shift_point = point(row.origin.x + row.size.width * 0.3, row.center().y);
     cx.simulate_event(MouseDownEvent {
         position: shift_point,
         modifiers: Modifiers {

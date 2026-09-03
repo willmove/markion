@@ -119,7 +119,7 @@ impl VisualProjection {
 
         for segment in &self.segments {
             if display > segment.display_range.start && display < segment.display_range.end {
-                if segment.display_range.len() == segment.source_range.len() {
+                if !segment.atomic && segment.display_range.len() == segment.source_range.len() {
                     let exact = segment.source_range.start + display - segment.display_range.start;
                     return VisualBoundaryCandidates {
                         display_offset: display,
@@ -128,10 +128,11 @@ impl VisualProjection {
                     };
                 }
                 // Non-identity segment (a rendered atom such as `<br>` or a
-                // table cell): an interior display position has no linear
-                // source mapping, so it resolves ambiguously between the
-                // atom's source edges instead of an interpolated offset that
-                // could land mid-marker or off a UTF-8 boundary.
+                // table cell) or an atomic segment (an elided data-URI
+                // payload): an interior display position has no linear source
+                // mapping, so it resolves ambiguously between the segment's
+                // source edges instead of an interpolated offset that could
+                // land mid-marker, mid-payload, or off a UTF-8 boundary.
                 return VisualBoundaryCandidates {
                     display_offset: display,
                     upstream_source: segment.source_range.start,
@@ -169,6 +170,18 @@ impl VisualProjection {
         self.boundary_candidates(display).resolve(affinity)
     }
 
+    /// Display range of the atomic segment whose interior strictly contains
+    /// `display`. Pointer snapping uses this to resolve a click inside an
+    /// elided token to its nearest displayed edge.
+    pub fn atomic_display_range_containing(&self, display: usize) -> Option<Range<usize>> {
+        self.segments.iter().find_map(|segment| {
+            (segment.atomic
+                && display > segment.display_range.start
+                && display < segment.display_range.end)
+                .then(|| segment.display_range.clone())
+        })
+    }
+
     pub fn source_for_display(&self, display: usize) -> usize {
         self.source_for_display_with_affinity(display, VisualCaretAffinity::Upstream)
     }
@@ -177,6 +190,15 @@ impl VisualProjection {
         let first = self.segments.first()?;
         for segment in &self.segments {
             if source >= segment.source_range.start && source <= segment.source_range.end {
+                if segment.atomic
+                    && source > segment.source_range.start
+                    && source < segment.source_range.end
+                {
+                    // An interior offset of an atomic segment has no display
+                    // position: rest on the token's trailing edge so a caret
+                    // or selection endpoint never paints inside the token.
+                    return Some(segment.display_range.end);
+                }
                 return Some(
                     segment.display_range.start
                         + source
@@ -252,7 +274,7 @@ impl VisualProjection {
             .find(|segment| {
                 run.start > segment.display_range.start
                     && run.start < segment.display_range.end
-                    && segment.display_range.len() != segment.source_range.len()
+                    && (segment.atomic || segment.display_range.len() != segment.source_range.len())
             })
             .map(|segment| segment.source_range.start);
         let atom_end = self
@@ -261,10 +283,11 @@ impl VisualProjection {
             .find(|segment| {
                 run.end > segment.display_range.start
                     && run.end < segment.display_range.end
-                    && segment.display_range.len() != segment.source_range.len()
+                    && (segment.atomic || segment.display_range.len() != segment.source_range.len())
             })
             .map(|segment| segment.source_range.end);
-        let start = atom_start.unwrap_or_else(|| self.boundary_candidates(run.start).downstream_source);
+        let start =
+            atom_start.unwrap_or_else(|| self.boundary_candidates(run.start).downstream_source);
         let end = atom_end.unwrap_or_else(|| self.boundary_candidates(run.end).upstream_source);
         (start < end).then_some(start..end)
     }
@@ -420,6 +443,7 @@ pub fn build_visual_projection_with_marked_range(
                 projection.segments.push(VisualProjectionSegment {
                     display_range: display_range.clone(),
                     source_range: run.content_range.clone(),
+                    atomic: false,
                 });
                 // A run belongs to a link when it carries a local destination
                 // (inline link) or sits inside a resolved reference-style
@@ -436,19 +460,71 @@ pub fn build_visual_projection_with_marked_range(
                 });
             }
             ProjectionPiece::Source(source_range) => {
-                let display_start = projection.text.len();
-                projection.text.push_str(&source[source_range.clone()]);
-                let display_range = display_start..projection.text.len();
-                projection.segments.push(VisualProjectionSegment {
-                    display_range: display_range.clone(),
-                    source_range,
-                });
-                projection.spans.push(VisualProjectionSpan {
-                    display_range,
-                    style: InlineStyle::default(),
-                    link: false,
-                    source: true,
-                });
+                let payload_ranges = data_uri_payload_ranges(source, source_range.clone());
+                if payload_ranges.is_empty() {
+                    let display_start = projection.text.len();
+                    projection.text.push_str(&source[source_range.clone()]);
+                    let display_range = display_start..projection.text.len();
+                    projection.segments.push(VisualProjectionSegment {
+                        display_range: display_range.clone(),
+                        source_range,
+                        atomic: false,
+                    });
+                    projection.spans.push(VisualProjectionSpan {
+                        display_range,
+                        style: InlineStyle::default(),
+                        link: false,
+                        source: true,
+                    });
+                } else {
+                    // Revealed data-URI payloads collapse into atomic tokens
+                    // so a caret entering an inline image, `<img>` atom, or
+                    // link destination never renders megabytes of base64.
+                    let mut cursor = source_range.start;
+                    let mut push_verbatim =
+                        |projection: &mut VisualProjection, verbatim: Range<usize>| {
+                            let display_start = projection.text.len();
+                            projection.text.push_str(&source[verbatim.clone()]);
+                            let display_range = display_start..projection.text.len();
+                            projection.segments.push(VisualProjectionSegment {
+                                display_range: display_range.clone(),
+                                source_range: verbatim,
+                                atomic: false,
+                            });
+                            projection.spans.push(VisualProjectionSpan {
+                                display_range,
+                                style: InlineStyle::default(),
+                                link: false,
+                                source: true,
+                            });
+                        };
+                    for token in payload_ranges {
+                        if cursor < token.start {
+                            push_verbatim(&mut projection, cursor..token.start);
+                        }
+                        let display_start = projection.text.len();
+                        projection.text.push_str(&elided_payload_token(token.len()));
+                        let display_range = display_start..projection.text.len();
+                        projection.segments.push(VisualProjectionSegment {
+                            display_range: display_range.clone(),
+                            source_range: token.clone(),
+                            atomic: true,
+                        });
+                        projection.spans.push(VisualProjectionSpan {
+                            display_range,
+                            style: InlineStyle {
+                                code: true,
+                                ..InlineStyle::default()
+                            },
+                            link: false,
+                            source: true,
+                        });
+                        cursor = token.end;
+                    }
+                    if cursor < source_range.end {
+                        push_verbatim(&mut projection, cursor..source_range.end);
+                    }
+                }
             }
         }
     }
@@ -1308,11 +1384,18 @@ fn visual_block_editor(
             {
                 return None;
             }
+            let data_uri_fingerprint =
+                destination_data_uri_fingerprint(destination_inner).or_else(|| {
+                    destination_inner
+                        .strip_prefix('<')
+                        .and_then(destination_data_uri_fingerprint)
+                });
             Some(VisualBlockEditor::Image {
                 payload: VisualEditorField {
                     kind: VisualEditorFieldKind::ImageSource,
-                    source_range,
+                    source_range: source_range.clone(),
                 },
+                data_uri_fingerprint,
             })
         }
         PreviewBlock::Html { .. } => Some(VisualBlockEditor::Html {
@@ -1323,6 +1406,144 @@ fn visual_block_editor(
         }),
         _ => None,
     }
+}
+
+/// Content hash of a data-URI destination, or `None` for other destinations.
+/// Both the derivation and the decode-completion path hash the same bytes so
+/// the render layer can match failures by fingerprint without ever building
+/// the multi-megabyte cache key per frame.
+pub fn destination_data_uri_fingerprint(destination: &str) -> Option<u64> {
+    let after_angle = destination.strip_prefix('<').unwrap_or(destination);
+    after_angle.starts_with("data:").then(|| {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        after_angle.hash(&mut hasher);
+        hasher.finish()
+    })
+}
+
+/// Human-readable byte size for elision token labels (binary units, one
+/// decimal past the first). Locale-neutral by construction so every surface
+/// — library-side reveals and app-side payload editors — renders the same
+/// `…{size}…` token.
+pub fn format_byte_size(bytes: usize) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0usize;
+    while size >= 1024. && unit < UNITS.len() - 1 {
+        size /= 1024.;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
+}
+
+/// The display text of one elided data-URI payload token.
+pub fn elided_payload_token(bytes: usize) -> String {
+    format!("…{}…", format_byte_size(bytes))
+}
+
+/// Opaque data-URI payload ranges inside `text[range]`, as absolute offsets.
+/// Each range starts after the RFC 2397 comma and ends at the enclosing
+/// URI delimiter. The scan is conservative so prose that merely mentions
+/// `data:` stays verbatim:
+/// - the `data:` scheme must follow a URI-introducing byte — one of
+///   `( " ' = <`, whitespace, or the range start;
+/// - the mediatype between `data:` and the comma must contain `/`, start
+///   with `;`, or be empty, and must not contain whitespace, quotes,
+///   parens, or angle brackets;
+/// - the payload must be non-empty and end at the first of `) " ' < >`,
+///   whitespace, or the range end.
+// Both loops below index `bytes` by absolute offset on purpose: the cursor
+// arithmetic (comma + 1, token end) is clearer in source offsets than in
+// enumerate/skip form.
+#[allow(clippy::needless_range_loop)]
+pub fn data_uri_payload_ranges(text: &str, range: Range<usize>) -> Vec<Range<usize>> {
+    let start = range.start.min(text.len());
+    let end = range.end.min(text.len()).max(start);
+    if !text.is_char_boundary(start) || !text.is_char_boundary(end) || end - start < 6 {
+        return Vec::new();
+    }
+    let bytes = text.as_bytes();
+    let mut tokens = Vec::new();
+    let mut cursor = start;
+    while let Some(mut scheme) = find_data_scheme(&bytes[cursor..end]) {
+        scheme += cursor;
+        let after_scheme = scheme + "data:".len();
+        // Locate the comma that ends the editable prefix; give up at the
+        // first byte that cannot appear in a mediatype.
+        let mut comma = None;
+        for offset in after_scheme..end {
+            match bytes[offset] {
+                b',' => {
+                    comma = Some(offset);
+                    break;
+                }
+                b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'(' | b')' | b'<' | b'>' | b'`' => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(comma) = comma else {
+            cursor = after_scheme;
+            continue;
+        };
+        let mediatype = &text[after_scheme..comma];
+        let plausible_mediatype =
+            mediatype.is_empty() || mediatype.starts_with(';') || mediatype.contains('/');
+        if !plausible_mediatype {
+            cursor = comma + 1;
+            continue;
+        }
+        let mut token_end = end;
+        for offset in (comma + 1)..end {
+            if matches!(
+                bytes[offset],
+                b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b')' | b'<' | b'>'
+            ) {
+                token_end = offset;
+                break;
+            }
+        }
+        let mut token_start = comma + 1;
+        while token_start < token_end && !text.is_char_boundary(token_start) {
+            token_start += 1;
+        }
+        while token_end > token_start && !text.is_char_boundary(token_end) {
+            token_end -= 1;
+        }
+        if token_start < token_end {
+            tokens.push(token_start..token_end);
+            cursor = token_end;
+        } else {
+            cursor = (comma + 1).max(after_scheme);
+        }
+    }
+    tokens
+}
+
+/// Byte offset of the next `data:` (case-insensitive) whose preceding byte
+/// introduces a URI, within `bytes`.
+fn find_data_scheme(bytes: &[u8]) -> Option<usize> {
+    let mut cursor = 0;
+    while cursor + 5 <= bytes.len() {
+        let window = &bytes[cursor..cursor + 5];
+        if window.eq_ignore_ascii_case(b"data:")
+            && (cursor == 0
+                || matches!(
+                    bytes[cursor - 1],
+                    b'(' | b'"' | b'\'' | b'=' | b'<' | b' ' | b'\t' | b'\n' | b'\r'
+                ))
+        {
+            return Some(cursor);
+        }
+        cursor += 1;
+    }
+    None
 }
 
 fn fenced_payload_ranges(
@@ -3294,7 +3515,7 @@ mod tests {
 
     use super::{
         build_visual_blocks, build_visual_projection, build_visual_projection_with_marked_range,
-        fenced_payload_ranges,
+        data_uri_payload_ranges, fenced_payload_ranges,
     };
     use crate::{
         AlertKind, BlockTarget, BlockTransform, MarkdownDocument, MarkdownFormat, PreviewBlock,
@@ -5377,7 +5598,7 @@ mod tests {
         assert_eq!(alt, "替代]文本");
         assert_eq!(url, "images/a)b.png");
         assert_eq!(title.as_deref(), Some("标题"));
-        let Some(VisualBlockEditor::Image { payload }) = &block.editor else {
+        let Some(VisualBlockEditor::Image { payload, .. }) = &block.editor else {
             panic!("single-line inline image should carry an Image payload editor");
         };
         assert_eq!(payload.source_range, block.source_range);
@@ -5777,7 +5998,7 @@ mod tests {
                 .into_iter()
                 .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
                 .unwrap_or_else(|| panic!("expected block image for {source:?}"));
-            let Some(VisualBlockEditor::Image { payload }) = block.editor else {
+            let Some(VisualBlockEditor::Image { payload, .. }) = block.editor else {
                 panic!("proven image span should carry an Image editor for {source:?}");
             };
             assert_eq!(payload.kind, VisualEditorFieldKind::ImageSource);
@@ -5820,7 +6041,9 @@ mod tests {
             .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
             .expect("code block");
         let Some(VisualBlockEditor::Code {
-            opening_fence, info, ..
+            opening_fence,
+            info,
+            ..
         }) = block.editor
         else {
             panic!("bare fence should have direct metadata");
@@ -6873,14 +7096,17 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
                 VisualProjectionSegment {
                     display_range: 0..1,
                     source_range: 0..1,
+                    atomic: false,
                 },
                 VisualProjectionSegment {
                     display_range: 1..8,
                     source_range: 1..6,
+                    atomic: false,
                 },
                 VisualProjectionSegment {
                     display_range: 8..9,
                     source_range: 6..7,
+                    atomic: false,
                 },
             ],
             spans: Vec::new(),
@@ -6908,5 +7134,224 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             source_anchor: 0,
         };
         assert_eq!(projection.word_selection_range(0), None);
+    }
+
+    fn elided_token_projection() -> VisualProjection {
+        // Display: "A" + "…12.5 MB…" (token, 13 bytes) + "B".
+        // Source:  "A" + 2,000,000 opaque payload bytes + "B".
+        VisualProjection {
+            text: "A…12.5 MB…B".to_string(),
+            segments: vec![
+                VisualProjectionSegment {
+                    display_range: 0..1,
+                    source_range: 0..1,
+                    atomic: false,
+                },
+                VisualProjectionSegment {
+                    display_range: 1..14,
+                    source_range: 1..2_000_001,
+                    atomic: true,
+                },
+                VisualProjectionSegment {
+                    display_range: 14..15,
+                    source_range: 2_000_001..2_000_002,
+                    atomic: false,
+                },
+            ],
+            spans: Vec::new(),
+            revealed_source_ranges: Vec::new(),
+            source_anchor: 0,
+        }
+    }
+
+    #[test]
+    fn atomic_segment_snaps_interior_display_to_source_edges() {
+        let projection = elided_token_projection();
+        for interior in [4, 5, 8, 10, 11] {
+            let candidates = projection.boundary_candidates(interior);
+            assert_eq!(candidates.display_offset, interior);
+            assert_eq!(candidates.upstream_source, 1);
+            assert_eq!(candidates.downstream_source, 2_000_001);
+            assert!(candidates.is_ambiguous());
+        }
+        assert_eq!(
+            projection.source_for_display_with_affinity(8, VisualCaretAffinity::Upstream),
+            1
+        );
+        assert_eq!(
+            projection.source_for_display_with_affinity(8, VisualCaretAffinity::Downstream),
+            2_000_001
+        );
+    }
+
+    #[test]
+    fn atomic_segment_boundaries_resolve_unambiguously() {
+        let projection = elided_token_projection();
+        // Display offsets on the token's edges resolve to single source
+        // offsets shared with the neighboring verbatim segments.
+        let start = projection.boundary_candidates(1);
+        assert_eq!(start.upstream_source, 1);
+        assert_eq!(start.downstream_source, 1);
+        let end = projection.boundary_candidates(14);
+        assert_eq!(end.upstream_source, 2_000_001);
+        assert_eq!(end.downstream_source, 2_000_001);
+    }
+
+    #[test]
+    fn atomic_segment_interior_source_rests_on_trailing_display_edge() {
+        let projection = elided_token_projection();
+        assert_eq!(projection.display_for_source(500_000), Some(14));
+        assert_eq!(projection.display_for_source(2), Some(14));
+        assert_eq!(projection.display_for_source(1), Some(1));
+        assert_eq!(projection.display_for_source(2_000_001), Some(14));
+    }
+
+    #[test]
+    fn atomic_segment_double_click_selects_whole_token() {
+        let projection = elided_token_projection();
+        assert_eq!(projection.word_selection_range(5), Some(1..2_000_001));
+        assert_eq!(projection.word_selection_range(8), Some(1..2_000_001));
+        // Neighboring verbatim runs stay on their own identity segments.
+        assert_eq!(projection.word_selection_range(0), Some(0..1));
+    }
+
+    #[test]
+    fn non_atomic_segments_keep_identity_and_atom_mapping() {
+        // Identity segments keep their exact linear mapping.
+        let identity = VisualProjection {
+            text: "abc".to_string(),
+            segments: vec![VisualProjectionSegment {
+                display_range: 0..3,
+                source_range: 5..8,
+                atomic: false,
+            }],
+            spans: Vec::new(),
+            revealed_source_ranges: Vec::new(),
+            source_anchor: 5,
+        };
+        assert_eq!(identity.boundary_candidates(1).upstream_source, 6);
+        assert_eq!(identity.boundary_candidates(1).downstream_source, 6);
+        assert_eq!(identity.display_for_source(6), Some(1));
+        // Non-identity non-atomic segments (rendered atoms) keep snapping to
+        // their source edges exactly as before the atomic flag existed.
+        let atom = VisualProjection {
+            text: "x𝑥y".to_string(),
+            segments: vec![VisualProjectionSegment {
+                display_range: 0..6,
+                source_range: 0..1,
+                atomic: false,
+            }],
+            spans: Vec::new(),
+            revealed_source_ranges: Vec::new(),
+            source_anchor: 0,
+        };
+        let interior = atom.boundary_candidates(3);
+        assert_eq!(interior.upstream_source, 0);
+        assert_eq!(interior.downstream_source, 1);
+    }
+
+    fn image_block_for(source: &str) -> crate::VisualBlock {
+        let doc = MarkdownDocument::from_text(source);
+        doc.visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+            .unwrap_or_else(|| panic!("no image block for {source:?}"))
+    }
+
+    fn image_payload_tokens(source: &str) -> Vec<std::ops::Range<usize>> {
+        match image_block_for(source).editor {
+            Some(VisualBlockEditor::Image { payload, .. }) => {
+                data_uri_payload_ranges(source, payload.source_range)
+            }
+            other => panic!("expected image editor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn data_uri_image_elides_payload_after_base64_comma() {
+        let payload = "QUJD".repeat(4);
+        let source = format!("![icon](data:image/png;base64,{payload})");
+        let tokens = image_payload_tokens(&source);
+        assert_eq!(tokens.len(), 1, "data URI should elide: {source:?}");
+        assert_eq!(&source[tokens[0].clone()], &payload);
+        assert_eq!(tokens[0].end, source.len() - 1);
+    }
+
+    #[test]
+    fn data_uri_image_with_title_elides_only_the_payload() {
+        let payload = "QUJD".repeat(8);
+        let source = format!("![icon](data:image/png;base64,{payload} \"Cap {{width=50}}\")");
+        let tokens = image_payload_tokens(&source);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(&source[tokens[0].clone()], &payload);
+        assert_eq!(&source[tokens[0].end..], " \"Cap {width=50}\")");
+    }
+
+    #[test]
+    fn ordinary_image_destination_stays_verbatim() {
+        assert!(image_payload_tokens("![alt](images/a.png)").is_empty());
+        assert!(image_payload_tokens("![alt](images/a.png \"Title\")").is_empty());
+    }
+
+    #[test]
+    fn empty_data_uri_payload_does_not_elide() {
+        // `data:image/png;base64,` with no bytes after the comma: the token
+        // range would be empty, so the span renders verbatim.
+        assert!(image_payload_tokens("![icon](data:image/png;base64,)").is_empty());
+    }
+
+    #[test]
+    fn uppercase_data_scheme_elides_like_lowercase() {
+        // RFC 3986 schemes are case-insensitive.
+        let payload = "QUJD".repeat(4);
+        let source = format!("![icon](DATA:image/png;base64,{payload})");
+        let tokens = image_payload_tokens(&source);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(&source[tokens[0].clone()], &payload);
+    }
+
+    #[test]
+    fn scanner_finds_payloads_in_markdown_angle_and_html_contexts() {
+        let payload = "QUJD".repeat(4);
+        let markdown = format!("![a](data:image/png;base64,{payload})");
+        let angle = format!("![a](<data:image/svg+xml;utf8,{payload}>)");
+        let html = format!(r#"<p><img src="data:image/webp;base64,{payload}" alt="x"></p>"#);
+        for source in [&markdown, &angle, &html] {
+            let tokens = data_uri_payload_ranges(source, 0..source.len());
+            assert_eq!(tokens.len(), 1, "one payload in {source}");
+            assert_eq!(&source[tokens[0].clone()], &payload);
+        }
+    }
+
+    #[test]
+    fn scanner_finds_multiple_payloads_in_one_range() {
+        let first = "QUJD".repeat(2);
+        let second = "QUJD".repeat(3);
+        let source = format!(
+            r#"<p><img src="data:image/png;base64,{first}"><img src="data:image/png;base64,{second}"></p>"#
+        );
+        let tokens = data_uri_payload_ranges(&source, 0..source.len());
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(&source[tokens[0].clone()], &first);
+        assert_eq!(&source[tokens[1].clone()], &second);
+    }
+
+    #[test]
+    fn scanner_rejects_prose_false_positives() {
+        // `(see data:foo,bar)` — no plausible mediatype before the comma.
+        assert!(data_uri_payload_ranges("(see data:foo,bar)", 0..18).is_empty());
+        // `metadata:x` — the scheme does not follow a URI-introducing byte.
+        assert!(data_uri_payload_ranges("(metadata:a/b,c)", 0..16).is_empty());
+        // `data:` with no comma before the delimiter — not a data URI.
+        assert!(data_uri_payload_ranges("(data:image/png;base64)", 0..23).is_empty());
+    }
+
+    #[test]
+    fn scanner_clamps_to_char_boundaries_and_range() {
+        let payload = "QUJD".repeat(4);
+        let source = format!("x![a](data:image/png;base64,{payload})y");
+        let tokens = data_uri_payload_ranges(&source, 1..source.len() - 1);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(&source[tokens[0].clone()], &payload);
     }
 }

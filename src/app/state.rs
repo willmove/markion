@@ -263,33 +263,27 @@ pub(super) struct MeasuredHeightKey {
     pub(super) font_family: SharedString,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct VisualNavigationCaret {
-    pub(super) source_offset: usize,
-    pub(super) x: Pixels,
+/// One wrapped line fragment contributed by a single painted text element:
+/// the display window `[start_display, end_display)` indexes into that
+/// element's own projection and layout.
+#[derive(Clone)]
+pub(super) struct VisualNavigationWindow {
+    pub(super) projection: std::sync::Arc<VisualProjection>,
+    pub(super) layout: gpui::TextLayout,
+    pub(super) start_display: usize,
+    pub(super) end_display: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// A visual line of a block, in window coordinates. Blocks painted by several
+/// text elements (multiple fields or runs) merge their windows onto the same
+/// line by y during registration.
+#[derive(Clone)]
 pub(super) struct VisualNavigationLine {
     pub(super) y: Pixels,
-    pub(super) carets: Vec<VisualNavigationCaret>,
+    pub(super) windows: Vec<VisualNavigationWindow>,
 }
 
-impl VisualNavigationLine {
-    pub(super) fn closest_source(&self, preferred_x: Pixels) -> Option<usize> {
-        self.carets
-            .iter()
-            .min_by(|left, right| {
-                (left.x - preferred_x)
-                    .abs()
-                    .to_f64()
-                    .total_cmp(&(right.x - preferred_x).abs().to_f64())
-            })
-            .map(|caret| caret.source_offset)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone)]
 pub(super) struct VisualNavigationSnapshot {
     pub(super) document_version: u64,
     pub(super) block_index: usize,
@@ -299,38 +293,113 @@ pub(super) struct VisualNavigationSnapshot {
     pub(super) lines: Vec<VisualNavigationLine>,
 }
 
+impl VisualNavigationWindow {
+    fn contains_source(&self, source: usize) -> bool {
+        self.projection.segments.iter().any(|segment| {
+            source >= segment.source_range.start && source <= segment.source_range.end
+        })
+    }
+
+    fn sample_y(&self, line_y: Pixels) -> Pixels {
+        line_y + self.layout.line_height() * 0.5
+    }
+}
+
 impl VisualNavigationSnapshot {
+    /// Line whose display windows contain the display position of `source`.
     pub(super) fn line_index_for_source(&self, source: usize) -> Option<usize> {
-        self.lines
-            .iter()
-            .position(|line| {
-                line.carets
-                    .iter()
-                    .any(|caret| caret.source_offset == source)
+        self.lines.iter().position(|line| {
+            line.windows.iter().any(|window| {
+                window.contains_source(source)
+                    && window
+                        .projection
+                        .display_for_source(source)
+                        .is_some_and(|display| {
+                            display >= window.start_display && display <= window.end_display
+                        })
             })
-            .or_else(|| {
-                self.lines
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, line)| {
-                        let distance = line
-                            .carets
-                            .iter()
-                            .map(|caret| caret.source_offset.abs_diff(source))
-                            .min()?;
-                        Some((index, distance))
-                    })
-                    .min_by_key(|(_, distance)| *distance)
-                    .map(|(index, _)| index)
-            })
+        })
     }
 
     pub(super) fn caret_x_for_source(&self, source: usize) -> Option<Pixels> {
-        let line = self.lines.get(self.line_index_for_source(source)?)?;
-        line.carets
-            .iter()
-            .min_by_key(|caret| caret.source_offset.abs_diff(source))
-            .map(|caret| caret.x)
+        for line in &self.lines {
+            for window in &line.windows {
+                if !window.contains_source(source) {
+                    continue;
+                }
+                let Some(display) = window.projection.display_for_source(source) else {
+                    continue;
+                };
+                if let Some(point) = window.layout.position_for_index(display) {
+                    return Some(point.x);
+                }
+            }
+        }
+        None
+    }
+
+    /// Source offset on `line_index` closest to `preferred_x`, resolved
+    /// through each window's layout in constant work (no per-character
+    /// walk). Windows from different painted fragments of the same line
+    /// compete by their candidate's distance to `preferred_x`.
+    pub(super) fn closest_source_on_line(
+        &self,
+        line_index: usize,
+        preferred_x: Pixels,
+    ) -> Option<usize> {
+        let line = self.lines.get(line_index)?;
+        let mut best: Option<(Pixels, usize)> = None;
+        for window in &line.windows {
+            let sample = gpui::point(preferred_x, window.sample_y(line.y));
+            let display = match window.layout.index_for_position(sample) {
+                Ok(index) | Err(index) => index,
+            };
+            let candidates = window.projection.boundary_candidates(display);
+            for source in [candidates.upstream_source, candidates.downstream_source] {
+                let Some(display) = window.projection.display_for_source(source) else {
+                    continue;
+                };
+                let Some(point) = window.layout.position_for_index(display) else {
+                    continue;
+                };
+                let distance = (preferred_x - point.x).abs();
+                if best.is_none_or(|(best_distance, _)| distance < best_distance) {
+                    best = Some((distance, source));
+                }
+            }
+        }
+        best.map(|(_, source)| source)
+    }
+
+    /// First (Home) or last (End) source offset of a wrapped line, decided by
+    /// the displayed x of each window's boundary candidate.
+    pub(super) fn line_boundary_source(&self, line_index: usize, end: bool) -> Option<usize> {
+        let line = self.lines.get(line_index)?;
+        let mut best: Option<(Pixels, usize)> = None;
+        for window in &line.windows {
+            let display = if end {
+                window.end_display
+            } else {
+                window.start_display
+            };
+            let candidates = window.projection.boundary_candidates(display);
+            let source = if end {
+                candidates.upstream_source
+            } else {
+                candidates.downstream_source
+            };
+            let Some(display) = window.projection.display_for_source(source) else {
+                continue;
+            };
+            let Some(point) = window.layout.position_for_index(display) else {
+                continue;
+            };
+            let rank = if end { point.x } else { Pixels::ZERO - point.x };
+            if best.is_none_or(|(best_rank, _)| rank > best_rank) {
+                best = Some((rank, source));
+            }
+        }
+        best.map(|(_, source)| source)
     }
 }
 
@@ -634,6 +703,11 @@ pub(super) struct DocumentTabState {
     pub(super) visual_projection_paint_count: usize,
     #[cfg(test)]
     pub(super) visual_caret_paint_count: usize,
+    /// Layout queries issued while building visual navigation snapshots this
+    /// session; the display-bounded gate asserts this stays proportional to
+    /// wrapped lines, never characters.
+    #[cfg(test)]
+    pub(super) visual_navigation_position_queries: usize,
     /// Snapshot of the block slice `preview_list` currently reflects. Each frame
     /// we diff the freshly-parsed blocks against this and `splice` only the
     /// changed range into `preview_list`, which preserves scroll position (a
@@ -886,6 +960,8 @@ impl DocumentTabState {
             visual_projection_paint_count: 0,
             #[cfg(test)]
             visual_caret_paint_count: 0,
+            #[cfg(test)]
+            visual_navigation_position_queries: 0,
             preview_list_blocks: std::sync::Arc::new(Vec::new()),
             // Seen = current version so the first render is not mistaken for an
             // edit; reflects = None so that same render parses immediately.
@@ -1271,11 +1347,7 @@ impl DocumentTabState {
         {
             for line in snapshot.lines.drain(..) {
                 if let Some(current) = existing.lines.iter_mut().find(|item| item.y == line.y) {
-                    current.carets.extend(line.carets);
-                    current
-                        .carets
-                        .sort_by(|left, right| left.x.to_f64().total_cmp(&right.x.to_f64()));
-                    current.carets.dedup();
+                    current.windows.extend(line.windows);
                 } else {
                     existing.lines.push(line);
                 }

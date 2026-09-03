@@ -2385,6 +2385,11 @@ impl MarkionApp {
                 .active_tab()
                 .document
                 .visual_backspace_edit(self.cursor_offset())
+                .or_else(|| {
+                    self.active_tab()
+                        .document
+                        .visual_atomic_token_edit(self.cursor_offset(), false)
+                })
         {
             self.push_undo_snapshot();
             let mutation = {
@@ -2436,6 +2441,39 @@ impl MarkionApp {
                 .visual_editor_edge_target(self.cursor_offset(), true)
         {
             self.move_to(target, cx);
+            return;
+        }
+
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && self.active_tab().selected_range.is_empty()
+            && let Some(edit) = self
+                .active_tab()
+                .document
+                .visual_atomic_token_edit(self.cursor_offset(), true)
+        {
+            self.push_undo_snapshot();
+            let mutation = {
+                let tab = self.active_tab_mut();
+                tab.document.prepare_range_mutation(
+                    MutationOrigin::StructuralEdit,
+                    edit.range.clone(),
+                    &edit.replacement,
+                )
+            };
+            if self
+                .apply_document_mutation("delete_visual_atomic_token", mutation)
+                .is_none()
+            {
+                cx.notify();
+                return;
+            }
+            let tab = self.active_tab_mut();
+            tab.selected_range = edit.selection_after;
+            tab.selection_reversed = false;
+            tab.marked_range = None;
+            self.status = t(self.language, Msg::StatusEditing).into();
+            self.after_document_changed(cx);
+            cx.notify();
             return;
         }
 
@@ -2880,7 +2918,7 @@ impl MarkionApp {
             }
         };
         if let Some(line_index) = adjacent_line
-            && let Some(target) = snapshot.lines[line_index].closest_source(preferred_x)
+            && let Some(target) = snapshot.closest_source_on_line(line_index, preferred_x)
         {
             if extend_selection {
                 self.select_to(target, cx);
@@ -3044,30 +3082,8 @@ impl MarkionApp {
 
     fn visual_painted_line_boundary(&self, end: bool) -> Option<usize> {
         let (_, snapshot) = self.current_visual_navigation_snapshot()?;
-        let line = snapshot
-            .lines
-            .get(snapshot.line_index_for_source(self.cursor_offset())?)?;
-        if end {
-            line.carets
-                .iter()
-                .max_by(|left, right| {
-                    left.x
-                        .to_f64()
-                        .total_cmp(&right.x.to_f64())
-                        .then_with(|| left.source_offset.cmp(&right.source_offset))
-                })
-                .map(|caret| caret.source_offset)
-        } else {
-            line.carets
-                .iter()
-                .min_by(|left, right| {
-                    left.x
-                        .to_f64()
-                        .total_cmp(&right.x.to_f64())
-                        .then_with(|| left.source_offset.cmp(&right.source_offset))
-                })
-                .map(|caret| caret.source_offset)
-        }
+        let line_index = snapshot.line_index_for_source(self.cursor_offset())?;
+        snapshot.line_boundary_source(line_index, end)
     }
 
     /// Fallback navigation target for a callout title row: its marker line
@@ -3151,11 +3167,13 @@ impl MarkionApp {
             }
             return;
         };
-        let line = match pending.direction {
-            VisualNavigationDirection::Up => snapshot.lines.last(),
-            VisualNavigationDirection::Down => snapshot.lines.first(),
+        let line_index = match pending.direction {
+            VisualNavigationDirection::Up => snapshot.lines.len().checked_sub(1),
+            VisualNavigationDirection::Down => (!snapshot.lines.is_empty()).then_some(0),
         };
-        let Some(target) = line.and_then(|line| line.closest_source(pending.preferred_x)) else {
+        let Some(target) = line_index
+            .and_then(|index| snapshot.closest_source_on_line(index, pending.preferred_x))
+        else {
             return;
         };
         self.active_tab_mut().pending_visual_navigation = None;

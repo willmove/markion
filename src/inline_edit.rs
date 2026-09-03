@@ -315,7 +315,10 @@ mod tests {
         assert_eq!(unescape_markdown("\\\\\\*"), "\\*");
         // A backslash before a non-punctuation character stays literal, which
         // is exactly how pulldown parses Windows-style path destinations.
-        assert_eq!(unescape_markdown("..\\shared\\图片.png"), "..\\shared\\图片.png");
+        assert_eq!(
+            unescape_markdown("..\\shared\\图片.png"),
+            "..\\shared\\图片.png"
+        );
         assert_eq!(unescape_markdown("a\\.b"), "a.b");
     }
 

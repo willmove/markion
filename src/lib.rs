@@ -171,7 +171,10 @@ pub use model::{
     normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
     resolve_font_family, touch_recent_file,
 };
-pub use visual::{build_visual_projection, build_visual_projection_with_marked_range};
+pub use visual::{
+    build_visual_projection, build_visual_projection_with_marked_range, data_uri_payload_ranges,
+    destination_data_uri_fingerprint, elided_payload_token, format_byte_size,
+};
 
 /// A compiled find pattern shared by source-document and rendered-preview
 /// search. Compiling once keeps literal/regex, case sensitivity, Unicode and
@@ -2779,6 +2782,44 @@ impl MarkdownDocument {
         })
     }
 
+    /// One canonical removal of an elided data-URI payload token adjacent to
+    /// the caret: Backspace at the token's trailing edge and forward-Delete
+    /// at its leading edge remove the whole opaque payload in a single
+    /// undoable replacement, because the token is one atomic unit. Works on
+    /// every payload-bearing surface (image source, raw-HTML blocks).
+    pub fn visual_atomic_token_edit(
+        &self,
+        byte_index: usize,
+        forward: bool,
+    ) -> Option<VisualStructuralEdit> {
+        let offset = clamp_to_char_boundary(&self.text, byte_index);
+        let blocks = self.visual_blocks_shared();
+        let payload_range = blocks.iter().find_map(|block| {
+            let editor = block.editor.as_ref()?;
+            let payload = match editor {
+                VisualBlockEditor::Image { payload, .. } | VisualBlockEditor::Html { payload } => {
+                    payload
+                }
+                _ => return None,
+            };
+            (payload.source_range.contains(&offset)).then(|| payload.source_range.clone())
+        })?;
+        let token = visual::data_uri_payload_ranges(&self.text, payload_range)
+            .into_iter()
+            .find(|token| {
+                if forward {
+                    offset == token.start
+                } else {
+                    offset == token.end
+                }
+            })?;
+        Some(VisualStructuralEdit {
+            range: token.clone(),
+            replacement: String::new(),
+            selection_after: token.start..token.start,
+        })
+    }
+
     pub fn validate_visual_block_edit(&self, edit: &VisualBlockEdit) -> bool {
         edit.document_version == self.text_version
             && self.visual_blocks_shared().iter().any(|block| {
@@ -4095,9 +4136,9 @@ fn push_matching_img_src_ranges<'a>(
         // Attribute values are compared entity-decoded so the raw authored
         // bytes match the destinations the parser reported for the same tag
         // (e.g. src="a&amp;b.png" vs the parsed "a&b.png").
-        if let Some(matched) = urls.get(crate::parse::decode_html_entities(
-            &html[value_start..value_end],
-        ).as_str()) {
+        if let Some(matched) =
+            urls.get(crate::parse::decode_html_entities(&html[value_start..value_end]).as_str())
+        {
             out.push((base + value_start..base + value_end, *matched));
         }
         search = search.max(value_end);
@@ -4355,10 +4396,12 @@ mod tests {
     fn rewrite_image_destinations_matches_windows_backslash_destinations() {
         // Backslashes before non-punctuation stay literal in pulldown's parsed
         // destination; the rewrite must still find and replace the raw span.
-        let mut doc =
-            MarkdownDocument::from_text("![封面](..\\shared\\图片.png) ![next](a.png)\n");
+        let mut doc = MarkdownDocument::from_text("![封面](..\\shared\\图片.png) ![next](a.png)\n");
         let rewrites = vec![
-            ("..\\shared\\图片.png".to_string(), "note.assets/cover-1.png".to_string()),
+            (
+                "..\\shared\\图片.png".to_string(),
+                "note.assets/cover-1.png".to_string(),
+            ),
             ("a.png".to_string(), "note.assets/a-1.png".to_string()),
         ];
 
@@ -4370,7 +4413,10 @@ mod tests {
     #[test]
     fn rewrite_image_destinations_matches_html_entities_in_src() {
         let mut doc = MarkdownDocument::from_text(r#"<img src="shared/a&amp;b.png" alt="x">"#);
-        let rewrites = vec![("shared/a&b.png".to_string(), "note.assets/ab-1.png".to_string())];
+        let rewrites = vec![(
+            "shared/a&b.png".to_string(),
+            "note.assets/ab-1.png".to_string(),
+        )];
 
         assert_eq!(doc.rewrite_image_destinations(&rewrites), 1);
         assert!(doc.text().contains(r#"src="note.assets/ab-1.png""#));

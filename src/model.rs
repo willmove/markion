@@ -1184,6 +1184,11 @@ pub enum VisualBlockEditor {
     /// `![alt](destination "title")` bytes as a single field.
     Image {
         payload: VisualEditorField,
+        /// Content hash of a data-URI destination, computed once per
+        /// derivation. The render path matches it against the failed-decode
+        /// fingerprint set to decide forced expansion without re-deriving a
+        /// multi-megabyte cache key every frame.
+        data_uri_fingerprint: Option<u64>,
     },
 }
 
@@ -1193,7 +1198,7 @@ impl VisualBlockEditor {
             Self::Code { payload, info, .. } => vec![payload, info],
             Self::Math { payload, .. } => vec![payload],
             Self::Table { cells } => cells.iter().map(|cell| &cell.field).collect(),
-            Self::Html { payload } | Self::Image { payload } => vec![payload],
+            Self::Html { payload } | Self::Image { payload, .. } => vec![payload],
         }
     }
 
@@ -1216,7 +1221,10 @@ pub enum VisualEditorFieldKind {
     ImageSource,
     /// First fenced info-string token (the language identifier).
     CodeInfo,
-    TableCell { row: usize, column: usize },
+    TableCell {
+        row: usize,
+        column: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1262,6 +1270,11 @@ pub struct VisualRevealGroup {
 pub struct VisualProjectionSegment {
     pub display_range: Range<usize>,
     pub source_range: Range<usize>,
+    /// Atomic segments collapse opaque runs (e.g. an elided data-URI payload)
+    /// into one unit: the caret may rest on either boundary but never inside,
+    /// and any edit intersecting the display range replaces the whole
+    /// `source_range` in one canonical replacement.
+    pub atomic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

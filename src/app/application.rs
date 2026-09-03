@@ -270,6 +270,9 @@ impl MarkionApp {
             highlight_cache: RefCell::new(HashMap::new()),
             diagram_cache: DiagramCache::new(DIAGRAM_CACHE_CAPACITY),
             preview_image_cache: PreviewImageCache::new(PREVIEW_IMAGE_CACHE_CAPACITY),
+            failed_data_uri_fingerprints: std::collections::HashSet::new(),
+            #[cfg(test)]
+            visual_field_projection_builds: std::cell::Cell::new(0),
             math_cache: MathCache::new(MATH_CACHE_CAPACITY),
         };
         // Resolve per-plane font families once from the loaded preferences

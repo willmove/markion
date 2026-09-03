@@ -600,6 +600,28 @@ pub(super) fn preview_index_for_position(layout: &TextLayout, position: Point<Pi
     }
 }
 
+/// Resolves which edge of an atomic token's display range a pointer x is
+/// closer to, so clicks and drags inside the token land on a boundary.
+fn nearest_token_edge_affinity(
+    layout: &TextLayout,
+    token: &Range<usize>,
+    x: Pixels,
+) -> VisualCaretAffinity {
+    let start_x = layout
+        .position_for_index(token.start)
+        .map(|position| position.x)
+        .unwrap_or(x);
+    let end_x = layout
+        .position_for_index(token.end)
+        .map(|position| position.x)
+        .unwrap_or(x);
+    if (x - start_x).abs() <= (end_x - x).abs() {
+        VisualCaretAffinity::Upstream
+    } else {
+        VisualCaretAffinity::Downstream
+    }
+}
+
 /// Registers the existing source-backed input handler exactly once for the
 /// Visual Edit surface. It deliberately creates no hitbox; visual rows keep
 /// owning pointer-to-source mapping.
@@ -889,6 +911,15 @@ impl Element for VisualEditableText {
         let marked_range = self.entity.read(cx).active_tab().marked_range.clone();
         if self.navigation_active {
             if let Some(layout) = layout.as_ref() {
+                #[cfg(test)]
+                let line_count = {
+                    let line_height = layout.line_height();
+                    if line_height > Pixels::ZERO {
+                        ((layout.bounds().size.height / line_height).round() as usize).max(1)
+                    } else {
+                        1
+                    }
+                };
                 let navigation_snapshot = visual_navigation_snapshot(
                     document_version,
                     self.block_index,
@@ -899,6 +930,13 @@ impl Element for VisualEditableText {
                     layout,
                 );
                 self.entity.update(cx, |app, cx| {
+                    #[cfg(test)]
+                    {
+                        // The build issues one index query per wrapped line;
+                        // the display-bounded gate asserts this counter stays
+                        // proportional to lines, never characters.
+                        app.active_tab_mut().visual_navigation_position_queries += line_count;
+                    }
                     app.active_tab_mut()
                         .register_visual_navigation_snapshot(navigation_snapshot);
                     app.complete_pending_visual_navigation(cx);
@@ -947,17 +985,28 @@ impl Element for VisualEditableText {
                     double_click_word = projection.word_selection_range(visible);
                 }
                 let candidates = projection.boundary_candidates(visible);
-                let boundary_x = text_layout
-                    .position_for_index(candidates.display_offset)
-                    .map(|position| position.x)
-                    .unwrap_or(event.position.x);
-                let affinity = if candidates.is_ambiguous() && event.position.x < boundary_x {
-                    Some(VisualCaretAffinity::Upstream)
-                } else if candidates.is_ambiguous() {
-                    Some(VisualCaretAffinity::Downstream)
-                } else {
-                    None
-                };
+                let affinity =
+                    if let Some(token) = projection.atomic_display_range_containing(visible) {
+                        // A click inside an atomic token snaps to its nearer
+                        // displayed edge instead of the generic midpoint rule.
+                        Some(nearest_token_edge_affinity(
+                            text_layout,
+                            &token,
+                            event.position.x,
+                        ))
+                    } else {
+                        let boundary_x = text_layout
+                            .position_for_index(candidates.display_offset)
+                            .map(|position| position.x)
+                            .unwrap_or(event.position.x);
+                        if candidates.is_ambiguous() && event.position.x < boundary_x {
+                            Some(VisualCaretAffinity::Upstream)
+                        } else if candidates.is_ambiguous() {
+                            Some(VisualCaretAffinity::Downstream)
+                        } else {
+                            None
+                        }
+                    };
                 (
                     candidates.resolve(affinity.unwrap_or(VisualCaretAffinity::Downstream)),
                     affinity,
@@ -1014,7 +1063,15 @@ impl Element for VisualEditableText {
             } else if let Some(text_layout) = text_layout.as_ref() {
                 let visible = preview_index_for_position(text_layout, event.position);
                 let candidates = projection.boundary_candidates(visible);
-                candidates.resolve(VisualCaretAffinity::Downstream)
+                if let Some(token) = projection.atomic_display_range_containing(visible) {
+                    candidates.resolve(nearest_token_edge_affinity(
+                        text_layout,
+                        &token,
+                        event.position.x,
+                    ))
+                } else {
+                    candidates.resolve(VisualCaretAffinity::Downstream)
+                }
             } else {
                 return;
             };
@@ -1058,72 +1115,49 @@ fn visual_navigation_snapshot(
     projection: &VisualProjection,
     layout: &TextLayout,
 ) -> VisualNavigationSnapshot {
+    // Line-driven build: one constant-work index query per wrapped line.
+    // Never walk per character — `position_for_index` is linear in wrapped
+    // lines inside gpui, so a per-grapheme loop is quadratic overall.
     let bounds = layout.bounds();
     let line_height = layout.line_height();
-    let mut line_ys = projection
-        .text
-        .grapheme_indices(true)
-        .map(|(display, _)| display)
-        .chain(std::iter::once(projection.text.len()))
-        .filter_map(|display| layout.position_for_index(display).map(|point| point.y))
-        .collect::<Vec<_>>();
-    if line_ys.is_empty() {
-        line_ys.push(bounds.top());
+    let wrapped_lines = if line_height > Pixels::ZERO {
+        ((bounds.size.height / line_height).round() as usize).max(1)
+    } else {
+        1
+    };
+    let mut starts = Vec::with_capacity(wrapped_lines);
+    for line in 0..wrapped_lines {
+        let sample = point(
+            bounds.left(),
+            bounds.top() + line_height * (line as f32 + 0.5),
+        );
+        starts.push(preview_index_for_position(layout, sample));
     }
-    line_ys.sort_by(|left, right| left.to_f64().total_cmp(&right.to_f64()));
-    line_ys.dedup();
-
-    let display_boundaries = projection
-        .text
-        .grapheme_indices(true)
-        .map(|(display, _)| display)
-        .chain(std::iter::once(projection.text.len()))
-        .collect::<Vec<_>>();
-    let mut lines = Vec::with_capacity(line_ys.len());
-    for y in line_ys {
-        let sample_y = y + line_height * 0.5;
-        let display_start = preview_index_for_position(layout, point(bounds.left(), sample_y));
-        let display_end = preview_index_for_position(layout, point(bounds.right(), sample_y));
-        let mut carets = Vec::new();
-        for display in display_boundaries
-            .iter()
+    // Guard against rounding quirks producing a non-monotonic sequence.
+    let mut monotone_starts = Vec::with_capacity(starts.len());
+    for start in starts {
+        if monotone_starts.last().is_none_or(|&last| start > last) {
+            monotone_starts.push(start);
+        }
+    }
+    let starts = monotone_starts;
+    let projection = std::sync::Arc::new(projection.clone());
+    let mut lines = Vec::with_capacity(starts.len());
+    for (index, &start_display) in starts.iter().enumerate() {
+        let end_display = starts
+            .get(index + 1)
             .copied()
-            .filter(|display| *display >= display_start && *display <= display_end)
-        {
-            let position = layout.position_for_index(display);
-            let x = if display == display_start {
-                bounds.left()
-            } else if let Some(position) = position.filter(|position| position.y == y) {
-                position.x
-            } else {
-                continue;
-            };
-            let candidates = projection.boundary_candidates(display);
-            carets.push(VisualNavigationCaret {
-                source_offset: candidates.upstream_source,
-                x,
-            });
-            if candidates.is_ambiguous() {
-                carets.push(VisualNavigationCaret {
-                    source_offset: candidates.downstream_source,
-                    x,
-                });
-            }
-        }
-        if carets.is_empty() {
-            carets.push(VisualNavigationCaret {
-                source_offset: projection.source_anchor,
-                x: bounds.left(),
-            });
-        }
-        carets.sort_by(|left, right| {
-            left.x
-                .to_f64()
-                .total_cmp(&right.x.to_f64())
-                .then_with(|| left.source_offset.cmp(&right.source_offset))
+            .unwrap_or_else(|| layout.len())
+            .max(start_display);
+        lines.push(VisualNavigationLine {
+            y: bounds.top() + line_height * index as f32,
+            windows: vec![VisualNavigationWindow {
+                projection: projection.clone(),
+                layout: layout.clone(),
+                start_display,
+                end_display,
+            }],
         });
-        carets.dedup();
-        lines.push(VisualNavigationLine { y, carets });
     }
 
     VisualNavigationSnapshot {
@@ -2500,8 +2534,16 @@ fn visual_math_atom(
                 .bottom_0()
                 .left_0()
                 .flex()
-                .child(visual_math_hit_target(source_range.clone(), source_range.start, cx))
-                .child(visual_math_hit_target(source_range.clone(), source_range.end, cx)),
+                .child(visual_math_hit_target(
+                    source_range.clone(),
+                    source_range.start,
+                    cx,
+                ))
+                .child(visual_math_hit_target(
+                    source_range.clone(),
+                    source_range.end,
+                    cx,
+                )),
         )
         .into_any_element()
 }
@@ -2592,8 +2634,16 @@ fn visual_html_image_atom(
                 .bottom_0()
                 .left_0()
                 .flex()
-                .child(visual_math_hit_target(source_range.clone(), source_range.start, cx))
-                .child(visual_math_hit_target(source_range.clone(), source_range.end, cx)),
+                .child(visual_math_hit_target(
+                    source_range.clone(),
+                    source_range.start,
+                    cx,
+                ))
+                .child(visual_math_hit_target(
+                    source_range.clone(),
+                    source_range.end,
+                    cx,
+                )),
         )
         .into_any_element()
 }
@@ -2625,6 +2675,7 @@ fn visual_projection_fragment(
             segments: vec![markion::VisualProjectionSegment {
                 display_range: 0..visible_len,
                 source_range: source_range.clone(),
+                atomic: false,
             }],
             spans: Vec::new(),
             revealed_source_ranges: Vec::new(),
@@ -3028,8 +3079,27 @@ pub(super) fn visual_source_island_view(
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
-    let source = app.active_tab().document.text()[block.source_range.clone()].to_string();
-    let source_len = source.len();
+    let document_text = app.active_tab().document.text();
+    let source = document_text[block.source_range.clone()].to_string();
+    // Unprovable data-URI image spans fall back to this island; their opaque
+    // payload collapses into the shared token instead of raw base64.
+    let (projection, token_displays) = visual_payload_field_projection(
+        document_text,
+        &VisualEditorField {
+            kind: VisualEditorFieldKind::HtmlSource,
+            source_range: block.source_range.clone(),
+        },
+    );
+    let styled = if token_displays.is_empty() {
+        StyledText::new(SharedString::from(source))
+    } else {
+        StyledText::new(SharedString::from(projection.text.clone())).with_highlights(
+            token_displays
+                .iter()
+                .map(|range| (range.clone(), elided_token_highlight()))
+                .collect::<Vec<_>>(),
+        )
+    };
     div()
         .mb_2()
         .px_2()
@@ -3044,17 +3114,8 @@ pub(super) fn visual_source_island_view(
             element_id: ElementId::from(("visual-source-island", block_index)),
             block_index,
             source_island: true,
-            text: StyledText::new(SharedString::from(source.clone())),
-            projection: VisualProjection {
-                text: source.clone(),
-                segments: vec![markion::VisualProjectionSegment {
-                    display_range: 0..source_len,
-                    source_range: block.source_range.clone(),
-                }],
-                spans: Vec::new(),
-                revealed_source_ranges: vec![block.source_range.clone()],
-                source_anchor: block.source_range.start,
-            },
+            text: styled,
+            projection,
             source_selection: app.active_tab().selected_range.clone(),
             source_cursor: app.active_tab().cursor_offset(),
             marked_range: app.active_tab().marked_range.clone(),
@@ -3092,6 +3153,7 @@ pub(super) fn visual_whitespace_caret_element(
         segments: vec![markion::VisualProjectionSegment {
             display_range: 0..0,
             source_range: anchor..anchor,
+            atomic: false,
         }],
         spans: Vec::new(),
         revealed_source_ranges: Vec::new(),
@@ -3685,7 +3747,9 @@ pub(super) fn visual_block_view(
                 .filter(|title| !title.is_empty())
                 .or_else(|| (!image_alt.is_empty()).then_some(image_alt.as_str()));
             let image = div()
-                .w(gpui::relative(image_presentation.width_percent as f32 / 100.))
+                .w(gpui::relative(
+                    image_presentation.width_percent as f32 / 100.,
+                ))
                 .child(preview_image_view(app, url, document_dir, None, None));
             let image = match image_presentation.alignment {
                 ImageAlignment::Left => div().w_full().flex().items_start().child(image),
@@ -3716,13 +3780,18 @@ pub(super) fn visual_block_view(
                             visual_image_controls(offset, image_presentation, app.language, cx)
                         })),
                 );
-            if let Some(VisualBlockEditor::Image { payload }) = block.editor.as_ref() {
+            if let Some(VisualBlockEditor::Image {
+                payload,
+                data_uri_fingerprint,
+            }) = block.editor.as_ref()
+            {
                 return div().child(visual_image_source_editor(
                     app,
                     block,
                     block_index,
                     url,
                     payload,
+                    *data_uri_fingerprint,
                     presentation.into_any_element(),
                     document_dir,
                     cx,
@@ -4427,6 +4496,7 @@ pub(super) fn visual_reference_definition_view(
                 segments: vec![markion::VisualProjectionSegment {
                     display_range: 0..source_len,
                     source_range: block.source_range.clone(),
+                    atomic: false,
                 }],
                 spans: Vec::new(),
                 revealed_source_ranges: vec![block.source_range.clone()],
@@ -4446,6 +4516,7 @@ pub(super) fn visual_reference_definition_view(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn visual_editor_field_element(
     app: &MarkionApp,
     block_index: usize,
@@ -4461,6 +4532,16 @@ fn visual_editor_field_element(
     let caret_active = block_owns_caret
         && source_cursor >= field.source_range.start
         && source_cursor <= field.source_range.end;
+    #[cfg(test)]
+    {
+        // Counting here (rather than in the projection builders) captures
+        // every clone-bearing build, including table-cell projections; the
+        // collapsed-affordance gate asserts this stays flat while hidden.
+        // Construction runs inside the render borrow, so the counter is an
+        // interior-mutable Cell on the app rather than a tab field.
+        app.visual_field_projection_builds
+            .set(app.visual_field_projection_builds.get() + 1);
+    }
     let marked_range = app.active_tab().marked_range.clone().filter(|marked| {
         marked.start >= field.source_range.start && marked.end <= field.source_range.end
     });
@@ -4468,26 +4549,49 @@ fn visual_editor_field_element(
     // Table cells render inline formatting (bold, links, etc.) while unfocused,
     // and reveal the authored source markup when focused for editing -
     // mirroring how non-table visual blocks reveal inline constructs.
-    let (projection, text, highlights) = if let Some(rich) = cell_rich {
+    let (projection, text, highlights, token_displays) = if let Some(rich) = cell_rich {
         if caret_active {
-            let proj = visual_editor_field_projection(source, field);
+            // Focused cells reveal authored source; a data-URI payload inside
+            // collapses into the shared token (falls back to the ordinary
+            // cell projection — including escape collapsing — when the
+            // scanner finds nothing).
+            let (proj, token_displays) = visual_payload_field_projection(source, field);
             let txt = proj.text.clone();
-            let hl = Vec::new();
-            (proj, txt, hl)
+            (proj, txt, Vec::new(), token_displays)
         } else {
             let (proj, hl) = table_cell_rendered_projection(rich, field);
             let txt = proj.text.clone();
-            (proj, txt, hl)
+            (proj, txt, hl, Vec::new())
         }
+    } else if matches!(
+        field.kind,
+        VisualEditorFieldKind::ImageSource
+            | VisualEditorFieldKind::HtmlSource
+            | VisualEditorFieldKind::TableCell { .. }
+    ) {
+        // Opaque-payload fields (image source toggles, raw-HTML blocks, and
+        // focused table cells revealing authored source) collapse
+        // scanner-found data-URI payloads into atomic tokens.
+        let (proj, token_displays) = visual_payload_field_projection(source, field);
+        let txt = proj.text.clone();
+        (proj, txt, Vec::new(), token_displays)
     } else {
         let proj = visual_editor_field_projection(source, field);
         let txt = proj.text.clone();
-        (proj, txt, Vec::new())
+        (proj, txt, Vec::new(), Vec::new())
     };
 
     #[cfg(test)]
     let test_projection = caret_active.then_some((text.clone(), Vec::new()));
-    let styled = if !highlights.is_empty() {
+    let styled = if !token_displays.is_empty() {
+        // The elided-payload tokens must read as chrome, not authored bytes.
+        StyledText::new(SharedString::from(text.clone())).with_highlights(
+            token_displays
+                .into_iter()
+                .map(|range| (range, elided_token_highlight()))
+                .collect::<Vec<_>>(),
+        )
+    } else if !highlights.is_empty() {
         StyledText::new(SharedString::from(text.clone())).with_highlights(highlights)
     } else {
         styled_text.unwrap_or_else(|| StyledText::new(SharedString::from(text)))
@@ -4511,6 +4615,78 @@ fn visual_editor_field_element(
         test_projection_styles: None,
     }
     .into_any_element()
+}
+
+/// Chip styling for the elided-payload summary token: a soft tint plus dimmed
+/// text so the token reads as chrome rather than authored source bytes.
+fn elided_token_highlight() -> HighlightStyle {
+    HighlightStyle {
+        background_color: Some(rgba(0xf1f5f9ff).into()),
+        color: Some(rgb(0x64748b).into()),
+        ..Default::default()
+    }
+}
+
+/// Builds the elided projection for an opaque-payload field (image source or
+/// raw-HTML block): everything stays verbatim identity segments except the
+/// scanner-found data-URI payloads, which each collapse into one atomic
+/// segment showing the shared `…{size}…` token. Returns the token display
+/// ranges for chip highlighting.
+pub(super) fn visual_payload_field_projection(
+    source: &str,
+    field: &VisualEditorField,
+) -> (VisualProjection, Vec<Range<usize>>) {
+    let span = field.source_range.clone();
+    let payload_ranges = data_uri_payload_ranges(source, span.clone());
+    if payload_ranges.is_empty() {
+        return (visual_editor_field_projection(source, field), Vec::new());
+    }
+    let authored = &source[span.clone()];
+    let mut text = String::new();
+    let mut segments = Vec::with_capacity(payload_ranges.len() * 2 + 1);
+    let mut token_display_ranges = Vec::with_capacity(payload_ranges.len());
+    let mut cursor = 0usize;
+    for token in payload_ranges {
+        let token_start = token.start - span.start;
+        let token_end = token.end - span.start;
+        if cursor < token_start {
+            let verbatim = &authored[cursor..token_start];
+            let display_start = text.len();
+            text.push_str(verbatim);
+            segments.push(markion::VisualProjectionSegment {
+                display_range: display_start..text.len(),
+                source_range: span.start + cursor..token.start,
+                atomic: false,
+            });
+        }
+        let display_start = text.len();
+        text.push_str(&elided_payload_token(token.len()));
+        token_display_ranges.push(display_start..text.len());
+        segments.push(markion::VisualProjectionSegment {
+            display_range: display_start..text.len(),
+            source_range: token,
+            atomic: true,
+        });
+        cursor = token_end;
+    }
+    if cursor < authored.len() {
+        let verbatim = &authored[cursor..];
+        let display_start = text.len();
+        text.push_str(verbatim);
+        segments.push(markion::VisualProjectionSegment {
+            display_range: display_start..text.len(),
+            source_range: span.start + cursor..span.end,
+            atomic: false,
+        });
+    }
+    let projection = VisualProjection {
+        text,
+        segments,
+        spans: Vec::new(),
+        revealed_source_ranges: Vec::new(),
+        source_anchor: span.start,
+    };
+    (projection, token_display_ranges)
 }
 
 /// Builds a rendered (non-source-revealing) projection for a table cell from
@@ -4545,6 +4721,7 @@ fn table_cell_rendered_projection(
         vec![markion::VisualProjectionSegment {
             display_range: 0..text.len(),
             source_range: field.source_range.clone(),
+            atomic: false,
         }]
     };
     let projection = VisualProjection {
@@ -4585,6 +4762,7 @@ pub(super) fn visual_editor_field_projection(
                 .then_some(markion::VisualProjectionSegment {
                     display_range: 0..authored.len(),
                     source_range: field.source_range.clone(),
+                    atomic: false,
                 })
                 .into_iter()
                 .collect(),
@@ -4610,6 +4788,7 @@ pub(super) fn visual_editor_field_projection(
                 display_range: display_start..text.len(),
                 source_range: source_start
                     ..field.source_range.start + next_offset + next.len_utf8(),
+                atomic: false,
             });
             continue;
         }
@@ -4618,6 +4797,7 @@ pub(super) fn visual_editor_field_projection(
         segments.push(markion::VisualProjectionSegment {
             display_range: display_start..text.len(),
             source_range: source_start..source_start + ch.len_utf8(),
+            atomic: false,
         });
     }
     VisualProjection {
@@ -4738,23 +4918,26 @@ fn visual_math_editor(
             .text_color(rgb(0xb91c1c))
             .child(app.math_error_message(&error)),
     };
-    let payload_editor = div()
-        .border_t_1()
-        .border_color(rgb(0xe2e8f0))
-        .bg(rgb(0xf8fafc))
-        .p_2()
-        .font(code_slot_font(&app.resolved_font_families.code))
-        .text_size(px(typography.code_font_size))
-        .line_height(px(typography.code_line_height))
-        .child(visual_editor_field_element(
-            app,
-            block_index,
-            payload,
-            ElementId::from(("visual-math-payload", block.id.as_u64())),
-            None,
-            None,
-            cx,
-        ));
+    let payload_editor = move |cx: &mut Context<MarkionApp>| {
+        div()
+            .border_t_1()
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xf8fafc))
+            .p_2()
+            .font(code_slot_font(&app.resolved_font_families.code))
+            .text_size(px(typography.code_font_size))
+            .line_height(px(typography.code_line_height))
+            .child(visual_editor_field_element(
+                app,
+                block_index,
+                payload,
+                ElementId::from(("visual-math-payload", block.id.as_u64())),
+                None,
+                None,
+                cx,
+            ))
+            .into_any_element()
+    };
     div().child(visual_collapsible_source_block(
         app,
         block.id,
@@ -4763,7 +4946,7 @@ fn visual_math_editor(
         true,
         false,
         presentation.into_any_element(),
-        payload_editor.into_any_element(),
+        payload_editor,
         cx,
     ))
 }
@@ -4782,23 +4965,26 @@ fn visual_html_editor(
     let bordered = !html_preview_parts(html)
         .iter()
         .any(|part| matches!(part, HtmlPreviewPart::Table { .. }));
-    let payload_editor = div()
-        .border_t_1()
-        .border_color(rgb(0xe2e8f0))
-        .bg(rgb(0xf8fafc))
-        .p_2()
-        .font(code_slot_font(&app.resolved_font_families.code))
-        .text_size(px(typography.source_island_font_size))
-        .line_height(px(typography.source_island_line_height))
-        .child(visual_editor_field_element(
-            app,
-            block_index,
-            payload,
-            ElementId::from(("visual-html-payload", block.id.as_u64())),
-            None,
-            None,
-            cx,
-        ));
+    let payload_editor = move |cx: &mut Context<MarkionApp>| {
+        div()
+            .border_t_1()
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xf8fafc))
+            .p_2()
+            .font(code_slot_font(&app.resolved_font_families.code))
+            .text_size(px(typography.source_island_font_size))
+            .line_height(px(typography.source_island_line_height))
+            .child(visual_editor_field_element(
+                app,
+                block_index,
+                payload,
+                ElementId::from(("visual-html-payload", block.id.as_u64())),
+                None,
+                None,
+                cx,
+            ))
+            .into_any_element()
+    };
     div().child(visual_collapsible_source_block(
         app,
         block.id,
@@ -4807,7 +4993,7 @@ fn visual_html_editor(
         bordered,
         false,
         presentation.into_any_element(),
-        payload_editor.into_any_element(),
+        payload_editor,
         cx,
     ))
 }
@@ -4877,34 +5063,37 @@ fn visual_diagram_editor(
             .text_color(app.palette().muted)
             .child(t(app.language, Msg::DiagramLoading)),
     };
-    let payload_editor = div()
-        .border_t_1()
-        .border_color(rgb(0xe2e8f0))
-        .bg(rgb(0xf8fafc))
-        .p_2()
-        .font(code_slot_font(&app.resolved_font_families.code))
-        .text_size(px(typography.code_font_size))
-        .line_height(px(typography.code_line_height))
-        .child(code_block_header_with_language(
-            app,
-            language,
-            code,
-            code_palette(app.code_theme),
-            // The header only exists inside the payload editor, which is
-            // mounted when the user expanded the source — so the language
-            // chip is always editable while it is on screen.
-            CodeHeaderLanguage::Field(info, block_index, block.id),
-            cx,
-        ))
-        .child(visual_editor_field_element(
-            app,
-            block_index,
-            payload,
-            ElementId::from(("visual-diagram-payload", block.id.as_u64())),
-            None,
-            None,
-            cx,
-        ));
+    let payload_editor = move |cx: &mut Context<MarkionApp>| {
+        div()
+            .border_t_1()
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xf8fafc))
+            .p_2()
+            .font(code_slot_font(&app.resolved_font_families.code))
+            .text_size(px(typography.code_font_size))
+            .line_height(px(typography.code_line_height))
+            .child(code_block_header_with_language(
+                app,
+                language,
+                code,
+                code_palette(app.code_theme),
+                // The header only exists inside the payload editor, which is
+                // mounted when the user expanded the source — so the language
+                // chip is always editable while it is on screen.
+                CodeHeaderLanguage::Field(info, block_index, block.id),
+                cx,
+            ))
+            .child(visual_editor_field_element(
+                app,
+                block_index,
+                payload,
+                ElementId::from(("visual-diagram-payload", block.id.as_u64())),
+                None,
+                None,
+                cx,
+            ))
+            .into_any_element()
+    };
     div().child(visual_collapsible_source_block(
         app,
         block.id,
@@ -4913,7 +5102,7 @@ fn visual_diagram_editor(
         true,
         false,
         presentation.into_any_element(),
-        payload_editor.into_any_element(),
+        payload_editor,
         cx,
     ))
 }
@@ -5046,7 +5235,9 @@ fn visual_image_controls(
 /// presentation on top of an on-demand whole-span source payload editor
 /// (collapsed by default; expand via the hover `</>` control — same chrome
 /// as `visual_math_editor`). A failed image load forces the payload visible
-/// so the destination can be corrected, mirroring invalid math.
+/// so the destination can be corrected, mirroring invalid math. An elision
+/// policy collapses an opaque data-URI (or oversized) payload into one atomic
+/// summary token instead of rendering megabytes of base64.
 #[allow(clippy::too_many_arguments)]
 fn visual_image_source_editor(
     app: &MarkionApp,
@@ -5054,37 +5245,47 @@ fn visual_image_source_editor(
     block_index: usize,
     url: &str,
     payload: &VisualEditorField,
+    data_uri_fingerprint: Option<u64>,
     presentation: gpui::AnyElement,
     document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
     let typography = app.typography_metrics();
-    let forced = matches!(
-        app.preview_image_entry(url, document_dir),
-        PreviewImageEntry::Error(_)
-    );
+    // Data-URI destinations decide forced expansion by fingerprint so no
+    // frame re-derives a multi-megabyte cache key; short destinations keep
+    // the direct entry probe.
+    let forced = match data_uri_fingerprint {
+        Some(fingerprint) => app.failed_data_uri_fingerprints.contains(&fingerprint),
+        None => matches!(
+            app.preview_image_entry(url, document_dir),
+            PreviewImageEntry::Error(_)
+        ),
+    };
     // The payload renders above the image so the authored span is right where
     // the user clicks `</>`; the top padding strip reserves room for the
     // chrome's top-right source toggle so it never covers source text.
-    let payload_editor = div()
-        .border_b_1()
-        .border_color(rgb(0xe2e8f0))
-        .bg(rgb(0xf8fafc))
-        .pt(px(30.))
-        .px_2()
-        .pb_2()
-        .font(code_slot_font(&app.resolved_font_families.code))
-        .text_size(px(typography.source_island_font_size))
-        .line_height(px(typography.source_island_line_height))
-        .child(visual_editor_field_element(
-            app,
-            block_index,
-            payload,
-            ElementId::from(("visual-image-payload", block.id.as_u64())),
-            None,
-            None,
-            cx,
-        ));
+    let payload_editor = move |cx: &mut Context<MarkionApp>| {
+        div()
+            .border_b_1()
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xf8fafc))
+            .pt(px(30.))
+            .px_2()
+            .pb_2()
+            .font(code_slot_font(&app.resolved_font_families.code))
+            .text_size(px(typography.source_island_font_size))
+            .line_height(px(typography.source_island_line_height))
+            .child(visual_editor_field_element(
+                app,
+                block_index,
+                payload,
+                ElementId::from(("visual-image-payload", block.id.as_u64())),
+                None,
+                None,
+                cx,
+            ))
+            .into_any_element()
+    };
     visual_collapsible_source_block(
         app,
         block.id,
@@ -5093,11 +5294,12 @@ fn visual_image_source_editor(
         false,
         true,
         presentation,
-        payload_editor.into_any_element(),
+        payload_editor,
         cx,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn visual_collapsible_source_block(
     app: &MarkionApp,
     block_id: VisualBlockId,
@@ -5108,7 +5310,10 @@ fn visual_collapsible_source_block(
     // than below it (math, diagrams, HTML).
     payload_first: bool,
     presentation: gpui::AnyElement,
-    payload_editor: gpui::AnyElement,
+    // The payload editor builds lazily: while collapsed the projection (which
+    // for image spans can clone megabytes) is never constructed. The closure
+    // receives the render context at construction time.
+    payload_editor: impl FnOnce(&mut Context<MarkionApp>) -> gpui::AnyElement,
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
     let tab = app.active_tab();
@@ -5125,12 +5330,12 @@ fn visual_collapsible_source_block(
     // the presentation; every other block stacks it below.
     let mut children: Vec<gpui::AnyElement> = Vec::with_capacity(2);
     if payload_first && show_payload {
-        children.push(payload_editor);
+        children.push(payload_editor(&mut *cx));
         children.push(presentation);
     } else {
         children.push(presentation);
         if show_payload {
-            children.push(payload_editor);
+            children.push(payload_editor(&mut *cx));
         }
     }
 
@@ -5796,14 +6001,7 @@ fn code_block_header(
     palette: &CodePalette,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
-    code_block_header_with_language(
-        app,
-        language,
-        code,
-        palette,
-        CodeHeaderLanguage::Text,
-        cx,
-    )
+    code_block_header_with_language(app, language, code, palette, CodeHeaderLanguage::Text, cx)
 }
 
 /// How the rendered block header presents the fence's language token.
@@ -5842,7 +6040,14 @@ fn code_block_header_with_language(
             );
         }
         CodeHeaderLanguage::Field(info, block_index, block_id) => {
-            header = header.child(code_info_chip(app, info, block_index, block_id, palette, cx));
+            header = header.child(code_info_chip(
+                app,
+                info,
+                block_index,
+                block_id,
+                palette,
+                cx,
+            ));
         }
     }
     header.child(code_copy_button(app, code, palette, cx))
@@ -5864,7 +6069,10 @@ fn code_info_chip(
     let empty = token.is_empty();
     let info_start = info.source_range.start;
     let chip = div()
-        .id(ElementId::from(("visual-code-info-chip", block_id.as_u64())))
+        .id(ElementId::from((
+            "visual-code-info-chip",
+            block_id.as_u64(),
+        )))
         .debug_selector(move || format!("visual-code-info-chip-{block_index}"))
         .relative()
         .min_w(px(44.))
