@@ -197,6 +197,7 @@ pub enum Msg {
     ItemExportPng,
     ItemExportJpeg,
     ItemPublishWechat,
+    ItemOrganizeLocalImages,
 
     // --- Help menu items ---
     ItemPreferences,
@@ -390,8 +391,16 @@ pub enum Msg {
     StatusRecentFilesCleared,
     StatusPublishingOpening,
     StatusPublishingOpened,
+    StatusOrganizeRequiresSave,
+    StatusOrganizeNothingToDo,
+    StatusOrganizeWaitingConfirm,
+    StatusOrganizeCanceled,
 
     // --- Status bar: dynamic (use tf) ---
+    /// {0}=organized count.
+    StatusOrganizeCompleted,
+    /// {0}=organized count, {1}=failed count.
+    StatusOrganizePartial,
     /// {0}=branch name — persistent status-bar repository context.
     StatusContextBranch,
     /// {0}=Unicode-scalar character count.
@@ -595,6 +604,13 @@ pub enum Msg {
     DialogResetTitle,
     /// Reset-preferences detail. (static)
     DialogResetDetail,
+    /// Organize-images prompt title.
+    DialogOrganizeImagesTitle,
+    /// Organize-images detail. {0}=count of images that will be copied.
+    DialogOrganizeImagesDetail,
+    /// Organize-images confirm button (destructive-free counterpart of
+    /// DialogButtonDelete).
+    DialogButtonOrganize,
     /// Path prompt labels (open / save / export).
     PromptOpenMarkdown,
     PromptOpenFolder,
@@ -2980,6 +2996,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemExportPng => "Export PNG",
         Msg::ItemExportJpeg => "Export JPEG",
         Msg::ItemPublishWechat => "Publish for WeChat (MarkNice)",
+        Msg::ItemOrganizeLocalImages => "Organize Local Images…",
 
         Msg::ItemPreferences => "Preferences",
         Msg::ItemResetPreferences => "Reset Preferences",
@@ -3025,6 +3042,11 @@ fn en(msg: Msg) -> &'static str {
 
         Msg::StatusReady => "Ready",
         Msg::StatusContextBranch => "Branch {0}",
+        Msg::DialogOrganizeImagesTitle => "Copy local images into the asset folder?",
+        Msg::DialogOrganizeImagesDetail => "{0} local image(s) outside the publishing preview scope will be copied into the document's asset folder and their links rewritten.",
+        Msg::DialogButtonOrganize => "Organize",
+        Msg::StatusOrganizeCompleted => "Organized {0} local image(s); the document is not saved yet.",
+        Msg::StatusOrganizePartial => "Organized {0} local image(s); {1} could not be copied.",
         Msg::StatusContextCharacters => "Chars {0}",
         Msg::StatusContextWords => "Words {0}",
         Msg::StatusContextLineColumn => "Ln {0}, Col {1}",
@@ -3181,6 +3203,10 @@ fn en(msg: Msg) -> &'static str {
         }
         Msg::StatusExportFailed => "Export failed: {0}",
         Msg::StatusPublishingOpening => "Opening the local WeChat publishing workspace…",
+        Msg::StatusOrganizeRequiresSave => "Save the document before organizing local images.",
+        Msg::StatusOrganizeNothingToDo => "No local images need organizing.",
+        Msg::StatusOrganizeWaitingConfirm => "Waiting for confirmation to organize local images…",
+        Msg::StatusOrganizeCanceled => "Organizing canceled.",
         Msg::StatusPublishingOpened => "Opened the local WeChat publishing workspace",
         Msg::StatusPublishSetupFailed => "Publishing workspace setup failed: {0}",
         Msg::StatusPublishLaunchFailed => "Could not open the default browser: {0}",
@@ -3514,6 +3540,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemExportPng => "PNG出力",
         Msg::ItemExportJpeg => "JPEG出力",
         Msg::ItemPublishWechat => "WeChat向けに公開（MarkNice）",
+        Msg::ItemOrganizeLocalImages => "ローカル画像を整理…",
 
         Msg::ItemPreferences => "設定",
         Msg::ItemResetPreferences => "設定をリセット",
@@ -3559,6 +3586,11 @@ fn ja(msg: Msg) -> &'static str {
 
         Msg::StatusReady => "準備完了",
         Msg::StatusContextBranch => "ブランチ {0}",
+        Msg::DialogOrganizeImagesTitle => "ローカル画像をアセットフォルダーにコピーしますか？",
+        Msg::DialogOrganizeImagesDetail => "プレビュー範囲外のローカル画像 {0} 枚を文書のアセットフォルダーにコピーし、リンクを書き換えます。",
+        Msg::DialogButtonOrganize => "整理",
+        Msg::StatusOrganizeCompleted => "ローカル画像 {0} 枚を整理しました。文書は未保存です。",
+        Msg::StatusOrganizePartial => "ローカル画像 {0} 枚を整理しました。{1} 枚はコピーできませんでした。",
         Msg::StatusContextCharacters => "文字 {0}",
         Msg::StatusContextWords => "単語 {0}",
         Msg::StatusContextLineColumn => "行 {0}、列 {1}",
@@ -3715,6 +3747,10 @@ fn ja(msg: Msg) -> &'static str {
         }
         Msg::StatusExportFailed => "エクスポートに失敗しました: {0}",
         Msg::StatusPublishingOpening => "ローカルWeChat公開ワークスペースを開いています…",
+        Msg::StatusOrganizeRequiresSave => "ローカル画像を整理する前に文書を保存してください。",
+        Msg::StatusOrganizeNothingToDo => "整理が必要なローカル画像はありません。",
+        Msg::StatusOrganizeWaitingConfirm => "ローカル画像の整理の確認を待っています…",
+        Msg::StatusOrganizeCanceled => "ローカル画像の整理をキャンセルしました。",
         Msg::StatusPublishingOpened => "ローカルWeChat公開ワークスペースを開きました",
         Msg::StatusPublishSetupFailed => "公開ワークスペースの準備に失敗しました: {0}",
         Msg::StatusPublishLaunchFailed => "既定のブラウザーを開けませんでした: {0}",
@@ -4040,6 +4076,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemExportPng => "Exporter en PNG",
         Msg::ItemExportJpeg => "Exporter en JPEG",
         Msg::ItemPublishWechat => "Publier pour WeChat (MarkNice)",
+        Msg::ItemOrganizeLocalImages => "Organiser les images locales…",
         Msg::ItemPreferences => "Préférences",
         Msg::ItemResetPreferences => "Réinitialiser les préférences",
         Msg::ItemKeyboardShortcuts => "Raccourcis clavier",
@@ -4081,6 +4118,11 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusCaseInsensitiveFind => "Recherche insensible à la casse",
         Msg::StatusReady => "Prêt",
         Msg::StatusContextBranch => "Branche {0}",
+        Msg::DialogOrganizeImagesTitle => "Copier les images locales dans le dossier de ressources ?",
+        Msg::DialogOrganizeImagesDetail => "{0} image(s) locale(s) hors du périmètre d’aperçu seront copiées dans le dossier de ressources du document et leurs liens réécrits.",
+        Msg::DialogButtonOrganize => "Organiser",
+        Msg::StatusOrganizeCompleted => "{0} image(s) locale(s) organisée(s) ; le document n’est pas enregistré.",
+        Msg::StatusOrganizePartial => "{0} image(s) locale(s) organisée(s) ; {1} n’ont pas pu être copiées.",
         Msg::StatusContextCharacters => "Car. {0}",
         Msg::StatusContextWords => "Mots {0}",
         Msg::StatusContextLineColumn => "L {0}, C {1}",
@@ -4239,6 +4281,10 @@ fn fr(msg: Msg) -> &'static str {
         }
         Msg::StatusExportFailed => "Échec de l'exportation : {0}",
         Msg::StatusPublishingOpening => "Ouverture de l’espace local de publication WeChat…",
+        Msg::StatusOrganizeRequiresSave => "Enregistrez le document avant d’organiser les images locales.",
+        Msg::StatusOrganizeNothingToDo => "Aucune image locale à organiser.",
+        Msg::StatusOrganizeWaitingConfirm => "En attente de confirmation pour organiser les images locales…",
+        Msg::StatusOrganizeCanceled => "Organisation des images locales annulée.",
         Msg::StatusPublishingOpened => "Espace local de publication WeChat ouvert",
         Msg::StatusPublishSetupFailed => "Échec de la préparation de l’espace de publication : {0}",
         Msg::StatusPublishLaunchFailed => "Impossible d’ouvrir le navigateur par défaut : {0}",
@@ -4574,6 +4620,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemExportPng => "PNG exportieren",
         Msg::ItemExportJpeg => "JPEG exportieren",
         Msg::ItemPublishWechat => "Für WeChat veröffentlichen (MarkNice)",
+        Msg::ItemOrganizeLocalImages => "Lokale Bilder ordnen…",
         Msg::ItemPreferences => "Einstellungen",
         Msg::ItemResetPreferences => "Einstellungen zurücksetzen",
         Msg::ItemKeyboardShortcuts => "Tastenkürzel",
@@ -4615,6 +4662,11 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusCaseInsensitiveFind => "Suche ohne Groß-/Kleinschreibung",
         Msg::StatusReady => "Bereit",
         Msg::StatusContextBranch => "Branch {0}",
+        Msg::DialogOrganizeImagesTitle => "Lokale Bilder in den Ressourcenordner kopieren?",
+        Msg::DialogOrganizeImagesDetail => "{0} lokale Bilder außerhalb des Vorschaubereichs werden in den Ressourcenordner des Dokuments kopiert und ihre Verweise neu geschrieben.",
+        Msg::DialogButtonOrganize => "Ordnen",
+        Msg::StatusOrganizeCompleted => "{0} lokale Bilder geordnet; das Dokument ist nicht gespeichert.",
+        Msg::StatusOrganizePartial => "{0} lokale Bilder geordnet; {1} konnten nicht kopiert werden.",
         Msg::StatusContextCharacters => "Zeichen {0}",
         Msg::StatusContextWords => "Wörter {0}",
         Msg::StatusContextLineColumn => "Z. {0}, Sp. {1}",
@@ -4769,6 +4821,10 @@ fn de(msg: Msg) -> &'static str {
         }
         Msg::StatusExportFailed => "Export fehlgeschlagen: {0}",
         Msg::StatusPublishingOpening => "Lokaler WeChat-Veröffentlichungsbereich wird geöffnet…",
+        Msg::StatusOrganizeRequiresSave => "Speichern Sie das Dokument, bevor Sie lokale Bilder ordnen.",
+        Msg::StatusOrganizeNothingToDo => "Keine lokalen Bilder zu ordnen.",
+        Msg::StatusOrganizeWaitingConfirm => "Warte auf Bestätigung zum Ordnen lokaler Bilder…",
+        Msg::StatusOrganizeCanceled => "Ordnen lokaler Bilder abgebrochen.",
         Msg::StatusPublishingOpened => "Lokaler WeChat-Veröffentlichungsbereich geöffnet",
         Msg::StatusPublishSetupFailed => {
             "Einrichten des Veröffentlichungsbereichs fehlgeschlagen: {0}"
@@ -5102,6 +5158,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemExportPng => "Exportar PNG",
         Msg::ItemExportJpeg => "Exportar JPEG",
         Msg::ItemPublishWechat => "Publicar para WeChat (MarkNice)",
+        Msg::ItemOrganizeLocalImages => "Organizar imágenes locales…",
         Msg::ItemPreferences => "Preferencias",
         Msg::ItemResetPreferences => "Restablecer preferencias",
         Msg::ItemKeyboardShortcuts => "Atajos de teclado",
@@ -5143,6 +5200,11 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusCaseInsensitiveFind => "Búsqueda sin distinguir mayúsculas",
         Msg::StatusReady => "Listo",
         Msg::StatusContextBranch => "Rama {0}",
+        Msg::DialogOrganizeImagesTitle => "¿Copiar las imágenes locales en la carpeta de recursos?",
+        Msg::DialogOrganizeImagesDetail => "Se copiarán {0} imagen(es) local(es) fuera del alcance de la vista previa en la carpeta de recursos del documento y se reescribirán sus enlaces.",
+        Msg::DialogButtonOrganize => "Organizar",
+        Msg::StatusOrganizeCompleted => "Se organizaron {0} imagen(es) local(es); el documento no está guardado.",
+        Msg::StatusOrganizePartial => "Se organizaron {0} imagen(es) local(es); {1} no se pudieron copiar.",
         Msg::StatusContextCharacters => "Caracteres {0}",
         Msg::StatusContextWords => "Palabras {0}",
         Msg::StatusContextLineColumn => "Lín. {0}, Col. {1}",
@@ -5297,6 +5359,10 @@ fn es(msg: Msg) -> &'static str {
         }
         Msg::StatusExportFailed => "Error de exportación: {0}",
         Msg::StatusPublishingOpening => "Abriendo el espacio local de publicación de WeChat…",
+        Msg::StatusOrganizeRequiresSave => "Guarda el documento antes de organizar imágenes locales.",
+        Msg::StatusOrganizeNothingToDo => "No hay imágenes locales que organizar.",
+        Msg::StatusOrganizeWaitingConfirm => "Esperando confirmación para organizar imágenes locales…",
+        Msg::StatusOrganizeCanceled => "Se canceló la organización de imágenes locales.",
         Msg::StatusPublishingOpened => "Espacio local de publicación de WeChat abierto",
         Msg::StatusPublishSetupFailed => "Error al preparar el espacio de publicación: {0}",
         Msg::StatusPublishLaunchFailed => "No se pudo abrir el navegador predeterminado: {0}",
@@ -5619,6 +5685,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemExportPng => "导出 PNG",
         Msg::ItemExportJpeg => "导出 JPEG",
         Msg::ItemPublishWechat => "发布到微信公众号（MarkNice）",
+        Msg::ItemOrganizeLocalImages => "整理本地图片…",
 
         Msg::ItemPreferences => "首选项",
         Msg::ItemResetPreferences => "重置首选项",
@@ -5662,6 +5729,11 @@ fn zh(msg: Msg) -> &'static str {
 
         Msg::StatusReady => "就绪",
         Msg::StatusContextBranch => "分支 {0}",
+        Msg::DialogOrganizeImagesTitle => "将本地图片复制到资源文件夹？",
+        Msg::DialogOrganizeImagesDetail => "预览范围外的 {0} 张本地图片将被复制到文档的资源文件夹，并重写对应链接。",
+        Msg::DialogButtonOrganize => "整理",
+        Msg::StatusOrganizeCompleted => "已整理 {0} 张本地图片；文档尚未保存。",
+        Msg::StatusOrganizePartial => "已整理 {0} 张本地图片；{1} 张复制失败。",
         Msg::StatusContextCharacters => "字符 {0}",
         Msg::StatusContextWords => "词数 {0}",
         Msg::StatusContextLineColumn => "行 {0}，列 {1}",
@@ -5816,6 +5888,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusExportedBuiltinConversionFailed => "已导出 {0}（内置简易导出——pandoc 转换失败）",
         Msg::StatusExportFailed => "导出失败：{0}",
         Msg::StatusPublishingOpening => "正在打开本地微信公众号发布工作区…",
+        Msg::StatusOrganizeRequiresSave => "请先保存文档，再整理本地图片。",
+        Msg::StatusOrganizeNothingToDo => "没有需要整理的本地图片。",
+        Msg::StatusOrganizeWaitingConfirm => "等待确认整理本地图片…",
+        Msg::StatusOrganizeCanceled => "已取消整理本地图片。",
         Msg::StatusPublishingOpened => "已打开本地微信公众号发布工作区",
         Msg::StatusPublishSetupFailed => "发布工作区初始化失败：{0}",
         Msg::StatusPublishLaunchFailed => "无法打开默认浏览器：{0}",
@@ -6132,6 +6208,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemExportPng => "匯出 PNG",
         Msg::ItemExportJpeg => "匯出 JPEG",
         Msg::ItemPublishWechat => "發佈到微信公眾號（MarkNice）",
+        Msg::ItemOrganizeLocalImages => "整理本機圖片…",
 
         Msg::ItemPreferences => "偏好設定",
         Msg::ItemResetPreferences => "重設偏好設定",
@@ -6175,6 +6252,11 @@ fn zh_hant(msg: Msg) -> &'static str {
 
         Msg::StatusReady => "就緒",
         Msg::StatusContextBranch => "分支 {0}",
+        Msg::DialogOrganizeImagesTitle => "將本機圖片複製到資源資料夾？",
+        Msg::DialogOrganizeImagesDetail => "預覽範圍外的 {0} 張本機圖片將被複製到文件的資源資料夾，並改寫對應連結。",
+        Msg::DialogButtonOrganize => "整理",
+        Msg::StatusOrganizeCompleted => "已整理 {0} 張本機圖片；文件尚未儲存。",
+        Msg::StatusOrganizePartial => "已整理 {0} 張本機圖片；{1} 張複製失敗。",
         Msg::StatusContextCharacters => "字元 {0}",
         Msg::StatusContextWords => "詞數 {0}",
         Msg::StatusContextLineColumn => "行 {0}，列 {1}",
@@ -6329,6 +6411,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusExportedBuiltinConversionFailed => "已匯出 {0}（內建簡易匯出——pandoc 轉換失敗）",
         Msg::StatusExportFailed => "匯出失敗：{0}",
         Msg::StatusPublishingOpening => "正在開啟本機微信公眾號發佈工作區…",
+        Msg::StatusOrganizeRequiresSave => "請先儲存文件，再整理本機圖片。",
+        Msg::StatusOrganizeNothingToDo => "沒有需要整理的本機圖片。",
+        Msg::StatusOrganizeWaitingConfirm => "等待確認整理本機圖片…",
+        Msg::StatusOrganizeCanceled => "已取消整理本機圖片。",
         Msg::StatusPublishingOpened => "已開啟本機微信公眾號發佈工作區",
         Msg::StatusPublishSetupFailed => "發佈工作區初始化失敗：{0}",
         Msg::StatusPublishLaunchFailed => "無法開啟預設瀏覽器：{0}",

@@ -96,6 +96,198 @@ fn publishing_action_and_statuses_are_localized_for_every_language() {
         assert!(!tf(language, Msg::StatusPublishSetupFailed, &["setup"]).contains("{0}"));
         assert!(!tf(language, Msg::StatusPublishLaunchFailed, &["launch"]).contains("{0}"));
     }
+
+    for language in [
+        Language::En,
+        Language::ZhHans,
+        Language::ZhHant,
+        Language::Ja,
+        Language::Fr,
+        Language::De,
+        Language::Es,
+    ] {
+        for message in [
+            Msg::ItemOrganizeLocalImages,
+            Msg::DialogOrganizeImagesTitle,
+            Msg::DialogButtonOrganize,
+            Msg::StatusOrganizeRequiresSave,
+            Msg::StatusOrganizeNothingToDo,
+            Msg::StatusOrganizeWaitingConfirm,
+            Msg::StatusOrganizeCanceled,
+        ] {
+            assert!(!t(language, message).trim().is_empty());
+        }
+        assert!(
+            !tf(language, Msg::DialogOrganizeImagesDetail, &["2"]).contains("{0}")
+        );
+        assert!(
+            !tf(language, Msg::StatusOrganizeCompleted, &["2"]).contains("{0}")
+        );
+        assert!(
+            !tf(language, Msg::StatusOrganizePartial, &["1", "1"])
+                .contains("{0}")
+                && !tf(language, Msg::StatusOrganizePartial, &["1", "1"]).contains("{1}")
+        );
+    }
+}
+
+#[gpui::test]
+fn organize_local_images_copies_and_rewrites_in_one_undo_step(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let docs = root.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::create_dir_all(temp.path().join("shared")).unwrap();
+    std::fs::write(temp.path().join("shared/logo.png"), b"logo").unwrap();
+    let document_path = docs.join("note.md");
+    let mut document = MarkdownDocument::from_text(
+        "![icon](../../shared/logo.png)\n[site](../../shared/logo.png)\n",
+    );
+    document.save_as(&document_path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let references = app.active_tab().document.publishing_image_references();
+        let candidates = organize_candidates(&document_path, &references);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].authored_url, "../../shared/logo.png");
+
+        let undo_before = app.active_tab().undo_stack.len();
+        app.apply_organize_candidates(&document_path, &candidates, cx);
+
+        let text = app.active_tab().document.text().to_string();
+        assert!(
+            text.contains("![icon](note.assets/"),
+            "image destination should be rewritten into the asset dir: {text}"
+        );
+        assert!(
+            text.contains("[site](../../shared/logo.png)"),
+            "a plain link sharing the destination must stay intact: {text}"
+        );
+        assert!(app.active_tab().document.is_dirty());
+        assert_eq!(
+            app.active_tab().undo_stack.len(),
+            undo_before + 1,
+            "organizing must be one undo step"
+        );
+        let managed = markion::document_asset_dir(&document_path);
+        assert_eq!(
+            std::fs::read_dir(&managed).unwrap().count(),
+            1,
+            "exactly one copied image"
+        );
+
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(
+            app.active_tab().undo_stack.len(),
+            undo_before,
+            "a single undo step restores the pre-organize text"
+        );
+        assert!(app
+            .active_tab()
+            .document
+            .text()
+            .contains("![icon](../../shared/logo.png)"));
+        // The copied file remains: content-addressed imports are idempotent.
+        assert_eq!(std::fs::read_dir(&managed).unwrap().count(), 1);
+    });
+}
+
+#[gpui::test]
+fn organize_local_images_reports_partial_failure_and_keeps_failed_reference(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let docs = root.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::create_dir_all(temp.path().join("shared")).unwrap();
+    std::fs::write(temp.path().join("shared/logo.png"), b"logo").unwrap();
+    let missing = temp.path().join("shared/missing.png");
+    let document_path = docs.join("note.md");
+    let mut document = MarkdownDocument::from_text(
+        "![icon](../../shared/logo.png) ![gone](../../shared/missing.png)\n",
+    );
+    document.save_as(&document_path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        // The planner skips the missing file; a candidate that disappears
+        // after planning must fail gracefully during apply.
+        let references = app.active_tab().document.publishing_image_references();
+        let mut candidates = organize_candidates(&document_path, &references);
+        assert_eq!(candidates.len(), 1);
+        candidates.push(OrganizeCandidate {
+            authored_url: "../../shared/missing.png".to_owned(),
+            source_path: missing,
+        });
+
+        app.apply_organize_candidates(&document_path, &candidates, cx);
+
+        let text = app.active_tab().document.text().to_string();
+        assert!(text.contains("![icon](note.assets/"));
+        assert!(
+            text.contains("![gone](../../shared/missing.png)"),
+            "the failed copy must leave its reference untouched: {text}"
+        );
+        assert!(app
+            .status
+            .contains(&tf(app.language, Msg::StatusOrganizePartial, &["1", "1"])[..]));
+    });
+}
+
+#[gpui::test]
+fn organize_local_images_requires_a_saved_document(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, _| {
+        app.active_tab_mut().document.insert(0, "![x](../../a.png)");
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let before = app.active_tab().document.text().to_owned();
+            app.organize_local_images(&OrganizeLocalImages, window, cx);
+            assert_eq!(app.active_tab().document.text(), before);
+            assert_eq!(
+                app.status,
+                t(app.language, Msg::StatusOrganizeRequiresSave).to_owned()
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn organize_local_images_reports_nothing_to_do_for_in_scope_references(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("sibling.png"), b"sibling").unwrap();
+    let document_path = docs.join("note.md");
+    let mut document = MarkdownDocument::from_text("![x](sibling.png)");
+    document.save_as(&document_path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.organize_local_images(&OrganizeLocalImages, window, cx);
+            assert_eq!(
+                app.status,
+                t(app.language, Msg::StatusOrganizeNothingToDo).to_owned()
+            );
+        });
+    });
 }
 
 #[test]

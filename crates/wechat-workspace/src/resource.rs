@@ -13,10 +13,10 @@ const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
 
 #[derive(Debug, Error)]
 pub enum ResourceError {
-    #[error("the resource reference is not an allowed relative image path")]
+    #[error("the resource reference is not an allowed local image path")]
     InvalidReference,
-    #[error("the resource is outside the document asset directory")]
-    OutsideAssetDirectory,
+    #[error("the resource is outside the publishing image scope")]
+    OutsideScope,
     #[error("the resource is missing or is not a regular file")]
     Unavailable,
     #[error("the resource image type is unsupported")]
@@ -31,24 +31,27 @@ pub enum ResourceError {
 pub struct PublishingResource {
     authored_url: String,
     id: String,
-    canonical_asset_root: PathBuf,
+    canonical_scope_root: PathBuf,
     canonical_path: PathBuf,
 }
 
 impl PublishingResource {
+    /// Accepts an image only when it stays inside the caller-supplied
+    /// publishing image scope after canonicalization. `..` components are
+    /// permitted lexically; canonical containment is the deciding authority.
     pub fn from_path(
         authored_url: impl Into<String>,
-        asset_root: &Path,
+        scope_root: &Path,
         candidate: &Path,
     ) -> Result<Self, ResourceError> {
         let authored_url = authored_url.into();
         validate_authored_reference(&authored_url)?;
         validate_image_extension(candidate)?;
 
-        let canonical_asset_root = fs::canonicalize(asset_root).map_err(map_unavailable)?;
+        let canonical_scope_root = fs::canonicalize(scope_root).map_err(map_unavailable)?;
         let canonical_path = fs::canonicalize(candidate).map_err(map_unavailable)?;
-        if !canonical_path.starts_with(&canonical_asset_root) {
-            return Err(ResourceError::OutsideAssetDirectory);
+        if !canonical_path.starts_with(&canonical_scope_root) {
+            return Err(ResourceError::OutsideScope);
         }
         let metadata = fs::metadata(&canonical_path).map_err(map_unavailable)?;
         if !metadata.is_file() {
@@ -64,7 +67,7 @@ impl PublishingResource {
         Ok(Self {
             authored_url,
             id,
-            canonical_asset_root,
+            canonical_scope_root,
             canonical_path,
         })
     }
@@ -78,10 +81,10 @@ impl PublishingResource {
     }
 
     pub fn read(&self) -> Result<ResourceBytes, ResourceError> {
-        let root = fs::canonicalize(&self.canonical_asset_root).map_err(map_unavailable)?;
+        let root = fs::canonicalize(&self.canonical_scope_root).map_err(map_unavailable)?;
         let path = fs::canonicalize(&self.canonical_path).map_err(map_unavailable)?;
         if !path.starts_with(&root) {
-            return Err(ResourceError::OutsideAssetDirectory);
+            return Err(ResourceError::OutsideScope);
         }
         validate_image_extension(&path)?;
         let metadata = fs::metadata(&path).map_err(map_unavailable)?;
@@ -116,13 +119,14 @@ fn validate_authored_reference(reference: &str) -> Result<(), ResourceError> {
     {
         return Err(ResourceError::InvalidReference);
     }
+    // `..` components are permitted: whether the reference stays inside the
+    // publishing image scope is decided by canonical containment, not by the
+    // lexical form.
     let normalized = decoded.replace('\\', "/");
-    if Path::new(&normalized).components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
+    if Path::new(&normalized)
+        .components()
+        .any(|component| matches!(component, Component::RootDir | Component::Prefix(_)))
+    {
         return Err(ResourceError::InvalidReference);
     }
     Ok(())
@@ -171,16 +175,23 @@ mod tests {
         fs::write(&outside, b"outside").unwrap();
         assert!(matches!(
             PublishingResource::from_path("outside.png", &root, &outside),
-            Err(ResourceError::OutsideAssetDirectory)
+            Err(ResourceError::OutsideScope)
+        ));
+        // `..` is lexically permitted; the outside candidate is rejected by
+        // canonical containment instead.
+        assert!(matches!(
+            PublishingResource::from_path("../outside.png", &root, &outside),
+            Err(ResourceError::OutsideScope)
         ));
         assert!(matches!(
-            PublishingResource::from_path("../outside.png", &root, &image),
-            Err(ResourceError::InvalidReference)
+            PublishingResource::from_path("%2e%2e/outside.png", &root, &outside),
+            Err(ResourceError::OutsideScope)
         ));
-        assert!(matches!(
-            PublishingResource::from_path("%2e%2e/outside.png", &root, &image),
-            Err(ResourceError::InvalidReference)
-        ));
+        // An in-root candidate keeps working even when the authored URL
+        // escapes lexically and comes back.
+        assert!(
+            PublishingResource::from_path("../note.assets/sample.PNG", &root, &image).is_ok()
+        );
         assert!(matches!(
             PublishingResource::from_path("C:\\outside.png", &root, &image),
             Err(ResourceError::InvalidReference)
@@ -199,6 +210,52 @@ mod tests {
         ));
         assert!(PublishingResource::from_path("note.assets\\sample.PNG", &root, &image).is_ok());
         assert!(PublishingResource::from_path("note.assets/%73ample.PNG", &root, &image).is_ok());
+    }
+
+    #[test]
+    fn scope_root_permits_document_tree_and_exactly_one_level_above() {
+        let temp = tempfile::tempdir().unwrap();
+        let scope = temp.path().join("scope");
+        let docs = scope.join("docs");
+        fs::create_dir_all(docs.join("img/deep")).unwrap();
+        fs::create_dir_all(scope.join("assets")).unwrap();
+        fs::write(docs.join("sibling.png"), b"sibling").unwrap();
+        fs::write(docs.join("img/deep/nested.png"), b"nested").unwrap();
+        fs::write(scope.join("banner.png"), b"banner").unwrap();
+        fs::write(scope.join("assets/x.png"), b"x").unwrap();
+        fs::write(temp.path().join("escape.png"), b"escape").unwrap();
+
+        let ok = [
+            ("sibling.png", docs.join("sibling.png")),
+            ("img/deep/nested.png", docs.join("img/deep/nested.png")),
+            ("../banner.png", scope.join("banner.png")),
+            ("../assets/x.png", scope.join("assets/x.png")),
+        ];
+        for (authored, candidate) in ok {
+            assert!(
+                PublishingResource::from_path(authored, &scope, &candidate)
+                    .map(|resource| resource.authored_url() == authored)
+                    .unwrap_or(false),
+                "{authored} should resolve inside the scope root"
+            );
+        }
+
+        // Escaping above the parent level and absolute references are
+        // rejected; only caller-enumerated candidates ever reach this API.
+        assert!(matches!(
+            PublishingResource::from_path(
+                "../../escape.png",
+                &scope,
+                &temp.path().join("escape.png")
+            ),
+            Err(ResourceError::OutsideScope)
+        ));
+        let absolute = temp.path().join("escape.png");
+        let authored = absolute.to_string_lossy().to_string();
+        assert!(matches!(
+            PublishingResource::from_path(&authored, &scope, &absolute),
+            Err(ResourceError::InvalidReference)
+        ));
     }
 
     #[cfg(unix)]
@@ -220,7 +277,7 @@ mod tests {
 
         assert!(matches!(
             resource.read(),
-            Err(ResourceError::OutsideAssetDirectory)
+            Err(ResourceError::OutsideScope)
         ));
     }
 
@@ -248,7 +305,7 @@ mod tests {
         }
         assert!(matches!(
             resource.read(),
-            Err(ResourceError::OutsideAssetDirectory)
+            Err(ResourceError::OutsideScope)
         ));
     }
 }

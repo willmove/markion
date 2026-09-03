@@ -101,6 +101,111 @@ impl MarkionApp {
         })
         .detach();
     }
+
+    pub(super) fn organize_local_images(
+        &mut self,
+        _: &OrganizeLocalImages,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_menu = None;
+        let Some(document_path) = self
+            .active_tab()
+            .document
+            .path()
+            .map(Path::to_path_buf)
+        else {
+            self.status = self.tr(Msg::StatusOrganizeRequiresSave).into();
+            cx.notify();
+            return;
+        };
+        let references = self.active_tab().document.publishing_image_references();
+        let candidates = organize_candidates(&document_path, &references);
+        if candidates.is_empty() {
+            self.status = self.tr(Msg::StatusOrganizeNothingToDo).into();
+            cx.notify();
+            return;
+        }
+
+        let count = candidates.len().to_string();
+        let detail = self.trf(Msg::DialogOrganizeImagesDetail, &[&count]);
+        let answer = window.prompt(
+            PromptLevel::Info,
+            self.tr(Msg::DialogOrganizeImagesTitle),
+            Some(&detail),
+            &[
+                PromptButton::ok(self.tr(Msg::DialogButtonOrganize)),
+                PromptButton::cancel(self.tr(Msg::DialogButtonCancel)),
+            ],
+            cx,
+        );
+        self.status = self.tr(Msg::StatusOrganizeWaitingConfirm).into();
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let confirmed = matches!(answer.await, Ok(0));
+            let _ = this.update(cx, |app, cx| {
+                if confirmed {
+                    app.apply_organize_candidates(&document_path, &candidates, cx);
+                } else {
+                    app.status = app.tr(Msg::StatusOrganizeCanceled).into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Applies a confirmed organize plan: copies each candidate into the
+    /// document's asset directory through the standard import path, rewrites
+    /// the referencing destinations as one undoable edit, and reports the
+    /// outcome. Candidates that fail to copy are left untouched. Separated
+    /// from the prompt flow so tests can drive it directly.
+    pub(super) fn apply_organize_candidates(
+        &mut self,
+        document_path: &Path,
+        candidates: &[OrganizeCandidate],
+        cx: &mut Context<Self>,
+    ) {
+        let mut replacements = Vec::new();
+        let mut failed = 0usize;
+        for candidate in candidates {
+            match import_image_file(document_path, &candidate.source_path) {
+                Ok(imported) => {
+                    replacements.push((candidate.authored_url.clone(), imported.relative_url));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        source = %candidate.source_path.display(),
+                        "organize copy failed"
+                    );
+                    failed += 1;
+                }
+            }
+        }
+        let organized = if replacements.is_empty() {
+            0
+        } else {
+            self.active_tab_mut().finish_undo_capture();
+            let snapshot = self.snapshot();
+            let tab = self.active_tab_mut();
+            let rewritten = tab.document.rewrite_image_destinations(&replacements);
+            if rewritten > 0 {
+                self.commit_undo_snapshot(snapshot);
+                self.after_document_changed(cx);
+            }
+            rewritten
+        };
+        self.status = if failed > 0 {
+            self.trf(
+                Msg::StatusOrganizePartial,
+                &[&organized.to_string(), &failed.to_string()],
+            )
+        } else {
+            self.trf(Msg::StatusOrganizeCompleted, &[&organized.to_string()])
+        };
+    }
 }
 
 #[cfg(test)]

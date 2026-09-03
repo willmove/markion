@@ -1,15 +1,14 @@
 //! Explicit, read-only handoff from Markion's document model to the local
 //! browser publishing workspace.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{path::Path, sync::Arc};
 
-use percent_encoding::percent_decode_str;
 use wechat_workspace::{PublishingResource, PublishingSnapshot};
 
-use crate::{MarkdownDocument, document_asset_dir};
+use crate::{
+    MarkdownDocument,
+    storage::resources::{document_scope_root, is_local_reference, resolve_local_reference},
+};
 
 /// Builds an immutable publishing snapshot without populating, invalidating,
 /// or replacing any of the document's per-version derived caches.
@@ -22,7 +21,7 @@ pub fn build_publishing_snapshot(
     let mut unresolved_local_images = Vec::new();
 
     if let Some(document_path) = document.path() {
-        let asset_root = document_asset_dir(document_path);
+        let scope_root = document_scope_root(document_path);
         let document_dir = document_path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
@@ -31,9 +30,9 @@ pub fn build_publishing_snapshot(
             if !is_local_reference(&authored_url) {
                 continue;
             }
-            let candidate = decoded_candidate(document_dir, &authored_url);
+            let candidate = resolve_local_reference(document_dir, &authored_url);
             match candidate.and_then(|candidate| {
-                PublishingResource::from_path(&authored_url, &asset_root, &candidate).ok()
+                PublishingResource::from_path(&authored_url, &scope_root, &candidate).ok()
             }) {
                 Some(resource) => resources.push(resource),
                 None => unresolved_local_images.push(authored_url),
@@ -61,40 +60,27 @@ pub fn build_publishing_snapshot(
     }
 }
 
-fn is_local_reference(reference: &str) -> bool {
-    let lower = reference.trim_start().to_ascii_lowercase();
-    !(lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("data:")
-        || lower.starts_with("blob:")
-        || lower.starts_with("//"))
-}
-
-fn decoded_candidate(document_dir: &Path, reference: &str) -> Option<PathBuf> {
-    let path = reference.split(['?', '#']).next().unwrap_or_default();
-    let decoded = percent_decode_str(path).decode_utf8().ok()?;
-    let mut candidate = document_dir.to_path_buf();
-    for component in decoded.replace('\\', "/").split('/') {
-        candidate.push(component);
-    }
-    Some(candidate)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document_asset_dir;
     use std::fs;
 
     #[test]
-    fn saved_document_allows_only_managed_images_without_touching_caches() {
+    fn saved_document_resolves_scope_images_without_touching_caches() {
         let temp = tempfile::tempdir().unwrap();
-        let document_path = temp.path().join("My Note.md");
+        let docs = temp.path().join("docs");
+        let document_path = docs.join("My Note.md");
         let managed_dir = document_asset_dir(&document_path);
+        fs::create_dir_all(managed_dir.parent().unwrap()).unwrap();
+        fs::create_dir_all(docs.join("img/deep")).unwrap();
         fs::create_dir(&managed_dir).unwrap();
-        fs::write(managed_dir.join("cover.png"), b"image").unwrap();
-        fs::write(temp.path().join("outside.png"), b"outside").unwrap();
+        fs::write(managed_dir.join("cover.png"), b"managed").unwrap();
+        fs::write(docs.join("sibling.png"), b"sibling").unwrap();
+        fs::write(docs.join("img/deep/nested.png"), b"nested").unwrap();
+        fs::write(temp.path().join("banner.png"), b"banner").unwrap();
         let mut document = MarkdownDocument::from_text(
-            "![managed](my-note.assets/cover.png)\n![outside](outside.png)\n![remote](https://example.com/a.png)",
+            "![managed](my-note.assets/cover.png)\n![sibling](sibling.png)\n![nested](img/deep/nested.png)\n![banner](../banner.png)\n![escape](../../escape.png)\n![absolute](/definitely/outside.png)\n![remote](https://example.com/a.png)",
         );
         document.save_as(&document_path).unwrap();
         document.insert(document.text().len(), "\nDirty edit");
@@ -107,12 +93,24 @@ mod tests {
         let snapshot = build_publishing_snapshot(&document, "en");
 
         assert_eq!(snapshot.markdown.as_ref(), document.text());
-        assert_eq!(snapshot.resources.len(), 1);
+        let resolved: Vec<_> = snapshot
+            .resources
+            .iter()
+            .map(|resource| resource.authored_url())
+            .collect();
         assert_eq!(
-            snapshot.resources[0].authored_url(),
-            "my-note.assets/cover.png"
+            resolved,
+            [
+                "../banner.png",
+                "img/deep/nested.png",
+                "my-note.assets/cover.png",
+                "sibling.png"
+            ]
         );
-        assert_eq!(snapshot.unresolved_local_images, ["outside.png"]);
+        assert_eq!(
+            snapshot.unresolved_local_images,
+            ["../../escape.png", "/definitely/outside.png"]
+        );
         assert_eq!(document.version(), version);
         assert_eq!(document.is_dirty(), dirty);
         assert_eq!(document.memory_breakdown(), before_memory);

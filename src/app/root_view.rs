@@ -212,6 +212,7 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::export_png))
                     .on_action(cx.listener(Self::export_jpeg))
                     .on_action(cx.listener(Self::publish_wechat))
+                    .on_action(cx.listener(Self::organize_local_images))
                     .on_action(cx.listener(Self::toggle_view_mode))
                     .on_action(cx.listener(Self::set_edit_mode))
                     .on_action(cx.listener(Self::set_visual_edit_mode))
@@ -4264,6 +4265,11 @@ pub(super) fn active_menu_dropdown(
                 Msg::ItemPublishWechat,
                 publish_wechat,
                 PublishWechat
+            ))
+            .child(action_item!(
+                Msg::ItemOrganizeLocalImages,
+                organize_local_images,
+                OrganizeLocalImages
             )),
         AppMenu::Help => panel
             .child(action_item!(

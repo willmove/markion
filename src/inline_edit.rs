@@ -44,6 +44,33 @@ pub fn inline_image_at(source: &str, offset: usize) -> Option<InlineMarkdownTarg
     inline_target_at(source, offset, true)
 }
 
+/// Byte range of the authored destination inside a complete inline-image span
+/// `![label](destination "title")`, relative to the span start. Returns
+/// `None` for any span whose destination cannot be located with certainty;
+/// callers must skip those conservatively rather than guess.
+pub fn authored_image_destination_range(authored: &str) -> Option<Range<usize>> {
+    if !authored.starts_with("![") || !authored.ends_with(')') {
+        return None;
+    }
+    let label_end = find_unescaped(authored, 2, b']')?;
+    if authored.as_bytes().get(label_end + 1) != Some(&b'(') {
+        return None;
+    }
+    let inner_start = label_end + 2;
+    let inner = &authored[inner_start..authored.len() - 1];
+    let (relative_start, relative_end) = if inner.starts_with('<') {
+        let close = find_unescaped(inner, 1, b'>')?;
+        (1, close)
+    } else {
+        let end = inner.find(char::is_whitespace).unwrap_or(inner.len());
+        (0, end)
+    };
+    if relative_start >= relative_end {
+        return None;
+    }
+    Some(relative_start + inner_start..relative_end + inner_start)
+}
+
 fn inline_target_at(source: &str, offset: usize, image: bool) -> Option<InlineMarkdownTarget> {
     let offset = offset.min(source.len());
     Parser::new_ext(source, markdown_options())
@@ -149,7 +176,7 @@ fn escape_destination(url: &str) -> String {
     }
 }
 
-fn unescape_markdown(value: &str) -> String {
+pub(crate) fn unescape_markdown(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut chars = value.chars();
     while let Some(ch) = chars.next() {

@@ -236,14 +236,16 @@ pub use parse::{
 pub use publishing::build_publishing_snapshot;
 
 pub use storage::{
-    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS, ImportedImage,
-    MARKDOWN_EXTENSIONS, RecoveryInventoryEntry, RecoverySourceState, TEXT_EXTENSIONS,
-    delete_recovery_file, document_asset_dir, image_extension_supported, import_image_bytes,
-    import_image_file, init_logging, inspect_recovery_files, is_markdown_path, is_text_path,
-    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
-    load_session_state, load_theme_definition, parse_app_preferences, parse_legacy_app_preferences,
-    parse_session_state, parse_theme_definition, render_app_preferences, render_session_state,
-    render_theme_definition, save_app_preferences, save_session_state, save_theme_definition,
+    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS,
+    MARKDOWN_EXTENSIONS, ImportedImage, OrganizeCandidate, RecoveryInventoryEntry,
+    RecoverySourceState, TEXT_EXTENSIONS, delete_recovery_file, document_asset_dir,
+    document_scope_root, image_extension_supported, import_image_bytes, import_image_file,
+    init_logging, inspect_recovery_files, is_markdown_path, is_text_path, list_recovery_files,
+    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
+    load_theme_definition, organize_candidates, parse_app_preferences,
+    parse_legacy_app_preferences, parse_session_state, parse_theme_definition,
+    render_app_preferences, render_session_state, render_theme_definition, save_app_preferences,
+    save_session_state, save_theme_definition,
 };
 
 pub use table::table_column_flex_weights;
@@ -1562,6 +1564,82 @@ impl MarkdownDocument {
         urls.sort();
         urls.dedup();
         urls
+    }
+
+    /// Byte ranges of every image destination — Markdown inline-image spans
+    /// and raw-HTML `<img src>` values — whose parsed destination equals one
+    /// of `urls`, paired with the matched URL. Like the publishing export
+    /// scan this is a command-time pass, deliberately outside the
+    /// per-version derived caches.
+    pub fn image_destination_matches<'a>(
+        &self,
+        urls: &'a std::collections::HashSet<&str>,
+    ) -> Vec<(Range<usize>, &'a str)> {
+        let mut matches = Vec::new();
+        let (body, base) = self.body_text_and_offset();
+        for (event, range) in Parser::new_ext(body, markdown_options()).into_offset_iter() {
+            match event {
+                Event::Start(Tag::Image { dest_url, .. }) => {
+                    let Some(matched) = urls.get(dest_url.as_ref()) else {
+                        continue;
+                    };
+                    let Some(authored) = body.get(range.clone()) else {
+                        continue;
+                    };
+                    let Some(relative) =
+                        inline_edit::authored_image_destination_range(authored)
+                    else {
+                        continue;
+                    };
+                    // Skip authoring forms (escapes, angle brackets) the
+                    // locator cannot attribute unambiguously.
+                    if inline_edit::unescape_markdown(&authored[relative.clone()]) != *matched {
+                        continue;
+                    }
+                    matches.push((
+                        base + range.start + relative.start..base + range.start + relative.end,
+                        *matched,
+                    ));
+                }
+                Event::Html(html) | Event::InlineHtml(html) => {
+                    push_matching_img_src_ranges(
+                        html.as_ref(),
+                        urls,
+                        base + range.start,
+                        &mut matches,
+                    );
+                }
+                _ => {}
+            }
+        }
+        matches.sort_by_key(|(range, _)| range.start);
+        matches
+    }
+
+    /// Rewrites the destinations of Markdown inline images and raw-HTML
+    /// `<img>` sources whose parsed destination matches a key in
+    /// `replacements`, collapsing every rewrite into one exact splice so the
+    /// version advances exactly once. Plain links are never touched. Returns
+    /// the number of destination occurrences rewritten.
+    pub fn rewrite_image_destinations(&mut self, replacements: &[(String, String)]) -> usize {
+        let urls: std::collections::HashSet<&str> =
+            replacements.iter().map(|(url, _)| url.as_str()).collect();
+        let matches = self.image_destination_matches(&urls);
+        if matches.is_empty() {
+            return 0;
+        }
+        let mut transformed = self.text.clone();
+        let mut rewritten = 0usize;
+        for (range, matched) in matches.iter().rev() {
+            if let Some((_, replacement)) = replacements.iter().find(|(url, _)| url == matched) {
+                transformed.replace_range(range.clone(), replacement);
+                rewritten += 1;
+            }
+        }
+        if rewritten > 0 {
+            self.apply_transformed_text(MutationOrigin::SearchReplaceAll, transformed);
+        }
+        rewritten
     }
 
     /// Number of logical lines (newline count + 1), cached per text version.
@@ -3962,6 +4040,54 @@ fn line_snippet_at(text: &str, line_number: usize) -> String {
     crate::text_util::line_snippet_at(text, line_number)
 }
 
+/// Appends byte ranges of `<img src>` attribute values in `html` that exactly
+/// equal one of `urls`. Deliberately conservative: only quoted attributes
+/// preceded by whitespace (so `data-src` and friends never match) whose value
+/// equals a requested destination are attributed.
+fn push_matching_img_src_ranges<'a>(
+    html: &str,
+    urls: &'a std::collections::HashSet<&str>,
+    base: usize,
+    out: &mut Vec<(Range<usize>, &'a str)>,
+) {
+    let bytes = html.as_bytes();
+    let lowercase = html.to_ascii_lowercase();
+    let mut search = 0usize;
+    while let Some(found) = lowercase[search..].find("src") {
+        let at = search + found;
+        search = at + 3;
+        if at > 0 && !(bytes[at - 1] as char).is_ascii_whitespace() {
+            continue;
+        }
+        let mut cursor = at + 3;
+        while cursor < bytes.len() && (bytes[cursor] as char).is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b'=') {
+            continue;
+        }
+        cursor += 1;
+        while cursor < bytes.len() && (bytes[cursor] as char).is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let Some(&quote) = bytes.get(cursor) else {
+            continue;
+        };
+        if quote != b'"' && quote != b'\'' {
+            continue;
+        }
+        let value_start = cursor + 1;
+        let Some(relative_end) = html[value_start..].find(quote as char) else {
+            continue;
+        };
+        let value_end = value_start + relative_end;
+        if let Some(matched) = urls.get(&html[value_start..value_end]) {
+            out.push((base + value_start..base + value_end, *matched));
+        }
+        search = search.max(value_end);
+    }
+}
+
 fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
     crate::text_util::clamp_to_char_boundary(text, index)
 }
@@ -4165,6 +4291,40 @@ pub fn title_from_path(path: Option<&Path>) -> CowStr<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rewrite_image_destinations_splices_once_and_preserves_plain_links() {
+        let mut doc = MarkdownDocument::from_text(
+            "![icon](../../shared/logo.png)\n[site](../../shared/logo.png)\n<img src=\"C:/pictures/banner.png\" alt=\"b\">\n![titled](../../shared/logo.png \"Caption\")\n![keep](my-note.assets/ok.png)\n",
+        );
+        let version = doc.version();
+        let rewrites = vec![
+            ("../../shared/logo.png".to_string(), "my-note.assets/logo-1.png".to_string()),
+            ("C:/pictures/banner.png".to_string(), "my-note.assets/banner-1.png".to_string()),
+        ];
+
+        let count = doc.rewrite_image_destinations(&rewrites);
+
+        assert_eq!(count, 3);
+        assert_eq!(doc.version(), version + 1);
+        assert!(doc.text().contains("![icon](my-note.assets/logo-1.png)"));
+        assert!(doc.text().contains("![titled](my-note.assets/logo-1.png \"Caption\")"));
+        assert!(doc.text().contains("src=\"my-note.assets/banner-1.png\""));
+        assert!(doc.text().contains("![keep](my-note.assets/ok.png)"));
+        // A plain link sharing the destination is not an image destination.
+        assert!(doc.text().contains("[site](../../shared/logo.png)"));
+    }
+
+    #[test]
+    fn rewrite_image_destinations_returns_zero_without_matches() {
+        let mut doc = MarkdownDocument::from_text("![x](a.png)");
+        let version = doc.version();
+        let rewrites = vec![("missing.png".to_string(), "b.png".to_string())];
+
+        assert_eq!(doc.rewrite_image_destinations(&rewrites), 0);
+        assert_eq!(doc.version(), version);
+        assert_eq!(doc.text(), "![x](a.png)");
+    }
 
     #[test]
     fn renders_common_markdown_to_html() {
