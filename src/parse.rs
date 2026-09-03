@@ -2153,7 +2153,7 @@ fn parse_html_attrs(input: &str) -> Vec<(String, String)> {
     attrs
 }
 
-fn decode_html_entities(text: &str) -> String {
+pub(crate) fn decode_html_entities(text: &str) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < text.len() {

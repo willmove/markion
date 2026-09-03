@@ -4081,7 +4081,12 @@ fn push_matching_img_src_ranges<'a>(
             continue;
         };
         let value_end = value_start + relative_end;
-        if let Some(matched) = urls.get(&html[value_start..value_end]) {
+        // Attribute values are compared entity-decoded so the raw authored
+        // bytes match the destinations the parser reported for the same tag
+        // (e.g. src="a&amp;b.png" vs the parsed "a&b.png").
+        if let Some(matched) = urls.get(crate::parse::decode_html_entities(
+            &html[value_start..value_end],
+        ).as_str()) {
             out.push((base + value_start..base + value_end, *matched));
         }
         search = search.max(value_end);
@@ -4333,6 +4338,31 @@ mod tests {
         assert_eq!(doc.rewrite_image_destinations(&rewrites), 0);
         assert_eq!(doc.version(), version);
         assert_eq!(doc.text(), "![x](a.png)");
+    }
+
+    #[test]
+    fn rewrite_image_destinations_matches_windows_backslash_destinations() {
+        // Backslashes before non-punctuation stay literal in pulldown's parsed
+        // destination; the rewrite must still find and replace the raw span.
+        let mut doc =
+            MarkdownDocument::from_text("![封面](..\\shared\\图片.png) ![next](a.png)\n");
+        let rewrites = vec![
+            ("..\\shared\\图片.png".to_string(), "note.assets/cover-1.png".to_string()),
+            ("a.png".to_string(), "note.assets/a-1.png".to_string()),
+        ];
+
+        assert_eq!(doc.rewrite_image_destinations(&rewrites), 2);
+        assert!(doc.text().contains("![封面](note.assets/cover-1.png)"));
+        assert!(doc.text().contains("![next](note.assets/a-1.png)"));
+    }
+
+    #[test]
+    fn rewrite_image_destinations_matches_html_entities_in_src() {
+        let mut doc = MarkdownDocument::from_text(r#"<img src="shared/a&amp;b.png" alt="x">"#);
+        let rewrites = vec![("shared/a&b.png".to_string(), "note.assets/ab-1.png".to_string())];
+
+        assert_eq!(doc.rewrite_image_destinations(&rewrites), 1);
+        assert!(doc.text().contains(r#"src="note.assets/ab-1.png""#));
     }
 
     #[test]

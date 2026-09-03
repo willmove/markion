@@ -177,12 +177,21 @@ fn escape_destination(url: &str) -> String {
 }
 
 pub(crate) fn unescape_markdown(value: &str) -> String {
+    // CommonMark backslash escapes apply only before ASCII punctuation;
+    // a backslash before any other character (including Windows path
+    // separators before alphanumerics or non-ASCII text) stays literal.
+    // This must match pulldown-cmark's destination/label semantics exactly
+    // so parsed destinations can be attributed back to authored spans.
     let mut out = String::with_capacity(value.len());
-    let mut chars = value.chars();
+    let mut chars = value.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
+            match chars.peek() {
+                Some(next) if next.is_ascii_punctuation() => {
+                    out.push(*next);
+                    chars.next();
+                }
+                _ => out.push('\\'),
             }
         } else {
             out.push(ch);
@@ -297,6 +306,17 @@ mod tests {
     fn reference_links_are_conservative() {
         assert!(inline_link_at("[label][target]", 3).is_none());
         assert!(inline_link_at("[label][]", 3).is_none());
+    }
+
+    #[test]
+    fn unescape_follows_commonmark_backslash_rules() {
+        // Escapes apply only before ASCII punctuation.
+        assert_eq!(unescape_markdown("a\\*b"), "a*b");
+        assert_eq!(unescape_markdown("\\\\\\*"), "\\*");
+        // A backslash before a non-punctuation character stays literal, which
+        // is exactly how pulldown parses Windows-style path destinations.
+        assert_eq!(unescape_markdown("..\\shared\\图片.png"), "..\\shared\\图片.png");
+        assert_eq!(unescape_markdown("a\\.b"), "a.b");
     }
 
     #[test]
