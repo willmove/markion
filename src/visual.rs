@@ -15,6 +15,7 @@ use crate::model::{
 };
 use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fence};
 use crate::table::table_cell_source_ranges;
+use crate::text_util::char_run_range;
 
 /// Collects the document's link reference definition lines so that per-block
 /// parsing in `inline_runs` can resolve reference-style links whose
@@ -232,6 +233,40 @@ impl VisualProjection {
         (self.source_is_exactly_projected(source.start)
             && self.source_is_exactly_projected(source.end))
         .then_some(start.min(end)..start.max(end))
+    }
+
+    /// Canonical source range selected by double-clicking the display text
+    /// at `display`.
+    ///
+    /// The visible run (`text_util::char_run_range`) bounds the selection.
+    /// Edges resolve to the innermost source side so hidden Markdown syntax
+    /// at the selection's edges is excluded (`**word**` selects `word`), and
+    /// a run strictly inside a rendered atom selects that atom's full source
+    /// range. Returns `None` when no non-empty range resolves, leaving the
+    /// caller on the plain caret-placement path.
+    pub fn word_selection_range(&self, display: usize) -> Option<Range<usize>> {
+        let run = char_run_range(&self.text, display);
+        let atom_start = self
+            .segments
+            .iter()
+            .find(|segment| {
+                run.start > segment.display_range.start
+                    && run.start < segment.display_range.end
+                    && segment.display_range.len() != segment.source_range.len()
+            })
+            .map(|segment| segment.source_range.start);
+        let atom_end = self
+            .segments
+            .iter()
+            .find(|segment| {
+                run.end > segment.display_range.start
+                    && run.end < segment.display_range.end
+                    && segment.display_range.len() != segment.source_range.len()
+            })
+            .map(|segment| segment.source_range.end);
+        let start = atom_start.unwrap_or_else(|| self.boundary_candidates(run.start).downstream_source);
+        let end = atom_end.unwrap_or_else(|| self.boundary_candidates(run.end).upstream_source);
+        (start < end).then_some(start..end)
     }
 }
 
@@ -3219,8 +3254,8 @@ mod tests {
         AlertKind, BlockTarget, BlockTransform, MarkdownDocument, MarkdownFormat, PreviewBlock,
         RichText, SlashCommand, TableEdit, VisualBlockEditor, VisualBlockId, VisualBlockKind,
         VisualBlockPrefixKind, VisualCaretAffinity, VisualEditorFieldKind, VisualNavigationTarget,
-        VisualQuoteGroupEdge, VisualRevealKind, VisualSourceIslandKind, slash_command_edit,
-        slash_query_at, transform_block,
+        VisualProjection, VisualProjectionSegment, VisualQuoteGroupEdge, VisualRevealKind,
+        VisualSourceIslandKind, slash_command_edit, slash_query_at, transform_block,
     };
 
     #[test]
@@ -6610,5 +6645,130 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
                     && *slice == "<user@example.com>"),
             "email autolink reveal, got {kinds:?}"
         );
+    }
+
+    fn paragraph_projection(source: &str) -> VisualProjection {
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .expect("paragraph block");
+        let cursor = block
+            .editable_runs
+            .first()
+            .map_or(block.source_range.start, |run| run.content_range.start);
+        build_visual_projection(source, block, cursor..cursor, cursor)
+    }
+
+    #[test]
+    fn word_selection_maps_plain_words_one_to_one() {
+        let source = "hello world";
+        let projection = paragraph_projection(source);
+        assert_eq!(projection.text, "hello world");
+        let range = projection.word_selection_range(7).expect("word range");
+        assert_eq!(range, 6..11);
+        assert_eq!(&source[range], "world");
+    }
+
+    #[test]
+    fn word_selection_excludes_hidden_syntax_at_its_edges() {
+        let source = "bold **word** tail";
+        let projection = paragraph_projection(source);
+        assert_eq!(projection.text, "bold word tail");
+        let display = projection.text.find("word").expect("visible word") + 1;
+        let range = projection
+            .word_selection_range(display)
+            .expect("content-only range");
+        let content = source.match_indices("word").next().unwrap().0;
+        assert_eq!(range, content..content + "word".len());
+        assert_eq!(&source[range], "word");
+    }
+
+    #[test]
+    fn word_selection_spans_hidden_syntax_inside_the_run() {
+        // Source "bo**ld** now": the visible word "bold" spans the split
+        // emphasis, so the selection covers "bo**ld" in one contiguous
+        // source range while the trailing edge markers stay outside.
+        let source = "bo**ld** now";
+        let projection = paragraph_projection(source);
+        assert_eq!(projection.text, "bold now");
+        let display = projection.text.find("bold").expect("visible word") + 1;
+        let range = projection
+            .word_selection_range(display)
+            .expect("contiguous range");
+        assert_eq!(range, 0..6);
+        assert_eq!(&source[range], "bo**ld");
+    }
+
+    #[test]
+    fn word_selection_on_identity_math_text_selects_the_token() {
+        // While an inline formula is projected as identity source text
+        // (rendered-atom fallback), double click selects the token under the
+        // pointer, and the delimiters select as single-character runs.
+        let source = "value $x=1$ here";
+        let projection = paragraph_projection(source);
+        assert_eq!(projection.text, "value $x=1$ here");
+        let range = projection.word_selection_range(7).expect("token range");
+        assert_eq!(range, 7..8);
+        assert_eq!(&source[range], "x");
+        assert_eq!(
+            projection.word_selection_range(8),
+            Some(8..9),
+            "the = operator is its own run"
+        );
+        assert_eq!(
+            projection.word_selection_range(6),
+            Some(6..7),
+            "the opening delimiter is its own run"
+        );
+    }
+
+    #[test]
+    fn word_selection_inside_a_non_identity_segment_selects_the_atom_source() {
+        // Display " 𝑥=1y " where display 1..8 is a rendered atom backed by
+        // the source range 1..6 (e.g. `$x=1$`): a run whose edge falls
+        // strictly inside the atom selects the atom's full source range.
+        let projection = VisualProjection {
+            text: " 𝑥=1y ".to_string(),
+            segments: vec![
+                VisualProjectionSegment {
+                    display_range: 0..1,
+                    source_range: 0..1,
+                },
+                VisualProjectionSegment {
+                    display_range: 1..8,
+                    source_range: 1..6,
+                },
+                VisualProjectionSegment {
+                    display_range: 8..9,
+                    source_range: 6..7,
+                },
+            ],
+            spans: Vec::new(),
+            revealed_source_ranges: Vec::new(),
+            source_anchor: 0,
+        };
+        // '1' occupies display 6..7, strictly inside the atom.
+        assert_eq!(projection.word_selection_range(6), Some(1..6));
+        // The '𝑥' run starts at the atom's display edge and ends inside it.
+        assert_eq!(projection.word_selection_range(1), Some(1..6));
+        // 'y' at display 7..8 also resolves through the atom's source end.
+        assert_eq!(projection.word_selection_range(7), Some(1..6));
+        // The surrounding whitespace stays on its own identity segments.
+        assert_eq!(projection.word_selection_range(0), Some(0..1));
+        assert_eq!(projection.word_selection_range(8), Some(6..7));
+    }
+
+    #[test]
+    fn word_selection_returns_none_when_nothing_resolves() {
+        let projection = VisualProjection {
+            text: String::new(),
+            segments: Vec::new(),
+            spans: Vec::new(),
+            revealed_source_ranges: Vec::new(),
+            source_anchor: 0,
+        };
+        assert_eq!(projection.word_selection_range(0), None);
     }
 }

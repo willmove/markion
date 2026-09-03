@@ -812,29 +812,6 @@ When a paragraph, heading, quoted paragraph, or list item contains a Markdown im
 - **THEN** the image still renders as a block-level image row
 - **AND** the prose paragraph (when present) remains a separate row whose source range does not overlap the image
 
-### Requirement: Direct Markdown image editing in Visual Edit
-Visual Edit SHALL present an exactly ranged inline Markdown image as its image preview together with direct text controls for alt text, destination, and optional title. Each control SHALL edit only its validated authored field range, preserve unrelated delimiters and escaping, and use the canonical source selection, platform input, IME, history, dirty-state, and multi-tab paths. Reference-style images, multiline or malformed syntax, and field forms whose exact boundaries cannot be proven MUST retain the complete source-backed image island.
-
-#### Scenario: Image preview exposes editable authored fields
-- **WHEN** an exactly ranged inline Markdown image is shown in Visual Edit
-- **THEN** the image preview is accompanied by editable alt text and destination controls
-- **AND** an authored title is editable without exposing the complete Markdown source
-
-#### Scenario: Destination edit updates image presentation
-- **WHEN** the user edits the destination field and commits platform text input
-- **THEN** one exact canonical source replacement updates the destination
-- **AND** the preview requests the new local or remote image without persisting preview state into the document
-
-#### Scenario: Broken image remains editable
-- **WHEN** the destination cannot be loaded or decoded
-- **THEN** Visual Edit shows a bounded unavailable-image presentation while keeping all proven image fields editable
-- **AND** the load failure does not mutate source, history, or document version
-
-#### Scenario: Ambiguous image syntax remains source-backed
-- **WHEN** an image uses reference syntax, malformed delimiters, unsupported multiline syntax, or another form without proven field ranges
-- **THEN** Visual Edit presents the complete authored image source island
-- **AND** it does not guess alt, destination, or title mutations
-
 ### Requirement: Maintained Visual Edit support classification
 The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that classifies every user-visible Markdown construct into exactly one of three classes: **rendered WYSIWYG** (the construct is shown in its rendered form, including dedicated field/payload editors for code, math, diagrams, images, and tables whose editors ARE the rendered form), **progressive-reveal WYSIWYG** (the construct is rendered by default and reveals its smallest complete source syntax group when the caret enters it — inline formatting, links, inline math, structural prefixes), or **WYSIWYG coverage gap** (the construct currently shows raw source and is tracked under the `WYSIWYG coverage roadmap` for closure by a future change). The matrix SHALL name the canonical editable range and the verification evidence for each rendered/reveal class, and SHALL name the roadmap priority and implementation seam for each gap. The matrix SHALL agree with the stable requirements and the implemented `VisualBlock`/`VisualBlockEditor` behavior.
 

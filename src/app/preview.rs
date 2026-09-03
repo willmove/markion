@@ -929,6 +929,7 @@ impl Element for VisualEditableText {
             {
                 return;
             }
+            let mut double_click_word = None;
             let (source, affinity) = if let Some(whitespace) = whitespace_click.as_ref() {
                 let text = entity.read(cx).active_tab().document.text().to_string();
                 (
@@ -942,6 +943,9 @@ impl Element for VisualEditableText {
                 )
             } else if let Some(text_layout) = text_layout.as_ref() {
                 let visible = preview_index_for_position(text_layout, event.position);
+                if event.click_count >= 2 && !event.modifiers.shift {
+                    double_click_word = projection.word_selection_range(visible);
+                }
                 let candidates = projection.boundary_candidates(visible);
                 let boundary_x = text_layout
                     .position_for_index(candidates.display_offset)
@@ -972,10 +976,15 @@ impl Element for VisualEditableText {
                 app.active_tab_mut().is_selecting = true;
                 if event.modifiers.shift {
                     app.select_to(source, cx);
+                    app.active_tab_mut().set_visual_caret_affinity(affinity);
+                } else if let Some(range) = double_click_word {
+                    // move_to_visual_editor_target clears caret affinity
+                    // itself; a selection has no collapsed-affinity side.
+                    app.move_to_visual_editor_target(range, cx);
                 } else {
                     app.move_to(source, cx);
+                    app.active_tab_mut().set_visual_caret_affinity(affinity);
                 }
-                app.active_tab_mut().set_visual_caret_affinity(affinity);
             });
             window.refresh();
         });
@@ -2403,7 +2412,11 @@ pub(super) fn visual_text_element(
     .into_any_element()
 }
 
-fn visual_math_hit_target(boundary: usize, cx: &mut Context<MarkionApp>) -> Div {
+fn visual_math_hit_target(
+    source_range: Range<usize>,
+    boundary: usize,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
     div()
         .flex_1()
         .h_full()
@@ -2419,7 +2432,9 @@ fn visual_math_hit_target(boundary: usize, cx: &mut Context<MarkionApp>) -> Div 
                 app.input_marked_len = 0;
                 app.active_tab_mut().clear_preview_selection();
                 app.active_tab_mut().is_selecting = true;
-                if event.modifiers.shift {
+                if event.click_count >= 2 && !event.modifiers.shift {
+                    app.move_to_visual_editor_target(source_range.clone(), cx);
+                } else if event.modifiers.shift {
                     app.select_to(boundary, cx);
                 } else {
                     app.move_to(boundary, cx);
@@ -2485,8 +2500,8 @@ fn visual_math_atom(
                 .bottom_0()
                 .left_0()
                 .flex()
-                .child(visual_math_hit_target(source_range.start, cx))
-                .child(visual_math_hit_target(source_range.end, cx)),
+                .child(visual_math_hit_target(source_range.clone(), source_range.start, cx))
+                .child(visual_math_hit_target(source_range.clone(), source_range.end, cx)),
         )
         .into_any_element()
 }
@@ -2577,8 +2592,8 @@ fn visual_html_image_atom(
                 .bottom_0()
                 .left_0()
                 .flex()
-                .child(visual_math_hit_target(source_range.start, cx))
-                .child(visual_math_hit_target(source_range.end, cx)),
+                .child(visual_math_hit_target(source_range.clone(), source_range.start, cx))
+                .child(visual_math_hit_target(source_range.clone(), source_range.end, cx)),
         )
         .into_any_element()
 }

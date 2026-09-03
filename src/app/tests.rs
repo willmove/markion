@@ -15569,3 +15569,203 @@ fn search_domain_tracks_all_four_view_modes_and_replacement_availability(cx: &mu
         );
     });
 }
+
+#[gpui::test]
+fn visual_edit_double_click_word_selection_changes_only_selection_state(
+    cx: &mut TestAppContext,
+) {
+    let source = "bold **word** tail\n";
+    let document = MarkdownDocument::from_text(source);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // Resolve the exact range the paint-level double-click branch computes
+    // for a click inside the visible word.
+    let expected = {
+        let content_start = source.match_indices("word").next().unwrap().0;
+        content_start..content_start + "word".len()
+    };
+    let double_click_range = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let block = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Paragraph))
+            .expect("fixture should have one paragraph");
+        let cursor = block.editable_runs[0].content_range.start;
+        let projection = build_visual_projection(
+            tab.document.text(),
+            block,
+            cursor..cursor,
+            cursor,
+        );
+        let display = projection.text.find("word").expect("visible word") + 1;
+        projection
+            .word_selection_range(display)
+            .expect("double-click word range")
+    });
+    assert_eq!(
+        double_click_range, expected,
+        "hidden emphasis markers stay outside the double-click selection"
+    );
+
+    let before = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.text().to_string(),
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.undo_stack.len(),
+            std::sync::Arc::as_ptr(&tab.document.visual_blocks_shared()),
+        )
+    });
+    app.update(cx, |app, cx| {
+        // The same state write the VisualEditableText mouse handler performs
+        // on the second click of a double click.
+        app.move_to_visual_editor_target(double_click_range, cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.selected_range, expected);
+        assert_eq!(tab.document.text(), before.0);
+        assert_eq!(tab.document.version(), before.1);
+        assert_eq!(tab.document.is_dirty(), before.2);
+        assert_eq!(tab.undo_stack.len(), before.3);
+        assert_eq!(
+            std::sync::Arc::as_ptr(&tab.document.visual_blocks_shared()),
+            before.4,
+            "double-click selection must not rebuild the visual block cache"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_edit_double_click_selects_the_word_under_the_pointer(cx: &mut TestAppContext) {
+    // The dominant middle word keeps the row center inside it even with
+    // block padding shifting the click point a few characters either way.
+    // The bold and CJK paragraphs sit mid-viewport so the pointer-placement
+    // viewport-preservation rules apply to the double clicks.
+    let source = "# Title\n\nintro paragraph one\n\na **bbbbbbbbbbbbbbbbbbbbbbbb** c\n\n 词语选择测试内容一二三四五六七八九十\n";
+    let bold_content = source.find("bbbb").expect("bold content");
+    let bold_range = bold_content..bold_content + 24;
+    let cjk_run = "词语选择测试内容一二三四五六七八九十";
+    let cjk_start = source.find(cjk_run).expect("cjk run");
+    let cjk_range = cjk_start..cjk_start + cjk_run.len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (before, top) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            (
+                tab.document.version(),
+                tab.document.is_dirty(),
+                tab.undo_stack.len(),
+                std::sync::Arc::as_ptr(&tab.document.visual_blocks_shared()),
+            ),
+            tab.visual_list.logical_scroll_top(),
+        )
+    });
+
+    let double_click =
+        |cx: &mut gpui::VisualTestContext, row_index: usize, expected: Range<usize>| {
+            let row = cx
+                .debug_bounds(test_debug_selector(format!(
+                    "visual-document-row-{row_index}"
+                )))
+                .expect("visual row should be painted");
+            cx.simulate_event(MouseDownEvent {
+                position: row.center(),
+                modifiers: Modifiers::none(),
+                button: MouseButton::Left,
+                click_count: 2,
+                first_mouse: false,
+            });
+            cx.simulate_event(MouseUpEvent {
+                position: row.center(),
+                modifiers: Modifiers::none(),
+                button: MouseButton::Left,
+                click_count: 2,
+            });
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                assert_eq!(
+                    app.active_tab().selected_range,
+                    expected,
+                    "double click on row {row_index} must select the clicked run"
+                );
+            });
+        };
+
+    double_click(cx, 4, bold_range.clone());
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.version(), before.0);
+        assert!(!tab.document.is_dirty(), "before.2: {}", before.2);
+        assert_eq!(tab.undo_stack.len(), before.2);
+        assert_eq!(
+            std::sync::Arc::as_ptr(&tab.document.visual_blocks_shared()),
+            before.3
+        );
+        assert_eq!(
+            (
+                tab.visual_list.logical_scroll_top().item_ix,
+                tab.visual_list.logical_scroll_top().offset_in_item
+            ),
+            (top.item_ix, top.offset_in_item),
+            "in-viewport double click must not scroll"
+        );
+    });
+
+    double_click(cx, 6, cjk_range.clone());
+
+    // Shift + double click keeps the extend-selection path: it must not
+    // re-select the word run. A 30%-width point avoids the row-end boundary,
+    // where extending to the end would coincidentally equal the word range.
+    let row = cx
+        .debug_bounds(test_debug_selector("visual-document-row-6".to_string()))
+        .expect("visual row should be painted");
+    let shift_point = point(
+        row.origin.x + row.size.width * 0.3,
+        row.center().y,
+    );
+    cx.simulate_event(MouseDownEvent {
+        position: shift_point,
+        modifiers: Modifiers {
+            shift: true,
+            ..Modifiers::none()
+        },
+        button: MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_ne!(
+            app.active_tab().selected_range,
+            cjk_range,
+            "shift + double click must extend the selection, not select the word"
+        );
+        assert_eq!(app.active_tab().selected_range.start, cjk_range.start);
+    });
+}

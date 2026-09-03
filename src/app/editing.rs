@@ -3250,7 +3250,11 @@ impl MarkionApp {
         }
     }
 
-    fn move_to_visual_editor_target(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+    pub(super) fn move_to_visual_editor_target(
+        &mut self,
+        range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) {
         let tab = self.active_tab_mut();
         tab.selected_range = range;
         tab.selection_reversed = false;
