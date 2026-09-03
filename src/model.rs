@@ -1161,6 +1161,10 @@ pub enum VisualBlockEditor {
         opening_fence: Range<usize>,
         payload: VisualEditorField,
         info_range: Option<Range<usize>>,
+        /// First info-string token — the language identifier. Empty range at
+        /// `opening_fence.end` when the fence carries no info string; the
+        /// caret-owned header language field edits exactly this range.
+        info: VisualEditorField,
         closing_fence: Range<usize>,
     },
     Math {
@@ -1174,15 +1178,22 @@ pub enum VisualBlockEditor {
     Html {
         payload: VisualEditorField,
     },
+    /// One complete proven inline-image span, presented by Visual Edit as an
+    /// image with an on-demand whole-span source payload. Unlike the removed
+    /// structured field editor, this payload covers the complete authored
+    /// `![alt](destination "title")` bytes as a single field.
+    Image {
+        payload: VisualEditorField,
+    },
 }
 
 impl VisualBlockEditor {
     pub fn fields(&self) -> Vec<&VisualEditorField> {
         match self {
-            Self::Code { payload, .. } | Self::Math { payload, .. } | Self::Html { payload } => {
-                vec![payload]
-            }
+            Self::Code { payload, info, .. } => vec![payload, info],
+            Self::Math { payload, .. } => vec![payload],
             Self::Table { cells } => cells.iter().map(|cell| &cell.field).collect(),
+            Self::Html { payload } | Self::Image { payload } => vec![payload],
         }
     }
 
@@ -1201,6 +1212,10 @@ pub enum VisualEditorFieldKind {
     ImageAlt,
     ImageDestination,
     ImageTitle,
+    /// Complete authored Markdown image span behind the image source toggle.
+    ImageSource,
+    /// First fenced info-string token (the language identifier).
+    CodeInfo,
     TableCell { row: usize, column: usize },
 }
 

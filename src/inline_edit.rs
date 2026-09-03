@@ -200,7 +200,7 @@ pub(crate) fn unescape_markdown(value: &str) -> String {
     out
 }
 
-fn find_unescaped(source: &str, start: usize, needle: u8) -> Option<usize> {
+pub(crate) fn find_unescaped(source: &str, start: usize, needle: u8) -> Option<usize> {
     let bytes = source.as_bytes();
     let mut escaped = false;
     for (index, byte) in bytes.iter().copied().enumerate().skip(start) {

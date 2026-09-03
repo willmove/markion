@@ -2184,7 +2184,8 @@ impl MarkionApp {
                 }
                 VisualEditorFieldKind::CodePayload
                 | VisualEditorFieldKind::MathPayload
-                | VisualEditorFieldKind::HtmlSource => {
+                | VisualEditorFieldKind::HtmlSource
+                | VisualEditorFieldKind::ImageSource => {
                     self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
                     self.replace_text_in_range(None, "\n", _window, cx);
                     self.active_tab_mut().finish_undo_capture();
@@ -2195,6 +2196,9 @@ impl MarkionApp {
                 VisualEditorFieldKind::ImageAlt
                 | VisualEditorFieldKind::ImageDestination
                 | VisualEditorFieldKind::ImageTitle => {}
+                // Enter in the language field commits the token instead of
+                // inserting a newline into the fence's info string.
+                VisualEditorFieldKind::CodeInfo => return,
             }
         }
         let cursor = self.active_tab().selected_range.start;

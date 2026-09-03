@@ -2862,16 +2862,22 @@ impl MarkdownDocument {
     pub fn visual_editor_edge_target(&self, offset: usize, forward: bool) -> Option<usize> {
         let range = offset..offset;
         let blocks = self.visual_blocks_shared();
-        let (block_index, editor, field_index) =
+        let (block_index, fields, field_index) =
             blocks.iter().enumerate().find_map(|(block_index, block)| {
                 let editor = block.editor.as_ref()?;
-                let fields = editor.fields();
+                // The language info token is not a mounted sibling editor: for
+                // code fences only the payload participates in edge handoff,
+                // so stepping off its closing edge still hands to the next
+                // visual block instead of the fence header.
+                let fields: Vec<&VisualEditorField> = match editor {
+                    VisualBlockEditor::Code { payload, .. } => vec![payload],
+                    _ => editor.fields(),
+                };
                 let field_index = fields.iter().position(|field| {
                     range.start >= field.source_range.start && range.end <= field.source_range.end
                 })?;
-                Some((block_index, editor, field_index))
+                Some((block_index, fields, field_index))
             })?;
-        let fields = editor.fields();
         let field = fields[field_index];
         if forward {
             if offset != field.source_range.end {
@@ -3943,7 +3949,12 @@ fn sanitize_visual_field_replacement(
     match kind {
         VisualEditorFieldKind::CodePayload
         | VisualEditorFieldKind::MathPayload
-        | VisualEditorFieldKind::HtmlSource => replacement.to_string(),
+        | VisualEditorFieldKind::HtmlSource
+        | VisualEditorFieldKind::ImageSource => replacement.to_string(),
+        VisualEditorFieldKind::CodeInfo => replacement
+            .chars()
+            .filter(|ch| !ch.is_whitespace() && *ch != '`')
+            .collect(),
         VisualEditorFieldKind::ImageAlt => {
             escape_unescaped_visual_terminators(&replacement.replace(['\r', '\n'], " "), |ch| {
                 ch == ']'

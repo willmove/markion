@@ -223,6 +223,8 @@ pub enum Msg {
     LabelImageAlt,
     LabelImageDestination,
     LabelImageTitle,
+    /// Editable code-fence language label in Visual Edit (caret-owned header).
+    CodeLanguage,
 
     // --- Search panel ---
     SearchFind,
@@ -3042,6 +3044,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::LabelImageAlt => "Alt text",
         Msg::LabelImageDestination => "Destination",
         Msg::LabelImageTitle => "Title",
+        Msg::CodeLanguage => "language",
 
         Msg::SearchFind => "Find",
         Msg::SearchReplace => "Replace",
@@ -3603,6 +3606,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::LabelImageAlt => "代替テキスト",
         Msg::LabelImageDestination => "URL",
         Msg::LabelImageTitle => "タイトル",
+        Msg::CodeLanguage => "言語",
 
         Msg::SearchFind => "検索",
         Msg::SearchReplace => "置換",
@@ -4154,6 +4158,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::LabelImageAlt => "Texte alternatif",
         Msg::LabelImageDestination => "Destination",
         Msg::LabelImageTitle => "Titre",
+        Msg::CodeLanguage => "langage",
         Msg::SearchFind => "Rechercher",
         Msg::SearchReplace => "Remplacer",
         Msg::SearchPrev => "Préc.",
@@ -4725,6 +4730,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::LabelImageAlt => "Alternativtext",
         Msg::LabelImageDestination => "Ziel",
         Msg::LabelImageTitle => "Titel",
+        Msg::CodeLanguage => "Sprache",
         Msg::SearchFind => "Suchen",
         Msg::SearchReplace => "Ersetzen",
         Msg::SearchPrev => "Zurück",
@@ -5284,6 +5290,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::LabelImageAlt => "Texto alternativo",
         Msg::LabelImageDestination => "Destino",
         Msg::LabelImageTitle => "Título",
+        Msg::CodeLanguage => "lenguaje",
         Msg::SearchFind => "Buscar",
         Msg::SearchReplace => "Reemplazar",
         Msg::SearchPrev => "Ant.",
@@ -5836,8 +5843,9 @@ fn zh(msg: Msg) -> &'static str {
         Msg::LabelTable => "表格",
         Msg::VisualTableDeleteTable => "删表",
         Msg::LabelImageAlt => "替代文本",
-        Msg::LabelImageDestination => "目标地址",
+        Msg::LabelImageDestination => "目标",
         Msg::LabelImageTitle => "标题",
+        Msg::CodeLanguage => "语言",
 
         Msg::SearchFind => "查找",
         Msg::SearchReplace => "替换",
@@ -6374,8 +6382,9 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::LabelTable => "表格",
         Msg::VisualTableDeleteTable => "刪表",
         Msg::LabelImageAlt => "替代文字",
-        Msg::LabelImageDestination => "目標位址",
+        Msg::LabelImageDestination => "目標",
         Msg::LabelImageTitle => "標題",
+        Msg::CodeLanguage => "語言",
 
         Msg::SearchFind => "尋找",
         Msg::SearchReplace => "取代",

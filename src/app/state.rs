@@ -592,6 +592,10 @@ pub(super) struct DocumentTabState {
     pub(super) hovered_visual_source_block: Option<VisualBlockId>,
     /// Table currently under the pointer for showing the Visual Edit table header.
     pub(super) hovered_visual_table_block: Option<VisualBlockId>,
+    /// Code fence currently under the pointer for revealing its editable
+    /// language label (hidden again when the pointer leaves and the fence does
+    /// not own the caret).
+    pub(super) hovered_visual_code_block: Option<VisualBlockId>,
     /// Set by a collapsible block's mouse-down so the Visual Edit surface can
     /// collapse other expanded blocks without collapsing the clicked one.
     pub(super) retain_visual_source_expand: Option<VisualBlockId>,
@@ -859,6 +863,7 @@ impl DocumentTabState {
             expanded_visual_source_blocks: HashSet::new(),
             hovered_visual_source_block: None,
             hovered_visual_table_block: None,
+            hovered_visual_code_block: None,
             retain_visual_source_expand: None,
             visual_cursor_reveal_pending: false,
             visual_caret_follow_frames: 0,
@@ -978,6 +983,12 @@ impl DocumentTabState {
             self.hovered_visual_table_block = None;
         }
         if self
+            .hovered_visual_code_block
+            .is_some_and(|id| !live_ids.contains(&id))
+        {
+            self.hovered_visual_code_block = None;
+        }
+        if self
             .retain_visual_source_expand
             .is_some_and(|id| !live_ids.contains(&id))
         {
@@ -1076,6 +1087,7 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.hovered_visual_table_block = None;
+        self.hovered_visual_code_block = None;
         self.retain_visual_source_expand = None;
         self.visual_end_padding_height = None;
         self.visual_caret_bounds = None;
@@ -1126,6 +1138,7 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.hovered_visual_table_block = None;
+        self.hovered_visual_code_block = None;
         self.retain_visual_source_expand = None;
         self.visual_end_padding_height = None;
         self.visual_cursor_reveal_pending = true;

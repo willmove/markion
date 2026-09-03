@@ -1213,6 +1213,16 @@ fn visual_block_editor(
             // editing contract is preserved while the diagram becomes visible.
             // Keep the editor's source ranges identical to a normal fence.
             let _ = language;
+            let info = info_range.as_ref().map_or_else(
+                || opening_fence.end..opening_fence.end,
+                |range| {
+                    // `info_range` covers the already-trimmed info string, so
+                    // the first token ends at its first whitespace.
+                    let slice = &text[range.clone()];
+                    let token_end = slice.find(char::is_whitespace).unwrap_or(slice.len());
+                    range.start..range.start + token_end
+                },
+            );
             Some(VisualBlockEditor::Code {
                 opening_fence,
                 payload: VisualEditorField {
@@ -1220,6 +1230,10 @@ fn visual_block_editor(
                     source_range: payload_range,
                 },
                 info_range,
+                info: VisualEditorField {
+                    kind: VisualEditorFieldKind::CodeInfo,
+                    source_range: info,
+                },
                 closing_fence,
             })
         }
@@ -1267,6 +1281,38 @@ fn visual_block_editor(
                         }
                     })
                     .collect(),
+            })
+        }
+        PreviewBlock::Image { .. } => {
+            // Conservative whole-span proof: the block must be exactly one
+            // complete inline image whose label and destination bounds
+            // resolve without guessing. The closing `)` must be unescaped
+            // (otherwise the authored title could swallow it) and, outside an
+            // angle destination, no unescaped `)` may appear before it.
+            // Reference-style and multiline forms end with `]` or fail the
+            // scan and keep `editor: None` (today's island fallback) instead
+            // of a guessed payload range.
+            let authored = text.get(source_range.clone())?;
+            if !authored.starts_with("![")
+                || authored.len() < 6
+                || authored.contains(['\n', '\r'])
+                || !crate::inline_edit::find_unescaped(authored, 0, b')')
+                    .is_some_and(|close| close == authored.len() - 1)
+            {
+                return None;
+            }
+            let destination = crate::inline_edit::authored_image_destination_range(authored)?;
+            let destination_inner = &authored[destination.clone()];
+            if !destination_inner.starts_with('<')
+                && crate::inline_edit::find_unescaped(destination_inner, 0, b')').is_some()
+            {
+                return None;
+            }
+            Some(VisualBlockEditor::Image {
+                payload: VisualEditorField {
+                    kind: VisualEditorFieldKind::ImageSource,
+                    source_range,
+                },
             })
         }
         PreviewBlock::Html { .. } => Some(VisualBlockEditor::Html {
@@ -5223,6 +5269,7 @@ mod tests {
             opening_fence,
             payload,
             info_range,
+            info,
             closing_fence,
         }) = block.editor
         else {
@@ -5231,6 +5278,7 @@ mod tests {
         assert_eq!(&source[opening_fence], "~~~");
         assert_eq!(&source[payload.source_range], "  let 名称 = 1;\r\n\r\n");
         assert_eq!(&source[info_range.expect("info range")], "rust extra");
+        assert_eq!(&source[info.source_range], "rust");
         assert_eq!(&source[closing_fence], "~~~~");
         assert!(block.source_island.is_none());
     }
@@ -5264,6 +5312,7 @@ mod tests {
             opening_fence,
             payload,
             info_range,
+            info,
             closing_fence,
         } = block
             .editor
@@ -5277,6 +5326,7 @@ mod tests {
             "flowchart LR\nA --> B\n"
         );
         assert_eq!(&source[info_range.expect("info range")], "mermaid");
+        assert_eq!(&source[info.source_range], "mermaid");
         assert_eq!(&source[closing_fence], "```");
         // Payload lies strictly inside the block's source range, and the block
         // range fully covers the authored fence.
@@ -5316,7 +5366,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_image_has_no_direct_editor_but_keeps_source_island() {
+    fn inline_image_editor_proves_exact_spans_and_refuses_ambiguous_forms() {
         let source = "![替代\\]文本](images/a\\)b.png '标题')";
         let block = MarkdownDocument::from_text(source)
             .visual_blocks()
@@ -5327,12 +5377,18 @@ mod tests {
         assert_eq!(alt, "替代]文本");
         assert_eq!(url, "images/a)b.png");
         assert_eq!(title.as_deref(), Some("标题"));
-        assert!(block.editor.is_none(), "image should have no direct editor");
-        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Image));
+        let Some(VisualBlockEditor::Image { payload }) = &block.editor else {
+            panic!("single-line inline image should carry an Image payload editor");
+        };
+        assert_eq!(payload.source_range, block.source_range);
+        // Editor-driven blocks drop the conservative source-island kind,
+        // matching the other payload-editor blocks.
+        assert!(block.source_island.is_none());
 
         for ambiguous in [
+            // Reference-style: no proven destination parentheses.
             "![alt][asset]\n\n[asset]: image.png",
-            "![alt](<image with spaces.png>)",
+            // Multiline: provable by the parser but outside the payload proof.
             "![alt](image.png\n \"title\")",
         ] {
             let image = MarkdownDocument::from_text(ambiguous)
@@ -5707,6 +5763,88 @@ mod tests {
                     column: cell.column,
                 })
         }));
+    }
+
+    #[test]
+    fn block_image_editor_covers_exactly_the_authored_span() {
+        for source in [
+            "![alt](pic.png)",
+            "![A\\]lt](<note.assets/a b.png> \"Caption {width=50 align=right}\")",
+            "![alt](pic.png \"title\")\r\n",
+        ] {
+            let block = MarkdownDocument::from_text(source)
+                .visual_blocks()
+                .into_iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+                .unwrap_or_else(|| panic!("expected block image for {source:?}"));
+            let Some(VisualBlockEditor::Image { payload }) = block.editor else {
+                panic!("proven image span should carry an Image editor for {source:?}");
+            };
+            assert_eq!(payload.kind, VisualEditorFieldKind::ImageSource);
+            assert_eq!(payload.source_range, block.source_range);
+            let authored = &source[payload.source_range.clone()];
+            assert!(authored.starts_with("![") && authored.ends_with(')'));
+            assert!(block.source_island.is_none());
+        }
+    }
+
+    #[test]
+    fn unprovable_image_spans_keep_the_source_island() {
+        // Reference-style and multiline image forms cannot be proven by the
+        // whole-span byte scan, so they must not get an Image payload editor.
+        for source in [
+            "![alt][ref]\n\n[ref]: pic.png",
+            "![alt](image.png\n \"title\")",
+        ] {
+            let block = MarkdownDocument::from_text(source)
+                .visual_blocks()
+                .into_iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }));
+            if let Some(block) = block {
+                assert!(
+                    !matches!(block.editor, Some(VisualBlockEditor::Image { .. })),
+                    "unprovable image span must not gain an Image editor for {source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn code_info_field_covers_first_token_or_inserts_after_the_fence() {
+        // Bare fence: empty insertion range directly after the opening fence.
+        let bare = "```\nlet x = 1;\n```";
+        let doc = MarkdownDocument::from_text(bare);
+        let block = doc
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("code block");
+        let Some(VisualBlockEditor::Code {
+            opening_fence, info, ..
+        }) = block.editor
+        else {
+            panic!("bare fence should have direct metadata");
+        };
+        assert!(info.source_range.is_empty());
+        assert_eq!(info.source_range.start, opening_fence.end);
+        assert_eq!(info.kind, VisualEditorFieldKind::CodeInfo);
+
+        // Multi-token info strings edit only the first token, LF and CRLF.
+        for (source, token) in [
+            ("```rust extra\nlet x = 1;\n```", "rust"),
+            ("```rust extra\r\nlet x = 1;\r\n```", "rust"),
+            ("```toml\r\nx = 1\r\n```", "toml"),
+        ] {
+            let block = MarkdownDocument::from_text(source)
+                .visual_blocks()
+                .into_iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+                .expect("code block");
+            let Some(VisualBlockEditor::Code { info, .. }) = block.editor else {
+                panic!("fence should have direct metadata for {source:?}");
+            };
+            assert_eq!(&source[info.source_range.clone()], token);
+        }
     }
 
     #[test]

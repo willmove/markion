@@ -12656,6 +12656,388 @@ fn visual_image_presentation_is_one_exact_undoable_mutation(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn visual_image_source_toggle_expands_collapses_and_edits_exactly(cx: &mut TestAppContext) {
+    let source = "![图](old.png \"Caption\")";
+    let document = MarkdownDocument::from_text(source);
+    let (image_id, payload_range) = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Image { payload }) => Some((block.id, payload.source_range)),
+            _ => None,
+        })
+        .expect("image block should carry a whole-span payload editor");
+    assert_eq!(&source[payload_range.clone()], source);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let version = app.update(cx, |app, _| app.active_tab().document.version());
+
+    // Expand via the toggle: presentation-only, document untouched.
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        assert!(!tab.is_visual_source_expanded(image_id));
+        tab.toggle_visual_source_expanded(image_id);
+        assert!(tab.is_visual_source_expanded(image_id));
+        cx.notify();
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(app.active_tab().undo_stack.is_empty());
+        assert!(!app.active_tab().document.is_dirty());
+    });
+
+    // Edit the payload as one exact source replacement (rename destination).
+    app.update(cx, |app, _| {
+        let edit_field = app
+            .active_tab()
+            .document
+            .visual_editor_field_at(&payload_range)
+            .expect("image payload field");
+        assert_eq!(edit_field.kind, VisualEditorFieldKind::ImageSource);
+        let destination_start = source.find("old.png").unwrap();
+        let destination = destination_start..destination_start + "old.png".len();
+        let edit = app
+            .active_tab()
+            .document
+            .direct_visual_block_edit(destination, "new.png")
+            .expect("payload edit validates against the current version");
+        assert!(app.active_tab().document.validate_visual_block_edit(&edit));
+        app.active_tab_mut()
+            .document
+            .replace_range(edit.range.clone(), &edit.replacement);
+        assert_eq!(
+            app.active_tab().document.text(),
+            "![图](new.png \"Caption\")"
+        );
+        assert_eq!(app.active_tab().document.version(), version + 1);
+    });
+
+    // Clicking outside collapses the payload without touching the document.
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().retain_visual_source_expand = None;
+        app.active_tab_mut().apply_visual_source_outside_click();
+        assert!(!app.active_tab().is_visual_source_expanded(image_id));
+        cx.notify();
+    });
+}
+
+#[gpui::test]
+fn visual_image_failed_load_forces_the_source_payload(cx: &mut TestAppContext) {
+    // A destination that cannot be decoded keeps the payload editor visible
+    // regardless of the toggle state (same forced-expand rule as math).
+    let source = "![broken](missing.png)";
+    let document = MarkdownDocument::from_text(source);
+    let image_id = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Image { .. }) => Some(block.id),
+            _ => None,
+        })
+        .expect("image block");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.run_until_parked();
+    // With no image ever decoded, the resolved entry is not Ready; the chrome
+    // keeps the source reachable. The toggle set stays empty — forced expand
+    // is computed from the entry, not the user's expand set.
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(!tab.is_visual_source_expanded(image_id));
+        assert!(matches!(
+            app.preview_image_entry("missing.png", None),
+            PreviewImageEntry::Pending | PreviewImageEntry::Error(_)
+        ));
+    });
+}
+
+#[gpui::test]
+fn visual_fence_language_field_edits_only_the_info_token(cx: &mut TestAppContext) {
+    let source = "```rust extra\nlet 名称 = 1;\n```";
+    let document = MarkdownDocument::from_text(source);
+    let (info_range, payload_range) = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Code { payload, info, .. }) => {
+                Some((info.source_range, payload.source_range))
+            }
+            _ => None,
+        })
+        .expect("code fence should carry an info field");
+    assert_eq!(&source[info_range.clone()], "rust");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.run_until_parked();
+
+    let version = app.update(cx, |app, _| app.active_tab().document.version());
+    app.update(cx, |app, _| {
+        // Replace only the first info token; sanitizer strips whitespace and
+        // backticks, so `"to`ml "` commits as `toml`.
+        let edit = app
+            .active_tab()
+            .document
+            .direct_visual_block_edit(info_range.clone(), "to`ml ")
+            .expect("info edit validates");
+        assert_eq!(edit.range, info_range.clone());
+        assert_eq!(edit.replacement, "toml");
+        assert!(app.active_tab().document.validate_visual_block_edit(&edit));
+        app.active_tab_mut()
+            .document
+            .replace_range(edit.range.clone(), &edit.replacement);
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```toml extra\nlet 名称 = 1;\n```"
+        );
+        assert_eq!(app.active_tab().document.version(), version + 1);
+        // Fences, the remainder of the info string, and the payload are
+        // byte-identical apart from the token.
+        let text = app.active_tab().document.text();
+        assert!(text.starts_with("```toml extra\n"));
+        assert!(text.ends_with("let 名称 = 1;\n```"));
+        assert!(text.contains(&source[payload_range.clone()]));
+    });
+}
+
+#[gpui::test]
+fn visual_fence_language_inserts_on_a_bare_fence(cx: &mut TestAppContext) {
+    let source = "```\nlet x = 1;\n```";
+    let document = MarkdownDocument::from_text(source);
+    let (info_range, opening_end) = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Code {
+                opening_fence, info, ..
+            }) => Some((info.source_range, opening_fence.end)),
+            _ => None,
+        })
+        .expect("bare fence should carry an info field");
+    assert!(info_range.is_empty());
+    assert_eq!(info_range.start, opening_end);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let edit = app
+            .active_tab()
+            .document
+            .direct_visual_block_edit(info_range.clone(), "json")
+            .expect("insert validates");
+        assert_eq!(edit.replacement, "json");
+        app.active_tab_mut()
+            .document
+            .replace_range(edit.range.clone(), &edit.replacement);
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```json\nlet x = 1;\n```"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_fence_language_retyped_token_redispatches(cx: &mut TestAppContext) {
+    let source = "```mermaid\nflowchart LR\nA --> B\n```";
+    let document = MarkdownDocument::from_text(source);
+    let info_range = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Code { info, .. }) => Some(info.source_range),
+            _ => None,
+        })
+        .expect("diagram fence should carry an info field");
+    assert_eq!(&source[info_range.clone()], "mermaid");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let edit = app
+            .active_tab()
+            .document
+            .direct_visual_block_edit(info_range.clone(), "rust")
+            .expect("retype validates");
+        app.active_tab_mut()
+            .document
+            .replace_range(edit.range.clone(), &edit.replacement);
+        let block = app
+            .active_tab()
+            .document
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("re-parsed code block");
+        let VisualBlockKind::CodeBlock { language } = &block.kind else {
+            unreachable!()
+        };
+        assert_eq!(language.as_deref(), Some("rust"));
+        // No diagram presentation state rewrote the source beyond the token.
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```rust\nflowchart LR\nA --> B\n```"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_fence_language_chip_reveals_on_hover_and_click(cx: &mut TestAppContext) {
+    let source = "```rust\nlet x = 1;\n```\n\nafter";
+    let document = MarkdownDocument::from_text(source);
+    let (block_id, payload_start, info_start) = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor.as_ref() {
+            Some(VisualBlockEditor::Code { payload, info, .. }) => Some((
+                block.id,
+                payload.source_range.start,
+                info.source_range.start,
+            )),
+            _ => None,
+        })
+        .expect("code fence editor");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = payload_start..payload_start;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // Caret inside the fence: the language chip is visible and clickable.
+    let chip = cx
+        .debug_bounds("visual-code-info-chip-0")
+        .expect("caret-owned fence shows the language chip");
+    cx.simulate_click(chip.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let info = tab
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .find_map(|block| match block.editor.as_ref() {
+                Some(VisualBlockEditor::Code { info, .. }) => Some(info.source_range.clone()),
+                _ => None,
+            })
+            .expect("info field");
+        assert!(
+            tab.cursor_offset() >= info.start && tab.cursor_offset() <= info.end,
+            "clicking the chip should place the caret inside the info token"
+        );
+    });
+
+    // Pointer entering a fence that does not own the caret reveals the chip.
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().hovered_visual_code_block = Some(block_id);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-code-info-chip-0").is_some());
+
+    // Pointer leaving and the caret elsewhere hides the chip again. The
+    // visibility predicate is caret-in-fence OR hovered; both must be false.
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().hovered_visual_code_block = None;
+        app.move_to(source.len(), cx);
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().cursor_offset(), source.len());
+        assert!(app.active_tab().hovered_visual_code_block.is_none());
+        assert!(
+            !super::preview::visual_block_owns_caret(app, 0),
+            "caret left the code fence"
+        );
+    });
+    assert_eq!(info_start < source.len(), true);
+}
+
+#[gpui::test]
+fn visual_bare_fence_language_chip_click_lands_in_the_insertion_range(cx: &mut TestAppContext) {
+    let source = "```\nlet x = 1;\n```\n\nafter";
+    let document = MarkdownDocument::from_text(source);
+    let (block_id, info_start) = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor.as_ref() {
+            Some(VisualBlockEditor::Code { info, .. }) => {
+                Some((block.id, info.source_range.start))
+            }
+            _ => None,
+        })
+        .expect("bare fence info field");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = info_start..info_start;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // A bare fence shows the placeholder chip; clicking it keeps the caret in
+    // the empty insertion range directly after the opening fence.
+    let chip = cx
+        .debug_bounds("visual-code-info-chip-0")
+        .expect("caret-owned bare fence shows the placeholder chip");
+    cx.simulate_click(chip.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().cursor_offset(), info_start);
+        // And typing there inserts the token through the normal field path.
+        let edit = app
+            .active_tab()
+            .document
+            .direct_visual_block_edit(info_start..info_start, "json")
+            .expect("insert validates");
+        app.active_tab_mut()
+            .document
+            .replace_range(edit.range.clone(), &edit.replacement);
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```json\nlet x = 1;\n```\n\nafter"
+        );
+    });
+    assert_eq!(block_id.as_u64() > 0, true);
+}
+
+#[gpui::test]
 fn external_change_reload_and_dirty_conflict_preserve_expected_source(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("external.md");

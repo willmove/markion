@@ -333,7 +333,7 @@ impl From<PreferencesFile> for AppPreferences {
             focus_mode: file.focus_mode,
             typewriter_mode: file.typewriter_mode,
             code_line_numbers: file.code_line_numbers,
-            code_theme: crate::model::CodeTheme::from_config(&file.code_theme),
+            code_theme: CodeTheme::from_config(&file.code_theme),
             code_long_line_wrap: file.code_long_line_wrap,
             code_font_size: file
                 .code_font_size

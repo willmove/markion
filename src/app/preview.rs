@@ -3674,7 +3674,7 @@ pub(super) fn visual_block_view(
         } => {
             let offset = block.source_range.start;
             let exact_image = inline_image_at(app.active_tab().document.text(), offset);
-            let presentation = exact_image
+            let image_presentation = exact_image
                 .as_ref()
                 .and_then(|image| image.presentation)
                 .unwrap_or_default();
@@ -3685,15 +3685,14 @@ pub(super) fn visual_block_view(
                 .filter(|title| !title.is_empty())
                 .or_else(|| (!image_alt.is_empty()).then_some(image_alt.as_str()));
             let image = div()
-                .w(gpui::relative(presentation.width_percent as f32 / 100.))
+                .w(gpui::relative(image_presentation.width_percent as f32 / 100.))
                 .child(preview_image_view(app, url, document_dir, None, None));
-            let image = match presentation.alignment {
+            let image = match image_presentation.alignment {
                 ImageAlignment::Left => div().w_full().flex().items_start().child(image),
                 ImageAlignment::Center => div().w_full().flex().items_center().child(image),
                 ImageAlignment::Right => div().w_full().flex().items_end().child(image),
             };
-            div()
-                .mb_3()
+            let presentation = div()
                 .cursor(CursorStyle::PointingHand)
                 .on_mouse_down(
                     MouseButton::Left,
@@ -3714,9 +3713,22 @@ pub(super) fn visual_block_view(
                                 .child(text.to_string())
                         }))
                         .children((owns_caret && exact_image.is_some()).then(|| {
-                            visual_image_controls(offset, presentation, app.language, cx)
+                            visual_image_controls(offset, image_presentation, app.language, cx)
                         })),
-                )
+                );
+            if let Some(VisualBlockEditor::Image { payload }) = block.editor.as_ref() {
+                return div().child(visual_image_source_editor(
+                    app,
+                    block,
+                    block_index,
+                    url,
+                    payload,
+                    presentation.into_any_element(),
+                    document_dir,
+                    cx,
+                ));
+            }
+            presentation.mb_3()
         }
         VisualBlockKind::Rule => {
             let offset = block.source_range.start;
@@ -3844,15 +3856,33 @@ pub(super) fn visual_block_view(
             }
         }
         VisualBlockKind::CodeBlock { language } => {
-            if let Some(VisualBlockEditor::Code { payload, .. }) = block.editor.as_ref() {
+            if let Some(VisualBlockEditor::Code { payload, info, .. }) = block.editor.as_ref() {
                 // Diagram fences (e.g. `mermaid`) layer a rendered image on
                 // top of the same source-backed payload editor used by ordinary
                 // code blocks. Non-diagram CodeBlocks keep the highlighted
                 // code editor.
                 if diagram_backend_id(language.as_deref()).is_some() {
-                    visual_diagram_editor(app, block, block_index, language.as_deref(), payload, cx)
+                    visual_diagram_editor(
+                        app,
+                        block,
+                        block_index,
+                        language.as_deref(),
+                        payload,
+                        info,
+                        cx,
+                    )
                 } else {
-                    visual_code_editor(app, block.id, block_index, language.as_deref(), payload, cx)
+                    // `visual_code_editor` is stateful so the fence can track
+                    // hover for its language chip.
+                    div().child(visual_code_editor(
+                        app,
+                        block.id,
+                        block_index,
+                        language.as_deref(),
+                        payload,
+                        info,
+                        cx,
+                    ))
                 }
             } else {
                 visual_source_island_view(app, block, block_index, cx)
@@ -4544,7 +4574,9 @@ pub(super) fn visual_editor_field_projection(
         VisualEditorFieldKind::TableCell { .. } => Some('|'),
         VisualEditorFieldKind::CodePayload
         | VisualEditorFieldKind::MathPayload
-        | VisualEditorFieldKind::HtmlSource => None,
+        | VisualEditorFieldKind::HtmlSource
+        | VisualEditorFieldKind::ImageSource
+        | VisualEditorFieldKind::CodeInfo => None,
     };
     let Some(terminator) = terminator else {
         return VisualProjection {
@@ -4603,14 +4635,25 @@ fn visual_code_editor(
     block_index: usize,
     language: Option<&str>,
     payload: &VisualEditorField,
+    info: &VisualEditorField,
     cx: &mut Context<MarkionApp>,
-) -> Div {
+) -> Stateful<Div> {
     let typography = app.typography_metrics();
     let palette = code_palette(app.code_theme);
     let code = &app.active_tab().document.text()[payload.source_range.clone()];
     let highlighted = app.highlighted_code(language, code);
     let (styled, _) = code_block_text(&highlighted, palette);
+    // The language chip appears only while the pointer is inside the fence or
+    // the fence owns the caret; otherwise the header shows no label at all.
+    let show_info = visual_block_owns_caret(app, block_index)
+        || app.active_tab().hovered_visual_code_block == Some(block_id);
+    let label = if show_info {
+        CodeHeaderLanguage::Field(info, block_index, block_id)
+    } else {
+        CodeHeaderLanguage::Hidden
+    };
     div()
+        .id(ElementId::from(("visual-code", block_id.as_u64())))
         .mb_3()
         .p_3()
         .rounded_md()
@@ -4619,11 +4662,26 @@ fn visual_code_editor(
         .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
-        .child(code_block_header(
+        .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+            let tab = app.active_tab_mut();
+            let next = hovered.then_some(block_id);
+            let changed = if *hovered {
+                tab.hovered_visual_code_block != Some(block_id)
+            } else {
+                tab.hovered_visual_code_block == Some(block_id)
+            };
+            if !changed {
+                return;
+            }
+            tab.hovered_visual_code_block = next;
+            cx.notify();
+        }))
+        .child(code_block_header_with_language(
             app,
             language,
             code.to_string(),
             palette,
+            label,
             cx,
         ))
         .child(visual_editor_field_element(
@@ -4703,6 +4761,7 @@ fn visual_math_editor(
         payload,
         forced,
         true,
+        false,
         presentation.into_any_element(),
         payload_editor.into_any_element(),
         cx,
@@ -4746,6 +4805,7 @@ fn visual_html_editor(
         payload,
         false,
         bordered,
+        false,
         presentation.into_any_element(),
         payload_editor.into_any_element(),
         cx,
@@ -4767,6 +4827,7 @@ fn visual_diagram_editor(
     block_index: usize,
     language: Option<&str>,
     payload: &VisualEditorField,
+    info: &VisualEditorField,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
@@ -4824,11 +4885,15 @@ fn visual_diagram_editor(
         .font(code_slot_font(&app.resolved_font_families.code))
         .text_size(px(typography.code_font_size))
         .line_height(px(typography.code_line_height))
-        .child(code_block_header(
+        .child(code_block_header_with_language(
             app,
             language,
             code,
             code_palette(app.code_theme),
+            // The header only exists inside the payload editor, which is
+            // mounted when the user expanded the source — so the language
+            // chip is always editable while it is on screen.
+            CodeHeaderLanguage::Field(info, block_index, block.id),
             cx,
         ))
         .child(visual_editor_field_element(
@@ -4846,6 +4911,7 @@ fn visual_diagram_editor(
         payload,
         forced,
         true,
+        false,
         presentation.into_any_element(),
         payload_editor.into_any_element(),
         cx,
@@ -4976,12 +5042,71 @@ fn visual_image_controls(
         )
 }
 
+/// Renders a standalone Markdown image in Visual Edit by layering the image
+/// presentation on top of an on-demand whole-span source payload editor
+/// (collapsed by default; expand via the hover `</>` control — same chrome
+/// as `visual_math_editor`). A failed image load forces the payload visible
+/// so the destination can be corrected, mirroring invalid math.
+#[allow(clippy::too_many_arguments)]
+fn visual_image_source_editor(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    url: &str,
+    payload: &VisualEditorField,
+    presentation: gpui::AnyElement,
+    document_dir: Option<&Path>,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    let typography = app.typography_metrics();
+    let forced = matches!(
+        app.preview_image_entry(url, document_dir),
+        PreviewImageEntry::Error(_)
+    );
+    // The payload renders above the image so the authored span is right where
+    // the user clicks `</>`; the top padding strip reserves room for the
+    // chrome's top-right source toggle so it never covers source text.
+    let payload_editor = div()
+        .border_b_1()
+        .border_color(rgb(0xe2e8f0))
+        .bg(rgb(0xf8fafc))
+        .pt(px(30.))
+        .px_2()
+        .pb_2()
+        .font(code_slot_font(&app.resolved_font_families.code))
+        .text_size(px(typography.source_island_font_size))
+        .line_height(px(typography.source_island_line_height))
+        .child(visual_editor_field_element(
+            app,
+            block_index,
+            payload,
+            ElementId::from(("visual-image-payload", block.id.as_u64())),
+            None,
+            None,
+            cx,
+        ));
+    visual_collapsible_source_block(
+        app,
+        block.id,
+        payload,
+        forced,
+        false,
+        true,
+        presentation,
+        payload_editor.into_any_element(),
+        cx,
+    )
+}
+
 fn visual_collapsible_source_block(
     app: &MarkionApp,
     block_id: VisualBlockId,
     payload: &VisualEditorField,
     forced: bool,
     bordered: bool,
+    // Render the source payload above the presentation (image blocks) rather
+    // than below it (math, diagrams, HTML).
+    payload_first: bool,
     presentation: gpui::AnyElement,
     payload_editor: gpui::AnyElement,
     cx: &mut Context<MarkionApp>,
@@ -4996,6 +5121,18 @@ fn visual_collapsible_source_block(
         || user_expanded
         || caret_in_payload
         || tab.hovered_visual_source_block == Some(block_id);
+    // Child order: payload-first blocks (images) stack the source editor above
+    // the presentation; every other block stacks it below.
+    let mut children: Vec<gpui::AnyElement> = Vec::with_capacity(2);
+    if payload_first && show_payload {
+        children.push(payload_editor);
+        children.push(presentation);
+    } else {
+        children.push(presentation);
+        if show_payload {
+            children.push(payload_editor);
+        }
+    }
 
     div()
         .id(ElementId::from((
@@ -5031,8 +5168,7 @@ fn visual_collapsible_source_block(
                 app.active_tab_mut().retain_visual_source_expand = Some(block_id);
             }),
         )
-        .child(presentation)
-        .when(show_payload, |chrome| chrome.child(payload_editor))
+        .children(children)
         .when(show_toggle, |chrome| {
             chrome.child(
                 div()
@@ -5660,19 +5796,108 @@ fn code_block_header(
     palette: &CodePalette,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    code_block_header_with_language(
+        app,
+        language,
+        code,
+        palette,
+        CodeHeaderLanguage::Text,
+        cx,
+    )
+}
+
+/// How the rendered block header presents the fence's language token.
+enum CodeHeaderLanguage<'a> {
+    /// No label at all (Visual Edit fences the pointer is not over and whose
+    /// payload does not own the caret).
+    Hidden,
+    /// Static reading label (Read mode / Split Preview).
+    Text,
+    /// Editable chip over the first info-string token, shown while the user
+    /// can act on it (hovered or caret-owned Visual Edit fence).
+    Field(&'a VisualEditorField, usize, VisualBlockId),
+}
+
+/// Header for a rendered code/diagram block. Read and Split Preview keep the
+/// static label; Visual Edit shows either the editable language chip or no
+/// label at all, per [`CodeHeaderLanguage`].
+fn code_block_header_with_language(
+    app: &MarkionApp,
+    language: Option<&str>,
+    code: String,
+    palette: &CodePalette,
+    label: CodeHeaderLanguage<'_>,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
     let typography = app.typography_metrics();
-    div()
-        .mb_2()
-        .flex()
-        .items_center()
-        .justify_between()
-        .child(
+    let mut header = div().mb_2().flex().items_center().justify_between();
+    match label {
+        CodeHeaderLanguage::Hidden => {}
+        CodeHeaderLanguage::Text => {
+            header = header.child(
+                div()
+                    .text_size(px(typography.small_font_size))
+                    .text_color(palette.accent)
+                    .child(language.unwrap_or_default().to_string()),
+            );
+        }
+        CodeHeaderLanguage::Field(info, block_index, block_id) => {
+            header = header.child(code_info_chip(app, info, block_index, block_id, palette, cx));
+        }
+    }
+    header.child(code_copy_button(app, code, palette, cx))
+}
+
+/// Compact, obviously-clickable editable chip for the fence's first info-string
+/// token. A bare fence (empty token) shows the localized placeholder text and
+/// the whole chip moves the caret into the empty insertion range on click.
+fn code_info_chip(
+    app: &MarkionApp,
+    info: &VisualEditorField,
+    block_index: usize,
+    block_id: VisualBlockId,
+    palette: &CodePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    let typography = app.typography_metrics();
+    let token = &app.active_tab().document.text()[info.source_range.clone()];
+    let empty = token.is_empty();
+    let info_start = info.source_range.start;
+    let chip = div()
+        .id(ElementId::from(("visual-code-info-chip", block_id.as_u64())))
+        .debug_selector(move || format!("visual-code-info-chip-{block_index}"))
+        .relative()
+        .min_w(px(44.))
+        .px_2()
+        .py(px(1.))
+        .rounded_sm()
+        .border_1()
+        .border_color(palette.accent)
+        .text_size(px(typography.small_font_size))
+        .cursor(CursorStyle::IBeam)
+        .when(empty, |chip| {
+            chip.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |app, _, _, cx| app.move_to(info_start, cx)),
+            )
+        });
+    if empty {
+        chip.child(
             div()
-                .text_size(px(typography.small_font_size))
-                .text_color(palette.accent)
-                .child(language.unwrap_or_default().to_string()),
+                .text_color(palette.gutter)
+                .child(app.tr(Msg::CodeLanguage)),
         )
-        .child(code_copy_button(app, code, palette, cx))
+    } else {
+        chip.child(visual_editor_field_element(
+            app,
+            block_index,
+            info,
+            ElementId::from(("visual-code-info", block_id.as_u64())),
+            None,
+            None,
+            cx,
+        ))
+    }
 }
 
 fn code_block_view(

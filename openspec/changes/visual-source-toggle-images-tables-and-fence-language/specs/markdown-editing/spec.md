@@ -1,14 +1,14 @@
 ## ADDED Requirements
 
 ### Requirement: On-demand Markdown image source editing in Visual Edit
-Visual Edit SHALL present a block-level Markdown image whose complete authored span can be proven exactly with the same on-demand source affordance used by block math, diagrams, and raw-HTML blocks: collapsed by default (rendered image, read-only caption, and the existing caret-owner presentation controls), with a hover-visible source toggle that expands one monospaced payload editor covering the complete authored span — `![alt](destination "title {width=… align=…}")` — as a single field. Payload edits SHALL use one exact canonical source replacement through the existing source-selection, platform input, IME, history, dirty-state, and multi-tab paths. While the destination cannot be loaded or decoded, the payload editor SHALL remain visible regardless of the toggle state, mirroring the forced-expand rule for invalid math and failed diagrams. Expanding and collapsing SHALL be presentation-only: they MUST NOT mutate document text, dirty state, undo history, document version, or derived Markdown caches.
+Visual Edit SHALL present a block-level Markdown image whose complete authored span can be proven exactly with the same on-demand source affordance used by block math, diagrams, and raw-HTML blocks: collapsed by default (rendered image, read-only caption, and the existing caret-owner presentation controls), with a hover-visible source toggle that expands one monospaced payload editor covering the complete authored span — `![alt](destination "title {width=… align=…}")` — as a single field rendered above the image so the authored span sits directly under the toggle the user clicked. Payload edits SHALL use one exact canonical source replacement through the existing source-selection, platform input, IME, history, dirty-state, and multi-tab paths. While the destination cannot be loaded or decoded, the payload editor SHALL remain visible regardless of the toggle state, mirroring the forced-expand rule for invalid math and failed diagrams. Expanding and collapsing SHALL be presentation-only: they MUST NOT mutate document text, dirty state, undo history, document version, or derived Markdown caches.
 
 Reference-style images, multiline or malformed image syntax, and spans whose exact boundaries cannot be proven MUST keep today's presentation without a source toggle, and no image payload range MAY be guessed. Images inline with prose keep their existing caret-proximity reveal behavior and are not affected by this requirement.
 
 #### Scenario: Toggle expands the complete image syntax as one payload
 
 - **WHEN** Visual Edit shows a block-level `![alt](url "Cap {width=50 align=right}")` and the user activates the hover source toggle
-- **THEN** a monospaced payload editor shows the exact authored span as one editable field
+- **THEN** a monospaced payload editor shows the exact authored span as one editable field above the image
 - **AND** a payload edit applies as one exact canonical source replacement, after which the image, caption, width, and alignment re-derive from the re-parsed source
 
 #### Scenario: Collapse follows the shared affordance rules

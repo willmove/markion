@@ -793,6 +793,7 @@ fn shift_block_editor(editor: &mut VisualBlockEditor, delta: isize) -> Option<()
             opening_fence,
             payload,
             info_range,
+            info,
             closing_fence,
         } => {
             *opening_fence = shift_range(opening_fence, delta)?;
@@ -800,6 +801,7 @@ fn shift_block_editor(editor: &mut VisualBlockEditor, delta: isize) -> Option<()
             if let Some(range) = info_range {
                 *range = shift_range(range, delta)?;
             }
+            shift_editor_field(info, delta)?;
             *closing_fence = shift_range(closing_fence, delta)?;
         }
         VisualBlockEditor::Math {
@@ -816,7 +818,7 @@ fn shift_block_editor(editor: &mut VisualBlockEditor, delta: isize) -> Option<()
                 shift_editor_field(&mut cell.field, delta)?;
             }
         }
-        VisualBlockEditor::Html { payload } => {
+        VisualBlockEditor::Html { payload } | VisualBlockEditor::Image { payload } => {
             shift_editor_field(payload, delta)?;
         }
     }
@@ -1215,6 +1217,7 @@ mod tests {
             opening_fence,
             payload,
             info_range,
+            info,
             closing_fence,
         } = shifted.editor.unwrap()
         else {
@@ -1222,6 +1225,7 @@ mod tests {
         };
         assert_eq!(&document.text()[opening_fence], "```");
         assert_eq!(&document.text()[info_range.unwrap()], "rust extra");
+        assert_eq!(&document.text()[info.source_range], "rust");
         assert_eq!(&document.text()[payload.source_range], "let 名称 = 1;\n");
         assert_eq!(&document.text()[closing_fence], "```");
     }
