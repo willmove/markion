@@ -132,7 +132,10 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemExportPng), ExportPng),
                 MenuItem::action(t(language, Msg::ItemExportJpeg), ExportJpeg),
                 MenuItem::separator(),
-                MenuItem::action(t(language, Msg::ItemOrganizeLocalImages), OrganizeLocalImages),
+                MenuItem::action(
+                    t(language, Msg::ItemOrganizeLocalImages),
+                    OrganizeLocalImages,
+                ),
                 MenuItem::action(t(language, Msg::ItemPublishWechat), PublishWechat),
             ],
         },

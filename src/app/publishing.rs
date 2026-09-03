@@ -109,12 +109,7 @@ impl MarkionApp {
         cx: &mut Context<Self>,
     ) {
         self.active_menu = None;
-        let Some(document_path) = self
-            .active_tab()
-            .document
-            .path()
-            .map(Path::to_path_buf)
-        else {
+        let Some(document_path) = self.active_tab().document.path().map(Path::to_path_buf) else {
             self.status = self.tr(Msg::StatusOrganizeRequiresSave).into();
             cx.notify();
             return;

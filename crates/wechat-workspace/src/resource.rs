@@ -189,9 +189,7 @@ mod tests {
         ));
         // An in-root candidate keeps working even when the authored URL
         // escapes lexically and comes back.
-        assert!(
-            PublishingResource::from_path("../note.assets/sample.PNG", &root, &image).is_ok()
-        );
+        assert!(PublishingResource::from_path("../note.assets/sample.PNG", &root, &image).is_ok());
         assert!(matches!(
             PublishingResource::from_path("C:\\outside.png", &root, &image),
             Err(ResourceError::InvalidReference)
@@ -275,10 +273,7 @@ mod tests {
         fs::remove_file(&original).unwrap();
         symlink(&outside, &original).unwrap();
 
-        assert!(matches!(
-            resource.read(),
-            Err(ResourceError::OutsideScope)
-        ));
+        assert!(matches!(resource.read(), Err(ResourceError::OutsideScope)));
     }
 
     #[cfg(windows)]
@@ -303,9 +298,6 @@ mod tests {
             }
             panic!("creating test symlink failed: {error}");
         }
-        assert!(matches!(
-            resource.read(),
-            Err(ResourceError::OutsideScope)
-        ));
+        assert!(matches!(resource.read(), Err(ResourceError::OutsideScope)));
     }
 }

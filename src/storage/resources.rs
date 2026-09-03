@@ -45,7 +45,10 @@ pub fn organize_candidates(
     for reference in references {
         let reference = reference.as_ref();
         if !is_local_reference(reference)
-            || reference.trim_start().to_ascii_lowercase().starts_with("file:")
+            || reference
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("file:")
         {
             continue;
         }
