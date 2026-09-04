@@ -180,11 +180,36 @@ impl FileTree {
         new_parent: impl AsRef<Path>,
     ) -> io::Result<PathBuf> {
         let path = path.as_ref();
+        ensure_existing_path_within_root(&self.root, path)?;
+        let dest_parent = new_parent.as_ref();
+        ensure_destination_parent_within_root(&self.root, dest_parent)?;
+
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
-        let new_path = unique_child_path(new_parent.as_ref(), name);
+
+        let source = path.canonicalize()?;
+        let dest_parent_canon = dest_parent.canonicalize()?;
+        if dest_parent_canon == source || dest_parent_canon.starts_with(&source) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot move a folder into itself or a descendant",
+            ));
+        }
+
+        let new_path = dest_parent.join(name);
+        if new_path.exists() {
+            let existing = new_path.canonicalize().unwrap_or_else(|_| new_path.clone());
+            if existing == source {
+                return Ok(path.to_path_buf());
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "destination already exists",
+            ));
+        }
+
         fs::rename(path, &new_path)?;
         self.refresh()?;
         Ok(new_path)
@@ -292,6 +317,31 @@ fn ensure_existing_path_within_root(root: &Path, path: &Path) -> io::Result<()> 
         ));
     }
     Ok(())
+}
+
+/// Destination parent of a move: the workspace root itself, or a directory
+/// inside it. Unlike [`ensure_existing_path_within_root`], the root is allowed.
+fn ensure_destination_parent_within_root(root: &Path, parent: &Path) -> io::Result<()> {
+    let root = root.canonicalize()?;
+    let parent = parent.canonicalize()?;
+    if parent != root && !parent.starts_with(&root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "parent is outside the file tree root",
+        ));
+    }
+    if !parent.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "destination is not a directory",
+        ));
+    }
+    Ok(())
+}
+
+/// Path of `path` relative to `root`, or `None` when `path` is not under `root`.
+pub fn workspace_relative_path(root: &Path, path: &Path) -> Option<PathBuf> {
+    path.strip_prefix(root).ok().map(Path::to_path_buf)
 }
 
 /// Recursively collects Markdown and curated plain-text files, plus the
@@ -944,5 +994,109 @@ mod tests {
         assert!(!opened.iter().any(|p| p == &txt));
         assert!(!opened.iter().any(|p| p == &csv));
         assert!(!opened.iter().any(|p| p == &folder));
+    }
+
+    #[test]
+    fn workspace_relative_path_strips_root_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let nested = root.join("notes").join("daily.md");
+        assert_eq!(
+            workspace_relative_path(root, &nested),
+            Some(PathBuf::from("notes").join("daily.md"))
+        );
+        assert!(workspace_relative_path(root, Path::new("/not-in-workspace.md")).is_none());
+    }
+
+    #[test]
+    fn move_entry_moves_file_into_another_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "notes/daily.md", "# Daily");
+        fs::create_dir(root.join("archive")).unwrap();
+
+        let mut tree = FileTree::scan(root).unwrap();
+        let source = root.join("notes").join("daily.md");
+        let moved = tree.move_entry(&source, &root.join("archive")).unwrap();
+
+        assert_eq!(moved, root.join("archive").join("daily.md"));
+        assert!(moved.exists());
+        assert!(!source.exists());
+        assert!(tree.entries.iter().any(|e| e.path == moved));
+        assert!(!tree.entries.iter().any(|e| e.path == source));
+    }
+
+    #[test]
+    fn move_entry_same_parent_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "notes/daily.md", "# Daily");
+        let source = root.join("notes").join("daily.md");
+
+        let mut tree = FileTree::scan(root).unwrap();
+        let result = tree.move_entry(&source, &root.join("notes")).unwrap();
+
+        assert_eq!(result, source);
+        assert!(source.exists());
+    }
+
+    #[test]
+    fn move_entry_refuses_name_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "notes/daily.md", "# Notes");
+        write(root, "archive/daily.md", "# Archive");
+
+        let mut tree = FileTree::scan(root).unwrap();
+        let source = root.join("notes").join("daily.md");
+        let err = tree
+            .move_entry(&source, &root.join("archive"))
+            .expect_err("same-name child must fail");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(source.exists());
+        assert_eq!(fs::read_to_string(&source).unwrap(), "# Notes");
+    }
+
+    #[test]
+    fn move_entry_refuses_folder_into_itself_or_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "docs/guide.md", "# Guide");
+        fs::create_dir(root.join("docs").join("inner")).unwrap();
+        let docs = root.join("docs");
+
+        let mut tree = FileTree::scan(root).unwrap();
+        assert_eq!(
+            tree.move_entry(&docs, &docs).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            tree.move_entry(&docs, &docs.join("inner"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(docs.exists());
+    }
+
+    #[test]
+    fn move_entry_refuses_paths_outside_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "keep.md", "# Keep");
+        let mut tree = FileTree::scan(root).unwrap();
+
+        let outside = std::env::temp_dir().join("markion-move-guard-probe.md");
+        fs::write(&outside, "probe").unwrap();
+        let source_err = tree.move_entry(&outside, root);
+        let dest_dir = std::env::temp_dir().join("markion-move-guard-dest");
+        let _ = fs::create_dir(&dest_dir);
+        let dest_err = tree.move_entry(&root.join("keep.md"), &dest_dir);
+        let _ = fs::remove_file(&outside);
+        let _ = fs::remove_dir(&dest_dir);
+
+        assert!(source_err.is_err());
+        assert!(dest_err.is_err());
+        assert!(root.join("keep.md").exists());
     }
 }

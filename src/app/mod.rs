@@ -14,17 +14,17 @@ use std::{
 
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, ClickEvent, ClipboardEntry, ClipboardItem, Context, CursorStyle,
-    DefiniteLength, DispatchPhase, Div, DragMoveEvent, Element, ElementId, ElementInputHandler,
-    Empty, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable, Font, FontFallbacks,
-    FontFeatures, FontStyle, FontWeight, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior,
-    ImageFormat, ImageSource, KeyBinding, KeyDownEvent, LayoutId, ListAlignment, ListState, Menu,
-    MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, RenderImage, Rgba, ScrollHandle,
-    SharedString, Size, Stateful, StrikethroughStyle, Style, StyledText, Subscription, TextLayout,
-    TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window, WindowBounds,
-    WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, font, img, list, point, px,
-    rgb, rgba, size,
+    AnyElement, App, Application, Bounds, ClickEvent, ClipboardEntry, ClipboardItem, Context,
+    CursorStyle, DefiniteLength, DispatchPhase, Div, DragMoveEvent, Element, ElementId,
+    ElementInputHandler, Empty, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable,
+    Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GlobalElementId, HighlightStyle,
+    Hitbox, HitboxBehavior, ImageFormat, ImageSource, KeyBinding, KeyDownEvent, LayoutId,
+    ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel,
+    RenderImage, Rgba, ScrollHandle, SharedString, Size, Stateful, StrikethroughStyle, Style,
+    StyledText, Subscription, TextLayout, TextRun, Timer, TitlebarOptions, UTF16Selection,
+    UnderlineStyle, Window, WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas,
+    div, fill, font, img, list, point, px, rgb, rgba, size,
 };
 use markion::{
     AlertKind, AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement,
@@ -63,6 +63,7 @@ use markion::{
     save_session_state, save_text_snapshot, save_theme_definition, serialize_inline_image,
     serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
     t, table_column_flex_weights, tf, title_from_path, transform_block, validate_block_target,
+    workspace_relative_path,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -200,6 +201,7 @@ fn kenhuang_markdown_tutorial_url(language: Language) -> &'static str {
 enum AboutLink {
     ProjectWebsite,
     GithubRepository,
+    GithubStar,
 }
 
 impl AboutLink {
@@ -209,13 +211,14 @@ impl AboutLink {
         match self {
             Self::ProjectWebsite => Msg::DialogAboutProjectWebsite,
             Self::GithubRepository => Msg::DialogAboutGithub,
+            Self::GithubStar => Msg::DialogAboutStarLink,
         }
     }
 
     const fn url(self) -> &'static str {
         match self {
             Self::ProjectWebsite => MARKION_PROJECT_WEBSITE_URL,
-            Self::GithubRepository => GITHUB_REPO_URL,
+            Self::GithubRepository | Self::GithubStar => GITHUB_REPO_URL,
         }
     }
 
@@ -223,6 +226,7 @@ impl AboutLink {
         match self {
             Self::ProjectWebsite => "about-project-website-row",
             Self::GithubRepository => "about-github-row",
+            Self::GithubStar => "about-github-star-row",
         }
     }
 
@@ -230,6 +234,7 @@ impl AboutLink {
         match self {
             Self::ProjectWebsite => "about-project-website-link",
             Self::GithubRepository => "about-github-link",
+            Self::GithubStar => "about-github-star-link",
         }
     }
 }
@@ -914,6 +919,8 @@ enum FileTreeContextAction {
     Rename,
     Delete,
     ShowInFileManager,
+    CopyPath,
+    CopyRelativePath,
     Refresh,
     FilterFiles,
 }
@@ -924,6 +931,8 @@ const FILE_TREE_FILE_CONTEXT_ACTIONS: &[FileTreeContextAction] = &[
     FileTreeContextAction::Rename,
     FileTreeContextAction::Delete,
     FileTreeContextAction::ShowInFileManager,
+    FileTreeContextAction::CopyPath,
+    FileTreeContextAction::CopyRelativePath,
     FileTreeContextAction::Refresh,
 ];
 
@@ -933,6 +942,8 @@ const FILE_TREE_DIRECTORY_CONTEXT_ACTIONS: &[FileTreeContextAction] = &[
     FileTreeContextAction::Rename,
     FileTreeContextAction::Delete,
     FileTreeContextAction::ShowInFileManager,
+    FileTreeContextAction::CopyPath,
+    FileTreeContextAction::CopyRelativePath,
     FileTreeContextAction::Refresh,
 ];
 
@@ -961,6 +972,8 @@ fn file_tree_context_action_label(action: FileTreeContextAction) -> Msg {
         FileTreeContextAction::Rename => Msg::FileTreeContextRename,
         FileTreeContextAction::Delete => Msg::FileTreeContextDelete,
         FileTreeContextAction::ShowInFileManager => Msg::FileTreeContextShowInFileManager,
+        FileTreeContextAction::CopyPath => Msg::FileTreeContextCopyPath,
+        FileTreeContextAction::CopyRelativePath => Msg::FileTreeContextCopyRelativePath,
         FileTreeContextAction::Refresh => Msg::FileTreeContextRefresh,
         FileTreeContextAction::FilterFiles => Msg::FileTreeContextFilterFiles,
     }
@@ -1798,6 +1811,49 @@ struct DraggedVisualBlock {
     target: BlockTarget,
 }
 
+#[derive(Debug, Clone)]
+struct DraggedFileTreeEntry {
+    path: PathBuf,
+    #[allow(dead_code)]
+    kind: FileTreeEntryKind,
+}
+
+/// Resolve a hovered tree row to the folder a drop would move into.
+/// Folder rows are themselves the destination; file rows use their parent.
+fn file_tree_drop_parent_for_target(path: &Path, kind: FileTreeEntryKind) -> PathBuf {
+    match kind {
+        FileTreeEntryKind::Directory => path.to_path_buf(),
+        FileTreeEntryKind::File => path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| path.to_path_buf()),
+    }
+}
+
+fn file_tree_drop_into_is_actionable(source: &Path, dest_parent: &Path) -> bool {
+    let source = comparable_document_path(source);
+    let dest_parent = comparable_document_path(dest_parent);
+    if dest_parent == source || dest_parent.starts_with(&source) {
+        return false;
+    }
+    match source.parent() {
+        Some(parent) if comparable_document_path(parent) == dest_parent => false,
+        _ => true,
+    }
+}
+
+fn remap_path_after_move(old: &Path, source: &Path, new_source: &Path) -> Option<PathBuf> {
+    let old = comparable_document_path(old);
+    let source = comparable_document_path(source);
+    let new_source = comparable_document_path(new_source);
+    if old == source {
+        return Some(new_source);
+    }
+    old.strip_prefix(&source)
+        .ok()
+        .map(|relative| new_source.join(relative))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PaneScrollTarget {
     Editor,
@@ -2256,6 +2312,9 @@ struct MarkionApp {
     ime_input_target: Option<(DocumentInstanceId, u64)>,
     selected_tree_path: Option<PathBuf>,
     collapsed_tree_paths: HashSet<PathBuf>,
+    /// True between the start of an in-tree row drag and the mouse-up that
+    /// consumes it, so that mouse-up does not also open a file or toggle a folder.
+    file_tree_drag_active: bool,
     /// Set when a replacement workspace root still needs its first successful
     /// scan to seed the one-level default tree view.
     file_tree_needs_initial_collapse: bool,

@@ -443,6 +443,30 @@ The Help menu SHALL offer a "Report an Issue" item and an "Online Documentation"
 - **WHEN** the interface language is switched
 - **THEN** both external-link item labels re-render in the new language in the in-window menu bar and in the reinstalled native menu bar
 
+### Requirement: About Markion dialog invites a GitHub star
+
+The About Markion dialog SHALL show a short localized invitation after the product description asking users who find Markion useful to star the project, followed immediately by a clickable GitHub link targeting `https://github.com/willmove/markion`. The invitation SHALL NOT replace the existing title, version, product description, project-website link, GitHub repository link, or confirmation control. The star link SHALL be visually identifiable as an interactive link; pointer activation SHALL open that exact HTTPS destination in the system default browser through the platform shell. Link activation SHALL NOT render embedded web content, stop the application, or dismiss the About dialog. User-facing invitation and star-link labels SHALL follow the active interface language; the literal repository URL SHALL remain unchanged and SHALL be displayed verbatim.
+
+#### Scenario: About dialog shows the star invitation above the official project links
+
+- **WHEN** the user opens About Markion from either Help-menu surface
+- **THEN** the dialog shows the product description, then a localized star invitation, then a GitHub star link targeting `https://github.com/willmove/markion`
+- **AND** the existing project-website and GitHub repository links remain below that star link
+- **AND** the star URL is visually identifiable as an interactive link
+
+#### Scenario: Star link opens the repository in the system browser
+
+- **WHEN** the user activates the GitHub star link in the About dialog
+- **THEN** the system default browser opens exactly `https://github.com/willmove/markion`
+- **AND** Markion renders no embedded web content and continues running
+- **AND** the About dialog remains open until the user explicitly dismisses it
+
+#### Scenario: Star invitation follows the active language
+
+- **WHEN** the About dialog is opened after the interface language changes
+- **THEN** the star invitation and star-link label render in the active language
+- **AND** the star-link HTTPS URL is displayed verbatim rather than translated
+
 ### Requirement: File paths SHALL be presented and persisted in platform-normal form
 
 File paths shown to the user, written to the clipboard, or persisted in session state SHALL be in platform-normal form — on Windows, drive-rooted paths SHALL NOT carry the extended-length verbatim prefix (`\\?\`), and network paths SHALL NOT carry the `\\?\UNC\` form (they use `\\server\share\...`). Paths attached to opened content (document tabs, image tabs), the workspace root, file-tree entries, and recent-files entries SHALL all be in normal form, so that any surface reading them — copy actions, status feedback, reveal-in-file-manager, session persistence — presents the normal form. A path that genuinely requires the extended-length syntax (e.g. longer than the classic Windows path limit) MAY retain the verbatim form, since correct file access takes precedence over cosmetic presentation.

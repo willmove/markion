@@ -742,7 +742,7 @@ impl Render for MarkionApp {
 }
 
 /// Root-hosted About Markion modal. The platform prompt detail is plain text,
-/// so this purpose-built surface owns the two interactive external-link rows.
+/// so this purpose-built surface owns the interactive external-link rows.
 pub(super) fn about_dialog_view(
     app: &MarkionApp,
     cx: &mut Context<MarkionApp>,
@@ -753,7 +753,12 @@ pub(super) fn about_dialog_view(
         Msg::DialogAboutVersion,
         &[env!("CARGO_PKG_VERSION")],
     );
-    let mut links = div().flex().flex_col().gap_2();
+    let mut links = div().flex().flex_col().gap_2().child(about_link_row(
+        app,
+        AboutLink::GithubStar,
+        palette,
+        cx,
+    ));
     for link in AboutLink::ALL {
         links = links.child(about_link_row(app, link, palette, cx));
     }
@@ -812,6 +817,13 @@ pub(super) fn about_dialog_view(
                                 .debug_selector(|| "about-dialog-description".to_string())
                                 .text_size(px(14.))
                                 .child(app.tr(Msg::DialogAboutDescription)),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "about-dialog-star-invite".to_string())
+                                .text_size(px(14.))
+                                .text_color(palette.muted)
+                                .child(app.tr(Msg::DialogAboutStarInvite)),
                         ),
                 )
                 .child(links)
@@ -2319,6 +2331,21 @@ fn name_editor_fallback_row_view(
     name_editor_row_view(app, cx, 0, icon_kind, tree_content_width)
 }
 
+struct FileTreeDragPreview {
+    name: String,
+}
+
+impl Render for FileTreeDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py(px(1.))
+            .rounded_md()
+            .text_size(px(12.))
+            .child(self.name.clone())
+    }
+}
+
 /// Build the visible tree rows, interleaving the inline name editor in place of
 /// the renamed row (rename) or directly after the parent folder row (create).
 fn file_tree_rows(
@@ -2328,11 +2355,12 @@ fn file_tree_rows(
     active_path: &Option<PathBuf>,
     selected_path: &Option<PathBuf>,
     tree_content_width: f32,
-) -> Vec<Div> {
+) -> Vec<AnyElement> {
     let palette = app.palette();
     let app_entity = cx.entity();
     let pending = app.pending_name_input.as_ref();
-    let mut rows: Vec<Div> = Vec::with_capacity(entries.len() + 1);
+    let drag_enabled = pending.is_none();
+    let mut rows: Vec<AnyElement> = Vec::with_capacity(entries.len() + 1);
 
     for entry in entries {
         let is_rename_target = pending.map_or(false, |p| {
@@ -2341,25 +2369,26 @@ fn file_tree_rows(
         if is_rename_target {
             let icon_kind =
                 crate::ui::icon::icon_for(&entry.path, entry.kind == FileTreeEntryKind::Directory);
-            rows.push(name_editor_row_view(
-                app,
-                cx,
-                entry.depth,
-                icon_kind,
-                tree_content_width,
-            ));
+            rows.push(
+                name_editor_row_view(app, cx, entry.depth, icon_kind, tree_content_width)
+                    .into_any_element(),
+            );
             continue;
         }
 
-        rows.push(file_tree_entry_row(
-            &app_entity,
-            &palette,
-            entry,
-            active_path,
-            selected_path,
-            &app.collapsed_tree_paths,
-            tree_content_width,
-        ));
+        rows.push(
+            file_tree_entry_row(
+                &app_entity,
+                &palette,
+                entry,
+                active_path,
+                selected_path,
+                &app.collapsed_tree_paths,
+                tree_content_width,
+                drag_enabled,
+            )
+            .into_any_element(),
+        );
 
         // Place the create editor directly after the parent folder row.
         let create_here = pending.map_or(false, |p| {
@@ -2374,13 +2403,10 @@ fn file_tree_rows(
                 PendingNameKind::CreateFolder => IconKind::Folder,
                 _ => crate::ui::icon::icon_for(&pending.parent.join(&pending.buffer), false),
             };
-            rows.push(name_editor_row_view(
-                app,
-                cx,
-                entry.depth + 1,
-                icon_kind,
-                tree_content_width,
-            ));
+            rows.push(
+                name_editor_row_view(app, cx, entry.depth + 1, icon_kind, tree_content_width)
+                    .into_any_element(),
+            );
         }
     }
 
@@ -2399,11 +2425,19 @@ fn file_tree_entry_row(
     selected_path: &Option<PathBuf>,
     collapsed_tree_paths: &HashSet<PathBuf>,
     tree_content_width: f32,
-) -> Div {
+    drag_enabled: bool,
+) -> Stateful<Div> {
     let left_app_entity = app_entity.clone();
     let right_app_entity = app_entity.clone();
-    let path = entry.path.clone();
+    let drag_app_entity = app_entity.clone();
+    let drop_app_entity = app_entity.clone();
+    let click_path = entry.path.clone();
+    let dest_parent = file_tree_drop_parent_for_target(&entry.path, entry.kind);
+    let dest_path = dest_parent.clone();
+    let drop_path = dest_parent;
+    let drag_path = entry.path.clone();
     let entry_kind = entry.kind;
+    let preview_name = entry.name.clone();
     let context_target = match entry.kind {
         FileTreeEntryKind::Directory => FileTreeContextTarget::Directory(entry.path.clone()),
         FileTreeEntryKind::File => FileTreeContextTarget::File(entry.path.clone()),
@@ -2429,8 +2463,11 @@ fn file_tree_entry_row(
     } else {
         palette.muted
     };
+    let drop_highlight = palette.active_bg;
+    let row_id = entry.path.to_string_lossy().into_owned();
 
     div()
+        .id(SharedString::from(format!("file-tree-row:{row_id}")))
         .mb(px(0.))
         .ml(px(entry.depth as f32 * 12.))
         .w_full()
@@ -2470,6 +2507,40 @@ fn file_tree_entry_row(
                         .child(entry.name.clone()),
                 ),
         )
+        .when(drag_enabled, |row| {
+            row.on_drag(
+                DraggedFileTreeEntry {
+                    path: drag_path,
+                    kind: entry_kind,
+                },
+                move |_, _, _, cx| {
+                    drag_app_entity.update(cx, |app, cx| app.begin_file_tree_drag(cx));
+                    cx.new(|_| FileTreeDragPreview {
+                        name: preview_name.clone(),
+                    })
+                },
+            )
+        })
+        .can_drop({
+            let dest = drop_path.clone();
+            move |value, _, _| {
+                value
+                    .downcast_ref::<DraggedFileTreeEntry>()
+                    .is_some_and(|dragged| file_tree_drop_into_is_actionable(&dragged.path, &dest))
+            }
+        })
+        .drag_over::<DraggedFileTreeEntry>(move |style, dragged, _, _| {
+            if file_tree_drop_into_is_actionable(&dragged.path, &drop_path) {
+                style.bg(drop_highlight)
+            } else {
+                style
+            }
+        })
+        .on_drop::<DraggedFileTreeEntry>(move |dragged, _, cx| {
+            drop_app_entity.update(cx, |app, cx| {
+                app.handle_file_tree_drop(&dragged.path, &dest_path, cx);
+            });
+        })
         .on_mouse_up(MouseButton::Left, move |event, window, cx| {
             // A click that click-away-committed the inline name editor — or
             // one made while it is still open (a refused commit leaves it
@@ -2488,32 +2559,10 @@ fn file_tree_entry_row(
             }
             let focus_handle = left_app_entity.read(cx).focus_handle.clone();
             window.focus(&focus_handle);
-            let path = path.clone();
+            let click_path = click_path.clone();
             let force_new_tab = event.modifiers.secondary();
             left_app_entity.update(cx, |app, cx| {
-                app.selected_tree_path = Some(path.clone());
-                app.file_tree_query_focused = false;
-                app.input_marked_len = 0;
-                match entry_kind {
-                    FileTreeEntryKind::File if clickable => {
-                        if force_new_tab {
-                            app.open_file_in_new_tab_from_path(path, cx);
-                        } else {
-                            app.open_tree_file(path, window, cx);
-                        }
-                    }
-                    FileTreeEntryKind::Directory => {
-                        if let Some(tree) = &app.file_tree {
-                            toggle_tree_folder(&path, tree, &mut app.collapsed_tree_paths);
-                        }
-                        app.status = t(app.language, Msg::StatusSelectedTreeEntry).into();
-                        cx.notify();
-                    }
-                    FileTreeEntryKind::File => {
-                        app.status = t(app.language, Msg::StatusSelectedTreeEntry).into();
-                        cx.notify();
-                    }
-                }
+                app.handle_file_tree_row_left_up(click_path, entry_kind, force_new_tab, window, cx);
             });
         })
         .on_mouse_up(MouseButton::Right, {
@@ -2574,6 +2623,12 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
     let hidden_entries = total_entries.saturating_sub(entries.len());
     let tree_content_width = file_tree_content_width(&entries);
     let background_app_entity = app_entity.clone();
+    let header_drop_entity = app_entity.clone();
+    let pad_drop_entity = app_entity.clone();
+    let drop_highlight = palette.active_bg;
+    let workspace_root = app.workspace_root.clone();
+    let header_root = workspace_root.clone();
+    let pad_root = workspace_root.clone();
     let root_label = app
         .workspace_root
         .file_name()
@@ -2590,9 +2645,32 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
         // subheading so users still know which directory they are browsing.
         .child(
             div()
+                .id("file-tree-workspace-root")
                 .mb_2()
                 .text_size(px(12.))
                 .text_color(palette.muted)
+                .can_drop({
+                    let dest = header_root.clone();
+                    move |value, _, _| {
+                        value
+                            .downcast_ref::<DraggedFileTreeEntry>()
+                            .is_some_and(|dragged| {
+                                file_tree_drop_into_is_actionable(&dragged.path, &dest)
+                            })
+                    }
+                })
+                .drag_over::<DraggedFileTreeEntry>(move |style, dragged, _, _| {
+                    if file_tree_drop_into_is_actionable(&dragged.path, &header_root) {
+                        style.bg(drop_highlight)
+                    } else {
+                        style
+                    }
+                })
+                .on_drop::<DraggedFileTreeEntry>(move |dragged, _, cx| {
+                    header_drop_entity.update(cx, |app, cx| {
+                        app.handle_file_tree_drop(&dragged.path, &app.workspace_root.clone(), cx);
+                    });
+                })
                 .child(root_label),
         )
         // Inline name editor for create/rename. When the target row is among
@@ -2634,6 +2712,42 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                             &selected_path,
                             tree_content_width,
                         ))
+                        .child(
+                            div()
+                                .id("file-tree-workspace-drop-pad")
+                                .flex_1()
+                                .min_h(px(32.))
+                                .w_full()
+                                .can_drop({
+                                    let dest = pad_root.clone();
+                                    move |value, _, _| {
+                                        value.downcast_ref::<DraggedFileTreeEntry>().is_some_and(
+                                            |dragged| {
+                                                file_tree_drop_into_is_actionable(
+                                                    &dragged.path,
+                                                    &dest,
+                                                )
+                                            },
+                                        )
+                                    }
+                                })
+                                .drag_over::<DraggedFileTreeEntry>(move |style, dragged, _, _| {
+                                    if file_tree_drop_into_is_actionable(&dragged.path, &pad_root) {
+                                        style.bg(drop_highlight)
+                                    } else {
+                                        style
+                                    }
+                                })
+                                .on_drop::<DraggedFileTreeEntry>(move |dragged, _, cx| {
+                                    pad_drop_entity.update(cx, |app, cx| {
+                                        app.handle_file_tree_drop(
+                                            &dragged.path,
+                                            &app.workspace_root.clone(),
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        )
                         .children((hidden_entries > 0).then(|| {
                             div()
                                 .mt_1()

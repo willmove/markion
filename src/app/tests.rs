@@ -2061,6 +2061,8 @@ fn file_tree_context_actions_are_scoped_by_target_kind() {
             FileTreeContextAction::Rename,
             FileTreeContextAction::Delete,
             FileTreeContextAction::ShowInFileManager,
+            FileTreeContextAction::CopyPath,
+            FileTreeContextAction::CopyRelativePath,
             FileTreeContextAction::Refresh,
         ]
     );
@@ -2072,6 +2074,8 @@ fn file_tree_context_actions_are_scoped_by_target_kind() {
             FileTreeContextAction::Rename,
             FileTreeContextAction::Delete,
             FileTreeContextAction::ShowInFileManager,
+            FileTreeContextAction::CopyPath,
+            FileTreeContextAction::CopyRelativePath,
             FileTreeContextAction::Refresh,
         ]
     );
@@ -2084,6 +2088,73 @@ fn file_tree_context_actions_are_scoped_by_target_kind() {
             FileTreeContextAction::ShowInFileManager,
             FileTreeContextAction::FilterFiles,
         ]
+    );
+}
+
+#[test]
+fn file_tree_drop_into_is_actionable_rejects_self_descendant_and_same_parent() {
+    let source = PathBuf::from("/ws/notes/daily.md");
+    let notes = PathBuf::from("/ws/notes");
+    let archive = PathBuf::from("/ws/archive");
+    let docs = PathBuf::from("/ws/docs");
+    let inner = PathBuf::from("/ws/docs/inner");
+    assert!(!file_tree_drop_into_is_actionable(&source, &notes));
+    assert!(file_tree_drop_into_is_actionable(&source, &archive));
+    assert!(!file_tree_drop_into_is_actionable(&docs, &docs));
+    assert!(!file_tree_drop_into_is_actionable(&docs, &inner));
+    assert!(file_tree_drop_into_is_actionable(&docs, &archive));
+}
+
+#[test]
+fn file_tree_drop_parent_for_target_uses_file_parent_and_folder_self() {
+    let file = PathBuf::from("/ws/archive/keep.md");
+    assert_eq!(
+        file_tree_drop_parent_for_target(&file, FileTreeEntryKind::File),
+        PathBuf::from("/ws/archive")
+    );
+    let folder = PathBuf::from("/ws/archive");
+    assert_eq!(
+        file_tree_drop_parent_for_target(&folder, FileTreeEntryKind::Directory),
+        folder
+    );
+}
+
+#[test]
+fn file_tree_drop_onto_file_row_resolves_to_parent_folder() {
+    let source = PathBuf::from("/ws/notes/daily.md");
+    let keep = PathBuf::from("/ws/archive/keep.md");
+    let sibling = PathBuf::from("/ws/notes/other.md");
+    let docs = PathBuf::from("/ws/docs");
+    let nested = PathBuf::from("/ws/docs/inner/a.md");
+    assert!(file_tree_drop_into_is_actionable(
+        &source,
+        &file_tree_drop_parent_for_target(&keep, FileTreeEntryKind::File)
+    ));
+    assert!(!file_tree_drop_into_is_actionable(
+        &source,
+        &file_tree_drop_parent_for_target(&sibling, FileTreeEntryKind::File)
+    ));
+    assert!(!file_tree_drop_into_is_actionable(
+        &docs,
+        &file_tree_drop_parent_for_target(&nested, FileTreeEntryKind::File)
+    ));
+}
+
+#[test]
+fn remap_path_after_move_rewrites_source_and_descendants() {
+    let source = PathBuf::from("/ws/docs");
+    let new_source = PathBuf::from("/ws/archive/docs");
+    assert_eq!(
+        remap_path_after_move(&source, &source, &new_source),
+        Some(new_source.clone())
+    );
+    assert_eq!(
+        remap_path_after_move(&source.join("guide.md"), &source, &new_source),
+        Some(new_source.join("guide.md"))
+    );
+    assert_eq!(
+        remap_path_after_move(Path::new("/ws/other.md"), &source, &new_source),
+        None
     );
 }
 
@@ -3131,6 +3202,15 @@ fn about_dialog_opens_exact_ordered_links_and_closes_only_on_confirmation(cx: &m
         assert_eq!(app.status, t(app.language, Msg::StatusAboutMarkion));
     });
 
+    let description = cx
+        .debug_bounds("about-dialog-description")
+        .expect("product description should render");
+    let invite = cx
+        .debug_bounds("about-dialog-star-invite")
+        .expect("GitHub star invitation should render");
+    let star = cx
+        .debug_bounds(AboutLink::GithubStar.link_selector())
+        .expect("GitHub star link should render");
     let website = cx
         .debug_bounds(AboutLink::ProjectWebsite.link_selector())
         .expect("project website link should render");
@@ -3138,9 +3218,26 @@ fn about_dialog_opens_exact_ordered_links_and_closes_only_on_confirmation(cx: &m
         .debug_bounds(AboutLink::GithubRepository.link_selector())
         .expect("GitHub link should render");
     assert!(
+        description.center().y < invite.center().y,
+        "star invitation must render below the product description"
+    );
+    assert!(
+        invite.center().y < star.center().y,
+        "GitHub star link must render below the invitation"
+    );
+    assert!(
+        star.center().y < website.center().y,
+        "official project links must render below the GitHub star link"
+    );
+    assert!(
         website.center().y < github.center().y,
         "project website link must render above GitHub"
     );
+
+    cx.simulate_click(star.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.opened_url().as_deref(), Some(GITHUB_REPO_URL));
+    app.update(cx, |app, _| assert!(app.about_dialog_open));
 
     cx.simulate_click(website.center(), Modifiers::none());
     cx.run_until_parked();
@@ -3169,6 +3266,8 @@ fn about_dialog_link_model_and_messages_cover_every_supported_language() {
         AboutLink::ALL.map(AboutLink::url),
         [MARKION_PROJECT_WEBSITE_URL, GITHUB_REPO_URL]
     );
+    assert_eq!(AboutLink::GithubStar.url(), GITHUB_REPO_URL);
+    assert_eq!(AboutLink::GithubStar.label(), Msg::DialogAboutStarLink);
 
     for &language in Language::all() {
         let version = tf(language, Msg::DialogAboutVersion, &["1.2.3"]);
@@ -3181,6 +3280,8 @@ fn about_dialog_link_model_and_messages_cover_every_supported_language() {
             Msg::DialogAboutDescription,
             Msg::DialogAboutProjectWebsite,
             Msg::DialogAboutGithub,
+            Msg::DialogAboutStarInvite,
+            Msg::DialogAboutStarLink,
             Msg::DialogButtonOk,
         ] {
             assert!(
@@ -3188,10 +3289,19 @@ fn about_dialog_link_model_and_messages_cover_every_supported_language() {
                 "empty About label {msg:?} for {language:?}"
             );
         }
+        assert!(
+            t(language, Msg::DialogAboutStarInvite).contains("Star"),
+            "star invitation must keep the GitHub term Star for {language:?}"
+        );
+        assert!(
+            t(language, Msg::DialogAboutStarLink).contains("Star"),
+            "star-link label must keep the GitHub term Star for {language:?}"
+        );
         for link in AboutLink::ALL {
             assert!(!t(language, link.label()).trim().is_empty());
             assert!(link.url().starts_with("https://"));
         }
+        assert!(!t(language, AboutLink::GithubStar.label()).trim().is_empty());
     }
 }
 
@@ -3219,6 +3329,9 @@ fn about_dialog_renders_with_readable_theme_derived_chrome(cx: &mut TestAppConte
             "about-dialog-title",
             "about-dialog-version",
             "about-dialog-description",
+            "about-dialog-star-invite",
+            "about-github-star-row",
+            "about-github-star-link",
             "about-project-website-row",
             "about-project-website-link",
             "about-github-row",
@@ -15719,6 +15832,228 @@ fn tab_context_copy_path_reports_status_and_skips_untitled(cx: &mut TestAppConte
     app.update(cx, |app, _| {
         assert_eq!(app.status, status_before);
         assert!(app.tab_context_menu.is_none());
+    });
+}
+
+#[gpui::test]
+fn file_tree_copy_path_and_relative_path_report_status(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let path = root.join("notes.md");
+    fs::write(&path, "plain").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_file_tree_context_menu(
+                FileTreeContextTarget::File(path.clone()),
+                Point::new(px(10.), px(10.)),
+                cx,
+            );
+            app.handle_file_tree_context_action(FileTreeContextAction::CopyPath, window, cx);
+        });
+    });
+    let expected_abs = app.update(cx, |app, _| {
+        tf(
+            app.language,
+            Msg::StatusCopiedPath,
+            &[&comparable_document_path(&path).display().to_string()],
+        )
+    });
+    let copied_abs = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    app.update(cx, |app, _| {
+        assert_eq!(app.status, expected_abs);
+        assert!(app.file_tree_context_menu.is_none());
+    });
+    assert_eq!(
+        copied_abs.as_deref(),
+        Some(
+            comparable_document_path(&path)
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_file_tree_context_menu(
+                FileTreeContextTarget::File(path.clone()),
+                Point::new(px(10.), px(10.)),
+                cx,
+            );
+            app.handle_file_tree_context_action(
+                FileTreeContextAction::CopyRelativePath,
+                window,
+                cx,
+            );
+        });
+    });
+    let expected_rel = app.update(cx, |app, _| {
+        tf(app.language, Msg::StatusCopiedRelativePath, &["notes.md"])
+    });
+    let copied_rel = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    app.update(cx, |app, _| {
+        assert_eq!(app.status, expected_rel);
+    });
+    assert_eq!(copied_rel.as_deref(), Some("notes.md"));
+}
+
+#[gpui::test]
+fn file_tree_drop_remaps_clean_tab_and_refuses_dirty(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let notes = root.join("notes");
+    let archive = root.join("archive");
+    fs::create_dir(&notes).unwrap();
+    fs::create_dir(&archive).unwrap();
+    let path = notes.join("daily.md");
+    fs::write(&path, "# Daily").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.handle_file_tree_drop(&path, &archive, cx);
+    });
+    let moved = archive.join("daily.md");
+    app.update(cx, |app, _| {
+        assert!(moved.exists());
+        assert!(!path.exists());
+        assert_eq!(app.tabs[0].path(), Some(moved.as_path()));
+        assert_eq!(app.tabs[0].document.text(), "# Daily");
+        assert_eq!(
+            app.status,
+            tf(
+                app.language,
+                Msg::StatusMovedTo,
+                &[&moved.display().to_string()]
+            )
+        );
+    });
+
+    let dirty_path = notes.join("draft.md");
+    fs::write(&dirty_path, "# Draft").unwrap();
+    app.update(cx, |app, _| {
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.tabs
+            .push(EditorTab::new(MarkdownDocument::open(&dirty_path).unwrap()));
+        app.tabs[1].document.replace_range(0..0, "x");
+        assert!(app.tabs[1].is_dirty());
+    });
+    app.update(cx, |app, cx| {
+        app.handle_file_tree_drop(&dirty_path, &archive, cx);
+    });
+    app.update(cx, |app, _| {
+        assert!(dirty_path.exists());
+        assert!(!archive.join("draft.md").exists());
+        assert_eq!(app.tabs[1].path(), Some(dirty_path.as_path()));
+        assert_eq!(
+            app.status,
+            t(app.language, Msg::StatusSaveBeforeMove).to_string()
+        );
+    });
+}
+
+#[gpui::test]
+fn file_tree_drop_onto_file_moves_into_parent_and_sibling_is_noop(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let notes = root.join("notes");
+    let archive = root.join("archive");
+    fs::create_dir(&notes).unwrap();
+    fs::create_dir(&archive).unwrap();
+    let daily = notes.join("daily.md");
+    let other = notes.join("other.md");
+    let keep = archive.join("keep.md");
+    fs::write(&daily, "# Daily").unwrap();
+    fs::write(&other, "# Other").unwrap();
+    fs::write(&keep, "# Keep").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app
+    });
+
+    let sibling_parent = file_tree_drop_parent_for_target(&other, FileTreeEntryKind::File);
+    let status_before = app.update(cx, |app, _| app.status.clone());
+    app.update(cx, |app, cx| {
+        app.handle_file_tree_drop(&daily, &sibling_parent, cx);
+    });
+    app.update(cx, |app, _| {
+        assert!(daily.exists());
+        assert!(other.exists());
+        assert!(!archive.join("daily.md").exists());
+        assert_eq!(app.status, status_before);
+    });
+
+    let dest_parent = file_tree_drop_parent_for_target(&keep, FileTreeEntryKind::File);
+    app.update(cx, |app, cx| {
+        app.handle_file_tree_drop(&daily, &dest_parent, cx);
+    });
+    let moved = archive.join("daily.md");
+    app.update(cx, |app, _| {
+        assert!(moved.exists());
+        assert!(!daily.exists());
+        assert!(keep.exists());
+        assert!(other.exists());
+        assert_eq!(
+            app.status,
+            tf(
+                app.language,
+                Msg::StatusMovedTo,
+                &[&moved.display().to_string()]
+            )
+        );
+    });
+}
+
+#[gpui::test]
+fn file_tree_drag_flag_suppresses_row_click(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let path = root.join("notes.md");
+    fs::write(&path, "# Notes").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("welcome"))];
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.begin_file_tree_drag(cx);
+            app.handle_file_tree_row_left_up(
+                path.clone(),
+                FileTreeEntryKind::File,
+                false,
+                window,
+                cx,
+            );
+        });
+    });
+    app.update(cx, |app, _| {
+        assert!(!app.file_tree_drag_active);
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.tabs[0].path().is_none());
+        assert_eq!(app.tabs[0].document.text(), "welcome");
     });
 }
 

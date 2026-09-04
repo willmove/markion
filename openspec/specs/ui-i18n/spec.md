@@ -45,6 +45,18 @@ The system SHALL route every user-visible UI string (menu bar titles and items, 
 - **WHEN** the active language is Japanese, French, German, or Spanish
 - **THEN** document content, the welcome Markdown, and user files remain untouched (only UI chrome is translated)
 
+### Requirement: File tree move and path-copy chrome SHALL be localized
+The system SHALL route every user-visible string introduced for file-tree drag-move and path-copy through the i18n `Msg` / `t` / `tf` layer for every supported interface language. This includes the Copy Path and Copy Relative Path context-menu labels, move success and failure status, name-collision status, invalid-move status, save-before-move status, and path-copy success and failure status. Hard-coded user-visible English literals SHALL NOT remain on these surfaces.
+
+#### Scenario: Path-copy labels follow the active language
+- **WHEN** the active interface language is Simplified Chinese and the user right-clicks a file-tree file or folder
+- **THEN** Copy Path and Copy Relative Path render in Simplified Chinese through the i18n layer
+
+#### Scenario: Move and copy status follow the active language
+- **WHEN** a drag-move succeeds or fails, or a path-copy succeeds or fails
+- **THEN** the status bar text is produced by `t` / `tf` in the active language
+- **AND** templatized messages interpolate the path or error through positional arguments
+
 ### Requirement: The interface language SHALL be selectable and shall persist
 The system SHALL let the user choose an interface language from the set of supported languages (`Language::all()`) via the Preferences panel. The chosen language SHALL persist across launches in the preferences file as a stable lowercase code (`language=<code>`).
 

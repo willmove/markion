@@ -649,6 +649,20 @@ impl MarkionApp {
                 }
                 cx.notify();
             }
+            FileTreeContextAction::CopyPath => {
+                let path = target.path(&self.workspace_root);
+                if matches!(target, FileTreeContextTarget::Workspace) {
+                    return;
+                }
+                self.copy_tree_entry_path(&path, false, cx);
+            }
+            FileTreeContextAction::CopyRelativePath => {
+                let path = target.path(&self.workspace_root);
+                if matches!(target, FileTreeContextTarget::Workspace) {
+                    return;
+                }
+                self.copy_tree_entry_path(&path, true, cx);
+            }
             FileTreeContextAction::Refresh => {
                 self.refresh_file_tree_action(&RefreshFileTree, window, cx);
             }
@@ -825,40 +839,7 @@ impl MarkionApp {
                     .and_then(|tree| tree.rename_unique(&target, name));
                 match result {
                     Ok(new_path) => {
-                        // Keep any open content tab attached to its renamed
-                        // filesystem path. Image claims use path identity, so
-                        // release the old key before replacing it.
-                        let matching: Vec<usize> = self
-                            .tabs
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(i, tab)| {
-                                (tab.path() == Some(target.as_path())).then_some(i)
-                            })
-                            .collect();
-                        for index in matching {
-                            self.release_tab_image_claims(index, cx);
-                            match &mut self.tabs[index] {
-                                WorkspaceTab::Document(tab) => {
-                                    if let Ok(document) = MarkdownDocument::open(&new_path) {
-                                        // The reopened file is a new document
-                                        // instance: history and capture state
-                                        // still reference the replaced
-                                        // document and must not survive the
-                                        // slot replacement.
-                                        tab.undo_stack.clear();
-                                        tab.redo_stack.clear();
-                                        tab.undo_capture = None;
-                                        tab.pending_text_edit_intent = None;
-                                        tab.document = document;
-                                    }
-                                }
-                                WorkspaceTab::Image(image) => {
-                                    image.path = new_path.clone();
-                                    image.key = PreviewImageKey::from_local_path(&new_path);
-                                }
-                            }
-                        }
+                        self.remap_tabs_after_path_change(&target, &new_path, cx);
                         self.selected_tree_path = Some(new_path.clone());
                         self.status =
                             self.trf(Msg::StatusRenamedTo, &[&new_path.display().to_string()]);
@@ -991,5 +972,192 @@ impl MarkionApp {
             });
         })
         .detach();
+    }
+
+    pub(super) fn copy_tree_entry_path(
+        &mut self,
+        path: &Path,
+        relative: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if relative {
+            let root = comparable_document_path(&self.workspace_root);
+            let path = comparable_document_path(path);
+            match workspace_relative_path(&root, &path) {
+                Some(rel) => {
+                    let display = rel.display().to_string();
+                    cx.write_to_clipboard(ClipboardItem::new_string(display.clone()));
+                    self.status = self.trf(Msg::StatusCopiedRelativePath, &[&display]);
+                }
+                None => {
+                    self.status =
+                        self.trf(Msg::StatusCopyPathFailed, &[&path.display().to_string()]);
+                }
+            }
+        } else {
+            let display = comparable_document_path(path).display().to_string();
+            cx.write_to_clipboard(ClipboardItem::new_string(display.clone()));
+            self.status = self.trf(Msg::StatusCopiedPath, &[&display]);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn begin_file_tree_drag(&mut self, cx: &mut Context<Self>) {
+        self.file_tree_drag_active = true;
+        cx.notify();
+    }
+
+    pub(super) fn handle_file_tree_row_left_up(
+        &mut self,
+        path: PathBuf,
+        entry_kind: FileTreeEntryKind,
+        force_new_tab: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.file_tree_drag_active {
+            self.file_tree_drag_active = false;
+            cx.notify();
+            return;
+        }
+        self.selected_tree_path = Some(path.clone());
+        self.file_tree_query_focused = false;
+        self.input_marked_len = 0;
+        match entry_kind {
+            FileTreeEntryKind::File => {
+                if force_new_tab {
+                    self.open_file_in_new_tab_from_path(path, cx);
+                } else {
+                    self.open_tree_file(path, window, cx);
+                }
+            }
+            FileTreeEntryKind::Directory => {
+                if let Some(tree) = &self.file_tree {
+                    toggle_tree_folder(&path, tree, &mut self.collapsed_tree_paths);
+                }
+                self.status = t(self.language, Msg::StatusSelectedTreeEntry).into();
+                cx.notify();
+            }
+        }
+    }
+
+    pub(super) fn handle_file_tree_drop(
+        &mut self,
+        source: &Path,
+        dest_parent: &Path,
+        cx: &mut Context<Self>,
+    ) {
+        self.file_tree_drag_active = false;
+        if self.pending_name_input.is_some() {
+            cx.notify();
+            return;
+        }
+        if !file_tree_drop_into_is_actionable(source, dest_parent) {
+            let source_canon = comparable_document_path(source);
+            let dest_canon = comparable_document_path(dest_parent);
+            let same_parent = source_canon
+                .parent()
+                .is_some_and(|parent| comparable_document_path(parent) == dest_canon);
+            if !same_parent {
+                self.status = t(self.language, Msg::StatusMoveInvalid).into();
+            }
+            cx.notify();
+            return;
+        }
+
+        let affects_dirty = self.tabs.iter().any(|tab| {
+            tab.is_dirty()
+                && tab
+                    .path()
+                    .is_some_and(|path| remap_path_after_move(path, source, source).is_some())
+        });
+        if affects_dirty {
+            self.status = t(self.language, Msg::StatusSaveBeforeMove).into();
+            cx.notify();
+            return;
+        }
+
+        let result = self
+            .file_tree
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "file tree unavailable"))
+            .and_then(|tree| tree.move_entry(source, dest_parent));
+        match result {
+            Ok(new_path) => {
+                if comparable_document_path(&new_path) == comparable_document_path(source) {
+                    cx.notify();
+                    return;
+                }
+                self.remap_tabs_after_move(source, &new_path, cx);
+                self.selected_tree_path = Some(new_path.clone());
+                self.status = self.trf(Msg::StatusMovedTo, &[&new_path.display().to_string()]);
+            }
+            Err(err) => {
+                let name = source
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("");
+                self.status = match err.kind() {
+                    io::ErrorKind::AlreadyExists => self.trf(Msg::StatusMoveNameCollision, &[name]),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {
+                        t(self.language, Msg::StatusMoveInvalid).into()
+                    }
+                    _ => self.trf(Msg::StatusMoveFailed, &[&err.to_string()]),
+                };
+            }
+        }
+        cx.notify();
+    }
+
+    fn remap_tabs_after_move(&mut self, source: &Path, new_source: &Path, cx: &mut Context<Self>) {
+        let matching: Vec<(usize, PathBuf)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, tab)| {
+                tab.path()
+                    .and_then(|path| remap_path_after_move(path, source, new_source))
+                    .map(|new_path| (i, new_path))
+            })
+            .collect();
+        for (index, new_path) in matching {
+            self.repoint_tab_to_path(index, &new_path, cx);
+        }
+    }
+
+    fn remap_tabs_after_path_change(
+        &mut self,
+        old_path: &Path,
+        new_path: &Path,
+        cx: &mut Context<Self>,
+    ) {
+        let matching: Vec<usize> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, tab)| (tab.path() == Some(old_path)).then_some(i))
+            .collect();
+        for index in matching {
+            self.repoint_tab_to_path(index, new_path, cx);
+        }
+    }
+
+    fn repoint_tab_to_path(&mut self, index: usize, new_path: &Path, cx: &mut Context<Self>) {
+        self.release_tab_image_claims(index, cx);
+        match &mut self.tabs[index] {
+            WorkspaceTab::Document(tab) => {
+                if let Ok(document) = MarkdownDocument::open(new_path) {
+                    tab.undo_stack.clear();
+                    tab.redo_stack.clear();
+                    tab.undo_capture = None;
+                    tab.pending_text_edit_intent = None;
+                    tab.document = document;
+                }
+            }
+            WorkspaceTab::Image(image) => {
+                image.path = new_path.to_path_buf();
+                image.key = PreviewImageKey::from_local_path(new_path);
+            }
+        }
     }
 }

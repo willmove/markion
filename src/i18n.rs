@@ -280,6 +280,7 @@ pub enum Msg {
     StatusFileTreeRefreshed,
     StatusSelectTreeEntryFirst,
     StatusSaveBeforeRename,
+    StatusSaveBeforeMove,
     StatusWaitingDeleteConfirm,
     StatusDeleteCanceled,
     StatusAboutMarkion,
@@ -509,6 +510,18 @@ pub enum Msg {
     StatusShowInFileManagerFailed,
     /// {0}=path — "Copied path: {path}"
     StatusCopiedPath,
+    /// {0}=relative path — "Copied relative path: {path}"
+    StatusCopiedRelativePath,
+    /// {0}=err — "Could not copy the path: {err}"
+    StatusCopyPathFailed,
+    /// {0}=path — "Moved to {path}"
+    StatusMovedTo,
+    /// {0}=err — "Move failed: {err}"
+    StatusMoveFailed,
+    /// {0}=name — destination already has this name
+    StatusMoveNameCollision,
+    /// Drop target cannot receive the dragged entry.
+    StatusMoveInvalid,
     /// {0}=theme label — "Theme: {theme}"
     StatusTheme,
     /// {0}=count — "{count} matches"
@@ -555,6 +568,10 @@ pub enum Msg {
     DialogAboutProjectWebsite,
     /// About GitHub-repository link label.
     DialogAboutGithub,
+    /// About GitHub-star invitation.
+    DialogAboutStarInvite,
+    /// About GitHub-star link label.
+    DialogAboutStarLink,
     /// Update check: up-to-date dialog title.
     DialogUpToDateTitle,
     /// Update check: up-to-date dialog body.
@@ -662,6 +679,8 @@ pub enum Msg {
     FileTreeContextRename,
     FileTreeContextDelete,
     FileTreeContextShowInFileManager,
+    FileTreeContextCopyPath,
+    FileTreeContextCopyRelativePath,
     FileTreeContextRefresh,
     FileTreeContextFilterFiles,
     /// Inline name-prompt label prefix shown as "Name: <buffer>".
@@ -3110,6 +3129,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusFileTreeRefreshed => "File tree refreshed",
         Msg::StatusSelectTreeEntryFirst => "Select a file tree entry first",
         Msg::StatusSaveBeforeRename => "Save the active document before renaming it",
+        Msg::StatusSaveBeforeMove => "Save unsaved documents in the moved files before moving",
         Msg::StatusWaitingDeleteConfirm => "Waiting for delete confirmation...",
         Msg::StatusDeleteCanceled => "Delete canceled",
         Msg::StatusAboutMarkion => "About Markion",
@@ -3258,6 +3278,12 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusDeleteFailed => "Delete failed: {0}",
         Msg::StatusShownInFileManager => "Shown in system file manager: {0}",
         Msg::StatusCopiedPath => "Copied path: {0}",
+        Msg::StatusCopiedRelativePath => "Copied relative path: {0}",
+        Msg::StatusCopyPathFailed => "Could not copy the path: {0}",
+        Msg::StatusMovedTo => "Moved to {0}",
+        Msg::StatusMoveFailed => "Move failed: {0}",
+        Msg::StatusMoveNameCollision => "An entry named {0} already exists in the destination",
+        Msg::StatusMoveInvalid => "That drop target cannot receive this entry",
         Msg::StatusShowInFileManagerFailed => "Show in system file manager failed: {0}",
         Msg::StatusTheme => "Theme: {0}",
         Msg::StatusMatches => "{0} matches",
@@ -3290,6 +3316,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::DialogAboutDescription => "A local-first Markdown editor built with Rust and GPUI.",
         Msg::DialogAboutProjectWebsite => "Project website",
         Msg::DialogAboutGithub => "GitHub",
+        Msg::DialogAboutStarInvite => {
+            "If Markion helps you, please give it a Star on GitHub. Thank you!"
+        }
+        Msg::DialogAboutStarLink => "Star on GitHub",
         Msg::DialogUpToDateTitle => "Up to Date",
         Msg::DialogUpToDateDetail => "You are running the latest version of Markion.",
         Msg::DialogUpdateAvailableTitle => "Update Available",
@@ -3363,6 +3393,8 @@ fn en(msg: Msg) -> &'static str {
         Msg::FileTreeContextRename => "Rename",
         Msg::FileTreeContextDelete => "Delete",
         Msg::FileTreeContextShowInFileManager => "Show in System File Manager",
+        Msg::FileTreeContextCopyPath => "Copy Path",
+        Msg::FileTreeContextCopyRelativePath => "Copy Relative Path",
         Msg::FileTreeContextRefresh => "Refresh",
         Msg::FileTreeContextFilterFiles => "Filter Files",
         Msg::FileTreeNamePromptLabel => "Name",
@@ -3672,6 +3704,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusFileTreeRefreshed => "ファイルツリーを更新しました",
         Msg::StatusSelectTreeEntryFirst => "先にファイルツリーの項目を選択してください",
         Msg::StatusSaveBeforeRename => "名前を変更する前にアクティブな文書を保存してください",
+        Msg::StatusSaveBeforeMove => "移動する前に、対象ファイルの未保存の変更を保存してください",
         Msg::StatusWaitingDeleteConfirm => "削除の確認待ち...",
         Msg::StatusDeleteCanceled => "削除をキャンセルしました",
         Msg::StatusAboutMarkion => "Markionについて",
@@ -3820,6 +3853,12 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusDeleteFailed => "削除に失敗しました: {0}",
         Msg::StatusShownInFileManager => "システムのファイルマネージャーで表示: {0}",
         Msg::StatusCopiedPath => "パスをコピーしました: {0}",
+        Msg::StatusCopiedRelativePath => "相対パスをコピーしました: {0}",
+        Msg::StatusCopyPathFailed => "パスをコピーできませんでした: {0}",
+        Msg::StatusMovedTo => "{0} に移動しました",
+        Msg::StatusMoveFailed => "移動できませんでした: {0}",
+        Msg::StatusMoveNameCollision => "移動先に {0} が既に存在します",
+        Msg::StatusMoveInvalid => "この項目をその場所へ移動できません",
         Msg::StatusShowInFileManagerFailed => {
             "システムのファイルマネージャーでの表示に失敗しました: {0}"
         }
@@ -3856,6 +3895,10 @@ fn ja(msg: Msg) -> &'static str {
         }
         Msg::DialogAboutProjectWebsite => "プロジェクトサイト",
         Msg::DialogAboutGithub => "GitHub",
+        Msg::DialogAboutStarInvite => {
+            "役に立ったら、GitHub で Star をお願いします。ありがとうございます！"
+        }
+        Msg::DialogAboutStarLink => "GitHub で Star",
         Msg::DialogUpToDateTitle => "最新です",
         Msg::DialogUpToDateDetail => "Markion は最新のバージョンを実行しています。",
         Msg::DialogUpdateAvailableTitle => "更新があります",
@@ -3929,6 +3972,8 @@ fn ja(msg: Msg) -> &'static str {
         Msg::FileTreeContextRename => "名前を変更",
         Msg::FileTreeContextDelete => "削除",
         Msg::FileTreeContextShowInFileManager => "システムのファイルマネージャーで表示",
+        Msg::FileTreeContextCopyPath => "パスをコピー",
+        Msg::FileTreeContextCopyRelativePath => "相対パスをコピー",
         Msg::FileTreeContextRefresh => "更新",
         Msg::FileTreeContextFilterFiles => "ファイルを絞り込み",
         Msg::FileTreeNamePromptLabel => "名前",
@@ -4226,6 +4271,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusFileTreeRefreshed => "Arborescence actualisée",
         Msg::StatusSelectTreeEntryFirst => "Sélectionnez d'abord une entrée dans l'arborescence",
         Msg::StatusSaveBeforeRename => "Enregistrez le document actif avant de le renommer",
+        Msg::StatusSaveBeforeMove => "Enregistrez les documents non enregistrés avant de déplacer",
         Msg::StatusWaitingDeleteConfirm => "En attente de confirmation de suppression...",
         Msg::StatusDeleteCanceled => "Suppression annulée",
         Msg::StatusAboutMarkion => "À propos de Markion",
@@ -4382,6 +4428,12 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusDeleteFailed => "Échec de la suppression : {0}",
         Msg::StatusShownInFileManager => "Affiché dans le gestionnaire de fichiers : {0}",
         Msg::StatusCopiedPath => "Chemin copié : {0}",
+        Msg::StatusCopiedRelativePath => "Chemin relatif copié : {0}",
+        Msg::StatusCopyPathFailed => "Impossible de copier le chemin : {0}",
+        Msg::StatusMovedTo => "Déplacé vers {0}",
+        Msg::StatusMoveFailed => "Impossible de déplacer : {0}",
+        Msg::StatusMoveNameCollision => "Un élément nommé {0} existe déjà dans la destination",
+        Msg::StatusMoveInvalid => "Cette cible ne peut pas recevoir cet élément",
         Msg::StatusShowInFileManagerFailed => {
             "Échec de l'affichage dans le gestionnaire de fichiers : {0}"
         }
@@ -4416,6 +4468,10 @@ fn fr(msg: Msg) -> &'static str {
         }
         Msg::DialogAboutProjectWebsite => "Site du projet",
         Msg::DialogAboutGithub => "GitHub",
+        Msg::DialogAboutStarInvite => {
+            "Si Markion vous est utile, un Star sur GitHub serait super. Merci !"
+        }
+        Msg::DialogAboutStarLink => "Star sur GitHub",
         Msg::DialogUpToDateTitle => "À jour",
         Msg::DialogUpToDateDetail => "Vous exécutez la dernière version de Markion.",
         Msg::DialogUpdateAvailableTitle => "Mise à jour disponible",
@@ -4499,6 +4555,8 @@ fn fr(msg: Msg) -> &'static str {
         Msg::FileTreeContextRename => "Renommer",
         Msg::FileTreeContextDelete => "Supprimer",
         Msg::FileTreeContextShowInFileManager => "Afficher dans le gestionnaire de fichiers",
+        Msg::FileTreeContextCopyPath => "Copier le chemin",
+        Msg::FileTreeContextCopyRelativePath => "Copier le chemin relatif",
         Msg::FileTreeContextRefresh => "Actualiser",
         Msg::FileTreeContextFilterFiles => "Filtrer les fichiers",
         Msg::FileTreeNamePromptLabel => "Nom",
@@ -4796,6 +4854,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusFileTreeRefreshed => "Dateiansicht aktualisiert",
         Msg::StatusSelectTreeEntryFirst => "Zuerst einen Eintrag in der Dateiansicht auswählen",
         Msg::StatusSaveBeforeRename => "Aktives Dokument vor dem Umbenennen speichern",
+        Msg::StatusSaveBeforeMove => "Speichern Sie ungespeicherte Dokumente vor dem Verschieben",
         Msg::StatusWaitingDeleteConfirm => "Warte auf Löschbestätigung...",
         Msg::StatusDeleteCanceled => "Löschen abgebrochen",
         Msg::StatusAboutMarkion => "Über Markion",
@@ -4946,6 +5005,12 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusDeleteFailed => "Löschen fehlgeschlagen: {0}",
         Msg::StatusShownInFileManager => "Im Dateimanager angezeigt: {0}",
         Msg::StatusCopiedPath => "Pfad kopiert: {0}",
+        Msg::StatusCopiedRelativePath => "Relativer Pfad kopiert: {0}",
+        Msg::StatusCopyPathFailed => "Pfad konnte nicht kopiert werden: {0}",
+        Msg::StatusMovedTo => "Verschoben nach {0}",
+        Msg::StatusMoveFailed => "Verschieben fehlgeschlagen: {0}",
+        Msg::StatusMoveNameCollision => "Ein Eintrag namens {0} existiert bereits im Ziel",
+        Msg::StatusMoveInvalid => "Dieses Ziel kann den Eintrag nicht aufnehmen",
         Msg::StatusShowInFileManagerFailed => "Anzeige im Dateimanager fehlgeschlagen: {0}",
         Msg::StatusTheme => "Design: {0}",
         Msg::StatusMatches => "{0} Treffer",
@@ -4978,6 +5043,10 @@ fn de(msg: Msg) -> &'static str {
         }
         Msg::DialogAboutProjectWebsite => "Projektwebsite",
         Msg::DialogAboutGithub => "GitHub",
+        Msg::DialogAboutStarInvite => {
+            "Wenn Markion Ihnen hilft, geben Sie uns gerne einen Star auf GitHub. Danke!"
+        }
+        Msg::DialogAboutStarLink => "Star auf GitHub",
         Msg::DialogUpToDateTitle => "Aktuell",
         Msg::DialogUpToDateDetail => "Sie verwenden die neueste Version von Markion.",
         Msg::DialogUpdateAvailableTitle => "Update verfügbar",
@@ -5059,6 +5128,8 @@ fn de(msg: Msg) -> &'static str {
         Msg::FileTreeContextRename => "Umbenennen",
         Msg::FileTreeContextDelete => "Löschen",
         Msg::FileTreeContextShowInFileManager => "Im Dateimanager anzeigen",
+        Msg::FileTreeContextCopyPath => "Pfad kopieren",
+        Msg::FileTreeContextCopyRelativePath => "Relativen Pfad kopieren",
         Msg::FileTreeContextRefresh => "Aktualisieren",
         Msg::FileTreeContextFilterFiles => "Dateien filtern",
         Msg::FileTreeNamePromptLabel => "Name",
@@ -5356,6 +5427,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusFileTreeRefreshed => "Árbol de archivos actualizado",
         Msg::StatusSelectTreeEntryFirst => "Seleccione primero una entrada del árbol de archivos",
         Msg::StatusSaveBeforeRename => "Guarde el documento activo antes de renombrarlo",
+        Msg::StatusSaveBeforeMove => "Guarde los documentos sin guardar antes de mover",
         Msg::StatusWaitingDeleteConfirm => "Esperando confirmación de eliminación...",
         Msg::StatusDeleteCanceled => "Eliminación cancelada",
         Msg::StatusAboutMarkion => "Acerca de Markion",
@@ -5508,6 +5580,12 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusDeleteFailed => "Error al eliminar: {0}",
         Msg::StatusShownInFileManager => "Mostrado en el administrador de archivos: {0}",
         Msg::StatusCopiedPath => "Ruta copiada: {0}",
+        Msg::StatusCopiedRelativePath => "Ruta relativa copiada: {0}",
+        Msg::StatusCopyPathFailed => "No se pudo copiar la ruta: {0}",
+        Msg::StatusMovedTo => "Movido a {0}",
+        Msg::StatusMoveFailed => "No se pudo mover: {0}",
+        Msg::StatusMoveNameCollision => "Ya existe una entrada llamada {0} en el destino",
+        Msg::StatusMoveInvalid => "Ese destino no puede recibir esta entrada",
         Msg::StatusShowInFileManagerFailed => {
             "Error al mostrar en el administrador de archivos: {0}"
         }
@@ -5540,6 +5618,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::DialogAboutDescription => "Un editor Markdown local-first construido con Rust y GPUI.",
         Msg::DialogAboutProjectWebsite => "Sitio web del proyecto",
         Msg::DialogAboutGithub => "GitHub",
+        Msg::DialogAboutStarInvite => {
+            "Si Markion te resulta útil, te agradeceríamos un Star en GitHub. ¡Gracias!"
+        }
+        Msg::DialogAboutStarLink => "Star en GitHub",
         Msg::DialogUpToDateTitle => "Actualizado",
         Msg::DialogUpToDateDetail => "Estás usando la última versión de Markion.",
         Msg::DialogUpdateAvailableTitle => "Actualización disponible",
@@ -5611,6 +5693,8 @@ fn es(msg: Msg) -> &'static str {
         Msg::FileTreeContextRename => "Renombrar",
         Msg::FileTreeContextDelete => "Eliminar",
         Msg::FileTreeContextShowInFileManager => "Mostrar en el administrador de archivos",
+        Msg::FileTreeContextCopyPath => "Copiar ruta",
+        Msg::FileTreeContextCopyRelativePath => "Copiar ruta relativa",
         Msg::FileTreeContextRefresh => "Actualizar",
         Msg::FileTreeContextFilterFiles => "Filtrar archivos",
         Msg::FileTreeNamePromptLabel => "Nombre",
@@ -5907,6 +5991,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusFileTreeRefreshed => "已刷新文件树",
         Msg::StatusSelectTreeEntryFirst => "请先选择一个文件树条目",
         Msg::StatusSaveBeforeRename => "重命名前请先保存当前文档",
+        Msg::StatusSaveBeforeMove => "移动前请先保存被移动文件中的未保存更改",
         Msg::StatusWaitingDeleteConfirm => "等待删除确认…",
         Msg::StatusDeleteCanceled => "已取消删除",
         Msg::StatusAboutMarkion => "关于 Markion",
@@ -6053,6 +6138,12 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusDeleteFailed => "删除失败：{0}",
         Msg::StatusShownInFileManager => "已在系统资源管理器中显示：{0}",
         Msg::StatusCopiedPath => "已复制路径：{0}",
+        Msg::StatusCopiedRelativePath => "已复制相对路径：{0}",
+        Msg::StatusCopyPathFailed => "无法复制路径：{0}",
+        Msg::StatusMovedTo => "已移动到 {0}",
+        Msg::StatusMoveFailed => "无法移动：{0}",
+        Msg::StatusMoveNameCollision => "目标位置已存在同名项 {0}",
+        Msg::StatusMoveInvalid => "无法将此项放到该目标",
         Msg::StatusShowInFileManagerFailed => "在系统资源管理器中显示失败：{0}",
         Msg::StatusTheme => "主题：{0}",
         Msg::StatusMatches => "找到 {0} 个匹配",
@@ -6085,6 +6176,8 @@ fn zh(msg: Msg) -> &'static str {
         Msg::DialogAboutDescription => "一款使用 Rust 与 GPUI 构建的本地优先 Markdown 编辑器。",
         Msg::DialogAboutProjectWebsite => "项目网站",
         Msg::DialogAboutGithub => "GitHub",
+        Msg::DialogAboutStarInvite => "觉得有用的话，欢迎给个 Star，谢谢！",
+        Msg::DialogAboutStarLink => "在 GitHub 上 Star",
         Msg::DialogUpToDateTitle => "已是最新版本",
         Msg::DialogUpToDateDetail => "您正在使用最新版本的 Markion。",
         Msg::DialogUpdateAvailableTitle => "发现新版本",
@@ -6154,6 +6247,8 @@ fn zh(msg: Msg) -> &'static str {
         Msg::FileTreeContextRename => "重命名",
         Msg::FileTreeContextDelete => "删除",
         Msg::FileTreeContextShowInFileManager => "在系统资源管理器中显示",
+        Msg::FileTreeContextCopyPath => "复制路径",
+        Msg::FileTreeContextCopyRelativePath => "复制相对路径",
         Msg::FileTreeContextRefresh => "刷新",
         Msg::FileTreeContextFilterFiles => "筛选文件",
         Msg::FileTreeNamePromptLabel => "名称",
@@ -6446,6 +6541,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusFileTreeRefreshed => "已重新整理檔案樹",
         Msg::StatusSelectTreeEntryFirst => "請先選擇一個檔案樹項目",
         Msg::StatusSaveBeforeRename => "重新命名前請先儲存目前文件",
+        Msg::StatusSaveBeforeMove => "移動前請先儲存被移動檔案中的未儲存變更",
         Msg::StatusWaitingDeleteConfirm => "等待刪除確認…",
         Msg::StatusDeleteCanceled => "已取消刪除",
         Msg::StatusAboutMarkion => "關於 Markion",
@@ -6592,6 +6688,12 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusDeleteFailed => "刪除失敗：{0}",
         Msg::StatusShownInFileManager => "已在系統檔案管理員中顯示：{0}",
         Msg::StatusCopiedPath => "已複製路徑：{0}",
+        Msg::StatusCopiedRelativePath => "已複製相對路徑：{0}",
+        Msg::StatusCopyPathFailed => "無法複製路徑：{0}",
+        Msg::StatusMovedTo => "已移動到 {0}",
+        Msg::StatusMoveFailed => "無法移動：{0}",
+        Msg::StatusMoveNameCollision => "目標位置已存在同名項目 {0}",
+        Msg::StatusMoveInvalid => "無法將此項目放到該目標",
         Msg::StatusShowInFileManagerFailed => "在系統檔案管理員中顯示失敗：{0}",
         Msg::StatusTheme => "佈景主題：{0}",
         Msg::StatusMatches => "找到 {0} 個符合項目",
@@ -6624,6 +6726,8 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::DialogAboutDescription => "一款使用 Rust 與 GPUI 打造的本機優先 Markdown 編輯器。",
         Msg::DialogAboutProjectWebsite => "專案網站",
         Msg::DialogAboutGithub => "GitHub",
+        Msg::DialogAboutStarInvite => "覺得有用的話，歡迎給個 Star，謝謝！",
+        Msg::DialogAboutStarLink => "在 GitHub 上 Star",
         Msg::DialogUpToDateTitle => "已是最新版本",
         Msg::DialogUpToDateDetail => "您正在使用最新版本的 Markion。",
         Msg::DialogUpdateAvailableTitle => "發現新版本",
@@ -6693,6 +6797,8 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::FileTreeContextRename => "重新命名",
         Msg::FileTreeContextDelete => "刪除",
         Msg::FileTreeContextShowInFileManager => "在系統檔案管理員中顯示",
+        Msg::FileTreeContextCopyPath => "複製路徑",
+        Msg::FileTreeContextCopyRelativePath => "複製相對路徑",
         Msg::FileTreeContextRefresh => "重新整理",
         Msg::FileTreeContextFilterFiles => "篩選檔案",
         Msg::FileTreeNamePromptLabel => "名稱",
@@ -7365,6 +7471,7 @@ mod tests {
             Msg::StatusFileTreeRefreshed,
             Msg::StatusSelectTreeEntryFirst,
             Msg::StatusSaveBeforeRename,
+            Msg::StatusSaveBeforeMove,
             Msg::StatusWaitingDeleteConfirm,
             Msg::StatusDeleteCanceled,
             Msg::StatusAboutMarkion,
@@ -7508,6 +7615,13 @@ mod tests {
             Msg::StatusDeleteFailed,
             Msg::StatusShownInFileManager,
             Msg::StatusShowInFileManagerFailed,
+            Msg::StatusCopiedPath,
+            Msg::StatusCopiedRelativePath,
+            Msg::StatusCopyPathFailed,
+            Msg::StatusMovedTo,
+            Msg::StatusMoveFailed,
+            Msg::StatusMoveNameCollision,
+            Msg::StatusMoveInvalid,
             Msg::StatusTheme,
             Msg::StatusMatches,
             Msg::StatusReplaceFailed,
@@ -7535,6 +7649,8 @@ mod tests {
             Msg::DialogAboutDescription,
             Msg::DialogAboutProjectWebsite,
             Msg::DialogAboutGithub,
+            Msg::DialogAboutStarInvite,
+            Msg::DialogAboutStarLink,
             Msg::DialogUpToDateTitle,
             Msg::DialogUpToDateDetail,
             Msg::DialogUpdateAvailableTitle,
@@ -7588,6 +7704,8 @@ mod tests {
             Msg::FileTreeContextRename,
             Msg::FileTreeContextDelete,
             Msg::FileTreeContextShowInFileManager,
+            Msg::FileTreeContextCopyPath,
+            Msg::FileTreeContextCopyRelativePath,
             Msg::FileTreeContextRefresh,
             Msg::FileTreeContextFilterFiles,
             Msg::FileTreeNamePromptLabel,

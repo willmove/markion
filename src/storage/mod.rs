@@ -22,7 +22,7 @@ pub use atomic::atomic_write;
 
 pub use file_tree::{
     FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, MARKDOWN_EXTENSIONS,
-    TEXT_EXTENSIONS, is_markdown_path, is_text_path,
+    TEXT_EXTENSIONS, is_markdown_path, is_text_path, workspace_relative_path,
 };
 pub use logging::init_logging;
 pub use preferences::{

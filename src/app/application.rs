@@ -238,6 +238,7 @@ impl MarkionApp {
             ime_input_target: None,
             selected_tree_path: None,
             collapsed_tree_paths: HashSet::new(),
+            file_tree_drag_active: false,
             file_tree_needs_initial_collapse: false,
             file_tree_context_menu: None,
             preview_context_menu: None,

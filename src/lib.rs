@@ -253,7 +253,7 @@ pub use storage::{
     load_theme_definition, organize_candidates, parse_app_preferences,
     parse_legacy_app_preferences, parse_session_state, parse_theme_definition,
     render_app_preferences, render_session_state, render_theme_definition, save_app_preferences,
-    save_session_state, save_theme_definition,
+    save_session_state, save_theme_definition, workspace_relative_path,
 };
 
 pub use table::table_column_flex_weights;
