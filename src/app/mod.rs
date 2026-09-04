@@ -21,46 +21,48 @@ use gpui::{
     ImageFormat, ImageSource, KeyBinding, KeyDownEvent, LayoutId, ListAlignment, ListState, Menu,
     MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     PathPromptOptions, Pixels, Point, PromptButton, PromptLevel, RenderImage, Rgba, ScrollHandle,
-    SharedString, Size, Stateful, StrikethroughStyle, Style, StyledText, TextLayout, TextRun,
-    Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window, WindowBounds, WindowOptions,
-    WrappedLine, actions, anchored, canvas, div, fill, font, img, list, point, px, rgb, rgba, size,
+    SharedString, Size, Stateful, StrikethroughStyle, Style, StyledText, Subscription, TextLayout,
+    TextRun, Timer, TitlebarOptions, UTF16Selection, UnderlineStyle, Window, WindowBounds,
+    WindowOptions, WrappedLine, actions, anchored, canvas, div, fill, font, img, list, point, px,
+    rgb, rgba, size,
 };
 use markion::{
     AlertKind, AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement,
     BlockTarget, BlockTransform, CheckedMutation, CodeTheme, DEFAULT_CODE_FONT_FAMILY,
-    DEFAULT_EDITOR_FONT_SIZE, DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_RENDERED_FONT_SIZE,
-    DiskIdentity, DiskState, DocumentInstanceId, DocxImagePolicy, DocxPageSize,
-    EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackendPreference, ExportFormat, ExportPreferences,
-    ExternalCheckOutcome, FileTree, FileTreeEntry, FileTreeEntryKind, HighlightKind,
-    HighlightedSpan, HtmlAlign, HtmlImgLength, HtmlListMarker, HtmlPreviewPart, HtmlTableGrid,
-    ImageAlignment, ImagePresentation, InlineSpan, InlineStyle, Language, MAX_AUTO_SAVE_DELAY_SECS,
-    MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
-    MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
-    MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat, MathLayoutStyle, Msg, MutationOrigin,
-    MutationReceipt, OrganizeCandidate, P0Msg, P1Msg, PdfPageSize, PreviewBlock,
-    RecoveryInventoryEntry, RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange,
-    SearchOptions, SearchPattern, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab,
-    SlashCommand, SlashQuery, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode,
-    VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity,
-    VisualEditorField, VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget,
-    VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind, adjacent_reorder_target,
-    backend_status_msg, block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
-    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
-    builtin_theme_definitions, bundled_resource_path, check_path_state, data_uri_payload_ranges,
-    default_preferences_path, default_recovery_dir, default_session_path, default_themes_dir,
-    delete_block, delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
+    DEFAULT_EDITOR_FONT_SIZE, DEFAULT_EDITOR_SPLIT_RATIO, DEFAULT_HEADING_MENU_MAX_LEVEL,
+    DEFAULT_RENDERED_FONT_SIZE, DEFAULT_SIDEBAR_WIDTH, DiskIdentity, DiskState, DocumentInstanceId,
+    DocxImagePolicy, DocxPageSize, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackendPreference,
+    ExportFormat, ExportPreferences, ExternalCheckOutcome, FileTree, FileTreeEntry,
+    FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlAlign, HtmlImgLength, HtmlListMarker,
+    HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
+    Language, MAX_AUTO_SAVE_DELAY_SECS, MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE,
+    MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE,
+    MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
+    MarkdownFormat, MathLayoutStyle, Msg, MutationOrigin, MutationReceipt, OrganizeCandidate,
+    P0Msg, P1Msg, PdfPageSize, PreviewBlock, RecoveryInventoryEntry, RecoverySourceState, RichText,
+    SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions, SearchPattern, SessionLayout,
+    SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery,
+    TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor,
+    VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualHtmlImage, VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge,
+    VisualSourceIslandKind, adjacent_reorder_target, backend_status_msg, block_can_reorder_at,
+    block_can_transform_at, build_publishing_snapshot, build_visual_projection,
+    build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
+    bundled_resource_path, check_path_state, data_uri_payload_ranges, default_preferences_path,
+    default_recovery_dir, default_session_path, default_themes_dir, delete_block,
+    delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
     highlight_code, html_preview_parts, html_preview_plain_text, html_table_column_weights,
     html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
     import_image_bytes, import_image_file, inline_image_at, inline_link_at, inspect_recovery_files,
-    is_markdown_path, is_text_path, list_theme_definitions, load_app_preferences,
-    load_recovery_file, load_session_state, markdown_reference, normalize_auto_save_delay_secs,
-    normalize_code_font_size, normalize_editor_font_size, normalize_heading_menu_max_level,
-    normalize_paragraph_spacing, normalize_rendered_font_size, organize_candidates, p0_t, p0_tf,
-    p1_t, p1_tf, pandoc_available, read_document_source, reorder_block, resolve_font_family,
-    resolve_html_img_display_size, save_app_preferences, save_session_state, save_text_snapshot,
-    save_theme_definition, serialize_inline_image, serialize_inline_link, shortcut_catalog,
-    sidebar_tab_label, slash_command_edit, slash_query_at, t, table_column_flex_weights, tf,
-    title_from_path, transform_block, validate_block_target,
+    is_markdown_path, is_text_path, layout_rect_is_visible, list_theme_definitions,
+    load_app_preferences, load_recovery_file, load_session_state, markdown_reference,
+    normalize_auto_save_delay_secs, normalize_code_font_size, normalize_editor_font_size,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    organize_candidates, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, read_document_source,
+    reorder_block, resolve_font_family, resolve_html_img_display_size, save_app_preferences,
+    save_session_state, save_text_snapshot, save_theme_definition, serialize_inline_image,
+    serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
+    t, table_column_flex_weights, tf, title_from_path, transform_block, validate_block_target,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -1759,12 +1761,11 @@ const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(80);
 /// window has not elapsed, so the preview never freezes mid-typing-burst.
 const PREVIEW_MAX_STALE: Duration = Duration::from_millis(400);
 /// Clamp range for the editor/preview split ratio so neither pane can collapse.
-const EDITOR_SPLIT_RATIO_MIN: f32 = 0.15;
-const EDITOR_SPLIT_RATIO_MAX: f32 = 0.85;
+const EDITOR_SPLIT_RATIO_MIN: f32 = markion::EDITOR_SPLIT_RATIO_MIN;
+const EDITOR_SPLIT_RATIO_MAX: f32 = markion::EDITOR_SPLIT_RATIO_MAX;
 /// Default and clamp range for the sidebar pixel width.
-const DEFAULT_SIDEBAR_WIDTH: f32 = 230.;
-const SIDEBAR_MIN_WIDTH: f32 = 150.;
-const SIDEBAR_MAX_WIDTH: f32 = 480.;
+const SIDEBAR_MIN_WIDTH: f32 = markion::SIDEBAR_MIN_WIDTH;
+const SIDEBAR_MAX_WIDTH: f32 = markion::SIDEBAR_MAX_WIDTH;
 const SIDEBAR_DIVIDER_WIDTH: f32 = 1.;
 const DOCUMENT_TAB_BAND_HEIGHT: f32 = 30.;
 /// Width bounds for one document tab in the strip. Tabs truncate their title
@@ -2066,6 +2067,7 @@ mod documents;
 mod editing;
 mod editor_element;
 mod export_prefs;
+pub(super) mod layout;
 mod math_render;
 mod memory;
 mod network;
@@ -2218,10 +2220,13 @@ struct MarkionApp {
     open_in_current_tab: bool,
     view_mode: ViewMode,
     workspace_root: PathBuf,
-    // Draggable layout widths. Not persisted — every launch starts from the
-    // defaults so a resized window never leaves a pane unusably thin.
+    // Draggable layout widths. Restored from `session.toml` `[layout]`.
     editor_split_ratio: f32,
     sidebar_width: f32,
+    /// Keeps `observe_window_bounds` alive for the window lifetime.
+    layout_bounds_subscription: Option<Subscription>,
+    /// Generation token so only the latest layout-persist debounce writes.
+    layout_persist_generation: u64,
     file_tree: Option<FileTree>,
     // Unified sidebar: a single left column toggled as a whole, whose content
     // switches between the file tree and the document outline via `sidebar_tab`.

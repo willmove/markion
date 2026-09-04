@@ -191,6 +191,7 @@ impl MarkionApp {
             ((cursor_x - left) / width).clamp(EDITOR_SPLIT_RATIO_MIN, EDITOR_SPLIT_RATIO_MAX);
         if (ratio - self.editor_split_ratio).abs() > f32::EPSILON {
             self.editor_split_ratio = ratio;
+            self.schedule_persist_layout(cx);
             cx.notify();
         }
     }
@@ -217,6 +218,7 @@ impl MarkionApp {
             f32::from(event.event.position.x).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
         if (new_width - self.sidebar_width).abs() > f32::EPSILON {
             self.sidebar_width = new_width;
+            self.schedule_persist_layout(cx);
             cx.notify();
         }
     }

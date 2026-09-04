@@ -129,6 +129,8 @@ impl MarkionApp {
         } else {
             load_session_state(&session_path).unwrap_or_default()
         };
+        let editor_split_ratio = session.layout.normalized_split_ratio();
+        let sidebar_width = session.layout.normalized_sidebar_width();
         let typography = DocumentTypographyMetrics::new_with_code_font_size(
             preferences.editor_font_size,
             preferences.rendered_font_size,
@@ -217,8 +219,10 @@ impl MarkionApp {
             last_update_check: preferences.last_update_check,
             view_mode: ViewMode::default_mode(),
             workspace_root,
-            editor_split_ratio: 0.5,
-            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            editor_split_ratio,
+            sidebar_width,
+            layout_bounds_subscription: None,
+            layout_persist_generation: 0,
             file_tree,
             sidebar_visible: preferences.sidebar_visible,
             sidebar_tab: preferences.sidebar_tab,

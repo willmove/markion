@@ -10,7 +10,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{MAX_RECENT_FILES, SessionState};
+use crate::model::{MAX_RECENT_FILES, SessionLayout, SessionState};
 use crate::storage::atomic_write;
 
 /// Serde-facing shape of `session.toml`. Kept separate so `model` stays
@@ -26,6 +26,80 @@ struct SessionFile {
     active_file: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     recent_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layout: Option<LayoutFile>,
+}
+
+/// `[layout]` table: every field optional; unknown keys are ignored.
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct LayoutFile {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
+    x: Option<f32>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
+    y: Option<f32>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
+    width: Option<f32>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
+    height: Option<f32>,
+    #[serde(default, deserialize_with = "deserialize_bool_or_false")]
+    maximized: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
+    sidebar_width: Option<f32>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
+    editor_split_ratio: Option<f32>,
+}
+
+impl From<&SessionLayout> for LayoutFile {
+    fn from(layout: &SessionLayout) -> Self {
+        Self {
+            x: layout.x,
+            y: layout.y,
+            width: layout.width,
+            height: layout.height,
+            maximized: layout.maximized,
+            sidebar_width: layout.sidebar_width,
+            editor_split_ratio: layout.editor_split_ratio,
+        }
+    }
+}
+
+impl From<LayoutFile> for SessionLayout {
+    fn from(file: LayoutFile) -> Self {
+        Self {
+            x: file.x,
+            y: file.y,
+            width: file.width,
+            height: file.height,
+            maximized: file.maximized,
+            sidebar_width: file.sidebar_width,
+            editor_split_ratio: file.editor_split_ratio,
+        }
+    }
 }
 
 impl From<&SessionState> for SessionFile {
@@ -49,6 +123,7 @@ impl From<&SessionState> for SessionFile {
                 .iter()
                 .map(|path| path.display().to_string())
                 .collect(),
+            layout: (!session.layout.is_empty()).then(|| LayoutFile::from(&session.layout)),
         }
     }
 }
@@ -112,8 +187,29 @@ impl From<SessionFile> for SessionState {
             open_files,
             active_file,
             recent_files,
+            layout: file.layout.map(SessionLayout::from).unwrap_or_default(),
         }
     }
+}
+
+fn deserialize_optional_f32<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(match value {
+        toml::Value::Float(number) if number.is_finite() => Some(number as f32),
+        toml::Value::Integer(number) => Some(number as f32),
+        _ => None,
+    })
+}
+
+fn deserialize_bool_or_false<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value.as_bool().unwrap_or(false))
 }
 
 /// Loads session state from `path`. Missing files yield the default empty session.
@@ -174,6 +270,15 @@ mod tests {
                 PathBuf::from("D:/Notes/b.md"),
                 PathBuf::from("D:/Other/c.md"),
             ],
+            layout: SessionLayout {
+                x: Some(120.0),
+                y: Some(80.0),
+                width: Some(1420.0),
+                height: Some(900.0),
+                maximized: false,
+                sidebar_width: Some(280.0),
+                editor_split_ratio: Some(0.42),
+            },
         };
 
         save_session_state(&path, &session).unwrap();
@@ -183,6 +288,8 @@ mod tests {
         assert!(written.contains("workspace_root"));
         assert!(written.contains("open_files"));
         assert!(written.contains("recent_files"));
+        assert!(written.contains("[layout]"));
+        assert!(written.contains("sidebar_width"));
     }
 
     #[test]
@@ -192,6 +299,7 @@ mod tests {
         assert!(parsed.open_files.is_empty());
         assert!(parsed.active_file.is_none());
         assert!(parsed.recent_files.is_empty());
+        assert!(parsed.layout.is_empty());
     }
 
     #[test]
@@ -290,6 +398,89 @@ recent_files = ["", "D:/recent.md"]
         }
         assert_eq!(parsed.open_files.len(), 1);
         assert_eq!(parsed.recent_files.len(), 1);
+    }
+
+    #[test]
+    fn missing_layout_table_keeps_defaults() {
+        let parsed = parse_session_state(
+            r#"
+workspace_root = "D:/Notes"
+open_files = ["D:/Notes/a.md"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.workspace_root, Some(PathBuf::from("D:/Notes")));
+        assert_eq!(parsed.open_files, vec![PathBuf::from("D:/Notes/a.md")]);
+        assert!(parsed.layout.is_empty());
+        assert_eq!(
+            parsed.layout.normalized_window_size(),
+            (
+                crate::model::DEFAULT_WINDOW_WIDTH,
+                crate::model::DEFAULT_WINDOW_HEIGHT
+            )
+        );
+        assert_eq!(
+            parsed.layout.normalized_sidebar_width(),
+            crate::model::DEFAULT_SIDEBAR_WIDTH
+        );
+        assert_eq!(
+            parsed.layout.normalized_split_ratio(),
+            crate::model::DEFAULT_EDITOR_SPLIT_RATIO
+        );
+    }
+
+    #[test]
+    fn partial_and_invalid_layout_fields_degrade() {
+        let parsed = parse_session_state(
+            r#"
+[layout]
+width = 1420
+sidebar_width = "wide"
+editor_split_ratio = true
+unknown_future_key = 1
+"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.layout.width, Some(1420.0));
+        assert!(parsed.layout.height.is_none());
+        assert!(parsed.layout.sidebar_width.is_none());
+        assert!(parsed.layout.editor_split_ratio.is_none());
+        assert!(!parsed.layout.maximized);
+        assert_eq!(
+            parsed.layout.normalized_sidebar_width(),
+            crate::model::DEFAULT_SIDEBAR_WIDTH
+        );
+        assert_eq!(
+            crate::model::normalize_window_size(Some(100.0), Some(100.0)),
+            (
+                crate::model::DEFAULT_WINDOW_WIDTH,
+                crate::model::DEFAULT_WINDOW_HEIGHT
+            )
+        );
+        assert_eq!(
+            crate::model::normalize_sidebar_width(Some(12.0)),
+            crate::model::SIDEBAR_MIN_WIDTH
+        );
+        assert_eq!(
+            crate::model::normalize_sidebar_width(Some(900.0)),
+            crate::model::SIDEBAR_MAX_WIDTH
+        );
+        assert_eq!(
+            crate::model::normalize_editor_split_ratio(Some(0.01)),
+            crate::model::EDITOR_SPLIT_RATIO_MIN
+        );
+        assert_eq!(
+            crate::model::normalize_editor_split_ratio(Some(0.99)),
+            crate::model::EDITOR_SPLIT_RATIO_MAX
+        );
+        assert!(!crate::model::layout_rect_is_visible(
+            (5000.0, 5000.0, 800.0, 600.0),
+            &[(0.0, 0.0, 1920.0, 1080.0)]
+        ));
+        assert!(crate::model::layout_rect_is_visible(
+            (100.0, 80.0, 800.0, 600.0),
+            &[(0.0, 0.0, 1920.0, 1080.0)]
+        ));
     }
 
     /// Minimal TOML basic-string quoting for single-line Windows paths

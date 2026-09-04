@@ -167,14 +167,134 @@ impl CodeTheme {
 /// Maximum number of paths kept in the recent-files list.
 pub const MAX_RECENT_FILES: usize = 10;
 
-/// Persisted editor session: last workspace root, open saved tabs, and recent files.
-/// Stored separately from [`AppPreferences`] in `session.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// Built-in window size used when no valid `[layout]` size has been recorded.
+pub const DEFAULT_WINDOW_WIDTH: f32 = 1180.0;
+pub const DEFAULT_WINDOW_HEIGHT: f32 = 760.0;
+/// Size floor: values below this fall back to [`DEFAULT_WINDOW_WIDTH`] /
+/// [`DEFAULT_WINDOW_HEIGHT`] rather than being clamped up.
+pub const MIN_WINDOW_WIDTH: f32 = 640.0;
+pub const MIN_WINDOW_HEIGHT: f32 = 480.0;
+/// Minimum intersection height (logical pixels) that counts as “the window
+/// still has a grabable chrome strip on a connected display.”
+pub const TITLE_BAR_VISIBLE_STRIP: f32 = 24.0;
+
+/// Default and clamp range for the sidebar column width (logical pixels).
+pub const DEFAULT_SIDEBAR_WIDTH: f32 = 230.0;
+pub const SIDEBAR_MIN_WIDTH: f32 = 150.0;
+pub const SIDEBAR_MAX_WIDTH: f32 = 480.0;
+
+/// Default and clamp range for the Split Preview editor/preview divider.
+pub const DEFAULT_EDITOR_SPLIT_RATIO: f32 = 0.5;
+pub const EDITOR_SPLIT_RATIO_MIN: f32 = 0.15;
+pub const EDITOR_SPLIT_RATIO_MAX: f32 = 0.85;
+
+/// Optional chrome geometry stored under `[layout]` in `session.toml`.
+///
+/// Every field is optional so older session files and partial tables keep
+/// working. Missing or invalid numbers are normalized by the helpers below.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SessionLayout {
+    pub x: Option<f32>,
+    pub y: Option<f32>,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub maximized: bool,
+    pub sidebar_width: Option<f32>,
+    pub editor_split_ratio: Option<f32>,
+}
+
+impl SessionLayout {
+    /// True when nothing has been recorded and the table can be omitted.
+    pub fn is_empty(&self) -> bool {
+        self.x.is_none()
+            && self.y.is_none()
+            && self.width.is_none()
+            && self.height.is_none()
+            && !self.maximized
+            && self.sidebar_width.is_none()
+            && self.editor_split_ratio.is_none()
+    }
+
+    pub fn normalized_window_size(&self) -> (f32, f32) {
+        normalize_window_size(self.width, self.height)
+    }
+
+    pub fn normalized_sidebar_width(&self) -> f32 {
+        normalize_sidebar_width(self.sidebar_width)
+    }
+
+    pub fn normalized_split_ratio(&self) -> f32 {
+        normalize_editor_split_ratio(self.editor_split_ratio)
+    }
+}
+
+/// Accept a finite size at or above the floor; otherwise use the built-in default.
+pub fn normalize_window_size(width: Option<f32>, height: Option<f32>) -> (f32, f32) {
+    match (finite_positive(width), finite_positive(height)) {
+        (Some(width), Some(height)) if width >= MIN_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT => {
+            (width, height)
+        }
+        _ => (DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
+    }
+}
+
+/// Clamp a recorded sidebar width into the live divider range; missing or
+/// non-finite values become [`DEFAULT_SIDEBAR_WIDTH`].
+pub fn normalize_sidebar_width(width: Option<f32>) -> f32 {
+    match finite_positive(width) {
+        Some(width) => width.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+        None => DEFAULT_SIDEBAR_WIDTH,
+    }
+}
+
+/// Clamp a recorded split ratio into the live divider range; missing or
+/// non-finite values become [`DEFAULT_EDITOR_SPLIT_RATIO`].
+pub fn normalize_editor_split_ratio(ratio: Option<f32>) -> f32 {
+    match ratio.filter(|value| value.is_finite()) {
+        Some(ratio) => ratio.clamp(EDITOR_SPLIT_RATIO_MIN, EDITOR_SPLIT_RATIO_MAX),
+        None => DEFAULT_EDITOR_SPLIT_RATIO,
+    }
+}
+
+fn finite_positive(value: Option<f32>) -> Option<f32> {
+    value.filter(|value| value.is_finite() && *value > 0.0)
+}
+
+/// Axis-aligned rectangle in logical pixels: `(x, y, width, height)`.
+pub type LayoutRect = (f32, f32, f32, f32);
+
+/// True when `window` overlaps any display by at least a title-bar-high strip.
+pub fn layout_rect_is_visible(window: LayoutRect, displays: &[LayoutRect]) -> bool {
+    let (wx, wy, ww, wh) = window;
+    if !ww.is_finite() || !wh.is_finite() || ww <= 0.0 || wh <= 0.0 {
+        return false;
+    }
+    displays.iter().any(|&(dx, dy, dw, dh)| {
+        if !dw.is_finite() || !dh.is_finite() || dw <= 0.0 || dh <= 0.0 {
+            return false;
+        }
+        let left = wx.max(dx);
+        let top = wy.max(dy);
+        let right = (wx + ww).min(dx + dw);
+        let bottom = (wy + wh).min(dy + dh);
+        let width = right - left;
+        let height = bottom - top;
+        width > 0.0 && height >= TITLE_BAR_VISIBLE_STRIP
+    })
+}
+
+/// Persisted editor session: last workspace root, open saved tabs, recent files,
+/// and optional chrome geometry. Stored separately from [`AppPreferences`] in
+/// `session.toml`.
+///
+/// `Eq` is omitted because [`SessionLayout`] carries `f32` fields.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SessionState {
     pub workspace_root: Option<PathBuf>,
     pub open_files: Vec<PathBuf>,
     pub active_file: Option<PathBuf>,
     pub recent_files: Vec<PathBuf>,
+    pub layout: SessionLayout,
 }
 
 impl SessionState {
