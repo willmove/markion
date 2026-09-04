@@ -1,3 +1,4 @@
+use super::layout::startup_window_bounds;
 use super::*;
 
 pub(super) fn install_window_close_guard(
@@ -16,6 +17,10 @@ pub(super) fn install_window_close_guard(
         };
 
         if allow_close || !is_dirty {
+            let _ = app_entity.update(cx, |app, _| {
+                app.capture_window_layout(window);
+                app.flush_layout();
+            });
             return true;
         }
 
@@ -360,7 +365,8 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
         // been loaded, so the OS menu bar honours the user's choice on launch.
         install_menus(Language::default(), DEFAULT_HEADING_MENU_MAX_LEVEL, cx);
 
-        let bounds = Bounds::centered(None, size(px(1180.), px(760.)), cx);
+        let session = load_session_state(default_session_path()).unwrap_or_default();
+        let window_bounds = startup_window_bounds(&session.layout, cx);
         let window = cx
             .open_window(
                 WindowOptions {
@@ -368,7 +374,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                         title: Some(SharedString::from(MARKION_WINDOW_TITLE)),
                         ..Default::default()
                     }),
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_bounds: Some(window_bounds),
                     app_id: Some(MARKION_APP_ID.to_string()),
                     ..Default::default()
                 },
@@ -380,6 +386,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
         window
             .update(cx, |app, window, cx| {
                 install_window_close_guard(window, cx.entity(), cx);
+                app.install_layout_persistence(window, cx);
                 window.focus(&app.focus_handle(cx));
                 // Re-translate the native menu now that the saved language
                 // preference has been loaded by `MarkionApp::new`.

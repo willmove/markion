@@ -3023,6 +3023,92 @@ fn global_shortcut_clear_restores_defaults_and_exits_capture(cx: &mut TestAppCon
         .expect("global Preferences reset handler");
     assert!(reset.contains("app.clear_shortcut_overrides(cx)"));
     assert!(reset.contains("app.persist_preferences()"));
+    assert!(
+        !reset.contains("session.layout") && !reset.contains("sidebar_width"),
+        "Reset Preferences must not clear session chrome geometry"
+    );
+}
+
+#[gpui::test]
+fn test_constructor_uses_in_memory_layout_defaults(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, _| {
+        assert_eq!(app.sidebar_width, DEFAULT_SIDEBAR_WIDTH);
+        assert_eq!(app.editor_split_ratio, DEFAULT_EDITOR_SPLIT_RATIO);
+        assert!(app.session.layout.is_empty());
+    });
+}
+
+#[gpui::test]
+fn startup_window_bounds_recenters_when_off_screen(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let visible = SessionLayout {
+            x: Some(80.0),
+            y: Some(60.0),
+            width: Some(1000.0),
+            height: Some(700.0),
+            maximized: true,
+            ..SessionLayout::default()
+        };
+        match crate::app::layout::startup_window_bounds(&visible, cx) {
+            WindowBounds::Maximized(bounds) => {
+                assert_eq!(f32::from(bounds.origin.x), 80.0);
+                assert_eq!(f32::from(bounds.origin.y), 60.0);
+                assert_eq!(f32::from(bounds.size.width), 1000.0);
+                assert_eq!(f32::from(bounds.size.height), 700.0);
+            }
+            other => panic!("expected maximized restore, got {other:?}"),
+        }
+
+        let off_screen = SessionLayout {
+            x: Some(20_000.0),
+            y: Some(20_000.0),
+            width: Some(1000.0),
+            height: Some(700.0),
+            maximized: true,
+            ..SessionLayout::default()
+        };
+        match crate::app::layout::startup_window_bounds(&off_screen, cx) {
+            WindowBounds::Windowed(bounds) => {
+                assert_eq!(f32::from(bounds.size.width), 1000.0);
+                assert_eq!(f32::from(bounds.size.height), 700.0);
+            }
+            other => panic!("off-screen layout must open windowed, got {other:?}"),
+        }
+
+        let missing = SessionLayout::default();
+        match crate::app::layout::startup_window_bounds(&missing, cx) {
+            WindowBounds::Windowed(bounds) => {
+                assert_eq!(f32::from(bounds.size.width), markion::DEFAULT_WINDOW_WIDTH);
+                assert_eq!(
+                    f32::from(bounds.size.height),
+                    markion::DEFAULT_WINDOW_HEIGHT
+                );
+            }
+            other => panic!("missing layout must use default windowed size, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn chrome_layout_io_does_not_touch_document_caches() {
+    let layout = include_str!("layout.rs");
+    assert!(layout.contains("fn flush_layout"));
+    assert!(layout.contains("self.persist_session()"));
+    assert!(
+        !layout.contains("document.version")
+            && !layout.contains("preview_blocks")
+            && !layout.contains("visual_blocks_shared"),
+        "layout persist must not rebuild derived Markdown caches"
+    );
+    assert!(
+        include_str!("bootstrap.rs").contains("startup_window_bounds(&session.layout"),
+        "window bounds restore must run before open_window, independent of CLI session restore"
+    );
+    assert!(
+        include_str!("state.rs").contains("fn should_restore_session"),
+        "document/workspace restore stays gated by CLI intent"
+    );
 }
 
 #[gpui::test]
@@ -11288,6 +11374,7 @@ fn session_restore_skips_missing_paths_and_untitled_tabs() {
         open_files: vec![existing.clone(), missing.clone()],
         active_file: Some(missing.clone()),
         recent_files: Vec::new(),
+        layout: SessionLayout::default(),
     };
     let (root, open_files, active) = filter_restorable_session(&session);
     assert_eq!(root.as_deref(), Some(workspace.as_path()));

@@ -1378,6 +1378,10 @@ impl MarkionApp {
         self.allow_close = true;
         self.status = t(self.language, Msg::StatusExitingMarkion).into();
         cx.notify();
+        if let Ok(bounds) = window_handle.update(cx, |_, window, _| window.window_bounds()) {
+            self.apply_window_bounds(bounds);
+        }
+        self.flush_layout();
         match kind {
             UnsavedExitKind::MenuQuit => {
                 let _ = window_handle.update(cx, |_, window, _| window.remove_window());

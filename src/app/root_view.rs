@@ -3348,7 +3348,8 @@ pub(super) fn editor_split_handle_view(
                 .on_click(cx.listener(move |app, event: &ClickEvent, _, cx| {
                     // Double-click resets the editor/preview split to 50/50.
                     if event.click_count() >= 2 {
-                        app.editor_split_ratio = 0.5;
+                        app.editor_split_ratio = DEFAULT_EDITOR_SPLIT_RATIO;
+                        app.schedule_persist_layout(cx);
                         cx.notify();
                     }
                 }))
@@ -3384,6 +3385,7 @@ pub(super) fn sidebar_resize_handle_view(
                 .on_click(cx.listener(move |app, event: &ClickEvent, _, cx| {
                     if event.click_count() >= 2 {
                         app.sidebar_width = DEFAULT_SIDEBAR_WIDTH;
+                        app.schedule_persist_layout(cx);
                         cx.notify();
                     }
                 }))
