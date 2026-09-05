@@ -367,15 +367,17 @@ impl MemoryFootprint for DiagramCache {
 impl MemoryFootprint for PreviewImageCache {
     fn memory_sites(&self) -> Vec<MemorySite> {
         let (entries, pending, ready, completed_bytes, budget_bytes) = self.accounting_counts();
+        let data_payload_bytes = self.retained_data_payload_bytes();
         vec![MemorySite::owned(
             "global.preview_image_cache",
-            completed_bytes,
+            completed_bytes.saturating_add(data_payload_bytes),
             vec![
                 ("entries".into(), entries),
                 ("pending".into(), pending),
                 ("ready".into(), ready),
                 ("completed_bytes".into(), completed_bytes),
                 ("budget_bytes".into(), budget_bytes),
+                ("data_payload_bytes".into(), data_payload_bytes),
             ],
         )]
     }

@@ -242,6 +242,141 @@ fn url_in_parentheses() {
 }
 
 // ---------------------------------------------------------------------------
+// Non-ASCII URL Tests (char/byte index regression)
+// ---------------------------------------------------------------------------
+
+/// Collect the auto-detected link URLs from a paragraph's inline content.
+fn link_urls(content: &[Inline]) -> Vec<&str> {
+    content
+        .iter()
+        .filter_map(|inline| {
+            if let Inline::Link { url, .. } = inline {
+                Some(url.as_str())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn detect_unicode_domain_url() {
+    // pulldown-cmark's GFM autolinker only handles ASCII domains, so this
+    // reaches the URL post-processor as plain text.
+    let md = "Visit https://例子.com today.\n";
+    let doc = default_parser().parse(md).unwrap();
+
+    if let Block::Paragraph { content, .. } = &doc.blocks[0] {
+        let urls = link_urls(content);
+        assert!(
+            urls.contains(&"https://例子.com"),
+            "Unicode-domain URL should be fully captured, got {:?}",
+            urls
+        );
+        // Text after the URL must survive intact (byte-offset slicing).
+        let has_tail = content
+            .iter()
+            .any(|i| matches!(i, Inline::Text(t) if t.contains(" today.")));
+        assert!(has_tail, "Text following the URL should be preserved");
+    } else {
+        panic!("Expected Paragraph block");
+    }
+}
+
+#[test]
+fn unicode_domain_url_with_multibyte_path_and_query() {
+    let md = "Visit https://例子.com/路径?x=1 today.\n";
+    let doc = default_parser().parse(md).unwrap();
+
+    if let Block::Paragraph { content, .. } = &doc.blocks[0] {
+        let urls = link_urls(content);
+        assert!(
+            urls.contains(&"https://例子.com/路径?x=1"),
+            "Full URL with multibyte path and query should be captured, got {:?}",
+            urls
+        );
+    } else {
+        panic!("Expected Paragraph block");
+    }
+}
+
+#[test]
+fn detect_umlaut_domain_url() {
+    let md = "Visit https://münchen.de/x today.\n";
+    let doc = default_parser().parse(md).unwrap();
+
+    if let Block::Paragraph { content, .. } = &doc.blocks[0] {
+        let urls = link_urls(content);
+        assert!(
+            urls.contains(&"https://münchen.de/x"),
+            "Umlaut-domain URL should be fully captured, got {:?}",
+            urls
+        );
+    } else {
+        panic!("Expected Paragraph block");
+    }
+}
+
+#[test]
+fn ascii_domain_with_multibyte_path() {
+    let md = "Visit https://example.com/中文路径 today.\n";
+    let doc = default_parser().parse(md).unwrap();
+
+    if let Block::Paragraph { content, .. } = &doc.blocks[0] {
+        let urls = link_urls(content);
+        assert!(
+            urls.contains(&"https://example.com/中文路径"),
+            "ASCII-domain URL with multibyte path should be fully captured, got {:?}",
+            urls
+        );
+    } else {
+        panic!("Expected Paragraph block");
+    }
+}
+
+#[test]
+fn unicode_url_trailing_cjk_punctuation() {
+    let md = "See https://例子.com。\n";
+    let doc = default_parser().parse(md).unwrap();
+
+    if let Block::Paragraph { content, .. } = &doc.blocks[0] {
+        let urls = link_urls(content);
+        assert!(
+            urls.contains(&"https://例子.com"),
+            "URL should stop before the CJK full stop, got {:?}",
+            urls
+        );
+        // The trailing 。 must remain as text, not be swallowed or corrupt slicing.
+        let has_full_stop = content
+            .iter()
+            .any(|i| matches!(i, Inline::Text(t) if t.contains('。')));
+        assert!(
+            has_full_stop,
+            "Trailing CJK punctuation should be preserved as text"
+        );
+    } else {
+        panic!("Expected Paragraph block");
+    }
+}
+
+#[test]
+fn detect_www_unicode_url() {
+    let md = "Go to www.例子.com/büro now.\n";
+    let doc = default_parser().parse(md).unwrap();
+
+    if let Block::Paragraph { content, .. } = &doc.blocks[0] {
+        let urls = link_urls(content);
+        assert!(
+            urls.contains(&"https://www.例子.com/büro"),
+            "www.-prefixed Unicode URL should be detected and prefixed with https://, got {:?}",
+            urls
+        );
+    } else {
+        panic!("Expected Paragraph block");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Round-trip Tests
 // ---------------------------------------------------------------------------
 

@@ -54,7 +54,9 @@ pub(super) fn status_bar_context(
             branch: branch.map(str::to_owned),
         };
     }
-    let stats = tab.document.stats();
+    // `basic_stats` (not `stats`) deliberately: the heading count in `stats`
+    // costs a Markdown parse, which Edit mode must not pay per keystroke.
+    let stats = tab.document.basic_stats();
     let caret = (!matches!(view_mode, ViewMode::Read))
         .then(|| tab.document.line_column_at(tab.cursor_offset()));
 

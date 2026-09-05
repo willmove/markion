@@ -150,8 +150,8 @@ pub use model::{
     AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, CodeTheme,
     DEFAULT_CODE_FONT_FAMILY, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_EDITOR_SPLIT_RATIO,
     DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE,
-    DEFAULT_SIDEBAR_WIDTH, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, DocumentStats,
-    DocxExportOptions, DocxImagePolicy, DocxPageSize, EDITOR_SPLIT_RATIO_MAX,
+    DEFAULT_SIDEBAR_WIDTH, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, DocumentBasicStats,
+    DocumentStats, DocxExportOptions, DocxImagePolicy, DocxPageSize, EDITOR_SPLIT_RATIO_MAX,
     EDITOR_SPLIT_RATIO_MIN, EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory, ExportBackend,
     ExportBackendPreference, ExportFormat, ExportOutcome, ExportPreferences, Footnote,
     FrontMatterError, Heading, HighlightKind, HighlightedSpan, HtmlImgLength, InlineImage,
@@ -636,6 +636,7 @@ pub struct MarkdownDocument {
     cached_visual_blocks: std::cell::RefCell<Option<Cached<std::sync::Arc<Vec<VisualBlock>>>>>,
     cached_outline: std::cell::RefCell<Option<Cached<Vec<Heading>>>>,
     cached_stats: std::cell::RefCell<Option<Cached<DocumentStats>>>,
+    cached_basic_stats: std::cell::RefCell<Option<Cached<DocumentBasicStats>>>,
     cached_line_count: std::cell::Cell<Option<(u64, usize)>>,
     source_mapped_cache: std::cell::RefCell<Option<source_mapped::SourceMappedCache>>,
     pending_source_edits: std::cell::RefCell<source_mapped::PendingSourceEdits>,
@@ -659,6 +660,7 @@ impl Clone for MarkdownDocument {
             cached_visual_blocks: std::cell::RefCell::new(None),
             cached_outline: std::cell::RefCell::new(None),
             cached_stats: std::cell::RefCell::new(None),
+            cached_basic_stats: std::cell::RefCell::new(None),
             cached_line_count: std::cell::Cell::new(None),
             source_mapped_cache: std::cell::RefCell::new(None),
             pending_source_edits: std::cell::RefCell::new(source_mapped::PendingSourceEdits::Full),
@@ -716,6 +718,7 @@ impl MarkdownDocument {
             cached_visual_blocks: std::cell::RefCell::new(None),
             cached_outline: std::cell::RefCell::new(None),
             cached_stats: std::cell::RefCell::new(None),
+            cached_basic_stats: std::cell::RefCell::new(None),
             cached_line_count: std::cell::Cell::new(None),
             source_mapped_cache: std::cell::RefCell::new(None),
             pending_source_edits: std::cell::RefCell::new(source_mapped::PendingSourceEdits::Full),
@@ -1312,6 +1315,7 @@ impl MarkdownDocument {
         *self.cached_preview_blocks.borrow_mut() = None;
         *self.cached_outline.borrow_mut() = None;
         *self.cached_stats.borrow_mut() = None;
+        *self.cached_basic_stats.borrow_mut() = None;
         self.cached_line_count.set(None);
         if let Some(edit) = edit {
             self.pending_source_edits.borrow_mut().record(edit);
@@ -1391,6 +1395,7 @@ impl MarkdownDocument {
         *self.cached_visual_blocks.borrow_mut() = None;
         *self.cached_outline.borrow_mut() = None;
         *self.cached_stats.borrow_mut() = None;
+        *self.cached_basic_stats.borrow_mut() = None;
         self.cached_line_count.set(None);
         *self.source_mapped_cache.borrow_mut() = None;
         *self.pending_source_edits.borrow_mut() = source_mapped::PendingSourceEdits::Full;
@@ -1491,6 +1496,22 @@ impl MarkdownDocument {
             populated: stats_populated,
         });
         drop(stats);
+
+        let basic_stats = self.cached_basic_stats.borrow();
+        let basic_stats_populated = basic_stats
+            .as_ref()
+            .is_some_and(|cached| cached.version == self.text_version);
+        sites.push(DocumentMemorySite {
+            name: "basic_stats",
+            estimated_bytes: if basic_stats_populated {
+                std::mem::size_of::<DocumentBasicStats>()
+            } else {
+                0
+            },
+            item_count: usize::from(basic_stats_populated),
+            populated: basic_stats_populated,
+        });
+        drop(basic_stats);
 
         let line_count_populated = self
             .cached_line_count
@@ -3927,6 +3948,30 @@ impl MarkdownDocument {
         )
     }
 
+    /// Byte/char/word/line counters only. Unlike [`Self::stats`] this never
+    /// parses Markdown for headings, so it is safe on the per-keystroke render
+    /// path (the status bar) in Edit mode, where the outline cache is cold.
+    pub fn basic_stats(&self) -> DocumentBasicStats {
+        if let Some(cached) = self.cached_basic_stats.borrow().as_ref()
+            && cached.version == self.text_version
+        {
+            return cached.value;
+        }
+
+        let stats = DocumentBasicStats {
+            bytes: self.text.len(),
+            chars: self.text.chars().count(),
+            words: self.text.split_whitespace().count(),
+            lines: self.text.lines().count().max(1),
+        };
+        let version = self.text_version;
+        *self.cached_basic_stats.borrow_mut() = Some(Cached {
+            version,
+            value: stats,
+        });
+        stats
+    }
+
     pub fn stats(&self) -> DocumentStats {
         if let Some(cached) = self.cached_stats.borrow().as_ref()
             && cached.version == self.text_version
@@ -3934,11 +3979,12 @@ impl MarkdownDocument {
             return cached.value.clone();
         }
 
+        let basic = self.basic_stats();
         let stats = DocumentStats {
-            bytes: self.text.len(),
-            chars: self.text.chars().count(),
-            words: self.text.split_whitespace().count(),
-            lines: self.text.lines().count().max(1),
+            bytes: basic.bytes,
+            chars: basic.chars,
+            words: basic.words,
+            lines: basic.lines,
             headings: self.outline().len(),
         };
         let version = self.text_version;
@@ -8940,6 +8986,84 @@ Intro.
         let second = doc.outline();
         assert_eq!(first, second);
         assert_eq!(doc.stats(), doc.stats());
+    }
+
+    #[test]
+    fn basic_stats_counts_bytes_chars_words_and_lines() {
+        let doc = MarkdownDocument::from_text("# Title\n\nTwo words here.\n\n## Second heading");
+        let stats = doc.basic_stats();
+        assert_eq!(stats.bytes, doc.text().len());
+        assert_eq!(stats.chars, doc.text().chars().count());
+        // "#", "Title", "Two", "words", "here.", "##", "Second", "heading"
+        assert_eq!(stats.words, 8);
+        assert_eq!(stats.lines, 5);
+        // The full stats must agree on the shared fields.
+        let full = doc.stats();
+        assert_eq!(
+            (
+                full.bytes,
+                full.chars,
+                full.words,
+                full.lines,
+                full.headings
+            ),
+            (stats.bytes, stats.chars, stats.words, stats.lines, 2)
+        );
+    }
+
+    #[test]
+    fn basic_stats_never_populates_outline_or_stats_caches() {
+        // The whole point of basic_stats: the status bar must not trigger the
+        // heading parse in Edit mode, where the outline cache is otherwise
+        // cold (the preview derive is skipped there).
+        let doc = MarkdownDocument::from_text("# Title\n\nbody");
+        let _ = doc.basic_stats();
+        let breakdown = doc.memory_breakdown();
+        assert!(
+            breakdown.site("basic_stats").unwrap().populated,
+            "basic_stats read populates its own cache"
+        );
+        assert!(
+            !breakdown.site("stats").unwrap().populated,
+            "basic_stats must not populate the heading-carrying stats cache"
+        );
+        assert!(
+            !breakdown.site("outline").unwrap().populated,
+            "basic_stats must not trigger the outline parse"
+        );
+    }
+
+    #[test]
+    fn basic_stats_cache_is_version_gated() {
+        let mut doc = MarkdownDocument::from_text("one two");
+        let first = doc.basic_stats();
+        assert_eq!(
+            doc.basic_stats(),
+            first,
+            "repeat read within a version reuses"
+        );
+        assert!(
+            doc.memory_breakdown()
+                .site("basic_stats")
+                .unwrap()
+                .populated
+        );
+
+        doc.replace_range(7..7, " three");
+        let second = doc.basic_stats();
+        assert_eq!(second.words, 3, "mutation must invalidate the cache");
+        assert_ne!(second, first);
+
+        // Dormancy eviction drops the cache without a version bump; the next
+        // read recomputes the same values for the unchanged text.
+        doc.evict_derived_caches();
+        assert!(
+            !doc.memory_breakdown()
+                .site("basic_stats")
+                .unwrap()
+                .populated
+        );
+        assert_eq!(doc.basic_stats(), second);
     }
 
     #[test]

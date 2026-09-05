@@ -1024,11 +1024,12 @@ fn detect_and_convert_urls(text: &str) -> Vec<Inline> {
 
 /// Find the end position of a URL in text.
 /// URLs end at whitespace, punctuation (except certain characters), or end of string.
+/// Returns a BYTE offset into `url_start` (the callers slice with it).
 fn find_url_end(url_start: &str) -> usize {
-    let chars: Vec<char> = url_start.chars().collect();
+    let chars: Vec<(usize, char)> = url_start.char_indices().collect();
     let mut end = 0;
 
-    for (i, &ch) in chars.iter().enumerate() {
+    for (i, &(byte_idx, ch)) in chars.iter().enumerate() {
         // URL ends at whitespace
         if ch.is_whitespace() {
             break;
@@ -1036,7 +1037,7 @@ fn find_url_end(url_start: &str) -> usize {
 
         // Handle period: if it's at the end or followed by whitespace, exclude it
         if ch == '.' {
-            let next_is_whitespace_or_end = i + 1 >= chars.len() || chars[i + 1].is_whitespace();
+            let next_is_whitespace_or_end = i + 1 >= chars.len() || chars[i + 1].1.is_whitespace();
             if next_is_whitespace_or_end {
                 // Don't include the trailing period
                 break;
@@ -1045,7 +1046,7 @@ fn find_url_end(url_start: &str) -> usize {
 
         // Handle other sentence-ending punctuation
         if i > 0 && matches!(ch, '!' | ')' | '>' | '"' | '\'' | ',' | ';' | '?') {
-            let next_is_whitespace_or_end = i + 1 >= chars.len() || chars[i + 1].is_whitespace();
+            let next_is_whitespace_or_end = i + 1 >= chars.len() || chars[i + 1].1.is_whitespace();
             if next_is_whitespace_or_end {
                 // Don't include the trailing punctuation
                 break;
@@ -1073,15 +1074,15 @@ fn find_url_end(url_start: &str) -> usize {
                     | '!'
             )
         {
-            end = i + 1;
+            end = byte_idx + ch.len_utf8();
         } else {
             break;
         }
     }
 
-    // Ensure we captured at least something
+    // Ensure we captured at least one character
     if end == 0 {
-        end = 1;
+        end = url_start.chars().next().map_or(0, char::len_utf8);
     }
 
     end
@@ -1676,5 +1677,25 @@ mod tests {
         } else {
             panic!("Expected FootnoteDefinition");
         }
+    }
+
+    // --- URL auto-detection ---
+
+    #[test]
+    fn find_url_end_returns_byte_offsets() {
+        // ASCII: byte count == char count, behavior unchanged.
+        let ascii = "https://example.com/path?x=1 rest";
+        assert_eq!(find_url_end(ascii), "https://example.com/path?x=1".len());
+
+        // Multibyte: the result must be a byte offset on a char boundary that
+        // captures the full URL (not a char count that truncates or panics).
+        let unicode = "https://例子.com/路径?x=1 rest";
+        let end = find_url_end(unicode);
+        assert_eq!(&unicode[..end], "https://例子.com/路径?x=1");
+
+        // Trailing ASCII punctuation is still trimmed in byte terms.
+        let punctuated = "https://例子.com。";
+        let end = find_url_end(punctuated);
+        assert_eq!(&punctuated[..end], "https://例子.com");
     }
 }

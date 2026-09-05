@@ -8219,6 +8219,150 @@ fn visual_edit_gfm_alert_title_row_is_reachable_and_editable(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn visual_edit_callout_title_cjk_pending_navigation_clamps_caret(cx: &mut TestAppContext) {
+    // Regression: the callout title fallback target used to be `line_end - 1`,
+    // which sits inside the trailing multibyte character when the marker line
+    // ends with CJK text; the poisoned caret then panicked on the next arrow
+    // key / Ctrl+F / copy. Real alert marker lines are pure ASCII (pulldown
+    // rejects any title after `[!NOTE]`), so drive the fallback with a
+    // synthetic title row whose line ends in CJK — the shape the fix defends
+    // against.
+    let source = "> [!NOTE]\n> body 注意标题\n";
+    let cjk_line = source.find("> body").unwrap()..source.len();
+    let title_target = source.find('题').unwrap();
+    let body_caret = source.find("body").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        let mut title = tab.document.visual_blocks_shared()[0].clone();
+        assert!(
+            matches!(title.kind, VisualBlockKind::CalloutTitle { .. }),
+            "fixture block 0 must be the real callout title row"
+        );
+        title.source_range = cjk_line.clone();
+        tab.visual_list_blocks = Arc::new(vec![title]);
+        // The pending completion must take the snapshot-less callout fallback,
+        // not a stale painted snapshot from before the block swap.
+        tab.visual_navigation_snapshots.clear();
+        tab.visual_navigation_snapshot_ids.clear();
+        tab.pending_visual_navigation = Some(PendingVisualNavigation {
+            document_version: tab.document.version(),
+            target_block: 0,
+            direction: VisualNavigationDirection::Up,
+            extend_selection: false,
+            preferred_x: px(0.),
+        });
+        app.complete_pending_visual_navigation(cx);
+
+        let tab = app.active_tab();
+        let cursor = tab.cursor_offset();
+        assert!(
+            tab.document.text().is_char_boundary(cursor),
+            "caret {cursor} must fall on a char boundary in {:?}",
+            tab.document.text()
+        );
+        assert_eq!(
+            cursor, title_target,
+            "the fallback should park just inside the CJK line end"
+        );
+        assert!(tab.pending_visual_navigation.is_none());
+        let block_index = visual_block_index_for_offset(
+            &tab.visual_list_blocks,
+            cursor,
+            tab.document.text().len(),
+        )
+        .expect("caret owns a visual row");
+        assert!(
+            matches!(
+                tab.visual_list_blocks[block_index].kind,
+                VisualBlockKind::CalloutTitle { .. }
+            ),
+            "caret should own the callout title row"
+        );
+    });
+
+    // The follow-up keystrokes that used to panic on the poisoned caret.
+    cx.dispatch_action(Left);
+    cx.dispatch_action(Right);
+    cx.run_until_parked();
+
+    // Extending a selection into the row hits the same target; copying it
+    // then slices the selection out of the document. Both used to panic.
+    app.update(cx, |app, cx| {
+        app.move_to(body_caret, cx);
+        let tab = app.active_tab_mut();
+        let mut title = tab.document.visual_blocks_shared()[0].clone();
+        title.source_range = cjk_line.clone();
+        tab.visual_list_blocks = Arc::new(vec![title]);
+        tab.visual_navigation_snapshots.clear();
+        tab.visual_navigation_snapshot_ids.clear();
+        tab.pending_visual_navigation = Some(PendingVisualNavigation {
+            document_version: tab.document.version(),
+            target_block: 0,
+            direction: VisualNavigationDirection::Up,
+            extend_selection: true,
+            preferred_x: px(0.),
+        });
+        app.complete_pending_visual_navigation(cx);
+
+        let tab = app.active_tab();
+        let selected = tab.selected_range.clone();
+        assert!(!selected.is_empty(), "selection should extend into the row");
+        assert_eq!(selected.start, body_caret);
+        assert_eq!(selected.end, title_target);
+        assert!(tab.document.text().is_char_boundary(selected.start));
+        assert!(tab.document.text().is_char_boundary(selected.end));
+    });
+    let expected = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        tab.document.text()[tab.selected_range.clone()].to_string()
+    });
+    cx.dispatch_action(Copy);
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(copied.as_deref(), Some(expected.as_str()));
+
+    // Find prefill slices the selection too; it must see the same safe text.
+    cx.dispatch_action(ShowFind);
+    app.update(cx, |app, _| {
+        assert!(app.search_visible);
+        assert_eq!(app.search_query.buffer, expected);
+    });
+}
+
+#[test]
+fn visual_edit_callout_title_cjk_marker_line_target_clamps_boundary() {
+    // The shared caret-target computation behind keyboard entry and label
+    // clicks (both call sites use `callout_marker_line_caret_target`):
+    // always on a char boundary, just inside the line's end.
+    let cjk = "> [!NOTE] 注意标题\n> body\n";
+    let target = callout_marker_line_caret_target(cjk, &(0..23)).expect("target");
+    assert_eq!(target, cjk.find('题').unwrap());
+    assert!(cjk.is_char_boundary(target));
+
+    let ascii = "> [!NOTE]\n> body\n";
+    assert_eq!(callout_marker_line_caret_target(ascii, &(0..10)), Some(8));
+    // A marker line at end of document without a trailing newline.
+    assert_eq!(
+        callout_marker_line_caret_target("> [!NOTE]", &(0..9)),
+        Some(8)
+    );
+    // Degenerate ranges carry no caret target.
+    assert_eq!(callout_marker_line_caret_target("ab\ncd", &(2..2)), None);
+    assert_eq!(callout_marker_line_caret_target("ab\n", &(2..3)), None);
+}
+
+#[gpui::test]
 fn visual_edit_down_arrow_lands_on_blank_line_gap(cx: &mut TestAppContext) {
     let source = "Para 1\n\nPara 2";
     let (app, cx) = cx.add_window_view(|_, cx| {
@@ -8940,6 +9084,113 @@ fn grapheme_boundaries_match_full_document_segmentation() {
             "next_boundary at {offset}"
         );
     }
+}
+
+#[test]
+fn mid_char_offsets_are_safe_for_boundary_scans_and_selected_range() {
+    // Defense in depth: a caret or selection that somehow lands mid-character
+    // (the pre-fix CJK callout title target did exactly that) must clamp to a
+    // char boundary instead of panicking at a slice site.
+    let text = "a注意b\ncd";
+    let tab = EditorTab::new(MarkdownDocument::from_text(text));
+
+    for offset in 0..=text.len() + 5 {
+        let scan = boundary_scan_start(text, offset);
+        assert!(
+            text.is_char_boundary(scan),
+            "scan start for offset {offset} must be a char boundary"
+        );
+        assert!(
+            scan <= clamp_to_text_boundary(text, offset),
+            "scan start must never pass the clamped offset {offset}"
+        );
+        let previous = tab.previous_boundary(offset);
+        assert!(
+            text.is_char_boundary(previous),
+            "previous_boundary({offset}) must be a char boundary"
+        );
+        let next = tab.next_boundary(offset);
+        assert!(
+            text.is_char_boundary(next),
+            "next_boundary({offset}) must be a char boundary"
+        );
+    }
+
+    // Mid-character and out-of-range offsets scan from the containing
+    // character's start, matching the already-clamped offset.
+    assert_eq!(tab.previous_boundary(2), tab.previous_boundary(1));
+    assert_eq!(
+        tab.previous_boundary(usize::MAX),
+        tab.previous_boundary(text.len())
+    );
+
+    // Invalid selections collapse to a clamped caret instead of panicking at
+    // the copy/cut/find-prefill slice sites.
+    let mut tab = EditorTab::new(MarkdownDocument::from_text(text));
+    tab.selected_range = 2..5;
+    assert_eq!(tab.safe_selected_range(), 4..4);
+    tab.selected_range = 2..2;
+    assert_eq!(tab.safe_selected_range(), 1..1);
+    tab.selected_range = 0..usize::MAX;
+    assert_eq!(tab.safe_selected_range(), text.len()..text.len());
+}
+
+#[gpui::test]
+fn invalid_mid_char_selection_degrades_gracefully_for_copy_cut_and_find(cx: &mut TestAppContext) {
+    // If selection state is ever poisoned with a mid-character range, the
+    // selection consumers must no-op exactly like an empty selection rather
+    // than panic slicing the document.
+    let source = "注意标题\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // Copy: nothing valid to copy, clipboard untouched.
+    app.update(cx, |app, _| {
+        app.active_tab_mut().selected_range = 2..8;
+    });
+    cx.dispatch_action(Copy);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.status.as_ref(),
+            t(app.language, Msg::StatusNothingToCopy)
+        );
+    });
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert!(
+        copied.is_none(),
+        "invalid selection must not copy, got {copied:?}"
+    );
+
+    // Cut: document and clipboard both untouched.
+    app.update(cx, |app, _| {
+        app.active_tab_mut().selected_range = 2..8;
+    });
+    cx.dispatch_action(Cut);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(!app.active_tab().document.is_dirty());
+    });
+    let cut = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert!(cut.is_none(), "invalid selection must not cut, got {cut:?}");
+
+    // Find prefill: the panel opens with an empty query instead of slicing.
+    app.update(cx, |app, _| {
+        app.active_tab_mut().selected_range = 2..8;
+    });
+    cx.dispatch_action(ShowFind);
+    app.update(cx, |app, _| {
+        assert!(app.search_visible);
+        assert!(app.search_query.buffer.is_empty());
+    });
 }
 
 #[test]
@@ -14976,7 +15227,7 @@ fn status_bar_context_uses_cached_unicode_metrics_and_active_caret() {
     assert!(
         !tab.document
             .memory_breakdown()
-            .site("stats")
+            .site("basic_stats")
             .unwrap()
             .populated
     );
@@ -14989,9 +15240,20 @@ fn status_bar_context_uses_cached_unicode_metrics_and_active_caret() {
     assert!(
         tab.document
             .memory_breakdown()
-            .site("stats")
+            .site("basic_stats")
             .unwrap()
             .populated
+    );
+    // The status bar must not pay for the heading parse: the full stats and
+    // outline caches stay cold on the per-keystroke path.
+    let breakdown = tab.document.memory_breakdown();
+    assert!(
+        !breakdown.site("stats").unwrap().populated,
+        "status bar must not populate the heading-carrying stats cache"
+    );
+    assert!(
+        !breakdown.site("outline").unwrap().populated,
+        "status bar must not trigger the outline parse"
     );
 
     let repeated = status_bar_context(&tab, ViewMode::VisualEdit, Some("feature/状态栏"));

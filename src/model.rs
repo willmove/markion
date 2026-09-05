@@ -1011,6 +1011,19 @@ pub struct DocumentStats {
     pub headings: usize,
 }
 
+/// The cheap subset of [`DocumentStats`]: byte/char/word/line counters with no
+/// heading count. Computing headings needs a Markdown parse (the dominant
+/// per-keystroke cost), so per-frame readers such as the status bar use this
+/// instead of `stats()`. Version-cached on the document like the other
+/// derived values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DocumentBasicStats {
+    pub bytes: usize,
+    pub chars: usize,
+    pub words: usize,
+    pub lines: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighlightKind {
     Plain,

@@ -7,6 +7,7 @@ use super::*;
 use gpui::RenderImage;
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageReader, RgbaImage};
+use std::borrow::Cow;
 use std::io::Cursor;
 
 pub(super) const PREVIEW_IMAGE_CACHE_CAPACITY: usize = 64;
@@ -30,6 +31,11 @@ const PREVIEW_IMAGE_OVERSHOOT_FACTOR: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct PreviewImageKey {
+    /// `local:` / `remote:` identities hold the full (small) locator. `data:`
+    /// identities are deliberately bounded — `data:{len}:{fingerprint}` — so
+    /// per-frame claim/ensure/lookup work never clones or hashes a
+    /// multi-megabyte base64 URI; the full URI bytes live next to the pending
+    /// cache entry (see `PreviewImageCache::data_payloads`) for the decode.
     pub(super) identity: String,
 }
 
@@ -45,9 +51,14 @@ impl PreviewImageKey {
         if url.starts_with("data:") {
             // Inline base64/URL-encoded images (RFC 2397) are decoded in
             // process — never handed to reqwest. Use a dedicated prefix so
-            // `remote_url()` keeps meaning "safe to GET over HTTP(S)".
+            // `remote_url()` keeps meaning "safe to GET over HTTP(S)". The
+            // identity is a bounded content fingerprint (computed from `&str`
+            // without cloning); two URIs with the same length and fingerprint
+            // share a cache entry — the same collision tradeoff the failure
+            // path already accepts (`destination_data_uri_fingerprint`), with
+            // the length as an extra discriminant.
             Self {
-                identity: format!("data:{}", url),
+                identity: format!("data:{}:{:016x}", url.len(), data_uri_key_fingerprint(url)),
             }
         } else if is_remote_resource(url) {
             Self {
@@ -77,16 +88,43 @@ impl PreviewImageKey {
     fn remote_url(&self) -> Option<&str> {
         // `from_url` only emits the `remote:` prefix for non-`data:` remote
         // resources, so a successful strip guarantees an HTTP(S)-style URL
-        // safe to feed reqwest — `data:` URIs are exposed via `data_url()`.
+        // safe to feed reqwest — `data:` URIs ride the payload side map.
         self.identity.strip_prefix("remote:")
     }
 
-    fn data_url(&self) -> Option<&str> {
-        // Identity stores the full URI verbatim under a `data:` prefix, i.e.
-        // `data:data:image/png;base64,...`. Strip once to recover the original
-        // `data:...` string for the decoder.
-        self.identity.strip_prefix("data:")
+    fn is_data_uri(&self) -> bool {
+        self.identity.starts_with("data:")
     }
+}
+
+/// Data URIs at or below this size are hashed in full for the cache key
+/// (exact content identity, matching the failure path's fingerprint).
+const DATA_URI_KEY_FULL_HASH_MAX: usize = 64 * 1024;
+/// Per-region sample size when a data URI exceeds the full-hash ceiling.
+const DATA_URI_KEY_SAMPLE_LEN: usize = 2048;
+
+/// Content fingerprint for data-URI cache keys, computed from `&str` without
+/// cloning. Small URIs hash every byte; oversized ones hash the length plus
+/// head/middle/tail samples so per-frame key construction stays bounded no
+/// matter how large the base64 payload grows. Same hasher as the failure
+/// path's `destination_data_uri_fingerprint`, so the collision class (64-bit
+/// content hash, plus length and, for small URIs, exact content) matches or
+/// exceeds that established tradeoff.
+fn data_uri_key_fingerprint(url: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let bytes = url.as_bytes();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.len().hash(&mut hasher);
+    if bytes.len() <= DATA_URI_KEY_FULL_HASH_MAX {
+        bytes.hash(&mut hasher);
+    } else {
+        let mid = bytes.len() / 2;
+        let half = DATA_URI_KEY_SAMPLE_LEN / 2;
+        bytes[..DATA_URI_KEY_SAMPLE_LEN].hash(&mut hasher);
+        bytes[mid - half..mid + half].hash(&mut hasher);
+        bytes[bytes.len() - DATA_URI_KEY_SAMPLE_LEN..].hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 #[derive(Clone)]
@@ -119,6 +157,12 @@ pub(super) struct PreviewImageCache {
     claims: HashMap<PreviewImageKey, usize>,
     /// Keys with a fetch/decode task currently running (`true` = heavy).
     in_flight: HashMap<PreviewImageKey, bool>,
+    /// Full source bytes for pending data-URI entries. The key identity is a
+    /// bounded fingerprint (cheap to rebuild per frame); the decode task reads
+    /// the real URI from here. Retained only while the entry is pending —
+    /// `complete` and `remove_entry` drop it — so a decoded image does not
+    /// keep its multi-megabyte base64 source alive.
+    data_payloads: HashMap<PreviewImageKey, Arc<str>>,
 }
 
 impl PreviewImageCache {
@@ -135,6 +179,7 @@ impl PreviewImageCache {
             completed_order: VecDeque::new(),
             claims: HashMap::new(),
             in_flight: HashMap::new(),
+            data_payloads: HashMap::new(),
         }
     }
 
@@ -251,6 +296,28 @@ impl PreviewImageCache {
         true
     }
 
+    /// Retain the full data-URI source for a freshly reserved pending entry
+    /// so the decode task can read it without the key carrying it. Called
+    /// once per reservation (not per frame); ignored when the entry vanished.
+    pub(super) fn attach_data_payload(&mut self, key: PreviewImageKey, payload: Arc<str>) {
+        if key.is_data_uri() && self.entries.contains_key(&key) {
+            self.data_payloads.insert(key, payload);
+        }
+    }
+
+    /// The retained data-URI source for a pending entry, if any.
+    pub(super) fn data_payload(&self, key: &PreviewImageKey) -> Option<Arc<str>> {
+        self.data_payloads.get(key).cloned()
+    }
+
+    /// Retained source bytes across pending data-URI entries (memory report).
+    pub(super) fn retained_data_payload_bytes(&self) -> usize {
+        self.data_payloads
+            .values()
+            .map(|payload| payload.len())
+            .sum()
+    }
+
     pub(super) fn complete(
         &mut self,
         key: &PreviewImageKey,
@@ -260,6 +327,9 @@ impl PreviewImageCache {
         if !matches!(self.entries.get(key), Some(PreviewImageEntry::Pending)) {
             return dropped;
         }
+        // The decode ran (successfully or not); the retained source has no
+        // further use either way.
+        self.data_payloads.remove(key);
         // Late completion for an unclaimed key: drop without retaining.
         if self.claim_count(key) == 0 {
             self.entries.remove(key);
@@ -374,6 +444,7 @@ impl PreviewImageCache {
 
     fn remove_entry(&mut self, key: &PreviewImageKey) -> Option<Arc<RenderImage>> {
         self.completed_order.retain(|k| k != key);
+        self.data_payloads.remove(key);
         match self.entries.remove(key) {
             Some(PreviewImageEntry::Ready(ready)) => {
                 self.completed_bytes = self.completed_bytes.saturating_sub(ready.byte_len);
@@ -426,7 +497,13 @@ pub(super) fn probe_is_heavy(key: &PreviewImageKey) -> bool {
     width.max(height) > PREVIEW_IMAGE_MAX_EDGE
 }
 
-pub(super) fn load_preview_image(key: &PreviewImageKey) -> Result<PreviewImageReady, String> {
+/// Decode the source identified by `key`. Data-URI keys are bounded
+/// fingerprints, so the full URI bytes arrive separately as `data_payload`
+/// (retained next to the pending entry by the cache).
+pub(super) fn load_preview_image(
+    key: &PreviewImageKey,
+    data_payload: Option<&str>,
+) -> Result<PreviewImageReady, String> {
     let (bytes, is_svg) = if let Some(path) = key.local_path() {
         let bytes = std::fs::read(&path)
             .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
@@ -437,7 +514,8 @@ pub(super) fn load_preview_image(key: &PreviewImageKey) -> Result<PreviewImageRe
             .unwrap_or(false)
             || looks_like_svg(&bytes);
         (bytes, is_svg)
-    } else if let Some(url) = key.data_url() {
+    } else if key.is_data_uri() {
+        let url = data_payload.ok_or_else(|| "data URI payload was not retained".to_string())?;
         let (bytes, mime_type) = decode_data_url(url)?;
         let is_svg = mime_type
             .map(|m| m.eq_ignore_ascii_case("image/svg+xml"))
@@ -684,7 +762,12 @@ impl MarkionApp {
         collect_preview_image_urls(preview, visual, &mut urls);
         for url in &urls {
             let key = PreviewImageKey::from_url(url, document_dir);
-            let _ = self.preview_image_cache.reserve_pending(key);
+            // Only a fresh reservation needs the payload retained: the copy
+            // happens once per image, not once per frame.
+            if self.preview_image_cache.reserve_pending(key.clone()) && key.is_data_uri() {
+                self.preview_image_cache
+                    .attach_data_payload(key, Arc::from(url.as_ref()));
+            }
         }
         self.schedule_pending_preview_decodes(cx);
     }
@@ -740,13 +823,23 @@ impl MarkionApp {
                 continue;
             }
             let load_key = key.clone();
+            // Data-URI keys are bounded fingerprints; the decode and the
+            // failure fingerprint both need the retained full URI bytes.
+            let data_payload = if key.is_data_uri() {
+                self.preview_image_cache.data_payload(&key)
+            } else {
+                None
+            };
             cx.spawn(async move |this, cx| {
+                let load_payload = data_payload.clone();
                 let result = cx
-                    .background_spawn(async move { load_preview_image(&load_key) })
+                    .background_spawn(async move {
+                        load_preview_image(&load_key, load_payload.as_deref())
+                    })
                     .await;
                 let _ = this.update(cx, |app, cx| {
                     if result.is_err()
-                        && let Some(url) = key.data_url()
+                        && let Some(url) = data_payload.as_deref()
                         && let Some(fingerprint) = markion::destination_data_uri_fingerprint(url)
                     {
                         // Record the failure by content fingerprint so the
@@ -820,21 +913,25 @@ impl MarkionApp {
     }
 }
 
-fn collect_preview_image_urls(
-    preview: &[PreviewBlock],
-    visual: &[VisualBlock],
-    out: &mut Vec<String>,
+/// Collect every image URL referenced by the blocks. Borrows from the blocks
+/// (which outlive the call) so per-frame collection never copies a
+/// multi-megabyte data URI; only HTML parts — whose URLs are extracted into
+/// fresh strings by the HTML pipeline — arrive owned.
+fn collect_preview_image_urls<'a>(
+    preview: &'a [PreviewBlock],
+    visual: &'a [VisualBlock],
+    out: &mut Vec<Cow<'a, str>>,
 ) {
     for block in preview {
         match block {
-            PreviewBlock::Image { url, .. } => out.push(url.clone()),
+            PreviewBlock::Image { url, .. } => out.push(Cow::Borrowed(url.as_str())),
             PreviewBlock::Paragraph { text, .. }
             | PreviewBlock::Heading { text, .. }
             | PreviewBlock::ListItem { text, .. }
             | PreviewBlock::FootnoteDefinition { text, .. } => {
                 for span in &text.spans {
                     if let Some(image) = &span.image {
-                        out.push(image.url.clone());
+                        out.push(Cow::Borrowed(image.url.as_str()));
                     }
                 }
             }
@@ -846,7 +943,7 @@ fn collect_preview_image_urls(
                     for cell in row {
                         for span in &cell.spans {
                             if let Some(image) = &span.image {
-                                out.push(image.url.clone());
+                                out.push(Cow::Borrowed(image.url.as_str()));
                             }
                         }
                     }
@@ -855,7 +952,7 @@ fn collect_preview_image_urls(
             PreviewBlock::Html { html, .. } => {
                 for part in html_preview_parts(html) {
                     if let HtmlPreviewPart::Image { url, .. } = part {
-                        out.push(url);
+                        out.push(Cow::Owned(url));
                     }
                 }
             }
@@ -864,14 +961,14 @@ fn collect_preview_image_urls(
     }
     for block in visual {
         match &block.kind {
-            VisualBlockKind::Image { url, .. } => out.push(url.clone()),
+            VisualBlockKind::Image { url, .. } => out.push(Cow::Borrowed(url.as_str())),
             // Prose blocks render inline `<img>` tags as image atoms; their
             // URLs ride the same claim/preload/evict lifecycle as block-level
             // images.
             _ => {
                 for run in &block.editable_runs {
                     if let Some(image) = &run.html_image {
-                        out.push(image.url.clone());
+                        out.push(Cow::Borrowed(image.url.as_str()));
                     }
                 }
             }
@@ -1155,7 +1252,7 @@ mod tests {
         let k = PreviewImageKey {
             identity: format!("local:{}", path.display()),
         };
-        let ready = load_preview_image(&k).expect("decode");
+        let ready = load_preview_image(&k, None).expect("decode");
         assert_eq!(ready.width, PREVIEW_IMAGE_MAX_EDGE);
         assert_eq!(ready.height, 512);
         assert!(ready.width.max(ready.height) <= PREVIEW_IMAGE_MAX_EDGE);
@@ -1169,7 +1266,7 @@ mod tests {
         let k = PreviewImageKey {
             identity: format!("local:{}", path.display()),
         };
-        let ready = load_preview_image(&k).expect("decode");
+        let ready = load_preview_image(&k, None).expect("decode");
         assert_eq!(ready.width, 64);
         assert_eq!(ready.height, 48);
     }
@@ -1179,7 +1276,7 @@ mod tests {
         let k = PreviewImageKey {
             identity: "other:not-a-source".into(),
         };
-        let err = match load_preview_image(&k) {
+        let err = match load_preview_image(&k, None) {
             Err(message) => message,
             Ok(_) => panic!("unsupported identity must fail"),
         };
@@ -1193,7 +1290,7 @@ mod tests {
         let key = PreviewImageKey {
             identity: format!("local:{}", path.display()),
         };
-        let err = match load_preview_image(&key) {
+        let err = match load_preview_image(&key, None) {
             Err(message) => message,
             Ok(_) => panic!("missing image must not decode"),
         };
@@ -1405,7 +1502,7 @@ mod tests {
         let k = PreviewImageKey {
             identity: format!("local:{}", path.display()),
         };
-        let ready = load_preview_image(&k).expect("rasterize");
+        let ready = load_preview_image(&k, None).expect("rasterize");
         assert_eq!((ready.display_width, ready.display_height), (120, 80));
         assert_eq!(
             (ready.width, ready.height),
@@ -1422,7 +1519,7 @@ mod tests {
         let k = PreviewImageKey {
             identity: format!("local:{}", path.display()),
         };
-        let ready = load_preview_image(&k).expect("decode");
+        let ready = load_preview_image(&k, None).expect("decode");
         assert_eq!((ready.display_width, ready.display_height), (96, 32));
         assert_eq!((ready.width, ready.height), (96, 32));
     }
@@ -1448,7 +1545,7 @@ mod tests {
             image
                 .save_with_format(&path, format)
                 .unwrap_or_else(|error| panic!("encode {extension}: {error}"));
-            let ready = load_preview_image(&PreviewImageKey::from_local_path(&path))
+            let ready = load_preview_image(&PreviewImageKey::from_local_path(&path), None)
                 .unwrap_or_else(|error| panic!("decode {extension}: {error}"));
             assert_eq!((ready.display_width, ready.display_height), (7, 5));
         }
@@ -1459,8 +1556,8 @@ mod tests {
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="9" height="6"><rect width="9" height="6" fill="red"/></svg>"#,
         )
         .expect("write svg");
-        let ready =
-            load_preview_image(&PreviewImageKey::from_local_path(&svg)).expect("decode local SVG");
+        let ready = load_preview_image(&PreviewImageKey::from_local_path(&svg), None)
+            .expect("decode local SVG");
         assert_eq!((ready.display_width, ready.display_height), (9, 6));
     }
 
@@ -1476,7 +1573,7 @@ mod tests {
                 image::Frame::new(RgbaImage::from_pixel(3, 2, Rgba([0, 0, 255, 255]))),
             ])
             .expect("encode animation");
-        let ready = load_preview_image(&PreviewImageKey::from_local_path(&path))
+        let ready = load_preview_image(&PreviewImageKey::from_local_path(&path), None)
             .expect("decode static presentation");
         assert_eq!((ready.display_width, ready.display_height), (3, 2));
     }
@@ -1485,15 +1582,15 @@ mod tests {
     fn local_viewer_contains_missing_corrupt_and_oversized_sources() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("missing.png");
-        assert!(load_preview_image(&PreviewImageKey::from_local_path(&missing)).is_err());
+        assert!(load_preview_image(&PreviewImageKey::from_local_path(&missing), None).is_err());
 
         let corrupt = dir.path().join("corrupt.svg");
         std::fs::write(&corrupt, b"<svg not-valid").expect("write corrupt");
-        assert!(load_preview_image(&PreviewImageKey::from_local_path(&corrupt)).is_err());
+        assert!(load_preview_image(&PreviewImageKey::from_local_path(&corrupt), None).is_err());
 
         let large = dir.path().join("large.png");
         write_png(&large, PREVIEW_IMAGE_MAX_EDGE * 2, 8);
-        let ready = load_preview_image(&PreviewImageKey::from_local_path(&large))
+        let ready = load_preview_image(&PreviewImageKey::from_local_path(&large), None)
             .expect("downscale oversized image");
         assert_eq!(ready.width, PREVIEW_IMAGE_MAX_EDGE);
         assert!(ready.height >= 1);
@@ -1517,13 +1614,126 @@ mod tests {
     }
 
     #[test]
-    fn from_url_routes_data_uri_to_data_identity() {
+    fn from_url_routes_data_uri_to_bounded_data_identity() {
         let url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
         let k = PreviewImageKey::from_url(url, None);
-        assert_eq!(k.identity, format!("data:{url}"));
-        assert_eq!(k.data_url(), Some(url));
+        assert!(k.is_data_uri());
+        // The identity is a bounded fingerprint — it never embeds the URI.
+        assert!(
+            k.identity.len() <= 48,
+            "identity must stay bounded, got {} bytes",
+            k.identity.len()
+        );
+        assert!(!url.contains(k.identity.as_str()) && !k.identity.contains("iVBOR"));
         assert_eq!(k.local_path(), None);
         assert_eq!(k.remote_url(), None);
+    }
+
+    #[test]
+    fn data_uri_key_is_stable_bounded_and_content_sensitive() {
+        // Multi-megabyte base64 URI: key construction must stay O(bounded).
+        let body = "QUJDRA".repeat(500_000); // 3 MB of base64
+        let url_a = format!("data:image/png;base64,{body}");
+        let k1 = PreviewImageKey::from_url(&url_a, None);
+        let k2 = PreviewImageKey::from_url(&url_a, None);
+        assert_eq!(k1, k2, "same content hashes to the same key every frame");
+        assert!(
+            k1.identity.len() <= 48,
+            "identity is independent of the {}-byte URI: {}",
+            url_a.len(),
+            k1.identity.len()
+        );
+
+        // Same length, one byte different inside the sampled middle region.
+        let mut body_b = body.clone();
+        let mid = body_b.len() / 2;
+        body_b.replace_range(mid..mid + 1, "Z");
+        let url_b = format!("data:image/png;base64,{body_b}");
+        assert_ne!(
+            PreviewImageKey::from_url(&url_b, None),
+            k1,
+            "different content must key differently"
+        );
+
+        // Same length, one byte different inside the tail sample region.
+        let mut body_c = body.clone();
+        let tail = body_c.len() - 100;
+        body_c.replace_range(tail..tail + 1, "Z");
+        let url_c = format!("data:image/png;base64,{body_c}");
+        assert_ne!(
+            PreviewImageKey::from_url(&url_c, None),
+            k1,
+            "a tail-sample difference must key differently"
+        );
+
+        // Different length also differs (length is part of the identity).
+        let url_d = format!("data:image/png;base64,{body}QQ");
+        assert_ne!(PreviewImageKey::from_url(&url_d, None), k1);
+    }
+
+    #[test]
+    fn data_uri_decode_requires_the_retained_payload() {
+        // The bounded key cannot be decoded by itself; the payload side map
+        // supplies the bytes. A missing payload errors instead of panicking.
+        let url = data_url_base64("image/png", &[1, 2, 3]);
+        let k = PreviewImageKey::from_url(&url, None);
+        match load_preview_image(&k, None) {
+            Err(err) => assert!(err.contains("payload"), "unexpected error: {err}"),
+            Ok(_) => panic!("a data-URI key without its payload must not decode"),
+        }
+    }
+
+    #[test]
+    fn data_uri_claim_decode_release_cycle_via_payload_map() {
+        // End-to-end over the cache: claim → reserve → attach → payload lookup
+        // → decode → complete → release, with the payload freed at completion.
+        let png = {
+            let img = RgbaImage::from_pixel(24, 12, Rgba([1, 2, 3, 255]));
+            let mut buf = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut buf, image::ImageFormat::Png)
+                .expect("encode png");
+            buf.into_inner()
+        };
+        let url = data_url_base64("image/png", &png);
+        let key = PreviewImageKey::from_url(&url, None);
+
+        let mut cache = PreviewImageCache::new(8);
+        cache.claim(key.clone());
+        assert!(cache.reserve_pending(key.clone()));
+        cache.attach_data_payload(key.clone(), Arc::from(url.as_str()));
+        let payload = cache.data_payload(&key).expect("retained payload");
+        assert_eq!(payload.as_ref(), url);
+        assert_eq!(cache.retained_data_payload_bytes(), url.len());
+
+        let ready = load_preview_image(&key, Some(&payload)).expect("decode via payload");
+        assert_eq!((ready.width, ready.height), (24, 12));
+        cache.complete(&key, Ok(ready));
+        assert!(matches!(cache.get(&key), Some(PreviewImageEntry::Ready(_))));
+        assert_eq!(
+            cache.retained_data_payload_bytes(),
+            0,
+            "payload is dropped once the decode lands"
+        );
+        assert_eq!(cache.claim_count(&key), 1);
+
+        // Release demotes to unclaimed LRU; the decoded raster survives.
+        assert!(cache.release(&key).is_empty());
+        assert!(matches!(cache.get(&key), Some(PreviewImageEntry::Ready(_))));
+    }
+
+    #[test]
+    fn data_uri_payload_follows_entry_removal() {
+        // An unclaimed late completion drops the entry and its payload.
+        let url = data_url_base64("image/png", &[9, 9]);
+        let key = PreviewImageKey::from_url(&url, None);
+        let mut cache = PreviewImageCache::new(8);
+        assert!(cache.reserve_pending(key.clone()));
+        cache.attach_data_payload(key.clone(), Arc::from(url.as_str()));
+        assert!(cache.data_payload(&key).is_some());
+        assert!(cache.complete(&key, Ok(ready(16))).len() == 1);
+        assert!(cache.get(&key).is_none());
+        assert!(cache.data_payload(&key).is_none());
+        assert_eq!(cache.retained_data_payload_bytes(), 0);
     }
 
     #[test]
@@ -1559,7 +1769,7 @@ mod tests {
         };
         let url = data_url_base64("image/png", &png);
         let k = PreviewImageKey::from_url(&url, None);
-        let ready = load_preview_image(&k).expect("decode data-uri png");
+        let ready = load_preview_image(&k, Some(&url)).expect("decode data-uri png");
         assert_eq!((ready.width, ready.height), (48, 24));
         assert_eq!((ready.display_width, ready.display_height), (48, 24));
         assert!(ready.byte_len > 0);
@@ -1575,7 +1785,7 @@ mod tests {
         // the MIME type — not the byte scan — must select the SVG path.
         let url = data_url_base64("image/svg+xml", &svg);
         let k = PreviewImageKey::from_url(&url, None);
-        let ready = load_preview_image(&k).expect("rasterize data-uri svg");
+        let ready = load_preview_image(&k, Some(&url)).expect("rasterize data-uri svg");
         assert_eq!((ready.display_width, ready.display_height), (60, 40));
         assert_eq!(
             (ready.width, ready.height),
@@ -1592,10 +1802,13 @@ mod tests {
                 .expect("encode png");
             buf.into_inner()
         };
-        let b64_key = PreviewImageKey::from_url(&data_url_base64("image/png", &png), None);
-        let url_key = PreviewImageKey::from_url(&data_url_urlencoded("image/png", &png), None);
-        let b64_ready = load_preview_image(&b64_key).expect("decode base64");
-        let url_ready = load_preview_image(&url_key).expect("decode url-encoded");
+        let b64_url = data_url_base64("image/png", &png);
+        let encoded_url = data_url_urlencoded("image/png", &png);
+        let b64_key = PreviewImageKey::from_url(&b64_url, None);
+        let url_key = PreviewImageKey::from_url(&encoded_url, None);
+        let b64_ready = load_preview_image(&b64_key, Some(&b64_url)).expect("decode base64");
+        let url_ready =
+            load_preview_image(&url_key, Some(&encoded_url)).expect("decode url-encoded");
         assert_eq!((b64_ready.width, b64_ready.height), (16, 16));
         assert_eq!(
             (url_ready.width, url_ready.height),
@@ -1607,15 +1820,17 @@ mod tests {
     #[test]
     fn malformed_data_uri_returns_err_for_placeholder() {
         // Missing comma between header and body.
-        let k = PreviewImageKey::from_url("data:image/png;base64", None);
-        match load_preview_image(&k) {
+        let url = "data:image/png;base64";
+        let k = PreviewImageKey::from_url(url, None);
+        match load_preview_image(&k, Some(url)) {
             Err(err) => assert!(err.contains("data URL"), "error mentions data URL: {err}"),
             Ok(_) => panic!("no-comma data URI must not decode"),
         }
 
         // Truncated/invalid base64 payload.
-        let k = PreviewImageKey::from_url("data:image/png;base64,!!!!not-base64!!!!", None);
-        match load_preview_image(&k) {
+        let url = "data:image/png;base64,!!!!not-base64!!!!";
+        let k = PreviewImageKey::from_url(url, None);
+        match load_preview_image(&k, Some(url)) {
             Err(_) => {}
             Ok(_) => panic!("invalid base64 data URI must not decode"),
         }
@@ -1632,7 +1847,7 @@ mod tests {
             Path::new(&resolved).is_file(),
             "untitled welcome logo must resolve to a real file, got {resolved:?}"
         );
-        let ready = load_preview_image(&key).expect("decode bundled welcome png");
+        let ready = load_preview_image(&key, None).expect("decode bundled welcome png");
         assert!(ready.width > 0 && ready.height > 0);
     }
 

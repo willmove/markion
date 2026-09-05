@@ -3826,14 +3826,9 @@ pub(super) fn visual_block_view(
                 // Clicking the label lands the caret just inside the marker
                 // line's end, mirroring keyboard entry into the row.
                 let source_range = &block.source_range;
-                let line_end = app.active_tab().document.text()[source_range.clone()]
-                    .find('\n')
-                    .map_or(source_range.end, |relative| source_range.start + relative);
-                let click_target = if line_end > source_range.start {
-                    line_end - 1
-                } else {
-                    source_range.start
-                };
+                let text = app.active_tab().document.text();
+                let click_target = callout_marker_line_caret_target(text, source_range)
+                    .unwrap_or(source_range.start);
                 div()
                     .flex()
                     .items_center()
@@ -7067,4 +7062,16 @@ pub(super) fn clamp_to_text_boundary(text: &str, offset: usize) -> usize {
         offset -= 1;
     }
     offset
+}
+
+/// Caret target for entering a callout title row (keyboard fallback and
+/// label click): just inside the marker line's end, so the row unambiguously
+/// owns the caret. A plain `line_end - 1` sits mid-character when the line
+/// ends with multibyte text (e.g. a CJK title), so back off to the nearest
+/// char boundary. Returns `None` when the marker line is empty.
+pub(super) fn callout_marker_line_caret_target(text: &str, range: &Range<usize>) -> Option<usize> {
+    let line_end = text[range.clone()]
+        .find('\n')
+        .map_or(range.end, |relative| range.start + relative);
+    (line_end > range.start).then(|| clamp_to_text_boundary(text, line_end - 1))
 }

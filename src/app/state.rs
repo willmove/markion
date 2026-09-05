@@ -241,8 +241,11 @@ impl OutlineFoldingState {
 /// the nearest char boundary [`BOUNDARY_SCAN_WINDOW`] bytes back when the
 /// line itself is longer than that.
 pub(super) fn boundary_scan_start(text: &str, offset: usize) -> usize {
+    // `offset` may arrive mid-character or out of range (e.g. a stale visual
+    // caret); the slice below must only ever see in-range char boundaries.
+    let offset = clamp_to_text_boundary(text, offset);
     let mut window_start = offset.saturating_sub(BOUNDARY_SCAN_WINDOW);
-    while !text.is_char_boundary(window_start) {
+    while window_start < offset && !text.is_char_boundary(window_start) {
         window_start += 1;
     }
     text[window_start..offset]
@@ -1716,7 +1719,7 @@ impl DocumentTabState {
     /// O(document) walk per Backspace / arrow key (~1ms on a 1 MB document).
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
         let text = self.document.text();
-        let offset = offset.min(text.len());
+        let offset = clamp_to_text_boundary(text, offset);
         if offset == 0 {
             return 0;
         }

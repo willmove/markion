@@ -12,7 +12,7 @@ impl MarkionApp {
         self.pending_name_input = None;
         self.input_marked_len = 0;
         let tab = self.active_tab();
-        let selected = tab.selected_range.clone();
+        let selected = tab.safe_selected_range();
         let text_owned = if !matches!(self.view_mode, ViewMode::Read)
             && self.search_query.buffer.is_empty()
             && !selected.is_empty()
@@ -44,7 +44,7 @@ impl MarkionApp {
         self.file_tree_query_focused = false;
         self.input_marked_len = 0;
         let tab = self.active_tab();
-        let selected = tab.selected_range.clone();
+        let selected = tab.safe_selected_range();
         let text_owned = if !matches!(self.view_mode, ViewMode::Read)
             && self.search_query.buffer.is_empty()
             && !selected.is_empty()

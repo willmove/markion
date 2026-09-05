@@ -308,6 +308,7 @@ mod tests {
         let _ = doc.visual_blocks_shared();
         let _ = doc.outline();
         let _ = doc.stats();
+        let _ = doc.basic_stats();
         let _ = doc.line_count();
         let breakdown = doc.memory_breakdown();
         for name in [
@@ -315,19 +316,24 @@ mod tests {
             "visual_blocks",
             "outline",
             "stats",
+            "basic_stats",
             "line_count",
             "source_mapped_cache",
         ] {
             let site = breakdown.site(name).expect(name);
             assert!(site.populated, "{name} should be populated");
             assert!(
-                site.estimated_bytes > 0 || name == "stats" || name == "line_count",
+                site.estimated_bytes > 0
+                    || name == "stats"
+                    || name == "basic_stats"
+                    || name == "line_count",
                 "{name} should report a size (got {})",
                 site.estimated_bytes
             );
         }
         // stats / line_count are tiny structs; still require populated + item_count.
         assert!(breakdown.site("stats").unwrap().item_count >= 1);
+        assert!(breakdown.site("basic_stats").unwrap().item_count >= 1);
         assert!(breakdown.site("line_count").unwrap().item_count >= 1);
         assert!(breakdown.site("preview_blocks").unwrap().estimated_bytes > 0);
         assert!(breakdown.site("visual_blocks").unwrap().estimated_bytes > 0);
@@ -349,6 +355,7 @@ mod tests {
         let _ = doc.visual_blocks_shared();
         let _ = doc.outline();
         let _ = doc.stats();
+        let _ = doc.basic_stats();
         let _ = doc.line_count();
         let version = doc.version();
         let text = doc.text().to_string();
@@ -367,6 +374,7 @@ mod tests {
             "visual_blocks",
             "outline",
             "stats",
+            "basic_stats",
             "line_count",
             "source_mapped_cache",
         ] {

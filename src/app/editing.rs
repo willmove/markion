@@ -1008,7 +1008,7 @@ impl MarkionApp {
 
     pub(super) fn open_link_editor(&mut self, cx: &mut Context<Self>) {
         self.dismiss_visual_block_menu();
-        let selected = self.active_tab().selected_range.clone();
+        let selected = self.active_tab().safe_selected_range();
         let cursor = self.active_tab().cursor_offset();
         let existing = inline_link_at(self.active_tab().document.text(), cursor);
         let (source_range, label, url, title) = if let Some(link) = existing {
@@ -2559,7 +2559,7 @@ impl MarkionApp {
             cx.notify();
             return;
         }
-        let selected = self.active_tab().selected_range.clone();
+        let selected = self.active_tab().safe_selected_range();
         if !selected.is_empty() {
             let text = self.active_tab().document.text()[selected].to_string();
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -2589,7 +2589,7 @@ impl MarkionApp {
             }
             return;
         }
-        let selected = self.active_tab().selected_range.clone();
+        let selected = self.active_tab().safe_selected_range();
         if !selected.is_empty() {
             let text = self.active_tab().document.text()[selected].to_string();
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -3100,10 +3100,7 @@ impl MarkionApp {
             return None;
         }
         let range = &block.source_range;
-        let line_end = tab.document.text()[range.clone()]
-            .find('\n')
-            .map_or(range.end, |relative| range.start + relative);
-        (line_end > range.start).then_some(line_end - 1)
+        callout_marker_line_caret_target(tab.document.text(), range)
     }
 
     pub(super) fn complete_pending_visual_navigation(&mut self, cx: &mut Context<Self>) {
