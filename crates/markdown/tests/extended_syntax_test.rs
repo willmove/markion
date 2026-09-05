@@ -224,13 +224,10 @@ fn test_subscript_vs_strikethrough() {
 
 #[test]
 fn test_subscript_at_end_of_paragraph() {
-    // With strikethrough disabled, pulldown-cmark hands the extended inline
-    // parser a single text event; a `~2~` run ending exactly at the end of
-    // that event must still parse as a subscript.
-    let parser = Parser::new(markdown::ParserOptions {
-        enable_strikethrough: false,
-        ..Default::default()
-    });
+    // Default options enable GFM strikethrough, which can split `H~2~`
+    // across adjacent text events. Offset-proven reconstruction must still
+    // yield a subscript at the end of the paragraph.
+    let parser = Parser::default();
     let doc = parser.parse("H~2~").unwrap();
 
     assert_eq!(doc.blocks.len(), 1);

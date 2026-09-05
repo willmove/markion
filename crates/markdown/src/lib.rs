@@ -16,5 +16,5 @@ pub use math::{
     MathError, MathErrorKind, MathRenderOptions, MathRenderer, MathStyle, RENDERER_VERSION,
     RenderedMath, Size, is_self_contained_svg, serialize_math_html,
 };
-pub use parser::{Parser, ParserOptions};
-pub use renderer::render_to_markdown;
+pub use parser::{Parser, ParserOptions, coalesce_contiguous_text_events};
+pub use renderer::{render_to_markdown, render_yaml_front_matter};

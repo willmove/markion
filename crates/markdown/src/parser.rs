@@ -3,6 +3,8 @@
 //! Handles YAML front matter extraction, then delegates to pulldown-cmark
 //! for CommonMark + GFM parsing.
 
+use std::ops::Range;
+
 use pulldown_cmark::{
     Alignment as PdAlignment, Event, HeadingLevel, Options, Parser as PdParser, Tag, TagEnd,
 };
@@ -79,6 +81,34 @@ impl ParserOptions {
     }
 }
 
+/// Merge adjacent `Event::Text` fragments whose original source ranges abut.
+///
+/// pulldown-cmark with GFM strikethrough can split a single authored run such
+/// as trailing `H~2~` into consecutive text events. Combining only
+/// offset-contiguous fragments reconstructs that run for extended-inline
+/// parsing without concatenating across escaped markers (the consumed
+/// backslash leaves a gap) or other semantic events (code, links, emphasis,
+/// HTML, breaks).
+pub fn coalesce_contiguous_text_events<'a>(
+    events: impl IntoIterator<Item = (Event<'a>, Range<usize>)>,
+) -> Vec<(Event<'a>, Range<usize>)> {
+    let mut out: Vec<(Event<'a>, Range<usize>)> = Vec::new();
+    for (event, range) in events {
+        if let Event::Text(next) = &event
+            && let Some((Event::Text(previous), previous_range)) = out.last_mut()
+            && previous_range.end == range.start
+        {
+            let mut merged = previous.to_string();
+            merged.push_str(next);
+            *previous = merged.into();
+            previous_range.end = range.end;
+            continue;
+        }
+        out.push((event, range));
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
@@ -138,7 +168,11 @@ impl Parser {
     /// headings rather than metadata.
     fn parse_body(&self, body: &str) -> MarkdownResult<Vec<Block>> {
         let opts = self.options.to_pd_options();
-        let events: Vec<Event<'_>> = PdParser::new_ext(body, opts).collect();
+        let events: Vec<Event<'_>> =
+            coalesce_contiguous_text_events(PdParser::new_ext(body, opts).into_offset_iter())
+                .into_iter()
+                .map(|(event, _)| event)
+                .collect();
 
         let mut builder = AstBuilder::new();
         let mut blocks = builder.build(&events)?;
@@ -1697,5 +1731,215 @@ mod tests {
         let punctuated = "https://例子.com。";
         let end = find_url_end(punctuated);
         assert_eq!(&punctuated[..end], "https://例子.com");
+    }
+
+    fn default_pd_options() -> Options {
+        ParserOptions::default().to_pd_options()
+    }
+
+    /// Raw pulldown text fragments (no coalescing) as `(text, range, source_slice)`.
+    fn raw_text_events(md: &str) -> Vec<(String, Range<usize>, String)> {
+        PdParser::new_ext(md, default_pd_options())
+            .into_offset_iter()
+            .filter_map(|(event, range)| match event {
+                Event::Text(text) => Some((
+                    text.to_string(),
+                    range.clone(),
+                    md.get(range).unwrap_or("").to_string(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn event_kind(event: &Event<'_>) -> &'static str {
+        match event {
+            Event::Start(Tag::Paragraph) => "start-paragraph",
+            Event::End(TagEnd::Paragraph) => "end-paragraph",
+            Event::Start(Tag::Strikethrough) => "start-strikethrough",
+            Event::End(TagEnd::Strikethrough) => "end-strikethrough",
+            Event::Start(Tag::Emphasis) => "start-emphasis",
+            Event::End(TagEnd::Emphasis) => "end-emphasis",
+            Event::Start(Tag::Link { .. }) => "start-link",
+            Event::End(TagEnd::Link) => "end-link",
+            Event::Code(_) => "code",
+            Event::Text(_) => "text",
+            Event::SoftBreak => "soft-break",
+            Event::HardBreak => "hard-break",
+            Event::InlineHtml(_) => "inline-html",
+            _ => "other",
+        }
+    }
+
+    fn paragraph_inlines(md: &str) -> Vec<Inline> {
+        let doc = default_parser().parse(md).unwrap();
+        match &doc.blocks[0] {
+            Block::Paragraph { content, .. } => content.clone(),
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    fn has_subscript_text(inlines: &[Inline], expected: &str) -> bool {
+        inlines.iter().any(|inline| match inline {
+            Inline::Subscript(inner) => {
+                inner.len() == 1 && matches!(&inner[0], Inline::Text(s) if s == expected)
+            }
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn pulldown_event_shapes_for_trailing_subscript_and_neighbors() {
+        // Trailing H~2~: strikethrough scanning splits the authored run into
+        // adjacent Text events whose ranges abut. Ownership: reconstruct only
+        // that contiguous run; parse_extended_inlines then owns subscript.
+        let trailing = raw_text_events("H~2~");
+        assert!(
+            trailing.len() >= 2,
+            "strikethrough-enabled pulldown must split trailing H~2~, got {trailing:?}"
+        );
+        let contiguous = trailing
+            .windows(2)
+            .any(|pair| pair[0].1.end == pair[1].1.start);
+        assert!(
+            contiguous,
+            "split H~2~ fragments must be offset-contiguous so they can be reconstructed, got {trailing:?}"
+        );
+        assert_eq!(
+            trailing
+                .iter()
+                .map(|(text, _, _)| text.as_str())
+                .collect::<String>(),
+            "H~2~"
+        );
+
+        // Left-flanking single tildes are GFM strikethrough events, not text
+        // fragments for the extended-inline adapter to reclassify.
+        let lead_kinds: Vec<_> = PdParser::new_ext("~2~ leading", default_pd_options())
+            .into_offset_iter()
+            .map(|(event, _)| event_kind(&event))
+            .collect();
+        assert!(
+            lead_kinds.contains(&"start-strikethrough"),
+            "left-flanking ~2~ belongs to strikethrough, got {lead_kinds:?}"
+        );
+
+        // Escaped tildes: the consumed backslash leaves a gap, so fragments
+        // must stay literal rather than being concatenated into ~2~.
+        let escaped = r"H\~2\~";
+        let escaped_events: Vec<_> = PdParser::new_ext(escaped, default_pd_options())
+            .into_offset_iter()
+            .collect();
+        let escaped_text: Vec<_> = escaped_events
+            .iter()
+            .filter_map(|(event, range)| match event {
+                Event::Text(text) => Some((text.to_string(), range.clone())),
+                _ => None,
+            })
+            .collect();
+        let has_gap = escaped_text
+            .windows(2)
+            .any(|pair| pair[0].1.end != pair[1].1.start);
+        assert!(
+            has_gap,
+            "escaped tildes must leave an offset gap, got {escaped_text:?}"
+        );
+
+        // GFM strikethrough is a distinct event pair, not a text-run merge.
+        let strike_kinds: Vec<_> = PdParser::new_ext("~~strike~~", default_pd_options())
+            .into_offset_iter()
+            .map(|(event, _)| event_kind(&event))
+            .collect();
+        assert!(
+            strike_kinds.contains(&"start-strikethrough"),
+            "~~strike~~ must remain a strikethrough construct, got {strike_kinds:?}"
+        );
+        assert!(!strike_kinds.contains(&"start-emphasis"));
+
+        // Unicode subscript content is still a text-event run (possibly split).
+        let unicode = raw_text_events("水~测~");
+        assert_eq!(
+            unicode
+                .iter()
+                .map(|(text, _, _)| text.as_str())
+                .collect::<String>(),
+            "水~测~"
+        );
+
+        // Code, link, emphasis, HTML, and breaks interrupt text ownership.
+        let code_kinds: Vec<_> = PdParser::new_ext("H~2~ `x`", default_pd_options())
+            .into_offset_iter()
+            .map(|(event, _)| event_kind(&event))
+            .collect();
+        assert!(code_kinds.contains(&"code"));
+        let link_kinds: Vec<_> = PdParser::new_ext("H~2~ [a](b)", default_pd_options())
+            .into_offset_iter()
+            .map(|(event, _)| event_kind(&event))
+            .collect();
+        assert!(link_kinds.contains(&"start-link"));
+        let em_kinds: Vec<_> = PdParser::new_ext("H~2~ *x*", default_pd_options())
+            .into_offset_iter()
+            .map(|(event, _)| event_kind(&event))
+            .collect();
+        assert!(em_kinds.contains(&"start-emphasis"));
+        let html_kinds: Vec<_> = PdParser::new_ext("H~2~ <em>x</em>", default_pd_options())
+            .into_offset_iter()
+            .map(|(event, _)| event_kind(&event))
+            .collect();
+        assert!(html_kinds.contains(&"inline-html") || html_kinds.iter().any(|k| *k == "other"));
+        let break_kinds: Vec<_> = PdParser::new_ext("H~2~  \nx", default_pd_options())
+            .into_offset_iter()
+            .map(|(event, _)| event_kind(&event))
+            .collect();
+        assert!(
+            break_kinds.contains(&"hard-break") || break_kinds.contains(&"soft-break"),
+            "hard/soft break must remain a semantic event, got {break_kinds:?}"
+        );
+    }
+
+    #[test]
+    fn default_parser_recognizes_subscript_around_semantic_events() {
+        // Left-flanking `~2~` is GFM strikethrough (pulldown Start/End), not
+        // an extended-inline candidate. Subscript at the start of a paragraph
+        // is the trailing-in-word form `H~2~…`.
+        let strike_lead = paragraph_inlines("~2~ leading");
+        assert!(
+            strike_lead
+                .iter()
+                .any(|i| matches!(i, Inline::Strikethrough(_))),
+            "left-flanking ~2~ is strikethrough, got {strike_lead:?}"
+        );
+        assert!(
+            !strike_lead
+                .iter()
+                .any(|i| matches!(i, Inline::Subscript(_)))
+        );
+
+        assert!(has_subscript_text(&paragraph_inlines("H~2~ starts"), "2"));
+        assert!(has_subscript_text(&paragraph_inlines("mid H~2~O end"), "2"));
+        assert!(has_subscript_text(&paragraph_inlines("H~2~"), "2"));
+        assert!(has_subscript_text(&paragraph_inlines("水~测~"), "测"));
+
+        let escaped = paragraph_inlines(r"H\~2\~");
+        assert!(
+            !escaped.iter().any(|i| matches!(i, Inline::Subscript(_))),
+            "escaped tildes must stay literal, got {escaped:?}"
+        );
+
+        let strike = paragraph_inlines("~~strike~~");
+        assert!(strike.iter().any(|i| matches!(i, Inline::Strikethrough(_))));
+        assert!(!strike.iter().any(|i| matches!(i, Inline::Subscript(_))));
+
+        assert!(has_subscript_text(&paragraph_inlines("H~2~ `code`"), "2"));
+        assert!(has_subscript_text(
+            &paragraph_inlines("H~2~ [a](https://example.com)"),
+            "2"
+        ));
+        assert!(has_subscript_text(&paragraph_inlines("H~2~ *em*"), "2"));
+        assert!(has_subscript_text(
+            &paragraph_inlines("H~2~ <em>x</em>"),
+            "2"
+        ));
+        assert!(has_subscript_text(&paragraph_inlines("H~2~  \nnext"), "2"));
     }
 }
