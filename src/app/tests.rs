@@ -5266,6 +5266,7 @@ fn visual_edit_ime_updates_share_one_undo_and_expose_exact_bounds(cx: &mut TestA
 }
 
 #[gpui::test]
+#[allow(clippy::reversed_empty_ranges)]
 fn visual_edit_ime_rejects_stale_native_ranges_and_commits_pinyin_preedit(cx: &mut TestAppContext) {
     let source = "前0后";
     let cursor = "前0".len();
@@ -8811,6 +8812,7 @@ fn theme_fonts_apply_only_without_explicit_preference(cx: &mut TestAppContext) {
 }
 
 #[test]
+#[allow(clippy::reversed_empty_ranges)]
 fn ime_selected_range_is_relative_to_composition_text() {
     let composing = "😀文";
     let range = EditorTab::relative_range_from_utf16(composing, &(2..3))

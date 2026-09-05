@@ -277,8 +277,8 @@ impl Exporter for PdfExporter {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Escapes a string for safe inclusion in YAML values.
-fn escape_yaml_string(s: &str) -> String {
+/// Escapes a string for safe inclusion in a double-quoted YAML scalar.
+pub(crate) fn escape_yaml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 

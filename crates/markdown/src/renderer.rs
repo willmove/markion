@@ -16,18 +16,18 @@ pub fn render_to_markdown(doc: &Document) -> String {
     if let Some(fm) = &doc.metadata {
         out.push_str("---\n");
         if let Some(title) = &fm.title {
-            out.push_str(&format!("title: {}\n", title));
+            out.push_str(&format!("title: {}\n", render_yaml_scalar(title)));
         }
         if let Some(author) = &fm.author {
-            out.push_str(&format!("author: {}\n", author));
+            out.push_str(&format!("author: {}\n", render_yaml_scalar(author)));
         }
         if let Some(date) = &fm.date {
-            out.push_str(&format!("date: {}\n", date));
+            out.push_str(&format!("date: {}\n", render_yaml_scalar(date)));
         }
         if !fm.tags.is_empty() {
             out.push_str("tags:\n");
             for tag in &fm.tags {
-                out.push_str(&format!("  - {}\n", tag));
+                out.push_str(&format!("  - {}\n", render_yaml_scalar(tag)));
             }
         }
         // Emit any extra custom keys
@@ -36,10 +36,7 @@ pub fn render_to_markdown(doc: &Document) -> String {
             if matches!(key.as_str(), "title" | "author" | "date" | "tags") {
                 continue;
             }
-            if let Ok(s) = serde_yaml::to_string(value) {
-                let s = s.trim_end_matches('\n');
-                out.push_str(&format!("{}: {}\n", key, s));
-            }
+            render_yaml_custom_value(key, value, &mut out);
         }
         out.push_str("---\n\n");
     }
@@ -47,6 +44,68 @@ pub fn render_to_markdown(doc: &Document) -> String {
     // Emit blocks
     render_blocks(&doc.blocks, &mut out, 0);
     out
+}
+
+/// Render a string as a YAML scalar that the parser (serde_yaml) reads back
+/// byte-for-byte.
+///
+/// The value is emitted in plain (unquoted) style only when our own YAML
+/// parser would read the bare value back as the identical string; anything
+/// else — leading/trailing whitespace, `: ` or ` #` sequences, quotes,
+/// newlines, or values that would resolve as a bool/number/null — falls back
+/// to a double-quoted scalar with escape sequences (which also keeps
+/// multi-line values on a single physical line, so they cannot break the
+/// front-matter block or its `---` delimiters).
+fn render_yaml_scalar(value: &str) -> String {
+    let plain_round_trips = match serde_yaml::from_str::<serde_yaml::Value>(value) {
+        Ok(serde_yaml::Value::String(parsed)) => parsed == value,
+        _ => false,
+    };
+    if plain_round_trips {
+        return value.to_string();
+    }
+
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            c if (c as u32) < 0x20 => quoted.push_str(&format!("\\x{:02X}", c as u32)),
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// Emit one custom front-matter entry. String values go through
+/// [`render_yaml_scalar`]; other values are serialized with serde_yaml, and
+/// multi-line output (mappings, sequences) is nested under the key with
+/// indentation so the front matter stays valid YAML.
+fn render_yaml_custom_value(key: &str, value: &serde_yaml::Value, out: &mut String) {
+    if let serde_yaml::Value::String(s) = value {
+        out.push_str(&format!("{}: {}\n", key, render_yaml_scalar(s)));
+        return;
+    }
+    if let Ok(serialized) = serde_yaml::to_string(value) {
+        let serialized = serialized.trim_end_matches('\n');
+        if serialized.contains('\n') {
+            out.push_str(&format!("{}:\n", key));
+            for line in serialized.lines() {
+                if line.is_empty() {
+                    out.push('\n');
+                } else {
+                    out.push_str(&format!("  {}\n", line));
+                }
+            }
+        } else {
+            out.push_str(&format!("{}: {}\n", key, serialized));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -714,5 +773,94 @@ mod tests {
         // First block should be a heading in both
         assert!(matches!(doc1.blocks[0], Block::Heading { level: 1, .. }));
         assert!(matches!(doc2.blocks[0], Block::Heading { level: 1, .. }));
+    }
+
+    #[test]
+    fn render_yaml_scalar_quotes_only_when_needed() {
+        // Plain-safe values are emitted unchanged.
+        assert_eq!(render_yaml_scalar("plain title"), "plain title");
+        assert_eq!(render_yaml_scalar("2024-01-15"), "2024-01-15");
+        assert_eq!(render_yaml_scalar("中文标题"), "中文标题");
+
+        // Values that would not read back as the same string get quoted.
+        assert_eq!(render_yaml_scalar("has: colon"), "\"has: colon\"");
+        assert_eq!(render_yaml_scalar("has #hash"), "\"has #hash\"");
+        assert_eq!(render_yaml_scalar("\"quoted\""), "\"\\\"quoted\\\"\"");
+        assert_eq!(render_yaml_scalar(" padded "), "\" padded \"");
+        assert_eq!(render_yaml_scalar("true"), "\"true\"");
+        assert_eq!(render_yaml_scalar("123"), "\"123\"");
+        assert_eq!(render_yaml_scalar(""), "\"\"");
+        // Multi-line values stay on one physical line via `\n` escapes.
+        assert_eq!(render_yaml_scalar("a\nb"), "\"a\\nb\"");
+        assert_eq!(render_yaml_scalar("a\tb"), "a\tb");
+    }
+
+    #[test]
+    fn round_trip_front_matter_hostile_scalars() {
+        use crate::ast::YamlFrontMatter;
+        use std::collections::HashMap;
+
+        let mut custom = HashMap::new();
+        custom.insert(
+            "note".to_string(),
+            serde_yaml::Value::String("line one\nline two".into()),
+        );
+        custom.insert(
+            "unicode".to_string(),
+            serde_yaml::Value::String("José 中文 éàü".into()),
+        );
+        let fm = YamlFrontMatter {
+            title: Some("Report: \"Q3\" #final".into()),
+            author: Some("  spaced out  ".into()),
+            date: Some("2024-01-15".into()),
+            tags: vec!["tag: colon".into(), "#hash".into(), "plain".into()],
+            custom,
+        };
+        let mut doc = Document::new(vec![make_para("body")]);
+        doc.metadata = Some(fm.clone());
+
+        let rendered = render_to_markdown(&doc);
+        // The multi-line custom value must not break the front-matter block.
+        assert!(rendered.contains("note: \"line one\\nline two\""));
+
+        let parser = Parser::new(ParserOptions::default());
+        let reparsed = parser.parse(&rendered).unwrap();
+        let fm2 = reparsed.metadata.as_ref().unwrap();
+        assert_eq!(fm2.title, fm.title);
+        assert_eq!(fm2.author, fm.author);
+        assert_eq!(fm2.date, fm.date);
+        assert_eq!(fm2.tags, fm.tags);
+        assert_eq!(fm2.custom, fm.custom);
+    }
+
+    #[test]
+    fn round_trip_front_matter_nested_custom_value() {
+        use crate::ast::YamlFrontMatter;
+        use std::collections::HashMap;
+
+        let nested: serde_yaml::Value =
+            serde_yaml::from_str("version: 1.0\nstatus: draft").unwrap();
+        let mut custom = HashMap::new();
+        custom.insert("metadata".to_string(), nested.clone());
+        let fm = YamlFrontMatter {
+            title: Some("Nested".into()),
+            author: None,
+            date: None,
+            tags: vec![],
+            custom,
+        };
+        let mut doc = Document::new(vec![make_para("body")]);
+        doc.metadata = Some(fm);
+
+        let rendered = render_to_markdown(&doc);
+        // A mapping value must be nested under its key, not glued onto it.
+        assert!(rendered.contains("metadata:\n  version: 1.0\n  status: draft\n"));
+
+        let parser = Parser::new(ParserOptions::default());
+        let reparsed = parser.parse(&rendered).unwrap();
+        assert_eq!(
+            reparsed.metadata.unwrap().custom.get("metadata"),
+            Some(&nested)
+        );
     }
 }

@@ -3907,6 +3907,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::reversed_empty_ranges)]
     fn malformed_preview_ranges_fall_back_without_panicking() {
         // Reversed, out-of-bounds, and non-UTF-8-boundary leaves must be
         // omitted from semantic projection; the coverage loop then keeps

@@ -8,6 +8,7 @@ use markdown::{Document, render_to_markdown};
 
 use crate::engine::{ExportFormat, ExportOptions, Exporter, PageSize};
 use crate::error::ExportError;
+use crate::pdf::escape_yaml_string;
 
 /// Exporter that produces DOCX (Word) files from a Document AST.
 ///
@@ -105,7 +106,7 @@ impl DocxExporter {
             if document.metadata.is_none() {
                 let mut output = String::new();
                 output.push_str("---\n");
-                output.push_str(&format!("title: {}\n", title));
+                output.push_str(&format!("title: \"{}\"\n", escape_yaml_string(title)));
                 output.push_str("---\n\n");
                 output.push_str(&md);
                 return output;
@@ -322,8 +323,37 @@ mod tests {
         let md = exporter.render_markdown_input(&doc, &options);
 
         assert!(md.starts_with("---\n"));
-        assert!(md.contains("title: Custom Title"));
+        assert!(md.contains("title: \"Custom Title\""));
         assert!(md.contains("Content"));
+    }
+
+    #[test]
+    fn test_render_markdown_title_override_escapes_yaml() {
+        let exporter = DocxExporter::new();
+        let doc = Document::new(vec![Block::Paragraph {
+            content: vec![Inline::Text("Content".into())],
+            id: 0,
+        }]);
+        let mut options = default_options();
+
+        // A colon would otherwise turn the scalar into a mapping; a `#` would
+        // start a comment. Inside a double-quoted scalar both are literal.
+        options.title_override = Some("Report: Q3 #internal".into());
+        let md = exporter.render_markdown_input(&doc, &options);
+        assert!(md.starts_with("---\ntitle: \"Report: Q3 #internal\"\n---\n\n"));
+
+        // Double quotes and backslashes are escaped inside the quoted scalar.
+        options.title_override = Some(r#"He said "hi" \o/"#.into());
+        let md = exporter.render_markdown_input(&doc, &options);
+        assert!(md.contains("title: \"He said \\\"hi\\\" \\\\o/\""));
+
+        // A newline stays inside the double-quoted scalar (valid YAML, folded
+        // by the reader) instead of breaking out of the `title:` line.
+        options.title_override = Some("line one\nline two".into());
+        let md = exporter.render_markdown_input(&doc, &options);
+        assert!(md.contains("title: \"line one\nline two\"\n"));
+        assert!(md.starts_with("---\n"));
+        assert!(md.contains("\n---\n\n"));
     }
 
     #[test]

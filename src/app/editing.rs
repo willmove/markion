@@ -1462,10 +1462,6 @@ impl MarkionApp {
     }
 
     pub(super) fn toggle_menu(&mut self, menu: AppMenu, cx: &mut Context<Self>) {
-        eprintln!(
-            "[menu-debug] toggle_menu({menu:?}), was {:?}",
-            self.active_menu
-        );
         self.file_tree_context_menu = None;
         self.pending_name_input = None;
         self.dismiss_visual_block_menu();
@@ -1516,7 +1512,6 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        eprintln!("[menu-debug] close_menu, active={:?}", self.active_menu);
         // Each mouse-down starts a fresh click: clear the click-away flag left
         // over from the previous click before deciding what this click does.
         self.name_editor_click_away = false;

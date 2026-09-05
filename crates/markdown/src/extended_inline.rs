@@ -33,8 +33,11 @@ pub fn parse_extended_inlines(text: &str) -> Vec<Inline> {
         // Note: We need to be careful not to confuse with strikethrough ~~
         if chars[i] == '~' && i + 1 < chars.len() && chars.get(i + 1) != Some(&'~') {
             if let Some((content, end_pos)) = extract_delimited(&chars, i, '~', '~') {
-                // Make sure it's not strikethrough
-                if end_pos < chars.len() && chars.get(end_pos) != Some(&'~') {
+                // Make sure it's not strikethrough: reject only when another
+                // `~` immediately follows the closing delimiter. A subscript
+                // ending exactly at the end of the text run (no following
+                // character) is fine.
+                if chars.get(end_pos) != Some(&'~') {
                     let inner = parse_extended_inlines(&content);
                     result.push(Inline::Subscript(inner));
                     i = end_pos;
@@ -322,5 +325,42 @@ mod tests {
         assert!(matches!(result.get(1), Some(Inline::Subscript(_))));
         // Note: Strikethrough ~~text~~ would be handled by the main parser,
         // not this extended inline parser
+    }
+
+    #[test]
+    fn test_subscript_at_end_of_text_run() {
+        // The subscript closes exactly at the end of the text event; there is
+        // no following character to disambiguate, and it must still parse.
+        let result = parse_extended_inlines("H~2~");
+        assert_eq!(
+            result,
+            vec![
+                Inline::Text("H".to_string()),
+                Inline::Subscript(vec![Inline::Text("2".to_string())]),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_subscript_at_end_does_not_weaken_strikethrough_guard() {
+        // `~~strike~~` must stay literal text here (the main parser owns
+        // strikethrough); the end-of-run relaxation must not swallow it.
+        let result = parse_extended_inlines("~~strike~~");
+        assert!(result.iter().all(|i| matches!(i, Inline::Text(_))));
+        let text: String = result
+            .iter()
+            .filter_map(|i| {
+                if let Inline::Text(s) = i {
+                    Some(s.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(text, "~~strike~~");
+
+        // A closing `~~` pair still rejects the subscript reading.
+        let result = parse_extended_inlines("~2~~");
+        assert!(!result.iter().any(|i| matches!(i, Inline::Subscript(_))));
     }
 }

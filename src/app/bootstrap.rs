@@ -380,7 +380,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 },
                 |_, cx| cx.new(MarkionApp::new),
             )
-            .unwrap();
+            .expect("failed to open the Markion main window");
 
         let startup_intent = startup_intent.clone();
         window
@@ -400,7 +400,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 // open, or opening a document — not by the process CWD.
                 cx.activate(true);
             })
-            .unwrap();
+            .expect("failed to initialize the Markion main window");
         cx.activate(true);
     });
 }

@@ -4,7 +4,13 @@
 //! [`DiagramBackend`] and return SVG; [`DiagramRegistry`] owns dispatch,
 //! resource limits, and the passive-SVG safety boundary shared by every caller.
 
-use std::{collections::HashMap, fmt, io::Cursor, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt,
+    io::Cursor,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::Arc,
+};
 
 #[cfg(feature = "mermaid")]
 mod mermaid;
@@ -317,7 +323,17 @@ impl DiagramRegistry {
             theme,
             limits: self.limits,
         };
-        let raw = entry.backend.render(&request)?;
+        // A backend panic (e.g. an adversarial diagram source hitting a parser
+        // bug in a third-party renderer) must not unwind into the live preview
+        // path; mirror the math renderer's containment and surface it as an
+        // ordinary render failure.
+        let raw =
+            catch_unwind(AssertUnwindSafe(|| entry.backend.render(&request))).map_err(|_| {
+                DiagramError::new(
+                    DiagramErrorKind::RenderFailed,
+                    format!("diagram backend '{backend_id}' panicked while rendering"),
+                )
+            })??;
         sanitize_svg(raw, self.limits)
     }
 
@@ -535,6 +551,43 @@ mod tests {
             .render_info("unknown", "source", DiagramTheme::Light)
             .unwrap_err();
         assert_eq!(error.kind(), DiagramErrorKind::UnsupportedBackend);
+    }
+
+    #[test]
+    fn backend_panic_is_contained_as_render_failure() {
+        struct PanickingBackend;
+
+        impl DiagramBackend for PanickingBackend {
+            fn id(&self) -> &'static str {
+                "panicking"
+            }
+
+            fn aliases(&self) -> &'static [&'static str] {
+                &[]
+            }
+
+            fn render(
+                &self,
+                _request: &DiagramRenderRequest,
+            ) -> Result<RawDiagramRender, DiagramError> {
+                panic!("simulated backend crash on adversarial source");
+            }
+        }
+
+        let mut registry = DiagramRegistry::new();
+        registry.register(PanickingBackend).unwrap();
+        let error = registry
+            .render("panicking", "graph TD; A-->B", DiagramTheme::Light)
+            .unwrap_err();
+        assert_eq!(error.kind(), DiagramErrorKind::RenderFailed);
+
+        // The registry stays usable after containing a backend panic.
+        let (registry, _) = registry_with(RawDiagramRender::svg(SAFE_SVG));
+        assert!(
+            registry
+                .render("mock", "source", DiagramTheme::Light)
+                .is_ok()
+        );
     }
 
     #[test]

@@ -223,6 +223,48 @@ fn test_subscript_vs_strikethrough() {
 }
 
 #[test]
+fn test_subscript_at_end_of_paragraph() {
+    // With strikethrough disabled, pulldown-cmark hands the extended inline
+    // parser a single text event; a `~2~` run ending exactly at the end of
+    // that event must still parse as a subscript.
+    let parser = Parser::new(markdown::ParserOptions {
+        enable_strikethrough: false,
+        ..Default::default()
+    });
+    let doc = parser.parse("H~2~").unwrap();
+
+    assert_eq!(doc.blocks.len(), 1);
+    if let Block::Paragraph { content, .. } = &doc.blocks[0] {
+        assert!(content.iter().any(|i| matches!(i, Inline::Subscript(_))));
+
+        for inline in content {
+            if let Inline::Subscript(inner) = inline {
+                assert_eq!(inner.len(), 1);
+                assert!(matches!(inner[0], Inline::Text(ref s) if s == "2"));
+            }
+        }
+    } else {
+        panic!("Expected Paragraph block");
+    }
+}
+
+#[test]
+fn test_strikethrough_still_not_parsed_as_subscript() {
+    let parser = Parser::default();
+    let doc = parser.parse("~~strike~~").unwrap();
+
+    assert_eq!(doc.blocks.len(), 1);
+    if let Block::Paragraph { content, .. } = &doc.blocks[0] {
+        assert!(
+            !content.iter().any(|i| matches!(i, Inline::Subscript(_))),
+            "strikethrough must not be parsed as subscript, got: {content:?}"
+        );
+    } else {
+        panic!("Expected Paragraph block");
+    }
+}
+
+#[test]
 fn test_multiple_emojis_in_sequence() {
     let parser = Parser::default();
     let doc = parser.parse(":fire: :heart: :rocket:").unwrap();
