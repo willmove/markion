@@ -2017,6 +2017,7 @@ pub(super) fn filter_restorable_session(
 }
 
 /// Collect path-backed open tabs for the session snapshot. Untitled tabs are omitted.
+#[cfg(test)]
 pub(super) fn session_open_files_from_paths<'a>(
     paths: impl IntoIterator<Item = Option<&'a Path>>,
 ) -> Vec<PathBuf> {
