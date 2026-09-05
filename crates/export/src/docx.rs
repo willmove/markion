@@ -4,11 +4,10 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use markdown::{Document, render_to_markdown};
+use markdown::Document;
 
-use crate::engine::{ExportFormat, ExportOptions, Exporter, PageSize};
+use crate::engine::{ExportFormat, ExportOptions, Exporter, PageSize, pandoc_markdown_input};
 use crate::error::ExportError;
-use crate::pdf::escape_yaml_string;
 
 /// Exporter that produces DOCX (Word) files from a Document AST.
 ///
@@ -98,22 +97,7 @@ impl DocxExporter {
 
     /// Render the document to Markdown, optionally prepending YAML front matter.
     fn render_markdown_input(&self, document: &Document, options: &ExportOptions) -> String {
-        let md = render_to_markdown(document);
-
-        // If title_override is set and no metadata exists in the document,
-        // prepend YAML front matter
-        if let Some(ref title) = options.title_override {
-            if document.metadata.is_none() {
-                let mut output = String::new();
-                output.push_str("---\n");
-                output.push_str(&format!("title: \"{}\"\n", escape_yaml_string(title)));
-                output.push_str("---\n\n");
-                output.push_str(&md);
-                return output;
-            }
-        }
-
-        md
+        pandoc_markdown_input(document, options)
     }
 }
 
@@ -179,7 +163,7 @@ impl Exporter for DocxExporter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use markdown::{Block, Document, Inline};
+    use markdown::{Block, Document, Inline, Parser, YamlFrontMatter};
 
     fn default_options() -> ExportOptions {
         ExportOptions::default()
@@ -323,37 +307,51 @@ mod tests {
         let md = exporter.render_markdown_input(&doc, &options);
 
         assert!(md.starts_with("---\n"));
-        assert!(md.contains("title: \"Custom Title\""));
+        assert_eq!(
+            Parser::default()
+                .parse(&md)
+                .unwrap()
+                .metadata
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("Custom Title")
+        );
         assert!(md.contains("Content"));
     }
 
     #[test]
-    fn test_render_markdown_title_override_escapes_yaml() {
+    fn test_render_markdown_title_override_round_trips_hostile_scalars() {
         let exporter = DocxExporter::new();
-        let doc = Document::new(vec![Block::Paragraph {
-            content: vec![Inline::Text("Content".into())],
-            id: 0,
-        }]);
+        let mut fm = YamlFrontMatter {
+            title: Some("Original".into()),
+            ..Default::default()
+        };
+        fm.author = Some("Keep me".into());
+        let doc = Document::with_metadata(
+            vec![Block::Paragraph {
+                content: vec![Inline::Text("Content".into())],
+                id: 0,
+            }],
+            fm,
+        );
+        let original = doc.clone();
         let mut options = default_options();
-
-        // A colon would otherwise turn the scalar into a mapping; a `#` would
-        // start a comment. Inside a double-quoted scalar both are literal.
-        options.title_override = Some("Report: Q3 #internal".into());
-        let md = exporter.render_markdown_input(&doc, &options);
-        assert!(md.starts_with("---\ntitle: \"Report: Q3 #internal\"\n---\n\n"));
-
-        // Double quotes and backslashes are escaped inside the quoted scalar.
-        options.title_override = Some(r#"He said "hi" \o/"#.into());
-        let md = exporter.render_markdown_input(&doc, &options);
-        assert!(md.contains("title: \"He said \\\"hi\\\" \\\\o/\""));
-
-        // A newline stays inside the double-quoted scalar (valid YAML, folded
-        // by the reader) instead of breaking out of the `title:` line.
-        options.title_override = Some("line one\nline two".into());
-        let md = exporter.render_markdown_input(&doc, &options);
-        assert!(md.contains("title: \"line one\nline two\"\n"));
-        assert!(md.starts_with("---\n"));
-        assert!(md.contains("\n---\n\n"));
+        for title in [
+            "Report: Q3 #internal",
+            r#"He said "hi" \o/"#,
+            "line one\nline two",
+            "a\rb",
+            "---",
+            "a\u{0007}b",
+        ] {
+            options.title_override = Some(title.into());
+            let md = exporter.render_markdown_input(&doc, &options);
+            let parsed = Parser::default().parse(&md).unwrap();
+            assert_eq!(parsed.metadata.unwrap().title.as_deref(), Some(title));
+            assert_eq!(doc.metadata, original.metadata);
+            assert_eq!(doc.version, original.version);
+        }
     }
 
     #[test]

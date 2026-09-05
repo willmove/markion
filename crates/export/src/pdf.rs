@@ -4,9 +4,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use markdown::{Document, render_to_markdown};
+use markdown::Document;
 
-use crate::engine::{ExportFormat, ExportOptions, Exporter, PageSize};
+use crate::engine::{ExportFormat, ExportOptions, Exporter, PageSize, pandoc_markdown_input};
 use crate::error::ExportError;
 
 // ---------------------------------------------------------------------------
@@ -186,35 +186,7 @@ impl PdfExporter {
     /// markdown (including YAML front matter) is returned. Otherwise only the
     /// body content is rendered.
     fn prepare_input(&self, document: &Document, options: &ExportOptions) -> String {
-        if options.include_metadata && document.metadata.is_some() {
-            // render_to_markdown already includes YAML front matter
-            let mut md = render_to_markdown(document);
-
-            // Apply title override if present
-            if let Some(ref title) = options.title_override {
-                md = replace_or_prepend_title(&md, title);
-            }
-
-            md
-        } else {
-            // Render without metadata: create a temporary doc without metadata
-            let doc_no_meta = Document {
-                blocks: document.blocks.clone(),
-                metadata: None,
-                version: document.version,
-                footnote_map: document.footnote_map.clone(),
-            };
-
-            let mut md = render_to_markdown(&doc_no_meta);
-
-            // If title_override is set, prepend a YAML block with just the title
-            if let Some(ref title) = options.title_override {
-                let header = format!("---\ntitle: \"{}\"\n---\n\n", escape_yaml_string(title));
-                md = format!("{}{}", header, md);
-            }
-
-            md
-        }
+        pandoc_markdown_input(document, options)
     }
 }
 
@@ -274,60 +246,13 @@ impl Exporter for PdfExporter {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Escapes a string for safe inclusion in a double-quoted YAML scalar.
-pub(crate) fn escape_yaml_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Replaces the title in existing YAML front matter, or prepends a YAML block
-/// with the given title if no front matter exists.
-fn replace_or_prepend_title(md: &str, title: &str) -> String {
-    if let Some(stripped) = md.strip_prefix("---\n") {
-        // Find the closing ---
-        if let Some(end_idx) = stripped.find("\n---\n") {
-            let front_matter = &stripped[..end_idx];
-            let rest = &stripped[end_idx + 5..]; // skip past "\n---\n"
-
-            // Replace or add title line
-            let mut new_fm = String::new();
-            let mut title_found = false;
-            for line in front_matter.lines() {
-                if line.starts_with("title:") {
-                    new_fm.push_str(&format!("title: \"{}\"", escape_yaml_string(title)));
-                    title_found = true;
-                } else {
-                    new_fm.push_str(line);
-                }
-                new_fm.push('\n');
-            }
-            if !title_found {
-                new_fm.push_str(&format!("title: \"{}\"\n", escape_yaml_string(title)));
-            }
-
-            format!("---\n{}---\n{}", new_fm, rest)
-        } else {
-            md.to_string()
-        }
-    } else {
-        format!(
-            "---\ntitle: \"{}\"\n---\n\n{}",
-            escape_yaml_string(title),
-            md
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use markdown::{Block, Document, Inline, YamlFrontMatter};
+    use markdown::{Block, Document, Inline, Parser, YamlFrontMatter};
     use std::collections::HashMap;
 
     #[test]
@@ -373,6 +298,14 @@ mod tests {
                 custom: HashMap::new(),
             },
         )
+    }
+
+    fn parsed_title(md: &str) -> Option<String> {
+        Parser::default()
+            .parse(md)
+            .unwrap()
+            .metadata
+            .and_then(|fm| fm.title)
     }
 
     #[test]
@@ -503,9 +436,11 @@ mod tests {
         };
 
         let input = exporter.prepare_input(&doc, &options);
-
-        assert!(input.contains("title: \"Overridden Title\""));
-        assert!(!input.contains("title: My Document"));
+        assert_eq!(parsed_title(&input).as_deref(), Some("Overridden Title"));
+        assert_eq!(
+            doc.metadata.as_ref().unwrap().title.as_deref(),
+            Some("My Document")
+        );
     }
 
     #[test]
@@ -519,10 +454,9 @@ mod tests {
         };
 
         let input = exporter.prepare_input(&doc, &options);
-
-        // Should prepend YAML with title since doc has no metadata
-        assert!(input.contains("title: \"New Title\""));
+        assert_eq!(parsed_title(&input).as_deref(), Some("New Title"));
         assert!(input.contains("# Hello PDF"));
+        assert!(doc.metadata.is_none());
     }
 
     #[test]
@@ -557,9 +491,29 @@ mod tests {
     }
 
     #[test]
-    fn escape_yaml_handles_special_chars() {
-        assert_eq!(escape_yaml_string(r#"hello"world"#), r#"hello\"world"#);
-        assert_eq!(escape_yaml_string(r"back\slash"), r"back\\slash");
+    fn prepare_input_hostile_title_overrides_round_trip() {
+        let exporter = PdfExporter::new();
+        let doc = sample_document_with_metadata();
+        let originals = doc.clone();
+        let hostile = [
+            "line one\nline two",
+            "a\rb",
+            r#"he said "hi""#,
+            r"back\slash",
+            "a\u{0007}b",
+            "---",
+        ];
+        for title in hostile {
+            let options = ExportOptions {
+                include_metadata: true,
+                title_override: Some(title.into()),
+                ..Default::default()
+            };
+            let input = exporter.prepare_input(&doc, &options);
+            assert_eq!(parsed_title(&input).as_deref(), Some(title), "{title:?}");
+            assert_eq!(doc.metadata, originals.metadata);
+            assert_eq!(doc.version, originals.version);
+        }
     }
 
     #[test]

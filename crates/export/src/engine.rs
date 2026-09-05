@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use markdown::Document;
+use markdown::{Document, render_to_markdown};
 use tracing;
 
 use crate::error::{ExportError, ExportErrorContext, ExportStep};
@@ -99,6 +99,29 @@ impl Default for ExportOptions {
             toc: false,
         }
     }
+}
+
+/// Build transient pandoc Markdown from a document without mutating the source
+/// `Document`. Title overrides are applied to cloned or newly built typed
+/// metadata and serialized with the canonical YAML renderer.
+pub(crate) fn pandoc_markdown_input(document: &Document, options: &ExportOptions) -> String {
+    let mut metadata = if options.include_metadata {
+        document.metadata.clone()
+    } else {
+        None
+    };
+    if let Some(title) = &options.title_override {
+        let mut fm = metadata.take().unwrap_or_default();
+        fm.title = Some(title.clone());
+        metadata = Some(fm);
+    }
+    let transient = Document {
+        blocks: document.blocks.clone(),
+        metadata,
+        version: document.version,
+        footnote_map: document.footnote_map.clone(),
+    };
+    render_to_markdown(&transient)
 }
 
 /// Standard page sizes for paged export formats.
