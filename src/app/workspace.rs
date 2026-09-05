@@ -506,6 +506,7 @@ impl MarkionApp {
         self.pending_name_input = None;
         self.input_marked_len = 0;
         self.tab_context_menu = None;
+        self.close_workspace_switcher();
         match &target {
             FileTreeContextTarget::Workspace => self.selected_tree_path = None,
             FileTreeContextTarget::Directory(path) | FileTreeContextTarget::File(path) => {

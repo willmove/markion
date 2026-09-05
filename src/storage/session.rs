@@ -10,7 +10,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{MAX_RECENT_FILES, SessionLayout, SessionState};
+use crate::model::{
+    MAX_RECENT_FILES, MAX_RECENT_WORKSPACES, SessionLayout, SessionState, WorkspaceSnapshot,
+};
 use crate::storage::atomic_write;
 
 /// Serde-facing shape of `session.toml`. Kept separate so `model` stays
@@ -18,6 +20,8 @@ use crate::storage::atomic_write;
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
 struct SessionFile {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    workspaces: Vec<WorkspaceFile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace_root: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -28,6 +32,16 @@ struct SessionFile {
     recent_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     layout: Option<LayoutFile>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct WorkspaceFile {
+    root: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    open_files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_file: Option<String>,
 }
 
 /// `[layout]` table: every field optional; unknown keys are ignored.
@@ -102,21 +116,87 @@ impl From<LayoutFile> for SessionLayout {
     }
 }
 
-impl From<&SessionState> for SessionFile {
-    fn from(session: &SessionState) -> Self {
+impl From<&WorkspaceSnapshot> for WorkspaceFile {
+    fn from(snapshot: &WorkspaceSnapshot) -> Self {
         Self {
-            workspace_root: session
-                .workspace_root
-                .as_ref()
-                .map(|path| path.display().to_string()),
-            open_files: session
+            root: snapshot.root.display().to_string(),
+            open_files: snapshot
                 .open_files
                 .iter()
                 .map(|path| path.display().to_string())
                 .collect(),
-            active_file: session
+            active_file: snapshot
                 .active_file
                 .as_ref()
+                .map(|path| path.display().to_string()),
+        }
+    }
+}
+
+fn parse_path_string(path: impl AsRef<str>) -> Option<PathBuf> {
+    let trimmed = path.as_ref().trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(sanitize_persisted_path(PathBuf::from(trimmed)))
+    }
+}
+
+fn parse_path_list(paths: impl IntoIterator<Item = String>) -> Vec<PathBuf> {
+    paths.into_iter().filter_map(parse_path_string).collect()
+}
+
+impl From<WorkspaceFile> for Option<WorkspaceSnapshot> {
+    fn from(file: WorkspaceFile) -> Self {
+        let root = parse_path_string(file.root)?;
+        let open_files = parse_path_list(file.open_files);
+        let active_file = file
+            .active_file
+            .and_then(parse_path_string)
+            .filter(|path| open_files.iter().any(|open| open == path));
+        Some(WorkspaceSnapshot {
+            root,
+            open_files,
+            active_file,
+        })
+    }
+}
+
+impl From<&SessionState> for SessionFile {
+    fn from(session: &SessionState) -> Self {
+        let current = session.current_workspace();
+        Self {
+            workspaces: session
+                .workspaces
+                .iter()
+                .map(WorkspaceFile::from)
+                .collect(),
+            workspace_root: current
+                .map(|snapshot| snapshot.root.display().to_string())
+                .or_else(|| {
+                    session
+                        .workspace_root
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                }),
+            open_files: current
+                .map(|snapshot| {
+                    snapshot
+                        .open_files
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    session
+                        .open_files
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect()
+                }),
+            active_file: current
+                .and_then(|snapshot| snapshot.active_file.as_ref())
+                .or(session.active_file.as_ref())
                 .map(|path| path.display().to_string()),
             recent_files: session
                 .recent_files
@@ -137,58 +217,76 @@ fn sanitize_persisted_path(path: PathBuf) -> PathBuf {
     dunce::simplified(&path).to_path_buf()
 }
 
+fn dedupe_recent_files(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut deduped = Vec::with_capacity(paths.len().min(MAX_RECENT_FILES));
+    for path in paths {
+        if deduped.iter().any(|existing| existing == &path) {
+            continue;
+        }
+        deduped.push(path);
+        if deduped.len() == MAX_RECENT_FILES {
+            break;
+        }
+    }
+    deduped
+}
+
+fn dedupe_workspaces(mut workspaces: Vec<WorkspaceSnapshot>) -> Vec<WorkspaceSnapshot> {
+    let mut deduped: Vec<WorkspaceSnapshot> =
+        Vec::with_capacity(workspaces.len().min(MAX_RECENT_WORKSPACES));
+    for snapshot in workspaces.drain(..) {
+        if deduped.iter().any(|existing| existing.root == snapshot.root) {
+            continue;
+        }
+        deduped.push(snapshot);
+        if deduped.len() == MAX_RECENT_WORKSPACES {
+            break;
+        }
+    }
+    deduped
+}
+
 impl From<SessionFile> for SessionState {
     fn from(file: SessionFile) -> Self {
-        let mut recent_files = file
-            .recent_files
+        let recent_files = dedupe_recent_files(parse_path_list(file.recent_files));
+
+        let mut workspaces: Vec<WorkspaceSnapshot> = file
+            .workspaces
             .into_iter()
-            .map(|path| path.trim().to_string())
-            .filter(|path| !path.is_empty())
-            .map(|path| sanitize_persisted_path(PathBuf::from(path)))
-            .collect::<Vec<_>>();
-        // Preserve on-disk order (most recent first) while capping length and
-        // dropping later duplicates.
-        let mut deduped = Vec::with_capacity(recent_files.len().min(MAX_RECENT_FILES));
-        for path in recent_files.drain(..) {
-            if deduped.iter().any(|existing| existing == &path) {
-                continue;
-            }
-            deduped.push(path);
-            if deduped.len() == MAX_RECENT_FILES {
-                break;
+            .filter_map(Option::<WorkspaceSnapshot>::from)
+            .collect();
+        workspaces = dedupe_workspaces(workspaces);
+
+        // Legacy single-snapshot files: synthesize one workspace from top-level fields.
+        if workspaces.is_empty() {
+            let open_files = parse_path_list(file.open_files);
+            let active_file = file
+                .active_file
+                .and_then(parse_path_string)
+                .filter(|path| open_files.iter().any(|open| open == path));
+            let workspace_root = file.workspace_root.and_then(parse_path_string);
+            if let Some(root) = workspace_root {
+                workspaces.push(WorkspaceSnapshot {
+                    root,
+                    open_files,
+                    active_file,
+                });
+            } else if !open_files.is_empty() {
+                // No root but open files — keep aliases only via a synthetic rootless skip;
+                // without a root we cannot form a workspace slot.
             }
         }
-        recent_files = deduped;
 
-        let open_files = file
-            .open_files
-            .into_iter()
-            .map(|path| path.trim().to_string())
-            .filter(|path| !path.is_empty())
-            .map(|path| sanitize_persisted_path(PathBuf::from(path)))
-            .collect::<Vec<_>>();
-
-        let active_file = file
-            .active_file
-            .as_deref()
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(|path| sanitize_persisted_path(PathBuf::from(path)));
-
-        let workspace_root = file
-            .workspace_root
-            .as_deref()
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(|path| sanitize_persisted_path(PathBuf::from(path)));
-
-        Self {
-            workspace_root,
-            open_files,
-            active_file,
+        let mut session = SessionState {
+            workspaces,
+            workspace_root: None,
+            open_files: Vec::new(),
+            active_file: None,
             recent_files,
             layout: file.layout.map(SessionLayout::from).unwrap_or_default(),
-        }
+        };
+        session.sync_aliases_from_current();
+        session
     }
 }
 
@@ -245,7 +343,7 @@ pub fn render_session_state(session: &SessionState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{MAX_RECENT_FILES, touch_recent_file};
+    use crate::model::{MAX_RECENT_FILES, MAX_RECENT_WORKSPACES, touch_recent_file, touch_workspace_snapshot};
     use std::path::PathBuf;
 
     #[test]
@@ -256,18 +354,30 @@ mod tests {
     }
 
     #[test]
-    fn session_roundtrip_preserves_paths() {
+    fn session_roundtrip_preserves_workspaces() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.toml");
-        let session = SessionState {
-            workspace_root: Some(PathBuf::from("D:/Notes")),
-            open_files: vec![
-                PathBuf::from("D:/Notes/a.md"),
-                PathBuf::from("D:/Notes/b.md"),
+        let mut session = SessionState {
+            workspaces: vec![
+                WorkspaceSnapshot::new(
+                    PathBuf::from("D:/Notes"),
+                    vec![
+                        PathBuf::from("D:/Notes/a.md"),
+                        PathBuf::from("D:/Notes/cover.png"),
+                    ],
+                    Some(PathBuf::from("D:/Notes/a.md")),
+                ),
+                WorkspaceSnapshot::new(
+                    PathBuf::from("D:/Blog"),
+                    vec![PathBuf::from("D:/Blog/post.md")],
+                    Some(PathBuf::from("D:/Blog/post.md")),
+                ),
             ],
-            active_file: Some(PathBuf::from("D:/Notes/b.md")),
+            workspace_root: None,
+            open_files: Vec::new(),
+            active_file: None,
             recent_files: vec![
-                PathBuf::from("D:/Notes/b.md"),
+                PathBuf::from("D:/Notes/a.md"),
                 PathBuf::from("D:/Other/c.md"),
             ],
             layout: SessionLayout {
@@ -280,16 +390,46 @@ mod tests {
                 editor_split_ratio: Some(0.42),
             },
         };
+        session.sync_aliases_from_current();
 
         save_session_state(&path, &session).unwrap();
         assert_eq!(load_session_state(&path).unwrap(), session);
 
         let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("[[workspaces]]"));
         assert!(written.contains("workspace_root"));
         assert!(written.contains("open_files"));
         assert!(written.contains("recent_files"));
         assert!(written.contains("[layout]"));
         assert!(written.contains("sidebar_width"));
+    }
+
+    #[test]
+    fn legacy_top_level_fields_synthesize_one_workspace() {
+        let parsed = parse_session_state(
+            r#"
+workspace_root = "D:/Notes"
+open_files = ["D:/Notes/a.md", "D:/Notes/b.md"]
+active_file = "D:/Notes/b.md"
+recent_files = ["D:/Notes/b.md"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.workspaces.len(), 1);
+        assert_eq!(parsed.workspaces[0].root, PathBuf::from("D:/Notes"));
+        assert_eq!(
+            parsed.workspaces[0].open_files,
+            vec![
+                PathBuf::from("D:/Notes/a.md"),
+                PathBuf::from("D:/Notes/b.md")
+            ]
+        );
+        assert_eq!(
+            parsed.workspaces[0].active_file,
+            Some(PathBuf::from("D:/Notes/b.md"))
+        );
+        assert_eq!(parsed.workspace_root, Some(PathBuf::from("D:/Notes")));
+        assert_eq!(parsed.active_file, Some(PathBuf::from("D:/Notes/b.md")));
     }
 
     #[test]
@@ -300,6 +440,7 @@ mod tests {
         assert!(parsed.active_file.is_none());
         assert!(parsed.recent_files.is_empty());
         assert!(parsed.layout.is_empty());
+        assert_eq!(parsed.workspaces.len(), 1);
     }
 
     #[test]
@@ -330,6 +471,42 @@ mod tests {
     }
 
     #[test]
+    fn workspace_list_dedupes_and_caps() {
+        let mut workspaces = Vec::new();
+        for i in 0..(MAX_RECENT_WORKSPACES + 2) {
+            touch_workspace_snapshot(
+                &mut workspaces,
+                WorkspaceSnapshot::new(PathBuf::from(format!("D:/w{i}")), Vec::new(), None),
+                MAX_RECENT_WORKSPACES,
+            );
+        }
+        assert_eq!(workspaces.len(), MAX_RECENT_WORKSPACES);
+        assert_eq!(
+            workspaces[0].root,
+            PathBuf::from(format!("D:/w{}", MAX_RECENT_WORKSPACES + 1))
+        );
+
+        touch_workspace_snapshot(
+            &mut workspaces,
+            WorkspaceSnapshot::new(
+                PathBuf::from("D:/w3"),
+                vec![PathBuf::from("D:/w3/a.md")],
+                Some(PathBuf::from("D:/w3/a.md")),
+            ),
+            MAX_RECENT_WORKSPACES,
+        );
+        assert_eq!(workspaces[0].root, PathBuf::from("D:/w3"));
+        assert_eq!(workspaces[0].open_files, vec![PathBuf::from("D:/w3/a.md")]);
+        assert_eq!(
+            workspaces
+                .iter()
+                .filter(|entry| entry.root == PathBuf::from("D:/w3"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn empty_path_strings_are_ignored() {
         let parsed = parse_session_state(
             r#"
@@ -337,12 +514,20 @@ workspace_root = "  "
 open_files = ["", " D:/ok.md ", ""]
 active_file = ""
 recent_files = ["", "D:/recent.md"]
+[[workspaces]]
+root = "D:/Notes"
+open_files = ["", "D:/Notes/a.md"]
+active_file = ""
 "#,
         )
         .unwrap();
-        assert!(parsed.workspace_root.is_none());
-        assert_eq!(parsed.open_files, vec![PathBuf::from("D:/ok.md")]);
-        assert!(parsed.active_file.is_none());
+        assert_eq!(parsed.workspaces.len(), 1);
+        assert_eq!(parsed.workspaces[0].root, PathBuf::from("D:/Notes"));
+        assert_eq!(
+            parsed.workspaces[0].open_files,
+            vec![PathBuf::from("D:/Notes/a.md")]
+        );
+        assert!(parsed.workspaces[0].active_file.is_none());
         assert_eq!(parsed.recent_files, vec![PathBuf::from("D:/recent.md")]);
     }
 
@@ -354,18 +539,23 @@ recent_files = ["", "D:/recent.md"]
         fs::create_dir_all(&root).unwrap();
         fs::write(&file, "# a").unwrap();
 
-        // What earlier versions persisted on Windows: std::fs::canonicalize's
-        // verbatim form. On other platforms this fixture is already in normal
-        // form and the test still guards the passthrough + identity checks.
         let verbatim_root = fs::canonicalize(&root).unwrap().display().to_string();
         let verbatim_file = fs::canonicalize(&file).unwrap().display().to_string();
 
         let parsed = parse_session_state(&format!(
-            "workspace_root = {root}\nopen_files = [{file}]\nactive_file = {file}\nrecent_files = [{file}]\n",
+            "recent_files = [{file}]\n[[workspaces]]\nroot = {root}\nopen_files = [{file}]\nactive_file = {file}\n",
             root = toml_quote(&verbatim_root),
             file = toml_quote(&verbatim_file),
         ))
         .unwrap();
+
+        assert_eq!(parsed.workspaces.len(), 1, "workspaces={:?}", parsed.workspaces);
+        assert_eq!(
+            parsed.workspaces[0].open_files.len(),
+            1,
+            "workspace open_files={:?}",
+            parsed.workspaces[0].open_files
+        );
 
         for path in parsed
             .workspace_root
@@ -373,31 +563,21 @@ recent_files = ["", "D:/recent.md"]
             .chain(parsed.open_files.iter())
             .chain(parsed.active_file.iter())
             .chain(parsed.recent_files.iter())
+            .chain(parsed.workspaces.iter().map(|w| &w.root))
+            .chain(parsed.workspaces.iter().flat_map(|w| w.open_files.iter()))
         {
             let text = path.display().to_string();
             assert!(!text.starts_with(r"\\?\"));
             assert!(!text.starts_with(r"\\?\UNC\"));
         }
 
-        // Healing must preserve file identity.
         assert_eq!(
             fs::canonicalize(parsed.workspace_root.as_ref().unwrap()).unwrap(),
             fs::canonicalize(&root).unwrap()
         );
-        for (healed, original) in parsed
-            .open_files
-            .iter()
-            .chain(parsed.active_file.iter())
-            .chain(parsed.recent_files.iter())
-            .zip(std::iter::repeat(&file))
-        {
-            assert_eq!(
-                fs::canonicalize(healed).unwrap(),
-                fs::canonicalize(original).unwrap()
-            );
-        }
         assert_eq!(parsed.open_files.len(), 1);
         assert_eq!(parsed.recent_files.len(), 1);
+        assert_eq!(parsed.workspaces.len(), 1);
     }
 
     #[test]

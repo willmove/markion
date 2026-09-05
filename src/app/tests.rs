@@ -9815,8 +9815,15 @@ fn image_open_router_preserves_documents_deduplicates_and_releases_cache_claims(
                 app.session.recent_files.first(),
                 Some(&comparable_document_path(&image_path))
             );
-            assert!(app.session.open_files.is_empty());
-            assert!(app.session.active_file.is_none());
+            assert_eq!(
+                app.session.open_files,
+                vec![comparable_document_path(&image_path)],
+                "in-root image tabs participate in the workspace snapshot"
+            );
+            assert_eq!(
+                app.session.active_file,
+                Some(comparable_document_path(&image_path))
+            );
             let key = app.active_tab().image().unwrap().key.clone();
             (
                 document_version,
@@ -11737,6 +11744,11 @@ fn session_restore_skips_missing_paths_and_untitled_tabs() {
     fs::create_dir_all(&workspace).unwrap();
 
     let session = SessionState {
+        workspaces: vec![WorkspaceSnapshot::new(
+            workspace.clone(),
+            vec![existing.clone(), missing.clone()],
+            Some(missing.clone()),
+        )],
         workspace_root: Some(workspace.clone()),
         open_files: vec![existing.clone(), missing.clone()],
         active_file: Some(missing.clone()),
@@ -11761,6 +11773,158 @@ fn cli_open_intent_disables_session_restore() {
     assert!(!should_restore_session(&StartupOpenIntent::Folder(
         PathBuf::from("notes")
     )));
+}
+
+#[test]
+fn workspace_switcher_ui_wiring_is_present() {
+    let root_view = include_str!("root_view.rs");
+    assert!(root_view.contains("file-tree-workspace-switcher-toggle"));
+    assert!(root_view.contains("workspace_switcher_menu"));
+    assert!(root_view.contains("workspace_switcher_overlay_view"));
+    assert!(root_view.contains("file_tree_empty_state"));
+    assert!(root_view.contains("FileTreeRecentWorkspaces"));
+    let application = include_str!("application.rs");
+    assert!(application.contains("fn switch_to_workspace"));
+    assert!(application.contains("fn toggle_workspace_switcher"));
+    let documents = include_str!("documents.rs");
+    assert!(documents.contains("app.switch_to_workspace(path, cx)"));
+    // Implicit rebase must not go through the explicit switch path.
+    let update_fn = include_str!("application.rs")
+        .split_once("pub(super) fn update_workspace_root_from_document")
+        .expect("update_workspace_root_from_document")
+        .1
+        .split_once("pub(super) fn refresh_file_tree")
+        .expect("refresh_file_tree")
+        .0;
+    assert!(!update_fn.contains("switch_to_workspace"));
+}
+
+#[test]
+fn session_snapshot_keeps_only_in_root_paths() {
+    let root = PathBuf::from("D:/Notes");
+    let paths = vec![
+        PathBuf::from("D:/Notes/a.md"),
+        PathBuf::from("D:/Notes/cover.png"),
+        PathBuf::from("D:/Other/out.md"),
+        PathBuf::from("D:/Notes/notes.txt"),
+    ];
+    let filtered = markion::filter_paths_in_workspace_root(&root, paths);
+    assert_eq!(
+        filtered,
+        vec![
+            PathBuf::from("D:/Notes/a.md"),
+            PathBuf::from("D:/Notes/cover.png"),
+            PathBuf::from("D:/Notes/notes.txt"),
+        ]
+    );
+}
+
+#[test]
+fn filter_restorable_session_accepts_text_and_images() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    fs::create_dir_all(&root).unwrap();
+    let md = root.join("a.md");
+    let txt = root.join("b.txt");
+    let png = root.join("c.png");
+    let missing = root.join("gone.md");
+    fs::write(&md, "# a\n").unwrap();
+    fs::write(&txt, "plain\n").unwrap();
+    fs::write(&png, [0x89, b'P', b'N', b'G']).unwrap();
+
+    let session = SessionState {
+        workspaces: vec![WorkspaceSnapshot::new(
+            root.clone(),
+            vec![md.clone(), txt.clone(), png.clone(), missing],
+            Some(txt.clone()),
+        )],
+        workspace_root: Some(root.clone()),
+        open_files: Vec::new(),
+        active_file: None,
+        recent_files: Vec::new(),
+        layout: SessionLayout::default(),
+    };
+    let (restored_root, open_files, active) = filter_restorable_session(&session);
+    assert_eq!(restored_root.as_deref(), Some(root.as_path()));
+    assert_eq!(open_files, vec![md, txt.clone(), png]);
+    assert_eq!(active, Some(txt));
+}
+
+#[gpui::test]
+fn workspace_switch_keeps_dirty_tabs_and_restores_clean_snapshot(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let notes = dir.path().join("notes");
+    let blog = dir.path().join("blog");
+    fs::create_dir_all(&notes).unwrap();
+    fs::create_dir_all(&blog).unwrap();
+    let notes_file = notes.join("a.md");
+    let blog_file = blog.join("post.md");
+    fs::write(&notes_file, "# notes\n").unwrap();
+    fs::write(&blog_file, "# post\n").unwrap();
+
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        let document = MarkdownDocument::open(&notes_file).unwrap();
+        app.replace_active_tab(document, cx);
+        app.active_tab_mut().document.insert(0, "dirty ");
+        assert!(app.active_tab().is_dirty());
+        app.set_workspace_root(notes.clone(), cx);
+        app.session.set_current_workspace(WorkspaceSnapshot::new(
+            comparable_document_path(&notes),
+            vec![comparable_document_path(&notes_file)],
+            Some(comparable_document_path(&notes_file)),
+        ));
+        app.session.set_current_workspace(WorkspaceSnapshot::new(
+            comparable_document_path(&blog),
+            vec![comparable_document_path(&blog_file)],
+            Some(comparable_document_path(&blog_file)),
+        ));
+        // Current is blog after second set; put notes dirty tab + switch to blog.
+        app.session.set_current_workspace(WorkspaceSnapshot::new(
+            comparable_document_path(&notes),
+            vec![comparable_document_path(&notes_file)],
+            Some(comparable_document_path(&notes_file)),
+        ));
+        app.switch_to_workspace(blog.clone(), cx);
+    });
+
+    app.update(cx, |app, _| {
+        assert!(
+            scan_result_matches_workspace(&app.workspace_root, &comparable_document_path(&blog))
+        );
+        assert!(
+            app.tabs.iter().any(|tab| tab.is_dirty()),
+            "dirty notes tab must survive the switch"
+        );
+        assert!(
+            app.tabs
+                .iter()
+                .any(|tab| tab.path() == Some(blog_file.as_path())
+                    || tab
+                        .path()
+                        .is_some_and(|path| comparable_document_path(path)
+                            == comparable_document_path(&blog_file))),
+            "blog snapshot path should be open"
+        );
+    });
+}
+
+#[gpui::test]
+fn workspace_switch_current_root_is_noop(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ws");
+    fs::create_dir_all(&root).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        app.set_workspace_root(root.clone(), cx);
+        let before = app.tabs.len();
+        app.switch_to_workspace(root.clone(), cx);
+        assert_eq!(app.tabs.len(), before);
+        assert!(scan_result_matches_workspace(
+            &app.workspace_root,
+            &comparable_document_path(&root)
+        ));
+    });
 }
 
 #[gpui::test]

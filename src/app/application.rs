@@ -163,6 +163,8 @@ impl MarkionApp {
             focus_handle: cx.focus_handle(),
             active_menu: None,
             open_recent_submenu_open: false,
+            workspace_switcher_open: false,
+            workspace_switcher_anchor: None,
             about_dialog_open: false,
             markdown_reference_open: false,
             markdown_reference_scroll: ScrollHandle::new(),
@@ -1927,26 +1929,26 @@ impl MarkionApp {
         }
     }
 
-    /// Snapshot open saved tabs / workspace root into `self.session` and write
-    /// `session.toml`. Best-effort: failures are logged via the status bar.
+    /// Snapshot open path-backed in-root tabs / workspace root into `self.session`
+    /// and write `session.toml`. Best-effort: failures are logged.
     pub(super) fn sync_and_persist_session(&mut self) {
-        self.session.open_files = session_open_files_from_paths(
-            self.tabs
+        if self.file_tree.is_some() {
+            let root = comparable_document_path(&self.workspace_root);
+            let open_files: Vec<PathBuf> = self
+                .tabs
                 .iter()
-                .filter(|tab| tab.is_document())
-                .map(|tab| tab.document.path()),
-        );
-        self.session.active_file = self
-            .active_tab()
-            .is_document()
-            .then(|| self.active_tab().document.path())
-            .flatten()
-            .map(comparable_document_path);
-        self.session.workspace_root = if self.file_tree.is_some() {
-            Some(comparable_document_path(&self.workspace_root))
-        } else {
-            None
-        };
+                .filter_map(|tab| tab.path())
+                .map(comparable_document_path)
+                .filter(|path| path_is_within_workspace(&root, path))
+                .collect();
+            let active_file = self
+                .active_tab()
+                .path()
+                .map(comparable_document_path)
+                .filter(|path| open_files.iter().any(|open| open == path));
+            self.session
+                .set_current_workspace(WorkspaceSnapshot::new(root, open_files, active_file));
+        }
         self.persist_session();
     }
 
@@ -1977,40 +1979,25 @@ impl MarkionApp {
             return;
         }
 
-        // Filter and read the whole session on the background executor first;
-        // even the existence probes stall on a dead network path recorded in
-        // session.toml, and one stalled file used to freeze startup for the
-        // whole window. The restore bookkeeping then runs on the UI thread
-        // with the results.
+        // Filter and probe paths on the background executor first; existence
+        // checks can stall on a dead network path recorded in session.toml.
         let session = self.session.clone();
         cx.spawn(async move |this, cx| {
-            let (workspace_root, loaded, active_file) = cx
-                .background_spawn(async move {
-                    let (workspace_root, open_files, active_file) =
-                        filter_restorable_session(&session);
-                    let loaded = open_files
-                        .into_iter()
-                        .map(|path| {
-                            let result = read_document_source(&path);
-                            (path, result)
-                        })
-                        .collect::<Vec<_>>();
-                    (workspace_root, loaded, active_file)
-                })
+            let (workspace_root, open_files, active_file) = cx
+                .background_spawn(async move { filter_restorable_session(&session) })
                 .await;
             let _ = this.update(cx, |app, cx| {
-                app.finish_session_restore(loaded, workspace_root, active_file, cx);
+                app.finish_session_restore(open_files, workspace_root, active_file, cx);
             });
         })
         .detach();
     }
 
-    /// UI-thread half of session restore: turns the background reads into
-    /// tabs with the same replace-first/append-rest, focus, workspace-root,
-    /// and recent-list behavior the old synchronous restore had.
+    /// UI-thread half of session restore / workspace switch: open surviving
+    /// snapshot paths through existing document/image APIs.
     fn finish_session_restore(
         &mut self,
-        loaded: Vec<(PathBuf, io::Result<(String, DiskIdentity)>)>,
+        open_files: Vec<PathBuf>,
         workspace_root: Option<PathBuf>,
         active_file: Option<PathBuf>,
         cx: &mut Context<Self>,
@@ -2018,16 +2005,9 @@ impl MarkionApp {
         let mut opened_any = false;
         let mut replaced_initial = false;
         let mut restored_paths = Vec::new();
-        for (path, result) in loaded {
-            match result {
-                Ok((text, identity)) => {
-                    let document = MarkdownDocument::from_loaded(text, path.clone(), identity);
-                    if !replaced_initial && !self.active_tab().is_dirty() {
-                        self.replace_active_tab(document, cx);
-                        replaced_initial = true;
-                    } else {
-                        self.open_in_new_tab(document, cx);
-                    }
+        for path in open_files {
+            match self.open_restored_snapshot_path(path.clone(), &mut replaced_initial, cx) {
+                Ok(()) => {
                     opened_any = true;
                     restored_paths.push(path);
                 }
@@ -2050,19 +2030,215 @@ impl MarkionApp {
         }
 
         if let Some(root) = workspace_root {
-            // Prefer the persisted workspace root when it still exists; otherwise
-            // fall back to deriving the root from the active document.
             self.set_workspace_root(root, cx);
             self.schedule_file_tree_scan(None, cx);
         } else {
             self.update_workspace_root_from_document(cx);
         }
 
-        // Refresh recent list with restored paths and rewrite pruned session.
         for path in &restored_paths {
             self.session.touch_recent(comparable_document_path(path));
         }
         self.sync_and_persist_session();
+    }
+
+    /// Open one snapshot path for restore/switch. Reuses an already-open tab.
+    /// When `replaced_initial` is false and the active tab is clean, may replace
+    /// it in place for the first document; images always append unless reused.
+    fn open_restored_snapshot_path(
+        &mut self,
+        path: PathBuf,
+        replaced_initial: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.focus_existing_tab_for_path(&path, cx) {
+            return Ok(());
+        }
+
+        if image_extension_supported(&path) {
+            if !*replaced_initial && self.active_tab().is_safe_to_replace() {
+                self.replace_active_tab_with_image(path, cx);
+                *replaced_initial = true;
+            } else {
+                self.open_image_in_new_tab(path, cx);
+            }
+            return Ok(());
+        }
+
+        if is_markdown_path(&path) || is_text_path(&path) {
+            let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
+            if !*replaced_initial && !self.active_tab().is_dirty() && self.active_tab().is_document()
+            {
+                self.replace_active_tab(document, cx);
+                *replaced_initial = true;
+            } else {
+                self.open_in_new_tab(document, cx);
+            }
+            return Ok(());
+        }
+
+        Err(format!("unsupported session path: {}", path.display()))
+    }
+
+    /// Explicit workspace switch: snapshot current, close clean tabs, keep dirty
+    /// tabs, open the target folder's last path-backed list. No dirty prompt.
+    pub(super) fn switch_to_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        let root = comparable_document_path(&root);
+        let display_path = root.display().to_string();
+
+        if self.file_tree.is_some()
+            && scan_result_matches_workspace(&self.workspace_root, &root)
+        {
+            self.close_workspace_switcher();
+            cx.notify();
+            return;
+        }
+
+        if !root.is_dir() {
+            self.session.remove_workspace(&root);
+            self.persist_session();
+            self.close_workspace_switcher();
+            self.status = self.trf(Msg::StatusWorkspaceFolderMissing, &[&display_path]);
+            cx.notify();
+            return;
+        }
+
+        self.sync_and_persist_session();
+
+        let snapshot = self
+            .session
+            .workspaces
+            .iter()
+            .find(|entry| entry.root == root)
+            .cloned()
+            .unwrap_or_else(|| WorkspaceSnapshot::new(root.clone(), Vec::new(), None));
+
+        let clean_targets: Vec<TabContextTarget> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| !tab.is_dirty())
+            .map(|(index, tab)| TabContextTarget::capture(index, tab))
+            .collect();
+        if !clean_targets.is_empty() {
+            self.remove_tabs_by_identity(&clean_targets, cx);
+        }
+        if self.tabs.is_empty() {
+            self.tabs
+                .push(self.editor_tab_for_document(MarkdownDocument::new()));
+            self.active_tab = 0;
+        } else if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
+
+        let surviving: Vec<PathBuf> = snapshot
+            .open_files
+            .iter()
+            .filter(|path| {
+                path.is_file()
+                    && (is_markdown_path(path)
+                        || is_text_path(path)
+                        || image_extension_supported(path))
+            })
+            .cloned()
+            .collect();
+        let active_file = snapshot
+            .active_file
+            .as_ref()
+            .filter(|path| surviving.iter().any(|open| open == *path))
+            .cloned();
+
+        let only_pristine_welcome = self.tabs.len() == 1
+            && self.active_tab().is_document()
+            && !self.active_tab().is_dirty()
+            && self.active_tab().path().is_none();
+        let mut replaced_initial = only_pristine_welcome;
+
+        if surviving.is_empty() {
+            if !self.tabs.iter().any(|tab| tab.is_dirty()) {
+                // All previous tabs were clean and closed; keep or create welcome.
+                if self.tabs.is_empty()
+                    || !(self.tabs.len() == 1
+                        && self.active_tab().path().is_none()
+                        && !self.active_tab().is_dirty())
+                {
+                    self.tabs.clear();
+                    self.tabs
+                        .push(self.editor_tab_for_document(MarkdownDocument::new()));
+                    self.active_tab = 0;
+                }
+            }
+        } else {
+            for path in &surviving {
+                if let Err(err) =
+                    self.open_restored_snapshot_path(path.clone(), &mut replaced_initial, cx)
+                {
+                    tracing::warn!(path = ?path, error = %err, "workspace switch skipped file");
+                }
+            }
+            // Drop a leftover pristine welcome if we opened real files.
+            if self.tabs.len() > 1 {
+                let welcome_indexes: Vec<usize> = self
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tab)| {
+                        tab.is_document() && !tab.is_dirty() && tab.path().is_none()
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                for index in welcome_indexes.into_iter().rev() {
+                    if self.tabs.len() <= 1 {
+                        break;
+                    }
+                    self.release_tab_image_claims(index, cx);
+                    self.tabs.remove(index);
+                    if index < self.active_tab {
+                        self.active_tab -= 1;
+                    }
+                }
+                if self.active_tab >= self.tabs.len() {
+                    self.active_tab = self.tabs.len().saturating_sub(1);
+                }
+            }
+            if let Some(active) = active_file.as_ref() {
+                let _ = self.focus_existing_tab_for_path(active, cx);
+            }
+        }
+
+        self.set_workspace_root(root.clone(), cx);
+        self.schedule_file_tree_scan(Some(display_path.clone()), cx);
+        self.sidebar_visible = true;
+        self.sidebar_tab = SidebarTab::Files;
+        self.close_workspace_switcher();
+        self.active_menu = None;
+        self.status = self.trf(Msg::StatusOpenedFolder, &[&display_path]);
+        self.sync_and_persist_session();
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn close_workspace_switcher(&mut self) {
+        self.workspace_switcher_open = false;
+        self.workspace_switcher_anchor = None;
+    }
+
+    pub(super) fn toggle_workspace_switcher(
+        &mut self,
+        anchor: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_menu = None;
+        self.open_recent_submenu_open = false;
+        self.file_tree_context_menu = None;
+        self.tab_context_menu = None;
+        if self.workspace_switcher_open {
+            self.close_workspace_switcher();
+        } else {
+            self.workspace_switcher_open = true;
+            self.workspace_switcher_anchor = Some(anchor);
+        }
+        cx.notify();
     }
 
     pub(super) fn clear_recent_files(

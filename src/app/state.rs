@@ -1988,20 +1988,29 @@ pub(super) fn should_restore_session(intent: &StartupOpenIntent) -> bool {
 pub(super) fn filter_restorable_session(
     session: &SessionState,
 ) -> (Option<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
-    let workspace_root = session
-        .workspace_root
-        .as_ref()
+    let current = session.current_workspace();
+    let workspace_root = current
+        .map(|snapshot| &snapshot.root)
+        .or(session.workspace_root.as_ref())
         .filter(|root| root.is_dir())
         .cloned();
-    let open_files: Vec<PathBuf> = session
-        .open_files
+    let candidate_files = current
+        .map(|snapshot| snapshot.open_files.as_slice())
+        .unwrap_or(session.open_files.as_slice());
+    let open_files: Vec<PathBuf> = candidate_files
         .iter()
-        .filter(|path| path.is_file() && is_markdown_path(path))
+        .filter(|path| {
+            path.is_file()
+                && (is_markdown_path(path)
+                    || is_text_path(path)
+                    || image_extension_supported(path))
+        })
         .cloned()
         .collect();
-    let active_file = session
-        .active_file
-        .as_ref()
+    let active_candidate = current
+        .and_then(|snapshot| snapshot.active_file.as_ref())
+        .or(session.active_file.as_ref());
+    let active_file = active_candidate
         .filter(|path| open_files.iter().any(|open| open == *path))
         .cloned();
     (workspace_root, open_files, active_file)

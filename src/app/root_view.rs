@@ -707,6 +707,9 @@ impl Render for MarkionApp {
             .when(self.file_tree_context_menu.is_some(), |root| {
                 root.child(file_tree_context_menu_view(self, cx))
             })
+            .when(self.workspace_switcher_open, |root| {
+                root.child(workspace_switcher_overlay_view(self, cx))
+            })
             .when(self.preview_context_menu.is_some(), |root| {
                 root.child(preview_context_menu_view(self, cx))
             })
@@ -2580,25 +2583,10 @@ fn file_tree_entry_row(
 pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let palette = app.palette();
 
-    // Empty state: until a real Markdown file is opened the tree has no chosen
-    // root (the welcome document has no path), so we deliberately show a
-    // placeholder instead of scanning the program's working directory. The
-    // filter input and toolbar are hidden here because they operate on a tree
-    // that does not exist yet.
+    // Empty state: until a workspace root is established the tree has no chosen
+    // root. Prefer listing recent workspaces when available.
     if app.file_tree.is_none() {
-        return div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .px_4()
-            .py_6()
-            .text_size(px(12.))
-            .text_color(palette.muted)
-            .text_center()
-            .child(app.tr(Msg::FileTreeEmptyState).to_string());
+        return file_tree_empty_state(app, palette, cx);
     }
 
     let app_entity = cx.entity();
@@ -2641,14 +2629,11 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
         .min_h_0()
         .flex()
         .flex_col()
-        // The tab already says "Files"; show the workspace name as a muted
-        // subheading so users still know which directory they are browsing.
+        // Workspace name is a switcher for recent folders; still a drop target.
         .child(
             div()
                 .id("file-tree-workspace-root")
-                .mb_2()
-                .text_size(px(12.))
-                .text_color(palette.muted)
+                .mb_1()
                 .can_drop({
                     let dest = header_root.clone();
                     move |value, _, _| {
@@ -2671,7 +2656,42 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                         app.handle_file_tree_drop(&dragged.path, &app.workspace_root.clone(), cx);
                     });
                 })
-                .child(root_label),
+                .child(
+                    div()
+                        .id("file-tree-workspace-switcher-toggle")
+                        .w_full()
+                        .cursor_pointer()
+                        .flex()
+                        .gap_1()
+                        .items_center()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .text_size(px(13.))
+                        .text_color(palette.text)
+                        .hover(move |style| style.bg(palette.active_bg))
+                        // Keep workspace-row close_menu from eating the toggle
+                        // mouse-down when the switcher is already open (otherwise
+                        // down closes and up re-opens).
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_mouse_up(MouseButton::Left, {
+                            let entity = app_entity.clone();
+                            move |event, _, cx| {
+                                cx.stop_propagation();
+                                entity.update(cx, |app, cx| {
+                                    app.toggle_workspace_switcher(event.position, cx);
+                                });
+                            }
+                        })
+                        .child(root_label)
+                        .child(
+                            div()
+                                .text_color(palette.muted)
+                                .child("▾"),
+                        ),
+                ),
         )
         // Inline name editor for create/rename. When the target row is among
         // the visible rows the editor renders in place inside the tree (see
@@ -4417,6 +4437,167 @@ pub(super) fn active_menu_dropdown(
             .child(menu_separator(palette))
             .child(action_item!(Msg::ItemAboutMarkion, about, AboutMarkion)),
     }
+}
+
+fn workspace_display_name(root: &Path, fallback: &str) -> String {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+pub(super) fn file_tree_empty_state(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let recent = app.session.workspaces.clone();
+    if recent.is_empty() {
+        return div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .px_4()
+            .py_6()
+            .text_size(px(12.))
+            .text_color(palette.muted)
+            .text_center()
+            .child(app.tr(Msg::FileTreeEmptyState).to_string());
+    }
+
+    let fallback = app.tr(Msg::FileTreeWorkspaceFallback).to_string();
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .px_3()
+        .py_4()
+        .gap_2()
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(palette.muted)
+                .child(app.tr(Msg::FileTreeRecentWorkspaces).to_string()),
+        )
+        .children(recent.into_iter().map(|snapshot| {
+            let label = workspace_display_name(&snapshot.root, &fallback);
+            let root = snapshot.root.clone();
+            div()
+                .id(SharedString::from(format!(
+                    "empty-recent-workspace-{}",
+                    root.display()
+                )))
+                .cursor_pointer()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .text_size(px(12.))
+                .text_color(palette.text)
+                .hover(|style| style.bg(palette.active_bg))
+                .on_mouse_up(MouseButton::Left, {
+                    let root = root.clone();
+                    cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                        app.switch_to_workspace(root.clone(), cx);
+                    })
+                })
+                .child(label)
+        }))
+        .child(
+            div()
+                .mt_2()
+                .cursor_pointer()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .text_size(px(12.))
+                .text_color(palette.muted)
+                .hover(|style| style.bg(palette.active_bg))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                        app.open_folder(&OpenFolder, window, cx);
+                    }),
+                )
+                .child(app.tr(Msg::ItemOpenFolder).to_string()),
+        )
+}
+
+pub(super) fn workspace_switcher_overlay_view(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let palette = app.palette();
+    let anchor = app
+        .workspace_switcher_anchor
+        .unwrap_or_else(|| point(px(8.), px(56.)));
+    // Root-hosted like other overlays so the file-tree scroll sibling cannot
+    // paint over (and steal hits from) an absolute menu nested in the header.
+    anchored().position(anchor).child(workspace_switcher_menu(
+        &app.workspace_root,
+        &app.session.workspaces,
+        app.language,
+        palette,
+        cx,
+    ))
+}
+
+pub(super) fn workspace_switcher_menu(
+    current_root: &Path,
+    workspaces: &[WorkspaceSnapshot],
+    language: Language,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let fallback = t(language, Msg::FileTreeWorkspaceFallback).to_string();
+    let current = comparable_document_path(current_root);
+    let panel = div()
+        .id("file-tree-workspace-switcher")
+        .min_w(px(200.))
+        .max_w(px(320.))
+        .occlude()
+        .py_1()
+        .border_1()
+        .border_color(palette.border)
+        .rounded_md()
+        .bg(palette.panel_bg)
+        .text_color(palette.text)
+        .shadow_md()
+        .flex()
+        .flex_col();
+
+    let panel = panel.children(workspaces.iter().map(|snapshot| {
+        let is_current = snapshot.root == current;
+        let label = workspace_display_name(&snapshot.root, &fallback);
+        let label = if is_current {
+            format!("✓ {label}")
+        } else {
+            label
+        };
+        let root = snapshot.root.clone();
+        menu_action_button(
+            label,
+            None,
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                app.switch_to_workspace(root.clone(), cx);
+            }),
+        )
+    }));
+
+    panel
+        .child(menu_separator(palette))
+        .child(menu_action_button(
+            t(language, Msg::ItemOpenFolder),
+            None,
+            palette,
+            cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                app.open_folder(&OpenFolder, window, cx);
+            }),
+        ))
 }
 
 /// Nested File → Open Recent flyout: recent paths (or empty placeholder) and

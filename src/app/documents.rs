@@ -83,6 +83,7 @@ impl MarkionApp {
         let receiver = cx.prompt_for_paths(open_folder_prompt_options(self.language));
 
         self.active_menu = None;
+        self.close_workspace_switcher();
         self.status = t(self.language, Msg::StatusOpeningFolder).into();
         cx.notify();
 
@@ -91,15 +92,8 @@ impl MarkionApp {
             let status = match receiver.await {
                 Ok(Ok(Some(paths))) => {
                     if let Some(path) = paths.into_iter().next() {
-                        let display_path = path.display().to_string();
                         let _ = this.update(cx, |app, cx| {
-                            app.set_workspace_root(path, cx);
-                            app.sidebar_visible = true;
-                            app.sidebar_tab = SidebarTab::Files;
-                            app.active_menu = None;
-                            app.persist_preferences();
-                            app.schedule_file_tree_scan(Some(display_path), cx);
-                            cx.notify();
+                            app.switch_to_workspace(path, cx);
                         });
                         return;
                     }
@@ -565,7 +559,7 @@ impl MarkionApp {
     /// since capture). Dirty tabs' recovery snapshots are discarded on the way
     /// out — the same discard path as app exit — and the active index follows
     /// the removals so it keeps pointing at the same tab.
-    fn remove_tabs_by_identity(&mut self, targets: &[TabContextTarget], cx: &mut Context<Self>) {
+    pub(super) fn remove_tabs_by_identity(&mut self, targets: &[TabContextTarget], cx: &mut Context<Self>) {
         let indexes: Vec<usize> = self
             .tabs
             .iter()

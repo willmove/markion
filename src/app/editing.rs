@@ -1472,6 +1472,7 @@ impl MarkionApp {
             Some(menu)
         };
         self.open_recent_submenu_open = false;
+        self.close_workspace_switcher();
         cx.notify();
     }
 
@@ -1480,6 +1481,7 @@ impl MarkionApp {
         if next_menu != self.active_menu {
             self.active_menu = next_menu;
             self.open_recent_submenu_open = false;
+            self.close_workspace_switcher();
             cx.notify();
         }
     }
@@ -1519,7 +1521,8 @@ impl MarkionApp {
             || self.file_tree_context_menu.is_some()
             || self.preview_context_menu.is_some()
             || self.tab_context_menu.is_some()
-            || self.block_menu.is_some();
+            || self.block_menu.is_some()
+            || self.workspace_switcher_open;
         if had_transient_ui {
             self.active_menu = None;
             self.open_recent_submenu_open = false;
@@ -1527,6 +1530,7 @@ impl MarkionApp {
             self.preview_context_menu = None;
             self.tab_context_menu = None;
             self.dismiss_visual_block_menu();
+            self.close_workspace_switcher();
         }
         // A left mouse-down anywhere below the menu bar is a click-away for
         // the inline name editor: commit through the same pipeline as Enter

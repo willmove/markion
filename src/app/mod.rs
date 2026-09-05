@@ -46,7 +46,8 @@ use markion::{
     TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor,
     VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
     VisualHtmlImage, VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge,
-    VisualSourceIslandKind, adjacent_reorder_target, backend_status_msg, block_can_reorder_at,
+    VisualSourceIslandKind, WorkspaceSnapshot, adjacent_reorder_target, backend_status_msg,
+    block_can_reorder_at,
     block_can_transform_at, build_publishing_snapshot, build_visual_projection,
     build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
     bundled_resource_path, check_path_state, data_uri_payload_ranges, default_preferences_path,
@@ -2179,6 +2180,11 @@ struct MarkionApp {
     /// File → Open Recent nested submenu visibility. Cleared whenever
     /// `active_menu` leaves File or the whole menu closes.
     open_recent_submenu_open: bool,
+    /// Files-panel workspace-name recent-folder switcher visibility.
+    workspace_switcher_open: bool,
+    /// Window-space anchor for the root-hosted workspace switcher overlay.
+    /// Set when opening so the menu is not clipped under the file-tree scroll.
+    workspace_switcher_anchor: Option<Point<Pixels>>,
     /// Whether the transient, root-hosted About Markion modal is visible.
     /// This is application chrome only and is never persisted.
     about_dialog_open: bool,

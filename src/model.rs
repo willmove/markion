@@ -172,6 +172,52 @@ impl CodeTheme {
 /// Maximum number of paths kept in the recent-files list.
 pub const MAX_RECENT_FILES: usize = 10;
 
+/// Maximum number of recent workspace snapshots kept in `session.toml`.
+pub const MAX_RECENT_WORKSPACES: usize = 10;
+
+/// One workspace's path-backed tab snapshot (no cursor / dirty text).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorkspaceSnapshot {
+    pub root: PathBuf,
+    pub open_files: Vec<PathBuf>,
+    pub active_file: Option<PathBuf>,
+}
+
+impl WorkspaceSnapshot {
+    pub fn new(root: PathBuf, open_files: Vec<PathBuf>, active_file: Option<PathBuf>) -> Self {
+        let active_file = active_file.filter(|path| open_files.iter().any(|open| open == path));
+        Self {
+            root,
+            open_files,
+            active_file,
+        }
+    }
+}
+
+/// Keep only paths that sit under `root` (caller should normalize both sides).
+pub fn filter_paths_in_workspace_root(
+    root: &Path,
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .filter(|path| path.starts_with(root))
+        .collect()
+}
+
+/// Move `snapshot` to the front of `workspaces` by root identity, capping length.
+pub fn touch_workspace_snapshot(
+    workspaces: &mut Vec<WorkspaceSnapshot>,
+    snapshot: WorkspaceSnapshot,
+    max: usize,
+) {
+    workspaces.retain(|entry| entry.root != snapshot.root);
+    workspaces.insert(0, snapshot);
+    if workspaces.len() > max {
+        workspaces.truncate(max);
+    }
+}
+
 /// Built-in window size used when no valid `[layout]` size has been recorded.
 pub const DEFAULT_WINDOW_WIDTH: f32 = 1180.0;
 pub const DEFAULT_WINDOW_HEIGHT: f32 = 760.0;
@@ -288,13 +334,17 @@ pub fn layout_rect_is_visible(window: LayoutRect, displays: &[LayoutRect]) -> bo
     })
 }
 
-/// Persisted editor session: last workspace root, open saved tabs, recent files,
-/// and optional chrome geometry. Stored separately from [`AppPreferences`] in
-/// `session.toml`.
+/// Persisted editor session: recent workspace snapshots (with path-backed tabs),
+/// recent files, and optional chrome geometry. Stored separately from
+/// [`AppPreferences`] in `session.toml`.
+///
+/// Top-level `workspace_root` / `open_files` / `active_file` are aliases of the
+/// current (first) workspace snapshot for older readers and launch helpers.
 ///
 /// `Eq` is omitted because [`SessionLayout`] carries `f32` fields.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SessionState {
+    pub workspaces: Vec<WorkspaceSnapshot>,
     pub workspace_root: Option<PathBuf>,
     pub open_files: Vec<PathBuf>,
     pub active_file: Option<PathBuf>,
@@ -303,6 +353,36 @@ pub struct SessionState {
 }
 
 impl SessionState {
+    /// Copy the current workspace snapshot into the top-level alias fields.
+    pub fn sync_aliases_from_current(&mut self) {
+        if let Some(current) = self.workspaces.first() {
+            self.workspace_root = Some(current.root.clone());
+            self.open_files = current.open_files.clone();
+            self.active_file = current.active_file.clone();
+        } else {
+            self.workspace_root = None;
+            self.open_files.clear();
+            self.active_file = None;
+        }
+    }
+
+    /// Current (most recent) workspace snapshot, if any.
+    pub fn current_workspace(&self) -> Option<&WorkspaceSnapshot> {
+        self.workspaces.first()
+    }
+
+    /// Write or replace the current workspace slot and refresh aliases.
+    pub fn set_current_workspace(&mut self, snapshot: WorkspaceSnapshot) {
+        touch_workspace_snapshot(&mut self.workspaces, snapshot, MAX_RECENT_WORKSPACES);
+        self.sync_aliases_from_current();
+    }
+
+    /// Remove a workspace root from the recent list (e.g. vanished folder).
+    pub fn remove_workspace(&mut self, root: &Path) {
+        self.workspaces.retain(|entry| entry.root != root);
+        self.sync_aliases_from_current();
+    }
+
     /// Move `path` to the front of `recent_files`, deduplicating and capping length.
     pub fn touch_recent(&mut self, path: PathBuf) {
         touch_recent_file(&mut self.recent_files, path, MAX_RECENT_FILES);
