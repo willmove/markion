@@ -33,13 +33,14 @@ use markion::{
     DEFAULT_RENDERED_FONT_SIZE, DEFAULT_SIDEBAR_WIDTH, DiskIdentity, DiskState, DocumentInstanceId,
     DocxImagePolicy, DocxPageSize, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackendPreference,
     ExportFormat, ExportPreferences, ExternalCheckOutcome, FileTree, FileTreeEntry,
-    FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlAlign, HtmlImgLength, HtmlListMarker,
-    HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation, InlineSpan, InlineStyle,
-    Language, MAX_AUTO_SAVE_DELAY_SECS, MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE,
-    MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE,
-    MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument,
-    MarkdownFormat, MathLayoutStyle, Msg, MutationOrigin, MutationReceipt, OrganizeCandidate,
-    P0Msg, P1Msg, PdfPageSize, PreviewBlock, RecoveryInventoryEntry, RecoverySourceState, RichText,
+    FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlAlign, HtmlImageDescriptor,
+    HtmlImgLength, HtmlListMarker, HtmlPreviewPart, HtmlTableGrid, ImageAlignment,
+    ImagePresentation, ImageSourceIdentity, InlineSpan, InlineStyle, Language,
+    MAX_AUTO_SAVE_DELAY_SECS, MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING,
+    MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
+    MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat,
+    MathLayoutStyle, Msg, MutationOrigin, MutationReceipt, OrganizeCandidate, P0Msg, P1Msg,
+    PdfPageSize, PreviewBlock, RecoveryInventoryEntry, RecoverySourceState, RichText,
     SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions, SearchPattern, SessionLayout,
     SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery,
     TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor,
@@ -2386,11 +2387,11 @@ struct MarkionApp {
     diagram_cache: DiagramCache,
     /// Decoded Markdown preview images owned by Markion (not GPUI loading_assets).
     preview_image_cache: PreviewImageCache,
-    /// Content fingerprints of data-URI destinations whose decode failed.
+    /// SHA-256 identities of data-URI destinations whose decode failed.
     /// The image source toggle matches against this set to force the payload
     /// editor visible without re-deriving a multi-megabyte cache key per
     /// frame. Bounded by the number of distinct failed destinations seen.
-    pub(super) failed_data_uri_fingerprints: std::collections::HashSet<u64>,
+    pub(super) failed_data_uri_fingerprints: std::collections::HashSet<[u8; 32]>,
     /// Field projections built this session (interior-mutable: element
     /// construction runs inside the render borrow). The collapsed-affordance
     /// gate asserts this stays flat while payload editors are hidden.

@@ -7,7 +7,6 @@ use super::*;
 use gpui::RenderImage;
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageReader, RgbaImage};
-use std::borrow::Cow;
 use std::io::Cursor;
 
 pub(super) const PREVIEW_IMAGE_CACHE_CAPACITY: usize = 64;
@@ -32,10 +31,10 @@ const PREVIEW_IMAGE_OVERSHOOT_FACTOR: usize = 2;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct PreviewImageKey {
     /// `local:` / `remote:` identities hold the full (small) locator. `data:`
-    /// identities are deliberately bounded — `data:{len}:{fingerprint}` — so
-    /// per-frame claim/ensure/lookup work never clones or hashes a
-    /// multi-megabyte base64 URI; the full URI bytes live next to the pending
-    /// cache entry (see `PreviewImageCache::data_payloads`) for the decode.
+    /// identities are `data:{len}:{sha256-hex}` — constant-size, derived from
+    /// the complete URI once per document version. The full URI bytes live
+    /// next to the pending cache entry (see `PreviewImageCache::data_payloads`)
+    /// for decode only.
     pub(super) identity: String,
 }
 
@@ -47,18 +46,37 @@ impl PreviewImageKey {
         }
     }
 
+    pub(super) fn from_data(byte_len: usize, sha256: &[u8; 32]) -> Self {
+        let mut hex = String::with_capacity(64);
+        for byte in sha256 {
+            hex.push_str(&format!("{byte:02x}"));
+        }
+        Self {
+            identity: format!("data:{byte_len}:{hex}"),
+        }
+    }
+
+    pub(super) fn from_source(
+        url: &str,
+        identity: &ImageSourceIdentity,
+        document_dir: Option<&Path>,
+    ) -> Self {
+        match identity {
+            ImageSourceIdentity::Data { byte_len, sha256 } => Self::from_data(*byte_len, sha256),
+            ImageSourceIdentity::FromUrl => Self::from_url(url, document_dir),
+        }
+    }
+
     pub(super) fn from_url(url: &str, document_dir: Option<&Path>) -> Self {
         if url.starts_with("data:") {
-            // Inline base64/URL-encoded images (RFC 2397) are decoded in
-            // process — never handed to reqwest. Use a dedicated prefix so
-            // `remote_url()` keeps meaning "safe to GET over HTTP(S)". The
-            // identity is a bounded content fingerprint (computed from `&str`
-            // without cloning); two URIs with the same length and fingerprint
-            // share a cache entry — the same collision tradeoff the failure
-            // path already accepts (`destination_data_uri_fingerprint`), with
-            // the length as an extra discriminant.
-            Self {
-                identity: format!("data:{}:{:016x}", url.len(), data_uri_key_fingerprint(url)),
+            // Tests and non-derived call sites still accept a raw data URI.
+            // Paint/claim paths must pass a precomputed `ImageSourceIdentity`
+            // so they never scan the payload.
+            match ImageSourceIdentity::for_url(url) {
+                ImageSourceIdentity::Data { byte_len, sha256 } => {
+                    Self::from_data(byte_len, &sha256)
+                }
+                ImageSourceIdentity::FromUrl => unreachable!("data: URIs produce Data identities"),
             }
         } else if is_remote_resource(url) {
             Self {
@@ -95,36 +113,19 @@ impl PreviewImageKey {
     fn is_data_uri(&self) -> bool {
         self.identity.starts_with("data:")
     }
-}
 
-/// Data URIs at or below this size are hashed in full for the cache key
-/// (exact content identity, matching the failure path's fingerprint).
-const DATA_URI_KEY_FULL_HASH_MAX: usize = 64 * 1024;
-/// Per-region sample size when a data URI exceeds the full-hash ceiling.
-const DATA_URI_KEY_SAMPLE_LEN: usize = 2048;
-
-/// Content fingerprint for data-URI cache keys, computed from `&str` without
-/// cloning. Small URIs hash every byte; oversized ones hash the length plus
-/// head/middle/tail samples so per-frame key construction stays bounded no
-/// matter how large the base64 payload grows. Same hasher as the failure
-/// path's `destination_data_uri_fingerprint`, so the collision class (64-bit
-/// content hash, plus length and, for small URIs, exact content) matches or
-/// exceeds that established tradeoff.
-fn data_uri_key_fingerprint(url: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let bytes = url.as_bytes();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.len().hash(&mut hasher);
-    if bytes.len() <= DATA_URI_KEY_FULL_HASH_MAX {
-        bytes.hash(&mut hasher);
-    } else {
-        let mid = bytes.len() / 2;
-        let half = DATA_URI_KEY_SAMPLE_LEN / 2;
-        bytes[..DATA_URI_KEY_SAMPLE_LEN].hash(&mut hasher);
-        bytes[mid - half..mid + half].hash(&mut hasher);
-        bytes[bytes.len() - DATA_URI_KEY_SAMPLE_LEN..].hash(&mut hasher);
+    fn data_sha256(&self) -> Option<[u8; 32]> {
+        let rest = self.identity.strip_prefix("data:")?;
+        let hex = rest.split_once(':')?.1;
+        if hex.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+        }
+        Some(out)
     }
-    hasher.finish()
 }
 
 #[derive(Clone)]
@@ -301,6 +302,7 @@ impl PreviewImageCache {
     /// once per reservation (not per frame); ignored when the entry vanished.
     pub(super) fn attach_data_payload(&mut self, key: PreviewImageKey, payload: Arc<str>) {
         if key.is_data_uri() && self.entries.contains_key(&key) {
+            markion::record_data_uri_payload_clone(payload.len());
             self.data_payloads.insert(key, payload);
         }
     }
@@ -743,9 +745,10 @@ impl MarkionApp {
     pub(super) fn preview_image_entry(
         &self,
         url: &str,
+        identity: &ImageSourceIdentity,
         document_dir: Option<&Path>,
     ) -> PreviewImageEntry {
-        let key = PreviewImageKey::from_url(url, document_dir);
+        let key = PreviewImageKey::from_source(url, identity, document_dir);
         self.preview_image_cache
             .get(&key)
             .unwrap_or(PreviewImageEntry::Pending)
@@ -758,15 +761,15 @@ impl MarkionApp {
         document_dir: Option<&Path>,
         cx: &mut Context<Self>,
     ) {
-        let mut urls = Vec::new();
-        collect_preview_image_urls(preview, visual, &mut urls);
-        for url in &urls {
-            let key = PreviewImageKey::from_url(url, document_dir);
+        let mut sources = Vec::new();
+        collect_preview_image_sources(preview, visual, &mut sources);
+        for source in &sources {
+            let key = PreviewImageKey::from_source(source.url, source.identity, document_dir);
             // Only a fresh reservation needs the payload retained: the copy
             // happens once per image, not once per frame.
             if self.preview_image_cache.reserve_pending(key.clone()) && key.is_data_uri() {
                 self.preview_image_cache
-                    .attach_data_payload(key, Arc::from(url.as_ref()));
+                    .attach_data_payload(key, Arc::from(source.url));
             }
         }
         self.schedule_pending_preview_decodes(cx);
@@ -839,10 +842,9 @@ impl MarkionApp {
                     .await;
                 let _ = this.update(cx, |app, cx| {
                     if result.is_err()
-                        && let Some(url) = data_payload.as_deref()
-                        && let Some(fingerprint) = markion::destination_data_uri_fingerprint(url)
+                        && let Some(fingerprint) = key.data_sha256()
                     {
-                        // Record the failure by content fingerprint so the
+                        // Record the failure by complete identity so the
                         // image source toggle can force its payload visible
                         // without rebuilding the multi-megabyte key per frame.
                         if app.failed_data_uri_fingerprints.len() >= 4096 {
@@ -877,11 +879,11 @@ impl MarkionApp {
         if self.tabs[tab_index].is_image() {
             return;
         }
-        let mut urls = Vec::new();
-        collect_preview_image_urls(preview, visual, &mut urls);
-        let new_keys: HashSet<PreviewImageKey> = urls
+        let mut sources = Vec::new();
+        collect_preview_image_sources(preview, visual, &mut sources);
+        let new_keys: HashSet<PreviewImageKey> = sources
             .iter()
-            .map(|url| PreviewImageKey::from_url(url, document_dir))
+            .map(|source| PreviewImageKey::from_source(source.url, source.identity, document_dir))
             .collect();
         let old_keys = std::mem::take(&mut self.tabs[tab_index].claimed_preview_images);
         let mut dropped = Vec::new();
@@ -913,47 +915,61 @@ impl MarkionApp {
     }
 }
 
-/// Collect every image URL referenced by the blocks. Borrows from the blocks
-/// (which outlive the call) so per-frame collection never copies a
-/// multi-megabyte data URI; only HTML parts — whose URLs are extracted into
-/// fresh strings by the HTML pipeline — arrive owned.
-fn collect_preview_image_urls<'a>(
+struct PreviewImageSource<'a> {
+    url: &'a str,
+    identity: &'a ImageSourceIdentity,
+}
+
+/// Collect every image source referenced by the blocks. Borrows URLs and
+/// precomputed identities from derived state so per-frame collection never
+/// copies or hashes a multi-megabyte data URI.
+fn collect_preview_image_sources<'a>(
     preview: &'a [PreviewBlock],
     visual: &'a [VisualBlock],
-    out: &mut Vec<Cow<'a, str>>,
+    out: &mut Vec<PreviewImageSource<'a>>,
 ) {
     for block in preview {
         match block {
-            PreviewBlock::Image { url, .. } => out.push(Cow::Borrowed(url.as_str())),
+            PreviewBlock::Image { url, identity, .. } => out.push(PreviewImageSource {
+                url: url.as_str(),
+                identity,
+            }),
             PreviewBlock::Paragraph { text, .. }
             | PreviewBlock::Heading { text, .. }
             | PreviewBlock::ListItem { text, .. }
             | PreviewBlock::FootnoteDefinition { text, .. } => {
                 for span in &text.spans {
                     if let Some(image) = &span.image {
-                        out.push(Cow::Borrowed(image.url.as_str()));
+                        out.push(PreviewImageSource {
+                            url: image.url.as_str(),
+                            identity: &image.identity,
+                        });
                     }
                 }
             }
             PreviewBlock::BlockQuote { children, .. } => {
-                collect_preview_image_urls(children, &[], out);
+                collect_preview_image_sources(children, &[], out);
             }
             PreviewBlock::Table { rows, .. } => {
                 for row in rows {
                     for cell in row {
                         for span in &cell.spans {
                             if let Some(image) = &span.image {
-                                out.push(Cow::Borrowed(image.url.as_str()));
+                                out.push(PreviewImageSource {
+                                    url: image.url.as_str(),
+                                    identity: &image.identity,
+                                });
                             }
                         }
                     }
                 }
             }
-            PreviewBlock::Html { html, .. } => {
-                for part in html_preview_parts(html) {
-                    if let HtmlPreviewPart::Image { url, .. } = part {
-                        out.push(Cow::Owned(url));
-                    }
+            PreviewBlock::Html { images, .. } => {
+                for image in images {
+                    out.push(PreviewImageSource {
+                        url: image.url.as_ref(),
+                        identity: &image.identity,
+                    });
                 }
             }
             _ => {}
@@ -961,14 +977,25 @@ fn collect_preview_image_urls<'a>(
     }
     for block in visual {
         match &block.kind {
-            VisualBlockKind::Image { url, .. } => out.push(Cow::Borrowed(url.as_str())),
-            // Prose blocks render inline `<img>` tags as image atoms; their
-            // URLs ride the same claim/preload/evict lifecycle as block-level
-            // images.
+            VisualBlockKind::Image { url, identity, .. } => out.push(PreviewImageSource {
+                url: url.as_str(),
+                identity,
+            }),
+            VisualBlockKind::Html { images, .. } => {
+                for image in images {
+                    out.push(PreviewImageSource {
+                        url: image.url.as_ref(),
+                        identity: &image.identity,
+                    });
+                }
+            }
             _ => {
                 for run in &block.editable_runs {
                     if let Some(image) = &run.html_image {
-                        out.push(Cow::Borrowed(image.url.as_str()));
+                        out.push(PreviewImageSource {
+                            url: image.url.as_str(),
+                            identity: &image.identity,
+                        });
                     }
                 }
             }
@@ -980,11 +1007,12 @@ fn collect_preview_image_urls<'a>(
 pub(super) fn preview_image_view(
     app: &MarkionApp,
     url: &str,
+    identity: &ImageSourceIdentity,
     document_dir: Option<&Path>,
     width: Option<HtmlImgLength>,
     height: Option<HtmlImgLength>,
 ) -> Div {
-    match app.preview_image_entry(url, document_dir) {
+    match app.preview_image_entry(url, identity, document_dir) {
         PreviewImageEntry::Ready(ready) => {
             // Supersampled entries (SVG) present at their intrinsic size via an
             // explicit width, exactly like `visual_diagram_editor`; plain
@@ -1042,12 +1070,13 @@ pub(super) fn preview_image_view(
 pub(super) fn preview_inline_image_view(
     app: &MarkionApp,
     url: &str,
+    identity: &ImageSourceIdentity,
     alt: &str,
     document_dir: Option<&Path>,
     width: Option<HtmlImgLength>,
     height: Option<HtmlImgLength>,
 ) -> Div {
-    match app.preview_image_entry(url, document_dir) {
+    match app.preview_image_entry(url, identity, document_dir) {
         PreviewImageEntry::Ready(ready) => {
             let supersampled = ready.display_width != ready.width;
             let sized = resolve_html_img_display_size(
@@ -1620,7 +1649,7 @@ mod tests {
         assert!(k.is_data_uri());
         // The identity is a bounded fingerprint — it never embeds the URI.
         assert!(
-            k.identity.len() <= 48,
+            k.identity.len() <= 96,
             "identity must stay bounded, got {} bytes",
             k.identity.len()
         );
@@ -1638,7 +1667,7 @@ mod tests {
         let k2 = PreviewImageKey::from_url(&url_a, None);
         assert_eq!(k1, k2, "same content hashes to the same key every frame");
         assert!(
-            k1.identity.len() <= 48,
+            k1.identity.len() <= 96,
             "identity is independent of the {}-byte URI: {}",
             url_a.len(),
             k1.identity.len()
@@ -1669,6 +1698,168 @@ mod tests {
         // Different length also differs (length is part of the identity).
         let url_d = format!("data:image/png;base64,{body}QQ");
         assert_ne!(PreviewImageKey::from_url(&url_d, None), k1);
+    }
+
+    /// Two valid equal-length SVG data URIs that differ only outside the former
+    /// head/middle/tail 2 KiB samples used by the sampled cache key.
+    ///
+    /// The SVG payload is percent-encoded so markdown destinations, HTML
+    /// attributes, and `data_url` parsing do not truncate on `#`, `<`, or `>`.
+    fn adversarial_equal_length_data_uri_svgs() -> (String, String) {
+        const FORMER_SAMPLE: usize = 2048;
+        const FORMER_FULL_HASH_MAX: usize = 64 * 1024;
+        const TARGET_LEN: usize = FORMER_FULL_HASH_MAX + 8 * 1024;
+
+        fn pct(s: &str) -> String {
+            let mut out = String::with_capacity(s.len() * 3);
+            for &b in s.as_bytes() {
+                match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                        out.push(b as char);
+                    }
+                    _ => out.push_str(&format!("%{b:02X}")),
+                }
+            }
+            out
+        }
+
+        let prefix = "data:image/svg+xml,";
+        let head = pct("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><!--");
+        let rect_a = pct("<rect width='8' height='8' fill='red'/>");
+        let rect_b = pct("<rect width='8' height='8' fill='tan'/>");
+        let after_comment = pct("-->");
+        let comment_open = pct("<!--");
+        let tail = pct("--></svg>");
+        assert_eq!(rect_a.len(), rect_b.len());
+
+        let build = |rect: &str| {
+            let mut s = String::with_capacity(TARGET_LEN);
+            s.push_str(prefix);
+            s.push_str(&head);
+            let rect_at = FORMER_SAMPLE + 128;
+            while s.len() + after_comment.len() < rect_at {
+                s.push('x');
+            }
+            s.push_str(&after_comment);
+            s.push_str(rect);
+            s.push_str(&comment_open);
+            while s.len() + tail.len() < TARGET_LEN {
+                s.push('x');
+            }
+            s.push_str(&tail);
+            assert_eq!(s.len(), TARGET_LEN, "fixture length drifted to {}", s.len());
+            s
+        };
+
+        let a = build(&rect_a);
+        let b = build(&rect_b);
+        assert_eq!(a.len(), b.len());
+        assert!(a.len() > FORMER_FULL_HASH_MAX);
+        assert_eq!(&a[..FORMER_SAMPLE], &b[..FORMER_SAMPLE]);
+        let mid = a.len() / 2;
+        let half = FORMER_SAMPLE / 2;
+        assert_eq!(&a[mid - half..mid + half], &b[mid - half..mid + half]);
+        assert_eq!(&a[a.len() - FORMER_SAMPLE..], &b[b.len() - FORMER_SAMPLE..]);
+        assert_ne!(a, b);
+        (a, b)
+    }
+
+    /// Replica of the removed sampled hasher so the adversarial pair stays
+    /// locked as a collision for that algorithm even after complete SHA-256
+    /// identity replaced it.
+    fn former_sampled_data_uri_fingerprint(url: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        const FORMER_FULL_HASH_MAX: usize = 64 * 1024;
+        const FORMER_SAMPLE_LEN: usize = 2048;
+        let bytes = url.as_bytes();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.len().hash(&mut hasher);
+        if bytes.len() <= FORMER_FULL_HASH_MAX {
+            bytes.hash(&mut hasher);
+        } else {
+            let mid = bytes.len() / 2;
+            let half = FORMER_SAMPLE_LEN / 2;
+            bytes[..FORMER_SAMPLE_LEN].hash(&mut hasher);
+            bytes[mid - half..mid + half].hash(&mut hasher);
+            bytes[bytes.len() - FORMER_SAMPLE_LEN..].hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    #[test]
+    fn former_sampled_keys_alias_adversarial_equal_length_svgs() {
+        let (url_a, url_b) = adversarial_equal_length_data_uri_svgs();
+        assert_eq!(
+            former_sampled_data_uri_fingerprint(&url_a),
+            former_sampled_data_uri_fingerprint(&url_b),
+            "the removed sampled hasher must still collide on this fixture"
+        );
+        assert_ne!(
+            PreviewImageKey::from_url(&url_a, None),
+            PreviewImageKey::from_url(&url_b, None),
+            "complete SHA-256 identity must not inherit that alias"
+        );
+    }
+
+    #[test]
+    fn adversarial_equal_length_svgs_keep_distinct_keys_and_rasters() {
+        let (url_a, url_b) = adversarial_equal_length_data_uri_svgs();
+        let k1 = PreviewImageKey::from_url(&url_a, None);
+        let k2 = PreviewImageKey::from_url(&url_b, None);
+        assert_ne!(k1, k2, "complete identities must not alias this pair");
+        let ready_a = load_preview_image(&k1, Some(&url_a)).expect("decode svg a");
+        let ready_b = load_preview_image(&k2, Some(&url_b)).expect("decode svg b");
+        assert_eq!(
+            (ready_a.display_width, ready_a.display_height),
+            (ready_b.display_width, ready_b.display_height)
+        );
+        assert_ne!(
+            ready_a.image.as_ref() as *const _,
+            ready_b.image.as_ref() as *const _,
+            "distinct sources must not share a raster allocation"
+        );
+    }
+
+    #[test]
+    fn unsampled_same_length_edit_invalidates_data_uri_key() {
+        let (url_a, url_b) = adversarial_equal_length_data_uri_svgs();
+        assert_eq!(url_a.len(), url_b.len());
+        assert_ne!(
+            PreviewImageKey::from_url(&url_a, None),
+            PreviewImageKey::from_url(&url_b, None)
+        );
+    }
+
+    #[test]
+    fn repeated_source_collection_does_not_hash_or_clone_data_uri_payloads() {
+        let (url_a, _) = adversarial_equal_length_data_uri_svgs();
+        let markdown = format!("![red]({url_a})");
+        let doc = markion::MarkdownDocument::from_text(markdown);
+        let preview = doc.preview_blocks_shared();
+        let visual = doc.visual_blocks_shared();
+        markion::reset_data_uri_work_counters();
+        let mut sources = Vec::new();
+        collect_preview_image_sources(&preview, &visual, &mut sources);
+        assert!(!sources.is_empty());
+        for _ in 0..8 {
+            let mut again = Vec::new();
+            collect_preview_image_sources(&preview, &visual, &mut again);
+            let keys: Vec<_> = again
+                .iter()
+                .map(|source| PreviewImageKey::from_source(source.url, source.identity, None))
+                .collect();
+            assert_eq!(keys.len(), sources.len());
+        }
+        assert_eq!(
+            markion::DATA_URI_IDENTITY_HASH_BYTES.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "repaint collection must reuse derived identities"
+        );
+        assert_eq!(
+            markion::DATA_URI_PAYLOAD_CLONE_BYTES.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "repaint collection must not copy data-URI payloads"
+        );
     }
 
     #[test]

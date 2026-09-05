@@ -1439,6 +1439,7 @@ fn preview_images_do_not_expose_redundant_metadata_runs() {
         url: url.clone(),
         title: Some("architecture".to_string()),
         source_range: 0..42,
+        identity: markion::ImageSourceIdentity::for_url(&url),
     };
 
     assert!(preview_block_runs(&block).is_empty());
@@ -8220,14 +8221,13 @@ fn visual_edit_gfm_alert_title_row_is_reachable_and_editable(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn visual_edit_callout_title_cjk_pending_navigation_clamps_caret(cx: &mut TestAppContext) {
-    // Regression: the callout title fallback target used to be `line_end - 1`,
-    // which sits inside the trailing multibyte character when the marker line
-    // ends with CJK text; the poisoned caret then panicked on the next arrow
-    // key / Ctrl+F / copy. Real alert marker lines are pure ASCII (pulldown
-    // rejects any title after `[!NOTE]`), so drive the fallback with a
-    // synthetic title row whose line ends in CJK — the shape the fix defends
-    // against.
+fn stale_visual_block_cjk_line_pending_navigation_clamps_caret(cx: &mut TestAppContext) {
+    // Containment for a stale or malformed Visual Edit block whose source
+    // range ends on a multibyte character: the pending-navigation fallback
+    // must clamp the caret onto a char boundary. This is not an ordinary
+    // Callout user path — real GFM alert marker lines are ASCII-only
+    // (`[!NOTE]` rejects a trailing title) — so the fixture swaps in a
+    // synthetic range after parse.
     let source = "> [!NOTE]\n> body 注意标题\n";
     let cjk_line = source.find("> body").unwrap()..source.len();
     let title_target = source.find('题').unwrap();
@@ -8342,10 +8342,11 @@ fn visual_edit_callout_title_cjk_pending_navigation_clamps_caret(cx: &mut TestAp
 }
 
 #[test]
-fn visual_edit_callout_title_cjk_marker_line_target_clamps_boundary() {
-    // The shared caret-target computation behind keyboard entry and label
-    // clicks (both call sites use `callout_marker_line_caret_target`):
-    // always on a char boundary, just inside the line's end.
+fn stale_cjk_line_marker_target_clamps_to_char_boundary() {
+    // Shared caret-target helper used by keyboard entry and label clicks:
+    // a stale or malformed range whose line ends in CJK must still land on a
+    // char boundary. This does not claim a parsed Callout title — GFM alerts
+    // do not keep authored titles after `[!NOTE]`.
     let cjk = "> [!NOTE] 注意标题\n> body\n";
     let target = callout_marker_line_caret_target(cjk, &(0..23)).expect("target");
     assert_eq!(target, cjk.find('题').unwrap());
@@ -9090,9 +9091,9 @@ fn grapheme_boundaries_match_full_document_segmentation() {
 
 #[test]
 fn mid_char_offsets_are_safe_for_boundary_scans_and_selected_range() {
-    // Defense in depth: a caret or selection that somehow lands mid-character
-    // (the pre-fix CJK callout title target did exactly that) must clamp to a
-    // char boundary instead of panicking at a slice site.
+    // Defense in depth: stale, out-of-range, or mid-codepoint offsets must
+    // clamp to a char boundary instead of panicking at a slice site. This is
+    // containment, not a reproduced ordinary editing path.
     let text = "a注意b\ncd";
     let tab = EditorTab::new(MarkdownDocument::from_text(text));
 
@@ -13358,7 +13359,7 @@ fn visual_image_failed_load_forces_the_source_payload(cx: &mut TestAppContext) {
         let tab = app.active_tab();
         assert!(!tab.is_visual_source_expanded(image_id));
         assert!(matches!(
-            app.preview_image_entry("missing.png", None),
+            app.preview_image_entry("missing.png", &markion::ImageSourceIdentity::FromUrl, None,),
             PreviewImageEntry::Pending | PreviewImageEntry::Error(_)
         ));
     });
@@ -13666,7 +13667,11 @@ fn visual_data_uri_decode_failure_forces_payload_via_fingerprint(cx: &mut TestAp
     app.update(cx, |app, _| {
         assert!(app.failed_data_uri_fingerprints.contains(&fingerprint));
         assert!(matches!(
-            app.preview_image_entry(destination, None),
+            app.preview_image_entry(
+                destination,
+                &markion::ImageSourceIdentity::for_url(destination),
+                None,
+            ),
             PreviewImageEntry::Error(_)
         ));
     });

@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, LinkType, Tag, TagEnd};
 
 use crate::frontmatter::split_front_matter;
 use crate::model::{
@@ -531,8 +531,9 @@ pub fn build_visual_projection_with_marked_range(
     projection
 }
 use crate::parse::{
-    ExtendedInlineKind, InlineHtmlStyleKind, InlineHtmlStyleTag, extended_inline_matches,
-    parse_inline_html_image, parse_inline_html_style_tag, visual_markdown_options,
+    ExtendedInlineKind, InlineHtmlStyleKind, InlineHtmlStyleTag, coalesced_offset_events,
+    extended_inline_matches, parse_inline_html_image, parse_inline_html_style_tag,
+    visual_markdown_options,
 };
 
 #[derive(Clone)]
@@ -1178,14 +1179,25 @@ fn visual_block_from_preview(
             },
             Some(VisualSourceIslandKind::Math),
         ),
-        PreviewBlock::Html { html, .. } => (VisualBlockKind::Html { html: html.clone() }, None),
+        PreviewBlock::Html { html, images, .. } => (
+            VisualBlockKind::Html {
+                html: html.clone(),
+                images: images.clone(),
+            },
+            None,
+        ),
         PreviewBlock::Image {
-            alt, url, title, ..
+            alt,
+            url,
+            title,
+            identity,
+            ..
         } => (
             VisualBlockKind::Image {
                 alt: alt.clone(),
                 url: url.clone(),
                 title: title.clone(),
+                identity: identity.clone(),
             },
             Some(VisualSourceIslandKind::Image),
         ),
@@ -1359,7 +1371,7 @@ fn visual_block_editor(
                     .collect(),
             })
         }
-        PreviewBlock::Image { .. } => {
+        PreviewBlock::Image { identity, .. } => {
             // Conservative whole-span proof: the block must be exactly one
             // complete inline image whose label and destination bounds
             // resolve without guessing. The closing `)` must be unescaped
@@ -1384,18 +1396,12 @@ fn visual_block_editor(
             {
                 return None;
             }
-            let data_uri_fingerprint =
-                destination_data_uri_fingerprint(destination_inner).or_else(|| {
-                    destination_inner
-                        .strip_prefix('<')
-                        .and_then(destination_data_uri_fingerprint)
-                });
             Some(VisualBlockEditor::Image {
                 payload: VisualEditorField {
                     kind: VisualEditorFieldKind::ImageSource,
                     source_range: source_range.clone(),
                 },
-                data_uri_fingerprint,
+                data_uri_fingerprint: identity.data_sha256(),
             })
         }
         PreviewBlock::Html { .. } => Some(VisualBlockEditor::Html {
@@ -1408,18 +1414,13 @@ fn visual_block_editor(
     }
 }
 
-/// Content hash of a data-URI destination, or `None` for other destinations.
+/// Content identity of a data-URI destination, or `None` for other destinations.
 /// Both the derivation and the decode-completion path hash the same bytes so
-/// the render layer can match failures by fingerprint without ever building
+/// the render layer can match failures by identity without ever building
 /// the multi-megabyte cache key per frame.
-pub fn destination_data_uri_fingerprint(destination: &str) -> Option<u64> {
+pub fn destination_data_uri_fingerprint(destination: &str) -> Option<[u8; 32]> {
     let after_angle = destination.strip_prefix('<').unwrap_or(destination);
-    after_angle.starts_with("data:").then(|| {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        after_angle.hash(&mut hasher);
-        hasher.finish()
-    })
+    crate::ImageSourceIdentity::for_url(after_angle).data_sha256()
 }
 
 /// Human-readable byte size for elision token labels (binary units, one
@@ -1831,9 +1832,7 @@ fn inline_runs(
     let mut previous_leaf_end = 0usize;
     let mut image_open: Option<(String, Option<String>, Range<usize>, String)> = None;
 
-    for (event, relative_range) in
-        Parser::new_ext(parse_input, visual_markdown_options()).into_offset_iter()
-    {
+    for (event, relative_range) in coalesced_offset_events(parse_input, visual_markdown_options()) {
         if relative_range.start >= source.len() {
             break;
         }
@@ -1936,6 +1935,7 @@ fn inline_runs(
                         event_range.clone()
                     };
                     let range = range.start.max(block_range.start)..range.end.min(block_range.end);
+                    let identity = crate::ImageSourceIdentity::for_url(&url);
                     if range.start < range.end
                         && text.is_char_boundary(range.start)
                         && text.is_char_boundary(range.end)
@@ -1959,6 +1959,7 @@ fn inline_runs(
                                 title,
                                 width: None,
                                 height: None,
+                                identity,
                             }),
                             conservative_fallback: false,
                         });
@@ -4816,6 +4817,28 @@ mod tests {
     }
 
     #[test]
+    fn trailing_subscript_reaches_visual_runs() {
+        let source = "H~2~";
+        let doc = MarkdownDocument::from_text(source);
+        let block = &doc.visual_blocks_shared()[0];
+        assert!(
+            block
+                .editable_runs
+                .iter()
+                .any(|run| run.visible_text == "2" && run.style.subscript),
+            "trailing subscript must reach visual runs, got {:?}",
+            block.editable_runs
+        );
+        assert!(
+            block
+                .reveal_groups
+                .iter()
+                .any(|group| group.kind == VisualRevealKind::Subscript
+                    && &source[group.source_range.clone()] == "~2~")
+        );
+    }
+
+    #[test]
     fn nested_projection_reveals_one_outermost_group_and_reuses_cache() {
         let source = "before ***世界*** after ==高亮==";
         let doc = MarkdownDocument::from_text(source);
@@ -5593,7 +5616,10 @@ mod tests {
         let block = MarkdownDocument::from_text(source)
             .visual_blocks()
             .remove(0);
-        let VisualBlockKind::Image { alt, url, title } = &block.kind else {
+        let VisualBlockKind::Image {
+            alt, url, title, ..
+        } = &block.kind
+        else {
             panic!("expected image block, got {:?}", block.kind);
         };
         assert_eq!(alt, "替代]文本");
@@ -6462,7 +6488,7 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             "HTML visual block must expose a source payload editor"
         );
         match &html_block.kind {
-            VisualBlockKind::Html { html } => {
+            VisualBlockKind::Html { html, .. } => {
                 assert!(html.contains("<table"));
                 assert!(html.contains("rowspan"));
             }
@@ -6484,7 +6510,7 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
         let blocks = doc.visual_blocks_shared();
 
         match &blocks[0].kind {
-            VisualBlockKind::Html { html } => assert!(html.contains("a.png")),
+            VisualBlockKind::Html { html, .. } => assert!(html.contains("a.png")),
             other => panic!("expected Html kind, got {other:?}"),
         }
         assert!(

@@ -4,8 +4,13 @@
 //! impls). Behavior on [`MarkdownDocument`](crate::MarkdownDocument) lives in
 //! the crate root and the `document` module group.
 
+use sha2::{Digest, Sha256};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
@@ -1061,6 +1066,119 @@ impl InlineStyle {
     }
 }
 
+/// Bytes hashed while deriving complete data-URI identities. Tests reset this
+/// around a derivation and assert that later repaint/claim work does not add
+/// to it.
+pub static DATA_URI_IDENTITY_HASH_BYTES: AtomicU64 = AtomicU64::new(0);
+/// Bytes copied while retaining a pending data-URI payload for decode.
+pub static DATA_URI_PAYLOAD_CLONE_BYTES: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    static DATA_URI_IDENTITY_INTERN: RefCell<Option<HashMap<(*const u8, usize), ImageSourceIdentity>>> =
+        const { RefCell::new(None) };
+}
+
+/// Run `f` with a derivation-local interner so identical data-URI `&str`
+/// values in one document version are hashed only once.
+pub fn with_image_identity_interner<T>(f: impl FnOnce() -> T) -> T {
+    DATA_URI_IDENTITY_INTERN.with(|slot| {
+        let previous = slot.replace(Some(HashMap::new()));
+        let result = f();
+        slot.replace(previous);
+        result
+    })
+}
+
+pub fn reset_data_uri_work_counters() {
+    DATA_URI_IDENTITY_HASH_BYTES.store(0, Ordering::Relaxed);
+    DATA_URI_PAYLOAD_CLONE_BYTES.store(0, Ordering::Relaxed);
+}
+
+pub fn record_data_uri_payload_clone(bytes: usize) {
+    DATA_URI_PAYLOAD_CLONE_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
+}
+
+/// Render-cache identity for an image source. Local and remote locators are
+/// resolved at claim time (cheap). Data URIs carry a complete SHA-256 digest
+/// computed during per-document-version derivation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ImageSourceIdentity {
+    /// Non-data locator; `PreviewImageKey` resolves it with `document_dir`.
+    FromUrl,
+    Data {
+        byte_len: usize,
+        sha256: [u8; 32],
+    },
+}
+
+impl Default for ImageSourceIdentity {
+    fn default() -> Self {
+        Self::FromUrl
+    }
+}
+
+impl ImageSourceIdentity {
+    /// Identity for one authored URL. Data URIs hash the complete URI; other
+    /// schemes defer locator normalization to claim/paint time.
+    pub fn for_url(url: &str) -> Self {
+        if !url.starts_with("data:") {
+            return Self::FromUrl;
+        }
+        DATA_URI_IDENTITY_INTERN.with(|slot| {
+            if let Some(map) = slot.borrow_mut().as_mut() {
+                let key = (url.as_ptr(), url.len());
+                if let Some(existing) = map.get(&key) {
+                    return existing.clone();
+                }
+                let identity = Self::from_data_uri(url);
+                map.insert(key, identity.clone());
+                identity
+            } else {
+                Self::from_data_uri(url)
+            }
+        })
+    }
+
+    pub fn from_data_uri(url: &str) -> Self {
+        DATA_URI_IDENTITY_HASH_BYTES.fetch_add(url.len() as u64, Ordering::Relaxed);
+        let digest = Sha256::digest(url.as_bytes());
+        let mut sha256 = [0u8; 32];
+        sha256.copy_from_slice(&digest);
+        Self::Data {
+            byte_len: url.len(),
+            sha256,
+        }
+    }
+
+    pub fn data_sha256(&self) -> Option<[u8; 32]> {
+        match self {
+            Self::Data { sha256, .. } => Some(*sha256),
+            Self::FromUrl => None,
+        }
+    }
+
+    pub fn is_data_uri(&self) -> bool {
+        matches!(self, Self::Data { .. })
+    }
+}
+
+/// One HTML `<img>` extracted during per-version derivation so paint/claim
+/// paths can reuse a constant-size identity without rescanning the payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HtmlImageDescriptor {
+    pub url: Arc<str>,
+    pub identity: ImageSourceIdentity,
+}
+
+impl HtmlImageDescriptor {
+    pub fn from_url(url: &str) -> Self {
+        Self {
+            identity: ImageSourceIdentity::for_url(url),
+            url: Arc::from(url),
+        }
+    }
+}
+
 /// A Markdown `![alt](url)` (or equivalent) kept inside a prose construct
 /// instead of being extracted as a block-level [`PreviewBlock::Image`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1069,6 +1187,7 @@ pub struct InlineImage {
     pub url: String,
     pub title: Option<String>,
     pub source_range: Range<usize>,
+    pub identity: ImageSourceIdentity,
 }
 
 /// A run of preview text sharing one inline style (and optional link target).
@@ -1176,12 +1295,16 @@ pub enum VisualBlockKind {
         alt: String,
         url: String,
         title: Option<String>,
+        identity: ImageSourceIdentity,
     },
     /// Raw HTML block rendered read-only through the shared HTML-parts pipeline
     /// (so `<table>` blocks, text, and images appear). No editable runs and no
     /// source-island — Visual Edit shows the rendered view, not a raw-source box.
     Html {
         html: String,
+        /// Image sources extracted once per document version so claim/paint
+        /// reuse constant-size identities instead of rescanning data URIs.
+        images: Vec<HtmlImageDescriptor>,
     },
     Rule,
     Table {
@@ -1237,6 +1360,7 @@ pub struct VisualHtmlImage {
     pub title: Option<String>,
     pub width: Option<HtmlImgLength>,
     pub height: Option<HtmlImgLength>,
+    pub identity: ImageSourceIdentity,
 }
 
 /// Destination opened or jumped to from a Visual Edit navigation icon.
@@ -1317,11 +1441,11 @@ pub enum VisualBlockEditor {
     /// `![alt](destination "title")` bytes as a single field.
     Image {
         payload: VisualEditorField,
-        /// Content hash of a data-URI destination, computed once per
+        /// Complete SHA-256 of a data-URI destination, computed once per
         /// derivation. The render path matches it against the failed-decode
-        /// fingerprint set to decide forced expansion without re-deriving a
+        /// set to decide forced expansion without re-deriving a
         /// multi-megabyte cache key every frame.
-        data_uri_fingerprint: Option<u64>,
+        data_uri_fingerprint: Option<[u8; 32]>,
     },
 }
 
@@ -1612,12 +1736,14 @@ pub enum PreviewBlock {
     Html {
         html: String,
         source_range: Range<usize>,
+        images: Vec<HtmlImageDescriptor>,
     },
     Image {
         alt: String,
         url: String,
         title: Option<String>,
         source_range: Range<usize>,
+        identity: ImageSourceIdentity,
     },
     Rule {
         source_range: Range<usize>,

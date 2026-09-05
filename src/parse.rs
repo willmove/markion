@@ -8,12 +8,12 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{BlockQuoteKind, HeadingLevel, Options};
+use pulldown_cmark::{BlockQuoteKind, Event, HeadingLevel, Options, Parser};
 
 use crate::escape::escape_html_attribute;
 use crate::model::{
-    HtmlImgLength, InlineImage, InlineSpan, InlineStyle, MathSource, PreviewBlock, RichText,
-    VisualHtmlImage,
+    HtmlImageDescriptor, HtmlImgLength, ImageSourceIdentity, InlineImage, InlineSpan, InlineStyle,
+    MathSource, PreviewBlock, RichText, VisualHtmlImage,
 };
 use crate::table::TableDraft;
 
@@ -97,6 +97,7 @@ pub struct HtmlTableCellImage {
     pub title: Option<String>,
     pub width: Option<HtmlImgLength>,
     pub height: Option<HtmlImgLength>,
+    pub identity: crate::model::ImageSourceIdentity,
 }
 
 impl HtmlAlign {
@@ -281,6 +282,7 @@ pub(crate) struct ImageDraft {
     pub url: String,
     pub title: Option<String>,
     pub source_range: Range<usize>,
+    pub identity: ImageSourceIdentity,
 }
 
 #[derive(Default)]
@@ -508,6 +510,7 @@ pub(crate) fn append_preview_image(
             url: image.url,
             title: image.title,
             source_range: image.source_range,
+            identity: image.identity,
         }),
     });
     Ok(())
@@ -899,6 +902,7 @@ pub(crate) fn parse_inline_html_image(source: &str) -> Option<VisualHtmlImage> {
         return None;
     }
     let url = tag.attr("src").filter(|url| !url.is_empty())?;
+    let identity = ImageSourceIdentity::for_url(&url);
     Some(VisualHtmlImage {
         alt: tag.attr("alt").unwrap_or_default(),
         url,
@@ -908,6 +912,7 @@ pub(crate) fn parse_inline_html_image(source: &str) -> Option<VisualHtmlImage> {
             .attr("height")
             .as_deref()
             .and_then(parse_html_img_length),
+        identity,
     })
 }
 
@@ -1032,6 +1037,46 @@ pub(crate) fn parse_inline_html_style_tag(source: &str) -> Option<InlineHtmlStyl
     } else {
         InlineHtmlStyleTag::Open { kind }
     })
+}
+
+/// Image sources in document order (standalone `<img>`, table-cell images,
+/// and inline images inside HTML text). Computed once per Html preview block.
+pub fn html_image_descriptors(html: &str) -> Vec<HtmlImageDescriptor> {
+    let mut out = Vec::new();
+    collect_html_image_descriptors_from_parts(&html_preview_parts(html), &mut out);
+    out
+}
+
+fn collect_html_image_descriptors_from_parts(
+    parts: &[HtmlPreviewPart],
+    out: &mut Vec<HtmlImageDescriptor>,
+) {
+    for part in parts {
+        match part {
+            HtmlPreviewPart::Image { url, .. } => out.push(HtmlImageDescriptor::from_url(url)),
+            HtmlPreviewPart::Text { text, .. } => {
+                for span in &text.spans {
+                    if let Some(image) = &span.image {
+                        out.push(HtmlImageDescriptor::from_url(&image.url));
+                    }
+                }
+            }
+            HtmlPreviewPart::Table { grid } => {
+                for row in &grid.rows {
+                    for cell in row {
+                        if let Some(image) = &cell.image {
+                            out.push(HtmlImageDescriptor::from_url(&image.url));
+                        }
+                        for span in &cell.content.spans {
+                            if let Some(image) = &span.image {
+                                out.push(HtmlImageDescriptor::from_url(&image.url));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn html_preview_parts(html: &str) -> Vec<HtmlPreviewPart> {
@@ -1275,6 +1320,7 @@ impl<'a> HtmlTableParser<'a> {
                             .attr("height")
                             .as_deref()
                             .and_then(parse_html_img_length),
+                        identity: ImageSourceIdentity::default(),
                     });
                 }
             }
@@ -2439,6 +2485,16 @@ fn emoji_for_shortcode(shortcode: &str) -> Option<&'static str> {
         "sparkles" => Some("✨"),
         _ => None,
     }
+}
+
+/// pulldown events with adjacent, offset-contiguous `Text` fragments merged.
+pub(crate) fn coalesced_offset_events<'a>(
+    body: &'a str,
+    options: Options,
+) -> Vec<(Event<'a>, Range<usize>)> {
+    typune_markdown::coalesce_contiguous_text_events(
+        Parser::new_ext(body, options).into_offset_iter(),
+    )
 }
 
 pub(crate) fn markdown_options() -> Options {

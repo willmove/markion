@@ -2785,6 +2785,16 @@ mod tests {
     }
 
     #[test]
+    fn trailing_subscript_reaches_docx_vert_align() {
+        let document = MarkdownDocument::from_text("H~2~");
+        let document_xml = entry(&docx_parts(&document), "word/document.xml");
+        assert!(
+            document_xml.contains("<w:vertAlign w:val=\"subscript\"/>"),
+            "trailing subscript must reach DOCX export, got {document_xml}"
+        );
+    }
+
+    #[test]
     fn nested_inline_styles_compose_on_one_run() {
         let mut state = DocxRenderState::default();
         let rich = RichText {

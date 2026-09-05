@@ -1885,8 +1885,16 @@ pub(super) fn rich_text_with_math_element(
         offset = span_range.end;
         if let Some(image) = &span.image {
             children.push(
-                preview_inline_image_view(app, &image.url, &image.alt, document_dir, None, None)
-                    .into_any_element(),
+                preview_inline_image_view(
+                    app,
+                    &image.url,
+                    &image.identity,
+                    &image.alt,
+                    document_dir,
+                    None,
+                    None,
+                )
+                .into_any_element(),
             );
             fragment_index += 1;
             continue;
@@ -2574,7 +2582,7 @@ fn visual_html_image_atom(
     {
         VISUAL_HTML_IMAGE_ATOM_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    let content = match app.preview_image_entry(&image.url, document_dir) {
+    let content = match app.preview_image_entry(&image.url, &image.identity, document_dir) {
         PreviewImageEntry::Ready(ready) => {
             // Same presentation rules as `preview_image_view`: supersampled
             // (SVG) entries present at their intrinsic display width, plain
@@ -3732,6 +3740,7 @@ pub(super) fn visual_block_view(
             alt: image_alt,
             url,
             title: image_title,
+            identity,
             ..
         } => {
             let offset = block.source_range.start;
@@ -3750,7 +3759,14 @@ pub(super) fn visual_block_view(
                 .w(gpui::relative(
                     image_presentation.width_percent as f32 / 100.,
                 ))
-                .child(preview_image_view(app, url, document_dir, None, None));
+                .child(preview_image_view(
+                    app,
+                    url,
+                    identity,
+                    document_dir,
+                    None,
+                    None,
+                ));
             let image = match image_presentation.alignment {
                 ImageAlignment::Left => div().w_full().flex().items_start().child(image),
                 ImageAlignment::Center => div().w_full().flex().items_center().child(image),
@@ -3953,11 +3969,20 @@ pub(super) fn visual_block_view(
             }
         }
         VisualBlockKind::Unsupported => visual_source_island_view(app, block, block_index, cx),
-        VisualBlockKind::Html { html } => {
+        VisualBlockKind::Html { html, images } => {
             if let Some(VisualBlockEditor::Html { payload }) = block.editor.as_ref() {
-                visual_html_editor(app, block, block_index, html, payload, document_dir, cx)
+                visual_html_editor(
+                    app,
+                    block,
+                    block_index,
+                    html,
+                    images,
+                    payload,
+                    document_dir,
+                    cx,
+                )
             } else {
-                html_preview_block_view(app, html, block_index, document_dir, cx)
+                html_preview_block_view(app, html, images, block_index, document_dir, cx)
             }
         }
         VisualBlockKind::FootnoteDefinition { label } => div()
@@ -4951,12 +4976,13 @@ fn visual_html_editor(
     block: &VisualBlock,
     block_index: usize,
     html: &str,
+    images: &[HtmlImageDescriptor],
     payload: &VisualEditorField,
     document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
-    let presentation = html_preview_block_view(app, html, block_index, document_dir, cx);
+    let presentation = html_preview_block_view(app, html, images, block_index, document_dir, cx);
     let bordered = !html_preview_parts(html)
         .iter()
         .any(|part| matches!(part, HtmlPreviewPart::Table { .. }));
@@ -5240,7 +5266,7 @@ fn visual_image_source_editor(
     block_index: usize,
     url: &str,
     payload: &VisualEditorField,
-    data_uri_fingerprint: Option<u64>,
+    data_uri_fingerprint: Option<[u8; 32]>,
     presentation: gpui::AnyElement,
     document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
@@ -5252,7 +5278,7 @@ fn visual_image_source_editor(
     let forced = match data_uri_fingerprint {
         Some(fingerprint) => app.failed_data_uri_fingerprints.contains(&fingerprint),
         None => matches!(
-            app.preview_image_entry(url, document_dir),
+            app.preview_image_entry(url, &ImageSourceIdentity::FromUrl, document_dir),
             PreviewImageEntry::Error(_)
         ),
     };
@@ -5716,6 +5742,7 @@ pub(super) fn visual_table_view(
 fn html_preview_block_view(
     app: &MarkionApp,
     html: &str,
+    images: &[HtmlImageDescriptor],
     block_index: usize,
     document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
@@ -5725,11 +5752,13 @@ fn html_preview_block_view(
     if parts.is_empty() {
         return div();
     }
+    let image_index = std::cell::Cell::new(0usize);
 
-    div()
-        .mb_3()
-        .children(parts.into_iter().enumerate().map(|(part_index, part)| {
-            match part {
+    div().mb_3().children(
+        parts
+            .into_iter()
+            .enumerate()
+            .map(|(part_index, part)| match part {
                 HtmlPreviewPart::Text {
                     text,
                     centered,
@@ -5808,24 +5837,41 @@ fn html_preview_block_view(
                     height,
                     align,
                     ..
-                } => div()
-                    .mb_2()
-                    .when(centered || align == HtmlAlign::Center, |style| {
-                        style.flex().justify_center()
-                    })
-                    .when(align == HtmlAlign::End, |style| style.flex().justify_end())
-                    .child(preview_image_view(app, &url, document_dir, width, height)),
+                } => {
+                    let i = image_index.get();
+                    image_index.set(i + 1);
+                    let (src, identity) = images
+                        .get(i)
+                        .map(|image| (image.url.as_ref(), &image.identity))
+                        .unwrap_or((url.as_str(), &ImageSourceIdentity::FromUrl));
+                    div()
+                        .mb_2()
+                        .when(centered || align == HtmlAlign::Center, |style| {
+                            style.flex().justify_center()
+                        })
+                        .when(align == HtmlAlign::End, |style| style.flex().justify_end())
+                        .child(preview_image_view(
+                            app,
+                            src,
+                            identity,
+                            document_dir,
+                            width,
+                            height,
+                        ))
+                }
                 HtmlPreviewPart::Table { grid } => div().mb_2().child(html_table_grid_view(
                     app,
                     &grid,
+                    images,
+                    &image_index,
                     block_index,
                     part_index,
                     document_dir,
                     &typography,
                     cx,
                 )),
-            }
-        }))
+            }),
+    )
 }
 
 /// Renders a resolved HTML table grid. Uses GPUI's CSS-grid layout so that
@@ -5838,6 +5884,8 @@ fn html_preview_block_view(
 fn html_table_grid_view(
     app: &MarkionApp,
     grid: &HtmlTableGrid,
+    images: &[HtmlImageDescriptor],
+    image_index: &std::cell::Cell<usize>,
     block_index: usize,
     part_index: usize,
     document_dir: Option<&Path>,
@@ -5912,9 +5960,16 @@ fn html_table_grid_view(
                             .gap_1()
                             .min_w_0()
                             .children(cell.image.as_ref().map(|image| {
+                                let i = image_index.get();
+                                image_index.set(i + 1);
+                                let (src, identity) = images
+                                    .get(i)
+                                    .map(|desc| (desc.url.as_ref(), &desc.identity))
+                                    .unwrap_or((image.url.as_str(), &ImageSourceIdentity::FromUrl));
                                 preview_image_view(
                                     app,
-                                    &image.url,
+                                    src,
+                                    identity,
                                     document_dir,
                                     image.width,
                                     image.height,
@@ -6352,10 +6407,11 @@ pub(super) fn preview_block_view(
                     }
                     continue;
                 }
-                if let PreviewBlock::Html { html, .. } = child {
+                if let PreviewBlock::Html { html, images, .. } = child {
                     container = container.child(html_preview_block_view(
                         app,
                         html,
+                        images,
                         block_index,
                         document_dir,
                         cx,
@@ -6588,14 +6644,17 @@ pub(super) fn preview_block_view(
                 )
             }
         }
-        PreviewBlock::Html { html, .. } => {
-            html_preview_block_view(app, html, block_index, document_dir, cx)
+        PreviewBlock::Html { html, images, .. } => {
+            html_preview_block_view(app, html, images, block_index, document_dir, cx)
         }
-        PreviewBlock::Image { url, .. } => {
-            div()
-                .mb_3()
-                .child(preview_image_view(app, url, document_dir, None, None))
-        }
+        PreviewBlock::Image { url, identity, .. } => div().mb_3().child(preview_image_view(
+            app,
+            url,
+            identity,
+            document_dir,
+            None,
+            None,
+        )),
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
         PreviewBlock::FootnoteDefinition { label, text, .. } => div()
             .mb(px(typography.paragraph_spacing))

@@ -148,32 +148,35 @@ Reference-style links work too: [Markion repository][markion-repo].
 
 pub use model::{
     AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, CodeTheme,
-    DEFAULT_CODE_FONT_FAMILY, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_EDITOR_SPLIT_RATIO,
-    DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE,
-    DEFAULT_SIDEBAR_WIDTH, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, DocumentBasicStats,
-    DocumentStats, DocxExportOptions, DocxImagePolicy, DocxPageSize, EDITOR_SPLIT_RATIO_MAX,
+    DATA_URI_IDENTITY_HASH_BYTES, DATA_URI_PAYLOAD_CLONE_BYTES, DEFAULT_CODE_FONT_FAMILY,
+    DEFAULT_EDITOR_FONT_SIZE, DEFAULT_EDITOR_SPLIT_RATIO, DEFAULT_HEADING_MENU_MAX_LEVEL,
+    DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE, DEFAULT_SIDEBAR_WIDTH,
+    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, DocumentBasicStats, DocumentStats,
+    DocxExportOptions, DocxImagePolicy, DocxPageSize, EDITOR_SPLIT_RATIO_MAX,
     EDITOR_SPLIT_RATIO_MIN, EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory, ExportBackend,
     ExportBackendPreference, ExportFormat, ExportOutcome, ExportPreferences, Footnote,
-    FrontMatterError, Heading, HighlightKind, HighlightedSpan, HtmlImgLength, InlineImage,
-    InlineSpan, InlineStyle, MAX_AUTO_SAVE_DELAY_SECS, MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE,
-    MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES, MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS,
-    MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE,
-    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, MarkdownFormat, MathDelimiter, MathExpression,
-    MathLayoutStyle, MathSource, PdfExportOptions, PdfPageSize, PreviewBlock, RecoveryDocument,
-    RenderedMath, ReplaceResult, RichText, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
-    SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch, SearchMatchRange, SearchOptions,
-    SessionLayout, SessionState, SidebarTab, TableAlignment, TableEdit, TableEditResult,
-    ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEdit,
-    VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
-    VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualHtmlImage, VisualInlineRun, VisualNavigationTarget, VisualProjection,
-    VisualProjectionSegment, VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge,
-    VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit,
-    VisualTableCell, YamlFrontMatter, builtin_theme_definitions, layout_rect_is_visible,
-    normalize_auto_save_delay_secs, normalize_code_font_size, normalize_editor_font_size,
-    normalize_editor_split_ratio, normalize_font_family, normalize_heading_menu_max_level,
-    normalize_paragraph_spacing, normalize_rendered_font_size, normalize_sidebar_width,
-    normalize_window_size, resolve_font_family, touch_recent_file,
+    FrontMatterError, Heading, HighlightKind, HighlightedSpan, HtmlImageDescriptor, HtmlImgLength,
+    ImageSourceIdentity, InlineImage, InlineSpan, InlineStyle, MAX_AUTO_SAVE_DELAY_SECS,
+    MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES,
+    MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
+    MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+    MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle, MathSource, PdfExportOptions,
+    PdfPageSize, PreviewBlock, RecoveryDocument, RenderedMath, ReplaceResult, RichText,
+    SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch,
+    SearchMatchRange, SearchOptions, SessionLayout, SessionState, SidebarTab, TableAlignment,
+    TableEdit, TableEditResult, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock,
+    VisualBlockEdit, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix,
+    VisualBlockPrefixKind, VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField,
+    VisualEditorFieldKind, VisualHtmlImage, VisualInlineRun, VisualNavigationTarget,
+    VisualProjection, VisualProjectionSegment, VisualProjectionSpan, VisualQuoteContext,
+    VisualQuoteGroupEdge, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
+    VisualStructuralEdit, VisualTableCell, YamlFrontMatter, builtin_theme_definitions,
+    layout_rect_is_visible, normalize_auto_save_delay_secs, normalize_code_font_size,
+    normalize_editor_font_size, normalize_editor_split_ratio, normalize_font_family,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    normalize_sidebar_width, normalize_window_size, record_data_uri_payload_clone,
+    reset_data_uri_work_counters, resolve_font_family, touch_recent_file,
+    with_image_identity_interner,
 };
 pub use visual::{
     build_visual_projection, build_visual_projection_with_marked_range, data_uri_payload_ranges,
@@ -238,7 +241,7 @@ pub use i18n::{
 pub use math::{render_math, validate_latex};
 pub use parse::{
     HtmlAlign, HtmlListMarker, HtmlPreviewPart, HtmlTableCell, HtmlTableCellImage, HtmlTableGrid,
-    html_preview_parts, html_preview_plain_text, html_table_column_weights,
+    html_image_descriptors, html_preview_parts, html_preview_plain_text, html_table_column_weights,
     html_table_grid_line_end, html_table_row_has_visible_header, resolve_html_img_display_size,
 };
 pub use publishing::build_publishing_snapshot;
@@ -265,9 +268,10 @@ use table::{
 
 use parse::{
     ImageDraft, InlineStateDraft, ListItemDestination, ListItemDraft, ListLevelDraft,
-    append_preview_image, append_span, clean_preview_text, finish_rich_text, flush_list_item,
-    gfm_alert_kind, heading_level_to_u8, markdown_options, push_nonempty_block, push_preview_math,
-    push_preview_rich, render_extended_html_text_nodes, slugify, standalone_inline_images,
+    append_preview_image, append_span, clean_preview_text, coalesced_offset_events,
+    finish_rich_text, flush_list_item, gfm_alert_kind, heading_level_to_u8, markdown_options,
+    push_nonempty_block, push_preview_math, push_preview_rich, render_extended_html_text_nodes,
+    slugify, standalone_inline_images,
 };
 
 use diagram::collect_html_diagrams;
@@ -2256,8 +2260,8 @@ impl MarkdownDocument {
 
     pub fn render_html_fragment(&self) -> String {
         let body = self.body_text();
-        let parser = Parser::new_ext(body, markdown_options());
-        let (events, formulas) = collect_html_math(parser.into_offset_iter(), body);
+        let parser_events = coalesced_offset_events(body, markdown_options());
+        let (events, formulas) = collect_html_math(parser_events, body);
         let (events, diagrams) = collect_html_diagrams(events);
         let mut output = String::new();
         html::push_html(&mut output, events.into_iter());
@@ -2636,11 +2640,9 @@ impl MarkdownDocument {
                     }
                 }
             }
-            PreviewBlock::Html { html, .. } => {
-                for part in html_preview_parts(html) {
-                    if let HtmlPreviewPart::Image { url, .. } = part {
-                        push(&url, urls);
-                    }
+            PreviewBlock::Html { images, .. } => {
+                for image in images {
+                    push(image.url.as_ref(), urls);
                 }
             }
             _ => {}
@@ -2698,8 +2700,9 @@ impl MarkdownDocument {
             ),
         };
 
-        let mut blocks =
-            visual::build_visual_blocks(&self.text, &cache.blocks, VisualBlockId::fresh);
+        let mut blocks = with_image_identity_interner(|| {
+            visual::build_visual_blocks(&self.text, &cache.blocks, VisualBlockId::fresh)
+        });
         if let (Some(previous), Some(edits)) = (previous_cache.as_ref(), pending.edits())
             && !edits.is_empty()
             && let Some(old_visual) = self.cached_visual_blocks.borrow().as_ref()
@@ -3022,6 +3025,10 @@ impl MarkdownDocument {
     /// a snapshot of the document; the result is folded back into the caches
     /// via [`Self::install_derived`].
     pub fn derive_preview_and_outline(text: &str) -> (Vec<PreviewBlock>, Vec<Heading>) {
+        with_image_identity_interner(|| Self::derive_preview_and_outline_inner(text))
+    }
+
+    fn derive_preview_and_outline_inner(text: &str) -> (Vec<PreviewBlock>, Vec<Heading>) {
         let (body, body_offset) = split_front_matter(text)
             .map(|(_, body_start)| (&text[body_start..], body_start))
             .unwrap_or((text, 0));
@@ -3043,7 +3050,7 @@ impl MarkdownDocument {
         let mut inline = InlineStateDraft::default();
         let mut footnote: Option<(String, Vec<InlineSpan>, std::ops::Range<usize>)> = None;
 
-        for (event, range) in Parser::new_ext(body, markdown_options()).into_offset_iter() {
+        for (event, range) in coalesced_offset_events(body, markdown_options()) {
             let source_range = body_offset + range.start..body_offset + range.end;
             match event {
                 Event::Start(Tag::Heading { level, .. }) => {
@@ -3241,6 +3248,7 @@ impl MarkdownDocument {
                         url: dest_url.to_string(),
                         title: (!title.is_empty()).then(|| title.to_string()),
                         source_range,
+                        identity: ImageSourceIdentity::for_url(dest_url.as_ref()),
                     });
                 }
                 Event::End(TagEnd::Image) => {
@@ -3259,6 +3267,7 @@ impl MarkdownDocument {
                                 url: image.url,
                                 title: image.title,
                                 source_range: image.source_range,
+                                identity: image.identity,
                             });
                         }
                     }
@@ -4230,6 +4239,7 @@ fn emit_finished_paragraph(
                     url: image.url,
                     title: image.title,
                     source_range: image.source_range,
+                    identity: image.identity,
                 },
             );
         }
@@ -4266,18 +4276,23 @@ fn push_html_block(blocks: &mut Vec<PreviewBlock>, text: &str, source_range: Ran
     if let Some(PreviewBlock::Html {
         html: existing_html,
         source_range: existing_range,
+        images,
     }) = blocks.last_mut()
         && source_range.start >= existing_range.end
         && html_preview_gap_should_merge(&text[existing_range.end..source_range.start])
     {
         existing_range.end = source_range.end;
         *existing_html = text[existing_range.start..existing_range.end].to_string();
+        *images = html_image_descriptors(existing_html);
         return;
     }
 
+    let html = text[source_range.clone()].to_string();
+    let images = html_image_descriptors(&html);
     blocks.push(PreviewBlock::Html {
-        html: text[source_range.clone()].to_string(),
+        html,
         source_range,
+        images,
     });
 }
 
@@ -4571,7 +4586,9 @@ mod tests {
         let html_blocks: Vec<_> = blocks
             .iter()
             .filter_map(|block| match block {
-                PreviewBlock::Html { html, source_range } => Some((html, source_range)),
+                PreviewBlock::Html {
+                    html, source_range, ..
+                } => Some((html, source_range)),
                 _ => None,
             })
             .collect();
@@ -4696,7 +4713,7 @@ mod tests {
             html_visual
                 .iter()
                 .map(|block| match &block.kind {
-                    VisualBlockKind::Html { html } => html.chars().take(40).collect::<String>(),
+                    VisualBlockKind::Html { html, .. } => html.chars().take(40).collect::<String>(),
                     _ => String::new(),
                 })
                 .collect::<Vec<_>>()
@@ -4715,7 +4732,7 @@ mod tests {
             .first()
             .expect("HTML block should be the first block");
         assert!(
-            matches!(&html_block.kind, VisualBlockKind::Html { html } if html.contains("HTML")),
+            matches!(&html_block.kind, VisualBlockKind::Html { html, .. } if html.contains("HTML")),
             "expected Html kind, got {:?}",
             html_block.kind
         );
@@ -6582,6 +6599,31 @@ mod tests {
         assert_eq!(
             span_for("https://example.com/docs").link.as_deref(),
             Some("https://example.com/docs")
+        );
+    }
+
+    #[test]
+    fn preview_trailing_subscript_reaches_preview_spans() {
+        let doc = MarkdownDocument::from_text("H~2~");
+        let blocks = doc.preview_blocks();
+        let PreviewBlock::Paragraph { text: rich, .. } = &blocks[0] else {
+            panic!("expected paragraph, got {blocks:?}");
+        };
+        assert!(
+            rich.spans
+                .iter()
+                .any(|span| span.text == "2" && span.style.subscript),
+            "trailing subscript must reach preview spans, got {:?}",
+            rich.spans
+        );
+    }
+
+    #[test]
+    fn html_export_trailing_subscript_reaches_sub_element() {
+        let html = MarkdownDocument::from_text("H~2~").render_html_fragment();
+        assert!(
+            html.contains("<sub>2</sub>"),
+            "trailing subscript must reach HTML export, got {html}"
         );
     }
 

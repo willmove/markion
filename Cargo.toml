@@ -72,6 +72,10 @@ percent-encoding.workspace = true
 # preview images. Already vendored transitively via gpui; pinned to the
 # resolved version so the lock does not churn.
 data-url = "0.3.2"
+# Complete data-URI cache identity (SHA-256 of the full URI, computed once
+# per document version). Workspace member crates stay GPUI-free; this is the
+# root package's direct use of the existing workspace `sha2` pin.
+sha2.workspace = true
 # Diagram SVG is rasterized in-crate (src/app/diagram.rs) rather than through
 # `Image::from_bytes(ImageFormat::Svg, ..)`: gpui 0.2.2 uploads that path's
 # premultiplied-RGBA pixmap as BGRA without swapping channels and rasterizes it
