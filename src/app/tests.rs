@@ -5267,6 +5267,104 @@ fn visual_edit_ime_updates_share_one_undo_and_expose_exact_bounds(cx: &mut TestA
 }
 
 #[gpui::test]
+fn visual_edit_ime_xim_failure_cleanup_preserves_last_preedit_and_direct_input(
+    cx: &mut TestAppContext,
+) {
+    let source = "A🙂B";
+    let cursor = "A".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "中", None, window, cx);
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "中文", None, window, cx);
+        });
+    });
+
+    let (accepted_text, accepted_selection, accepted_version, accepted_blocks) =
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert_eq!(tab.document.text(), "A中文🙂B");
+            assert_eq!(tab.marked_range, Some(cursor..cursor + "中文".len()));
+            assert_eq!(tab.undo_stack.len(), 1);
+            assert_eq!(
+                tab.undo_capture.map(|capture| capture.kind),
+                Some(UndoCaptureKind::Ime)
+            );
+            (
+                tab.document.text().to_string(),
+                tab.selected_range.clone(),
+                tab.document.version(),
+                tab.document.visual_blocks_shared(),
+            )
+        });
+
+    // This is the callback GPUI must issue before abandoning a failed XIM
+    // connection. The undecodable packet itself never reaches Markion.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::unmark_text(app, window, cx);
+        });
+    });
+    let blocks_after_cleanup = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), accepted_text);
+        assert_eq!(tab.selected_range, accepted_selection);
+        assert_eq!(tab.document.version(), accepted_version);
+        assert!(
+            tab.document
+                .text()
+                .is_char_boundary(tab.selected_range.start)
+        );
+        assert!(tab.marked_range.is_none());
+        assert!(tab.undo_capture.is_none());
+        tab.document.visual_blocks_shared()
+    });
+    assert!(Arc::ptr_eq(&accepted_blocks, &blocks_after_cleanup));
+
+    cx.simulate_input("!");
+    let blocks_after_direct_input = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "A中文!🙂B");
+        assert!(
+            tab.document
+                .text()
+                .is_char_boundary(tab.selected_range.start)
+        );
+        tab.document.visual_blocks_shared()
+    });
+    assert!(!Arc::ptr_eq(
+        &blocks_after_cleanup,
+        &blocks_after_direct_input
+    ));
+
+    app.update(cx, |app, _| {
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), "A中文🙂B");
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), source);
+    });
+}
+
+#[test]
+fn gpui_x11_ime_xim_failure_cleanup_is_wired() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/vendor/zed/crates/gpui/src/platform/linux/x11/client.rs"
+    ));
+
+    assert!(source.contains("take_active_xim_composition"));
+    assert!(source.contains("window.handle_ime_unmark()"));
+}
+
+#[gpui::test]
 #[allow(clippy::reversed_empty_ranges)]
 fn visual_edit_ime_rejects_stale_native_ranges_and_commits_pinyin_preedit(cx: &mut TestAppContext) {
     let source = "前0后";
@@ -11889,9 +11987,10 @@ fn workspace_switch_keeps_dirty_tabs_and_restores_clean_snapshot(cx: &mut TestAp
     });
 
     app.update(cx, |app, _| {
-        assert!(
-            scan_result_matches_workspace(&app.workspace_root, &comparable_document_path(&blog))
-        );
+        assert!(scan_result_matches_workspace(
+            &app.workspace_root,
+            &comparable_document_path(&blog)
+        ));
         assert!(
             app.tabs.iter().any(|tab| tab.is_dirty()),
             "dirty notes tab must survive the switch"
@@ -11900,10 +11999,8 @@ fn workspace_switch_keeps_dirty_tabs_and_restores_clean_snapshot(cx: &mut TestAp
             app.tabs
                 .iter()
                 .any(|tab| tab.path() == Some(blog_file.as_path())
-                    || tab
-                        .path()
-                        .is_some_and(|path| comparable_document_path(path)
-                            == comparable_document_path(&blog_file))),
+                    || tab.path().is_some_and(|path| comparable_document_path(path)
+                        == comparable_document_path(&blog_file))),
             "blog snapshot path should be open"
         );
     });

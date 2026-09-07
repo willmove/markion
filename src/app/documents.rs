@@ -559,7 +559,11 @@ impl MarkionApp {
     /// since capture). Dirty tabs' recovery snapshots are discarded on the way
     /// out — the same discard path as app exit — and the active index follows
     /// the removals so it keeps pointing at the same tab.
-    pub(super) fn remove_tabs_by_identity(&mut self, targets: &[TabContextTarget], cx: &mut Context<Self>) {
+    pub(super) fn remove_tabs_by_identity(
+        &mut self,
+        targets: &[TabContextTarget],
+        cx: &mut Context<Self>,
+    ) {
         let indexes: Vec<usize> = self
             .tabs
             .iter()

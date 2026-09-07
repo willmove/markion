@@ -78,6 +78,10 @@ pub(crate) const XINPUT_ALL_DEVICE_GROUPS: xinput::DeviceId = 1;
 
 const GPUI_X11_SCALE_FACTOR_ENV: &str = "GPUI_X11_SCALE_FACTOR";
 
+fn take_active_xim_composition(composing: &mut bool) -> bool {
+    std::mem::take(composing)
+}
+
 pub(crate) struct WindowRef {
     window: X11WindowStatePtr,
     refresh_state: Option<RefreshState>,
@@ -628,6 +632,7 @@ impl X11Client {
                     continue;
                 };
                 let xim_connected = xim_handler.connected;
+                let xim_window = xim_handler.window;
                 drop(state);
 
                 let xim_filtered = ximc.filter_event(&event, &mut xim_handler);
@@ -658,9 +663,14 @@ impl X11Client {
                         // luckily, x11 sends us window not found error when xim server crashes upon further key press
                         // hence we fall back to handle_event
                         log::error!("XIMClientError: {}", err);
-                        let mut state = self.0.borrow_mut();
-                        state.take_xim();
-                        drop(state);
+                        let should_unmark = {
+                            let mut state = self.0.borrow_mut();
+                            take_active_xim_composition(&mut state.composing)
+                        };
+                        if should_unmark && let Some(window) = self.get_window(xim_window) {
+                            window.handle_ime_unmark();
+                        }
+                        let _ = self.0.borrow_mut().take_xim();
                         self.handle_event(event);
                     }
                 }
@@ -1377,6 +1387,20 @@ impl X11Client {
                 state.common.callbacks.keyboard_layout_change = Some(callback);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_active_xim_composition;
+
+    #[test]
+    fn xim_failure_unmarks_an_active_composition_once() {
+        let mut composing = true;
+
+        assert!(take_active_xim_composition(&mut composing));
+        assert!(!composing);
+        assert!(!take_active_xim_composition(&mut composing));
     }
 }
 

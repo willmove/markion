@@ -166,11 +166,7 @@ impl From<&SessionState> for SessionFile {
     fn from(session: &SessionState) -> Self {
         let current = session.current_workspace();
         Self {
-            workspaces: session
-                .workspaces
-                .iter()
-                .map(WorkspaceFile::from)
-                .collect(),
+            workspaces: session.workspaces.iter().map(WorkspaceFile::from).collect(),
             workspace_root: current
                 .map(|snapshot| snapshot.root.display().to_string())
                 .or_else(|| {
@@ -235,7 +231,10 @@ fn dedupe_workspaces(mut workspaces: Vec<WorkspaceSnapshot>) -> Vec<WorkspaceSna
     let mut deduped: Vec<WorkspaceSnapshot> =
         Vec::with_capacity(workspaces.len().min(MAX_RECENT_WORKSPACES));
     for snapshot in workspaces.drain(..) {
-        if deduped.iter().any(|existing| existing.root == snapshot.root) {
+        if deduped
+            .iter()
+            .any(|existing| existing.root == snapshot.root)
+        {
             continue;
         }
         deduped.push(snapshot);
@@ -343,7 +342,9 @@ pub fn render_session_state(session: &SessionState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{MAX_RECENT_FILES, MAX_RECENT_WORKSPACES, touch_recent_file, touch_workspace_snapshot};
+    use crate::model::{
+        MAX_RECENT_FILES, MAX_RECENT_WORKSPACES, touch_recent_file, touch_workspace_snapshot,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -549,7 +550,12 @@ active_file = ""
         ))
         .unwrap();
 
-        assert_eq!(parsed.workspaces.len(), 1, "workspaces={:?}", parsed.workspaces);
+        assert_eq!(
+            parsed.workspaces.len(),
+            1,
+            "workspaces={:?}",
+            parsed.workspaces
+        );
         assert_eq!(
             parsed.workspaces[0].open_files.len(),
             1,

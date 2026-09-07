@@ -4,7 +4,7 @@
 # commands and the release pipeline keep targeting it unchanged.
 [workspace]
 members = ["crates/*"]
-exclude = ["vendor/zed/crates/gpui"]
+exclude = ["vendor/zed/crates/gpui", "vendor/zed-xim"]
 
 # Shared metadata for workspace members (crates absorbed from Typune inherit
 # these via `version.workspace = true` / `edition.workspace = true`). The root
@@ -137,6 +137,10 @@ base64 = "0.22.1"
 # locally patched until a compatible crates.io release includes that change.
 [patch.crates-io]
 gpui = { path = "vendor/zed/crates/gpui" }
+# GPUI 0.2.2 resolves a zed-xim release that panics on valid Chinese/Korean
+# COMPOUND_TEXT. Keep the narrow licensed compatibility patch local until a
+# compatible GPUI release includes both the decoder and error-propagation fixes.
+zed-xim = { path = "vendor/zed-xim" }
 # cc-rs's parallel feature is unified in through libgit2-sys. The local patch
 # avoids MSVC 19.44's reproducible C1056 object timestamp failures.
 cc = { path = "vendor/cc-rs" }

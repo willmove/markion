@@ -1946,8 +1946,11 @@ impl MarkionApp {
                 .path()
                 .map(comparable_document_path)
                 .filter(|path| open_files.iter().any(|open| open == path));
-            self.session
-                .set_current_workspace(WorkspaceSnapshot::new(root, open_files, active_file));
+            self.session.set_current_workspace(WorkspaceSnapshot::new(
+                root,
+                open_files,
+                active_file,
+            ));
         }
         self.persist_session();
     }
@@ -2067,7 +2070,9 @@ impl MarkionApp {
 
         if is_markdown_path(&path) || is_text_path(&path) {
             let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
-            if !*replaced_initial && !self.active_tab().is_dirty() && self.active_tab().is_document()
+            if !*replaced_initial
+                && !self.active_tab().is_dirty()
+                && self.active_tab().is_document()
             {
                 self.replace_active_tab(document, cx);
                 *replaced_initial = true;
@@ -2086,9 +2091,7 @@ impl MarkionApp {
         let root = comparable_document_path(&root);
         let display_path = root.display().to_string();
 
-        if self.file_tree.is_some()
-            && scan_result_matches_workspace(&self.workspace_root, &root)
-        {
+        if self.file_tree.is_some() && scan_result_matches_workspace(&self.workspace_root, &root) {
             self.close_workspace_switcher();
             cx.notify();
             return;
@@ -2182,9 +2185,7 @@ impl MarkionApp {
                     .tabs
                     .iter()
                     .enumerate()
-                    .filter(|(_, tab)| {
-                        tab.is_document() && !tab.is_dirty() && tab.path().is_none()
-                    })
+                    .filter(|(_, tab)| tab.is_document() && !tab.is_dirty() && tab.path().is_none())
                     .map(|(index, _)| index)
                     .collect();
                 for index in welcome_indexes.into_iter().rev() {

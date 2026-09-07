@@ -2001,9 +2001,7 @@ pub(super) fn filter_restorable_session(
         .iter()
         .filter(|path| {
             path.is_file()
-                && (is_markdown_path(path)
-                    || is_text_path(path)
-                    || image_extension_supported(path))
+                && (is_markdown_path(path) || is_text_path(path) || image_extension_supported(path))
         })
         .cloned()
         .collect();

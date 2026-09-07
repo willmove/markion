@@ -2686,11 +2686,7 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
                             }
                         })
                         .child(root_label)
-                        .child(
-                            div()
-                                .text_color(palette.muted)
-                                .child("▾"),
-                        ),
+                        .child(div().text_color(palette.muted).child("▾")),
                 ),
         )
         // Inline name editor for create/rename. When the target row is among
