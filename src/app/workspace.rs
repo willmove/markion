@@ -41,6 +41,7 @@ impl MarkionApp {
             tab.visual_cursor_reveal_pending = true;
             tab.visual_caret_bounds = None;
         }
+        self.center_cursor_if_typewriter();
         if self.search_visible {
             self.replace_visible = self.search_form == SearchPanelForm::Replace
                 && !matches!(view_mode, ViewMode::Read);

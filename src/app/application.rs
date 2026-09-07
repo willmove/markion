@@ -391,6 +391,7 @@ impl MarkionApp {
         }
         if self.active_tab().is_document() {
             self.refresh_search_matches();
+            self.center_cursor_if_typewriter();
         } else {
             self.search_matches.clear();
             self.current_search_index = None;
@@ -1229,6 +1230,7 @@ impl MarkionApp {
         }
         if self.active_tab().is_document() {
             self.refresh_search_matches();
+            self.center_cursor_if_typewriter();
         } else {
             self.search_matches.clear();
             self.current_search_index = None;
@@ -1286,6 +1288,7 @@ impl MarkionApp {
         }
         if self.active_tab().is_document() {
             self.refresh_search_matches();
+            self.center_cursor_if_typewriter();
         } else {
             self.search_matches.clear();
             self.current_search_index = None;
@@ -1854,10 +1857,23 @@ impl MarkionApp {
     }
 
     pub(super) fn center_cursor_if_typewriter(&mut self) {
-        if self.typewriter_mode {
-            let offset = self.active_tab().cursor_offset();
-            self.active_tab_mut()
-                .scroll_editor_typewriter_to_offset(offset);
+        let surface = match self.view_mode {
+            ViewMode::Edit | ViewMode::Split => Some(TypewriterSurface::Source),
+            ViewMode::VisualEdit => Some(TypewriterSurface::Visual),
+            ViewMode::Read => None,
+        };
+        let enabled = self.typewriter_mode;
+        let Some(tab) = self.active_tab_mut().document_tab_mut() else {
+            return;
+        };
+        if enabled {
+            if let Some(surface) = surface {
+                tab.request_typewriter_recenter(surface);
+            } else {
+                tab.clear_typewriter_recenter();
+            }
+        } else {
+            tab.clear_typewriter_recenter();
         }
     }
 
@@ -2280,6 +2296,7 @@ impl MarkionApp {
         self.close_workspace_switcher();
         self.active_menu = None;
         self.status = self.trf(Msg::StatusOpenedFolder, &[&display_path]);
+        self.center_cursor_if_typewriter();
         self.sync_and_persist_session();
         self.persist_preferences();
         cx.notify();

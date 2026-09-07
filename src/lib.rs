@@ -7792,13 +7792,7 @@ Intro.
 
         assert!(
             document
-                .apply_external_move_checked(
-                    instance,
-                    version,
-                    old_path,
-                    "stale".into(),
-                    identity,
-                )
+                .apply_external_move_checked(instance, version, old_path, "stale".into(), identity,)
                 .is_err()
         );
         assert_eq!(document.path(), Some(new_path.as_path()));

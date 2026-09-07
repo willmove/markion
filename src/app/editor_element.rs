@@ -572,6 +572,7 @@ impl EntityInputHandler for MarkionApp {
 
 pub(super) struct EditorElement {
     pub(super) app: gpui::Entity<MarkionApp>,
+    pub(super) typewriter_boundary_space: Pixels,
 }
 
 pub(super) struct PrepaintState {
@@ -1102,7 +1103,10 @@ impl Element for EditorElement {
         let lines = std::mem::take(&mut prepaint.lines);
         let line_offsets = std::mem::take(&mut prepaint.line_offsets);
         let line_heights = std::mem::take(&mut prepaint.line_heights);
+        let typewriter_boundary_space = self.typewriter_boundary_space;
         self.app.update(cx, |app, cx| {
+            let typewriter_source_active =
+                app.typewriter_mode && matches!(app.view_mode, ViewMode::Edit | ViewMode::Split);
             let tab = app.active_tab_mut();
             let source_layout_key = SourceLayoutKey {
                 version: tab.document.version(),
@@ -1124,9 +1128,24 @@ impl Element for EditorElement {
             tab.source_layout_key = Some(source_layout_key);
             tab.last_bounds = Some(bounds);
             tab.line_height = line_height;
+            let boundary_space_changed = tab.source_typewriter_inset != typewriter_boundary_space;
+            tab.source_typewriter_inset = typewriter_boundary_space;
+            if typewriter_source_active && (layout_changed || boundary_space_changed) {
+                tab.request_typewriter_recenter(TypewriterSurface::Source);
+            }
+            let (typewriter_scrolled, typewriter_following) = if typewriter_source_active {
+                tab.reconcile_source_typewriter()
+            } else {
+                (false, false)
+            };
             if layout_changed {
                 tab.sync_scroll_state.invalidate_geometry();
+            }
+            if layout_changed || typewriter_following {
                 cx.notify();
+            }
+            if typewriter_scrolled && sync_scroll_is_active(app.view_mode, app.sync_scroll) {
+                app.reconcile_sync_scroll(cx);
             }
         });
     }

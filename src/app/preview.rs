@@ -691,17 +691,38 @@ impl Element for VisualInputElement {
         );
         self.app.update(cx, |app, cx| {
             let inset = px(app.typography_metrics().preview_row_line_height);
+            let typewriter_visual_active =
+                app.typewriter_mode && matches!(app.view_mode, ViewMode::VisualEdit);
             let tab = app.active_tab_mut();
             tab.visual_input_bounds = Some(bounds);
             if tab.visual_caret_follow_frames == 0 {
                 return;
             }
-            tab.visual_caret_follow_frames = tab.visual_caret_follow_frames.saturating_sub(1);
             let Some(caret) = tab.visual_caret_bounds else {
+                tab.visual_caret_follow_frames = tab.visual_caret_follow_frames.saturating_sub(1);
+                if tab.visual_caret_follow_frames > 0 {
+                    cx.notify();
+                }
                 return;
             };
             let list = tab.visual_list.clone();
-            if follow_visual_caret_in_list(&list, caret, inset) {
+            let center_request = typewriter_visual_active
+                && tab.typewriter_request_is_current(TypewriterSurface::Visual);
+            if typewriter_visual_active
+                && tab
+                    .typewriter_recenter
+                    .is_some_and(|request| request.surface == TypewriterSurface::Visual)
+                && !center_request
+            {
+                tab.clear_typewriter_recenter();
+            }
+            let scrolled = if center_request {
+                false
+            } else {
+                follow_visual_caret_in_list(&list, caret, inset)
+            };
+            tab.visual_caret_follow_frames = tab.visual_caret_follow_frames.saturating_sub(1);
+            if scrolled || tab.visual_caret_follow_frames > 0 {
                 cx.notify();
             }
         });

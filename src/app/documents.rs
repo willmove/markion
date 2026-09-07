@@ -244,6 +244,7 @@ impl MarkionApp {
         self.active_menu = None;
         if self.active_tab().is_document() {
             self.refresh_search_matches();
+            self.center_cursor_if_typewriter();
         } else {
             self.search_matches.clear();
             self.current_search_index = None;
@@ -618,6 +619,7 @@ impl MarkionApp {
         }
         if self.active_tab().is_document() {
             self.refresh_search_matches();
+            self.center_cursor_if_typewriter();
         } else {
             self.search_matches.clear();
             self.current_search_index = None;

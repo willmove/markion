@@ -11388,6 +11388,502 @@ fn source_layout_snapshot_maps_wrapped_utf8_content_bidirectionally(cx: &mut Tes
     });
 }
 
+#[test]
+fn typewriter_geometry_centers_clamps_and_sizes_trailing_space() {
+    assert_eq!(
+        typewriter_center_scroll_target(500., 20., 400., 1_000.),
+        Some(310.)
+    );
+    assert_eq!(
+        typewriter_center_scroll_target(10., 20., 400., 1_000.),
+        Some(0.)
+    );
+    assert_eq!(
+        typewriter_center_scroll_target(2_000., 20., 400., 700.),
+        Some(700.)
+    );
+    assert_eq!(typewriter_center_scroll_target(10., 20., 0., 100.), None);
+
+    let viewport = Bounds::new(point(px(0.), px(100.)), size(px(500.), px(400.)));
+    let caret = Bounds::new(point(px(20.), px(315.)), size(px(2.), px(20.)));
+    assert_eq!(typewriter_center_delta(viewport, caret), Some(px(25.)));
+    assert_eq!(typewriter_trailing_space(px(400.), px(20.)), px(190.));
+    assert!(!typewriter_delta_requires_scroll(px(0.5)));
+    assert!(typewriter_delta_requires_scroll(px(1.)));
+}
+
+#[test]
+fn typewriter_request_rejects_changed_caret_and_surface() {
+    let mut tab = EditorTab::new(MarkdownDocument::from_text("alpha\nbeta"));
+    tab.selected_range = 2..2;
+    tab.request_typewriter_recenter(TypewriterSurface::Source);
+    assert!(tab.typewriter_request_is_current(TypewriterSurface::Source));
+    assert!(!tab.typewriter_request_is_current(TypewriterSurface::Visual));
+    tab.selected_range = 4..4;
+    assert!(!tab.typewriter_request_is_current(TypewriterSurface::Source));
+    tab.clear_typewriter_recenter();
+    assert!(tab.typewriter_recenter.is_none());
+}
+
+#[test]
+fn visual_typewriter_skips_coarse_reveal_for_measured_typing_anchor() {
+    let mut tab = EditorTab::new(MarkdownDocument::from_text("first\n\nsecond"));
+    let blocks = tab.document.visual_blocks_shared();
+    tab.sync_visual_list(&blocks);
+    tab.selected_range = 2..2;
+    tab.visual_caret_bounds = Some(Bounds::new(point(px(20.), px(200.)), size(px(2.), px(24.))));
+
+    tab.request_typewriter_recenter(TypewriterSurface::Visual);
+
+    assert_eq!(
+        tab.take_visual_cursor_reveal_index(&blocks),
+        None,
+        "an already measured typing anchor must wait for direct caret refinement instead of coarse reveal"
+    );
+}
+
+#[gpui::test]
+fn typewriter_requests_follow_view_tab_and_typography_transitions(cx: &mut TestAppContext) {
+    let config_dir = tempfile::tempdir().unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = config_dir.path().join("config.toml");
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::from_text(&"first ".repeat(120))),
+            EditorTab::new(MarkdownDocument::from_text(&"second ".repeat(120))),
+        ];
+        app.view_mode = ViewMode::Read;
+        app.typewriter_mode = true;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.set_view_mode(ViewMode::Edit, cx);
+        assert!(
+            app.active_tab()
+                .typewriter_request_is_current(TypewriterSurface::Source)
+        );
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        app.switch_active_tab(1, cx);
+        assert!(
+            app.active_tab()
+                .typewriter_request_is_current(TypewriterSurface::Source)
+        );
+        app.set_editor_font_size(20, cx);
+        assert!(
+            app.active_tab()
+                .typewriter_request_is_current(TypewriterSurface::Source)
+        );
+        app.set_view_mode(ViewMode::VisualEdit, cx);
+        assert!(
+            app.active_tab()
+                .typewriter_request_is_current(TypewriterSurface::Visual)
+        );
+        app.set_view_mode(ViewMode::Read, cx);
+        assert!(app.active_tab().typewriter_recenter.is_none());
+    });
+}
+
+#[gpui::test]
+fn source_typewriter_centers_soft_wraps_tail_and_preserves_document_state(cx: &mut TestAppContext) {
+    let source = "wrapped source words ".repeat(260);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Edit;
+        app.typewriter_mode = true;
+        app
+    });
+    cx.simulate_resize(size(px(460.), px(420.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (version, dirty, undo_len, redo_len, preview, visual, text_handle) =
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            (
+                tab.document.version(),
+                tab.document.is_dirty(),
+                tab.undo_stack.len(),
+                tab.redo_stack.len(),
+                tab.document.preview_blocks_shared(),
+                tab.document.visual_blocks_shared(),
+                tab.shared_document_text(),
+            )
+        });
+
+    let middle = source.len() * 3 / 5;
+    app.update(cx, |app, cx| app.move_to(middle, cx));
+    cx.run_until_parked();
+
+    let assert_centered = |app: &mut MarkionApp| {
+        let tab = app.active_tab();
+        let caret_top = tab
+            .source_content_y_for_offset(tab.cursor_offset())
+            .expect("current wrapped source geometry");
+        let scroll = f32::from(-tab.editor_scroll.offset().y);
+        let viewport = f32::from(tab.editor_scroll.bounds().size.height);
+        let caret_in_view =
+            caret_top + f32::from(tab.source_typewriter_inset) + f32::from(tab.line_height) * 0.5
+                - scroll;
+        assert!(
+            (caret_in_view - viewport * 0.5).abs() <= f32::from(tab.line_height) + 1.,
+            "caret={caret_in_view} viewport={viewport} scroll={scroll}"
+        );
+        assert!(
+            scroll > 0.,
+            "a soft-wrapped line must produce a real scroll"
+        );
+    };
+    app.update(cx, |app, _| assert_centered(app));
+
+    app.update(cx, |app, cx| app.move_to(source.len(), cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_centered(app);
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), source);
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.document.is_dirty(), dirty);
+        assert_eq!(tab.undo_stack.len(), undo_len);
+        assert_eq!(tab.redo_stack.len(), redo_len);
+        assert!(Arc::ptr_eq(&tab.document.preview_blocks_shared(), &preview));
+        assert!(Arc::ptr_eq(&tab.document.visual_blocks_shared(), &visual));
+        assert_eq!(tab.shared_document_text().as_ptr(), text_handle.as_ptr());
+        assert!(tab.source_typewriter_inset > px(0.));
+    });
+
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    app.update(cx, |app, _| assert_centered(app));
+
+    app.update(cx, |app, cx| {
+        app.typewriter_mode = false;
+        app.center_cursor_if_typewriter();
+        app.active_tab()
+            .editor_scroll
+            .set_offset(point(px(0.), px(0.)));
+        app.move_to(middle, cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().editor_scroll.offset().y, px(0.));
+        assert_eq!(app.active_tab().source_typewriter_inset, px(0.));
+        assert!(app.active_tab().typewriter_recenter.is_none());
+    });
+}
+
+#[gpui::test]
+fn source_typewriter_stays_centered_after_each_typed_character(cx: &mut TestAppContext) {
+    let source = (0..140)
+        .map(|index| format!("line {index}: {}", "source words ".repeat(8)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let target = source.find("line 90:").expect("middle source row") + "line 90: ".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Edit;
+        app.typewriter_mode = true;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| app.move_to(target, cx));
+    cx.run_until_parked();
+
+    let assert_centered_and_not_at_top = |app: &mut MarkionApp, step: &str| {
+        let tab = app.active_tab();
+        let caret_top = tab
+            .source_content_y_for_offset(tab.cursor_offset())
+            .expect("current source caret geometry");
+        let scroll = f32::from(-tab.editor_scroll.offset().y);
+        let viewport = f32::from(tab.editor_scroll.bounds().size.height);
+        let caret_in_view =
+            caret_top + f32::from(tab.source_typewriter_inset) + f32::from(tab.line_height) * 0.5
+                - scroll;
+        assert!(scroll > 0., "{step}: source scroll jumped to the top");
+        assert!(
+            (caret_in_view - viewport * 0.5).abs() <= f32::from(tab.line_height) + 1.,
+            "{step}: caret={caret_in_view} viewport={viewport} scroll={scroll}"
+        );
+    };
+    app.update(cx, |app, _| assert_centered_and_not_at_top(app, "initial"));
+
+    for character in ["a", "b", "c"] {
+        cx.simulate_input(character);
+        cx.run_until_parked();
+        app.update(cx, |app, _| assert_centered_and_not_at_top(app, character));
+    }
+}
+
+#[gpui::test]
+fn source_typewriter_centers_first_row_during_consecutive_typing(cx: &mut TestAppContext) {
+    let source = (0..100)
+        .map(|index| format!("line {index}: {}", "source words ".repeat(6)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let target = "line 0: ".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Edit;
+        app.typewriter_mode = true;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| app.move_to(target, cx));
+    cx.run_until_parked();
+
+    for step in ["initial", "a", "b"] {
+        if step != "initial" {
+            cx.simulate_input(step);
+            cx.run_until_parked();
+        }
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            let caret_top = tab
+                .source_content_y_for_offset(tab.cursor_offset())
+                .expect("current first-row geometry");
+            let scroll = f32::from(-tab.editor_scroll.offset().y);
+            let viewport = f32::from(tab.editor_scroll.bounds().size.height);
+            let caret_in_view = caret_top
+                + f32::from(tab.source_typewriter_inset)
+                + f32::from(tab.line_height) * 0.5
+                - scroll;
+            assert!(
+                (caret_in_view - viewport * 0.5).abs() <= f32::from(tab.line_height) + 1.,
+                "{step}: first-row caret must remain centered; caret={caret_in_view} viewport={viewport} scroll={scroll}"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn visual_typewriter_centers_far_caret_and_keeps_manual_scroll(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(50);
+    let target = source.find("Paragraph 30").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = true;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| app.move_to(target, cx));
+    for _ in 0..TYPEWRITER_VISUAL_REFINEMENT_FRAMES + 2 {
+        app.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let caret = tab.visual_caret_bounds.expect("measured Visual Edit caret");
+        let delta = typewriter_center_delta(tab.visual_list.viewport_bounds(), caret)
+            .expect("valid visual viewport");
+        assert!(
+            f32::from(delta).abs() <= f32::from(caret.size.height) + 1.,
+            "visual caret should settle near center: delta={delta:?} viewport={:?} caret={caret:?} top={:?} px={:?} max={:?} request={:?} frames={}",
+            tab.visual_list.viewport_bounds(),
+            tab.visual_list.logical_scroll_top(),
+            tab.visual_list.scroll_px_offset_for_scrollbar(),
+            tab.visual_list.max_offset_for_scrollbar(),
+            tab.typewriter_recenter,
+            tab.visual_caret_follow_frames,
+        );
+        assert!(tab.visual_list.logical_scroll_top().item_ix > 0);
+    });
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab_mut();
+        assert!(tab.typewriter_recenter.is_none());
+        tab.visual_list.scroll_to(gpui::ListOffset::default());
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(top.item_ix, 0);
+        assert_eq!(top.offset_in_item, px(0.));
+    });
+}
+
+#[gpui::test]
+fn visual_typewriter_stays_centered_after_each_typed_character(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(50);
+    let target = source.find("Paragraph 30").expect("middle visual row") + "Paragraph 30 ".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = true;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| app.move_to(target, cx));
+    for _ in 0..TYPEWRITER_VISUAL_REFINEMENT_FRAMES + 2 {
+        app.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+
+    let assert_centered_and_not_at_top = |app: &mut MarkionApp, step: &str| {
+        let tab = app.active_tab();
+        let caret = tab.visual_caret_bounds.expect("measured visual caret");
+        let delta = typewriter_center_delta(tab.visual_list.viewport_bounds(), caret)
+            .expect("valid visual viewport");
+        let scroll = -tab.visual_list.scroll_px_offset_for_scrollbar().y;
+        assert!(scroll > px(0.), "{step}: visual list jumped to the top");
+        assert!(
+            f32::from(delta).abs() <= f32::from(caret.size.height) + 1.,
+            "{step}: visual caret delta={delta:?}, scroll={scroll:?}"
+        );
+    };
+    app.update(cx, |app, _| assert_centered_and_not_at_top(app, "initial"));
+
+    for character in ["a", "b", "c"] {
+        cx.simulate_input(character);
+        for _ in 0..TYPEWRITER_VISUAL_REFINEMENT_FRAMES + 2 {
+            app.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        app.update(cx, |app, _| assert_centered_and_not_at_top(app, character));
+    }
+}
+
+#[gpui::test]
+fn visual_typewriter_centers_first_row_during_consecutive_typing(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(40);
+    let target = source.find("Paragraph 0").expect("first visual row") + "Paragraph 0 ".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = true;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| app.move_to(target, cx));
+    for step in ["initial", "a", "b"] {
+        if step != "initial" {
+            cx.simulate_input(step);
+        }
+        for _ in 0..TYPEWRITER_VISUAL_REFINEMENT_FRAMES + 2 {
+            app.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            let caret = tab.visual_caret_bounds.expect("measured first-row caret");
+            let delta = typewriter_center_delta(tab.visual_list.viewport_bounds(), caret)
+                .expect("valid visual viewport");
+            assert!(
+                f32::from(delta).abs() <= f32::from(caret.size.height) + 1.,
+                "{step}: first visual caret must remain centered; delta={delta:?} viewport={:?} caret={caret:?}",
+                tab.visual_list.viewport_bounds()
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn split_typewriter_centers_source_and_drives_preview_sync(cx: &mut TestAppContext) {
+    let source = (0..100)
+        .map(|index| {
+            format!(
+                "## Heading {index}\n\nParagraph {index} {}",
+                "body ".repeat(18)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let target = source.find("Heading 70").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Split;
+        app.typewriter_mode = true;
+        app.sync_scroll = true;
+        app
+    });
+    cx.simulate_resize(size(px(1000.), px(620.)));
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| app.move_to(target, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let caret_top = tab.source_content_y_for_offset(target).unwrap();
+        let source_scroll = f32::from(-tab.editor_scroll.offset().y);
+        let viewport = f32::from(tab.editor_scroll.bounds().size.height);
+        let caret_in_view = caret_top
+            + f32::from(tab.source_typewriter_inset)
+            + f32::from(tab.line_height) * 0.5
+            - source_scroll;
+        assert!((caret_in_view - viewport * 0.5).abs() <= f32::from(tab.line_height) + 1.);
+        let source_viewport_top = (source_scroll - f32::from(tab.source_typewriter_inset)).max(0.);
+        let viewport_source_offset = tab
+            .source_offset_for_content_y(source_viewport_top)
+            .expect("source viewport top maps to the document");
+        let expected_preview_item = match preview_anchor_for_source_offset(
+            &tab.preview_list_blocks,
+            viewport_source_offset,
+            tab.document.text().len(),
+        ) {
+            Some(PreviewScrollAnchor::Block { item_ix }) => item_ix,
+            other => panic!("middle source viewport needs a block anchor, got {other:?}"),
+        };
+        assert_eq!(
+            tab.preview_list.logical_scroll_top().item_ix,
+            expected_preview_item,
+            "Split sync must map the source viewport top after removing typewriter presentation inset"
+        );
+        assert!(
+            tab.preview_list.logical_scroll_top().item_ix > 0,
+            "preview should follow the typewriter source driver: top={:?} px={:?} sync={:?} reflects={:?} version={}",
+            tab.preview_list.logical_scroll_top(),
+            tab.preview_list.scroll_px_offset_for_scrollbar(),
+            tab.sync_scroll_state,
+            tab.preview_reflects_version,
+            tab.document.version(),
+        );
+        assert!(tab.sync_scroll_state.expected_follower.is_some());
+    });
+}
+
 #[gpui::test]
 fn gpui_tests_start_from_documented_preference_defaults(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));

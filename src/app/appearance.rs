@@ -683,10 +683,12 @@ impl MarkionApp {
 
         match driver {
             PaneScrollTarget::Editor => {
+                let source_viewport_top =
+                    (editor_offset - f32::from(tab.source_typewriter_inset)).max(0.);
                 let source_offset = if editor_offset >= editor_max - SYNC_SCROLL_PIXEL_EPSILON {
                     tab.document.text().len()
                 } else {
-                    let Some(offset) = tab.source_offset_for_content_y(editor_offset) else {
+                    let Some(offset) = tab.source_offset_for_content_y(source_viewport_top) else {
                         tab.sync_scroll_state.deferred_driver = Some(driver);
                         return;
                     };
@@ -721,7 +723,7 @@ impl MarkionApp {
                         let progress = if source_offset < range.start {
                             0.
                         } else {
-                            sync_interval_progress(editor_offset, start_y, end_y)
+                            sync_interval_progress(source_viewport_top, start_y, end_y)
                         };
                         if let Some(bounds) = tab.preview_list.bounds_for_item(item_ix) {
                             tab.preview_list.scroll_to(gpui::ListOffset {
@@ -781,7 +783,9 @@ impl MarkionApp {
                         return;
                     };
                     end_y = end_y.max(start_y + f32::from(tab.line_height));
-                    sync_interpolate(start_y, end_y, progress).clamp(0., editor_max)
+                    (sync_interpolate(start_y, end_y, progress)
+                        + f32::from(tab.source_typewriter_inset))
+                    .clamp(0., editor_max)
                 };
                 tab.editor_scroll.set_offset(point(px(0.), px(-target)));
                 let actual = f32::from(-tab.editor_scroll.offset().y)

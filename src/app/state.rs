@@ -553,6 +553,72 @@ pub(super) struct SourceLayoutKey {
     pub(super) line_height: Pixels,
 }
 
+const TYPEWRITER_SOURCE_REFINEMENT_FRAMES: u8 = 3;
+pub(super) const TYPEWRITER_VISUAL_REFINEMENT_FRAMES: u8 = 8;
+const TYPEWRITER_PIXEL_EPSILON: f32 = 0.75;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TypewriterSurface {
+    Source,
+    Visual,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TypewriterRecenterRequest {
+    pub(super) instance: DocumentInstanceId,
+    pub(super) version: u64,
+    pub(super) offset: usize,
+    pub(super) surface: TypewriterSurface,
+    pub(super) remaining_refinements: u8,
+    /// Visual Edit typing can retain the current list anchor until the edited
+    /// row repaints. Far jumps clear caret geometry before requesting and
+    /// therefore still need the ordinary coarse reveal path.
+    pub(super) visual_anchor_was_measured: bool,
+}
+
+pub(super) fn typewriter_center_scroll_target(
+    caret_top: f32,
+    caret_height: f32,
+    viewport_height: f32,
+    max_scroll: f32,
+) -> Option<f32> {
+    if !caret_top.is_finite()
+        || !caret_height.is_finite()
+        || !viewport_height.is_finite()
+        || !max_scroll.is_finite()
+        || caret_height <= 0.
+        || viewport_height <= 0.
+        || max_scroll < 0.
+    {
+        return None;
+    }
+    let caret_center = caret_top.max(0.) + caret_height * 0.5;
+    Some((caret_center - viewport_height * 0.5).clamp(0., max_scroll))
+}
+
+pub(super) fn typewriter_center_delta(
+    viewport: Bounds<Pixels>,
+    caret: Bounds<Pixels>,
+) -> Option<Pixels> {
+    let viewport_height = f32::from(viewport.size.height);
+    let caret_height = f32::from(caret.size.height);
+    if viewport_height <= 0. || caret_height <= 0. {
+        return None;
+    }
+    let viewport_center = f32::from(viewport.top()) + viewport_height * 0.5;
+    let caret_center = f32::from(caret.top()) + caret_height * 0.5;
+    let delta = caret_center - viewport_center;
+    delta.is_finite().then(|| px(delta))
+}
+
+pub(super) fn typewriter_trailing_space(viewport_height: Pixels, caret_height: Pixels) -> Pixels {
+    px((f32::from(viewport_height).max(0.) * 0.5 - f32::from(caret_height).max(0.) * 0.5).max(0.))
+}
+
+pub(super) fn typewriter_delta_requires_scroll(delta: Pixels) -> bool {
+    f32::from(delta).abs() > TYPEWRITER_PIXEL_EPSILON
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct SyncPreviewPosition {
     pub(super) item_ix: usize,
@@ -644,6 +710,14 @@ pub(super) struct DocumentTabState {
     pub(super) undo_capture: Option<UndoCapture>,
     pub(super) pending_text_edit_intent: Option<UndoCaptureKind>,
     pub(super) editor_scroll: ScrollHandle,
+    /// Presentation-only leading inset used while source typewriter mode is
+    /// active. Source layout coordinates remain document-relative; centering
+    /// adds this value when mapping them into scroll-content coordinates.
+    pub(super) source_typewriter_inset: Pixels,
+    /// Newest caret-centered scrolling request for the visible editable surface.
+    /// It is presentation-only and validated against the document identity/version
+    /// before current layout geometry is allowed to consume it.
+    pub(super) typewriter_recenter: Option<TypewriterRecenterRequest>,
     /// Session-only outline tree presentation. Interior mutability lets the
     /// render path reconcile semantic keys without touching document state.
     pub(super) outline_folding: RefCell<OutlineFoldingState>,
@@ -932,6 +1006,8 @@ impl DocumentTabState {
             undo_capture: None,
             pending_text_edit_intent: None,
             editor_scroll: ScrollHandle::new(),
+            source_typewriter_inset: px(0.),
+            typewriter_recenter: None,
             outline_folding: RefCell::new(OutlineFoldingState::default()),
             preview_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
             visual_list: ListState::new(0, ListAlignment::Top, px(PREVIEW_LIST_OVERDRAW)),
@@ -1085,22 +1161,23 @@ impl DocumentTabState {
     /// Keep the trailing document-end spacer item in sync with the current
     /// Visual Edit viewport. Presentation-only: does not touch document text
     /// or derived Markdown caches.
-    pub(super) fn refresh_visual_end_padding(&mut self) {
+    pub(super) fn refresh_visual_end_padding(&mut self) -> bool {
         let block_count = self.visual_list_blocks.len();
         ensure_visual_list_spacer(&self.visual_list, block_count);
         if block_count == 0 {
-            self.visual_end_padding_height = None;
-            return;
+            let changed = self.visual_end_padding_height.take().is_some();
+            return changed;
         }
         let desired = visual_end_padding_height(self.visual_list.viewport_bounds().size.height);
         if self.visual_end_padding_height == Some(desired) {
-            return;
+            return false;
         }
         self.visual_end_padding_height = Some(desired);
         let spacer_ix = block_count;
         if self.visual_list.item_count() > spacer_ix {
             self.visual_list.splice(spacer_ix..spacer_ix + 1, 1);
         }
+        true
     }
 
     pub(super) fn take_visual_cursor_reveal_index(
@@ -1108,6 +1185,13 @@ impl DocumentTabState {
         blocks: &[VisualBlock],
     ) -> Option<usize> {
         if !std::mem::take(&mut self.visual_cursor_reveal_pending) {
+            return None;
+        }
+        if self.typewriter_request_is_current(TypewriterSurface::Visual)
+            && self
+                .typewriter_recenter
+                .is_some_and(|request| request.visual_anchor_was_measured)
+        {
             return None;
         }
         visual_block_index_for_offset(blocks, self.cursor_offset(), self.document.text().len())
@@ -1172,6 +1256,7 @@ impl DocumentTabState {
         self.visual_caret_bounds = None;
         self.visual_marked_range_bounds = None;
         self.visual_caret_follow_frames = 0;
+        self.typewriter_recenter = None;
         self.clear_visual_caret_affinity();
         self.clear_visual_navigation_intent();
         self.visual_navigation_snapshots.clear();
@@ -1222,6 +1307,8 @@ impl DocumentTabState {
         self.visual_end_padding_height = None;
         self.visual_cursor_reveal_pending = true;
         self.visual_caret_follow_frames = 2;
+        self.typewriter_recenter = None;
+        self.source_typewriter_inset = px(0.);
         self.visual_caret_bounds = None;
         self.visual_marked_range_bounds = None;
         self.clear_visual_caret_affinity();
@@ -1378,17 +1465,130 @@ impl DocumentTabState {
         self.sync_scroll_state.mark_driver(PaneScrollTarget::Editor);
     }
 
-    pub(super) fn scroll_editor_typewriter_to_offset(&mut self, offset: usize) {
-        let offset = clamp_to_text_boundary(self.document.text(), offset);
-        let line = self.document.text()[..offset]
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count();
-        // Keep the caret ~10 lines below the viewport top ("typewriter" band).
-        let line_height = f32::from(self.line_height);
-        let y = (line as f32 * line_height - 10. * line_height).max(0.);
-        self.editor_scroll.set_offset(point(px(0.), -px(y)));
-        self.sync_scroll_state.mark_driver(PaneScrollTarget::Editor);
+    pub(super) fn request_typewriter_recenter(&mut self, surface: TypewriterSurface) {
+        let offset = self.cursor_offset();
+        let visual_anchor_was_measured =
+            surface == TypewriterSurface::Visual && self.visual_caret_bounds.is_some();
+        self.typewriter_recenter = Some(TypewriterRecenterRequest {
+            instance: self.document.instance_id(),
+            version: self.document.version(),
+            offset,
+            surface,
+            remaining_refinements: match surface {
+                TypewriterSurface::Source => TYPEWRITER_SOURCE_REFINEMENT_FRAMES,
+                TypewriterSurface::Visual => TYPEWRITER_VISUAL_REFINEMENT_FRAMES,
+            },
+            visual_anchor_was_measured,
+        });
+        if surface == TypewriterSurface::Visual {
+            self.visual_cursor_reveal_pending = true;
+            self.visual_caret_follow_frames = TYPEWRITER_VISUAL_REFINEMENT_FRAMES;
+            self.visual_caret_bounds = None;
+        }
+    }
+
+    pub(super) fn clear_typewriter_recenter(&mut self) {
+        self.typewriter_recenter = None;
+    }
+
+    pub(super) fn typewriter_request_is_current(&self, surface: TypewriterSurface) -> bool {
+        self.typewriter_recenter.is_some_and(|request| {
+            request.surface == surface
+                && request.instance == self.document.instance_id()
+                && request.version == self.document.version()
+                && request.offset == self.cursor_offset()
+        })
+    }
+
+    /// Reconcile one source-editor request after current wrapped geometry has
+    /// been published. Returns true while a bounded normalization frame remains.
+    pub(super) fn reconcile_source_typewriter(&mut self) -> (bool, bool) {
+        if !self.typewriter_request_is_current(TypewriterSurface::Source) {
+            if self
+                .typewriter_recenter
+                .is_some_and(|request| request.surface == TypewriterSurface::Source)
+            {
+                self.typewriter_recenter = None;
+            }
+            return (false, false);
+        }
+        let Some(caret_top) = self.source_content_y_for_offset(self.cursor_offset()) else {
+            return (false, false);
+        };
+        let caret_top = caret_top + f32::from(self.source_typewriter_inset);
+        let viewport_height = f32::from(self.editor_scroll.bounds().size.height);
+        let max_scroll = f32::from(self.editor_scroll.max_offset().height.max(px(0.)));
+        let Some(target) = typewriter_center_scroll_target(
+            caret_top,
+            f32::from(self.line_height),
+            viewport_height,
+            max_scroll,
+        ) else {
+            return (false, false);
+        };
+        let current = f32::from(-self.editor_scroll.offset().y).clamp(0., max_scroll);
+        let changed = typewriter_delta_requires_scroll(px(target - current));
+        if changed {
+            self.editor_scroll.set_offset(point(px(0.), px(-target)));
+            self.sync_scroll_state.mark_driver(PaneScrollTarget::Editor);
+        }
+        let Some(request) = self.typewriter_recenter.as_mut() else {
+            return (changed, false);
+        };
+        request.remaining_refinements = request.remaining_refinements.saturating_sub(1);
+        if request.remaining_refinements == 0 {
+            self.typewriter_recenter = None;
+            (changed, false)
+        } else {
+            (changed, true)
+        }
+    }
+
+    /// Reconcile a Visual Edit request from the caret bounds painted on the
+    /// preceding frame. Returns true while another bounded frame is required.
+    pub(super) fn reconcile_visual_typewriter(&mut self) -> bool {
+        if !self.typewriter_request_is_current(TypewriterSurface::Visual) {
+            if self
+                .typewriter_recenter
+                .is_some_and(|request| request.surface == TypewriterSurface::Visual)
+            {
+                self.typewriter_recenter = None;
+            }
+            return false;
+        }
+        let changed = if let Some(caret) = self.visual_caret_bounds {
+            let Some(delta) = typewriter_center_delta(self.visual_list.viewport_bounds(), caret)
+            else {
+                return false;
+            };
+            if typewriter_delta_requires_scroll(delta) {
+                let max_scroll = self
+                    .visual_list
+                    .max_offset_for_scrollbar()
+                    .height
+                    .max(px(0.));
+                let current = (-self.visual_list.scroll_px_offset_for_scrollbar().y)
+                    .clamp(px(0.), max_scroll);
+                let target = (current + delta).clamp(px(0.), max_scroll);
+                self.visual_list
+                    .set_offset_from_scrollbar(point(px(0.), -target));
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let Some(request) = self.typewriter_recenter.as_mut() else {
+            return changed;
+        };
+        request.remaining_refinements = request.remaining_refinements.saturating_sub(1);
+        if request.remaining_refinements == 0 {
+            self.typewriter_recenter = None;
+            changed
+        } else {
+            true
+        }
     }
 
     pub(super) fn snapshot(&self) -> EditorSnapshot {
@@ -1568,9 +1768,9 @@ impl DocumentTabState {
             && self.line_tops.len() == self.last_lines.len() + 1
     }
 
-    /// Convert a source byte offset to a Y coordinate in the editor's
-    /// scrollable content space. The returned coordinate is independent of the
-    /// viewport's current scroll offset.
+    /// Convert a source byte offset to a document-relative Y coordinate in the
+    /// editor text layout. Typewriter presentation inset is deliberately
+    /// excluded and added only at the scroll-content boundary.
     pub(super) fn source_content_y_for_offset(&self, offset: usize) -> Option<f32> {
         if !self.source_layout_is_current() {
             return None;
@@ -1598,9 +1798,9 @@ impl DocumentTabState {
         Some((line_top + local_y).clamp(0., f32::from(*self.line_tops.last()?)))
     }
 
-    /// Convert a Y coordinate in the editor's scrollable content space to the
-    /// closest valid source byte offset at the left edge of that wrapped visual
-    /// line.
+    /// Convert a document-relative Y coordinate in the editor text layout to
+    /// the closest valid source byte offset at the left edge of that wrapped
+    /// visual line. Callers first remove any typewriter presentation inset.
     pub(super) fn source_offset_for_content_y(&self, content_y: f32) -> Option<usize> {
         if !self.source_layout_is_current() {
             return None;

@@ -51,7 +51,11 @@ impl Render for MarkionApp {
             if !active_is_image && matches!(self.view_mode, ViewMode::VisualEdit) {
                 let blocks = self.active_tab().document.visual_blocks_shared();
                 self.active_tab_mut().sync_visual_list(&blocks);
-                self.active_tab_mut().refresh_visual_end_padding();
+                let padding_changed = self.active_tab_mut().refresh_visual_end_padding();
+                if self.typewriter_mode && padding_changed {
+                    self.active_tab_mut()
+                        .request_typewriter_recenter(TypewriterSurface::Visual);
+                }
                 if let Some(index) = self
                     .active_tab_mut()
                     .take_visual_cursor_reveal_index(&blocks)
@@ -61,6 +65,9 @@ impl Render for MarkionApp {
                     let caret = self.active_tab().visual_caret_bounds;
                     apply_visual_caret_reveal(&list, index, caret, inset);
                     self.active_tab_mut().visual_caret_follow_frames = 2;
+                }
+                if self.typewriter_mode && self.active_tab_mut().reconcile_visual_typewriter() {
+                    cx.notify();
                 }
                 blocks
             } else {
@@ -164,6 +171,15 @@ impl Render for MarkionApp {
             .document_tab()
             .map(|tab| tab.editor_scroll.clone())
             .unwrap_or_else(ScrollHandle::new);
+        let source_typewriter_boundary_space =
+            if self.typewriter_mode && matches!(self.view_mode, ViewMode::Edit | ViewMode::Split) {
+                typewriter_trailing_space(
+                    editor_scroll.bounds().size.height,
+                    px(typography.editor_line_height),
+                )
+            } else {
+                px(0.)
+            };
         let block_menu_max_height = px((f32::from(window.viewport_size().height) - 32.0)
             .max(120.0)
             .min(520.0));
@@ -487,7 +503,29 @@ impl Render for MarkionApp {
                                                 cx.listener(Self::on_mouse_up),
                                             )
                                             .on_mouse_move(cx.listener(Self::on_mouse_move))
-                                            .child(EditorElement { app: cx.entity() }),
+                                            .child(
+                                                div()
+                                                    .w_full()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .child(
+                                                        div()
+                                                            .w_full()
+                                                            .h(source_typewriter_boundary_space)
+                                                            .flex_none(),
+                                                    )
+                                                    .child(EditorElement {
+                                                        app: cx.entity(),
+                                                        typewriter_boundary_space:
+                                                            source_typewriter_boundary_space,
+                                                    })
+                                                    .child(
+                                                        div()
+                                                            .w_full()
+                                                            .h(source_typewriter_boundary_space)
+                                                            .flex_none(),
+                                                    ),
+                                            ),
                                     )
                                     .child(pane_scrollbar_view(
                                         PaneScrollTarget::Editor,
@@ -1697,6 +1735,17 @@ pub(super) fn visual_edit_surface_view(
             .debug_selector(move || format!("visual-document-row-{ix}"))
             .w_full()
             .line_height(px(preview_row_line_height))
+            .when(app.typewriter_mode && ix == 0, |row| {
+                let boundary_space =
+                    app.active_tab()
+                        .visual_end_padding_height
+                        .unwrap_or_else(|| {
+                            visual_end_padding_height(
+                                app.active_tab().visual_list.viewport_bounds().size.height,
+                            )
+                        });
+                row.pt(boundary_space)
+            })
             .child(visual_block_view(
                 app,
                 &items[ix],
