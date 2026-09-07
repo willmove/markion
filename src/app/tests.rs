@@ -9398,6 +9398,70 @@ fn image_tabs_share_path_identity_without_dirty_document_state() {
     assert_eq!(find_tab_with_document_path(&tabs, &path), Some(0));
 }
 
+#[gpui::test]
+fn git_image_only_reconciliation_releases_image_bytes_without_rebuilding_markdown(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let note_path = dir.path().join("note.md");
+    let image_path = dir.path().join("image.png");
+    fs::write(&note_path, "![image](image.png)\n").unwrap();
+    fs::write(&image_path, b"old image").unwrap();
+    let document = MarkdownDocument::open(&note_path).unwrap();
+    let instance = document.instance_id();
+    let version = document.version();
+    let (_, note_identity) = markion::read_document_source(&note_path).unwrap();
+    let repository = markion_git_sync::RepositoryIdentity::new(
+        dir.path().to_path_buf(),
+        dir.path().join(".git"),
+        dir.path().join(".git"),
+    );
+    let registry = GitOperationRegistry::default();
+    registry.register(repository.clone());
+    let exclusive = registry
+        .begin_exclusive(&repository, "image-only-sync")
+        .unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut image = EditorTab::new_image(
+            image_path.clone(),
+            PreviewImageKey::from_local_path(&image_path),
+        );
+        image.image_mut().unwrap().claimed = true;
+        app.tabs = vec![EditorTab::new(document), image];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let cached = app.tabs[0].document.preview_blocks_shared();
+        app.apply_git_sync_completion(
+            super::git_sync::GitSyncCompletion {
+                _exclusive: exclusive,
+                outcome: markion_git_sync::SyncOutcome::UpToDate,
+                buffers: vec![super::git_sync::GitBufferResult {
+                    instance,
+                    version,
+                    previous_path: note_path.clone(),
+                    path: note_path.clone(),
+                    source: Some(("![image](image.png)\n".into(), note_identity)),
+                }],
+                images: vec![super::git_sync::GitImageResult {
+                    previous_path: image_path.clone(),
+                    path: image_path.clone(),
+                    changed: true,
+                }],
+            },
+            cx,
+        );
+        assert_eq!(app.tabs[0].document.version(), version);
+        assert!(std::sync::Arc::ptr_eq(
+            &cached,
+            &app.tabs[0].document.preview_blocks_shared()
+        ));
+        assert!(!app.tabs[1].image().unwrap().claimed);
+    });
+}
+
 #[test]
 fn discard_confirmation_is_scoped_to_dirty_document_tabs() {
     let mut document = EditorTab::new(MarkdownDocument::from_text("clean"));
@@ -14417,6 +14481,7 @@ fn external_check_outcome_is_dropped_when_the_document_was_saved_meanwhile(
                     read_for_reload: true,
                     instance,
                     version,
+                    repository_epoch: None,
                 },
                 markion::ExternalCheckOutcome::Modified {
                     reload: Some(Ok((
@@ -14567,6 +14632,7 @@ fn autosave_completion_after_racing_edit_keeps_dirty_but_records_identity(cx: &m
             AutosaveCompletion {
                 recovery_id,
                 generation: 6,
+                repository_epoch: None,
                 result: AutosaveOutcome::Saved {
                     path: path.clone(),
                     identity: identity.clone(),
@@ -14580,6 +14646,65 @@ fn autosave_completion_after_racing_edit_keeps_dirty_but_records_identity(cx: &m
         // ...but the identity reflects our own write, so the external-change
         // poll will not mistake it for a foreign modification.
         assert_eq!(tab.document.disk_identity(), Some(&identity));
+        assert!(!tab.autosave_in_flight);
+    });
+}
+
+#[gpui::test]
+fn autosave_completion_from_pre_git_epoch_cannot_replace_post_sync_identity(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    fs::write(&path, "before").unwrap();
+    let document = MarkdownDocument::open(&path).unwrap();
+    let (_, before_identity) = markion::read_document_source(&path).unwrap();
+    let repository = markion_git_sync::RepositoryIdentity::new(
+        dir.path().to_path_buf(),
+        dir.path().join(".git"),
+        dir.path().join(".git"),
+    );
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.git_operations.register(repository.clone());
+        app
+    });
+
+    let stale_epoch = app.update(cx, |app, _| {
+        app.git_operations.capture_read_epoch(&path).unwrap()
+    });
+    app.update(cx, |app, _| {
+        let exclusive = app
+            .git_operations
+            .begin_exclusive(&repository, "test-sync")
+            .unwrap();
+        fs::write(&path, "after sync").unwrap();
+        drop(exclusive);
+    });
+    let (_, stale_identity) = markion::read_document_source(&path).unwrap();
+
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.document.set_text("new local edit");
+        tab.autosave_generation = 8;
+        tab.autosave_in_flight = true;
+        let recovery_id = tab.document_tab().unwrap().recovery_id;
+        app.apply_autosave_outcome(
+            AutosaveCompletion {
+                recovery_id,
+                generation: 7,
+                repository_epoch: Some(stale_epoch),
+                result: AutosaveOutcome::Saved {
+                    path: path.clone(),
+                    identity: stale_identity,
+                },
+            },
+            cx,
+        );
+        let tab = app.active_tab();
+        assert!(tab.document.is_dirty());
+        assert_eq!(tab.document.disk_identity(), Some(&before_identity));
         assert!(!tab.autosave_in_flight);
     });
 }

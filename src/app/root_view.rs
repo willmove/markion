@@ -178,6 +178,9 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::new_document))
             .on_action(cx.listener(Self::open_document))
             .on_action(cx.listener(Self::open_folder))
+            .on_action(cx.listener(Self::setup_git_sync))
+            .on_action(cx.listener(Self::sync_now))
+            .on_action(cx.listener(Self::resolve_git_conflict))
             .on_action(cx.listener(Self::clear_recent_files))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::toggle_file_tree))
@@ -649,6 +652,35 @@ impl Render for MarkionApp {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .child(status_feedback),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "status-bar-git-sync".to_string())
+                            .flex_shrink_0()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .text_color(palette.text)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(palette.active_bg))
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                                    if app.git_conflict_admission.is_some() {
+                                        app.resolve_git_conflict(&ResolveGitConflict, window, cx);
+                                    } else {
+                                        app.sync_now(&SyncNow, window, cx);
+                                    }
+                                }),
+                            )
+                            .child(t(
+                                self.language,
+                                if self.git_conflict_admission.is_some() {
+                                    Msg::ItemGitResolveConflict
+                                } else {
+                                    Msg::ItemGitSyncNow
+                                },
+                            )),
                     )
                     .child(
                         div()
@@ -3989,6 +4021,18 @@ pub(super) fn active_menu_dropdown(
                 panel.child(image_action_unavailable_menu_row(language, palette))
             })
             .child(menu_separator(palette))
+            .child(file_action_item!(Msg::ItemGitSyncNow, sync_now, SyncNow))
+            .child(file_action_item!(
+                Msg::ItemGitResolveConflict,
+                resolve_git_conflict,
+                ResolveGitConflict
+            ))
+            .child(file_action_item!(
+                Msg::ItemGitSyncSetup,
+                setup_git_sync,
+                SetupGitSync
+            ))
+            .child(menu_separator(palette))
             .child(file_action_item!(
                 Msg::ItemNewTab,
                 new_tab,
@@ -4937,6 +4981,31 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                                 cx,
                                                             );
                                                         }
+                                                    },
+                                                ),
+                                            )),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(palette.muted)
+                                                    .child(app.tr(Msg::PrefPanelGitSection)),
+                                            )
+                                            .child(preference_boolean_row(
+                                                app.tr(Msg::PrefPanelGitBackgroundCheck),
+                                                app.git_preferences.background_check,
+                                                app.language,
+                                                palette,
+                                                cx.listener(
+                                                    |app, _: &MouseUpEvent, _window, cx| {
+                                                        app.toggle_git_background_check(cx);
+                                                        app.poll_git_background_check(cx);
                                                     },
                                                 ),
                                             )),

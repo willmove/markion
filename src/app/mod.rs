@@ -33,9 +33,9 @@ use markion::{
     DEFAULT_RENDERED_FONT_SIZE, DEFAULT_SIDEBAR_WIDTH, DiskIdentity, DiskState, DocumentInstanceId,
     DocxImagePolicy, DocxPageSize, EXTENDED_HEADING_MENU_MAX_LEVEL, ExportBackendPreference,
     ExportFormat, ExportPreferences, ExternalCheckOutcome, FileTree, FileTreeEntry,
-    FileTreeEntryKind, HighlightKind, HighlightedSpan, HtmlAlign, HtmlImageDescriptor,
-    HtmlImgLength, HtmlListMarker, HtmlPreviewPart, HtmlTableGrid, ImageAlignment,
-    ImagePresentation, ImageSourceIdentity, InlineSpan, InlineStyle, Language,
+    FileTreeEntryKind, GitPreferences, HighlightKind, HighlightedSpan, HtmlAlign,
+    HtmlImageDescriptor, HtmlImgLength, HtmlListMarker, HtmlPreviewPart, HtmlTableGrid,
+    ImageAlignment, ImagePresentation, ImageSourceIdentity, InlineSpan, InlineStyle, Language,
     MAX_AUTO_SAVE_DELAY_SECS, MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING,
     MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
     MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat,
@@ -50,21 +50,25 @@ use markion::{
     block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
     build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
     builtin_theme_definitions, bundled_resource_path, check_path_state, data_uri_payload_ranges,
-    default_preferences_path, default_recovery_dir, default_session_path, default_themes_dir,
-    delete_block, delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
-    highlight_code, html_preview_parts, html_preview_plain_text, html_table_column_weights,
-    html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
-    import_image_bytes, import_image_file, inline_image_at, inline_link_at, inspect_recovery_files,
-    is_markdown_path, is_text_path, layout_rect_is_visible, list_theme_definitions,
-    load_app_preferences, load_recovery_file, load_session_state, markdown_reference,
-    normalize_auto_save_delay_secs, normalize_code_font_size, normalize_editor_font_size,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
-    organize_candidates, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, read_document_source,
-    reorder_block, resolve_font_family, resolve_html_img_display_size, save_app_preferences,
-    save_session_state, save_text_snapshot, save_theme_definition, serialize_inline_image,
-    serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
-    t, table_column_flex_weights, tf, title_from_path, transform_block, validate_block_target,
-    workspace_relative_path,
+    default_git_sync_policy_path, default_preferences_path, default_recovery_dir,
+    default_session_path, default_themes_dir, delete_block, delete_recovery_file,
+    diagram_backend_id, duplicate_block, elided_payload_token, highlight_code, html_preview_parts,
+    html_preview_plain_text, html_table_column_weights, html_table_grid_line_end,
+    html_table_row_has_visible_header, image_extension_supported, import_image_bytes,
+    import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
+    is_text_path, layout_rect_is_visible, list_theme_definitions, load_app_preferences,
+    load_recovery_file, load_session_state, markdown_reference, normalize_auto_save_delay_secs,
+    normalize_code_font_size, normalize_editor_font_size, normalize_heading_menu_max_level,
+    normalize_paragraph_spacing, normalize_rendered_font_size, organize_candidates, p0_t, p0_tf,
+    p1_t, p1_tf, pandoc_available, read_document_source, reorder_block, resolve_font_family,
+    resolve_html_img_display_size, save_app_preferences, save_session_state, save_text_snapshot,
+    save_theme_definition, serialize_inline_image, serialize_inline_link, shortcut_catalog,
+    sidebar_tab_label, slash_command_edit, slash_query_at, t, table_column_flex_weights, tf,
+    title_from_path, transform_block, validate_block_target, workspace_relative_path,
+};
+use markion_git_sync::{
+    BackgroundFetchScheduler, ExclusiveAdmission, GitOperationRegistry, PolicyStore, ReadEpoch,
+    WriteAdmission,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -123,6 +127,9 @@ actions!(
         ClearRecentFiles,
         SaveDocument,
         SaveDocumentAs,
+        SetupGitSync,
+        SyncNow,
+        ResolveGitConflict,
         ExportHtml,
         ExportPlainHtml,
         ExportPdf,
@@ -2124,6 +2131,7 @@ mod documents;
 mod editing;
 mod editor_element;
 mod export_prefs;
+mod git_sync;
 pub(super) mod layout;
 mod math_render;
 mod memory;
@@ -2202,6 +2210,12 @@ struct MarkionApp {
     /// Filesystem-derived Git context is cached separately from documents so
     /// render/input never perform repository I/O and undo snapshots stay pure.
     git_branch_state: GitBranchState,
+    /// Repository-wide admission and reload epochs shared by app writes and
+    /// local Git mutations.
+    git_operations: GitOperationRegistry,
+    /// Held while a Git conflict session owns repository paths.
+    git_conflict_admission: Option<ExclusiveAdmission>,
+    git_background_scheduler: BackgroundFetchScheduler,
     confirming_close: bool,
     allow_close: bool,
     preferences_path: PathBuf,
@@ -2368,6 +2382,9 @@ struct MarkionApp {
     /// Auto-save settings from `[auto_save]`. `silent_save` and `delay_secs`
     /// are editable in Preferences → General; `enabled` remains file-only.
     auto_save_preferences: AutoSavePreferences,
+    /// Additive `[git]` preferences. Repository policy is deliberately kept
+    /// outside this resettable global preferences value.
+    git_preferences: GitPreferences,
     /// Export settings from the config file ([export] table). Not editable
     /// in the Preferences panel; kept to round-trip on save.
     export_preferences: ExportPreferences,

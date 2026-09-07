@@ -47,6 +47,10 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemSave), SaveDocument),
                 MenuItem::action(t(language, Msg::ItemSaveAs), SaveDocumentAs),
                 MenuItem::separator(),
+                MenuItem::action(t(language, Msg::ItemGitSyncNow), SyncNow),
+                MenuItem::action(t(language, Msg::ItemGitResolveConflict), ResolveGitConflict),
+                MenuItem::action(t(language, Msg::ItemGitSyncSetup), SetupGitSync),
+                MenuItem::separator(),
                 MenuItem::action(t(language, Msg::ItemNewTab), NewTab),
                 MenuItem::action(t(language, Msg::ItemOpenInNewTab), OpenInNewTab),
                 MenuItem::action(t(language, Msg::ItemCloseTab), CloseTab),
@@ -396,6 +400,8 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 app.check_recovery_on_startup(window, cx);
                 app.arm_external_file_poll(cx);
                 app.arm_git_branch_poll(cx);
+                app.arm_git_recovery(cx);
+                app.arm_git_background_checks(cx);
                 // File-tree scanning is driven by session restore, CLI folder
                 // open, or opening a document — not by the process CWD.
                 cx.activate(true);

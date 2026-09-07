@@ -773,6 +773,32 @@ impl MarkionApp {
             return;
         }
 
+        let mut _admissions = Vec::new();
+        let admission_paths = match pending.kind {
+            PendingNameKind::CreateFile | PendingNameKind::CreateFolder => {
+                vec![pending.parent.join(name)]
+            }
+            PendingNameKind::Rename => pending
+                .target
+                .iter()
+                .cloned()
+                .chain(std::iter::once(pending.parent.join(name)))
+                .collect(),
+        };
+        for path in admission_paths {
+            match self.git_operations.try_write(&path) {
+                Ok(admission) => _admissions.push(admission),
+                Err(_) => {
+                    self.status = self.trf(
+                        Msg::StatusGitSyncFailed,
+                        &["the workspace is being updated"],
+                    );
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+
         match pending.kind {
             PendingNameKind::CreateFile => {
                 let result = self
@@ -939,6 +965,17 @@ impl MarkionApp {
                 }
 
                 let was_active = app.active_tab().path() == Some(path.as_path());
+                let _admission = match app.git_operations.try_write(&path) {
+                    Ok(admission) => admission,
+                    Err(_) => {
+                        app.status = app.trf(
+                            Msg::StatusGitSyncFailed,
+                            &["the workspace is being updated"],
+                        );
+                        cx.notify();
+                        return;
+                    }
+                };
                 let result = app
                     .file_tree
                     .as_mut()
@@ -1076,6 +1113,25 @@ impl MarkionApp {
             self.status = t(self.language, Msg::StatusSaveBeforeMove).into();
             cx.notify();
             return;
+        }
+
+        let destination = source
+            .file_name()
+            .map(|name| dest_parent.join(name))
+            .unwrap_or_else(|| dest_parent.to_path_buf());
+        let mut _admissions = Vec::new();
+        for path in [source, destination.as_path()] {
+            match self.git_operations.try_write(path) {
+                Ok(admission) => _admissions.push(admission),
+                Err(_) => {
+                    self.status = self.trf(
+                        Msg::StatusGitSyncFailed,
+                        &["the source or destination workspace is being updated"],
+                    );
+                    cx.notify();
+                    return;
+                }
+            }
         }
 
         let result = self

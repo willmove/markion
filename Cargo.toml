@@ -37,6 +37,7 @@ getrandom = "0.3"
 mime_guess = "2.0"
 percent-encoding = "2.3"
 sha2 = "0.10"
+dunce = "1.0"
 proptest = "1.4"
 # bat's curated extended syntax set for syntect (TypeScript, TOML, Kotlin,
 # Swift, Dockerfile, PowerShell, ... — closes the modern-language gap in
@@ -101,6 +102,7 @@ miniz_oxide = "0.8"
 typune-markdown = { package = "markdown", path = "crates/markdown" }
 typune-export = { package = "export", path = "crates/export" }
 markion-diagram = { path = "crates/diagram", features = ["mermaid"] }
+markion-git-sync = { path = "crates/git-sync" }
 markion-pdf = { path = "crates/pdf" }
 wechat-workspace = { path = "crates/wechat-workspace" }
 # Drives syntect scope parsing directly in src/highlight.rs (colors keep coming
@@ -123,7 +125,7 @@ tracing-appender.workspace = true
 # Windows `Path::canonicalize` returns `\\?\`-prefixed verbatim paths; dunce
 # drops the prefix when the shortened form resolves to the same file (identity
 # on other platforms), keeping user-facing and persisted paths in normal form.
-dunce = "1.0"
+dunce.workspace = true
 
 [dev-dependencies]
 gpui = { version = "0.2.2", features = ["test-support"] }

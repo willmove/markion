@@ -692,6 +692,18 @@ impl MarkionApp {
             self.pending_image_import = Some(inputs);
             return;
         };
+        let _admission = match self.git_operations.try_write(&document_path) {
+            Ok(admission) => admission,
+            Err(_) => {
+                self.pending_image_import = Some(inputs);
+                self.status = self.trf(
+                    Msg::StatusGitSyncFailed,
+                    &["the workspace is being updated"],
+                );
+                cx.notify();
+                return;
+            }
+        };
         let mut markdown = Vec::with_capacity(inputs.len());
         let mut failures = Vec::new();
         for input in inputs {
@@ -799,6 +811,17 @@ impl MarkionApp {
                     app.status = p0_t(app.language, P0Msg::SaveBeforeImage).into();
                     cx.notify();
                     return;
+                };
+                let _admission = match app.git_operations.try_write(&document_path) {
+                    Ok(admission) => admission,
+                    Err(_) => {
+                        app.status = app.trf(
+                            Msg::StatusGitSyncFailed,
+                            &["the workspace is being updated"],
+                        );
+                        cx.notify();
+                        return;
+                    }
                 };
                 match import_image_file(&document_path, &source_path) {
                     Ok(imported) => {

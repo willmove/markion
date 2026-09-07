@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     AppPreferences, AutoSavePreferences, CodeTheme, DEFAULT_EDITOR_FONT_SIZE,
     DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy,
-    DocxPageSize, ExportBackendPreference, ExportPreferences, PdfExportOptions, PdfPageSize,
-    SidebarTab, normalize_code_font_size, normalize_editor_font_size,
+    DocxPageSize, ExportBackendPreference, ExportPreferences, GitPreferences, PdfExportOptions,
+    PdfPageSize, SidebarTab, normalize_code_font_size, normalize_editor_font_size,
     normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
 };
 
@@ -89,6 +89,7 @@ struct PreferencesFile {
     /// legacy format did.
     sidebar_tab: String,
     auto_save: AutoSaveFile,
+    git: GitFile,
     export: ExportFile,
     /// [shortcuts] table: action id -> GPUI keystroke string.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -103,6 +104,18 @@ struct AutoSaveFile {
     #[serde(deserialize_with = "deserialize_bool_or_true")]
     silent_save: bool,
     delay_secs: u64,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct GitFile {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    executable: Option<String>,
+    background_check: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -307,6 +320,12 @@ impl From<&AppPreferences> for PreferencesFile {
                 silent_save: preferences.auto_save.silent_save,
                 delay_secs: preferences.auto_save.delay_secs,
             },
+            git: GitFile {
+                executable: crate::model::normalize_font_family(
+                    preferences.git.executable.as_deref(),
+                ),
+                background_check: preferences.git.background_check,
+            },
             export: ExportFile {
                 backend: preferences.export.backend.config_value().to_string(),
                 pdf_engine: preferences.export.pdf_engine.clone(),
@@ -364,6 +383,10 @@ impl From<PreferencesFile> for AppPreferences {
                 delay_secs: crate::model::normalize_auto_save_delay_secs(
                     file.auto_save.delay_secs as i64,
                 ),
+            },
+            git: GitPreferences {
+                executable: file.git.executable,
+                background_check: file.git.background_check,
             },
             export: ExportPreferences {
                 backend: ExportBackendPreference::from_config(&file.export.backend),

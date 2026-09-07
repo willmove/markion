@@ -162,6 +162,17 @@ impl MarkionApp {
         candidates: &[OrganizeCandidate],
         cx: &mut Context<Self>,
     ) {
+        let _admission = match self.git_operations.try_write(document_path) {
+            Ok(admission) => admission,
+            Err(_) => {
+                self.status = self.trf(
+                    Msg::StatusGitSyncFailed,
+                    &["the workspace is being updated"],
+                );
+                cx.notify();
+                return;
+            }
+        };
         let mut replacements = Vec::new();
         let mut failed = 0usize;
         for candidate in candidates {

@@ -14,6 +14,7 @@ pub(super) struct ExternalCheckRequest {
     pub(super) read_for_reload: bool,
     pub(super) instance: DocumentInstanceId,
     pub(super) version: u64,
+    pub(super) repository_epoch: Option<ReadEpoch>,
 }
 
 /// Snapshot captured on the UI thread when an autosave timer fires; the
@@ -29,11 +30,14 @@ pub(super) struct AutosaveRequest {
     pub(super) previous_recovery: Option<PathBuf>,
     /// When false, skip writing the named destination after recovery.
     pub(super) silent_save: bool,
+    pub(super) write_admission: Option<WriteAdmission>,
+    pub(super) repository_epoch: Option<ReadEpoch>,
 }
 
 pub(super) struct AutosaveCompletion {
     pub(super) recovery_id: u64,
     pub(super) generation: u64,
+    pub(super) repository_epoch: Option<ReadEpoch>,
     pub(super) result: AutosaveOutcome,
 }
 
@@ -62,9 +66,11 @@ pub(super) enum AutosaveOutcome {
 /// destination write. All file I/O for autosave lives here, off the UI
 /// thread. Recovery-file cleanup happens here too — deletes are disk I/O.
 fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveCompletion {
+    let _write_admission = request.write_admission;
     let complete = |result| AutosaveCompletion {
         recovery_id: request.recovery_id,
         generation: request.generation,
+        repository_epoch: request.repository_epoch.clone(),
         result,
     };
     let recovery = match markion::write_recovery_copy(
@@ -122,6 +128,14 @@ impl MarkionApp {
         } else {
             load_app_preferences(&preferences_path).unwrap_or_default()
         };
+        let git_operations = GitOperationRegistry::default();
+        if !cfg!(test)
+            && let Ok(policies) = PolicyStore::new(default_git_sync_policy_path()).load()
+        {
+            for policy in policies.repositories {
+                git_operations.register(policy.identity);
+            }
+        }
         let session_path = default_session_path();
         // Unit tests must not read/write the developer's real session.toml.
         let session = if cfg!(test) {
@@ -173,6 +187,9 @@ impl MarkionApp {
             publishing_service: None,
             browser_launcher: Arc::new(publishing::DefaultBrowserLauncher),
             git_branch_state: GitBranchState::default(),
+            git_operations,
+            git_conflict_admission: None,
+            git_background_scheduler: BackgroundFetchScheduler::default(),
             confirming_close: false,
             allow_close: false,
             preferences_path,
@@ -269,6 +286,7 @@ impl MarkionApp {
             search_field_bounds: [None, None],
             pane_scrollbar_drag: None,
             auto_save_preferences: preferences.auto_save,
+            git_preferences: preferences.git.clone(),
             export_preferences: preferences.export.clone(),
             recovery_dir: default_recovery_dir(),
             external_check_in_flight: false,
@@ -787,6 +805,23 @@ impl MarkionApp {
         op: &'static str,
         mutation: CheckedMutation,
     ) -> Option<MutationReceipt> {
+        if self
+            .git_conflict_admission
+            .as_ref()
+            .is_some_and(|admission| {
+                admission.identity().is_some_and(|identity| {
+                    self.active_tab()
+                        .path()
+                        .is_some_and(|path| path.starts_with(&identity.worktree_root))
+                })
+            })
+        {
+            self.status = self.trf(
+                Msg::StatusGitSyncFailed,
+                &["resolve the Git conflict before editing this file"],
+            );
+            return None;
+        }
         let origin = mutation.origin();
         match self
             .active_tab_mut()
@@ -865,6 +900,7 @@ impl MarkionApp {
                     read_for_reload: !doc.document.is_dirty(),
                     instance: doc.document.instance_id(),
                     version: doc.document.version(),
+                    repository_epoch: self.git_operations.capture_read_epoch(doc.document.path()?),
                 })
             })
             .collect();
@@ -917,6 +953,10 @@ impl MarkionApp {
                 let doc = &self.tabs[index];
                 if doc.document.path() != Some(request.path.as_path())
                     || doc.document.disk_identity() != request.known.as_ref()
+                    || request
+                        .repository_epoch
+                        .as_ref()
+                        .is_some_and(|epoch| !self.git_operations.read_epoch_is_current(epoch))
                 {
                     continue;
                 }
@@ -1448,7 +1488,7 @@ impl MarkionApp {
             return;
         }
         tab.autosave_in_flight = true;
-        let request = AutosaveRequest {
+        let mut request = AutosaveRequest {
             recovery_id: tab.recovery_id,
             generation,
             path: tab.document.path().map(Path::to_path_buf),
@@ -1456,7 +1496,20 @@ impl MarkionApp {
             text: tab.document.text().to_string(),
             previous_recovery: tab.last_recovery_file.clone(),
             silent_save: self.auto_save_preferences.silent_save,
+            write_admission: None,
+            repository_epoch: None,
         };
+        if request.silent_save
+            && let Some(path) = request.path.as_ref()
+        {
+            match self.git_operations.try_write(path) {
+                Ok(admission) => {
+                    request.repository_epoch = self.git_operations.capture_read_epoch(path);
+                    request.write_admission = Some(admission);
+                }
+                Err(_) => request.silent_save = false,
+            }
+        }
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_spawn(async move { run_autosave(&recovery_dir, request) })
@@ -1486,6 +1539,18 @@ impl MarkionApp {
             return;
         };
         let language = self.language;
+        if outcome
+            .repository_epoch
+            .as_ref()
+            .is_some_and(|epoch| !self.git_operations.read_epoch_is_current(epoch))
+        {
+            self.tabs[index].autosave_in_flight = false;
+            if index == self.active_tab && self.tabs[index].is_dirty() {
+                self.schedule_autosave(cx);
+            }
+            cx.notify();
+            return;
+        }
         let status;
         {
             let tab = &mut self.tabs[index];
@@ -1839,6 +1904,7 @@ impl MarkionApp {
             check_for_updates_on_startup: self.check_for_updates_on_startup,
             last_update_check: self.last_update_check.clone(),
             auto_save: self.auto_save_preferences,
+            git: self.git_preferences.clone(),
             export: self.export_preferences.clone(),
             shortcut_overrides: self.shortcut_overrides.clone(),
         }

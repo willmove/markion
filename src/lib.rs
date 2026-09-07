@@ -155,29 +155,29 @@ pub use model::{
     DocxExportOptions, DocxImagePolicy, DocxPageSize, EDITOR_SPLIT_RATIO_MAX,
     EDITOR_SPLIT_RATIO_MIN, EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory, ExportBackend,
     ExportBackendPreference, ExportFormat, ExportOutcome, ExportPreferences, Footnote,
-    FrontMatterError, Heading, HighlightKind, HighlightedSpan, HtmlImageDescriptor, HtmlImgLength,
-    ImageSourceIdentity, InlineImage, InlineSpan, InlineStyle, MAX_AUTO_SAVE_DELAY_SECS,
-    MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES,
-    MAX_RECENT_WORKSPACES, MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE,
-    MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MIN_WINDOW_HEIGHT,
-    MIN_WINDOW_WIDTH, MarkdownFormat, MathDelimiter, MathExpression, MathLayoutStyle, MathSource,
-    PdfExportOptions, PdfPageSize, PreviewBlock, RecoveryDocument, RenderedMath, ReplaceResult,
-    RichText, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SYSTEM_UI_FONT_FAMILY, SearchError,
-    SearchMatch, SearchMatchRange, SearchOptions, SessionLayout, SessionState, SidebarTab,
-    TableAlignment, TableEdit, TableEditResult, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode,
-    VisualBlock, VisualBlockEdit, VisualBlockEditor, VisualBlockId, VisualBlockKind,
-    VisualBlockPrefix, VisualBlockPrefixKind, VisualBoundaryCandidates, VisualCaretAffinity,
-    VisualEditorField, VisualEditorFieldKind, VisualHtmlImage, VisualInlineRun,
-    VisualNavigationTarget, VisualProjection, VisualProjectionSegment, VisualProjectionSpan,
-    VisualQuoteContext, VisualQuoteGroupEdge, VisualRevealGroup, VisualRevealKind,
-    VisualSourceIslandKind, VisualStructuralEdit, VisualTableCell, WorkspaceSnapshot,
-    YamlFrontMatter, builtin_theme_definitions, filter_paths_in_workspace_root,
-    layout_rect_is_visible, normalize_auto_save_delay_secs, normalize_code_font_size,
-    normalize_editor_font_size, normalize_editor_split_ratio, normalize_font_family,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
-    normalize_sidebar_width, normalize_window_size, record_data_uri_payload_clone,
-    reset_data_uri_work_counters, resolve_font_family, touch_recent_file, touch_workspace_snapshot,
-    with_image_identity_interner,
+    FrontMatterError, GitPreferences, Heading, HighlightKind, HighlightedSpan, HtmlImageDescriptor,
+    HtmlImgLength, ImageSourceIdentity, InlineImage, InlineSpan, InlineStyle,
+    MAX_AUTO_SAVE_DELAY_SECS, MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING,
+    MAX_RECENT_FILES, MAX_RECENT_WORKSPACES, MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS,
+    MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE,
+    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, MarkdownFormat, MathDelimiter, MathExpression,
+    MathLayoutStyle, MathSource, PdfExportOptions, PdfPageSize, PreviewBlock, RecoveryDocument,
+    RenderedMath, ReplaceResult, RichText, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+    SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch, SearchMatchRange, SearchOptions,
+    SessionLayout, SessionState, SidebarTab, TableAlignment, TableEdit, TableEditResult,
+    ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEdit,
+    VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
+    VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualHtmlImage, VisualInlineRun, VisualNavigationTarget, VisualProjection,
+    VisualProjectionSegment, VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge,
+    VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit,
+    VisualTableCell, WorkspaceSnapshot, YamlFrontMatter, builtin_theme_definitions,
+    filter_paths_in_workspace_root, layout_rect_is_visible, normalize_auto_save_delay_secs,
+    normalize_code_font_size, normalize_editor_font_size, normalize_editor_split_ratio,
+    normalize_font_family, normalize_heading_menu_max_level, normalize_paragraph_spacing,
+    normalize_rendered_font_size, normalize_sidebar_width, normalize_window_size,
+    record_data_uri_payload_clone, reset_data_uri_work_counters, resolve_font_family,
+    touch_recent_file, touch_workspace_snapshot, with_image_identity_interner,
 };
 pub use visual::{
     build_visual_projection, build_visual_projection_with_marked_range, data_uri_payload_ranges,
@@ -883,6 +883,20 @@ impl MarkdownDocument {
         let receipt = self.apply_checked_mutation(mutation)?;
         self.dirty = false;
         self.disk_identity = Some(identity);
+        Ok(receipt)
+    }
+
+    pub fn apply_external_move_checked(
+        &mut self,
+        target: DocumentInstanceId,
+        expected_version: u64,
+        path: PathBuf,
+        text: String,
+        identity: DiskIdentity,
+    ) -> Result<MutationReceipt, MutationRejection> {
+        let receipt =
+            self.apply_external_reload_checked(target, expected_version, text, identity)?;
+        self.path = Some(path);
         Ok(receipt)
     }
 
@@ -4126,6 +4140,14 @@ pub fn default_preferences_path() -> PathBuf {
 
 pub fn default_session_path() -> PathBuf {
     crate::paths::default_session_path()
+}
+
+pub fn default_git_sync_policy_path() -> PathBuf {
+    crate::paths::default_git_sync_policy_path()
+}
+
+pub fn default_git_sync_data_dir() -> PathBuf {
+    crate::paths::default_git_sync_data_dir()
 }
 
 pub fn default_themes_dir() -> PathBuf {
@@ -7741,6 +7763,49 @@ Intro.
     }
 
     #[test]
+    fn checked_external_move_preserves_instance_and_rejects_a_stale_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_path = dir.path().join("old.md");
+        let new_path = dir.path().join("new.md");
+        fs::write(&old_path, "before").unwrap();
+        let mut document = MarkdownDocument::open(&old_path).unwrap();
+        let instance = document.instance_id();
+        let version = document.version();
+        fs::rename(&old_path, &new_path).unwrap();
+        fs::write(&new_path, "after").unwrap();
+        let (text, identity) = read_document_source(&new_path).unwrap();
+
+        document
+            .apply_external_move_checked(
+                instance,
+                version,
+                new_path.clone(),
+                text,
+                identity.clone(),
+            )
+            .unwrap();
+        assert_eq!(document.instance_id(), instance);
+        assert_eq!(document.path(), Some(new_path.as_path()));
+        assert_eq!(document.text(), "after");
+        assert_eq!(document.disk_identity(), Some(&identity));
+        assert!(!document.is_dirty());
+
+        assert!(
+            document
+                .apply_external_move_checked(
+                    instance,
+                    version,
+                    old_path,
+                    "stale".into(),
+                    identity,
+                )
+                .is_err()
+        );
+        assert_eq!(document.path(), Some(new_path.as_path()));
+        assert_eq!(document.text(), "after");
+    }
+
+    #[test]
     fn save_text_snapshot_saves_fresh_and_refuses_diverged_destinations() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("snapshot.md");
@@ -7801,6 +7866,10 @@ Intro.
                 silent_save: false,
                 delay_secs: 30,
             },
+            git: GitPreferences {
+                executable: Some("C:/Tools/Git/bin/git.exe".to_string()),
+                background_check: true,
+            },
             export: ExportPreferences {
                 pdf_engine: "tectonic".to_string(),
                 ..ExportPreferences::default()
@@ -7818,6 +7887,8 @@ Intro.
         assert!(written.contains("editor_font_size = 18"));
         assert!(written.contains("rendered_font_size = 20"));
         assert!(written.contains("paragraph_spacing = 16"));
+        assert!(written.contains("[git]"));
+        assert!(written.contains("background_check = true"));
         assert!(written.contains("heading_menu_max_level = 6"));
         assert!(written.contains("sync_scroll = true"));
         assert!(written.contains("[auto_save]"));

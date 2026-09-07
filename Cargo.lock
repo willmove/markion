@@ -3400,6 +3400,7 @@ dependencies = [
  "libc",
  "markdown",
  "markion-diagram",
+ "markion-git-sync",
  "markion-pdf",
  "miniz_oxide",
  "percent-encoding",
@@ -3435,6 +3436,21 @@ dependencies = [
  "mermaid-rs-renderer",
  "svg-hush",
  "usvg 0.45.1",
+]
+
+[[package]]
+name = "markion-git-sync"
+version = "0.3.3"
+dependencies = [
+ "dunce",
+ "percent-encoding",
+ "pulldown-cmark",
+ "serde",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml 0.8.23",
+ "windows 0.61.3",
 ]
 
 [[package]]

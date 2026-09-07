@@ -479,6 +479,9 @@ pub struct AppPreferences {
     /// Auto-save behavior. Configurable only via the config file, not the
     /// Preferences panel.
     pub auto_save: AutoSavePreferences,
+    /// Git executable discovery and optional remote-check defaults. Repository
+    /// bindings and approved paths live in the separate `git-sync.toml` file.
+    pub git: GitPreferences,
     /// Export behavior ([export] table). Configurable only via the config
     /// file, not the Preferences panel.
     pub export: ExportPreferences,
@@ -516,6 +519,7 @@ impl Default for AppPreferences {
             check_for_updates_on_startup: false,
             last_update_check: None,
             auto_save: AutoSavePreferences::default(),
+            git: GitPreferences::default(),
             export: ExportPreferences::default(),
             shortcut_overrides: std::collections::BTreeMap::new(),
         }
@@ -781,6 +785,14 @@ pub struct AutoSavePreferences {
     pub silent_save: bool,
     /// Inactivity interval before an auto-save fires, in seconds.
     pub delay_secs: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitPreferences {
+    /// Explicit Git executable. `None` resolves `git` through the process PATH.
+    pub executable: Option<String>,
+    /// Default for newly connected repositories. Network checks remain opt-in.
+    pub background_check: bool,
 }
 
 /// Minimum inactivity interval accepted for `[auto_save] delay_secs`.

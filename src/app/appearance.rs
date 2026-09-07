@@ -504,6 +504,32 @@ impl MarkionApp {
         cx.notify();
     }
 
+    pub(super) fn toggle_git_background_check(&mut self, cx: &mut Context<Self>) {
+        self.git_preferences.background_check = !self.git_preferences.background_check;
+        let enabled = self.git_preferences.background_check;
+        if !self.git_preferences.background_check {
+            self.git_background_scheduler.deactivate();
+        }
+        let workspace_root = self.workspace_root.clone();
+        if let Err(error) = PolicyStore::new(default_git_sync_policy_path()).update(|policies| {
+            if let Some(policy) = policies
+                .repositories
+                .iter_mut()
+                .filter(|policy| workspace_root.starts_with(&policy.identity.worktree_root))
+                .max_by_key(|policy| policy.identity.worktree_root.components().count())
+            {
+                policy.background_fetch = enabled;
+            }
+        }) {
+            self.status = self.trf(Msg::StatusGitSyncFailed, &[&error.to_string()]);
+            cx.notify();
+            return;
+        }
+        self.status = self.tr(Msg::PrefPanelGitBackgroundCheck).into();
+        self.persist_preferences();
+        cx.notify();
+    }
+
     pub(super) fn set_auto_save_delay_secs(&mut self, value: i64, cx: &mut Context<Self>) {
         let value = normalize_auto_save_delay_secs(value);
         if self.auto_save_preferences.delay_secs == value {

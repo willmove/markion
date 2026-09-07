@@ -109,6 +109,9 @@ pub enum Msg {
     ItemClearRecentFiles,
     ItemSave,
     ItemSaveAs,
+    ItemGitSyncSetup,
+    ItemGitSyncNow,
+    ItemGitResolveConflict,
     /// Open a fresh empty document in a new tab.
     ItemNewTab,
     /// Open a file chosen from a dialog in a new tab.
@@ -456,6 +459,18 @@ pub enum Msg {
     StatusSaved,
     /// {0}=err — "Save failed: {err}"
     StatusSaveFailed,
+    StatusGitSyncRunning,
+    StatusGitSyncComplete,
+    StatusGitSyncFailed,
+    StatusGitSyncNotConfigured,
+    StatusGitSyncConfigured,
+    StatusGitIncoming,
+    StatusGitAuthenticationPaused,
+    StatusGitWorkspaceUpdating,
+    /// {0}=root, {1}=branch, {2}=pending count.
+    DialogGitSyncSetupDetail,
+    /// {0}=repository-relative path.
+    DialogGitConflictDetail,
     /// "Save canceled"
     StatusSaveCanceled,
     /// "Export canceled"
@@ -542,6 +557,12 @@ pub enum Msg {
     // --- Dialogs ---
     DialogButtonOk,
     DialogButtonCancel,
+    DialogButtonEnableGitSync,
+    DialogButtonThisComputer,
+    DialogButtonRemoteVersion,
+    DialogButtonFinishMerge,
+    DialogButtonFinishAndPush,
+    DialogButtonAbortMerge,
     DialogButtonDiscard,
     DialogButtonDelete,
     DialogButtonReset,
@@ -717,6 +738,8 @@ pub enum Msg {
     PrefPanelTypographySection,
     /// Auto-save section title in Preferences → General.
     PrefPanelAutoSaveSection,
+    PrefPanelGitSection,
+    PrefPanelGitBackgroundCheck,
     /// Silent save-to-file toggle label.
     PrefPanelSilentSave,
     /// Auto-save inactivity delay row label.
@@ -2971,6 +2994,9 @@ fn en(msg: Msg) -> &'static str {
         Msg::ItemClearRecentFiles => "Clear Recent Files",
         Msg::ItemSave => "Save",
         Msg::ItemSaveAs => "Save As",
+        Msg::ItemGitSyncSetup => "Set Up Git Sync",
+        Msg::ItemGitSyncNow => "Sync Now",
+        Msg::ItemGitResolveConflict => "Resolve Git Conflicts",
         Msg::ItemNewTab => "New Tab",
         Msg::ItemOpenInNewTab => "Open in New Tab",
         Msg::ItemCloseTab => "Close Tab",
@@ -3252,6 +3278,24 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusSampleThemeSaveFailed => "Sample theme save failed: {0}",
         Msg::StatusSaved => "Saved {0}",
         Msg::StatusSaveFailed => "Save failed: {0}",
+        Msg::StatusGitSyncRunning => "Synchronizing notes with Git…",
+        Msg::StatusGitSyncComplete => "Git synchronization complete",
+        Msg::StatusGitSyncFailed => "Git synchronization needs attention: {0}",
+        Msg::StatusGitSyncNotConfigured => {
+            "Git synchronization is not configured for this workspace"
+        }
+        Msg::StatusGitSyncConfigured => "Git synchronization configured for {0}",
+        Msg::StatusGitIncoming => "{0} incoming Git commits are ready to sync",
+        Msg::StatusGitAuthenticationPaused => {
+            "Background Git checks paused until authentication is available"
+        }
+        Msg::StatusGitWorkspaceUpdating => "Git synchronization is updating this workspace",
+        Msg::DialogGitSyncSetupDetail => {
+            "{0}\n\nBranch: {1}\nCurrent Git changes: {2}\n\nMarkion will include tracked files plus new Markdown, text, and supported images in this repository. Hidden files, symlinks, nested repositories, and unrelated binaries require attention."
+        }
+        Msg::DialogGitConflictDetail => {
+            "Choose which version to keep for {0}. You can finish the merge after every conflict is resolved."
+        }
         Msg::StatusSaveCanceled => "Save canceled",
         Msg::StatusExportCanceled => "Export canceled",
         Msg::StatusChoosingExportLocation => "Choosing .{0} export location...",
@@ -3300,6 +3344,12 @@ fn en(msg: Msg) -> &'static str {
 
         Msg::DialogButtonOk => "OK",
         Msg::DialogButtonCancel => "Cancel",
+        Msg::DialogButtonEnableGitSync => "Enable Git Sync",
+        Msg::DialogButtonThisComputer => "This Computer",
+        Msg::DialogButtonRemoteVersion => "Remote Version",
+        Msg::DialogButtonFinishMerge => "Finish Merge",
+        Msg::DialogButtonFinishAndPush => "Finish and Push",
+        Msg::DialogButtonAbortMerge => "Abort Merge",
         Msg::DialogButtonDiscard => "Discard",
         Msg::DialogButtonDelete => "Delete",
         Msg::DialogButtonReset => "Reset",
@@ -3418,6 +3468,8 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelOtherSection => "Other",
         Msg::PrefPanelTypographySection => "Document typography",
         Msg::PrefPanelAutoSaveSection => "Auto-save",
+        Msg::PrefPanelGitSection => "Git Sync",
+        Msg::PrefPanelGitBackgroundCheck => "Check active workspace in background",
         Msg::PrefPanelSilentSave => "Auto-save to file",
         Msg::PrefPanelAutoSaveDelay => "Idle delay",
         Msg::PrefPanelEditorFontSize => "Source font size",
@@ -3548,6 +3600,9 @@ fn ja(msg: Msg) -> &'static str {
         Msg::ItemClearRecentFiles => "最近使ったファイルをクリア",
         Msg::ItemSave => "保存",
         Msg::ItemSaveAs => "名前を付けて保存",
+        Msg::ItemGitSyncSetup => "Git 同期を設定",
+        Msg::ItemGitSyncNow => "今すぐ同期",
+        Msg::ItemGitResolveConflict => "Git 競合を解決",
         Msg::ItemNewTab => "新しいタブ",
         Msg::ItemOpenInNewTab => "新しいタブで開く",
         Msg::ItemCloseTab => "タブを閉じる",
@@ -3829,6 +3884,22 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusSampleThemeSaveFailed => "サンプルテーマの保存に失敗しました: {0}",
         Msg::StatusSaved => "{0} を保存しました",
         Msg::StatusSaveFailed => "保存に失敗しました: {0}",
+        Msg::StatusGitSyncRunning => "Git でノートを同期しています…",
+        Msg::StatusGitSyncComplete => "Git 同期が完了しました",
+        Msg::StatusGitSyncFailed => "Git 同期に対応が必要です: {0}",
+        Msg::StatusGitSyncNotConfigured => "このワークスペースでは Git 同期が設定されていません",
+        Msg::StatusGitSyncConfigured => "{0} の Git 同期を設定しました",
+        Msg::StatusGitIncoming => "受信する Git コミットが {0} 件あります",
+        Msg::StatusGitAuthenticationPaused => {
+            "認証できるまでバックグラウンド Git 確認を停止しました"
+        }
+        Msg::StatusGitWorkspaceUpdating => "Git 同期がこのワークスペースを更新しています",
+        Msg::DialogGitSyncSetupDetail => {
+            "{0}\n\nブランチ: {1}\n現在の Git 変更: {2}\n\n追跡済みファイルと、新しい Markdown、テキスト、対応画像を含めます。隠しファイル、シンボリックリンク、入れ子のリポジトリ、その他のバイナリは確認が必要です。"
+        }
+        Msg::DialogGitConflictDetail => {
+            "{0} に残す版を選択してください。すべての競合を解決した後でマージを完了できます。"
+        }
         Msg::StatusSaveCanceled => "保存をキャンセルしました",
         Msg::StatusExportCanceled => "エクスポートをキャンセルしました",
         Msg::StatusChoosingExportLocation => ".{0} の出力先を選択中...",
@@ -3879,6 +3950,12 @@ fn ja(msg: Msg) -> &'static str {
 
         Msg::DialogButtonOk => "OK",
         Msg::DialogButtonCancel => "キャンセル",
+        Msg::DialogButtonEnableGitSync => "Git 同期を有効化",
+        Msg::DialogButtonThisComputer => "このコンピューター",
+        Msg::DialogButtonRemoteVersion => "リモート版",
+        Msg::DialogButtonFinishMerge => "マージを完了",
+        Msg::DialogButtonFinishAndPush => "完了してプッシュ",
+        Msg::DialogButtonAbortMerge => "マージを中止",
         Msg::DialogButtonDiscard => "破棄",
         Msg::DialogButtonDelete => "削除",
         Msg::DialogButtonReset => "リセット",
@@ -3999,6 +4076,8 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelOtherSection => "その他",
         Msg::PrefPanelTypographySection => "文書の文字設定",
         Msg::PrefPanelAutoSaveSection => "自動保存",
+        Msg::PrefPanelGitSection => "Git 同期",
+        Msg::PrefPanelGitBackgroundCheck => "アクティブなワークスペースをバックグラウンドで確認",
         Msg::PrefPanelSilentSave => "ファイルへ自動保存",
         Msg::PrefPanelAutoSaveDelay => "アイドル間隔",
         Msg::PrefPanelEditorFontSize => "ソースのフォントサイズ",
@@ -4121,6 +4200,9 @@ fn fr(msg: Msg) -> &'static str {
         Msg::ItemClearRecentFiles => "Effacer les fichiers récents",
         Msg::ItemSave => "Enregistrer",
         Msg::ItemSaveAs => "Enregistrer sous",
+        Msg::ItemGitSyncSetup => "Configurer la synchronisation Git",
+        Msg::ItemGitSyncNow => "Synchroniser maintenant",
+        Msg::ItemGitResolveConflict => "Résoudre les conflits Git",
         Msg::ItemNewTab => "Nouvel onglet",
         Msg::ItemOpenInNewTab => "Ouvrir dans un nouvel onglet",
         Msg::ItemCloseTab => "Fermer l'onglet",
@@ -4402,6 +4484,24 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusSampleThemeSaveFailed => "Échec de l'enregistrement du thème d'exemple : {0}",
         Msg::StatusSaved => "{0} enregistré",
         Msg::StatusSaveFailed => "Échec de l'enregistrement : {0}",
+        Msg::StatusGitSyncRunning => "Synchronisation des notes avec Git…",
+        Msg::StatusGitSyncComplete => "Synchronisation Git terminée",
+        Msg::StatusGitSyncFailed => "La synchronisation Git nécessite une action : {0}",
+        Msg::StatusGitSyncNotConfigured => {
+            "La synchronisation Git n'est pas configurée pour cet espace"
+        }
+        Msg::StatusGitSyncConfigured => "Synchronisation Git configurée pour {0}",
+        Msg::StatusGitIncoming => "{0} commits Git entrants sont prêts à être synchronisés",
+        Msg::StatusGitAuthenticationPaused => {
+            "Les vérifications Git en arrière-plan sont suspendues jusqu’à l’authentification"
+        }
+        Msg::StatusGitWorkspaceUpdating => "La synchronisation Git met à jour cet espace",
+        Msg::DialogGitSyncSetupDetail => {
+            "{0}\n\nBranche : {1}\nModifications Git actuelles : {2}\n\nLes fichiers suivis, les nouveaux fichiers Markdown et texte, ainsi que les images prises en charge seront inclus. Les fichiers cachés, liens symboliques, dépôts imbriqués et autres binaires exigent une vérification."
+        }
+        Msg::DialogGitConflictDetail => {
+            "Choisissez la version à conserver pour {0}. Vous pourrez terminer la fusion après avoir résolu tous les conflits."
+        }
         Msg::StatusSaveCanceled => "Enregistrement annulé",
         Msg::StatusExportCanceled => "Exportation annulée",
         Msg::StatusChoosingExportLocation => "Choix de l'emplacement d'export .{0}...",
@@ -4455,6 +4555,12 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusFileMatches => "{0} correspondances de fichiers",
         Msg::DialogButtonOk => "OK",
         Msg::DialogButtonCancel => "Annuler",
+        Msg::DialogButtonEnableGitSync => "Activer la synchronisation Git",
+        Msg::DialogButtonThisComputer => "Cet ordinateur",
+        Msg::DialogButtonRemoteVersion => "Version distante",
+        Msg::DialogButtonFinishMerge => "Terminer la fusion",
+        Msg::DialogButtonFinishAndPush => "Terminer et pousser",
+        Msg::DialogButtonAbortMerge => "Annuler la fusion",
         Msg::DialogButtonDiscard => "Abandonner",
         Msg::DialogButtonDelete => "Supprimer",
         Msg::DialogButtonReset => "Réinitialiser",
@@ -4582,6 +4688,8 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelOtherSection => "Autre",
         Msg::PrefPanelTypographySection => "Typographie du document",
         Msg::PrefPanelAutoSaveSection => "Enregistrement automatique",
+        Msg::PrefPanelGitSection => "Synchronisation Git",
+        Msg::PrefPanelGitBackgroundCheck => "Vérifier l’espace actif en arrière-plan",
         Msg::PrefPanelSilentSave => "Enregistrer automatiquement vers le fichier",
         Msg::PrefPanelAutoSaveDelay => "Délai d'inactivité",
         Msg::PrefPanelEditorFontSize => "Taille de la source",
@@ -4708,6 +4816,9 @@ fn de(msg: Msg) -> &'static str {
         Msg::ItemClearRecentFiles => "Zuletzt geöffnete Dateien leeren",
         Msg::ItemSave => "Speichern",
         Msg::ItemSaveAs => "Speichern unter",
+        Msg::ItemGitSyncSetup => "Git-Synchronisierung einrichten",
+        Msg::ItemGitSyncNow => "Jetzt synchronisieren",
+        Msg::ItemGitResolveConflict => "Git-Konflikte lösen",
         Msg::ItemNewTab => "Neuer Tab",
         Msg::ItemOpenInNewTab => "In neuem Tab öffnen",
         Msg::ItemCloseTab => "Tab schließen",
@@ -4981,6 +5092,26 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusSampleThemeSaveFailed => "Speichern des Beispiel-Designs fehlgeschlagen: {0}",
         Msg::StatusSaved => "{0} gespeichert",
         Msg::StatusSaveFailed => "Speichern fehlgeschlagen: {0}",
+        Msg::StatusGitSyncRunning => "Notizen werden mit Git synchronisiert…",
+        Msg::StatusGitSyncComplete => "Git-Synchronisierung abgeschlossen",
+        Msg::StatusGitSyncFailed => "Git-Synchronisierung erfordert eine Aktion: {0}",
+        Msg::StatusGitSyncNotConfigured => {
+            "Git-Synchronisierung ist für diesen Arbeitsbereich nicht eingerichtet"
+        }
+        Msg::StatusGitSyncConfigured => "Git-Synchronisierung für {0} eingerichtet",
+        Msg::StatusGitIncoming => "{0} eingehende Git-Commits können synchronisiert werden",
+        Msg::StatusGitAuthenticationPaused => {
+            "Git-Hintergrundprüfungen pausieren bis zur Authentifizierung"
+        }
+        Msg::StatusGitWorkspaceUpdating => {
+            "Die Git-Synchronisierung aktualisiert diesen Arbeitsbereich"
+        }
+        Msg::DialogGitSyncSetupDetail => {
+            "{0}\n\nBranch: {1}\nAktuelle Git-Änderungen: {2}\n\nVerfolgte Dateien sowie neue Markdown-, Text- und unterstützte Bilddateien werden einbezogen. Versteckte Dateien, Symlinks, verschachtelte Repositorys und andere Binärdateien erfordern eine Prüfung."
+        }
+        Msg::DialogGitConflictDetail => {
+            "Wählen Sie die Version für {0}. Nach dem Lösen aller Konflikte können Sie den Merge abschließen."
+        }
         Msg::StatusSaveCanceled => "Speichern abgebrochen",
         Msg::StatusExportCanceled => "Export abgebrochen",
         Msg::StatusChoosingExportLocation => "Exportziel für .{0} wählen...",
@@ -5032,6 +5163,12 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusFileMatches => "{0} Dateitreffer",
         Msg::DialogButtonOk => "OK",
         Msg::DialogButtonCancel => "Abbrechen",
+        Msg::DialogButtonEnableGitSync => "Git-Synchronisierung aktivieren",
+        Msg::DialogButtonThisComputer => "Dieser Computer",
+        Msg::DialogButtonRemoteVersion => "Remote-Version",
+        Msg::DialogButtonFinishMerge => "Merge abschließen",
+        Msg::DialogButtonFinishAndPush => "Abschließen und pushen",
+        Msg::DialogButtonAbortMerge => "Merge abbrechen",
         Msg::DialogButtonDiscard => "Verwerfen",
         Msg::DialogButtonDelete => "Löschen",
         Msg::DialogButtonReset => "Zurücksetzen",
@@ -5157,6 +5294,8 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelOtherSection => "Sonstiges",
         Msg::PrefPanelTypographySection => "Dokumenttypografie",
         Msg::PrefPanelAutoSaveSection => "Automatisches Speichern",
+        Msg::PrefPanelGitSection => "Git-Synchronisierung",
+        Msg::PrefPanelGitBackgroundCheck => "Aktiven Arbeitsbereich im Hintergrund prüfen",
         Msg::PrefPanelSilentSave => "Automatisch in Datei speichern",
         Msg::PrefPanelAutoSaveDelay => "Leerlaufintervall",
         Msg::PrefPanelEditorFontSize => "Quelltext-Schriftgröße",
@@ -5283,6 +5422,9 @@ fn es(msg: Msg) -> &'static str {
         Msg::ItemClearRecentFiles => "Borrar archivos recientes",
         Msg::ItemSave => "Guardar",
         Msg::ItemSaveAs => "Guardar como",
+        Msg::ItemGitSyncSetup => "Configurar sincronización Git",
+        Msg::ItemGitSyncNow => "Sincronizar ahora",
+        Msg::ItemGitResolveConflict => "Resolver conflictos de Git",
         Msg::ItemNewTab => "Nueva pestaña",
         Msg::ItemOpenInNewTab => "Abrir en nueva pestaña",
         Msg::ItemCloseTab => "Cerrar pestaña",
@@ -5558,6 +5700,24 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusSampleThemeSaveFailed => "Error al guardar tema de ejemplo: {0}",
         Msg::StatusSaved => "{0} guardado",
         Msg::StatusSaveFailed => "Error al guardar: {0}",
+        Msg::StatusGitSyncRunning => "Sincronizando notas con Git…",
+        Msg::StatusGitSyncComplete => "Sincronización Git completada",
+        Msg::StatusGitSyncFailed => "La sincronización Git requiere atención: {0}",
+        Msg::StatusGitSyncNotConfigured => {
+            "La sincronización Git no está configurada para este espacio"
+        }
+        Msg::StatusGitSyncConfigured => "Sincronización Git configurada para {0}",
+        Msg::StatusGitIncoming => "Hay {0} commits de Git entrantes listos para sincronizar",
+        Msg::StatusGitAuthenticationPaused => {
+            "Las comprobaciones de Git en segundo plano están pausadas hasta autenticarse"
+        }
+        Msg::StatusGitWorkspaceUpdating => "La sincronización Git está actualizando este espacio",
+        Msg::DialogGitSyncSetupDetail => {
+            "{0}\n\nRama: {1}\nCambios Git actuales: {2}\n\nSe incluirán los archivos seguidos, los nuevos archivos Markdown y de texto, y las imágenes compatibles. Los archivos ocultos, enlaces simbólicos, repositorios anidados y otros binarios requieren revisión."
+        }
+        Msg::DialogGitConflictDetail => {
+            "Elige qué versión conservar para {0}. Podrás terminar la fusión después de resolver todos los conflictos."
+        }
         Msg::StatusSaveCanceled => "Guardado cancelado",
         Msg::StatusExportCanceled => "Exportación cancelada",
         Msg::StatusChoosingExportLocation => "Eligiendo ubicación de exportación .{0}...",
@@ -5611,6 +5771,12 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusFileMatches => "{0} coincidencias de archivos",
         Msg::DialogButtonOk => "Aceptar",
         Msg::DialogButtonCancel => "Cancelar",
+        Msg::DialogButtonEnableGitSync => "Activar sincronización Git",
+        Msg::DialogButtonThisComputer => "Este equipo",
+        Msg::DialogButtonRemoteVersion => "Versión remota",
+        Msg::DialogButtonFinishMerge => "Terminar fusión",
+        Msg::DialogButtonFinishAndPush => "Terminar y enviar",
+        Msg::DialogButtonAbortMerge => "Cancelar fusión",
         Msg::DialogButtonDiscard => "Descartar",
         Msg::DialogButtonDelete => "Eliminar",
         Msg::DialogButtonReset => "Restablecer",
@@ -5724,6 +5890,8 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelOtherSection => "Otro",
         Msg::PrefPanelTypographySection => "Tipografía del documento",
         Msg::PrefPanelAutoSaveSection => "Autoguardado",
+        Msg::PrefPanelGitSection => "Sincronización Git",
+        Msg::PrefPanelGitBackgroundCheck => "Comprobar el espacio activo en segundo plano",
         Msg::PrefPanelSilentSave => "Autoguardar en archivo",
         Msg::PrefPanelAutoSaveDelay => "Retraso de inactividad",
         Msg::PrefPanelEditorFontSize => "Tamaño de fuente del código",
@@ -5847,6 +6015,9 @@ fn zh(msg: Msg) -> &'static str {
         Msg::ItemClearRecentFiles => "清除最近文件",
         Msg::ItemSave => "保存",
         Msg::ItemSaveAs => "另存为",
+        Msg::ItemGitSyncSetup => "设置 Git 同步",
+        Msg::ItemGitSyncNow => "立即同步",
+        Msg::ItemGitResolveConflict => "解决 Git 冲突",
         Msg::ItemNewTab => "新建标签页",
         Msg::ItemOpenInNewTab => "在新标签页打开",
         Msg::ItemCloseTab => "关闭标签页",
@@ -6124,6 +6295,18 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusSampleThemeSaveFailed => "示例主题保存失败：{0}",
         Msg::StatusSaved => "已保存 {0}",
         Msg::StatusSaveFailed => "保存失败：{0}",
+        Msg::StatusGitSyncRunning => "正在通过 Git 同步笔记…",
+        Msg::StatusGitSyncComplete => "Git 同步完成",
+        Msg::StatusGitSyncFailed => "Git 同步需要处理：{0}",
+        Msg::StatusGitSyncNotConfigured => "当前工作区尚未设置 Git 同步",
+        Msg::StatusGitSyncConfigured => "已为 {0} 设置 Git 同步",
+        Msg::StatusGitIncoming => "有 {0} 个传入 Git 提交可同步",
+        Msg::StatusGitAuthenticationPaused => "后台 Git 检查已暂停，等待身份验证可用",
+        Msg::StatusGitWorkspaceUpdating => "Git 同步正在更新当前工作区",
+        Msg::DialogGitSyncSetupDetail => {
+            "{0}\n\n分支：{1}\n当前 Git 更改：{2}\n\nMarkion 将包含已跟踪文件，以及新的 Markdown、文本和受支持图片。隐藏文件、符号链接、嵌套仓库和其他二进制文件需要检查。"
+        }
+        Msg::DialogGitConflictDetail => "请选择要为 {0} 保留的版本。解决全部冲突后即可完成合并。",
         Msg::StatusSaveCanceled => "已取消保存",
         Msg::StatusExportCanceled => "已取消导出",
         Msg::StatusChoosingExportLocation => "正在选择 .{0} 导出位置…",
@@ -6170,6 +6353,12 @@ fn zh(msg: Msg) -> &'static str {
 
         Msg::DialogButtonOk => "确定",
         Msg::DialogButtonCancel => "取消",
+        Msg::DialogButtonEnableGitSync => "启用 Git 同步",
+        Msg::DialogButtonThisComputer => "此电脑版本",
+        Msg::DialogButtonRemoteVersion => "远程版本",
+        Msg::DialogButtonFinishMerge => "完成合并",
+        Msg::DialogButtonFinishAndPush => "完成并推送",
+        Msg::DialogButtonAbortMerge => "放弃合并",
         Msg::DialogButtonDiscard => "放弃",
         Msg::DialogButtonDelete => "删除",
         Msg::DialogButtonReset => "重置",
@@ -6282,6 +6471,8 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelOtherSection => "其他",
         Msg::PrefPanelTypographySection => "文档排版",
         Msg::PrefPanelAutoSaveSection => "自动保存",
+        Msg::PrefPanelGitSection => "Git 同步",
+        Msg::PrefPanelGitBackgroundCheck => "在后台检查当前工作区",
         Msg::PrefPanelSilentSave => "自动保存到原文件",
         Msg::PrefPanelAutoSaveDelay => "空闲间隔",
         Msg::PrefPanelEditorFontSize => "源码字号",
@@ -6399,6 +6590,9 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::ItemClearRecentFiles => "清除最近檔案",
         Msg::ItemSave => "儲存",
         Msg::ItemSaveAs => "另存新檔",
+        Msg::ItemGitSyncSetup => "設定 Git 同步",
+        Msg::ItemGitSyncNow => "立即同步",
+        Msg::ItemGitResolveConflict => "解決 Git 衝突",
         Msg::ItemNewTab => "新增分頁",
         Msg::ItemOpenInNewTab => "在新分頁開啟",
         Msg::ItemCloseTab => "關閉分頁",
@@ -6676,6 +6870,18 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusSampleThemeSaveFailed => "範例佈景主題儲存失敗：{0}",
         Msg::StatusSaved => "已儲存 {0}",
         Msg::StatusSaveFailed => "儲存失敗：{0}",
+        Msg::StatusGitSyncRunning => "正在透過 Git 同步筆記…",
+        Msg::StatusGitSyncComplete => "Git 同步完成",
+        Msg::StatusGitSyncFailed => "Git 同步需要處理：{0}",
+        Msg::StatusGitSyncNotConfigured => "目前工作區尚未設定 Git 同步",
+        Msg::StatusGitSyncConfigured => "已為 {0} 設定 Git 同步",
+        Msg::StatusGitIncoming => "有 {0} 個傳入 Git 提交可同步",
+        Msg::StatusGitAuthenticationPaused => "背景 Git 檢查已暫停，等待身分驗證可用",
+        Msg::StatusGitWorkspaceUpdating => "Git 同步正在更新目前工作區",
+        Msg::DialogGitSyncSetupDetail => {
+            "{0}\n\n分支：{1}\n目前 Git 變更：{2}\n\nMarkion 將包含已追蹤檔案，以及新的 Markdown、文字和支援的圖片。隱藏檔案、符號連結、巢狀儲存庫和其他二進位檔案需要檢查。"
+        }
+        Msg::DialogGitConflictDetail => "請選擇要為 {0} 保留的版本。解決所有衝突後即可完成合併。",
         Msg::StatusSaveCanceled => "已取消儲存",
         Msg::StatusExportCanceled => "已取消匯出",
         Msg::StatusChoosingExportLocation => "正在選擇 .{0} 匯出位置…",
@@ -6722,6 +6928,12 @@ fn zh_hant(msg: Msg) -> &'static str {
 
         Msg::DialogButtonOk => "確定",
         Msg::DialogButtonCancel => "取消",
+        Msg::DialogButtonEnableGitSync => "啟用 Git 同步",
+        Msg::DialogButtonThisComputer => "此電腦版本",
+        Msg::DialogButtonRemoteVersion => "遠端版本",
+        Msg::DialogButtonFinishMerge => "完成合併",
+        Msg::DialogButtonFinishAndPush => "完成並推送",
+        Msg::DialogButtonAbortMerge => "放棄合併",
         Msg::DialogButtonDiscard => "放棄",
         Msg::DialogButtonDelete => "刪除",
         Msg::DialogButtonReset => "重設",
@@ -6834,6 +7046,8 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelOtherSection => "其他",
         Msg::PrefPanelTypographySection => "文件排版",
         Msg::PrefPanelAutoSaveSection => "自動儲存",
+        Msg::PrefPanelGitSection => "Git 同步",
+        Msg::PrefPanelGitBackgroundCheck => "在背景檢查目前工作區",
         Msg::PrefPanelSilentSave => "自動儲存到原檔案",
         Msg::PrefPanelAutoSaveDelay => "閒置間隔",
         Msg::PrefPanelEditorFontSize => "原始碼字號",
@@ -7363,6 +7577,9 @@ mod tests {
             Msg::ItemClearRecentFiles,
             Msg::ItemSave,
             Msg::ItemSaveAs,
+            Msg::ItemGitSyncSetup,
+            Msg::ItemGitSyncNow,
+            Msg::ItemGitResolveConflict,
             Msg::ItemNewTab,
             Msg::ItemOpenInNewTab,
             Msg::ItemCloseTab,
@@ -7612,6 +7829,16 @@ mod tests {
             Msg::StatusSampleThemeSaveFailed,
             Msg::StatusSaved,
             Msg::StatusSaveFailed,
+            Msg::StatusGitSyncRunning,
+            Msg::StatusGitSyncComplete,
+            Msg::StatusGitSyncFailed,
+            Msg::StatusGitSyncNotConfigured,
+            Msg::StatusGitSyncConfigured,
+            Msg::StatusGitIncoming,
+            Msg::StatusGitAuthenticationPaused,
+            Msg::StatusGitWorkspaceUpdating,
+            Msg::DialogGitSyncSetupDetail,
+            Msg::DialogGitConflictDetail,
             Msg::StatusSaveCanceled,
             Msg::StatusExportCanceled,
             Msg::StatusChoosingExportLocation,
@@ -7650,6 +7877,12 @@ mod tests {
             Msg::StatusFileMatches,
             Msg::DialogButtonOk,
             Msg::DialogButtonCancel,
+            Msg::DialogButtonEnableGitSync,
+            Msg::DialogButtonThisComputer,
+            Msg::DialogButtonRemoteVersion,
+            Msg::DialogButtonFinishMerge,
+            Msg::DialogButtonFinishAndPush,
+            Msg::DialogButtonAbortMerge,
             Msg::DialogButtonDiscard,
             Msg::DialogButtonDelete,
             Msg::DialogButtonReset,
@@ -7741,6 +7974,8 @@ mod tests {
             Msg::PrefPanelOtherSection,
             Msg::PrefPanelTypographySection,
             Msg::PrefPanelAutoSaveSection,
+            Msg::PrefPanelGitSection,
+            Msg::PrefPanelGitBackgroundCheck,
             Msg::PrefPanelSilentSave,
             Msg::PrefPanelAutoSaveDelay,
             Msg::PrefPanelEditorFontSize,

@@ -45,6 +45,14 @@ pub fn default_session_path() -> PathBuf {
     default_config_dir().join("session.toml")
 }
 
+pub fn default_git_sync_policy_path() -> PathBuf {
+    default_config_dir().join("git-sync.toml")
+}
+
+pub fn default_git_sync_data_dir() -> PathBuf {
+    default_config_dir().join("git-sync-data")
+}
+
 pub fn default_log_dir() -> PathBuf {
     if cfg!(windows) {
         env::var_os("LOCALAPPDATA")

@@ -259,6 +259,7 @@ fn delayed_reload_cannot_overwrite_intervening_edits(cx: &mut TestAppContext) {
             read_for_reload: true,
             instance: tab.document.instance_id(),
             version: tab.document.version(),
+            repository_epoch: None,
         }
     });
 

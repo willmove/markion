@@ -275,6 +275,20 @@ impl MarkionApp {
     }
 
     pub(super) fn try_save_named_tab(&mut self, index: usize) -> NamedSave {
+        let target_path = self
+            .tabs
+            .get(index)
+            .and_then(|tab| tab.document_tab())
+            .and_then(|state| state.document.path())
+            .map(Path::to_path_buf);
+        let _admission = match target_path
+            .as_ref()
+            .map(|path| self.git_operations.try_write(path))
+            .transpose()
+        {
+            Ok(admission) => admission,
+            Err(_) => return NamedSave::Failed,
+        };
         let (display_path, saved_path, save_result) = {
             let Some(state) = self
                 .tabs
@@ -332,6 +346,13 @@ impl MarkionApp {
             self.switch_active_tab(index, cx);
         }
         let display_path = path.display().to_string();
+        let _admission = match self.git_operations.try_write(path) {
+            Ok(admission) => admission,
+            Err(_) => {
+                self.status = t(self.language, Msg::StatusGitWorkspaceUpdating).into();
+                return false;
+            }
+        };
         let save_result = self.tabs[index]
             .document_tab_mut()
             .map(|tab| tab.document.save_as(path));
@@ -734,6 +755,18 @@ impl MarkionApp {
             .map(|path| path.display().to_string())
             .unwrap_or_default();
         let saved_path = self.active_tab().document.path().map(Path::to_path_buf);
+        let _admission = match saved_path
+            .as_ref()
+            .map(|path| self.git_operations.try_write(path))
+            .transpose()
+        {
+            Ok(admission) => admission,
+            Err(_) => {
+                self.status = t(self.language, Msg::StatusGitWorkspaceUpdating).into();
+                cx.notify();
+                return;
+            }
+        };
         let save_result = self.active_tab_mut().document.save();
         if save_result
             .as_ref()
@@ -789,6 +822,19 @@ impl MarkionApp {
             }
             Ok(1) => {
                 let _ = this.update(cx, |app, cx| {
+                    let path = app.active_tab().document.path().map(Path::to_path_buf);
+                    let _admission = match path
+                        .as_ref()
+                        .map(|path| app.git_operations.try_write(path))
+                        .transpose()
+                    {
+                        Ok(admission) => admission,
+                        Err(_) => {
+                            app.status = t(app.language, Msg::StatusGitWorkspaceUpdating).into();
+                            cx.notify();
+                            return;
+                        }
+                    };
                     match app.active_tab_mut().document.force_save() {
                         Ok(()) => {
                             app.active_tab_mut().external_conflict = None;
@@ -877,6 +923,15 @@ impl MarkionApp {
                 Some(path) => {
                     let display_path = path.display().to_string();
                     let _ = this.update(cx, |app, cx| {
+                        let _admission = match app.git_operations.try_write(&path) {
+                            Ok(admission) => admission,
+                            Err(_) => {
+                                app.status =
+                                    t(app.language, Msg::StatusGitWorkspaceUpdating).into();
+                                cx.notify();
+                                return;
+                            }
+                        };
                         let save_result = app.active_tab_mut().document.save_as(&path);
                         app.status = match save_result {
                             Ok(()) => {
@@ -1008,6 +1063,10 @@ impl MarkionApp {
                     // text fallback). Exporting the snapshot means slow
                     // downloads can never export the wrong tab.
                     let snapshot = this.update(cx, |app, _| {
+                        let admission = app
+                            .git_operations
+                            .try_write(&path)
+                            .map_err(|error| error.to_string())?;
                         let tab = app.active_tab();
                         // PDF always embeds images (no image policy); DOCX
                         // embeds unless the text-fallback policy is active.
@@ -1016,13 +1075,22 @@ impl MarkionApp {
                         let remote_urls = embeds_images
                             .then(|| tab.document.remote_image_urls())
                             .filter(|urls| !urls.is_empty());
-                        (
+                        Ok::<_, String>((
                             tab.document.clone(),
                             app.export_preferences.clone(),
                             remote_urls,
-                        )
+                            admission,
+                        ))
                     });
-                    let Ok((document, export_preferences, remote_urls)) = snapshot else {
+                    let Ok(Ok((document, export_preferences, remote_urls, admission))) = snapshot
+                    else {
+                        let _ = this.update(cx, |app, cx| {
+                            app.status = app.trf(
+                                Msg::StatusGitSyncFailed,
+                                &["the export destination is being updated"],
+                            );
+                            cx.notify();
+                        });
                         return;
                     };
                     let remote_images = if let Some(urls) = remote_urls {
@@ -1036,6 +1104,7 @@ impl MarkionApp {
                         HashMap::new()
                     };
                     let _ = this.update(cx, |app, cx| {
+                        let _admission = admission;
                         let language = app.language;
                         let outcome = document.export_to_with(
                             &path,
