@@ -44,6 +44,8 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemNew), NewDocument),
                 MenuItem::action(t(language, Msg::ItemOpen), OpenDocument),
                 MenuItem::action(t(language, Msg::ItemOpenFolder), OpenFolder),
+                MenuItem::action(t(language, Msg::ItemImportDocx), ImportDocx),
+                MenuItem::action(t(language, Msg::ItemCancelDocxImport), CancelDocxImport),
                 MenuItem::action(t(language, Msg::ItemSave), SaveDocument),
                 MenuItem::action(t(language, Msg::ItemSaveAs), SaveDocumentAs),
                 MenuItem::separator(),

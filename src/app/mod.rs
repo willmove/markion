@@ -124,6 +124,8 @@ actions!(
         NewDocument,
         OpenDocument,
         OpenFolder,
+        ImportDocx,
+        CancelDocxImport,
         ClearRecentFiles,
         SaveDocument,
         SaveDocumentAs,
@@ -2128,6 +2130,7 @@ mod application;
 mod bootstrap;
 mod diagram;
 mod documents;
+mod docx_import;
 mod editing;
 mod editor_element;
 mod export_prefs;
@@ -2206,6 +2209,8 @@ struct MarkionApp {
     /// Process-owned, lazily created loopback publishing service. `None`
     /// keeps ordinary startup/editing entirely free of bundle and socket work.
     publishing_service: Option<wechat_workspace::WorkspaceService>,
+    /// Coordinates one bounded worker and rejects canceled/superseded results.
+    docx_import: docx_import::DocxImportCoordinator,
     browser_launcher: Arc<dyn publishing::BrowserLauncher>,
     /// Filesystem-derived Git context is cached separately from documents so
     /// render/input never perform repository I/O and undo snapshots stay pure.
