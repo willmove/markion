@@ -8,6 +8,207 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 // under `-D warnings`.
 use markion::{FileTreeFileKind, ThemeFonts};
 
+fn assert_visual_typewriter_frames(
+    app: &Entity<MarkionApp>,
+    window: &mut Window,
+    cx: &mut App,
+    step: &str,
+) {
+    let (version, undo_len, blocks, text) = app.update(cx, |app, _| {
+        let tab = app.active_tab_mut();
+        (
+            tab.document.version(),
+            tab.undo_stack.len(),
+            tab.document.visual_blocks_shared(),
+            tab.shared_document_text(),
+        )
+    });
+    // Keep input and these draws in one App update: flushing effects between
+    // them lets the test platform draw the transient jump before we inspect it.
+    for frame in 0..TYPEWRITER_VISUAL_REFINEMENT_FRAMES + 3 {
+        let painted = app.read(cx).active_tab().visual_caret_paint_count;
+        window.refresh();
+        let _ = window.draw(cx);
+        app.update(cx, |app, _| {
+            let tab = app.active_tab_mut();
+            assert!(
+                tab.visual_caret_paint_count > painted,
+                "{step}: current caret must paint"
+            );
+            let caret = tab.visual_caret_bounds.expect("measured current caret");
+            let delta = typewriter_center_delta(tab.visual_list.viewport_bounds(), caret)
+                .expect("valid viewport");
+            assert!(
+                f32::from(delta).abs() <= 1.,
+                "{step} frame={frame}: typewriter caret displaced: {delta:?}, top={:?}",
+                tab.visual_list.logical_scroll_top(),
+            );
+            assert_eq!(tab.document.version(), version);
+            assert_eq!(tab.undo_stack.len(), undo_len);
+            assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+            assert_eq!(text.as_ptr(), tab.shared_document_text().as_ptr());
+        });
+    }
+}
+
+#[gpui::test]
+fn visual_typewriter_small_window_short_document(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(""))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = true;
+        app.sidebar_visible = false;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(400.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    for step in 0..12 {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                if step % 2 == 0 {
+                    EntityInputHandler::replace_text_in_range(app, None, "测试", window, cx);
+                } else {
+                    app.insert_newline(&InsertNewline, window, cx);
+                }
+            });
+            assert_visual_typewriter_frames(&app, window, cx, &format!("step {step}"));
+        });
+    }
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).active_tab().document.text(),
+            "测试\n".repeat(6)
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_typewriter_small_window_consecutive_enters_do_not_alternate(cx: &mut TestAppContext) {
+    let source = "Body";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = true;
+        app.sidebar_visible = false;
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.center_cursor_if_typewriter();
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(400.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    for press in 1..=8 {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| app.insert_newline(&InsertNewline, window, cx));
+            app.update(cx, |app, _| {
+                let tab = app.active_tab();
+                let blocks = tab.document.visual_blocks_shared();
+                let tail = blocks.last().expect("visual tail row");
+                assert!(
+                    matches!(tail.kind, VisualBlockKind::Whitespace),
+                    "press={press}: every terminal Enter must immediately create the caret's blank visual row: {blocks:#?}"
+                );
+                assert_eq!(
+                    tail.source_range.end,
+                    tab.document.text().len(),
+                    "press={press}: terminal whitespace row owns the source caret"
+                );
+            });
+            for frame in 0..TYPEWRITER_VISUAL_REFINEMENT_FRAMES + 3 {
+                window.refresh();
+                let _ = window.draw(cx);
+                app.update(cx, |app, _| {
+                    let tab = app.active_tab();
+                    let caret = tab.visual_caret_bounds.expect("current repeated-Enter caret");
+                    let viewport = tab.visual_list.viewport_bounds();
+                    let delta = typewriter_center_delta(viewport, caret).expect("valid viewport");
+                    assert!(
+                        f32::from(delta).abs() <= 1.,
+                        "press={press} frame={frame}: caret alternated away from center: {delta:?}"
+                    );
+                });
+            }
+        });
+    }
+}
+
+#[gpui::test]
+fn visual_typewriter_small_window_composition_wrap_and_resize(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("测试\n"))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = true;
+        app.sidebar_visible = false;
+        let end = app.active_tab().document.text().len();
+        app.active_tab_mut().selected_range = end..end;
+        app
+    });
+    cx.simulate_resize(size(px(480.), px(300.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    for _ in 0..3 {
+        for composition in ["c", "ce", "ceshi"] {
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    EntityInputHandler::replace_and_mark_text_in_range(
+                        app,
+                        None,
+                        composition,
+                        None,
+                        window,
+                        cx,
+                    );
+                });
+                assert_visual_typewriter_frames(&app, window, cx, composition);
+            });
+        }
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                EntityInputHandler::replace_text_in_range(app, None, "测试", window, cx);
+            });
+            assert_visual_typewriter_frames(&app, window, cx, "IME commit");
+            app.update(cx, |app, cx| app.insert_newline(&InsertNewline, window, cx));
+            assert_visual_typewriter_frames(&app, window, cx, "newline");
+        });
+    }
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).active_tab().document.text(),
+            "测试\n".repeat(4)
+        );
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_text_in_range(
+                app,
+                None,
+                &"wrapped words ".repeat(80),
+                window,
+                cx,
+            );
+        });
+        assert_visual_typewriter_frames(&app, window, cx, "wrapped paragraph");
+    });
+    cx.simulate_resize(size(px(380.), px(260.)));
+    cx.update(|window, cx| assert_visual_typewriter_frames(&app, window, cx, "resize"));
+}
+
 #[gpui::test]
 fn publishing_browser_handoff_preserves_gpui_tab_and_document_state(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));

@@ -2164,6 +2164,8 @@ mod focus_mode_tests;
 mod mutation_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod typewriter_content_tests;
 
 use bootstrap::{bind_app_keys, install_menus};
 use diagram::*;

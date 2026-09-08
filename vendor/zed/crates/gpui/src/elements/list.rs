@@ -820,9 +820,32 @@ impl StateInner {
                         && autoscroll
                     {
                         if autoscroll_bounds.top() < bounds.top() {
+                            let mut cursor = self.items.cursor::<Count>(());
+                            cursor.seek(&Count(item.index), Bias::Right);
+                            let mut offset_in_item = autoscroll_bounds.top() - item_origin.y;
+
+                            // A child can request space above its own item (for
+                            // example, a viewport-sized caret-centering region).
+                            // Resolve that position to a preceding item before
+                            // retrying: layout starts at item_ix and leading
+                            // overdraw only measures, rather than paints, earlier
+                            // items. Keeping a negative offset here omits visible
+                            // predecessors even though the target is positioned.
+                            while offset_in_item < Pixels::ZERO && cursor.start().0 > 0 {
+                                cursor.prev();
+                                let Some(previous) = cursor.item() else { break };
+                                let size = previous.size().unwrap_or_else(|| {
+                                    let mut element = render_item(cursor.start().0, window, cx);
+                                    let available_size =
+                                        size(bounds.size.width.into(), AvailableSpace::MinContent);
+                                    element.layout_as_root(available_size, window, cx)
+                                });
+                                offset_in_item += size.height;
+                            }
+
                             return Err(ListOffset {
-                                item_ix: item.index,
-                                offset_in_item: autoscroll_bounds.top() - item_origin.y,
+                                item_ix: cursor.start().0,
+                                offset_in_item: offset_in_item.max(Pixels::ZERO),
                             });
                         } else if autoscroll_bounds.bottom() > bounds.bottom() {
                             let mut cursor = self.items.cursor::<Count>(());

@@ -629,6 +629,81 @@ pub(super) struct VisualInputElement {
     pub(super) app: Entity<MarkionApp>,
 }
 
+/// Publish current viewport geometry before List measures its rows. In
+/// particular, the first typed row needs its leading space on its first frame.
+pub(super) struct VisualListElement {
+    pub(super) list: gpui::List,
+    pub(super) app: Entity<MarkionApp>,
+}
+
+impl IntoElement for VisualListElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for VisualListElement {
+    type RequestLayoutState = <gpui::List as Element>::RequestLayoutState;
+    type PrepaintState = <gpui::List as Element>::PrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        self.list.request_layout(id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        state: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.app.update(cx, |app, _| {
+            let enabled = app.typewriter_mode;
+            let tab = app.active_tab_mut();
+            let changed = tab.visual_typewriter_viewport != Some(bounds);
+            tab.visual_typewriter_viewport = Some(bounds);
+            tab.refresh_visual_end_padding_for_height(bounds.size.height);
+            if enabled && changed {
+                tab.request_typewriter_recenter(TypewriterSurface::Visual);
+            }
+        });
+        self.list
+            .prepaint(id, inspector_id, bounds, state, window, cx)
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        state: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.list
+            .paint(id, inspector_id, bounds, state, prepaint, window, cx);
+    }
+}
+
 impl IntoElement for VisualInputElement {
     type Element = Self;
 
@@ -771,6 +846,25 @@ struct WhitespaceCaretLayout {
     line_height: f32,
 }
 
+impl VisualEditableText {
+    /// Resolve the same current-layout caret during prepaint and paint.
+    fn caret_bounds(&self, bounds: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+        if !self.caret_active {
+            return None;
+        }
+        if let Some(whitespace) = &self.whitespace_caret {
+            return Some(Bounds::new(
+                point(bounds.origin.x, bounds.origin.y + whitespace.caret_shift),
+                size(px(2.), px(whitespace.line_height)),
+            ));
+        }
+        let layout = self.text.layout();
+        let index = self.projection.display_for_source(self.source_cursor)?;
+        let position = layout.position_for_index(index)?;
+        Some(Bounds::new(position, size(px(2.), layout.line_height())))
+    }
+}
+
 impl Element for VisualEditableText {
     type RequestLayoutState = ();
     type PrepaintState = Hitbox;
@@ -812,6 +906,27 @@ impl Element for VisualEditableText {
             self.text
                 .prepaint(None, inspector_id, bounds, state, window, cx);
         }
+        let app = self.entity.read(cx);
+        if app.typewriter_mode
+            && matches!(app.view_mode, ViewMode::VisualEdit)
+            && app
+                .active_tab()
+                .typewriter_request_is_current(TypewriterSurface::Visual)
+            && let Some(caret) = self.caret_bounds(bounds)
+            && let Some(viewport) = app.active_tab().visual_typewriter_viewport
+        {
+            // List retries prepaint before painting if a child requests autoscroll.
+            // A viewport-height rectangle around the caret centers it in this
+            // frame instead of displaying a jump and fixing it next frame.
+            if let Some(delta) = typewriter_center_delta(viewport, caret)
+                && typewriter_delta_requires_scroll(delta)
+            {
+                window.request_autoscroll(Bounds::new(
+                    point(caret.left(), viewport.top() + delta),
+                    size(caret.size.width, viewport.size.height),
+                ));
+            }
+        }
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
@@ -828,46 +943,7 @@ impl Element for VisualEditableText {
         let whitespace_caret = self.whitespace_caret.clone();
         let is_whitespace_row = whitespace_caret.is_some();
         let layout = (!is_whitespace_row).then(|| self.text.layout().clone());
-        let affinity = self
-            .entity
-            .read(cx)
-            .active_tab()
-            .current_visual_caret_affinity();
-        let caret_bounds = if let Some(whitespace) = whitespace_caret.as_ref() {
-            self.caret_active.then(|| {
-                Bounds::new(
-                    point(bounds.origin.x, bounds.origin.y + whitespace.caret_shift),
-                    size(px(2.), px(whitespace.line_height)),
-                )
-            })
-        } else {
-            self.caret_active
-                .then(|| {
-                    let display = self.projection.display_for_source(self.source_cursor)?;
-                    if let Some(affinity) = affinity {
-                        let candidates = self.projection.boundary_candidates(display);
-                        if candidates.is_ambiguous()
-                            && candidates.resolve(affinity) != self.source_cursor
-                        {
-                            return self.projection.display_for_source(self.source_cursor);
-                        }
-                    }
-                    Some(display)
-                })
-                .flatten()
-                .and_then(|index| layout.as_ref()?.position_for_index(index))
-                .map(|position| {
-                    let line_height = layout
-                        .as_ref()
-                        .map(|layout| layout.line_height())
-                        .unwrap_or(px(self
-                            .entity
-                            .read(cx)
-                            .typography_metrics()
-                            .paragraph_line_height));
-                    Bounds::new(position, size(px(2.), line_height))
-                })
-        };
+        let caret_bounds = self.caret_bounds(bounds);
         if self.source_selection.is_empty() {
             if let Some(caret_bounds) = caret_bounds {
                 #[cfg(test)]
@@ -1115,6 +1191,15 @@ impl Element for VisualEditableText {
         if !is_whitespace_row {
             self.text
                 .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+            #[cfg(test)]
+            self.entity.update(cx, |app, _| {
+                if let Some(paints) = app.active_tab_mut().visual_text_paints.as_mut() {
+                    paints.push((
+                        self.block_index,
+                        bounds.intersect(&window.content_mask().bounds),
+                    ));
+                }
+            });
         }
     }
 }

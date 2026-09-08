@@ -1728,6 +1728,7 @@ pub(super) fn visual_edit_surface_view(
 ) -> Div {
     let is_empty = items.is_empty();
     let input_bridge = VisualInputElement { app: cx.entity() };
+    let visual_list_app = cx.entity();
     let scrollbar_list = list_state.clone();
     let preview_row_line_height = typography.preview_row_line_height;
     let row_processor = cx.processor(move |app, ix: usize, _window, cx| {
@@ -1826,7 +1827,10 @@ pub(super) fn visual_edit_surface_view(
                             .size_full()
                             .pt(px(PANE_INNER_PADDING))
                             .pb(px(PANE_INNER_PADDING))
-                            .child(list(list_state, row_processor).size_full()),
+                            .child(VisualListElement {
+                                list: list(list_state, row_processor).size_full(),
+                                app: visual_list_app,
+                            }),
                     )
                 }),
         )

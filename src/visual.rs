@@ -632,7 +632,10 @@ pub(crate) fn build_visual_blocks(
                     .clone()
                     .unwrap_or_else(|| leaf.block.source_range().clone());
             }
-            let range = visual_block_source_range(text, leaf.block);
+            let mut range = visual_block_source_range(text, leaf.block);
+            if leaf.quote_group.is_none() {
+                range = split_terminal_blank_row(text, leaf.block, range);
+            }
             leaf.quote_group.as_ref().map_or(range.clone(), |group| {
                 quoted_leaf_source_range(text, range, group)
             })
@@ -1740,6 +1743,34 @@ fn visual_block_source_range(text: &str, block: &PreviewBlock) -> Range<usize> {
         {
             range.start = line_start;
         }
+    }
+    range
+}
+
+fn split_terminal_blank_row(
+    text: &str,
+    block: &PreviewBlock,
+    mut range: Range<usize>,
+) -> Range<usize> {
+    if !matches!(
+        block,
+        PreviewBlock::Paragraph { .. } | PreviewBlock::Heading { .. }
+    ) || range.end <= range.start
+        || !text[range.end..].trim().is_empty()
+        || text.as_bytes().get(range.end - 1) != Some(&b'\n')
+    {
+        return range;
+    }
+
+    // pulldown-cmark includes the first terminal line ending in a paragraph
+    // or heading range even though no inline run renders it. Leave that line
+    // ending to the coverage gap so Visual Edit creates a real whitespace row
+    // for the source caret after the very first Enter. Further Enters then grow
+    // the same tail row instead of alternating between a hidden marker and a
+    // visible blank row.
+    range.end -= 1;
+    if range.end > range.start && text.as_bytes().get(range.end - 1) == Some(&b'\r') {
+        range.end -= 1;
     }
     range
 }
@@ -3837,17 +3868,32 @@ mod tests {
     }
 
     #[test]
-    fn unquoted_multiline_paragraph_projection_is_unchanged() {
+    fn unquoted_multiline_paragraph_splits_terminal_caret_row() {
         let source = "alpha\nbeta\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
-        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks.len(), 2);
         let block = &blocks[0];
         let cursor = block.editable_runs[0].content_range.start;
         let projection = build_visual_projection(source, block, cursor..cursor, cursor);
         assert_eq!(projection.text, "alpha\nbeta");
-        // Only the trailing newline stays structural, as before.
-        assert_eq!(block.marker_ranges, vec![source.len() - 1..source.len()]);
+        assert_eq!(block.source_range, 0..source.len() - 1);
+        assert!(block.marker_ranges.is_empty());
+        assert!(matches!(blocks[1].kind, VisualBlockKind::Whitespace));
+        assert_eq!(blocks[1].source_range, source.len() - 1..source.len());
+    }
+
+    #[test]
+    fn every_terminal_enter_is_owned_by_the_same_blank_visual_tail() {
+        for source in ["Body\n", "Body\n\n", "Body\n\n\n", "Body\r\n"] {
+            let blocks = MarkdownDocument::from_text(source).visual_blocks();
+            assert_eq!(blocks.len(), 2, "{source:?}: {blocks:#?}");
+            assert!(matches!(blocks[0].kind, VisualBlockKind::Paragraph));
+            assert_eq!(blocks[0].source_range, 0..4);
+            assert!(matches!(blocks[1].kind, VisualBlockKind::Whitespace));
+            assert_eq!(&source[blocks[1].source_range.clone()], &source[4..]);
+            assert_eq!(blocks[1].source_range.end, source.len());
+        }
     }
 
     #[test]
@@ -4262,12 +4308,17 @@ mod tests {
         let source = "# Hello **bold** and [site](https://example.com)\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks();
-        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks.len(), 2);
         assert!(matches!(
             blocks[0].kind,
             VisualBlockKind::Heading { level: 1 }
         ));
-        assert_eq!(&source[blocks[0].source_range.clone()], source);
+        assert_eq!(
+            &source[blocks[0].source_range.clone()],
+            &source[..source.len() - 1]
+        );
+        assert!(matches!(blocks[1].kind, VisualBlockKind::Whitespace));
+        assert_eq!(&source[blocks[1].source_range.clone()], "\n");
 
         let bold = blocks[0]
             .editable_runs

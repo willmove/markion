@@ -310,6 +310,9 @@ impl MarkionApp {
         }
         self.rendered_font_size = value;
         self.refresh_typography_measurements(false, true);
+        if matches!(self.view_mode, ViewMode::VisualEdit) {
+            self.center_cursor_if_typewriter();
+        }
         self.status = self.trf(Msg::StatusRenderedFontSize, &[&format!("{value}px")]);
         self.persist_preferences();
         cx.notify();
@@ -322,6 +325,9 @@ impl MarkionApp {
         }
         self.paragraph_spacing = value;
         self.refresh_typography_measurements(false, true);
+        if matches!(self.view_mode, ViewMode::VisualEdit) {
+            self.center_cursor_if_typewriter();
+        }
         self.status = self.trf(Msg::StatusParagraphSpacing, &[&format!("{value}px")]);
         self.persist_preferences();
         cx.notify();

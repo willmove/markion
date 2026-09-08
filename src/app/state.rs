@@ -757,6 +757,8 @@ pub(super) struct DocumentTabState {
     /// Last applied document-end spacer height. Used to remasure the trailing
     /// list item when the Visual Edit viewport resizes.
     pub(super) visual_end_padding_height: Option<Pixels>,
+    /// Current list bounds, published before its children are laid out.
+    pub(super) visual_typewriter_viewport: Option<Bounds<Pixels>>,
     /// Ephemeral screen-space geometry produced by the focused visual row.
     pub(super) visual_caret_bounds: Option<Bounds<Pixels>>,
     pub(super) visual_marked_range_bounds: Option<(Range<usize>, Bounds<Pixels>)>,
@@ -780,6 +782,9 @@ pub(super) struct DocumentTabState {
     pub(super) visual_projection_paint_count: usize,
     #[cfg(test)]
     pub(super) visual_caret_paint_count: usize,
+    /// Opt-in observations after text painting, clipped to the active content mask.
+    #[cfg(test)]
+    pub(super) visual_text_paints: Option<Vec<(usize, Bounds<Pixels>)>>,
     /// Layout queries issued while building visual navigation snapshots this
     /// session; the display-bounded gate asserts this stays proportional to
     /// wrapped lines, never characters.
@@ -1021,6 +1026,7 @@ impl DocumentTabState {
             visual_cursor_reveal_pending: false,
             visual_caret_follow_frames: 0,
             visual_end_padding_height: None,
+            visual_typewriter_viewport: None,
             visual_caret_bounds: None,
             visual_marked_range_bounds: None,
             visual_caret_affinity: None,
@@ -1039,6 +1045,8 @@ impl DocumentTabState {
             visual_projection_paint_count: 0,
             #[cfg(test)]
             visual_caret_paint_count: 0,
+            #[cfg(test)]
+            visual_text_paints: None,
             #[cfg(test)]
             visual_navigation_position_queries: 0,
             preview_list_blocks: std::sync::Arc::new(Vec::new()),
@@ -1162,13 +1170,17 @@ impl DocumentTabState {
     /// Visual Edit viewport. Presentation-only: does not touch document text
     /// or derived Markdown caches.
     pub(super) fn refresh_visual_end_padding(&mut self) -> bool {
+        self.refresh_visual_end_padding_for_height(self.visual_list.viewport_bounds().size.height)
+    }
+
+    pub(super) fn refresh_visual_end_padding_for_height(&mut self, height: Pixels) -> bool {
         let block_count = self.visual_list_blocks.len();
         ensure_visual_list_spacer(&self.visual_list, block_count);
         if block_count == 0 {
             let changed = self.visual_end_padding_height.take().is_some();
             return changed;
         }
-        let desired = visual_end_padding_height(self.visual_list.viewport_bounds().size.height);
+        let desired = visual_end_padding_height(height);
         if self.visual_end_padding_height == Some(desired) {
             return false;
         }
@@ -1253,6 +1265,7 @@ impl DocumentTabState {
         self.hovered_visual_code_block = None;
         self.retain_visual_source_expand = None;
         self.visual_end_padding_height = None;
+        self.visual_typewriter_viewport = None;
         self.visual_caret_bounds = None;
         self.visual_marked_range_bounds = None;
         self.visual_caret_follow_frames = 0;
@@ -1305,6 +1318,7 @@ impl DocumentTabState {
         self.hovered_visual_code_block = None;
         self.retain_visual_source_expand = None;
         self.visual_end_padding_height = None;
+        self.visual_typewriter_viewport = None;
         self.visual_cursor_reveal_pending = true;
         self.visual_caret_follow_frames = 2;
         self.typewriter_recenter = None;

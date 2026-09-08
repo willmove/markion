@@ -972,7 +972,7 @@ mod tests {
     fn stable_ids_follow_source_lineage_not_equal_text() {
         let mut document = MarkdownDocument::from_text("same\n\nsame\n\ntail\n");
         let original = document.visual_blocks();
-        assert_eq!(original.len(), 5);
+        assert_eq!(original.len(), 6);
         let first_id = original[0].id;
         let second_id = original[2].id;
         let tail_id = original[4].id;
@@ -1139,7 +1139,8 @@ mod tests {
         let gap = merge_doc.text().find("\n\n").unwrap();
         merge_doc.replace_range(gap..gap + 2, " ");
         let merged = merge_doc.visual_blocks();
-        assert_eq!(merged.len(), 1);
+        assert_eq!(merged.len(), 2);
+        assert!(matches!(merged[1].kind, crate::VisualBlockKind::Whitespace));
         assert_ne!(merged[0].id, first_id);
         assert_ne!(merged[0].id, second_id);
 
@@ -1254,7 +1255,11 @@ mod tests {
             .find(|block| matches!(block.kind, crate::VisualBlockKind::Html { .. }))
             .unwrap()
             .id;
-        let tail_id = original.last().unwrap().id;
+        let tail_id = original
+            .iter()
+            .find(|block| document.text()[block.source_range.clone()].contains("tail"))
+            .expect("tail paragraph")
+            .id;
 
         document.insert(0, "intro\n\n");
         let shifted = document.visual_blocks();
