@@ -3600,8 +3600,31 @@ pub(super) fn visual_block_view(
     display_scale: f32,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
-    let typography = app.typography_metrics();
     let owns_caret = visual_block_owns_caret(app, block_index);
+    // Style the complete row so rich content and early-return source islands
+    // share the same focus cue without changing document-derived caches.
+    visual_block_content_view(
+        app,
+        block,
+        block_index,
+        owns_caret,
+        document_dir,
+        display_scale,
+        cx,
+    )
+    .when(app.focus_mode && !owns_caret, |row| row.opacity(0.4))
+}
+
+fn visual_block_content_view(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    owns_caret: bool,
+    document_dir: Option<&Path>,
+    display_scale: f32,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let typography = app.typography_metrics();
     let is_whitespace = matches!(block.kind, VisualBlockKind::Whitespace);
     let is_reference_definition = matches!(block.kind, VisualBlockKind::ReferenceDefinition);
     // A callout title row owns only structural marker bytes; focused, it

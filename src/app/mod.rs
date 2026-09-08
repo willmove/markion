@@ -2159,6 +2159,8 @@ use workspace::{ExternalDropIntent, classify_external_drop_path};
 #[cfg(test)]
 mod code_scroll_tests;
 #[cfg(test)]
+mod focus_mode_tests;
+#[cfg(test)]
 mod mutation_tests;
 #[cfg(test)]
 mod tests;
