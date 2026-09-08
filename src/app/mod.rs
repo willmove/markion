@@ -26,6 +26,7 @@ use gpui::{
     UnderlineStyle, Window, WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas,
     div, fill, font, img, list, point, px, rgb, rgba, size,
 };
+use markion::i18n::{GitMsg, git_t, git_tf};
 use markion::{
     AlertKind, AppPreferences, AutoSavePreferences, BlockEdit, BlockEditError, BlockPlacement,
     BlockTarget, BlockTransform, CheckedMutation, CodeTheme, DEFAULT_CODE_FONT_FAMILY,
@@ -129,6 +130,11 @@ actions!(
         ClearRecentFiles,
         SaveDocument,
         SaveDocumentAs,
+        ShowGitSync,
+        CommitLocally,
+        CheckRemote,
+        PullUpdates,
+        PushCommits,
         SetupGitSync,
         SyncNow,
         ResolveGitConflict,
@@ -256,6 +262,7 @@ enum AppMenu {
     View,
     Format,
     Export,
+    Repository,
     Help,
 }
 
@@ -611,6 +618,13 @@ mod menu_shortcuts {
         MenuShortcut::new("show-markdown-reference", "f1", "F1", "F1");
     /// Factory-unbound: Preferences → Shortcuts remains reachable from the
     /// Preferences panel; users may assign a keystroke later.
+    pub const SHOW_GIT_SYNC: MenuShortcut = MenuShortcut::unbound("show-git-sync");
+    pub const SYNC_NOW: MenuShortcut = MenuShortcut::unbound("sync-now");
+    pub const COMMIT_LOCALLY: MenuShortcut = MenuShortcut::unbound("commit-locally");
+    pub const CHECK_REMOTE: MenuShortcut = MenuShortcut::unbound("check-remote");
+    pub const PULL_UPDATES: MenuShortcut = MenuShortcut::unbound("pull-updates");
+    pub const PUSH_COMMITS: MenuShortcut = MenuShortcut::unbound("push-commits");
+    pub const RESOLVE_GIT_CONFLICT: MenuShortcut = MenuShortcut::unbound("resolve-git-conflict");
     pub const SHOW_SHORTCUTS: MenuShortcut = MenuShortcut::unbound("show-shortcuts");
 
     /// Every customizable action, in registry order. Used for rebinding,
@@ -683,6 +697,13 @@ mod menu_shortcuts {
         EXPORT_JPEG,
         SHOW_MARKDOWN_REFERENCE,
         SHOW_SHORTCUTS,
+        SHOW_GIT_SYNC,
+        SYNC_NOW,
+        COMMIT_LOCALLY,
+        CHECK_REMOTE,
+        PULL_UPDATES,
+        PUSH_COMMITS,
+        RESOLVE_GIT_CONFLICT,
     ];
 }
 
@@ -715,8 +736,12 @@ impl AppMenu {
             ) => px(238.),
             (
                 Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
-                AppMenu::Help,
+                AppMenu::Repository,
             ) => px(304.),
+            (
+                Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
+                AppMenu::Help,
+            ) => px(402.),
             // Chinese labels (文件/編輯/檢視/格式/匯出/說明) — narrower. Both
             // Simplified and Traditional share this column: the glyph widths
             // are nearly identical, so the hand-tuned offsets apply to both.
@@ -725,7 +750,8 @@ impl AppMenu {
             (Language::ZhHans | Language::ZhHant, AppMenu::View) => px(92.),
             (Language::ZhHans | Language::ZhHant, AppMenu::Format) => px(134.),
             (Language::ZhHans | Language::ZhHant, AppMenu::Export) => px(178.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(222.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Repository) => px(222.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(264.),
         }
     }
 
@@ -739,6 +765,7 @@ impl AppMenu {
             AppMenu::View => px(304.),
             AppMenu::Format => px(344.),
             AppMenu::Export => px(288.),
+            AppMenu::Repository => px(304.),
             AppMenu::Help => px(280.),
         }
     }
@@ -1004,6 +1031,9 @@ fn tab_context_action_label(action: TabContextAction) -> Msg {
 enum SearchField {
     Find,
     Replace,
+    Git(usize),
+    GitSetup(usize),
+    GitCommit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2134,6 +2164,8 @@ mod docx_import;
 mod editing;
 mod editor_element;
 mod export_prefs;
+mod git_conflicts;
+mod git_panel;
 mod git_sync;
 pub(super) mod layout;
 mod math_render;
@@ -2225,6 +2257,7 @@ struct MarkionApp {
     /// Held while a Git conflict session owns repository paths.
     git_conflict_admission: Option<ExclusiveAdmission>,
     git_background_scheduler: BackgroundFetchScheduler,
+    git_ui: git_panel::GitUi,
     confirming_close: bool,
     allow_close: bool,
     preferences_path: PathBuf,
@@ -2386,7 +2419,7 @@ struct MarkionApp {
     current_search_index: Option<usize>,
     search_result: SearchResultState,
     search_generation: Option<SearchGenerationKey>,
-    search_field_bounds: [Option<Bounds<Pixels>>; 2],
+    search_field_bounds: [Option<Bounds<Pixels>>; 13],
     pane_scrollbar_drag: Option<PaneScrollbarDrag>,
     /// Auto-save settings from `[auto_save]`. `silent_save` and `delay_secs`
     /// are editable in Preferences → General; `enabled` remains file-only.

@@ -56,13 +56,18 @@ pub enum SyncEngineError {
     InvalidOperationId,
     #[error("repository has no commit to synchronize")]
     NoCommit,
+    #[error("local version requires a nonblank commit message")]
+    InvalidCommitMessage,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GitSyncEngine {
     repository: GitRepository,
     journal: JournalStore,
     options: SyncOptions,
+    foreground_credentials: bool,
+    observer:
+        Option<std::sync::Arc<dyn Fn(OperationPhase) -> Result<(), SyncEngineError> + Send + Sync>>,
 }
 
 impl GitSyncEngine {
@@ -71,11 +76,26 @@ impl GitSyncEngine {
             repository,
             journal,
             options,
+            observer: None,
+            foreground_credentials: false,
         }
     }
 
     pub fn repository(&self) -> &GitRepository {
         &self.repository
+    }
+
+    pub fn with_foreground_credentials(mut self) -> Self {
+        self.foreground_credentials = true;
+        self
+    }
+
+    pub fn with_observer(
+        mut self,
+        observer: impl Fn(OperationPhase) -> Result<(), SyncEngineError> + Send + Sync + 'static,
+    ) -> Self {
+        self.observer = Some(std::sync::Arc::new(observer));
+        self
     }
 
     pub fn sync_now(
@@ -114,6 +134,7 @@ impl GitSyncEngine {
             checkpoint.phase = OperationPhase::Staging;
             self.persist_checkpoint(&mut checkpoint)?;
             self.stage_exact_paths(plan, cancellation)?;
+            checkpoint.expected_index_fingerprint = self.index_tree(cancellation).ok();
             checkpoint.phase = OperationPhase::Committing;
             self.persist_checkpoint(&mut checkpoint)?;
             match self.commit(plan, cancellation) {
@@ -122,7 +143,6 @@ impl GitSyncEngine {
                     Some(commit)
                 }
                 Err(error) => {
-                    checkpoint.phase = OperationPhase::NeedsAttention;
                     let _ = self.persist_checkpoint(&mut checkpoint);
                     return Err(error);
                 }
@@ -172,6 +192,11 @@ impl GitSyncEngine {
                             if self.repository.status()?.worktree.has_conflicts =>
                         {
                             let conflict_paths = self.conflict_paths(cancellation)?;
+                            checkpoint.owned_paths = conflict_paths
+                                .iter()
+                                .cloned()
+                                .map(|path| (path, String::new()))
+                                .collect();
                             checkpoint.expected_index_fingerprint = Some(
                                 self.conflict_state_fingerprint(&conflict_paths, cancellation)?,
                             );
@@ -223,7 +248,7 @@ impl GitSyncEngine {
                     {
                         continue;
                     }
-                    checkpoint.phase = OperationPhase::NeedsAttention;
+                    // Preserve Verifying across restart: delivery remains unknown.
                     self.persist_checkpoint(&mut checkpoint)?;
                     return Ok(SyncOutcome::UncertainDelivery {
                         commit: intended_commit,
@@ -252,6 +277,39 @@ impl GitSyncEngine {
         checkpoint.phase = OperationPhase::Staging;
         self.persist_checkpoint(&mut checkpoint)?;
         self.stage_exact_paths(plan, cancellation)?;
+        checkpoint.expected_index_fingerprint = self.index_tree(cancellation).ok();
+        checkpoint.phase = OperationPhase::Committing;
+        self.persist_checkpoint(&mut checkpoint)?;
+        let commit = self.commit(plan, cancellation)?;
+        checkpoint.phase = OperationPhase::Complete;
+        checkpoint.resulting_commit = Some(commit.clone());
+        checkpoint.confirmed = true;
+        self.persist_checkpoint(&mut checkpoint)?;
+        self.journal
+            .retire_success(&plan.operation_id, now_seconds())?;
+        Ok(SyncOutcome::CommittedLocally { commit })
+    }
+
+    /// Create a deliberate local version from a reviewed subset of current
+    /// policy-approved paths. Unlike the automatic snapshot path, unselected
+    /// worktree changes are allowed and remain untouched.
+    pub fn commit_selected(
+        &self,
+        plan: &SyncPlan,
+        policy: &RepositoryPolicy,
+        cancellation: &CancellationToken,
+    ) -> Result<SyncOutcome, SyncEngineError> {
+        validate_operation_id(&plan.operation_id)?;
+        if plan.message.trim().is_empty() {
+            return Err(SyncEngineError::InvalidCommitMessage);
+        }
+        let state = self.preflight_selected(plan, policy)?;
+        let mut checkpoint = self.new_checkpoint(plan, OperationKind::CommitLocally, &state);
+        self.journal.begin(checkpoint.clone())?;
+        checkpoint.phase = OperationPhase::Staging;
+        self.persist_checkpoint(&mut checkpoint)?;
+        self.stage_exact_paths(plan, cancellation)?;
+        checkpoint.expected_index_fingerprint = self.index_tree(cancellation).ok();
         checkpoint.phase = OperationPhase::Committing;
         self.persist_checkpoint(&mut checkpoint)?;
         let commit = self.commit(plan, cancellation)?;
@@ -272,32 +330,23 @@ impl GitSyncEngine {
         cancellation: &CancellationToken,
     ) -> Result<SyncOutcome, SyncEngineError> {
         validate_operation_id(&plan.operation_id)?;
-        let state = self.preflight(plan, policy, None)?;
+        let state = self.target_preflight(plan, policy)?;
         let local = state.head.ok_or(SyncEngineError::NoCommit)?;
-        let remote = self
-            .fetch_target(plan, askpass, cancellation)?
-            .ok_or(SyncEngineError::UnsafeRemoteHistory)?;
+        let Some(remote) = self.fetch_target(plan, askpass, cancellation)? else {
+            self.remove_fetch_ref(&plan.operation_id);
+            return Ok(SyncOutcome::RemoteChecked {
+                relation: GitRepository::classify_missing_target(
+                    policy.last_confirmed_remote.as_ref(),
+                ),
+            });
+        };
         let relation = self.repository.classify_history(
             &local,
             &remote,
             policy.last_confirmed_remote.as_ref(),
         )?;
-        match relation {
-            HistoryRelation::Equal => Ok(SyncOutcome::UpToDate),
-            HistoryRelation::Ahead { commits } => Ok(SyncOutcome::NeedsAttention {
-                phase: OperationPhase::Pushing,
-                reason: format!("{commits} local commits are ready to push"),
-            }),
-            HistoryRelation::Behind { commits } => Ok(SyncOutcome::NeedsAttention {
-                phase: OperationPhase::Integrating,
-                reason: format!("{commits} incoming commits are available"),
-            }),
-            HistoryRelation::Diverged { ahead, behind } => Ok(SyncOutcome::NeedsAttention {
-                phase: OperationPhase::Integrating,
-                reason: format!("history diverged by {ahead} local and {behind} remote commits"),
-            }),
-            _ => Err(SyncEngineError::UnsafeRemoteHistory),
-        }
+        self.remove_fetch_ref(&plan.operation_id);
+        Ok(SyncOutcome::RemoteChecked { relation })
     }
 
     pub fn background_check(
@@ -365,6 +414,7 @@ impl GitSyncEngine {
             }
             Err(error) => return BackgroundFetchResult::ActionableError(error.to_string()),
         };
+        self.remove_fetch_ref(operation_id);
         match self.repository.classify_history(
             &local,
             &remote,
@@ -421,9 +471,33 @@ impl GitSyncEngine {
         ) {
             return Err(SyncEngineError::UnsafeRemoteHistory);
         }
+        checkpoint.fetched_tip = Some(remote.clone());
+        checkpoint.resulting_commit = Some(local.clone());
         checkpoint.phase = OperationPhase::Integrating;
         self.persist_checkpoint(&mut checkpoint)?;
-        let commit = self.integrate(&mut checkpoint, &local, &remote, relation, cancellation)?;
+        let commit = match self.integrate(&mut checkpoint, &local, &remote, relation, cancellation)
+        {
+            Ok(commit) => commit,
+            Err(error) if self.repository.status()?.worktree.has_conflicts => {
+                // Reconcile even if cancellation interrupted Git's response.
+                let reconcile = CancellationToken::new();
+                let paths = self.conflict_paths(&reconcile)?;
+                checkpoint.owned_paths = paths
+                    .iter()
+                    .cloned()
+                    .map(|path| (path, String::new()))
+                    .collect();
+                checkpoint.expected_index_fingerprint =
+                    Some(self.conflict_state_fingerprint(&paths, &reconcile)?);
+                checkpoint.phase = OperationPhase::Resolving;
+                self.persist_checkpoint(&mut checkpoint)?;
+                return Ok(SyncOutcome::NeedsAttention {
+                    phase: OperationPhase::Resolving,
+                    reason: error.to_string(),
+                });
+            }
+            Err(error) => return Err(error),
+        };
         self.finish(policy, &mut checkpoint, commit, Some(remote), cancellation)
     }
 
@@ -435,7 +509,7 @@ impl GitSyncEngine {
         cancellation: &CancellationToken,
     ) -> Result<SyncOutcome, SyncEngineError> {
         validate_operation_id(&plan.operation_id)?;
-        let state = self.preflight(plan, policy, None)?;
+        let state = self.target_preflight(plan, policy)?;
         if !plan.paths.is_empty() {
             return Err(SyncEngineError::UnsafeRepositoryState);
         }
@@ -445,7 +519,25 @@ impl GitSyncEngine {
         checkpoint.phase = OperationPhase::Pushing;
         checkpoint.resulting_commit = Some(commit.clone());
         self.persist_checkpoint(&mut checkpoint)?;
-        self.push_exact(plan, &commit, askpass, cancellation)?;
+        if let Err(error) = self.push_exact(plan, &commit, askpass, cancellation) {
+            checkpoint.phase = OperationPhase::Verifying;
+            self.persist_checkpoint(&mut checkpoint)?;
+            if let Ok(Some(observed)) = self.fetch_target(plan, askpass, cancellation)
+                && self.is_ancestor(&commit, &observed, cancellation)?
+            {
+                return self.finish(
+                    policy,
+                    &mut checkpoint,
+                    commit,
+                    Some(observed),
+                    cancellation,
+                );
+            }
+            return Ok(SyncOutcome::UncertainDelivery {
+                commit,
+                reason: error.to_string(),
+            });
+        }
         self.finish(
             policy,
             &mut checkpoint,
@@ -453,6 +545,53 @@ impl GitSyncEngine {
             Some(commit),
             cancellation,
         )
+    }
+
+    /// Check a recorded delivery without pushing again or changing local files.
+    pub fn verify_delivery(
+        &self,
+        checkpoint: &OperationCheckpoint,
+        policy: &mut RepositoryPolicy,
+        cancellation: &CancellationToken,
+    ) -> Result<SyncOutcome, SyncEngineError> {
+        let target = checkpoint
+            .target
+            .clone()
+            .ok_or(SyncEngineError::TargetDrift)?;
+        let commit = checkpoint
+            .resulting_commit
+            .clone()
+            .ok_or(SyncEngineError::NoCommit)?;
+        if self.repository.identity() != &checkpoint.identity
+            || self.repository.resolve_sync_target()? != target
+        {
+            return Err(SyncEngineError::TargetDrift);
+        }
+        let plan = SyncPlan {
+            operation_id: checkpoint.operation_id.clone(),
+            identity: checkpoint.identity.clone(),
+            target,
+            expected_head: self.repository.status()?.head,
+            paths: Vec::new(),
+            content_fingerprints: Vec::new(),
+            message: String::new(),
+        };
+        let observed = self.fetch_target(&plan, None, cancellation)?;
+        if let Some(observed) = observed
+            && self.is_ancestor(&commit, &observed, cancellation)?
+        {
+            return self.finish(
+                policy,
+                &mut checkpoint.clone(),
+                commit,
+                Some(observed),
+                cancellation,
+            );
+        }
+        Ok(SyncOutcome::AwaitingUpload {
+            commit,
+            reason: "recorded commit is not present in the observed remote history".into(),
+        })
     }
 
     pub fn recover_owned_staging(
@@ -500,6 +639,28 @@ impl GitSyncEngine {
             updated_unix_seconds: now_seconds(),
             confirmed: false,
         }
+    }
+
+    fn target_preflight(
+        &self,
+        plan: &SyncPlan,
+        policy: &RepositoryPolicy,
+    ) -> Result<crate::RepositoryState, SyncEngineError> {
+        if self.repository.identity() != &plan.identity
+            || !policy.validates_identity(self.repository.identity())
+            || plan.target != policy.target
+            || self.repository.resolve_sync_target()? != policy.target
+        {
+            return Err(SyncEngineError::TargetDrift);
+        }
+        let state = self.repository.status()?;
+        if state.head != plan.expected_head {
+            return Err(SyncEngineError::TargetDrift);
+        }
+        if !state.capabilities.supports_write_sync() {
+            return Err(SyncEngineError::UnsupportedRepository);
+        }
+        Ok(state)
     }
 
     fn preflight(
@@ -559,6 +720,72 @@ impl GitSyncEngine {
         Ok(state)
     }
 
+    fn preflight_selected(
+        &self,
+        plan: &SyncPlan,
+        policy: &RepositoryPolicy,
+    ) -> Result<crate::RepositoryState, SyncEngineError> {
+        if plan.identity != *self.repository.identity()
+            || !policy.validates_identity(self.repository.identity())
+            || plan.target != policy.target
+            || self.repository.resolve_sync_target()? != plan.target
+        {
+            return Err(SyncEngineError::TargetDrift);
+        }
+        if plan.paths.is_empty() || plan.content_fingerprints.len() != plan.paths.len() {
+            return Err(SyncEngineError::StalePlan);
+        }
+        let state = self.repository.status()?;
+        if !state.capabilities.supports_write_sync() {
+            return Err(SyncEngineError::UnsupportedRepository);
+        }
+        if state.head != plan.expected_head
+            || state.worktree.has_external_staging
+            || state.worktree.has_conflicts
+            || state.worktree.operation_in_progress.is_some()
+        {
+            return Err(SyncEngineError::UnsafeRepositoryState);
+        }
+
+        let mut selected = plan.paths.clone();
+        selected.sort();
+        if selected.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(SyncEngineError::StalePlan);
+        }
+        for path in &selected {
+            let change = state
+                .worktree
+                .changes
+                .iter()
+                .find(|change| change.path == *path)
+                .ok_or(SyncEngineError::StalePlan)?;
+            let absolute = self.repository.identity().worktree_root.join(path);
+            let is_symlink = fs::symlink_metadata(&absolute)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false);
+            let ignored = change.kind == ChangeKind::Untracked && self.is_ignored(path);
+            if policy.decide_path(path, change.kind, ignored, is_symlink) != PathDecision::Automatic
+                || change
+                    .original_path
+                    .as_ref()
+                    .is_some_and(|from| policy.rename_needs_review(from, path))
+            {
+                return Err(SyncEngineError::StalePlan);
+            }
+            let expected = plan
+                .content_fingerprints
+                .iter()
+                .find_map(|(candidate, fingerprint)| {
+                    (candidate == path).then_some(fingerprint.as_str())
+                })
+                .ok_or(SyncEngineError::StalePlan)?;
+            if self.repository.content_fingerprint(path)? != expected {
+                return Err(SyncEngineError::StalePlan);
+            }
+        }
+        Ok(state)
+    }
+
     fn stage_exact_paths(
         &self,
         plan: &SyncPlan,
@@ -598,6 +825,18 @@ impl GitSyncEngine {
             .ok_or(SyncEngineError::NoCommit)
     }
 
+    fn remove_fetch_ref(&self, operation_id: &str) {
+        let _ = self.run(
+            GitCommand::new(&self.repository.identity().worktree_root).args([
+                "update-ref",
+                "-d",
+                &format!("refs/markion/fetched/{operation_id}"),
+            ]),
+            CommandLimits::default(),
+            &CancellationToken::new(),
+        );
+    }
+
     fn fetch_target(
         &self,
         plan: &SyncPlan,
@@ -622,7 +861,19 @@ impl GitSyncEngine {
             },
             cancellation,
         ) {
-            Ok(_) => self.rev_parse(&private_ref, cancellation).map(Some),
+            Ok(_) => {
+                let tip = self.rev_parse(&private_ref, cancellation)?;
+                self.run(
+                    GitCommand::new(&self.repository.identity().worktree_root).args([
+                        "update-ref",
+                        &GitRepository::observation_ref(&plan.target),
+                        tip.as_str(),
+                    ]),
+                    CommandLimits::default(),
+                    cancellation,
+                )?;
+                Ok(Some(tip))
+            }
             Err(SyncEngineError::Command(GitCommandError::Failed { output }))
                 if output.termination == ProcessTermination::Exited
                     && output.stderr_text().contains("couldn't find remote ref") =>
@@ -784,6 +1035,15 @@ impl GitSyncEngine {
         cancellation: &CancellationToken,
     ) -> Result<SyncOutcome, SyncEngineError> {
         let confirmed_remote = observed_remote.unwrap_or_else(|| commit.clone());
+        self.run(
+            GitCommand::new(&self.repository.identity().worktree_root).args([
+                "update-ref",
+                &GitRepository::observation_ref(&policy.target),
+                confirmed_remote.as_str(),
+            ]),
+            CommandLimits::default(),
+            &CancellationToken::new(),
+        )?;
         policy.last_confirmed_remote = Some(confirmed_remote.clone());
         checkpoint.phase = OperationPhase::Complete;
         checkpoint.confirmed = true;
@@ -803,6 +1063,7 @@ impl GitSyncEngine {
                 cancellation,
             );
         }
+        self.remove_fetch_ref(&checkpoint.operation_id);
         let pending = self.repository.status()?.worktree.changes.len();
         Ok(SyncOutcome::Synchronized {
             commit: Some(commit),
@@ -858,16 +1119,12 @@ impl GitSyncEngine {
     ) -> Result<Vec<PathBuf>, SyncEngineError> {
         let output = self.run(
             GitCommand::new(&self.repository.identity().worktree_root)
-                .args(["diff", "--cached", "--name-only", "-z"])
+                .args(["diff", "--cached", "--name-status", "-z", "--find-renames"])
                 .read_only(true),
             CommandLimits::default(),
             cancellation,
         )?;
-        Ok(output
-            .split(|byte| *byte == 0)
-            .filter(|path| !path.is_empty())
-            .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned()))
-            .collect())
+        parse_name_status_paths(&output).ok_or(SyncEngineError::UnsafeRepositoryState)
     }
 
     fn index_tree(&self, cancellation: &CancellationToken) -> Result<String, SyncEngineError> {
@@ -1033,6 +1290,10 @@ impl GitSyncEngine {
     }
 
     fn network_request(&self, request: GitCommand, askpass: Option<&AskpassBridge>) -> GitCommand {
+        let mut request = request.interactive_credentials(self.foreground_credentials);
+        if !self.foreground_credentials && askpass.is_none() {
+            request = noninteractive_network_request(request);
+        }
         askpass.map_or(request.clone(), |bridge| {
             Authentication::new(self.repository.runner().clone()).with_askpass(request, bridge)
         })
@@ -1043,7 +1304,21 @@ impl GitSyncEngine {
         checkpoint: &mut OperationCheckpoint,
     ) -> Result<(), SyncEngineError> {
         checkpoint.updated_unix_seconds = now_seconds();
-        self.journal.update(checkpoint.clone())?;
+        // Once integration preimages/refs exist, make that ownership durable
+        // before an adapter can interrupt checkout. Other observer calls retain
+        // their before-transition semantics, including unknown push-result
+        // simulation after the remote accepted a commit.
+        if checkpoint.phase == OperationPhase::Integrating && checkpoint.preimages.is_some() {
+            self.journal.update(checkpoint.clone())?;
+            if let Some(observer) = &self.observer {
+                observer(checkpoint.phase)?;
+            }
+        } else {
+            if let Some(observer) = &self.observer {
+                observer(checkpoint.phase)?;
+            }
+            self.journal.update(checkpoint.clone())?;
+        }
         Ok(())
     }
 
@@ -1059,6 +1334,43 @@ impl GitSyncEngine {
             .run(&request, limits, cancellation)?
             .stdout)
     }
+}
+
+fn noninteractive_network_request(mut request: GitCommand) -> GitCommand {
+    request.arguments.splice(
+        0..0,
+        [
+            std::ffi::OsString::from("-c"),
+            std::ffi::OsString::from("core.askPass="),
+            std::ffi::OsString::from("-c"),
+            std::ffi::OsString::from("credential.interactive=never"),
+        ],
+    );
+    request
+        .interactive_credentials(false)
+        .env("GCM_INTERACTIVE", "Never")
+}
+
+fn parse_name_status_paths(output: &[u8]) -> Option<Vec<PathBuf>> {
+    let mut fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    let mut paths = Vec::new();
+    while let Some(status_field) = fields.next() {
+        let (status, first_path) = status_field
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .map(|tab| (&status_field[..tab], Some(&status_field[tab + 1..])))
+            .unwrap_or((status_field, None));
+        let status = String::from_utf8_lossy(status);
+        let path = first_path.or_else(|| fields.next())?;
+        paths.push(PathBuf::from(String::from_utf8_lossy(path).into_owned()));
+        if status.starts_with('R') || status.starts_with('C') {
+            let target = fields.next()?;
+            paths.push(PathBuf::from(String::from_utf8_lossy(target).into_owned()));
+        }
+    }
+    Some(paths)
 }
 
 impl From<std::io::Error> for SyncEngineError {
@@ -1099,4 +1411,44 @@ fn is_non_fast_forward(error: &SyncEngineError) -> bool {
     };
     let stderr = output.stderr_text().to_ascii_lowercase();
     stderr.contains("non-fast-forward") || stderr.contains("[rejected]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_network_boundary_disables_every_interactive_git_path() {
+        let request = noninteractive_network_request(
+            GitCommand::new(".")
+                .args(["fetch", "origin"])
+                .interactive_credentials(true),
+        );
+        let arguments = request
+            .arguments
+            .iter()
+            .map(|argument| argument.to_string_lossy())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &arguments[..4],
+            ["-c", "core.askPass=", "-c", "credential.interactive=never"]
+        );
+        assert!(!request.allow_interactive_credentials);
+        let debug = format!("{request:?}");
+        assert!(debug.contains("GCM_INTERACTIVE"));
+        assert!(!debug.contains("Never"));
+    }
+
+    #[test]
+    fn staged_name_status_expands_both_rename_paths() {
+        assert_eq!(
+            parse_name_status_paths(b"M\0note.md\0R100\0old.md\0new.md\0").unwrap(),
+            [
+                PathBuf::from("note.md"),
+                PathBuf::from("old.md"),
+                PathBuf::from("new.md")
+            ]
+        );
+        assert!(parse_name_status_paths(b"R100\0old.md\0").is_none());
+    }
 }

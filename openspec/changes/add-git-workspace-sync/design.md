@@ -77,6 +77,10 @@ Use the remote's advertised default branch where available; if absent/ambiguous 
 
 First sync has a setup review of candidate files and outgoing history. Subsequent ordinary sync has no confirmation. Cancelling setup preserves the current workspace; local initialization already completed before a network failure remains visible and reconnectable instead of being destructively rolled back.
 
+The application presents these routes as a compact quick-start sheet rather than a Git configuration form. If the open folder is already an ordinary repository, **Use This Folder** is primary. Otherwise **Clone Notes Repository** asks only for the remote URL and destination (derived from the repository name), while **Start Syncing This Folder** asks for a remote URL only when publishing is wanted. The suggested initial branch is `main`; discovered upstream/default branches replace the suggestion. Repository scope, endpoints, author identity, and the whole-history explanation remain visible in a review/advanced section before writes are authorized.
+
+Clone and initialize run in background tasks and reuse `OnboardingService`; workspace activation happens only after the destination is complete. Initialization against an empty remote persists a resumable first-publication state so a network or authentication failure can be retried without repeating initialization or losing the local commit. The ordinary configured state collapses setup and keeps **Sync Now** as the primary action.
+
 ### 4. System Git behind a GUI-free boundary
 
 Add `crates/git-sync` (package `markion-git-sync`) for repository discovery, state/plan models, process adaptation, execution policy, and recovery reconciliation. Put GPUI scheduling, dialogs, document adapters, and image conversion in root-app modules. The new crate never imports `gpui` or owns live editor entities.
@@ -95,6 +99,8 @@ System Git is the first backend to retain established credential helpers, SSH co
 | Hooks/signing | Respect existing hooks, filters and signing during explicit writes; do not silently bypass failures. Explain configured helper/program execution during connection. If a hook changes the planned index or worktree, revalidate and stop unattended continuation. |
 
 HTTPS and SSH are the interactive onboarding protocols. Local filesystem remotes are allowed only for test fixtures, not inferred from arbitrary URL text in the user form. Unsupported URL schemes/remote-helper transports are rejected.
+
+Explicit setup and synchronization operations enable system Git's foreground credential path. Existing secure helpers, OS credential UI, SSH agents, SSH configuration, and host verification run in their normal foreground context; Markion does not copy the resulting secret into policy, session, operation logs, command arguments, or remote URLs. Authentication-required outcomes keep local work and expose **Retry** after the user completes the system prompt or credential setup. Background checks use a separate noninteractive capability gate and never inherit the foreground setting.
 
 Initial bounded defaults: 15 seconds for ordinary metadata commands, 60 seconds network inactivity with a visible extension/retry action, and a visible long-operation state after 10 seconds for local mutations. Never assume a killed mutation rolled back. Text diff display limit: 2 MiB per file and 10 MiB per view; larger files show metadata and an explicit external-open option. History pages contain 50 commits. These are app presentation/runtime limits, not remote hosting limits.
 

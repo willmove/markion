@@ -246,6 +246,9 @@ pub struct SyncPlan {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SyncOutcome {
+    RemoteChecked {
+        relation: HistoryRelation,
+    },
     Synchronized {
         commit: Option<GitObjectId>,
         remote_tip: Option<GitObjectId>,

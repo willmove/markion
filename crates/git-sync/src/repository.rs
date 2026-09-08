@@ -2,15 +2,24 @@ use std::{
     collections::VecDeque,
     ffi::OsString,
     fs, io,
+    io::Read,
     path::{Path, PathBuf},
     time::SystemTime,
 };
+
+use sha2::{Digest, Sha256};
 
 use crate::{
     CancellationToken, CommandLimits, GitCommand, GitCommandError, GitCommandRunner, GitObjectId,
     HistoryRelation, RepositoryCapabilities, RepositoryIdentity, SyncTarget, WorktreeState,
     parse_porcelain_v2,
 };
+
+pub fn content_fingerprint_bytes(bytes: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(bytes);
+    format!("sha256:{:x}", digest.finalize())
+}
 
 pub const DEFAULT_DIFF_FILE_LIMIT: usize = 2 * 1024 * 1024;
 pub const DEFAULT_HISTORY_PAGE_SIZE: usize = 50;
@@ -90,12 +99,19 @@ pub struct DiffContent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VersionComparison {
+    pub content: DiffContent,
+    pub binary: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryEntry {
     pub oid: GitObjectId,
     pub parents: Vec<GitObjectId>,
     pub author_name: String,
     pub author_email: String,
     pub authored_unix_seconds: i64,
+    pub authored_iso: String,
     pub subject: String,
 }
 
@@ -198,6 +214,54 @@ impl GitRepository {
             .strip_prefix(&root)
             .map(Path::to_path_buf)
             .map_err(|_| RepositoryError::OutsideWorktree(path.to_path_buf()))
+    }
+
+    pub fn path_is_tracked(&self, path: &Path) -> bool {
+        self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args(["ls-files", "--error-unmatch"])
+                .literal_paths([path])
+                .read_only(true),
+            CommandLimits::default(),
+        )
+        .is_ok()
+    }
+
+    pub fn path_is_ignored(&self, path: &Path) -> bool {
+        self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args(["check-ignore", "-q"])
+                .literal_paths([path])
+                .read_only(true),
+            CommandLimits::default(),
+        )
+        .is_ok()
+    }
+
+    /// Hash one repository-relative worktree file for a reviewed commit plan.
+    /// Missing paths use a stable marker so deletions can be selected. Symlink
+    /// content is never followed into a commit draft.
+    pub fn content_fingerprint(&self, path: &Path) -> Result<String, RepositoryError> {
+        let absolute = self.validate_write_path(path)?;
+        let metadata = match fs::symlink_metadata(&absolute) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok("missing".into()),
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(RepositoryError::UnsafePath(path.to_path_buf()));
+        }
+        let mut file = fs::File::open(absolute)?;
+        let mut digest = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            digest.update(&buffer[..read]);
+        }
+        Ok(format!("sha256:{:x}", digest.finalize()))
     }
 
     pub fn status(&self) -> Result<RepositoryState, RepositoryError> {
@@ -365,6 +429,20 @@ impl GitRepository {
     }
 
     pub fn diff(&self, request: &DiffRequest) -> Result<DiffContent, RepositoryError> {
+        if !request.staged
+            && let Some(path) = &request.path
+            && !self.path_is_tracked(path)
+        {
+            use std::io::Read;
+            let absolute = self.validate_write_path(path)?;
+            let file = fs::File::open(absolute)?;
+            let mut bytes = Vec::new();
+            file.take(request.max_bytes.saturating_add(1) as u64)
+                .read_to_end(&mut bytes)?;
+            let truncated = bytes.len() > request.max_bytes;
+            bytes.truncate(request.max_bytes);
+            return Ok(DiffContent { bytes, truncated });
+        }
         let mut command = GitCommand::new(&self.identity.worktree_root).args([
             "-c",
             "diff.external=",
@@ -391,15 +469,61 @@ impl GitRepository {
         })
     }
 
+    pub fn observed_remote_tip(&self, target: &SyncTarget) -> Option<GitObjectId> {
+        self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args(["rev-parse", "--verify", &Self::observation_ref(target)])
+                .read_only(true),
+            CommandLimits::default(),
+        )
+        .ok()
+        .and_then(|output| GitObjectId::parse(output.stdout_text().trim().to_string()).ok())
+    }
+
+    pub(crate) fn observation_ref(target: &SyncTarget) -> String {
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        for part in [
+            &target.remote,
+            &target.destination_ref,
+            &target.fetch_url,
+            &target.push_url,
+        ] {
+            digest.update(part.as_bytes());
+            digest.update([0]);
+        }
+        format!("refs/markion/observed/{:x}", digest.finalize())
+    }
+
     pub fn history(&self, skip: usize, limit: usize) -> Result<Vec<HistoryEntry>, RepositoryError> {
+        self.history_page(skip, limit, false)
+    }
+
+    pub fn history_page(
+        &self,
+        skip: usize,
+        limit: usize,
+        outgoing: bool,
+    ) -> Result<Vec<HistoryEntry>, RepositoryError> {
         let limit = limit.clamp(1, DEFAULT_HISTORY_PAGE_SIZE);
-        let arguments = vec![
+        let mut arguments = vec![
             OsString::from("log"),
             OsString::from("-z"),
             OsString::from(format!("--skip={skip}")),
             OsString::from(format!("-n{limit}")),
-            OsString::from("--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s"),
+            OsString::from("--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%aI%x1f%s"),
         ];
+        if outgoing {
+            let observed = self
+                .resolve_sync_target()
+                .ok()
+                .and_then(|target| self.observed_remote_tip(&target));
+            arguments.push(OsString::from(
+                observed
+                    .map(|oid| format!("{oid}..HEAD"))
+                    .unwrap_or_else(|| "@{upstream}..HEAD".into()),
+            ));
+        }
         let output = self.run(
             GitCommand::new(&self.identity.worktree_root)
                 .args(arguments)
@@ -417,6 +541,130 @@ impl GitRepository {
             .collect()
     }
 
+    /// Return one bounded page of commits affecting a single literal path.
+    /// `--follow` is intentionally limited to one path so Git can trace
+    /// ordinary renames without broadening the history query.
+    pub fn history_page_for_path(
+        &self,
+        path: &Path,
+        skip: usize,
+        limit: usize,
+    ) -> Result<Vec<HistoryEntry>, RepositoryError> {
+        let limit = limit.clamp(1, DEFAULT_HISTORY_PAGE_SIZE);
+        let requested = skip.saturating_add(limit);
+        let output = self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args([
+                    "log",
+                    "-z",
+                    "--follow",
+                    &format!("-n{requested}"),
+                    "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%aI%x1f%s",
+                ])
+                .literal_paths([path.as_os_str()])
+                .read_only(true),
+            CommandLimits {
+                max_stdout_bytes: 2 * 1024 * 1024,
+                ..CommandLimits::default()
+            },
+        )?;
+        if output.stdout_truncated {
+            return Err(RepositoryError::InvalidOutput(
+                "file history page exceeds limit".into(),
+            ));
+        }
+        output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|record| !record.is_empty())
+            .map(parse_history_entry)
+            .skip(skip)
+            .collect()
+    }
+
+    pub fn commit_metadata(&self, commit: &GitObjectId) -> Result<HistoryEntry, RepositoryError> {
+        let output = self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args([
+                    "show",
+                    "-s",
+                    "-z",
+                    "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%aI%x1f%s",
+                    commit.as_str(),
+                ])
+                .read_only(true),
+            CommandLimits {
+                max_stdout_bytes: 64 * 1024,
+                ..CommandLimits::default()
+            },
+        )?;
+        let record = output
+            .stdout
+            .split(|byte| *byte == 0)
+            .find(|record| !record.is_empty())
+            .ok_or_else(|| RepositoryError::InvalidOutput("missing commit metadata".into()))?;
+        parse_history_entry(record)
+    }
+
+    /// Compare one historical path with its current working-tree state. The
+    /// binary probe and the rendered patch both disable user diff drivers and
+    /// text conversion so inspection cannot execute repository-provided code.
+    pub fn working_diff_against(
+        &self,
+        commit: &GitObjectId,
+        path: &Path,
+        max_bytes: usize,
+    ) -> Result<VersionComparison, RepositoryError> {
+        let binary_probe = self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args([
+                    "-c",
+                    "diff.external=",
+                    "diff",
+                    "--numstat",
+                    "-z",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    commit.as_str(),
+                ])
+                .literal_paths([path.as_os_str()])
+                .read_only(true),
+            CommandLimits {
+                max_stdout_bytes: 64 * 1024,
+                ..CommandLimits::default()
+            },
+        )?;
+        let binary = binary_probe
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|field| !field.is_empty())
+            .any(|field| field.starts_with(b"-\t-\t"));
+        let output = self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args([
+                    "-c",
+                    "diff.external=",
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    commit.as_str(),
+                ])
+                .literal_paths([path.as_os_str()])
+                .read_only(true),
+            CommandLimits {
+                max_stdout_bytes: max_bytes,
+                ..CommandLimits::default()
+            },
+        )?;
+        Ok(VersionComparison {
+            content: DiffContent {
+                bytes: output.stdout,
+                truncated: output.stdout_truncated,
+            },
+            binary,
+        })
+    }
+
     pub fn historical_blob(
         &self,
         commit: &GitObjectId,
@@ -425,7 +673,7 @@ impl GitRepository {
     ) -> Result<DiffContent, RepositoryError> {
         let tree = self.run(
             GitCommand::new(&self.identity.worktree_root)
-                .args(["ls-tree", "-z", commit.as_str()])
+                .args(["ls-tree", "-r", "-z", commit.as_str()])
                 .literal_paths([path.as_os_str()])
                 .read_only(true),
             CommandLimits::default(),
@@ -439,13 +687,103 @@ impl GitRepository {
             .split(|byte| *byte == b'\t')
             .next()
             .ok_or_else(|| RepositoryError::InvalidOutput("invalid ls-tree output".into()))?;
-        let blob_oid = std::str::from_utf8(metadata)
-            .ok()
-            .and_then(|text| text.split_whitespace().nth(2))
+        let metadata = std::str::from_utf8(metadata)
+            .map_err(|_| RepositoryError::InvalidOutput("invalid ls-tree metadata".into()))?;
+        let mut fields = metadata.split_whitespace();
+        let mode = fields
+            .next()
+            .ok_or_else(|| RepositoryError::InvalidOutput("invalid ls-tree mode".into()))?;
+        if !matches!(mode, "100644" | "100755") {
+            return Err(RepositoryError::InvalidOutput(
+                "historical path is not a regular file".into(),
+            ));
+        }
+        let _kind = fields
+            .next()
+            .ok_or_else(|| RepositoryError::InvalidOutput("invalid ls-tree kind".into()))?;
+        let blob_oid = fields
+            .next()
             .ok_or_else(|| RepositoryError::InvalidOutput("invalid ls-tree object".into()))?;
         let output = self.run(
             GitCommand::new(&self.identity.worktree_root)
                 .args(["cat-file", "blob", blob_oid])
+                .read_only(true),
+            CommandLimits {
+                max_stdout_bytes: max_bytes,
+                ..CommandLimits::default()
+            },
+        )?;
+        Ok(DiffContent {
+            bytes: output.stdout,
+            truncated: output.stdout_truncated,
+        })
+    }
+
+    /// A bounded, NUL-delimited inventory including paths omitted by the editor tree.
+    pub fn commit_paths(&self, commit: &GitObjectId) -> Result<Vec<PathBuf>, RepositoryError> {
+        let output = self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args([
+                    "diff-tree",
+                    "--root",
+                    "-m",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    "-z",
+                    commit.as_str(),
+                ])
+                .read_only(true),
+            CommandLimits {
+                max_stdout_bytes: 16 * 1024 * 1024,
+                ..CommandLimits::default()
+            },
+        )?;
+        if output.stdout_truncated {
+            return Err(RepositoryError::InvalidOutput(
+                "commit path inventory exceeds limit".into(),
+            ));
+        }
+        let mut paths = Vec::new();
+        for bytes in output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|bytes| !bytes.is_empty())
+        {
+            #[cfg(unix)]
+            let path = {
+                use std::os::unix::ffi::OsStringExt;
+                PathBuf::from(OsString::from_vec(bytes.to_vec()))
+            };
+            #[cfg(not(unix))]
+            let path = PathBuf::from(
+                std::str::from_utf8(bytes)
+                    .map_err(|_| RepositoryError::InvalidOutput("unrepresentable path".into()))?,
+            );
+            paths.push(path);
+        }
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    pub fn commit_diff(
+        &self,
+        commit: &GitObjectId,
+        path: &Path,
+        max_bytes: usize,
+    ) -> Result<DiffContent, RepositoryError> {
+        let output = self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args([
+                    "show",
+                    "--format=",
+                    "--first-parent",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    commit.as_str(),
+                ])
+                .literal_paths([path.as_os_str()])
                 .read_only(true),
             CommandLimits {
                 max_stdout_bytes: max_bytes,
@@ -712,8 +1050,8 @@ fn parse_usize(value: Option<&str>, name: &str) -> Result<usize, RepositoryError
 fn parse_history_entry(record: &[u8]) -> Result<HistoryEntry, RepositoryError> {
     let text = std::str::from_utf8(record)
         .map_err(|_| RepositoryError::InvalidOutput("non-UTF-8 history record".into()))?;
-    let fields: Vec<_> = text.splitn(6, '\x1f').collect();
-    if fields.len() != 6 {
+    let fields: Vec<_> = text.splitn(7, '\x1f').collect();
+    if fields.len() != 7 {
         return Err(RepositoryError::InvalidOutput(
             "malformed history record".into(),
         ));
@@ -733,7 +1071,8 @@ fn parse_history_entry(record: &[u8]) -> Result<HistoryEntry, RepositoryError> {
         authored_unix_seconds: fields[4]
             .parse()
             .map_err(|_| RepositoryError::InvalidOutput("invalid author time".into()))?,
-        subject: fields[5].to_owned(),
+        authored_iso: fields[5].to_owned(),
+        subject: fields[6].to_owned(),
     })
 }
 
@@ -811,6 +1150,62 @@ mod tests {
     }
 
     #[test]
+    fn follows_literal_file_history_and_compares_working_versions() {
+        let dir = initialized_repository();
+        let repository = GitRepository::discover(GitCommandRunner::new("git"), dir.path()).unwrap();
+        fs::write(dir.path().join("notes.md"), "second\n").unwrap();
+        git(dir.path(), ["add", "--", "notes.md"]);
+        git(dir.path(), ["commit", "-q", "-m", "second"]);
+        git(dir.path(), ["mv", "notes.md", "renamed note.md"]);
+        git(dir.path(), ["commit", "-q", "-m", "rename"]);
+
+        let history = repository
+            .history_page_for_path(Path::new("renamed note.md"), 0, 50)
+            .unwrap();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].subject, "rename");
+        assert_eq!(
+            repository
+                .history_page_for_path(Path::new("renamed note.md"), 1, 1)
+                .unwrap()[0]
+                .subject,
+            "second"
+        );
+
+        fs::write(dir.path().join("renamed note.md"), "working\n").unwrap();
+        let comparison = repository
+            .working_diff_against(&history[0].oid, Path::new("renamed note.md"), 4096)
+            .unwrap();
+        assert!(!comparison.binary);
+        assert!(!comparison.content.truncated);
+        let patch = String::from_utf8(comparison.content.bytes).unwrap();
+        assert!(patch.contains("-second"));
+        assert!(patch.contains("+working"));
+    }
+
+    #[test]
+    fn working_comparison_reports_binary_and_truncation() {
+        let dir = initialized_repository();
+        fs::write(dir.path().join("asset.bin"), [0, 1, 2, 3]).unwrap();
+        git(dir.path(), ["add", "--", "asset.bin"]);
+        git(dir.path(), ["commit", "-q", "-m", "binary"]);
+        let repository = GitRepository::discover(GitCommandRunner::new("git"), dir.path()).unwrap();
+        let head = repository.status().unwrap().head.unwrap();
+        fs::write(dir.path().join("asset.bin"), [0, 9, 8, 7]).unwrap();
+        let binary = repository
+            .working_diff_against(&head, Path::new("asset.bin"), 4096)
+            .unwrap();
+        assert!(binary.binary);
+
+        fs::write(dir.path().join("notes.md"), "changed line\n".repeat(1024)).unwrap();
+        let truncated = repository
+            .working_diff_against(&head, Path::new("notes.md"), 64)
+            .unwrap();
+        assert!(truncated.content.truncated);
+        assert!(truncated.content.bytes.len() <= 64);
+    }
+
+    #[test]
     fn detects_repository_operation_and_lfs_attribute() {
         let dir = initialized_repository();
         fs::write(
@@ -832,6 +1227,22 @@ mod tests {
                 .as_deref(),
             Some("merge")
         );
+        fs::remove_file(repository.identity().git_dir.join("MERGE_HEAD")).unwrap();
+        fs::write(
+            repository.identity().git_dir.join("index.lock"),
+            "unknown owner\n",
+        )
+        .unwrap();
+        assert_eq!(
+            repository
+                .status()
+                .unwrap()
+                .worktree
+                .operation_in_progress
+                .as_deref(),
+            Some("locked")
+        );
+        assert!(repository.identity().git_dir.join("index.lock").is_file());
     }
 
     #[test]

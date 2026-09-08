@@ -143,3 +143,22 @@ Find searches authored Markdown in Edit, Visual Edit, and Split modes. In Read m
 - Focus mode dims paragraphs outside the current one; typewriter mode keeps the cursor line vertically centered.
 - A few bindings combine `Ctrl` with an `Alt` modifier (for example Ctrl+Alt+N for "new file in tree"); on macOS these are **Cmd+Option**.
 - If a binding does not behave as expected, check whether your window manager or OS has reserved it.
+
+
+## Git synchronization
+
+The Repository menu and Sync sidebar expose these actions. They have no default bindings, avoiding conflicts with document editing; assign them in Preferences → Shortcuts.
+
+| Action | Action ID |
+|---|---|
+| Sync details | `show-git-sync` |
+| Sync Now | `sync-now` |
+| Commit Locally | `commit-locally` |
+| Check Remote | `check-remote` |
+| Pull Updates | `pull-updates` |
+| Push Commits | `push-commits` |
+| Resolve Git Conflicts | `resolve-git-conflict` |
+
+Sync buttons support keyboard focus and Enter/Space. In connection settings, Tab/Shift+Tab move between text fields, Enter saves, and Escape closes the form. Editing a conflict result happens in a separate ordinary editor tab; marking it resolved is explicit.
+
+The **Create local version** composer is available on **Sync → Changes** and has no separate global action ID or default shortcut. Focus its commit-message field to type, use the selectable file rows to choose whole paths, and activate **Create version** with Enter/Space. **Recent history**, **File history**, **Compare with current**, **Restore in editor**, and **Save a Copy** are likewise keyboard-focusable controls in the Sync sidebar and version-detail dialog.

@@ -11,6 +11,10 @@ Preferences SHALL expose Git executable detection/override and an opt-in backgro
 - **WHEN** the user selects an unusable executable path
 - **THEN** the preferences report the failed detection without making ordinary document operations unavailable
 
+#### Scenario: Global Git settings are grouped
+- **WHEN** the user opens the General preferences category
+- **THEN** it shows one Git Sync section at the end containing both executable selection and background remote checking, with informational lines using the same text size as other General settings
+
 ### Requirement: Repository policies SHALL outlive recent sessions and fail closed
 Recent-workspace eviction and general Preferences reset SHALL NOT delete repository policies, Git history, credentials or unresolved recovery. Disconnect SHALL remove the sync binding/scheduling without deleting files, `.git` or remotes. Invalid/unsupported policy data SHALL disable writes with actionable feedback rather than broaden allowed scope. Replaced/moved repository identities SHALL require reconnection before using prior authorization.
 

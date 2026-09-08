@@ -11,7 +11,7 @@ pub(super) fn install_window_close_guard(
             let app = app_entity.read(cx);
             (
                 app.allow_close,
-                app.tabs.iter().any(EditorTab::is_dirty),
+                app.tabs.iter().any(EditorTab::is_dirty) || app.git_ui.running.is_some(),
                 app.confirming_close,
             )
         };
@@ -48,10 +48,6 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemCancelDocxImport), CancelDocxImport),
                 MenuItem::action(t(language, Msg::ItemSave), SaveDocument),
                 MenuItem::action(t(language, Msg::ItemSaveAs), SaveDocumentAs),
-                MenuItem::separator(),
-                MenuItem::action(t(language, Msg::ItemGitSyncNow), SyncNow),
-                MenuItem::action(t(language, Msg::ItemGitResolveConflict), ResolveGitConflict),
-                MenuItem::action(t(language, Msg::ItemGitSyncSetup), SetupGitSync),
                 MenuItem::separator(),
                 MenuItem::action(t(language, Msg::ItemNewTab), NewTab),
                 MenuItem::action(t(language, Msg::ItemOpenInNewTab), OpenInNewTab),
@@ -148,6 +144,21 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                     OrganizeLocalImages,
                 ),
                 MenuItem::action(t(language, Msg::ItemPublishWechat), PublishWechat),
+            ],
+        },
+        Menu {
+            name: t(language, Msg::MenuRepository).into(),
+            items: vec![
+                MenuItem::action(git_t(language, GitMsg::Details), ShowGitSync),
+                MenuItem::separator(),
+                MenuItem::action(t(language, Msg::ItemGitSyncNow), SyncNow),
+                MenuItem::action(git_t(language, GitMsg::Commit), CommitLocally),
+                MenuItem::action(git_t(language, GitMsg::Fetch), CheckRemote),
+                MenuItem::action(git_t(language, GitMsg::Pull), PullUpdates),
+                MenuItem::action(git_t(language, GitMsg::Push), PushCommits),
+                MenuItem::separator(),
+                MenuItem::action(t(language, Msg::ItemGitResolveConflict), ResolveGitConflict),
+                MenuItem::action(t(language, Msg::ItemGitSyncSetup), SetupGitSync),
             ],
         },
         Menu {
@@ -333,6 +344,27 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new("ctrl-shift-alt-m", ReportMemory, None),
     ]);
     // Factory-unbound: install only when the user has assigned an override.
+    if let Some(binding) = menu_shortcuts::SHOW_GIT_SYNC.effective_binding(overrides) {
+        cx.bind_keys([KeyBinding::new(binding, ShowGitSync, None)]);
+    }
+    if let Some(binding) = menu_shortcuts::SYNC_NOW.effective_binding(overrides) {
+        cx.bind_keys([KeyBinding::new(binding, SyncNow, None)]);
+    }
+    if let Some(binding) = menu_shortcuts::COMMIT_LOCALLY.effective_binding(overrides) {
+        cx.bind_keys([KeyBinding::new(binding, CommitLocally, None)]);
+    }
+    if let Some(binding) = menu_shortcuts::CHECK_REMOTE.effective_binding(overrides) {
+        cx.bind_keys([KeyBinding::new(binding, CheckRemote, None)]);
+    }
+    if let Some(binding) = menu_shortcuts::PULL_UPDATES.effective_binding(overrides) {
+        cx.bind_keys([KeyBinding::new(binding, PullUpdates, None)]);
+    }
+    if let Some(binding) = menu_shortcuts::PUSH_COMMITS.effective_binding(overrides) {
+        cx.bind_keys([KeyBinding::new(binding, PushCommits, None)]);
+    }
+    if let Some(binding) = menu_shortcuts::RESOLVE_GIT_CONFLICT.effective_binding(overrides) {
+        cx.bind_keys([KeyBinding::new(binding, ResolveGitConflict, None)]);
+    }
     if let Some(binding) = menu_shortcuts::SHOW_SHORTCUTS.effective_binding(overrides) {
         cx.bind_keys([KeyBinding::new(binding, ShowShortcuts, None)]);
     }
@@ -404,6 +436,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 app.arm_git_branch_poll(cx);
                 app.arm_git_recovery(cx);
                 app.arm_git_background_checks(cx);
+                app.arm_git_details_poll(cx);
                 // File-tree scanning is driven by session restore, CLI folder
                 // open, or opening a document — not by the process CWD.
                 cx.activate(true);

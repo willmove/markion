@@ -343,7 +343,12 @@ fn sanitize_environment(command: &mut Command, allow_interactive_credentials: bo
         }
     }
     if !allow_interactive_credentials {
+        command.env_remove("GIT_ASKPASS");
+        command.env_remove("SSH_ASKPASS");
         command.env("GIT_TERMINAL_PROMPT", "0");
+        command.env("GCM_INTERACTIVE", "never");
+        command.env("GCM_GUI_PROMPT", "0");
+        command.env("SSH_ASKPASS_REQUIRE", "never");
     }
 }
 

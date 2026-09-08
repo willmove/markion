@@ -893,6 +893,11 @@ impl MarkionApp {
 
     pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
         tracing::debug!(target: "markion::editing", op = "undo", "undo invoked");
+        if self.active_git_path_locked() {
+            self.status = self.git_label(GitMsg::Busy).into();
+            cx.notify();
+            return;
+        }
         if self.active_tab_mut().apply_undo() {
             self.active_menu = None;
             self.after_document_changed(cx);
@@ -905,6 +910,11 @@ impl MarkionApp {
 
     pub(super) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
         tracing::debug!(target: "markion::editing", op = "redo", "redo invoked");
+        if self.active_git_path_locked() {
+            self.status = self.git_label(GitMsg::Busy).into();
+            cx.notify();
+            return;
+        }
         if self.active_tab_mut().apply_redo() {
             self.active_menu = None;
             self.after_document_changed(cx);
@@ -1426,6 +1436,13 @@ impl MarkionApp {
         cx: &mut Context<Self>,
         kind: UnsavedExitKind,
     ) {
+        if let Some((_, _, token)) = &self.git_ui.running {
+            token.cancel();
+            self.git_ui.pending_exit = Some((window.window_handle(), kind));
+            self.status = self.git_label(GitMsg::Busy).into();
+            cx.notify();
+            return;
+        }
         if self.confirming_close {
             return;
         }
@@ -1864,6 +1881,15 @@ impl MarkionApp {
         self.toggle_menu(AppMenu::Export, cx);
     }
 
+    pub(super) fn toggle_repository_menu(
+        &mut self,
+        _: &MouseUpEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_menu(AppMenu::Repository, cx);
+    }
+
     pub(super) fn toggle_help_menu(
         &mut self,
         _: &MouseUpEvent,
@@ -2172,6 +2198,21 @@ impl MarkionApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        match self.search_focus {
+            Some(SearchField::Git(_)) => {
+                self.save_git_settings(cx);
+                return;
+            }
+            Some(SearchField::GitSetup(_)) => {
+                self.submit_git_onboarding(cx);
+                return;
+            }
+            Some(SearchField::GitCommit) => {
+                self.create_local_version(_window, cx);
+                return;
+            }
+            _ => {}
+        }
         if self.search_visible && self.search_control_focus.is_some() {
             self.find_next(&FindNext, _window, cx);
             return;
@@ -2303,6 +2344,21 @@ impl MarkionApp {
     }
 
     pub(super) fn indent(&mut self, _: &Indent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(SearchField::Git(index)) = self.search_focus {
+            self.search_focus = Some(SearchField::Git((index + 1) % 5));
+            window.focus(&self.focus_handle);
+            cx.notify();
+            return;
+        }
+        if let Some(SearchField::GitSetup(index)) = self.search_focus {
+            self.search_focus = Some(SearchField::GitSetup((index + 1) % 5));
+            window.focus(&self.focus_handle);
+            cx.notify();
+            return;
+        }
+        if self.search_focus == Some(SearchField::GitCommit) {
+            return;
+        }
         if self.search_focus.is_some() {
             self.cycle_search_overlay_focus(true, cx);
             return;
@@ -2349,6 +2405,19 @@ impl MarkionApp {
     }
 
     pub(super) fn outdent(&mut self, _: &Outdent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(SearchField::Git(index)) = self.search_focus {
+            self.search_focus = Some(SearchField::Git((index + 4) % 5));
+            cx.notify();
+            return;
+        }
+        if let Some(SearchField::GitSetup(index)) = self.search_focus {
+            self.search_focus = Some(SearchField::GitSetup((index + 4) % 5));
+            cx.notify();
+            return;
+        }
+        if self.search_focus == Some(SearchField::GitCommit) {
+            return;
+        }
         if self.search_visible && self.search_control_focus.is_some() {
             self.cycle_search_overlay_focus(false, cx);
             return;

@@ -31,11 +31,18 @@ pub enum OnboardingError {
     InvalidBranch,
     #[error("repository has no commit to publish")]
     NothingToPublish,
+    #[error("initial notes snapshot has no eligible files")]
+    NoInitialNotes,
+    #[error("initial notes snapshot changed while it was being prepared")]
+    UnsafeInitialSnapshot,
+    #[error("initial notes snapshot requires a nonblank message")]
+    InvalidMessage,
 }
 
 #[derive(Clone, Debug)]
 pub struct OnboardingService {
     runner: GitCommandRunner,
+    foreground_credentials: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -60,7 +67,17 @@ pub struct PublicationResult {
 
 impl OnboardingService {
     pub fn new(runner: GitCommandRunner) -> Self {
-        Self { runner }
+        Self {
+            runner,
+            foreground_credentials: false,
+        }
+    }
+
+    /// Explicit user-triggered setup may use the platform credential helper or
+    /// SSH agent UI. Background callers deliberately never enable this flag.
+    pub fn with_foreground_credentials(mut self) -> Self {
+        self.foreground_credentials = true;
+        self
     }
 
     pub fn clone_repository(
@@ -102,11 +119,7 @@ impl OnboardingService {
             OsString::from(remote.as_str()),
             temporary.as_os_str().to_owned(),
         ]);
-        let request = if let Some(bridge) = askpass {
-            Authentication::new(self.runner.clone()).with_askpass(request, bridge)
-        } else {
-            request
-        };
+        let request = self.network_request(request, askpass);
         if let Err(error) = self.runner.run(
             &request,
             CommandLimits {
@@ -145,6 +158,18 @@ impl OnboardingService {
                         cancellation,
                     )?;
                 }
+                branch.to_string()
+            } else if empty_remote {
+                let branch = "main";
+                self.validate_branch(&temporary, branch, cancellation)?;
+                self.run(
+                    GitCommand::new(&temporary).args([
+                        "symbolic-ref",
+                        "HEAD",
+                        &format!("refs/heads/{branch}"),
+                    ]),
+                    cancellation,
+                )?;
                 branch.to_string()
             } else {
                 self.current_branch(&temporary, cancellation)?
@@ -212,6 +237,127 @@ impl OnboardingService {
         self.connect_existing(directory)
     }
 
+    /// Attach `origin` only when it is absent. An existing matching remote is
+    /// accepted for resumable setup; a different URL is never replaced.
+    pub fn attach_origin(
+        &self,
+        repository: &GitRepository,
+        remote: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<(), OnboardingError> {
+        let remote = RemoteUrl::parse(remote)?;
+        let existing = self.origin_url(repository, cancellation)?;
+        if let Some(existing) = existing {
+            if existing.trim() == remote.as_str() {
+                return Ok(());
+            }
+            return Err(OnboardingError::RemoteExists("origin".into()));
+        }
+        self.run(
+            GitCommand::new(&repository.identity().worktree_root).args([
+                "remote",
+                "add",
+                "origin",
+                remote.as_str(),
+            ]),
+            cancellation,
+        )?;
+        Ok(())
+    }
+
+    pub fn origin_url(
+        &self,
+        repository: &GitRepository,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<String>, OnboardingError> {
+        Ok(self.run_optional(
+            GitCommand::new(&repository.identity().worktree_root)
+                .args(["remote", "get-url", "origin"])
+                .read_only(true),
+            cancellation,
+        )?)
+    }
+
+    /// Create the first commit for a newly initialized notes repository. Only
+    /// the exact reviewed note/resource paths are staged; failure deliberately
+    /// leaves that owned staging visible for a safe retry or manual inspection.
+    pub fn create_initial_commit(
+        &self,
+        repository: &GitRepository,
+        paths: &[PathBuf],
+        message: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<GitObjectId, OnboardingError> {
+        if message.trim().is_empty() {
+            return Err(OnboardingError::InvalidMessage);
+        }
+        let state = repository.status()?;
+        if state.head.is_some()
+            || state.worktree.has_external_staging
+            || state.worktree.has_conflicts
+            || state.worktree.operation_in_progress.is_some()
+            || !state.capabilities.supports_write_sync()
+        {
+            return Err(OnboardingError::UnsafeInitialSnapshot);
+        }
+        let mut expected = paths.to_vec();
+        expected.sort();
+        expected.dedup();
+        if expected.is_empty() {
+            return Err(OnboardingError::NoInitialNotes);
+        }
+        for path in &expected {
+            repository.validate_write_path(path)?;
+            if !repository.identity().worktree_root.join(path).is_file() {
+                return Err(OnboardingError::UnsafeInitialSnapshot);
+            }
+        }
+        self.run(
+            GitCommand::new(&repository.identity().worktree_root)
+                .arg("add")
+                .literal_paths(&expected),
+            cancellation,
+        )?;
+        let staged_state = repository.status()?;
+        let mut staged = staged_state
+            .worktree
+            .changes
+            .iter()
+            .filter(|change| change.index_status != '.' && change.index_status != '?')
+            .map(|change| change.path.clone())
+            .collect::<Vec<_>>();
+        staged.sort();
+        staged.dedup();
+        if staged != expected {
+            return Err(OnboardingError::UnsafeInitialSnapshot);
+        }
+        self.run(
+            GitCommand::new(&repository.identity().worktree_root).args([
+                "commit",
+                "-m",
+                message.trim(),
+            ]),
+            cancellation,
+        )?;
+        let head = self
+            .run_optional(
+                GitCommand::new(&repository.identity().worktree_root)
+                    .args(["rev-parse", "--verify", "HEAD"])
+                    .read_only(true),
+                cancellation,
+            )?
+            .ok_or(OnboardingError::NothingToPublish)?;
+        GitObjectId::parse(head.trim().to_string()).map_err(|_| OnboardingError::NothingToPublish)
+    }
+
+    pub fn current_branch_name(
+        &self,
+        repository: &GitRepository,
+        cancellation: &CancellationToken,
+    ) -> Result<String, OnboardingError> {
+        self.current_branch(&repository.identity().worktree_root, cancellation)
+    }
+
     pub fn publish_first_branch(
         &self,
         repository: &GitRepository,
@@ -247,11 +393,7 @@ impl OnboardingService {
             remote_name,
             &refspec,
         ]);
-        let request = if let Some(bridge) = askpass {
-            Authentication::new(self.runner.clone()).with_askpass(request, bridge)
-        } else {
-            request
-        };
+        let request = self.network_request(request, askpass);
         self.run(request, cancellation)?;
 
         // Bind upstream only after the exact publication succeeded. A failed
@@ -308,6 +450,13 @@ impl OnboardingService {
             cancellation,
         )?;
         Ok(())
+    }
+
+    fn network_request(&self, request: GitCommand, askpass: Option<&AskpassBridge>) -> GitCommand {
+        let request = request.interactive_credentials(self.foreground_credentials);
+        askpass.map_or(request.clone(), |bridge| {
+            Authentication::new(self.runner.clone()).with_askpass(request, bridge)
+        })
     }
 
     fn run(
@@ -380,6 +529,32 @@ mod tests {
     }
 
     #[test]
+    fn clones_empty_remote_to_main_when_branch_is_automatic() {
+        let dir = tempfile::tempdir().unwrap();
+        let remote = dir.path().join("empty.git");
+        run_git(
+            dir.path(),
+            ["init", "--bare", "-q", remote.to_str().unwrap()],
+        );
+        let destination = dir.path().join("automatic branch");
+        let result = OnboardingService::new(GitCommandRunner::new("git"))
+            .clone_repository(
+                remote.to_str().unwrap(),
+                &destination,
+                None,
+                None,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        assert!(result.empty_remote);
+        assert_eq!(result.selected_branch, "main");
+        assert_eq!(
+            run_git_output(&destination, ["symbolic-ref", "--short", "HEAD"]).trim(),
+            "main"
+        );
+    }
+
+    #[test]
     fn initializes_and_publishes_with_upstream_only_after_success() {
         let dir = tempfile::tempdir().unwrap();
         let remote = dir.path().join("remote.git");
@@ -417,6 +592,106 @@ mod tests {
         assert_eq!(publication.target.destination_ref, "refs/heads/main");
         let remote_head = run_git_output(&remote, ["rev-parse", "refs/heads/main"]);
         assert_eq!(remote_head.trim(), publication.commit.as_str());
+    }
+
+    #[test]
+    fn initial_commit_stages_only_reviewed_note_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let notes = dir.path().join("notes");
+        let runner = GitCommandRunner::new("git");
+        let service = OnboardingService::new(runner.clone());
+        let review = service.initialize_notes(&notes, "main", None).unwrap();
+        Authentication::new(runner)
+            .configure_author(
+                &notes,
+                &RepositoryAuthor {
+                    name: "Markion Test".into(),
+                    email: "test@markion.invalid".into(),
+                },
+            )
+            .unwrap();
+        fs::write(notes.join("note.md"), "hello\n").unwrap();
+        fs::write(notes.join("private.key"), "do not commit\n").unwrap();
+
+        let commit = service
+            .create_initial_commit(
+                &review.repository,
+                &[PathBuf::from("note.md")],
+                "Start notes",
+                &CancellationToken::new(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            run_git_output(
+                &notes,
+                ["show", "--format=", "--name-only", commit.as_str()]
+            )
+            .trim(),
+            "note.md"
+        );
+        assert!(notes.join("private.key").is_file());
+        assert!(
+            run_git_output(&notes, ["status", "--porcelain"])
+                .lines()
+                .any(|line| line.ends_with("private.key"))
+        );
+    }
+
+    #[test]
+    fn resumable_origin_attach_never_replaces_an_existing_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let notes = dir.path().join("notes");
+        let remote_a = dir.path().join("a.git");
+        let remote_b = dir.path().join("b.git");
+        run_git(
+            dir.path(),
+            ["init", "--bare", "-q", remote_a.to_str().unwrap()],
+        );
+        run_git(
+            dir.path(),
+            ["init", "--bare", "-q", remote_b.to_str().unwrap()],
+        );
+        let service = OnboardingService::new(GitCommandRunner::new("git"));
+        let review = service.initialize_notes(&notes, "main", None).unwrap();
+        service
+            .attach_origin(
+                &review.repository,
+                remote_a.to_str().unwrap(),
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        service
+            .attach_origin(
+                &review.repository,
+                remote_a.to_str().unwrap(),
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        assert!(matches!(
+            service.attach_origin(
+                &review.repository,
+                remote_b.to_str().unwrap(),
+                &CancellationToken::new(),
+            ),
+            Err(OnboardingError::RemoteExists(name)) if name == "origin"
+        ));
+        assert_eq!(
+            run_git_output(&notes, ["remote", "get-url", "origin"]).trim(),
+            remote_a.to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn foreground_credentials_are_opt_in_for_explicit_onboarding() {
+        let request = GitCommand::new(".").args(["fetch", "origin"]);
+        let background = OnboardingService::new(GitCommandRunner::new("git"))
+            .network_request(request.clone(), None);
+        let foreground = OnboardingService::new(GitCommandRunner::new("git"))
+            .with_foreground_credentials()
+            .network_request(request, None);
+        assert!(!background.allow_interactive_credentials);
+        assert!(foreground.allow_interactive_credentials);
     }
 
     #[test]

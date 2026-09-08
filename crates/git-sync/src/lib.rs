@@ -24,8 +24,9 @@ pub use admission::{
     AdmissionError, ExclusiveAdmission, GitOperationRegistry, ReadEpoch, WriteAdmission,
 };
 pub use auth::{
-    AskpassBridge, AuthFailure, Authentication, CredentialHelper, CredentialStorage,
-    RemoteTransport, RemoteUrl, RemoteUrlError, RepositoryAuthor,
+    AskpassBridge, AuthFailure, Authentication, CredentialHelper, CredentialPlatform,
+    CredentialStorage, RemoteTransport, RemoteUrl, RemoteUrlError, RepositoryAuthor,
+    credential_helper_is_noninteractive,
 };
 pub use background::{BackgroundFetchResult, BackgroundFetchScheduler, BackgroundNotification};
 pub use conflict::{
@@ -52,7 +53,7 @@ pub use process::{
 };
 pub use repository::{
     DiffContent, DiffRequest, GitRepository, HistoryEntry, RepositoryError, RepositoryState,
-    TargetResolutionError,
+    TargetResolutionError, VersionComparison, content_fingerprint_bytes,
 };
 pub use resources::{
     AttachmentIssue, AttachmentIssueKind, AttachmentReport, attachment_reference_fingerprint,

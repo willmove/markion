@@ -923,6 +923,7 @@ fn every_application_dropdown_uses_shortcut_aware_rows() {
         "AppMenu::View =>",
         "AppMenu::Format =>",
         "AppMenu::Export =>",
+        "AppMenu::Repository =>",
     ];
     for (index, boundary) in menu_boundaries.iter().enumerate() {
         let body = menu_source
@@ -1095,7 +1096,15 @@ fn menu_hover_switches_only_during_an_open_menu_session() {
 #[test]
 fn every_menu_title_wires_click_and_hover_behavior() {
     let source = include_str!("root_view.rs");
-    for menu in ["File", "Edit", "View", "Format", "Export", "Help"] {
+    for menu in [
+        "File",
+        "Edit",
+        "View",
+        "Format",
+        "Export",
+        "Repository",
+        "Help",
+    ] {
         assert!(
             source.contains(&format!("app.hover_menu(AppMenu::{menu}, cx);")),
             "{menu} title must switch an open menu session on hover"
@@ -1119,6 +1128,72 @@ fn every_menu_title_wires_click_and_hover_behavior() {
     assert!(title_button.contains(".on_mouse_up(MouseButton::Left, click_listener)"));
     assert!(title_button.contains(".on_mouse_move(hover_listener)"));
     assert!(source.contains("cx.listener(Self::close_menu)"));
+}
+
+#[test]
+fn git_actions_live_only_in_repository_menus() {
+    let root_view = include_str!("root_view.rs").replace("\r\n", "\n");
+    let in_window_file = root_view
+        .split_once("AppMenu::File => panel")
+        .and_then(|(_, rest)| rest.split_once("AppMenu::Edit =>").map(|(file, _)| file))
+        .expect("in-window File menu");
+    let in_window_repository = root_view
+        .split_once("AppMenu::Repository => panel")
+        .and_then(|(_, rest)| rest.split_once("AppMenu::Help =>").map(|(repo, _)| repo))
+        .expect("in-window Repository menu");
+
+    let bootstrap = include_str!("bootstrap.rs").replace("\r\n", "\n");
+    let native_file = bootstrap
+        .split_once("name: t(language, Msg::MenuFile)")
+        .and_then(|(_, rest)| {
+            rest.split_once("name: t(language, Msg::MenuEdit)")
+                .map(|(file, _)| file)
+        })
+        .expect("native File menu");
+    let native_repository = bootstrap
+        .split_once("name: t(language, Msg::MenuRepository)")
+        .and_then(|(_, rest)| {
+            rest.split_once("name: t(language, Msg::MenuHelp)")
+                .map(|(repo, _)| repo)
+        })
+        .expect("native Repository menu");
+
+    for token in [
+        "Msg::ItemGitSyncNow",
+        "GitMsg::Details",
+        "GitMsg::Commit",
+        "GitMsg::Fetch",
+        "GitMsg::Pull",
+        "GitMsg::Push",
+        "Msg::ItemGitResolveConflict",
+        "Msg::ItemGitSyncSetup",
+    ] {
+        assert!(
+            in_window_repository.contains(token),
+            "in-window Repository menu omitted {token}"
+        );
+        assert!(
+            native_repository.contains(token),
+            "native Repository menu omitted {token}"
+        );
+        assert!(
+            !in_window_file.contains(token),
+            "in-window File menu retained {token}"
+        );
+        assert!(
+            !native_file.contains(token),
+            "native File menu retained {token}"
+        );
+    }
+
+    let native_export = bootstrap
+        .find("Msg::MenuExport")
+        .expect("native Export menu");
+    let native_repository = bootstrap
+        .find("Msg::MenuRepository")
+        .expect("native Repository menu");
+    let native_help = bootstrap.find("Msg::MenuHelp").expect("native Help menu");
+    assert!(native_export < native_repository && native_repository < native_help);
 }
 
 #[test]
@@ -3205,6 +3280,57 @@ fn preferences_panel_renders_and_wires_the_appearance_tab() {
     assert!(!appearance_body.contains("PrefPanelAutoSaveSection"));
     assert!(!appearance_body.contains("preferences_shortcuts_body"));
     assert!(!appearance_body.contains("preferences_export_body"));
+}
+
+#[test]
+fn general_preferences_group_git_controls_once_at_the_end() {
+    let root_view = include_str!("root_view.rs").replace("\r\n", "\n");
+    let panel = root_view
+        .split_once("pub(super) fn preferences_panel_view")
+        .and_then(|(_, rest)| rest.split_once("fn preferences_tab_strip"))
+        .map(|(body, _)| body)
+        .expect("Preferences panel view");
+    let git_entry = "git_panel::preferences_view(app, cx)";
+    assert_eq!(
+        panel.matches(git_entry).count(),
+        1,
+        "General preferences must render one Git Sync section"
+    );
+    assert!(
+        panel.find("PrefPanelAutoSaveSection").unwrap() < panel.find(git_entry).unwrap(),
+        "Git Sync must follow the other General preference sections"
+    );
+    assert!(
+        !panel.contains("PrefPanelGitBackgroundCheck"),
+        "the background setting must not be duplicated outside the Git component"
+    );
+
+    let git_panel = include_str!("git_panel.rs").replace("\r\n", "\n");
+    let git_preferences = git_panel
+        .split_once("pub(super) fn preferences_view")
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn inspection_view"))
+        .map(|(body, _)| body)
+        .expect("Git preferences component");
+    for control in [
+        "Msg::PrefPanelGitSection",
+        "GitMsg::Executable",
+        "Msg::PrefPanelGitBackgroundCheck",
+    ] {
+        assert!(
+            git_preferences.contains(control),
+            "Git Sync section omitted {control}"
+        );
+    }
+    for line in ["git-executable-summary", "git-executable-status"] {
+        let style = git_preferences
+            .split_once(&format!(".id(\"{line}\")"))
+            .and_then(|(_, rest)| rest.split_once(".child(").map(|(style, _)| style))
+            .unwrap_or_else(|| panic!("missing Git preference line {line}"));
+        assert!(
+            style.contains(".text_size(px(12.))"),
+            "{line} must match the General preference text size"
+        );
+    }
 }
 
 #[test]
@@ -18501,5 +18627,380 @@ fn visual_edit_double_click_selects_the_word_under_the_pointer(cx: &mut TestAppC
             "shift + double click must extend the selection, not select the word"
         );
         assert_eq!(app.active_tab().selected_range.start, cjk_range.start);
+    });
+}
+
+#[gpui::test]
+fn git_local_phase_blocks_platform_input_but_network_phase_allows_new_edits(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("note.md");
+    fs::write(&path, "original").unwrap();
+    let identity = markion_git_sync::RepositoryIdentity::new(
+        directory.path().into(),
+        directory.path().join(".git"),
+        directory.path().join(".git"),
+    );
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&path).unwrap())];
+        app.git_operations.register(identity.clone());
+        app
+    });
+    let guard = app.update(cx, |app, _| {
+        app.git_operations
+            .begin_exclusive(&identity, "local-phase")
+            .unwrap()
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_text_in_range(app, None, "blocked", window, cx);
+            EntityInputHandler::replace_and_mark_text_in_range(
+                app,
+                None,
+                "also blocked",
+                None,
+                window,
+                cx,
+            );
+            app.undo(&Undo, window, cx);
+            assert_eq!(app.active_tab().document.text(), "original");
+        })
+    });
+    drop(guard);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let before = app.git_operations.content_generation(&identity);
+            EntityInputHandler::replace_text_in_range(app, None, "network edit", window, cx);
+            assert!(app.active_tab().document.text().contains("network edit"));
+            assert!(app.git_operations.content_generation(&identity) > before);
+        })
+    });
+}
+
+#[gpui::test]
+fn git_settings_input_tab_escape_and_undo_do_not_mutate_document(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let identity = markion_git_sync::RepositoryIdentity::new(
+        directory.path().into(),
+        directory.path().join(".git"),
+        directory.path().join(".git"),
+    );
+    let policy = markion_git_sync::RepositoryPolicy {
+        identity,
+        target: markion_git_sync::SyncTarget {
+            local_branch: "main".into(),
+            remote_branch: "main".into(),
+            remote: "origin".into(),
+            destination_ref: "refs/heads/main".into(),
+            fetch_url: "local".into(),
+            push_url: "local".into(),
+        },
+        tracked_roots: vec![],
+        new_file_rules: vec![],
+        message_template: String::new(),
+        include_device_name: false,
+        background_fetch: false,
+        last_confirmed_remote: None,
+        acknowledged_resource_omissions: vec![],
+    };
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("keep document"))];
+        app.git_ui.settings = Some(super::git_panel::GitSettings {
+            policy,
+            fields: std::array::from_fn(|_| SearchFieldState::default()),
+        });
+        app.search_focus = Some(SearchField::Git(0));
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let version = app.active_tab().document.version();
+            EntityInputHandler::replace_text_in_range(app, None, "notes", window, cx);
+            assert_eq!(
+                app.git_ui.settings.as_ref().unwrap().fields[0].buffer,
+                "notes"
+            );
+            app.indent(&Indent, window, cx);
+            assert_eq!(app.search_focus, Some(SearchField::Git(1)));
+            app.outdent(&Outdent, window, cx);
+            assert_eq!(app.search_focus, Some(SearchField::Git(0)));
+            app.undo(&Undo, window, cx);
+            assert_eq!(app.active_tab().document.version(), version);
+            app.clear_file_tree_search(&ClearFileTreeSearch, window, cx);
+            assert!(app.git_ui.settings.is_none());
+            assert!(app.search_focus.is_none());
+            assert_eq!(app.active_tab().document.text(), "keep document");
+        })
+    });
+}
+
+#[gpui::test]
+fn git_quick_setup_derives_clone_folder_and_keeps_input_out_of_document(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let current = directory.path().join("current");
+    fs::create_dir(&current).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.workspace_root = current.clone();
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("keep document"))];
+        app.git_ui.onboarding = Some(super::git_panel::GitOnboarding {
+            mode: super::git_panel::GitOnboardingMode::CloneRepository,
+            fields: std::array::from_fn(|_| SearchFieldState::default()),
+            advanced: false,
+            destination_edited: false,
+            sync_after_setup: false,
+            busy: false,
+            cancellation: None,
+            error: None,
+        });
+        app.search_focus = Some(SearchField::GitSetup(0));
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let version = app.active_tab().document.version();
+            EntityInputHandler::replace_text_in_range(
+                app,
+                None,
+                "https://example.invalid/user/notes.git",
+                window,
+                cx,
+            );
+            let setup = app.git_ui.onboarding.as_ref().unwrap();
+            assert_eq!(
+                PathBuf::from(&setup.fields[1].buffer),
+                directory.path().join("notes")
+            );
+            assert_eq!(app.active_tab().document.text(), "keep document");
+            assert_eq!(app.active_tab().document.version(), version);
+            app.indent(&Indent, window, cx);
+            assert_eq!(app.search_focus, Some(SearchField::GitSetup(1)));
+            app.outdent(&Outdent, window, cx);
+            assert_eq!(app.search_focus, Some(SearchField::GitSetup(0)));
+            app.clear_file_tree_search(&ClearFileTreeSearch, window, cx);
+            assert!(app.git_ui.onboarding.is_none());
+            assert!(app.search_focus.is_none());
+        })
+    });
+}
+
+#[gpui::test]
+fn git_quick_setup_prefers_initializing_an_existing_notes_folder(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let note = directory.path().join("existing.md");
+    fs::write(&note, "existing note").unwrap();
+    let (app, cx) = cx.add_window_view(|window, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.workspace_root = directory.path().to_path_buf();
+        app.file_tree = Some(FileTree::scan(directory.path()).unwrap());
+        app.setup_git_sync(&SetupGitSync, window, cx);
+        app
+    });
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let setup = app.git_ui.onboarding.as_ref().unwrap();
+            assert_eq!(
+                setup.mode,
+                super::git_panel::GitOnboardingMode::InitializeFolder
+            );
+            assert_eq!(setup.fields[2].buffer, "main");
+        })
+    });
+}
+
+#[gpui::test]
+fn git_version_message_input_does_not_mutate_document(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let identity = markion_git_sync::RepositoryIdentity::new(
+        directory.path().into(),
+        directory.path().join(".git"),
+        directory.path().join(".git"),
+    );
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("keep document"))];
+        app.git_ui.commit_draft = Some(super::git_panel::GitCommitDraft {
+            identity,
+            expected_head: None,
+            selected: HashSet::new(),
+            reviewed_fingerprints: HashMap::new(),
+            message: SearchFieldState::default(),
+        });
+        app.search_focus = Some(SearchField::GitCommit);
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let version = app.active_tab().document.version();
+            EntityInputHandler::replace_text_in_range(
+                app,
+                None,
+                "Explain this version",
+                window,
+                cx,
+            );
+            assert_eq!(
+                app.git_ui.commit_draft.as_ref().unwrap().message.buffer,
+                "Explain this version"
+            );
+            assert_eq!(app.active_tab().document.text(), "keep document");
+            assert_eq!(app.active_tab().document.version(), version);
+        })
+    });
+}
+
+#[gpui::test]
+fn git_restore_is_one_dirty_undoable_edit_and_preserves_other_tabs(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let note = directory.path().join("note.md");
+    let other = directory.path().join("other.md");
+    fs::write(&note, "current\n").unwrap();
+    fs::write(&other, "other\n").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&note).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&other).unwrap()),
+        ];
+        app
+    });
+    let other_before = app.update(cx, |app, _| {
+        (
+            app.tabs[1].document.text().to_string(),
+            app.tabs[1].document.version(),
+        )
+    });
+    app.update(cx, |app, cx| {
+        assert!(app.apply_git_restore_source("historical\n".into(), cx));
+        assert_eq!(app.active_tab().document.text(), "historical\n");
+        assert!(app.active_tab().document.is_dirty());
+        assert_eq!(
+            (
+                app.tabs[1].document.text().to_string(),
+                app.tabs[1].document.version(),
+            ),
+            other_before
+        );
+    });
+    assert_eq!(fs::read_to_string(&note).unwrap(), "current\n");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.undo(&Undo, window, cx);
+            assert_eq!(app.active_tab().document.text(), "current\n");
+            assert!(!app.active_tab().document.is_dirty());
+        })
+    });
+}
+
+#[gpui::test]
+fn git_restore_rejects_a_stale_tab_version(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let note = directory.path().join("note.md");
+    fs::write(&note, "current\n").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&note).unwrap())];
+        app
+    });
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let disk_identity = tab.document.disk_identity().cloned().unwrap();
+        let target: super::git_panel::GitRestoreTarget = (
+            tab.document.instance_id(),
+            tab.document.version(),
+            Some(disk_identity.clone()),
+            false,
+        );
+        app.active_tab_mut()
+            .document
+            .set_text("edited while loading\n");
+        assert!(
+            super::git_panel::resolve_git_restore_target(
+                &app.tabs,
+                &note,
+                Some(&target),
+                &disk_identity,
+            )
+            .is_err()
+        );
+        assert_eq!(app.active_tab().document.text(), "edited while loading\n");
+    });
+}
+
+#[gpui::test]
+fn cancelling_dirty_git_restore_preserves_the_buffer(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let note = directory.path().join("note.md");
+    fs::write(&note, "current\n").unwrap();
+    let identity = markion_git_sync::RepositoryIdentity::new(
+        directory.path().into(),
+        directory.path().join(".git"),
+        directory.path().join(".git"),
+    );
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        let mut tab = EditorTab::new(MarkdownDocument::open(&note).unwrap());
+        tab.document.set_text("unsaved\n");
+        app.tabs = vec![tab];
+        app.git_ui.inspection = Some(super::git_panel::GitInspection {
+            identity,
+            title: "note.md".into(),
+            text: "".into(),
+            limited: false,
+            copy: Some(b"historical\n".to_vec()),
+            path: Some(PathBuf::from("note.md")),
+            commit: Some(markion_git_sync::GitObjectId::parse("abcdef12").unwrap()),
+            metadata: None,
+            binary: false,
+            compare_current: false,
+            paths: Vec::new(),
+            offset: 0,
+        });
+        app
+    });
+    let cancel = app.update(cx, |app, _| {
+        t(app.language, Msg::DialogButtonCancel).to_string()
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.restore_git_version(window, cx));
+    });
+    cx.simulate_prompt_answer(&cancel);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "unsaved\n");
+        assert!(app.active_tab().document.is_dirty());
+        assert!(app.git_ui.inspection.is_some());
+    });
+}
+
+#[gpui::test]
+fn git_quit_requests_cancellation_and_waits_before_closing(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    let root = PathBuf::from("notes");
+    let token = markion_git_sync::CancellationToken::new();
+    app.update(cx, |app, _| {
+        app.git_ui.running = Some((
+            markion_git_sync::RepositoryIdentity::new(
+                root.clone(),
+                root.join(".git"),
+                root.join(".git"),
+            ),
+            markion_git_sync::OperationKind::SyncNow,
+            token.clone(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.begin_unsaved_exit(window, cx, UnsavedExitKind::WindowClose)
+        })
+    });
+    assert!(token.is_cancelled());
+    app.update(cx, |app, _| {
+        assert!(app.git_ui.pending_exit.is_some());
+        assert!(!app.allow_close);
     });
 }

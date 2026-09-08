@@ -112,6 +112,12 @@ impl EntityInputHandler for MarkionApp {
             return;
         }
 
+        if self.active_git_path_locked() {
+            self.status = self.git_label(GitMsg::Busy).into();
+            cx.notify();
+            return;
+        }
+
         // The platform derived explicit offsets against the document state it
         // last queried (recorded in `document_input_target`). If the active
         // document's identity or version has moved on — tab switch, external
@@ -317,6 +323,12 @@ impl EntityInputHandler for MarkionApp {
             return;
         }
 
+        if self.active_git_path_locked() {
+            self.status = self.git_label(GitMsg::Busy).into();
+            cx.notify();
+            return;
+        }
+
         // A live composition owns the version chain its own updates created.
         // If the document moved on underneath it (tab switch, reload, undo,
         // another edit), the pending update is stale: reset the composition
@@ -492,6 +504,9 @@ impl EntityInputHandler for MarkionApp {
             let field_index = match self.search_focus {
                 Some(SearchField::Find) => 0,
                 Some(SearchField::Replace) => 1,
+                Some(SearchField::Git(index)) => index + 2,
+                Some(SearchField::GitSetup(index)) => index + 8,
+                Some(SearchField::GitCommit) => 7,
                 None => return None,
             };
             let field_bounds = self.search_field_bounds[field_index]?;
@@ -545,6 +560,9 @@ impl EntityInputHandler for MarkionApp {
             let field_index = match self.search_focus {
                 Some(SearchField::Find) => 0,
                 Some(SearchField::Replace) => 1,
+                Some(SearchField::Git(index)) => index + 2,
+                Some(SearchField::GitSetup(index)) => index + 8,
+                Some(SearchField::GitCommit) => 7,
                 None => return None,
             };
             let bounds = self.search_field_bounds[field_index]?;

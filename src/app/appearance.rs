@@ -46,6 +46,7 @@ impl MarkionApp {
             self.rebind_keys(cx);
         }
         self.preferences_panel_open = true;
+        self.detect_git_executable(cx);
         self.active_menu = None;
         self.dismiss_visual_block_menu();
         window.focus(&self.preferences_panel_focus);

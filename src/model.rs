@@ -1076,6 +1076,7 @@ pub enum SidebarTab {
     #[default]
     Files,
     Outline,
+    Sync,
 }
 
 impl ViewMode {

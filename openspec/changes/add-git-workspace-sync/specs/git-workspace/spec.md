@@ -16,6 +16,13 @@ Markion SHALL detect the configured or system Git executable, report its version
 ### Requirement: Repository onboarding SHALL support clone connect and initialize
 Markion SHALL support cloning an HTTPS or SSH remote, connecting an existing local repository, and initializing a local notes folder against an empty remote. It SHALL discover advertised default branches or existing upstreams, collect an explicit branch choice when discovery is ambiguous, and reject destructive destination replacement. Nonempty unrelated remote history SHALL lead to clone-and-copy guidance rather than an automatic unrelated-history merge.
 
+The first-use surface SHALL use notes-oriented choices and defaults: use the open folder when it is already a repository, clone a notes repository, or start syncing the open notes folder. It SHALL derive an editable destination from the remote, suggest `main` only when no branch is discovered, and place repository scope and transport details in review/advanced controls. Ordinary configured use SHALL return directly to Sync Now.
+
+#### Scenario: User opens synchronization for the first time
+- **WHEN** the current notes folder has no saved synchronization policy
+- **THEN** the app presents the applicable connect, clone, and initialize routes with the shortest applicable route first
+- **AND** it does not require staging, refspec, or upstream terminology to begin
+
 #### Scenario: Clone succeeds
 - **WHEN** the user selects a remote, branch, and absent or empty destination and cloning succeeds
 - **THEN** the complete clone opens through the existing workspace-switching flow
@@ -73,6 +80,13 @@ Setup SHALL persist explicit repository-relative roots for tracked changes and e
 
 ### Requirement: Git authentication and commit identity SHALL remain separate and protected
 Explicit operations SHALL support HTTPS credential helpers and SSH user configuration, agents and host verification. The app SHALL keep author name/email separate from login identity, default author edits to repository-local scope, and respect signing/hook failures. App-acquired secrets SHALL remain session-only or be stored through a detected secure helper, never in repository files, session/policy files, command arguments, remote URLs, or logs. The app SHALL NOT disable certificate/host verification or silently configure plaintext credential storage.
+
+Explicit foreground setup and sync operations SHALL permit system secure credential helpers, operating-system credential UI, and SSH agents to interact. Authentication-required failures SHALL retain local work and offer a retry of the requested operation. Background checks SHALL remain noninteractive and SHALL pause when the configured transport cannot guarantee noninteractive authentication.
+
+#### Scenario: System credential prompt completes
+- **WHEN** an explicit clone or sync operation invokes a configured secure system helper and the user completes its prompt
+- **THEN** the operation continues or can be retried without Markion persisting the secret
+- **AND** the same foreground prompt path is not enabled for background checks
 
 #### Scenario: Missing HTTPS credential is requested
 - **WHEN** an explicit operation needs a credential unavailable from the configured helper

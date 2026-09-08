@@ -139,6 +139,9 @@ impl MarkionApp {
     /// not lazily scanned here: on the welcome document the Files tab shows an
     /// empty-state placeholder by design.
     pub(super) fn set_sidebar_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        if tab == SidebarTab::Sync {
+            self.refresh_git_details(cx);
+        }
         if self.sidebar_tab == tab {
             return;
         }
@@ -163,6 +166,7 @@ impl MarkionApp {
             match tab {
                 SidebarTab::Files => Msg::StatusFileTreeShown,
                 SidebarTab::Outline => Msg::StatusOutlineShown,
+                SidebarTab::Sync => Msg::PrefPanelGitSection,
             },
         )
         .into();
@@ -295,6 +299,39 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.git_ui.settings.is_some()
+            || self.git_ui.onboarding.is_some()
+            || self.git_ui.inspection.is_some()
+        {
+            self.git_ui.settings = None;
+            if let Some(setup) = &self.git_ui.onboarding
+                && let Some(cancellation) = &setup.cancellation
+            {
+                cancellation.cancel();
+            }
+            if self
+                .git_ui
+                .onboarding
+                .as_ref()
+                .is_none_or(|setup| !setup.busy)
+            {
+                self.git_ui.onboarding = None;
+            }
+            self.git_ui.inspection = None;
+            self.git_ui.inspection_pending = None;
+            self.search_focus = None;
+            self.git_ui.inspection_generation = self.git_ui.inspection_generation.wrapping_add(1);
+            window.focus(&self.focus_handle);
+            cx.notify();
+            return;
+        }
+        if self.search_focus == Some(SearchField::GitCommit) {
+            self.search_focus = None;
+            self.input_marked_len = 0;
+            window.focus(&self.focus_handle);
+            cx.notify();
+            return;
+        }
         if self.slash_commands.is_some() {
             self.dismissed_slash_query = self.slash_commands.take().map(|state| state.query);
             cx.notify();

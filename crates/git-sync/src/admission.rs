@@ -27,6 +27,7 @@ struct GateState {
     active_writers: usize,
     exclusive_operation: Option<String>,
     epoch: u64,
+    content_generation: u64,
 }
 
 impl Default for GateState {
@@ -35,6 +36,7 @@ impl Default for GateState {
             active_writers: 0,
             exclusive_operation: None,
             epoch: 1,
+            content_generation: 0,
         }
     }
 }
@@ -153,6 +155,39 @@ impl GitOperationRegistry {
             .cloned()
     }
 
+    pub fn is_mutating(&self, path: &Path) -> bool {
+        lock_state(&self.inner)
+            .repositories
+            .iter()
+            .any(|(identity, gate)| {
+                path.starts_with(&identity.worktree_root) && gate.exclusive_operation.is_some()
+            })
+    }
+
+    pub fn note_edit(&self, path: &Path) {
+        for (identity, gate) in &mut lock_state(&self.inner).repositories {
+            if path.starts_with(&identity.worktree_root) {
+                gate.content_generation = gate.content_generation.wrapping_add(1);
+            }
+        }
+    }
+
+    pub fn content_generation(&self, identity: &RepositoryIdentity) -> u64 {
+        lock_state(&self.inner)
+            .repositories
+            .get(identity)
+            .map(|gate| gate.content_generation)
+            .unwrap_or_default()
+    }
+
+    /// Admitted save completions must settle while an exclusive operation drains.
+    pub fn write_epoch_is_current(&self, epoch: &ReadEpoch) -> bool {
+        lock_state(&self.inner)
+            .repositories
+            .get(&epoch.identity)
+            .is_some_and(|gate| gate.epoch == epoch.value)
+    }
+
     pub fn try_write(&self, path: &Path) -> Result<WriteAdmission, AdmissionError> {
         let mut state = lock_state(&self.inner);
         let identity = state
@@ -175,6 +210,7 @@ impl GitOperationRegistry {
             return Err(AdmissionError::Deferred);
         }
         gate.active_writers += 1;
+        gate.content_generation = gate.content_generation.wrapping_add(1);
         Ok(WriteAdmission {
             inner: self.inner.clone(),
             identity: Some(identity),
@@ -206,7 +242,6 @@ impl GitOperationRegistry {
             return Err(AdmissionError::Busy);
         }
         gate.exclusive_operation = Some(operation_id.to_string());
-        gate.epoch = gate.epoch.wrapping_add(1).max(1);
         while state
             .repositories
             .get(identity)
@@ -218,6 +253,11 @@ impl GitOperationRegistry {
                 .wait(state)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
+        let gate = state
+            .repositories
+            .get_mut(identity)
+            .expect("registered gate");
+        gate.epoch = gate.epoch.wrapping_add(1).max(1);
         Ok(ExclusiveAdmission {
             inner: self.inner.clone(),
             identity: Some(identity.clone()),
@@ -291,6 +331,8 @@ mod tests {
             sent.send(exclusive).unwrap();
         });
         thread::sleep(Duration::from_millis(30));
+        assert!(registry.write_epoch_is_current(&epoch));
+        assert!(!registry.read_epoch_is_current(&epoch));
         assert_eq!(
             registry.try_write(&root.join("new.md")).unwrap_err(),
             AdmissionError::Deferred

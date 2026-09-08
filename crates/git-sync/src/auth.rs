@@ -115,6 +115,28 @@ pub struct CredentialHelper {
     pub supports_noninteractive_use: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialPlatform {
+    Windows,
+    MacOs,
+    Linux,
+    Other,
+}
+
+impl CredentialPlatform {
+    pub fn current() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else if cfg!(target_os = "linux") {
+            Self::Linux
+        } else {
+            Self::Other
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialStorage {
     SessionOnly,
@@ -182,19 +204,17 @@ impl Authentication {
             .filter(|helper| !helper.is_empty())
             .map(|helper| {
                 let normalized = helper.to_ascii_lowercase();
-                let secure = [
-                    "manager",
-                    "manager-core",
-                    "osxkeychain",
-                    "libsecret",
-                    "wincred",
-                ]
-                .iter()
-                .any(|name| normalized.contains(name));
+                let secure = matches!(
+                    normalized.as_str(),
+                    "manager" | "manager-core" | "osxkeychain" | "libsecret" | "wincred"
+                );
                 CredentialHelper {
                     command: helper.to_string(),
                     secure_storage: secure && !normalized.contains("store"),
-                    supports_noninteractive_use: secure && !normalized.starts_with('!'),
+                    supports_noninteractive_use: credential_helper_is_noninteractive(
+                        &normalized,
+                        CredentialPlatform::current(),
+                    ),
                 }
             })
             .collect())
@@ -307,6 +327,24 @@ impl Authentication {
             return AuthFailure::AuthenticationNeeded;
         }
         AuthFailure::Other(redact_sensitive_text(&output.stderr_text()))
+    }
+}
+
+pub fn credential_helper_is_noninteractive(helper: &str, platform: CredentialPlatform) -> bool {
+    let helper = helper.trim().to_ascii_lowercase();
+    if helper.starts_with('!') || helper.contains(char::is_whitespace) {
+        return false;
+    }
+    match helper.as_str() {
+        // GCM honors GCM_INTERACTIVE=Never and credential.interactive=never,
+        // which the background request boundary always supplies.
+        "manager" | "manager-core" => true,
+        // The in-memory cache helper returns a miss without opening UI.
+        "cache" => true,
+        "wincred" => platform == CredentialPlatform::Windows,
+        "osxkeychain" => platform == CredentialPlatform::MacOs,
+        // libsecret may unlock a desktop keyring interactively; fail closed.
+        _ => false,
     }
 }
 
@@ -431,5 +469,23 @@ mod tests {
             Authentication::classify_failure(&failure("Enter passphrase for key")),
             AuthFailure::EncryptedKey
         );
+    }
+
+    #[test]
+    fn background_helper_support_is_platform_specific_and_fail_closed() {
+        use CredentialPlatform::*;
+        assert!(credential_helper_is_noninteractive("manager-core", Windows));
+        assert!(credential_helper_is_noninteractive("manager", Linux));
+        assert!(credential_helper_is_noninteractive("cache", Other));
+        assert!(credential_helper_is_noninteractive("wincred", Windows));
+        assert!(!credential_helper_is_noninteractive("wincred", MacOs));
+        assert!(credential_helper_is_noninteractive("osxkeychain", MacOs));
+        assert!(!credential_helper_is_noninteractive("osxkeychain", Linux));
+        assert!(!credential_helper_is_noninteractive("libsecret", Linux));
+        assert!(!credential_helper_is_noninteractive("store", Windows));
+        assert!(!credential_helper_is_noninteractive(
+            "!custom helper",
+            Windows
+        ));
     }
 }

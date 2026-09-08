@@ -191,6 +191,7 @@ impl MarkionApp {
             git_operations,
             git_conflict_admission: None,
             git_background_scheduler: BackgroundFetchScheduler::default(),
+            git_ui: git_panel::GitUi::default(),
             confirming_close: false,
             allow_close: false,
             preferences_path,
@@ -284,7 +285,7 @@ impl MarkionApp {
             current_search_index: None,
             search_result: SearchResultState::Idle,
             search_generation: None,
-            search_field_bounds: [None, None],
+            search_field_bounds: [None; 13],
             pane_scrollbar_drag: None,
             auto_save_preferences: preferences.auto_save,
             git_preferences: preferences.git.clone(),
@@ -759,6 +760,9 @@ impl MarkionApp {
         if self.active_tab().is_image() {
             return;
         }
+        if let Some(path) = self.active_tab().path() {
+            self.git_operations.note_edit(path);
+        }
         self.slash_commands = None;
         self.dismissed_slash_query = None;
         self.dismiss_visual_block_menu();
@@ -777,6 +781,20 @@ impl MarkionApp {
         self.refresh_search_matches();
         self.center_cursor_if_typewriter();
         self.schedule_autosave(cx);
+    }
+
+    pub(super) fn active_git_path_locked(&self) -> bool {
+        self.git_ui.settings.is_some()
+            || self.git_ui.inspection.is_some()
+            || self.active_tab().path().is_some_and(|path| {
+                self.git_operations.is_mutating(path)
+                    || (self.git_ui.conflict_busy
+                        && self
+                            .git_ui
+                            .conflict
+                            .as_ref()
+                            .is_some_and(|view| view.draft_path.as_deref() == Some(path)))
+            })
     }
 
     /// Identity/version pair of the active document. Operations derived from
@@ -807,21 +825,8 @@ impl MarkionApp {
         op: &'static str,
         mutation: CheckedMutation,
     ) -> Option<MutationReceipt> {
-        if self
-            .git_conflict_admission
-            .as_ref()
-            .is_some_and(|admission| {
-                admission.identity().is_some_and(|identity| {
-                    self.active_tab()
-                        .path()
-                        .is_some_and(|path| path.starts_with(&identity.worktree_root))
-                })
-            })
-        {
-            self.status = self.trf(
-                Msg::StatusGitSyncFailed,
-                &["resolve the Git conflict before editing this file"],
-            );
+        if self.active_git_path_locked() {
+            self.status = self.git_label(GitMsg::Busy).into();
             return None;
         }
         let origin = mutation.origin();
@@ -1546,7 +1551,7 @@ impl MarkionApp {
         if outcome
             .repository_epoch
             .as_ref()
-            .is_some_and(|epoch| !self.git_operations.read_epoch_is_current(epoch))
+            .is_some_and(|epoch| !self.git_operations.write_epoch_is_current(epoch))
         {
             self.tabs[index].autosave_in_flight = false;
             if index == self.active_tab && self.tabs[index].is_dirty() {
@@ -1732,7 +1737,7 @@ impl MarkionApp {
             &mut self.input_marked_len,
         );
         self.search_control_focus = None;
-        self.search_field_bounds = [None, None];
+        self.search_field_bounds = [None; 13];
         self.search_query.marked_range = None;
         self.replace_text.marked_range = None;
         self.refresh_search_matches();
@@ -2369,7 +2374,10 @@ impl MarkionApp {
     }
 
     pub(super) fn has_text_input_focus(&self) -> bool {
-        self.pending_name_input.is_some()
+        matches!(
+            self.search_focus,
+            Some(SearchField::Git(_) | SearchField::GitSetup(_) | SearchField::GitCommit)
+        ) || self.pending_name_input.is_some()
             || self.link_editor.is_some()
             || self.file_tree_query_focused
             || (self.search_visible && self.search_control_focus.is_some())
@@ -2397,6 +2405,11 @@ impl MarkionApp {
         match self.search_focus {
             Some(SearchField::Find) => Some(&self.search_query),
             Some(SearchField::Replace) => Some(&self.replace_text),
+            Some(SearchField::Git(index)) => self.git_ui.settings.as_ref()?.fields.get(index),
+            Some(SearchField::GitSetup(index)) => {
+                self.git_ui.onboarding.as_ref()?.fields.get(index)
+            }
+            Some(SearchField::GitCommit) => Some(&self.git_ui.commit_draft.as_ref()?.message),
             None => None,
         }
     }
@@ -2405,11 +2418,26 @@ impl MarkionApp {
         match self.search_focus {
             Some(SearchField::Find) => Some(&mut self.search_query),
             Some(SearchField::Replace) => Some(&mut self.replace_text),
+            Some(SearchField::Git(index)) => self.git_ui.settings.as_mut()?.fields.get_mut(index),
+            Some(SearchField::GitSetup(index)) => {
+                self.git_ui.onboarding.as_mut()?.fields.get_mut(index)
+            }
+            Some(SearchField::GitCommit) => Some(&mut self.git_ui.commit_draft.as_mut()?.message),
             None => None,
         }
     }
 
     pub(super) fn after_input_changed(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.search_focus,
+            Some(SearchField::Git(_) | SearchField::GitSetup(_) | SearchField::GitCommit)
+        ) {
+            if let Some(SearchField::GitSetup(index)) = self.search_focus {
+                self.update_git_onboarding_defaults(index);
+            }
+            cx.notify();
+            return;
+        }
         if self.pending_name_input.is_some() {
             // The name prompt edits a single buffer; no search/tree filtering
             // runs while it is open.

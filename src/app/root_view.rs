@@ -196,6 +196,11 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::open_folder))
             .on_action(cx.listener(Self::import_docx))
             .on_action(cx.listener(Self::cancel_docx_import))
+            .on_action(cx.listener(Self::show_git_sync))
+            .on_action(cx.listener(Self::commit_locally))
+            .on_action(cx.listener(Self::check_remote))
+            .on_action(cx.listener(Self::pull_updates))
+            .on_action(cx.listener(Self::push_commits))
             .on_action(cx.listener(Self::setup_git_sync))
             .on_action(cx.listener(Self::sync_now))
             .on_action(cx.listener(Self::resolve_git_conflict))
@@ -356,6 +361,15 @@ impl Render for MarkionApp {
                             cx.listener(Self::toggle_export_menu),
                             cx.listener(|app, _: &MouseMoveEvent, _, cx| {
                                 app.hover_menu(AppMenu::Export, cx);
+                            }),
+                        ))
+                        .child(menu_title_button(
+                            self.tr(Msg::MenuRepository),
+                            self.active_menu == Some(AppMenu::Repository),
+                            palette,
+                            cx.listener(Self::toggle_repository_menu),
+                            cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                                app.hover_menu(AppMenu::Repository, cx);
                             }),
                         ))
                         .child(menu_title_button(
@@ -774,6 +788,15 @@ impl Render for MarkionApp {
                     ))
                 },
             )
+            .when(self.git_ui.settings.is_some(), |root| {
+                root.child(git_panel::settings_view(self, cx))
+            })
+            .when(self.git_ui.onboarding.is_some(), |root| {
+                root.child(git_panel::onboarding_view(self, cx))
+            })
+            .when(self.git_ui.inspection.is_some(), |root| {
+                root.child(git_panel::inspection_view(self, cx))
+            })
             .when(self.search_visible, |root| {
                 root.child(search_panel_view(self, cx))
             })
@@ -2062,12 +2085,42 @@ pub(super) fn search_field_view(
     let debug_selector = match field_kind {
         SearchField::Find => "search-find-field",
         SearchField::Replace => "search-replace-field",
+        SearchField::Git(index) => [
+            "git-root-field",
+            "git-new-root-field",
+            "git-message-field",
+            "git-author-field",
+            "git-email-field",
+        ][index],
+        SearchField::GitSetup(index) => [
+            "git-setup-remote-field",
+            "git-setup-destination-field",
+            "git-setup-branch-field",
+            "git-setup-author-field",
+            "git-setup-email-field",
+        ][index],
+        SearchField::GitCommit => "git-commit-message-field",
     };
 
     div()
         .id(match field_kind {
             SearchField::Find => "search-find-field",
             SearchField::Replace => "search-replace-field",
+            SearchField::Git(index) => [
+                "git-root-field",
+                "git-new-root-field",
+                "git-message-field",
+                "git-author-field",
+                "git-email-field",
+            ][index],
+            SearchField::GitSetup(index) => [
+                "git-setup-remote-field",
+                "git-setup-destination-field",
+                "git-setup-branch-field",
+                "git-setup-author-field",
+                "git-setup-email-field",
+            ][index],
+            SearchField::GitCommit => "git-commit-message-field",
         })
         .debug_selector(move || debug_selector.to_string())
         .min_w(px(180.))
@@ -2110,6 +2163,9 @@ pub(super) fn search_field_view(
                         app.search_field_bounds[match field_kind {
                             SearchField::Find => 0,
                             SearchField::Replace => 1,
+                            SearchField::Git(index) => index + 2,
+                            SearchField::GitSetup(index) => index + 8,
+                            SearchField::GitCommit => 7,
                         }] = Some(bounds);
                     });
                 },
@@ -2126,12 +2182,17 @@ pub(super) fn search_field_view(
             };
             let offset = name_x_to_offset(&buffer_for_click, event.position.x - bounds.left());
             app_entity.update(cx, |app, cx| {
-                app.search_visible = true;
+                _window.focus(&app.focus_handle);
+                app.search_visible = !matches!(
+                    field_kind,
+                    SearchField::Git(_) | SearchField::GitSetup(_) | SearchField::GitCommit
+                );
                 app.search_focus = Some(field_kind);
-                app.search_control_focus = Some(match field_kind {
-                    SearchField::Find => SearchOverlayControl::FindField,
-                    SearchField::Replace => SearchOverlayControl::ReplaceField,
-                });
+                app.search_control_focus = match field_kind {
+                    SearchField::Find => Some(SearchOverlayControl::FindField),
+                    SearchField::Replace => Some(SearchOverlayControl::ReplaceField),
+                    SearchField::Git(_) | SearchField::GitSetup(_) | SearchField::GitCommit => None,
+                };
                 app.file_tree_query_focused = false;
                 if let Some(field) = app.focused_search_field_mut() {
                     field.cursor = clamp_search_boundary(&field.buffer, offset);
@@ -2477,6 +2538,18 @@ fn file_tree_rows(
                 &app.collapsed_tree_paths,
                 tree_content_width,
                 drag_enabled,
+                app.git_ui
+                    .snapshot
+                    .as_ref()
+                    .filter(|details| details.workspace == app.workspace_root)
+                    .and_then(|details| {
+                        entry
+                            .path
+                            .strip_prefix(&details.identity.worktree_root)
+                            .ok()
+                            .and_then(|relative| details.decorations.get(relative))
+                    })
+                    .cloned(),
             )
             .into_any_element(),
         );
@@ -2517,6 +2590,7 @@ fn file_tree_entry_row(
     collapsed_tree_paths: &HashSet<PathBuf>,
     tree_content_width: f32,
     drag_enabled: bool,
+    git_decoration: Option<String>,
 ) -> Stateful<Div> {
     let left_app_entity = app_entity.clone();
     let right_app_entity = app_entity.clone();
@@ -2596,7 +2670,15 @@ fn file_tree_entry_row(
                         .min_w_0()
                         .whitespace_nowrap()
                         .child(entry.name.clone()),
-                ),
+                )
+                .when_some(git_decoration, |row, status| {
+                    row.child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(palette.muted)
+                            .child(status),
+                    )
+                }),
         )
         .when(drag_enabled, |row| {
             row.on_drag(
@@ -2717,6 +2799,7 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
         .min_h_0()
         .flex()
         .flex_col()
+        .child(git_panel::workspace_entry(app, cx))
         // Workspace name is a switcher for recent folders; still a drop target.
         .child(
             div()
@@ -3211,6 +3294,7 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
                         }),
                 ),
         )
+        .child(git_panel::sidebar_entry(app, cx))
         // Only build the active panel body when the sidebar is actually
         // visible. The whole sidebar is `.hidden()` when collapsed, but the
         // element tree (and, for the Outline tab, the full-document heading
@@ -3218,6 +3302,12 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
         // Skipping it here means a collapsed sidebar costs nothing per keystroke.
         .when(app.sidebar_visible, |container| {
             container.child(match active_tab {
+                SidebarTab::Sync => div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(git_panel::panel_body(app, cx)),
                 SidebarTab::Files => file_tree_panel_body(app, cx),
                 SidebarTab::Outline if app.active_tab().is_image() => div()
                     .flex_1()
@@ -4018,6 +4108,43 @@ pub(super) fn active_menu_dropdown(
             action_item!(@build $msg, $method, $action, None)
         };
     }
+    macro_rules! git_action_item {
+        ($msg:expr, $method:ident, $action:expr, $shortcut:expr) => {
+            menu_action_button(
+                git_t(language, $msg),
+                Some($shortcut.effective_label(shortcut_overrides, shortcut_platform)),
+                palette,
+                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                    app.active_menu = None;
+                    app.$method(&$action, window, cx);
+                }),
+            )
+        };
+    }
+    macro_rules! repository_action_item {
+        ($msg:expr, $method:ident, $action:expr, $shortcut:expr) => {
+            menu_action_button(
+                t(language, $msg),
+                Some($shortcut.effective_label(shortcut_overrides, shortcut_platform)),
+                palette,
+                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                    app.active_menu = None;
+                    app.$method(&$action, window, cx);
+                }),
+            )
+        };
+        ($msg:expr, $method:ident, $action:expr) => {
+            menu_action_button(
+                t(language, $msg),
+                None,
+                palette,
+                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                    app.active_menu = None;
+                    app.$method(&$action, window, cx);
+                }),
+            )
+        };
+    }
     // File-menu rows close the Open Recent flyout when hovered so only one
     // nested surface stays open (the parent row opens it separately).
     macro_rules! file_action_item {
@@ -4089,18 +4216,6 @@ pub(super) fn active_menu_dropdown(
             .when(!document_actions_enabled, |panel| {
                 panel.child(image_action_unavailable_menu_row(language, palette))
             })
-            .child(menu_separator(palette))
-            .child(file_action_item!(Msg::ItemGitSyncNow, sync_now, SyncNow))
-            .child(file_action_item!(
-                Msg::ItemGitResolveConflict,
-                resolve_git_conflict,
-                ResolveGitConflict
-            ))
-            .child(file_action_item!(
-                Msg::ItemGitSyncSetup,
-                setup_git_sync,
-                SetupGitSync
-            ))
             .child(menu_separator(palette))
             .child(file_action_item!(
                 Msg::ItemNewTab,
@@ -4519,6 +4634,56 @@ pub(super) fn active_menu_dropdown(
                 Msg::ItemOrganizeLocalImages,
                 organize_local_images,
                 OrganizeLocalImages
+            )),
+        AppMenu::Repository => panel
+            .child(git_action_item!(
+                GitMsg::Details,
+                show_git_sync,
+                ShowGitSync,
+                menu_shortcuts::SHOW_GIT_SYNC
+            ))
+            .child(menu_separator(palette))
+            .child(repository_action_item!(
+                Msg::ItemGitSyncNow,
+                sync_now,
+                SyncNow,
+                menu_shortcuts::SYNC_NOW
+            ))
+            .child(git_action_item!(
+                GitMsg::Commit,
+                commit_locally,
+                CommitLocally,
+                menu_shortcuts::COMMIT_LOCALLY
+            ))
+            .child(git_action_item!(
+                GitMsg::Fetch,
+                check_remote,
+                CheckRemote,
+                menu_shortcuts::CHECK_REMOTE
+            ))
+            .child(git_action_item!(
+                GitMsg::Pull,
+                pull_updates,
+                PullUpdates,
+                menu_shortcuts::PULL_UPDATES
+            ))
+            .child(git_action_item!(
+                GitMsg::Push,
+                push_commits,
+                PushCommits,
+                menu_shortcuts::PUSH_COMMITS
+            ))
+            .child(menu_separator(palette))
+            .child(repository_action_item!(
+                Msg::ItemGitResolveConflict,
+                resolve_git_conflict,
+                ResolveGitConflict,
+                menu_shortcuts::RESOLVE_GIT_CONFLICT
+            ))
+            .child(repository_action_item!(
+                Msg::ItemGitSyncSetup,
+                setup_git_sync,
+                SetupGitSync
             )),
         AppMenu::Help => panel
             .child(action_item!(
@@ -5054,31 +5219,7 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                 ),
                                             )),
                                     )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.))
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(palette.muted)
-                                                    .child(app.tr(Msg::PrefPanelGitSection)),
-                                            )
-                                            .child(preference_boolean_row(
-                                                app.tr(Msg::PrefPanelGitBackgroundCheck),
-                                                app.git_preferences.background_check,
-                                                app.language,
-                                                palette,
-                                                cx.listener(
-                                                    |app, _: &MouseUpEvent, _window, cx| {
-                                                        app.toggle_git_background_check(cx);
-                                                        app.poll_git_background_check(cx);
-                                                    },
-                                                ),
-                                            )),
-                                    ),
+                                    .child(git_panel::preferences_view(app, cx)),
                             )
                             .child(pane_scrollbar_view(
                                 PaneScrollTarget::PreferencesGeneral,

@@ -314,6 +314,7 @@ impl From<&AppPreferences> for PreferencesFile {
             sidebar_tab: match preferences.sidebar_tab {
                 SidebarTab::Files => "files".to_string(),
                 SidebarTab::Outline => "outline".to_string(),
+                SidebarTab::Sync => "sync".to_string(),
             },
             auto_save: AutoSaveFile {
                 enabled: preferences.auto_save.enabled,
@@ -375,6 +376,7 @@ impl From<PreferencesFile> for AppPreferences {
             sidebar_visible: file.sidebar_visible,
             sidebar_tab: match file.sidebar_tab.to_ascii_lowercase().as_str() {
                 "outline" => SidebarTab::Outline,
+                "sync" => SidebarTab::Sync,
                 _ => SidebarTab::Files,
             },
             auto_save: AutoSavePreferences {
@@ -502,6 +504,7 @@ pub fn parse_legacy_app_preferences(text: &str) -> io::Result<AppPreferences> {
             "sidebar_tab" => {
                 preferences.sidebar_tab = match value.trim().to_ascii_lowercase().as_str() {
                     "outline" => SidebarTab::Outline,
+                    "sync" => SidebarTab::Sync,
                     // Unknown / missing values fall back to Files.
                     _ => SidebarTab::Files,
                 };

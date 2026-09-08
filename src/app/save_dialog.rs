@@ -67,15 +67,15 @@ pub(super) struct SaveTargetProfile {
 impl SaveTarget {
     pub(super) const fn profile(self) -> SaveTargetProfile {
         match self {
-            Self::DocxImportMarkdown => SaveTargetProfile {
-                title: Msg::PromptSaveImportedMarkdown,
+            Self::Markdown | Self::Export(ExportFormat::Markdown) => SaveTargetProfile {
+                title: Msg::ItemSaveAs,
                 filter_label: Msg::FileTypeMarkdown,
                 accepted_extensions: &["md", "markdown", "mdown"],
                 canonical_extension: "md",
                 suggested_suffix: "md",
             },
-            Self::Markdown | Self::Export(ExportFormat::Markdown) => SaveTargetProfile {
-                title: Msg::ItemSaveAs,
+            Self::DocxImportMarkdown => SaveTargetProfile {
+                title: Msg::PromptSaveImportedMarkdown,
                 filter_label: Msg::FileTypeMarkdown,
                 accepted_extensions: &["md", "markdown", "mdown"],
                 canonical_extension: "md",
@@ -203,6 +203,25 @@ pub(super) fn prompt_for_save_path(
             .save_file()
             .await
             .map(|handle| target.normalize_path(handle.path()))
+    })
+}
+
+/// Preserve the original extension and bytes when saving historical content.
+pub(super) fn prompt_for_historical_copy(
+    window: &Window,
+    directory: &Path,
+    name: &str,
+    language: Language,
+) -> Pin<Box<dyn Future<Output = Option<PathBuf>> + 'static>> {
+    let dialog = set_dialog_parent(AsyncFileDialog::new(), window)
+        .set_directory(directory)
+        .set_file_name(name)
+        .set_title(markion::i18n::git_t(language, markion::i18n::GitMsg::Copy));
+    Box::pin(async move {
+        dialog
+            .save_file()
+            .await
+            .map(|handle| handle.path().to_path_buf())
     })
 }
 

@@ -37,6 +37,14 @@ pub struct ConflictFile {
     pub remote: Option<(String, GitObjectId)>,
 }
 
+impl ConflictFile {
+    /// Rename/rename and unrecognized index layouts stay owned by Git and are
+    /// intentionally left for an external Git tool.
+    pub fn supports_in_app_resolution(&self) -> bool {
+        !matches!(self.kind, ConflictKind::Rename | ConflictKind::Other)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConflictSession {
     pub operation_id: String,
@@ -71,6 +79,8 @@ pub enum ConflictError {
     MissingSource,
     #[error("conflict content is too large")]
     TooLarge,
+    #[error("this conflict shape requires an external Git tool")]
+    UnsupportedConflict,
     #[error("conflicts remain unresolved or a draft no longer matches disk")]
     IncompleteResolution,
     #[error("conflict filesystem operation failed: {0}")]
@@ -116,10 +126,10 @@ impl ConflictManager {
             return Err(ConflictError::StaleSession);
         }
         let merge_head = self.rev_parse("MERGE_HEAD", cancellation)?;
-        let files = self.read_index_conflicts(cancellation)?;
-        if files.is_empty() {
-            return Err(ConflictError::IncompleteResolution);
+        if checkpoint.fetched_tip.as_ref() != Some(&merge_head) {
+            return Err(ConflictError::StaleSession);
         }
+        let files = self.read_index_conflicts(cancellation)?;
         Ok(ConflictSession {
             operation_id: operation_id.to_string(),
             expected_head,
@@ -189,6 +199,9 @@ impl ConflictManager {
             .iter()
             .find(|file| file.path == path)
             .ok_or(ConflictError::StaleSession)?;
+        if !expected.supports_in_app_resolution() {
+            return Err(ConflictError::UnsupportedConflict);
+        }
         let current = self
             .read_index_conflicts(cancellation)?
             .into_iter()
@@ -233,6 +246,9 @@ impl ConflictManager {
                     MAX_RESOLUTION_SOURCE_BYTES,
                     cancellation,
                 )?;
+                if primary.truncated || alternate.truncated {
+                    return Err(ConflictError::TooLarge);
+                }
                 self.write_and_stage(path, &primary.bytes, cancellation)?;
                 self.write_and_stage(&alternate_path, &alternate.bytes, cancellation)
             }
@@ -270,7 +286,7 @@ impl ConflictManager {
         )?;
         let commit = self.rev_parse("HEAD", cancellation)?;
         let mut checkpoint = checkpoint;
-        checkpoint.phase = OperationPhase::Pushing;
+        checkpoint.phase = OperationPhase::Fetching;
         checkpoint.resulting_commit = Some(commit.clone());
         checkpoint.updated_unix_seconds = now_seconds();
         self.journal.update(checkpoint)?;
@@ -284,14 +300,17 @@ impl ConflictManager {
         cancellation: &CancellationToken,
     ) -> Result<GitObjectId, ConflictError> {
         let commit = self.finish_merge(session, cancellation)?;
+        if self.repository.resolve_sync_target()? != *target {
+            return Err(ConflictError::StaleSession);
+        }
+        let mut checkpoint = self.checkpoint(&session.operation_id)?;
+        checkpoint.phase = OperationPhase::Pushing;
+        self.journal.update(checkpoint)?;
         let refspec = format!("{}:{}", commit.as_str(), target.destination_ref);
         self.repository.runner().run(
-            &GitCommand::new(&self.repository.identity().worktree_root).args([
-                "push",
-                "--porcelain",
-                &target.remote,
-                &refspec,
-            ]),
+            &GitCommand::new(&self.repository.identity().worktree_root)
+                .args(["push", "--porcelain", &target.remote, &refspec])
+                .interactive_credentials(true),
             CommandLimits {
                 timeout: std::time::Duration::from_secs(300),
                 ..CommandLimits::default()
@@ -426,10 +445,11 @@ impl ConflictManager {
         )?;
         let mut digest = Sha256::new();
         digest.update(&index.stdout);
-        for file in &session.files {
-            digest.update(file.path.to_string_lossy().as_bytes());
+        let checkpoint = self.checkpoint(&session.operation_id)?;
+        for (path, _) in &checkpoint.owned_paths {
+            digest.update(path.to_string_lossy().as_bytes());
             digest.update([0]);
-            match fs::read(self.repository.identity().worktree_root.join(&file.path)) {
+            match fs::read(self.repository.identity().worktree_root.join(path)) {
                 Ok(bytes) => digest.update(bytes),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     digest.update(b"<missing>")
@@ -589,6 +609,121 @@ impl RecoveryManager {
         }
     }
 
+    fn oid(&self, name: &str) -> Option<GitObjectId> {
+        self.repository
+            .runner()
+            .run(
+                &GitCommand::new(&self.repository.identity().worktree_root)
+                    .args(["rev-parse", "--verify", name])
+                    .read_only(true),
+                CommandLimits::default(),
+                &CancellationToken::new(),
+            )
+            .ok()
+            .and_then(|output| GitObjectId::parse(output.stdout_text().trim().to_string()).ok())
+    }
+
+    fn index_tree(&self) -> Option<String> {
+        self.repository
+            .runner()
+            .run(
+                &GitCommand::new(&self.repository.identity().worktree_root).arg("write-tree"),
+                CommandLimits::default(),
+                &CancellationToken::new(),
+            )
+            .ok()
+            .map(|output| output.stdout_text().trim().to_string())
+    }
+
+    fn ancestor(&self, from: &GitObjectId, to: &GitObjectId) -> bool {
+        self.repository
+            .runner()
+            .run(
+                &GitCommand::new(&self.repository.identity().worktree_root)
+                    .args(["merge-base", "--is-ancestor", from.as_str(), to.as_str()])
+                    .read_only(true),
+                CommandLimits::default(),
+                &CancellationToken::new(),
+            )
+            .is_ok()
+    }
+
+    /// Explicit recovery: only the exact app-staged tree may be unstaged.
+    /// Worktree content is retained, so the next operation can capture it anew.
+    pub fn recover_staging(&self, operation_id: &str) -> Result<(), ConflictError> {
+        if !self.assess()?.iter().any(|assessment| matches!(assessment, RecoveryAssessment::OwnedStaging { operation_id: id } if id == operation_id)) {
+            return Err(ConflictError::StaleSession);
+        }
+        let checkpoint = self
+            .journal
+            .load()?
+            .active
+            .into_iter()
+            .find(|entry| entry.operation_id == operation_id)
+            .ok_or(ConflictError::StaleSession)?;
+        let paths: Vec<_> = checkpoint
+            .owned_paths
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect();
+        crate::GitSyncEngine::new(
+            self.repository.clone(),
+            self.journal.clone(),
+            crate::SyncOptions::default(),
+        )
+        .recover_owned_staging(&paths, &CancellationToken::new())
+        .map_err(|_| ConflictError::StaleSession)?;
+        self.complete_checkpoint(checkpoint, None)
+    }
+
+    /// Adopt a completed commit/integration only when its actual topology agrees
+    /// with the durable operation. This never writes the index or working files.
+    pub fn adopt_completed(&self, operation_id: &str) -> Result<GitObjectId, ConflictError> {
+        let commit = self
+            .assess()?
+            .into_iter()
+            .find_map(|assessment| match assessment {
+                RecoveryAssessment::CommitCompleted {
+                    operation_id: id,
+                    commit,
+                } if id == operation_id => Some(commit),
+                RecoveryAssessment::IntegrationCompleted {
+                    operation_id: id,
+                    head,
+                } if id == operation_id => Some(head),
+                _ => None,
+            })
+            .ok_or(ConflictError::StaleSession)?;
+        let checkpoint = self
+            .journal
+            .load()?
+            .active
+            .into_iter()
+            .find(|entry| entry.operation_id == operation_id)
+            .ok_or(ConflictError::StaleSession)?;
+        if !checkpoint.drafts.is_empty() {
+            return Err(ConflictError::IncompleteResolution);
+        }
+        self.complete_checkpoint(checkpoint, Some(commit.clone()))?;
+        Ok(commit)
+    }
+
+    fn complete_checkpoint(
+        &self,
+        mut checkpoint: OperationCheckpoint,
+        commit: Option<GitObjectId>,
+    ) -> Result<(), ConflictError> {
+        checkpoint.phase = OperationPhase::Complete;
+        checkpoint.confirmed = true;
+        if commit.is_some() {
+            checkpoint.resulting_commit = commit;
+        }
+        let id = checkpoint.operation_id.clone();
+        self.journal.update(checkpoint)?;
+        self.journal.retire_success(&id, now_seconds())?;
+        Ok(())
+    }
+
     pub fn assess(&self) -> Result<Vec<RecoveryAssessment>, ConflictError> {
         let journal = self.journal.load()?;
         let state = self.repository.status()?;
@@ -599,39 +734,73 @@ impl RecoveryManager {
             .filter(|checkpoint| checkpoint.identity == *self.repository.identity())
         {
             let operation_id = checkpoint.operation_id.clone();
-            let assessment =
-                if checkpoint.phase == OperationPhase::Resolving && state.worktree.has_conflicts {
-                    RecoveryAssessment::ConflictSession { operation_id }
-                } else if checkpoint.phase == OperationPhase::Pushing
-                    || checkpoint.phase == OperationPhase::Verifying
+            let expected = checkpoint
+                .resulting_commit
+                .as_ref()
+                .or(checkpoint.expected_head.as_ref());
+            let merge = self.oid("MERGE_HEAD");
+            let assessment = if checkpoint.phase == OperationPhase::Resolving
+                && state.head.as_ref() == expected
+                && merge.as_ref() == checkpoint.fetched_tip.as_ref()
+                && merge.is_some()
+            {
+                RecoveryAssessment::ConflictSession { operation_id }
+            } else if matches!(
+                checkpoint.phase,
+                OperationPhase::Pushing | OperationPhase::Verifying
+            ) {
+                checkpoint.resulting_commit.clone().map_or(
+                    RecoveryAssessment::ExternalState {
+                        operation_id: operation_id.clone(),
+                    },
+                    |commit| RecoveryAssessment::UnknownPushResult {
+                        operation_id,
+                        commit,
+                    },
+                )
+            } else if state.worktree.has_external_staging {
+                if state.head == checkpoint.expected_head
+                    && checkpoint.phase == OperationPhase::Committing
+                    && self.index_tree().as_deref()
+                        == checkpoint.expected_index_fingerprint.as_deref()
+                    && checkpoint.expected_index_fingerprint.is_some()
                 {
-                    checkpoint.resulting_commit.map_or(
-                        RecoveryAssessment::ExternalState {
-                            operation_id: operation_id.clone(),
-                        },
-                        |commit| RecoveryAssessment::UnknownPushResult {
-                            operation_id,
-                            commit,
-                        },
-                    )
-                } else if state.worktree.has_external_staging {
                     RecoveryAssessment::OwnedStaging { operation_id }
-                } else if let (Some(result), Some(head)) =
-                    (checkpoint.resulting_commit, state.head.clone())
-                {
-                    if result == head {
+                } else {
+                    RecoveryAssessment::ExternalState { operation_id }
+                }
+            } else if merge.is_none() && !state.worktree.has_conflicts {
+                if let Some(head) = state.head.clone() {
+                    let committed = checkpoint.resulting_commit.as_ref() == Some(&head)
+                        || (checkpoint.phase == OperationPhase::Committing
+                            && self.oid("HEAD^") == checkpoint.expected_head
+                            && self.oid("HEAD^{tree}").as_ref().map(|oid| oid.as_str())
+                                == checkpoint.expected_index_fingerprint.as_deref()
+                            && checkpoint.expected_index_fingerprint.is_some());
+                    if matches!(
+                        checkpoint.phase,
+                        OperationPhase::Integrating | OperationPhase::Resolving
+                    ) && checkpoint
+                        .fetched_tip
+                        .as_ref()
+                        .is_some_and(|tip| self.ancestor(tip, &head))
+                        && expected.is_some_and(|base| self.ancestor(base, &head))
+                    {
+                        RecoveryAssessment::IntegrationCompleted { operation_id, head }
+                    } else if committed {
                         RecoveryAssessment::CommitCompleted {
                             operation_id,
-                            commit: result,
+                            commit: head,
                         }
-                    } else if checkpoint.phase == OperationPhase::Integrating {
-                        RecoveryAssessment::IntegrationCompleted { operation_id, head }
                     } else {
                         RecoveryAssessment::ExternalState { operation_id }
                     }
                 } else {
                     RecoveryAssessment::ExternalState { operation_id }
-                };
+                }
+            } else {
+                RecoveryAssessment::ExternalState { operation_id }
+            };
             assessments.push(assessment);
         }
         Ok(assessments)
