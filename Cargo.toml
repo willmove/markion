@@ -38,6 +38,10 @@ mime_guess = "2.0"
 percent-encoding = "2.3"
 sha2 = "0.10"
 dunce = "1.0"
+quick-xml = "0.39.4"
+roxmltree = "0.21.1"
+same-file = "1.0.6"
+zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 proptest = "1.4"
 # bat's curated extended syntax set for syntect (TypeScript, TOML, Kotlin,
 # Swift, Dockerfile, PowerShell, ... — closes the modern-language gap in
@@ -101,6 +105,8 @@ miniz_oxide = "0.8"
 # parsing for later integration phases).
 typune-markdown = { package = "markdown", path = "crates/markdown" }
 typune-export = { package = "export", path = "crates/export" }
+markion-docx-import = { path = "crates/docx-import" }
+same-file.workspace = true
 markion-diagram = { path = "crates/diagram", features = ["mermaid"] }
 markion-git-sync = { path = "crates/git-sync" }
 markion-pdf = { path = "crates/pdf" }
@@ -192,6 +198,9 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.export]
+opt-level = 2
+
+[profile.dev.package.markion-docx-import]
 opt-level = 2
 
 # markion-pdf shapes text and subsets fonts on the export path; unoptimized

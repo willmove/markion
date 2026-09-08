@@ -194,6 +194,8 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::new_document))
             .on_action(cx.listener(Self::open_document))
             .on_action(cx.listener(Self::open_folder))
+            .on_action(cx.listener(Self::import_docx))
+            .on_action(cx.listener(Self::cancel_docx_import))
             .on_action(cx.listener(Self::setup_git_sync))
             .on_action(cx.listener(Self::sync_now))
             .on_action(cx.listener(Self::resolve_git_conflict))
@@ -755,6 +757,7 @@ impl Render for MarkionApp {
                 self.heading_menu_max_level,
                 &self.shortcut_overrides,
                 !active_is_image,
+                self.docx_import.is_running(),
                 palette,
                 cx,
             ))
@@ -3948,6 +3951,7 @@ pub(super) fn active_menu_dropdown(
     heading_menu_max_level: u8,
     shortcut_overrides: &BTreeMap<String, String>,
     document_actions_enabled: bool,
+    docx_import_in_progress: bool,
     palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
@@ -4040,6 +4044,18 @@ pub(super) fn active_menu_dropdown(
                 OpenFolder,
                 menu_shortcuts::OPEN_FOLDER
             ))
+            .child(file_action_item!(
+                Msg::ItemImportDocx,
+                import_docx,
+                ImportDocx
+            ))
+            .when(docx_import_in_progress, |panel| {
+                panel.child(file_action_item!(
+                    Msg::ItemCancelDocxImport,
+                    cancel_docx_import,
+                    CancelDocxImport
+                ))
+            })
             .child(menu_separator(palette))
             .child(menu_submenu_parent_button(
                 t(language, Msg::ItemOpenRecent),

@@ -51,6 +51,7 @@ fn set_dialog_parent(dialog: AsyncFileDialog, window: &Window) -> AsyncFileDialo
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SaveTarget {
     Markdown,
+    DocxImportMarkdown,
     Export(ExportFormat),
 }
 
@@ -66,6 +67,13 @@ pub(super) struct SaveTargetProfile {
 impl SaveTarget {
     pub(super) const fn profile(self) -> SaveTargetProfile {
         match self {
+            Self::DocxImportMarkdown => SaveTargetProfile {
+                title: Msg::PromptSaveImportedMarkdown,
+                filter_label: Msg::FileTypeMarkdown,
+                accepted_extensions: &["md", "markdown", "mdown"],
+                canonical_extension: "md",
+                suggested_suffix: "md",
+            },
             Self::Markdown | Self::Export(ExportFormat::Markdown) => SaveTargetProfile {
                 title: Msg::ItemSaveAs,
                 filter_label: Msg::FileTypeMarkdown,

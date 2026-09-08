@@ -1,13 +1,16 @@
 //! Managed, document-relative local image resources.
 
 use std::{
+    collections::HashMap,
     collections::hash_map::DefaultHasher,
-    fs,
+    fs::{self, OpenOptions},
     hash::{Hash, Hasher},
-    io,
+    io::{self, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
+use markion_docx_import::{AssetId, PreparedImport};
 use percent_encoding::percent_decode_str;
 
 use super::atomic_write;
@@ -16,6 +19,28 @@ use super::atomic_write;
 pub struct ImportedImage {
     pub stored_path: PathBuf,
     pub relative_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedDocxImport {
+    pub markdown_path: PathBuf,
+    pub asset_paths: Vec<PathBuf>,
+    /// Import-owned paths that could not be removed after commit. The main
+    /// output remains valid; callers can surface these exact cleanup remnants.
+    pub retained_paths: Vec<PathBuf>,
+}
+
+static NEXT_DOCX_IMPORT_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublishFailpoint {
+    AfterStaging,
+    AfterAssetDirectory,
+    AfterFirstAsset,
+    SubstituteFirstAssetBeforeRollback,
+    BeforeMarkdown,
+    SubstituteMarkdownBeforeCommit,
+    SimulatedTerminationBeforeMarkdown,
 }
 
 /// A local image reference outside the publishing image scope that the
@@ -213,6 +238,336 @@ pub fn import_image_bytes(
     }
 }
 
+/// Publishes one prepared DOCX import without overwriting an existing
+/// Markdown file or asset directory. Files are completed in a private sibling
+/// directory first; assets become visible before the Markdown commit point.
+pub fn publish_docx_import(
+    prepared: &PreparedImport,
+    destination: &Path,
+) -> io::Result<PublishedDocxImport> {
+    publish_docx_import_impl(prepared, destination, None)
+}
+
+fn publish_docx_import_impl(
+    prepared: &PreparedImport,
+    destination: &Path,
+    failpoint: Option<PublishFailpoint>,
+) -> io::Result<PublishedDocxImport> {
+    if destination
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case("md"))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "DOCX imports require a new .md destination",
+        ));
+    }
+    if destination.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Markdown destination already exists",
+        ));
+    }
+    let asset_dir = document_asset_dir(destination);
+    if asset_dir.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "managed asset destination already exists",
+        ));
+    }
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)?;
+    let canonical_parent = fs::canonicalize(parent)?;
+    let id = NEXT_DOCX_IMPORT_ID.fetch_add(1, Ordering::Relaxed);
+    let destination_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document.md");
+    let staging = parent.join(format!(
+        ".{destination_name}.markion-import-{}-{id}.tmp",
+        std::process::id()
+    ));
+    fs::create_dir(&staging)?;
+
+    let mut result = publish_docx_import_staged(
+        prepared,
+        destination,
+        &asset_dir,
+        &staging,
+        &canonical_parent,
+        failpoint,
+    );
+    if let Err(cleanup_error) = fs::remove_dir_all(&staging) {
+        if staging.exists() {
+            match &mut result {
+                Ok(published) => published.retained_paths.push(staging.clone()),
+                Err(error) => {
+                    *error = error_with_retained(
+                        io::Error::new(
+                            error.kind(),
+                            format!("{error}; cleanup failed: {cleanup_error}"),
+                        ),
+                        &[staging.clone()],
+                    );
+                }
+            }
+        }
+    }
+    result
+}
+
+fn publish_docx_import_staged(
+    prepared: &PreparedImport,
+    destination: &Path,
+    asset_dir: &Path,
+    staging: &Path,
+    canonical_parent: &Path,
+    failpoint: Option<PublishFailpoint>,
+) -> io::Result<PublishedDocxImport> {
+    let staged_assets = staging.join("assets");
+    let staged_owner = staging.join("asset-owner");
+    if !prepared.assets.is_empty() {
+        fs::create_dir(&staged_assets)?;
+        create_new_synced(&staged_owner, b"markion-docx-import")?;
+    }
+    let asset_dir_name = asset_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document.assets");
+    let mut asset_urls = HashMap::new();
+    let mut staged_paths = Vec::new();
+    for asset in &prepared.assets {
+        let extension = canonical_extension(&asset.extension).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported prepared image format",
+            )
+        })?;
+        let stem = sanitize_stem(&asset.suggested_stem);
+        let stem = if stem.is_empty() {
+            "image".to_owned()
+        } else {
+            stem
+        };
+        let name = format!("{stem}-{:016x}.{extension}", digest(&asset.bytes));
+        let staged_path = staged_assets.join(&name);
+        create_new_synced(&staged_path, &asset.bytes)?;
+        asset_urls.insert(asset.id, format!("{asset_dir_name}/{name}"));
+        staged_paths.push((staged_path, name));
+    }
+    let markdown = prepared
+        .render_markdown(|id: AssetId| asset_urls.get(&id).cloned())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+    let staged_markdown = staging.join("document.md");
+    create_new_synced(&staged_markdown, markdown.as_bytes())?;
+    inject_publish_failure(failpoint, PublishFailpoint::AfterStaging)?;
+
+    let mut published_assets = Vec::new();
+    if !staged_paths.is_empty() {
+        fs::create_dir(asset_dir)?;
+        let owner = asset_dir.join(".markion-import-owner");
+        if let Err(error) = fs::hard_link(&staged_owner, &owner) {
+            return Err(error_with_retained(error, &[asset_dir.to_path_buf()]));
+        }
+        if let Err(error) = validate_owned_asset_dir(asset_dir, canonical_parent, &staged_owner) {
+            let retained =
+                remove_owned_import_outputs(destination, asset_dir, &published_assets, staging);
+            return Err(error_with_retained(error, &retained));
+        }
+        if failpoint == Some(PublishFailpoint::AfterAssetDirectory) {
+            let error = io::Error::other("injected failure after asset directory creation");
+            let retained =
+                remove_owned_import_outputs(destination, asset_dir, &published_assets, staging);
+            return Err(error_with_retained(error, &retained));
+        }
+        for (staged_path, name) in &staged_paths {
+            if let Err(error) = validate_owned_asset_dir(asset_dir, canonical_parent, &staged_owner)
+            {
+                let retained =
+                    remove_owned_import_outputs(destination, asset_dir, &published_assets, staging);
+                return Err(error_with_retained(error, &retained));
+            }
+            let published = asset_dir.join(name);
+            if let Err(error) = fs::hard_link(staged_path, &published) {
+                let retained =
+                    remove_owned_import_outputs(destination, asset_dir, &published_assets, staging);
+                return Err(error_with_retained(error, &retained));
+            }
+            published_assets.push(published);
+            if failpoint == Some(PublishFailpoint::SubstituteFirstAssetBeforeRollback) {
+                let substituted = published_assets.last().expect("published asset");
+                fs::remove_file(substituted)?;
+                fs::write(substituted, b"unrelated replacement")?;
+                let error = io::Error::other("injected substituted asset race");
+                let retained =
+                    remove_owned_import_outputs(destination, asset_dir, &published_assets, staging);
+                return Err(error_with_retained(error, &retained));
+            }
+            if failpoint == Some(PublishFailpoint::AfterFirstAsset) {
+                let error = io::Error::other("injected failure after first asset publication");
+                let retained =
+                    remove_owned_import_outputs(destination, asset_dir, &published_assets, staging);
+                return Err(error_with_retained(error, &retained));
+            }
+        }
+    }
+    if failpoint == Some(PublishFailpoint::SimulatedTerminationBeforeMarkdown) {
+        return Err(io::Error::other(
+            "simulated process termination before Markdown commit",
+        ));
+    }
+    if failpoint == Some(PublishFailpoint::BeforeMarkdown) {
+        let error = io::Error::other("injected failure before Markdown commit");
+        let retained =
+            remove_owned_import_outputs(destination, asset_dir, &published_assets, staging);
+        return Err(error_with_retained(error, &retained));
+    }
+    if failpoint == Some(PublishFailpoint::SubstituteMarkdownBeforeCommit) {
+        fs::write(destination, b"unrelated destination")?;
+    }
+    if let Err(error) = fs::hard_link(&staged_markdown, destination) {
+        let retained =
+            remove_owned_import_outputs(destination, asset_dir, &published_assets, staging);
+        return Err(error_with_retained(error, &retained));
+    }
+    let mut retained_paths = Vec::new();
+    if !staged_paths.is_empty() {
+        let owner = asset_dir.join(".markion-import-owner");
+        if same_file::is_same_file(&owner, &staged_owner).unwrap_or(false) {
+            let _ = fs::remove_file(&owner);
+        }
+        if owner.exists() {
+            retained_paths.push(owner);
+        }
+    }
+    sync_parent_directory(destination);
+    Ok(PublishedDocxImport {
+        markdown_path: destination.to_path_buf(),
+        asset_paths: published_assets,
+        retained_paths,
+    })
+}
+
+fn inject_publish_failure(
+    selected: Option<PublishFailpoint>,
+    current: PublishFailpoint,
+) -> io::Result<()> {
+    if selected == Some(current) {
+        Err(io::Error::other(format!(
+            "injected DOCX publication failure at {current:?}"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn create_new_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+fn validate_owned_asset_dir(
+    asset_dir: &Path,
+    canonical_parent: &Path,
+    staged_owner: &Path,
+) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(asset_dir)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(io::Error::other(
+            "managed asset destination was replaced during import",
+        ));
+    }
+    let canonical = fs::canonicalize(asset_dir)?;
+    if canonical.parent() != Some(canonical_parent) {
+        return Err(io::Error::other(
+            "managed asset destination escaped its selected parent",
+        ));
+    }
+    if !same_file::is_same_file(asset_dir.join(".markion-import-owner"), staged_owner)
+        .unwrap_or(false)
+    {
+        return Err(io::Error::other(
+            "managed asset destination ownership changed during import",
+        ));
+    }
+    Ok(())
+}
+
+fn remove_owned_import_outputs(
+    markdown: &Path,
+    asset_dir: &Path,
+    published_assets: &[PathBuf],
+    staging: &Path,
+) -> Vec<PathBuf> {
+    let owner = asset_dir.join(".markion-import-owner");
+    let owned_directory =
+        same_file::is_same_file(&owner, staging.join("asset-owner")).unwrap_or(false);
+    let staged_markdown = staging.join("document.md");
+    if markdown.is_file() && same_file::is_same_file(markdown, &staged_markdown).unwrap_or(false) {
+        let _ = fs::remove_file(markdown);
+    }
+    for path in published_assets {
+        let staged = path
+            .file_name()
+            .map(|name| staging.join("assets").join(name));
+        if path.is_file()
+            && staged
+                .as_deref()
+                .is_some_and(|staged| same_file::is_same_file(path, staged).unwrap_or(false))
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
+    if owned_directory {
+        let _ = fs::remove_file(&owner);
+        let _ = fs::remove_dir(asset_dir);
+    }
+    let mut retained = Vec::new();
+    if markdown.exists() {
+        retained.push(markdown.to_path_buf());
+    }
+    for path in published_assets {
+        if path.exists() {
+            retained.push(path.clone());
+        }
+    }
+    if asset_dir.exists() && !retained.iter().any(|path| path == asset_dir) {
+        retained.push(asset_dir.to_path_buf());
+    }
+    retained
+}
+
+fn error_with_retained(error: io::Error, retained: &[PathBuf]) -> io::Error {
+    if retained.is_empty() {
+        return error;
+    }
+    let paths = retained
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    io::Error::new(
+        error.kind(),
+        format!("{error}; retained import paths: {paths}"),
+    )
+}
+
+fn sync_parent_directory(path: &Path) {
+    #[cfg(not(unix))]
+    let _ = path;
+    #[cfg(unix)]
+    if let Some(parent) = path.parent()
+        && let Ok(directory) = fs::File::open(parent)
+    {
+        let _ = directory.sync_all();
+    }
+}
+
 fn imported(stored_path: PathBuf, asset_name: &str, file_name: &str) -> ImportedImage {
     ImportedImage {
         stored_path,
@@ -273,6 +628,41 @@ fn digest(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use markion_docx_import::{
+        AssetId, ImportLimits, ImportSummary, MarkdownChunk, PackageStats, PreparedAsset,
+        PreparedImport,
+    };
+
+    fn prepared_with_asset() -> PreparedImport {
+        PreparedImport {
+            chunks: vec![
+                MarkdownChunk::Text("before __MARKION_ASSET_0__ ![alt](".into()),
+                MarkdownChunk::AssetUrl(AssetId(0)),
+                MarkdownChunk::Text(") after\n".into()),
+            ],
+            assets: vec![PreparedAsset {
+                id: AssetId(0),
+                suggested_stem: "../Screen shot [1]".into(),
+                extension: "png".into(),
+                bytes: b"prepared image bytes".to_vec(),
+                width: 1,
+                height: 1,
+            }],
+            diagnostics: vec![],
+            summary: ImportSummary {
+                paragraphs: 1,
+                tables: 0,
+                images: 1,
+                footnotes: 0,
+                revisions_accepted: false,
+            },
+            package: PackageStats {
+                entries: 3,
+                decompressed_bytes: 100,
+                limits: ImportLimits::default(),
+            },
+        }
+    }
 
     #[test]
     fn import_generates_safe_relative_link_and_reuses_identical_bytes() {
@@ -378,5 +768,147 @@ mod tests {
         assert_eq!(document_scope_root(&document), temp.path());
         // A bare relative document falls back to the working directory.
         assert_eq!(document_scope_root(Path::new("note.md")), Path::new("."));
+    }
+
+    #[test]
+    fn docx_import_publishes_assets_before_portable_markdown() {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("中文 notes").join("article.md");
+        let published = publish_docx_import(&prepared_with_asset(), &destination).unwrap();
+        assert_eq!(published.markdown_path, destination);
+        assert_eq!(published.asset_paths.len(), 1);
+        assert!(published.asset_paths[0].is_file());
+        assert!(
+            !document_asset_dir(&published.markdown_path)
+                .join(".markion-import-owner")
+                .exists()
+        );
+        let markdown = fs::read_to_string(&published.markdown_path).unwrap();
+        assert!(markdown.contains("article.assets/screen-shot-1-"));
+        assert!(markdown.contains("__MARKION_ASSET_0__"));
+        assert!(!markdown.contains("markion-import"));
+        assert_eq!(
+            fs::read(&published.asset_paths[0]).unwrap(),
+            b"prepared image bytes"
+        );
+    }
+
+    #[test]
+    fn docx_import_is_create_only_and_preserves_conflicts() {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("article.md");
+        fs::write(&destination, "existing").unwrap();
+        let error = publish_docx_import(&prepared_with_asset(), &destination).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(destination).unwrap(), "existing");
+
+        let destination = temp.path().join("other.md");
+        let asset_dir = document_asset_dir(&destination);
+        fs::create_dir(&asset_dir).unwrap();
+        fs::write(asset_dir.join("keep.txt"), "existing").unwrap();
+        let error = publish_docx_import(&prepared_with_asset(), &destination).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read_to_string(asset_dir.join("keep.txt")).unwrap(),
+            "existing"
+        );
+    }
+
+    #[test]
+    fn text_only_docx_import_creates_no_empty_asset_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("text.md");
+        let mut prepared = prepared_with_asset();
+        prepared.assets.clear();
+        prepared.chunks = vec![MarkdownChunk::Text("# Text\n".into())];
+        publish_docx_import(&prepared, &destination).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "# Text\n");
+        assert!(!document_asset_dir(&destination).exists());
+    }
+
+    #[test]
+    fn docx_import_rolls_back_every_injected_precommit_failure() {
+        for failpoint in [
+            PublishFailpoint::AfterStaging,
+            PublishFailpoint::AfterAssetDirectory,
+            PublishFailpoint::AfterFirstAsset,
+            PublishFailpoint::BeforeMarkdown,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let destination = temp.path().join("中文 parent").join("article.md");
+            assert!(
+                publish_docx_import_impl(&prepared_with_asset(), &destination, Some(failpoint))
+                    .is_err()
+            );
+            assert!(!destination.exists(), "{failpoint:?}");
+            assert!(!document_asset_dir(&destination).exists(), "{failpoint:?}");
+            let parent = destination.parent().unwrap();
+            assert!(
+                fs::read_dir(parent).unwrap().all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("markion-import")),
+                "{failpoint:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn simulated_termination_never_exposes_markdown_before_assets() {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("article.md");
+        let error = publish_docx_import_impl(
+            &prepared_with_asset(),
+            &destination,
+            Some(PublishFailpoint::SimulatedTerminationBeforeMarkdown),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("termination"));
+        assert!(!destination.exists());
+        let assets = document_asset_dir(&destination);
+        assert!(assets.is_dir());
+        assert_eq!(fs::read_dir(assets).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn rollback_preserves_substituted_files_and_reports_the_retained_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("article.md");
+        let error = publish_docx_import_impl(
+            &prepared_with_asset(),
+            &destination,
+            Some(PublishFailpoint::SubstituteFirstAssetBeforeRollback),
+        )
+        .unwrap_err();
+        let assets = document_asset_dir(&destination);
+        let retained = fs::read_dir(&assets)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(fs::read(&retained).unwrap(), b"unrelated replacement");
+        assert!(error.to_string().contains(&retained.display().to_string()));
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn markdown_commit_race_never_overwrites_or_deletes_the_winner() {
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("article.md");
+        let error = publish_docx_import_impl(
+            &prepared_with_asset(),
+            &destination,
+            Some(PublishFailpoint::SubstituteMarkdownBeforeCommit),
+        )
+        .unwrap_err();
+        assert_eq!(fs::read(&destination).unwrap(), b"unrelated destination");
+        assert!(
+            error
+                .to_string()
+                .contains(&destination.display().to_string())
+        );
+        assert!(!document_asset_dir(&destination).exists());
     }
 }

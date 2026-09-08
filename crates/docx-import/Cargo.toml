@@ -1,0 +1,19 @@
+[package]
+name = "markion-docx-import"
+version.workspace = true
+edition.workspace = true
+description = "Bounded, GUI-free DOCX to Markdown importer for Markion"
+license = "MIT"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+quick-xml.workspace = true
+roxmltree.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+pulldown-cmark.workspace = true
+tempfile = "3.20"
+typune-markdown = { package = "markdown", path = "../markdown" }

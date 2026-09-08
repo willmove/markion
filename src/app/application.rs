@@ -185,6 +185,7 @@ impl MarkionApp {
             status: t(Language::default(), Msg::StatusReady).into(),
             applied_window_title: None,
             publishing_service: None,
+            docx_import: docx_import::DocxImportCoordinator::default(),
             browser_launcher: Arc::new(publishing::DefaultBrowserLauncher),
             git_branch_state: GitBranchState::default(),
             git_operations,

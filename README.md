@@ -125,6 +125,19 @@ Markion exports to:
 
 PDF and DOCX try the absorbed Typune/pandoc export engine first. If pandoc or the selected PDF engine is unavailable, Markion falls back to a simpler built-in writer and reports the backend in the status bar. Installing pandoc and a suitable PDF engine produces richer output. PNG/JPEG and built-in PDF output are intentionally basic text snapshots.
 
+## Word import
+
+Choose **File → Import Word (.docx)** to convert one DOCX locally into a new
+saved Markdown document. Markion shows a conversion report before the save
+picker and requires an explicit choice when content may be lost. Supported
+embedded images are saved beside the Markdown in `<stem>.assets/`; keep that
+directory with the `.md` file. The importer is bounded, cancellable, offline,
+and never overwrites an existing Markdown or asset path. It uses the accepted
+view of tracked changes. Legacy `.doc`, `.docm`, encrypted files, PDF/OCR and
+page-layout fidelity are outside this workflow. See
+[`docs/word-import.md`](docs/word-import.md) for the supported semantic subset,
+limits, diagnostics and cleanup behavior.
+
 Choose **Export → Publish for WeChat (MarkNice)** to open the active in-memory
 document in a private loopback workspace in your default browser. The bundled
 editor skin tracks the pinned MarkNice editor section (dual cards, traffic-light
@@ -132,7 +145,7 @@ headers, SVG toolbar, 375px phone frame) as closely as a local, non-marketing
 shell allows. Themes, renderer, math typesetting, and application scripts work
 offline. Formulas are typeset as self-contained inline SVG (MathJax), so they
 survive the WeChat editor's paste-time filtering without duplication. Browser
-edits stay in that tab and never write back to Markion. **Import Word** converts
+edits stay in that tab and never write back to Markion. Its **Import Word** converts
 a `.docx` file only inside that browser session; recover it into Markion with
 **Copy MD** or by saving the session Markdown elsewhere. Managed local images
 can be previewed, but copying requires explicitly omitting them because a local
