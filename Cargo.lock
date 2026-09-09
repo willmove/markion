@@ -3402,6 +3402,7 @@ dependencies = [
  "markion-diagram",
  "markion-docx-import",
  "markion-git-sync",
+ "markion-html-import",
  "markion-pdf",
  "miniz_oxide",
  "percent-encoding",
@@ -3469,6 +3470,10 @@ dependencies = [
  "toml 0.8.23",
  "windows 0.61.3",
 ]
+
+[[package]]
+name = "markion-html-import"
+version = "0.3.6"
 
 [[package]]
 name = "markion-pdf"

@@ -2615,8 +2615,26 @@ impl MarkionApp {
                 self.push_text_input(&text, cx);
                 return;
             }
+            // Rich-text clipboards (Word, browsers, ...) carry an HTML flavor
+            // next to the plain text; paste it as formatted Markdown. Plain
+            // text remains the fallback when conversion yields nothing.
+            let insertion = match item.html() {
+                Some(html) => {
+                    let markdown = markion_html_import::html_to_markdown(html);
+                    if markdown.is_empty() { text } else { markdown }
+                }
+                None => text,
+            };
             self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
-            self.replace_text_in_range(None, &text, window, cx);
+            self.replace_text_in_range(None, &insertion, window, cx);
+            self.active_tab_mut().finish_undo_capture();
+        } else if !self.has_text_input_focus()
+            && let Some(markdown) = item.html().map(markion_html_import::html_to_markdown)
+            && !markdown.is_empty()
+        {
+            // The clipboard offered HTML without a plain-text flavor.
+            self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
+            self.replace_text_in_range(None, &markdown, window, cx);
             self.active_tab_mut().finish_undo_capture();
         } else {
             self.status = t(self.language, Msg::StatusClipboardEmpty).into();

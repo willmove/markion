@@ -1,0 +1,8 @@
+[package]
+name = "markion-html-import"
+version.workspace = true
+edition.workspace = true
+description = "Tolerant, GUI-free HTML to Markdown converter for clipboard rich text"
+license = "MIT"
+
+[dependencies]

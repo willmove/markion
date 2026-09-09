@@ -1513,6 +1513,10 @@ impl Default for CursorStyle {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClipboardItem {
     entries: Vec<ClipboardEntry>,
+    /// An HTML representation of the clipboard contents, when the source
+    /// application offered one (e.g. `text/html`) alongside plain text.
+    /// Never populated for items written by GPUI itself.
+    html: Option<String>,
 }
 
 /// Either a ClipboardString or a ClipboardImage
@@ -1529,6 +1533,7 @@ impl ClipboardItem {
     pub fn new_string(text: String) -> Self {
         Self {
             entries: vec![ClipboardEntry::String(ClipboardString::new(text))],
+            html: None,
         }
     }
 
@@ -1539,6 +1544,7 @@ impl ClipboardItem {
                 text,
                 metadata: Some(metadata),
             })],
+            html: None,
         }
     }
 
@@ -1548,6 +1554,7 @@ impl ClipboardItem {
             entries: vec![ClipboardEntry::String(
                 ClipboardString::new(text).with_json_metadata(metadata),
             )],
+            html: None,
         }
     }
 
@@ -1555,6 +1562,16 @@ impl ClipboardItem {
     pub fn new_image(image: &Image) -> Self {
         Self {
             entries: vec![ClipboardEntry::Image(image.clone())],
+            html: None,
+        }
+    }
+
+    /// Create a new ClipboardItem::String that also carries the HTML
+    /// representation the source application offered alongside the plain text.
+    pub fn new_html(text: String, html: String) -> Self {
+        Self {
+            entries: vec![ClipboardEntry::String(ClipboardString::new(text))],
+            html: Some(html),
         }
     }
 
@@ -1572,6 +1589,18 @@ impl ClipboardItem {
         }
 
         if any_entries { Some(answer) } else { None }
+    }
+
+    /// The HTML representation of this item's contents, when the source
+    /// application offered one alongside the plain text.
+    pub fn html(&self) -> Option<&str> {
+        self.html.as_deref()
+    }
+
+    /// Attaches an HTML representation to this item. Used by platform
+    /// backends that read a `text/html` flavor from the system clipboard.
+    pub(crate) fn set_html(&mut self, html: String) {
+        self.html = Some(html);
     }
 
     /// If this item is one ClipboardEntry::String, returns its metadata.
@@ -1618,6 +1647,7 @@ impl From<ClipboardEntry> for ClipboardItem {
     fn from(value: ClipboardEntry) -> Self {
         Self {
             entries: vec![value],
+            html: None,
         }
     }
 }

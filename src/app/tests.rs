@@ -14371,6 +14371,82 @@ fn pasted_clipboard_image_uses_managed_asset_and_one_undo(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn pasted_clipboard_html_converts_to_markdown_with_one_undo(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("before "))];
+        app.active_tab_mut().selected_range = 7..7;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_html(
+            "Title some bold text".to_string(),
+            "<html><body><h1>Title</h1><p>some <strong>bold</strong> text</p></body></html>"
+                .to_string(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.update(cx, |app, _| {
+        let text = app.active_tab().document.text();
+        assert_eq!(text, "before # Title\n\nsome **bold** text");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), "before ");
+    });
+}
+
+#[gpui::test]
+fn pasted_plain_text_clipboard_still_pastes_verbatim(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("before "))];
+        app.active_tab_mut().selected_range = 7..7;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(
+            "<b>not html</b> *stays raw*".to_string(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "before <b>not html</b> *stays raw*"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn pasted_clipboard_html_with_empty_conversion_falls_back_to_plain_text(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("before "))];
+        app.active_tab_mut().selected_range = 7..7;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_html(
+            "fallback text".to_string(),
+            "<html><head><style>.a{color:red}</style></head><body><script>var x=1;</script></body></html>"
+                .to_string(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "before fallback text");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
 fn visual_image_presentation_is_one_exact_undoable_mutation(cx: &mut TestAppContext) {
     let source = "![图](old.png \"Caption\")";
     let (app, cx) = cx.add_window_view(|_, cx| {

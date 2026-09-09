@@ -30,6 +30,8 @@ static CLIPBOARD_METADATA_FORMAT: LazyLock<u32> =
     LazyLock::new(|| register_clipboard_format(windows::core::w!("GPUI internal metadata")));
 static CLIPBOARD_SVG_FORMAT: LazyLock<u32> =
     LazyLock::new(|| register_clipboard_format(windows::core::w!("image/svg+xml")));
+static CLIPBOARD_HTML_FORMAT: LazyLock<u32> =
+    LazyLock::new(|| register_clipboard_format(windows::core::w!("HTML Format")));
 static CLIPBOARD_GIF_FORMAT: LazyLock<u32> =
     LazyLock::new(|| register_clipboard_format(windows::core::w!("GIF")));
 static CLIPBOARD_PNG_FORMAT: LazyLock<u32> =
@@ -80,11 +82,19 @@ pub(crate) fn write_to_clipboard(item: ClipboardItem) {
 
 pub(crate) fn read_from_clipboard() -> Option<ClipboardItem> {
     with_clipboard(|| {
-        with_best_match_format(|item_format| match format_to_type(item_format) {
+        let mut item = with_best_match_format(|item_format| match format_to_type(item_format) {
             ClipboardFormatType::Text => read_string_from_clipboard(),
             ClipboardFormatType::Image => read_image_from_clipboard(item_format),
             ClipboardFormatType::Files => read_files_from_clipboard(),
-        })
+        })?;
+        // Rich-text sources (Word, browsers, ...) place CF_HTML ("HTML
+        // Format") on the clipboard next to the plain text.
+        if matches!(item.entries().first(), Some(ClipboardEntry::String(_)))
+            && let Some(html) = read_html_from_clipboard()
+        {
+            item.set_html(html);
+        }
+        Some(item)
     })
     .flatten()
 }
@@ -259,6 +269,7 @@ where
         if let Some(entry) = f(*item_format) {
             return Some(ClipboardItem {
                 entries: vec![entry],
+                html: None,
             });
         }
     }
@@ -324,6 +335,47 @@ fn read_metadata_from_clipboard() -> Option<String> {
         let pcwstr = PCWSTR(data_ptr as *const u16);
         String::from_utf16_lossy(unsafe { pcwstr.as_wide() })
     })
+}
+
+fn read_html_from_clipboard() -> Option<String> {
+    unsafe { IsClipboardFormatAvailable(*CLIPBOARD_HTML_FORMAT).ok()? };
+    with_clipboard_data(*CLIPBOARD_HTML_FORMAT, |data_ptr, size| {
+        let bytes = unsafe { std::slice::from_raw_parts(data_ptr as *const u8, size) };
+        let end = bytes
+            .iter()
+            .position(|&byte| byte == 0)
+            .unwrap_or(bytes.len());
+        extract_cf_html_fragment(&bytes[..end])
+    })?
+}
+
+/// CF_HTML payloads are UTF-8 and start with an ASCII header carrying byte
+/// offsets (`StartHTML`/`EndHTML`/`StartFragment`/`EndFragment`); the fragment
+/// is the meaningful slice. Fall back to the whole payload when the header is
+/// missing or invalid.
+fn extract_cf_html_fragment(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8(bytes.to_vec()).ok()?;
+    let (mut start, mut end) = (None, None);
+    for line in text.lines().take(16) {
+        if let Some(value) = line.strip_prefix("StartFragment:") {
+            start = value.trim().parse::<usize>().ok();
+        } else if let Some(value) = line.strip_prefix("EndFragment:") {
+            end = value.trim().parse::<usize>().ok();
+        } else if line.starts_with('<') {
+            break;
+        }
+    }
+    match (start, end) {
+        (Some(start), Some(end))
+            if start <= end
+                && end <= text.len()
+                && text.is_char_boundary(start)
+                && text.is_char_boundary(end) =>
+        {
+            Some(text[start..end].to_string())
+        }
+        _ => Some(text),
+    }
 }
 
 fn read_image_from_clipboard(format: u32) -> Option<ClipboardEntry> {
