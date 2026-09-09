@@ -1599,6 +1599,7 @@ impl ClipboardItem {
 
     /// Attaches an HTML representation to this item. Used by platform
     /// backends that read a `text/html` flavor from the system clipboard.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub(crate) fn set_html(&mut self, html: String) {
         self.html = Some(html);
     }
