@@ -106,6 +106,7 @@ miniz_oxide = "0.8"
 typune-markdown = { package = "markdown", path = "crates/markdown" }
 typune-export = { package = "export", path = "crates/export" }
 markion-docx-import = { path = "crates/docx-import" }
+markion-html-import = { path = "crates/html-import" }
 same-file.workspace = true
 markion-diagram = { path = "crates/diagram", features = ["mermaid"] }
 markion-git-sync = { path = "crates/git-sync" }
@@ -201,6 +202,11 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.markion-docx-import]
+opt-level = 2
+
+# HTML→Markdown runs on the paste path; keep large Word/browser clipboard
+# payloads responsive in dev builds.
+[profile.dev.package.markion-html-import]
 opt-level = 2
 
 # markion-pdf shapes text and subsets fonts on the export path; unoptimized

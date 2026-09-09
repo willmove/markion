@@ -76,7 +76,7 @@ x11rb::atom_manager! {
         TEXT,
         TEXT_MIME_UNKNOWN: b"text/plain",
 
-        // HTML: b"text/html",
+        HTML_MIME: b"text/html",
         // URI_LIST: b"text/uri-list",
 
         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
@@ -1080,7 +1080,16 @@ impl Clipboard {
         } else {
             String::from_utf8(result.bytes).map_err(|_| Error::ConversionFailure)?
         };
-        Ok(ClipboardItem::new_string(text))
+        let mut item = ClipboardItem::new_string(text);
+        // Rich-text sources (Word, browsers, ...) offer text/html next to the
+        // plain text. This read fails quietly when the target is unoffered,
+        // including when we own the selection ourselves.
+        if let Ok(html_data) = self.inner.read(&[self.inner.atoms.HTML_MIME], selection)
+            && let Ok(html) = String::from_utf8(html_data.bytes)
+        {
+            item.set_html(html);
+        }
+        Ok(item)
     }
 
     pub fn is_owner(&self, selection: ClipboardKind) -> bool {

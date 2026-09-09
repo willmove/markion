@@ -1265,8 +1265,28 @@ impl MacPlatform {
                     }
                 });
 
+            // Rich-text sources (Word, browsers, ...) place public.html on the
+            // pasteboard next to the plain text.
+            let html = {
+                let types: id = state.pasteboard.types();
+                let html_type: id = ns_string("public.html");
+                if msg_send![types, containsObject: html_type] {
+                    let data = state.pasteboard.dataForType(html_type);
+                    if data == nil || data.bytes().is_null() {
+                        None
+                    } else {
+                        let bytes =
+                            slice::from_raw_parts(data.bytes() as *mut u8, data.length() as usize);
+                        String::from_utf8(bytes.to_vec()).ok()
+                    }
+                } else {
+                    None
+                }
+            };
+
             ClipboardItem {
                 entries: vec![ClipboardEntry::String(ClipboardString { text, metadata })],
+                html,
             }
         }
     }
@@ -1344,6 +1364,7 @@ fn try_clipboard_image(pasteboard: id, format: ImageFormat) -> Option<ClipboardI
 
                 Some(ClipboardItem {
                     entries: vec![ClipboardEntry::Image(Image { format, bytes, id })],
+                    html: None,
                 })
             }
         } else {
@@ -1678,6 +1699,7 @@ mod tests {
             entries: vec![ClipboardEntry::String(
                 ClipboardString::new("2".to_string()).with_json_metadata(vec![3, 4]),
             )],
+            html: None,
         };
         platform.write_to_clipboard(item.clone());
         assert_eq!(platform.read_from_clipboard(), Some(item));

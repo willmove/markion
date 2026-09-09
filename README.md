@@ -52,6 +52,7 @@ Switching modes preserves the active document, cursor and selection, undo histor
 
 - Parsing is powered by `pulldown-cmark` with CommonMark and GFM-oriented support.
 - Formatting commands cover bold, italic, inline code, links, images, headings, lists, task lists, blockquotes, fenced code blocks, and source Markdown tables.
+- Pasting rich text copied from Word, Google Docs, or web pages converts the clipboard's HTML flavor into formatted Markdown — headings, emphasis, links, nested lists, tables, code — as a single undoable step; plain-text clipboards still paste verbatim.
 - Heading commands expose H1–H5 by default, with an H1–H6 option in Preferences.
 - Find and replace supports case sensitivity, regular expressions, next/previous navigation, replace current, and replace all.
 - Source table commands can format tables and add, delete, or move rows and columns. Visual Edit tables additionally provide direct source-backed cell editing, Tab traversal, deterministic width reflow, and the same row/column operations; ordinary preview tables remain read-only.

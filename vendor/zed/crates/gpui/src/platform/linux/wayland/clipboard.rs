@@ -23,6 +23,10 @@ pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
 /// Text mime types that we'll accept from other programs.
 pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
 
+/// HTML mime type accepted from other programs, attached to the plain-text
+/// clipboard item as its rich-text representation.
+pub(crate) const HTML_MIME_TYPE: &str = "text/html";
+
 pub(crate) struct Clipboard {
     connection: Connection,
     loop_handle: LoopHandle<'static, WaylandClientStatePtr>,
@@ -116,7 +120,25 @@ impl<T: ReceiveData> DataOffer<T> {
         // copying from eg: firefox inserts a lot of blank
         // lines, and that is super annoying.
         let result = text_content.replace("\r\n", "\n");
-        Some(ClipboardItem::new_string(result))
+        let mut item = ClipboardItem::new_string(result);
+        if let Some(html) = self.read_html(connection) {
+            item.set_html(html);
+        }
+        Some(item)
+    }
+
+    fn read_html(&self, connection: &Connection) -> Option<String> {
+        if !self.has_mime_type(HTML_MIME_TYPE) {
+            return None;
+        }
+        let bytes = self.read_bytes(connection, HTML_MIME_TYPE)?;
+        match String::from_utf8(bytes) {
+            Ok(content) => Some(content.replace("\r\n", "\n")),
+            Err(e) => {
+                log::error!("Failed to convert clipboard HTML to UTF-8: {}", e);
+                None
+            }
+        }
     }
 
     fn read_image(&self, connection: &Connection) -> Option<ClipboardItem> {
@@ -130,6 +152,7 @@ impl<T: ReceiveData> DataOffer<T> {
                 let id = hash(&bytes);
                 return Some(ClipboardItem {
                     entries: vec![ClipboardEntry::Image(Image { format, bytes, id })],
+                    html: None,
                 });
             }
         }
