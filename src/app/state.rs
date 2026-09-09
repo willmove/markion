@@ -414,8 +414,10 @@ pub(super) enum VisualNavigationDirection {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PendingVisualNavigation {
+    pub(super) document_instance: DocumentInstanceId,
     pub(super) document_version: u64,
     pub(super) target_block: usize,
+    pub(super) target_block_id: VisualBlockId,
     pub(super) direction: VisualNavigationDirection,
     pub(super) extend_selection: bool,
     pub(super) preferred_x: Pixels,
@@ -427,6 +429,23 @@ pub(super) struct VisualNavigationPosition {
     pub(super) block_index: usize,
     pub(super) line_index: usize,
     pub(super) source_offset: usize,
+}
+
+/// Test-only evidence for the caret geometry produced by one concrete Visual
+/// Edit frame. Unlike `visual_caret_bounds`, this carries the source owner and
+/// frame generation, so a regression cannot pass by observing stale geometry.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(super) struct VisualCaretPaintObservation {
+    pub(super) frame_generation: u64,
+    pub(super) document_instance: DocumentInstanceId,
+    pub(super) document_version: u64,
+    pub(super) source_selection: Range<usize>,
+    pub(super) source_cursor: usize,
+    pub(super) block_index: usize,
+    pub(super) block_id: VisualBlockId,
+    pub(super) bounds: Bounds<Pixels>,
+    pub(super) caret_emitted: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -771,6 +790,10 @@ pub(super) struct DocumentTabState {
     pub(super) visual_preferred_x: Option<Pixels>,
     pub(super) visual_navigation_position: Option<VisualNavigationPosition>,
     pub(super) pending_visual_navigation: Option<PendingVisualNavigation>,
+    /// A matching pending request whose completion has already been deferred
+    /// until after the current GPUI paint. This prevents multiple text
+    /// fragments in one visual block from queuing duplicate callbacks.
+    pub(super) visual_navigation_completion_queued: Option<PendingVisualNavigation>,
     /// Bounds of the Visual Edit input bridge, used as an IME fallback before
     /// the focused virtual row has painted.
     pub(super) visual_input_bounds: Option<Bounds<Pixels>>,
@@ -782,6 +805,10 @@ pub(super) struct DocumentTabState {
     pub(super) visual_projection_paint_count: usize,
     #[cfg(test)]
     pub(super) visual_caret_paint_count: usize,
+    #[cfg(test)]
+    pub(super) visual_frame_generation: u64,
+    #[cfg(test)]
+    pub(super) visual_last_caret_paint: Option<VisualCaretPaintObservation>,
     /// Opt-in observations after text painting, clipped to the active content mask.
     #[cfg(test)]
     pub(super) visual_text_paints: Option<Vec<(usize, Bounds<Pixels>)>>,
@@ -1036,6 +1063,7 @@ impl DocumentTabState {
             visual_preferred_x: None,
             visual_navigation_position: None,
             pending_visual_navigation: None,
+            visual_navigation_completion_queued: None,
             visual_input_bounds: None,
             #[cfg(test)]
             visual_last_projection: None,
@@ -1045,6 +1073,10 @@ impl DocumentTabState {
             visual_projection_paint_count: 0,
             #[cfg(test)]
             visual_caret_paint_count: 0,
+            #[cfg(test)]
+            visual_frame_generation: 0,
+            #[cfg(test)]
+            visual_last_caret_paint: None,
             #[cfg(test)]
             visual_text_paints: None,
             #[cfg(test)]
@@ -1281,6 +1313,8 @@ impl DocumentTabState {
             self.visual_last_projection_styles = None;
             self.visual_projection_paint_count = 0;
             self.visual_caret_paint_count = 0;
+            self.visual_frame_generation = 0;
+            self.visual_last_caret_paint = None;
         }
 
         // Scroll handles are retained for reactivation; observations are
@@ -1336,6 +1370,8 @@ impl DocumentTabState {
             self.visual_last_projection_styles = None;
             self.visual_projection_paint_count = 0;
             self.visual_caret_paint_count = 0;
+            self.visual_frame_generation = 0;
+            self.visual_last_caret_paint = None;
         }
         self.sync_scroll_state.reset();
         self.clear_preview_selection();
@@ -1417,6 +1453,7 @@ impl DocumentTabState {
         self.visual_preferred_x = None;
         self.visual_navigation_position = None;
         self.pending_visual_navigation = None;
+        self.visual_navigation_completion_queued = None;
     }
 
     pub(super) fn register_visual_navigation_snapshot(

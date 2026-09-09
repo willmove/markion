@@ -9,6 +9,13 @@ impl Focusable for MarkionApp {
 
 impl Render for MarkionApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        if matches!(self.view_mode, ViewMode::VisualEdit)
+            && let Some(tab) = self.active_tab_mut().document_tab_mut()
+        {
+            tab.visual_frame_generation = tab.visual_frame_generation.wrapping_add(1);
+            tab.visual_last_caret_paint = None;
+        }
         let active_is_image = self.active_tab().is_image();
         if active_is_image {
             self.slash_commands = None;

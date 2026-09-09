@@ -1,5 +1,11 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ResolvedVisualNavigation {
+    source_offset: usize,
+    line_index: Option<usize>,
+}
+
 fn visual_block_transform(block: &VisualBlock) -> Option<BlockTransform> {
     match &block.kind {
         VisualBlockKind::Heading { level } => Some(BlockTransform::Heading(*level)),
@@ -3069,17 +3075,22 @@ impl MarkionApp {
             return true;
         }
 
-        let version = self.active_tab().document.version();
-        let pending = PendingVisualNavigation {
-            document_version: version,
-            target_block: first_target,
-            direction,
-            extend_selection,
-            preferred_x,
+        let Some(pending) =
+            self.visual_navigation_request(first_target, direction, extend_selection, preferred_x)
+        else {
+            return true;
         };
+        if let Some(resolved) = self.resolve_pending_visual_navigation(pending) {
+            self.apply_resolved_visual_navigation(pending, resolved, cx);
+            self.active_tab_mut()
+                .visual_list
+                .scroll_to_reveal_item(first_target);
+            return true;
+        }
         let tab = self.active_tab_mut();
         tab.visual_preferred_x = Some(preferred_x);
         tab.pending_visual_navigation = Some(pending);
+        tab.visual_navigation_completion_queued = None;
         tab.visual_list.scroll_to_reveal_item(first_target);
         cx.notify();
         true
@@ -3159,17 +3170,22 @@ impl MarkionApp {
             return true;
         }
 
-        let version = self.active_tab().document.version();
-        let pending = PendingVisualNavigation {
-            document_version: version,
-            target_block: first_target,
-            direction,
-            extend_selection,
-            preferred_x,
+        let Some(pending) =
+            self.visual_navigation_request(first_target, direction, extend_selection, preferred_x)
+        else {
+            return true;
         };
+        if let Some(resolved) = self.resolve_pending_visual_navigation(pending) {
+            self.apply_resolved_visual_navigation(pending, resolved, cx);
+            self.active_tab_mut()
+                .visual_list
+                .scroll_to_reveal_item(first_target);
+            return true;
+        }
         let tab = self.active_tab_mut();
         tab.visual_preferred_x = Some(preferred_x);
         tab.pending_visual_navigation = Some(pending);
+        tab.visual_navigation_completion_queued = None;
         tab.visual_list.scroll_to_reveal_item(first_target);
         cx.notify();
         true
@@ -3194,98 +3210,147 @@ impl MarkionApp {
         callout_marker_line_caret_target(tab.document.text(), range)
     }
 
+    pub(super) fn visual_navigation_request(
+        &self,
+        target_block: usize,
+        direction: VisualNavigationDirection,
+        extend_selection: bool,
+        preferred_x: Pixels,
+    ) -> Option<PendingVisualNavigation> {
+        let tab = self.active_tab();
+        Some(PendingVisualNavigation {
+            document_instance: tab.document.instance_id(),
+            document_version: tab.document.version(),
+            target_block,
+            target_block_id: tab.visual_list_blocks.get(target_block)?.id,
+            direction,
+            extend_selection,
+            preferred_x,
+        })
+    }
+
+    fn resolve_pending_visual_navigation(
+        &self,
+        pending: PendingVisualNavigation,
+    ) -> Option<ResolvedVisualNavigation> {
+        let tab = self.active_tab();
+        if !matches!(self.view_mode, ViewMode::VisualEdit)
+            || tab.document.instance_id() != pending.document_instance
+            || tab.document.version() != pending.document_version
+        {
+            return None;
+        }
+        let block = tab.visual_list_blocks.get(pending.target_block)?;
+        if block.id != pending.target_block_id {
+            return None;
+        }
+        if matches!(block.kind, VisualBlockKind::Whitespace) {
+            let from_above = matches!(pending.direction, VisualNavigationDirection::Down);
+            return Some(ResolvedVisualNavigation {
+                source_offset: whitespace_navigation_offset(
+                    block.source_range.clone(),
+                    tab.document.text(),
+                    from_above,
+                ),
+                line_index: None,
+            });
+        }
+        if let Some(source_offset) = self.callout_title_navigation_target(pending.target_block) {
+            return Some(ResolvedVisualNavigation {
+                source_offset,
+                line_index: None,
+            });
+        }
+        let snapshot = tab
+            .visual_navigation_snapshots
+            .get(&pending.target_block)
+            .filter(|snapshot| {
+                snapshot.document_version == pending.document_version
+                    && snapshot.block_index == pending.target_block
+            })?;
+        if tab
+            .visual_navigation_snapshot_ids
+            .get(&pending.target_block)
+            != Some(&pending.target_block_id)
+        {
+            return None;
+        }
+        let line_index = match pending.direction {
+            VisualNavigationDirection::Up => snapshot.lines.len().checked_sub(1),
+            VisualNavigationDirection::Down => (!snapshot.lines.is_empty()).then_some(0),
+        }?;
+        Some(ResolvedVisualNavigation {
+            source_offset: snapshot.closest_source_on_line(line_index, pending.preferred_x)?,
+            line_index: Some(line_index),
+        })
+    }
+
+    fn apply_resolved_visual_navigation(
+        &mut self,
+        pending: PendingVisualNavigation,
+        resolved: ResolvedVisualNavigation,
+        cx: &mut Context<Self>,
+    ) {
+        if pending.extend_selection {
+            self.select_to(resolved.source_offset, cx);
+        } else {
+            self.move_to(resolved.source_offset, cx);
+        }
+        let tab = self.active_tab_mut();
+        tab.visual_preferred_x = Some(pending.preferred_x);
+        if let Some(line_index) = resolved.line_index {
+            tab.visual_navigation_position = Some(VisualNavigationPosition {
+                document_version: pending.document_version,
+                block_index: pending.target_block,
+                line_index,
+                source_offset: resolved.source_offset,
+            });
+        }
+    }
+
     pub(super) fn complete_pending_visual_navigation(&mut self, cx: &mut Context<Self>) {
         let Some(pending) = self.active_tab().pending_visual_navigation else {
             return;
         };
-        if pending.document_version != self.active_tab().document.version() {
-            self.active_tab_mut().clear_visual_navigation_intent();
-            return;
-        }
-        let Some(snapshot) = self
-            .active_tab()
-            .visual_navigation_snapshots
-            .get(&pending.target_block)
-            .filter(|snapshot| snapshot.document_version == pending.document_version)
-            .filter(|_| {
-                self.active_tab()
-                    .visual_list_blocks
-                    .get(pending.target_block)
-                    .is_some_and(|block| {
-                        self.active_tab()
-                            .visual_navigation_snapshot_ids
-                            .get(&pending.target_block)
-                            == Some(&block.id)
-                    })
-            })
-            .cloned()
-        else {
-            // Whitespace rows and callout titles have no wrapped-line
-            // snapshot. Park on an existing source offset instead of dropping
-            // the pending move.
-            if let Some(block) = self
-                .active_tab()
-                .visual_list_blocks
-                .get(pending.target_block)
-                .filter(|block| matches!(block.kind, VisualBlockKind::Whitespace))
+        let Some(resolved) = self.resolve_pending_visual_navigation(pending) else {
+            if self.active_tab().document.instance_id() != pending.document_instance
+                || self.active_tab().document.version() != pending.document_version
             {
-                let from_above = matches!(pending.direction, VisualNavigationDirection::Down);
-                let target = whitespace_navigation_offset(
-                    block.source_range.clone(),
-                    self.active_tab().document.text(),
-                    from_above,
-                );
-                self.active_tab_mut().pending_visual_navigation = None;
-                self.active_tab_mut().visual_preferred_x = Some(pending.preferred_x);
-                if pending.extend_selection {
-                    self.select_to(target, cx);
-                } else {
-                    self.move_to(target, cx);
-                }
-                return;
-            }
-            // A callout title row has no rendered text runs, so no layout
-            // snapshot exists to land on. Park the caret just inside the
-            // marker line's end instead — the reveal projection then shows
-            // the authored `> [!NOTE]` verbatim.
-            if let Some(target) = self.callout_title_navigation_target(pending.target_block) {
-                self.active_tab_mut().pending_visual_navigation = None;
-                self.active_tab_mut().visual_preferred_x = Some(pending.preferred_x);
-                if pending.extend_selection {
-                    self.select_to(target, cx);
-                } else {
-                    self.move_to(target, cx);
-                }
+                self.active_tab_mut().clear_visual_navigation_intent();
             }
             return;
         };
-        let line_index = match pending.direction {
-            VisualNavigationDirection::Up => snapshot.lines.len().checked_sub(1),
-            VisualNavigationDirection::Down => (!snapshot.lines.is_empty()).then_some(0),
-        };
-        let Some(target) = line_index
-            .and_then(|index| snapshot.closest_source_on_line(index, pending.preferred_x))
-        else {
-            return;
-        };
-        self.active_tab_mut().pending_visual_navigation = None;
-        if pending.extend_selection {
-            self.select_to(target, cx);
-        } else {
-            self.move_to(target, cx);
+        self.apply_resolved_visual_navigation(pending, resolved, cx);
+    }
+
+    pub(super) fn queue_pending_visual_navigation_completion(
+        &mut self,
+        painted_block: usize,
+    ) -> Option<PendingVisualNavigation> {
+        let pending = self.active_tab().pending_visual_navigation?;
+        if pending.target_block != painted_block
+            || self.active_tab().visual_navigation_completion_queued == Some(pending)
+            || self.resolve_pending_visual_navigation(pending).is_none()
+        {
+            return None;
         }
-        let target_line = match pending.direction {
-            VisualNavigationDirection::Up => snapshot.lines.len().saturating_sub(1),
-            VisualNavigationDirection::Down => 0,
-        };
-        let tab = self.active_tab_mut();
-        tab.visual_preferred_x = Some(pending.preferred_x);
-        tab.visual_navigation_position = Some(VisualNavigationPosition {
-            document_version: pending.document_version,
-            block_index: pending.target_block,
-            line_index: target_line,
-            source_offset: target,
-        });
+        self.active_tab_mut().visual_navigation_completion_queued = Some(pending);
+        Some(pending)
+    }
+
+    pub(super) fn complete_deferred_visual_navigation(
+        &mut self,
+        expected: PendingVisualNavigation,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_tab().visual_navigation_completion_queued != Some(expected) {
+            return;
+        }
+        self.active_tab_mut().visual_navigation_completion_queued = None;
+        if self.active_tab().pending_visual_navigation != Some(expected) {
+            return;
+        }
+        self.complete_pending_visual_navigation(cx);
     }
 
     fn visual_affinity_horizontal_target(&self, direction: VisualCaretAffinity) -> Option<usize> {

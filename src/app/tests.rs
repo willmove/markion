@@ -5336,8 +5336,10 @@ fn visual_interaction_state_does_not_invalidate_document_derived_state() {
     tab.set_visual_caret_affinity(Some(VisualCaretAffinity::Upstream));
     tab.visual_preferred_x = Some(px(42.));
     tab.pending_visual_navigation = Some(PendingVisualNavigation {
+        document_instance: tab.document.instance_id(),
         document_version: version,
         target_block: 0,
+        target_block_id: visual_blocks[0].id,
         direction: VisualNavigationDirection::Down,
         extend_selection: false,
         preferred_x: px(42.),
@@ -8683,8 +8685,10 @@ fn stale_visual_block_cjk_line_pending_navigation_clamps_caret(cx: &mut TestAppC
         tab.visual_navigation_snapshots.clear();
         tab.visual_navigation_snapshot_ids.clear();
         tab.pending_visual_navigation = Some(PendingVisualNavigation {
+            document_instance: tab.document.instance_id(),
             document_version: tab.document.version(),
             target_block: 0,
+            target_block_id: tab.visual_list_blocks[0].id,
             direction: VisualNavigationDirection::Up,
             extend_selection: false,
             preferred_x: px(0.),
@@ -8734,8 +8738,10 @@ fn stale_visual_block_cjk_line_pending_navigation_clamps_caret(cx: &mut TestAppC
         tab.visual_navigation_snapshots.clear();
         tab.visual_navigation_snapshot_ids.clear();
         tab.pending_visual_navigation = Some(PendingVisualNavigation {
+            document_instance: tab.document.instance_id(),
             document_version: tab.document.version(),
             target_block: 0,
+            target_block_id: tab.visual_list_blocks[0].id,
             direction: VisualNavigationDirection::Up,
             extend_selection: true,
             preferred_x: px(0.),

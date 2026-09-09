@@ -764,21 +764,18 @@ impl Element for VisualInputElement {
             ElementInputHandler::new(bounds, self.app.clone()),
             cx,
         );
-        self.app.update(cx, |app, cx| {
+        let request_follow_frame = self.app.update(cx, |app, _| {
             let inset = px(app.typography_metrics().preview_row_line_height);
             let typewriter_visual_active =
                 app.typewriter_mode && matches!(app.view_mode, ViewMode::VisualEdit);
             let tab = app.active_tab_mut();
             tab.visual_input_bounds = Some(bounds);
             if tab.visual_caret_follow_frames == 0 {
-                return;
+                return false;
             }
             let Some(caret) = tab.visual_caret_bounds else {
                 tab.visual_caret_follow_frames = tab.visual_caret_follow_frames.saturating_sub(1);
-                if tab.visual_caret_follow_frames > 0 {
-                    cx.notify();
-                }
-                return;
+                return tab.visual_caret_follow_frames > 0;
             };
             let list = tab.visual_list.clone();
             let center_request = typewriter_visual_active
@@ -797,10 +794,11 @@ impl Element for VisualInputElement {
                 follow_visual_caret_in_list(&list, caret, inset)
             };
             tab.visual_caret_follow_frames = tab.visual_caret_follow_frames.saturating_sub(1);
-            if scrolled || tab.visual_caret_follow_frames > 0 {
-                cx.notify();
-            }
+            scrolled || tab.visual_caret_follow_frames > 0
         });
+        if request_follow_frame {
+            window.request_animation_frame();
+        }
     }
 }
 
@@ -944,13 +942,15 @@ impl Element for VisualEditableText {
         let is_whitespace_row = whitespace_caret.is_some();
         let layout = (!is_whitespace_row).then(|| self.text.layout().clone());
         let caret_bounds = self.caret_bounds(bounds);
+        let caret_emitted = self.source_selection.is_empty()
+            && self.entity.read(cx).focus_handle.is_focused(window);
         if self.source_selection.is_empty() {
             if let Some(caret_bounds) = caret_bounds {
                 #[cfg(test)]
                 self.entity.update(cx, |app, _| {
                     app.active_tab_mut().visual_caret_paint_count += 1;
                 });
-                if self.entity.read(cx).focus_handle.is_focused(window) {
+                if caret_emitted {
                     window.paint_quad(fill(caret_bounds, rgb(0x2563eb)));
                 }
             }
@@ -976,7 +976,26 @@ impl Element for VisualEditableText {
 
         if let Some(caret_bounds) = caret_bounds {
             self.entity.update(cx, |app, _| {
-                app.active_tab_mut().visual_caret_bounds = Some(caret_bounds);
+                let tab = app.active_tab_mut();
+                tab.visual_caret_bounds = Some(caret_bounds);
+                #[cfg(test)]
+                if let Some(block_id) = tab
+                    .visual_list_blocks
+                    .get(self.block_index)
+                    .map(|block| block.id)
+                {
+                    tab.visual_last_caret_paint = Some(VisualCaretPaintObservation {
+                        frame_generation: tab.visual_frame_generation,
+                        document_instance: tab.document.instance_id(),
+                        document_version: tab.document.version(),
+                        source_selection: self.source_selection.clone(),
+                        source_cursor: self.source_cursor,
+                        block_index: self.block_index,
+                        block_id,
+                        bounds: caret_bounds,
+                        caret_emitted,
+                    });
+                }
             });
         }
         if let (Some(marked_range), Some(layout)) = (self.marked_range.clone(), layout.as_ref()) {
@@ -1026,7 +1045,7 @@ impl Element for VisualEditableText {
                     &self.projection,
                     layout,
                 );
-                self.entity.update(cx, |app, cx| {
+                let deferred_navigation = self.entity.update(cx, |app, _| {
                     #[cfg(test)]
                     {
                         // The build issues one index query per wrapped line;
@@ -1036,8 +1055,16 @@ impl Element for VisualEditableText {
                     }
                     app.active_tab_mut()
                         .register_visual_navigation_snapshot(navigation_snapshot);
-                    app.complete_pending_visual_navigation(cx);
+                    app.queue_pending_visual_navigation_completion(self.block_index)
                 });
+                if let Some(expected) = deferred_navigation {
+                    let entity = self.entity.clone();
+                    window.defer(cx, move |_, cx| {
+                        entity.update(cx, |app, cx| {
+                            app.complete_deferred_visual_navigation(expected, cx);
+                        });
+                    });
+                }
             }
         }
         #[cfg(test)]
