@@ -3410,6 +3410,44 @@ pub(super) fn whitespace_row_height(line_count: usize, line_height: f32) -> f32 
     whitespace_clamped_line_count(line_count) as f32 * line_height
 }
 
+/// Visual Edit preserves authored prose newlines as painted lines even when
+/// CommonMark reparses those lines into fewer paragraph blocks after input.
+/// Assigning paragraph spacing only to the final row of a same-context body
+/// flow keeps its occupied height independent of that split/merge detail.
+pub(super) fn visual_body_flow_paragraph_spacing(
+    blocks: &[VisualBlock],
+    block_index: usize,
+    paragraph_spacing: f32,
+) -> f32 {
+    let Some(block) = blocks.get(block_index) else {
+        return 0.;
+    };
+    if !matches!(
+        block.kind,
+        VisualBlockKind::Paragraph | VisualBlockKind::Whitespace
+    ) {
+        return 0.;
+    }
+
+    let same_context_body_row_follows = blocks.get(block_index + 1).is_some_and(|next| {
+        matches!(
+            next.kind,
+            VisualBlockKind::Paragraph | VisualBlockKind::Whitespace
+        ) && match (&block.quote_context, &next.quote_context) {
+            (None, None) => true,
+            (Some(current), Some(next)) => {
+                current.depth == next.depth && current.group_source_range == next.group_source_range
+            }
+            _ => false,
+        }
+    });
+    if same_context_body_row_follows {
+        0.
+    } else {
+        paragraph_spacing
+    }
+}
+
 pub(super) fn whitespace_painted_line_count(source_range: Range<usize>, text: &str) -> usize {
     let end = source_range.end.min(text.len());
     let start = source_range.start.min(end);
@@ -3737,6 +3775,11 @@ fn visual_block_content_view(
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
+    let body_flow_spacing = visual_body_flow_paragraph_spacing(
+        &app.active_tab().document.visual_blocks_shared(),
+        block_index,
+        typography.paragraph_spacing,
+    );
     let is_whitespace = matches!(block.kind, VisualBlockKind::Whitespace);
     let is_reference_definition = matches!(block.kind, VisualBlockKind::ReferenceDefinition);
     // A callout title row owns only structural marker bytes; focused, it
@@ -3809,7 +3852,7 @@ fn visual_block_content_view(
                 ))
         }
         VisualBlockKind::Paragraph => div()
-            .mb(px(typography.paragraph_spacing))
+            .mb(px(body_flow_spacing))
             .line_height(px(typography.paragraph_line_height))
             .text_size(px(typography.rendered_font_size))
             .child(visual_text_with_math_element(
@@ -4031,6 +4074,7 @@ fn visual_block_content_view(
             // caret itself is painted only when `owns_caret`.
             div()
                 .h(px(row_height))
+                .mb(px(body_flow_spacing))
                 .cursor(CursorStyle::IBeam)
                 .debug_selector(|| "visual-whitespace-gap".to_string())
                 .child(visual_whitespace_caret_element(

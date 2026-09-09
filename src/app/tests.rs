@@ -2755,6 +2755,11 @@ fn whitespace_row_height_tracks_rendered_body_size() {
         markion::DEFAULT_RENDERED_FONT_SIZE + 4,
         markion::DEFAULT_PARAGRAPH_SPACING,
     );
+    let wider_spacing = DocumentTypographyMetrics::new(
+        markion::DEFAULT_EDITOR_FONT_SIZE,
+        markion::DEFAULT_RENDERED_FONT_SIZE,
+        markion::DEFAULT_PARAGRAPH_SPACING + 6,
+    );
     assert_eq!(
         whitespace_row_height(1, default.paragraph_line_height),
         default.paragraph_line_height
@@ -2767,7 +2772,33 @@ fn whitespace_row_height_tracks_rendered_body_size() {
         whitespace_row_height(1, larger.paragraph_line_height)
             > whitespace_row_height(1, default.paragraph_line_height)
     );
+    assert_eq!(
+        whitespace_row_height(1, wider_spacing.paragraph_line_height),
+        whitespace_row_height(1, default.paragraph_line_height),
+        "paragraph spacing belongs to the row margin, not its caret/click line box"
+    );
     assert_eq!(default.paragraph_line_height, 24.);
+}
+
+#[test]
+fn visual_body_flow_assigns_paragraph_spacing_once_at_the_end() {
+    let cases = [
+        ("Before\n\nAfter\n\n## Tail", vec![0., 0., 0., 18., 0.]),
+        ("## Before\n\n## After", vec![0., 18., 0.]),
+        ("## Before\n\nAfter", vec![0., 0., 18.]),
+        ("Body\n", vec![0., 18.]),
+    ];
+
+    for (source, expected) in cases {
+        let blocks = MarkdownDocument::from_text(source).visual_blocks();
+        let actual = (0..blocks.len())
+            .map(|index| visual_body_flow_paragraph_spacing(&blocks, index, 18.))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual, expected,
+            "paragraph spacing ownership must be stable for {source:?}; blocks={blocks:#?}"
+        );
+    }
 }
 
 fn default_paragraph_line_height() -> f32 {
@@ -7750,6 +7781,207 @@ fn visual_edit_changelog_gap_click_types_into_existing_blank_line(cx: &mut TestA
         );
         assert!(tab.document.is_dirty());
     });
+}
+
+#[gpui::test]
+fn visual_edit_typing_into_blank_line_preserves_row_height(cx: &mut TestAppContext) {
+    let source = "## Before\n\n## After";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 4..4;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let gap = cx
+        .debug_bounds("visual-whitespace-gap")
+        .expect("blank line should be rendered");
+    let empty_row = cx
+        .debug_bounds("visual-block-row-1")
+        .expect("blank line should own a visual row");
+    let following_before = cx
+        .debug_bounds("visual-block-row-2")
+        .expect("following heading should be rendered");
+
+    cx.simulate_click(gap.center(), Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_input("Body");
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "## Before\nBody\n## After"
+        );
+    });
+    let paragraph_row = cx
+        .debug_bounds("visual-block-row-1")
+        .expect("typed paragraph should replace the blank row");
+    let following_after = cx
+        .debug_bounds("visual-block-row-2")
+        .expect("following heading should remain rendered");
+
+    assert_eq!(
+        paragraph_row.size.height, empty_row.size.height,
+        "typing into the blank line must not change its occupied row height"
+    );
+    assert_eq!(
+        following_after.top(),
+        following_before.top(),
+        "typing into the blank line must not move following content"
+    );
+}
+
+#[gpui::test]
+fn visual_edit_typing_between_paragraphs_preserves_following_content_position(
+    cx: &mut TestAppContext,
+) {
+    let source = "Before\n\nAfter\n\n## Tail";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (gap_index, tail_index) = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        (
+            blocks
+                .iter()
+                .position(|block| matches!(block.kind, VisualBlockKind::Whitespace))
+                .expect("first paragraph gap"),
+            blocks
+                .iter()
+                .position(|block| {
+                    matches!(block.kind, VisualBlockKind::Heading { .. })
+                        && block.source_range.end == source.len()
+                })
+                .expect("tail heading"),
+        )
+    });
+    let gap = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-block-content-{gap_index}"
+        )))
+        .expect("first paragraph gap should be rendered");
+    let tail_before = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-block-row-{tail_index}"
+        )))
+        .expect("tail heading should be rendered");
+
+    cx.simulate_click(gap.center(), Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_input("Body");
+    cx.run_until_parked();
+
+    let tail_index = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "Before\nBody\nAfter\n\n## Tail");
+        tab.document
+            .visual_blocks_shared()
+            .iter()
+            .position(|block| {
+                matches!(block.kind, VisualBlockKind::Heading { .. })
+                    && block.source_range.end == tab.document.text().len()
+            })
+            .expect("tail heading after input")
+    });
+    let tail_after = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-block-row-{tail_index}"
+        )))
+        .expect("tail heading should remain rendered");
+    assert_eq!(
+        tail_after.top(),
+        tail_before.top(),
+        "typing into a blank line between paragraphs must not move later blocks"
+    );
+}
+
+#[gpui::test]
+fn visual_edit_blank_line_tracks_custom_paragraph_spacing_without_input_jump(
+    cx: &mut TestAppContext,
+) {
+    let source = "## Before\n\n## After";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 4..4;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let gap_before = cx
+        .debug_bounds("visual-whitespace-gap")
+        .expect("blank line should be rendered");
+    let following_before = cx
+        .debug_bounds("visual-block-row-2")
+        .expect("following heading should be rendered");
+    let (version, blocks) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (tab.document.version(), tab.document.visual_blocks_shared())
+    });
+
+    app.update(cx, |app, cx| app.set_paragraph_spacing(18, cx));
+    cx.run_until_parked();
+
+    let gap_after_spacing = cx
+        .debug_bounds("visual-whitespace-gap")
+        .expect("blank line should remain rendered after typography reflow");
+    let following_after_spacing = cx
+        .debug_bounds("visual-block-row-2")
+        .expect("following heading should remain rendered after typography reflow");
+    assert_eq!(
+        gap_after_spacing.size.height, gap_before.size.height,
+        "paragraph spacing must remain outside the whitespace line box"
+    );
+    assert!(
+        following_after_spacing.top() > following_before.top(),
+        "larger paragraph spacing must increase the blank row's occupied extent"
+    );
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), source);
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+        assert!(!tab.document.is_dirty());
+    });
+
+    cx.simulate_click(gap_after_spacing.center(), Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_input("Body");
+    cx.run_until_parked();
+
+    let following_after_input = cx
+        .debug_bounds("visual-block-row-2")
+        .expect("following heading should remain rendered after input");
+    assert_eq!(
+        following_after_input.top(),
+        following_after_spacing.top(),
+        "custom paragraph spacing must not reintroduce the input-time jump"
+    );
 }
 
 #[gpui::test]
