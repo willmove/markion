@@ -438,10 +438,19 @@ fn render_list(
         out.push_str(&escape_leading_block_marker(&content));
         out.push('\n');
 
-        // Block content (indented continuation)
+        // Block content (indented continuation). CommonMark attaches a child
+        // block to the item only when a blank line precedes it; without one,
+        // an indented line is a lazy continuation of the item's paragraph and
+        // the child block merges into the inline content on re-parse.
         let continuation_indent = indent + marker.len();
-        for block in &item.blocks {
-            render_block(block, out, continuation_indent);
+        if !item.blocks.is_empty() {
+            out.push('\n');
+            for (i, block) in item.blocks.iter().enumerate() {
+                if i > 0 {
+                    out.push('\n');
+                }
+                render_block(block, out, continuation_indent);
+            }
         }
 
         // Nested sub-items
@@ -702,6 +711,87 @@ mod tests {
         // First block should be a heading in both
         assert!(matches!(doc1.blocks[0], Block::Heading { level: 1, .. }));
         assert!(matches!(doc2.blocks[0], Block::Heading { level: 1, .. }));
+    }
+
+    #[test]
+    fn round_trip_loose_list_item_preserves_child_paragraph() {
+        let original = "- first paragraph\n\n  second paragraph\n";
+        let parser = Parser::new(ParserOptions::default());
+        let doc1 = parser.parse(original).unwrap();
+        let rendered = render_to_markdown(&doc1);
+        let doc2 = parser.parse(&rendered).unwrap();
+
+        assert_eq!(
+            format!("{:?}", doc1.blocks),
+            format!("{:?}", doc2.blocks),
+            "loose list item lost its child paragraph; rendered: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn round_trip_list_item_sibling_child_blocks_stay_separate() {
+        let doc = Document::new(vec![Block::List {
+            items: vec![ListItem {
+                content: vec![Inline::Text("lead".into())],
+                blocks: vec![
+                    Block::Paragraph {
+                        content: vec![Inline::Text("body".into())],
+                        id: 1,
+                    },
+                    Block::CodeBlock {
+                        lang: None,
+                        code: "x = 1\n".into(),
+                        id: 2,
+                    },
+                ],
+                checked: None,
+                sub_items: Vec::new(),
+            }],
+            ordered: false,
+            start: None,
+            id: 0,
+        }]);
+        let rendered = render_to_markdown(&doc);
+        let parser = Parser::new(ParserOptions::default());
+        let reparsed = parser.parse(&rendered).unwrap();
+
+        let Block::List { items, .. } = &reparsed.blocks[0] else {
+            panic!("expected a list, got {:?}", reparsed.blocks);
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].blocks.len(), 2, "rendered: {rendered:?}");
+        assert!(matches!(items[0].blocks[0], Block::Paragraph { .. }));
+        assert!(matches!(items[0].blocks[1], Block::CodeBlock { .. }));
+    }
+
+    #[test]
+    fn render_tight_list_item_stays_compact() {
+        let doc = Document::new(vec![Block::List {
+            items: vec![
+                ListItem::simple(vec![Inline::Text("a".into())]),
+                ListItem::simple(vec![Inline::Text("b".into())]),
+            ],
+            ordered: false,
+            start: None,
+            id: 0,
+        }]);
+        assert_eq!(render_to_markdown(&doc), "- a\n- b\n");
+    }
+
+    #[test]
+    fn render_list_item_with_sub_items_has_no_blank_line() {
+        let doc = Document::new(vec![Block::List {
+            items: vec![ListItem {
+                content: vec![Inline::Text("parent".into())],
+                blocks: Vec::new(),
+                checked: None,
+                sub_items: vec![ListItem::simple(vec![Inline::Text("child".into())])],
+            }],
+            ordered: false,
+            start: None,
+            id: 0,
+        }]);
+        assert_eq!(render_to_markdown(&doc), "- parent\n  - child\n");
     }
 
     #[test]
