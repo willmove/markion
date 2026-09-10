@@ -5458,6 +5458,162 @@ fn visual_ime_bounds_prefer_the_painted_caret_and_have_a_surface_fallback() {
 }
 
 #[test]
+fn source_ime_bounds_are_caret_sized_for_collapsed_and_cross_row_ranges() {
+    let line_height = px(24.);
+    assert_eq!(
+        editor_element::source_ime_bounds(
+            point(px(42.), px(84.)),
+            point(px(42.), px(84.)),
+            line_height,
+        ),
+        Bounds::new(point(px(42.), px(84.)), size(px(2.), line_height))
+    );
+    assert_eq!(
+        editor_element::source_ime_bounds(
+            point(px(42.), px(84.)),
+            point(px(12.), px(108.)),
+            line_height,
+        ),
+        Bounds::new(point(px(42.), px(84.)), size(px(2.), line_height))
+    );
+    assert_eq!(
+        editor_element::source_ime_bounds(
+            point(px(42.), px(84.)),
+            point(px(78.), px(84.)),
+            line_height,
+        ),
+        Bounds::new(point(px(42.), px(84.)), size(px(36.), line_height))
+    );
+}
+
+#[gpui::test]
+fn source_ime_candidate_bounds_are_non_empty_for_a_collapsed_range(cx: &mut TestAppContext) {
+    let source = "alpha beta";
+    let cursor = source.find("beta").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let tab = app.active_tab();
+            let element_bounds = tab.last_bounds.expect("source editor should be painted");
+            let cursor_utf16 = tab.offset_to_utf16(cursor);
+            let line_height = tab.line_height;
+            let actual = EntityInputHandler::bounds_for_range(
+                app,
+                cursor_utf16..cursor_utf16,
+                element_bounds,
+                window,
+                cx,
+            )
+            .expect("collapsed source range should expose candidate geometry");
+
+            assert_eq!(actual.size.width, px(2.));
+            assert_eq!(actual.size.height, line_height);
+        });
+    });
+}
+
+#[gpui::test]
+fn source_ime_candidate_anchor_is_stable_with_and_without_typewriter(cx: &mut TestAppContext) {
+    let source = (0..80)
+        .map(|index| format!("line {index}: source text"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    for typewriter_mode in [false, true] {
+        app.update(cx, |app, cx| {
+            app.typewriter_mode = typewriter_mode;
+            app.center_cursor_if_typewriter();
+            let label = if typewriter_mode {
+                "line 40: "
+            } else {
+                "line 2: "
+            };
+            let target = app.active_tab().document.text().find(label).unwrap() + label.len();
+            app.move_to(target, cx);
+        });
+        cx.run_until_parked();
+
+        let mut first_origin = None;
+        for preedit in ["n", "ni", "nih"] {
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    EntityInputHandler::replace_and_mark_text_in_range(
+                        app, None, preedit, None, window, cx,
+                    );
+                });
+            });
+            cx.run_until_parked();
+
+            let actual = cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    let tab = app.active_tab();
+                    let marked = tab.marked_range.clone().expect("active source preedit");
+                    let marked_start_utf16 = tab.offset_to_utf16(marked.start);
+                    let element_bounds = tab.last_bounds.expect("current source layout");
+                    let line_height = tab.line_height;
+                    let viewport = tab.editor_scroll.bounds();
+                    let actual = EntityInputHandler::bounds_for_range(
+                        app,
+                        marked_start_utf16..marked_start_utf16,
+                        element_bounds,
+                        window,
+                        cx,
+                    )
+                    .expect("source preedit should expose candidate geometry");
+                    (actual, line_height, viewport)
+                })
+            });
+            let (actual, line_height, viewport) = actual;
+
+            assert_eq!(actual.size.width, px(2.), "preedit={preedit}");
+            assert_eq!(actual.size.height, line_height, "preedit={preedit}");
+            assert!(
+                actual.top() >= viewport.top() && actual.top() < viewport.bottom(),
+                "typewriter={typewriter_mode} preedit={preedit}: candidate={actual:?} viewport={viewport:?}"
+            );
+            if let Some(origin) = first_origin {
+                assert_eq!(
+                    actual.origin, origin,
+                    "typewriter={typewriter_mode}: preedit growth moved the candidate anchor"
+                );
+            } else {
+                first_origin = Some(actual.origin);
+            }
+        }
+
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                EntityInputHandler::unmark_text(app, window, cx);
+            });
+        });
+    }
+}
+
+#[test]
 fn visual_extended_inline_styles_map_to_gpui_highlights() {
     let highlight = visual_highlight_style(
         InlineStyle {

@@ -18,6 +18,25 @@ pub(super) fn visual_ime_bounds(
     })
 }
 
+pub(super) fn source_ime_bounds(
+    start: Point<Pixels>,
+    end: Point<Pixels>,
+    line_height: Pixels,
+) -> Bounds<Pixels> {
+    // Wayland asks for the marked range's collapsed start so its candidate
+    // window remains fixed while preedit text grows. Preserve that anchor but
+    // never return the empty rectangle produced by two identical points:
+    // text-input-v3 compositors may treat an empty cursor rectangle as
+    // unspecified and fall back to the surface origin. For a cross-row range,
+    // first-rect semantics likewise use a caret at the range start.
+    let width = if start.y == end.y {
+        (end.x - start.x).max(px(2.))
+    } else {
+        px(2.)
+    };
+    Bounds::new(start, size(width, line_height))
+}
+
 impl EntityInputHandler for MarkionApp {
     fn text_for_range(
         &mut self,
@@ -547,7 +566,7 @@ impl EntityInputHandler for MarkionApp {
         let line_height = tab.line_height;
         let start = tab.layout_point_for_offset(range.start, bounds, line_height)?;
         let end = tab.layout_point_for_offset(range.end, bounds, line_height)?;
-        Some(Bounds::from_corners(start, end))
+        Some(source_ime_bounds(start, end, line_height))
     }
 
     fn character_index_for_point(
