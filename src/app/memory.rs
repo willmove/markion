@@ -307,6 +307,11 @@ impl MemoryFootprint for WorkspaceTab {
                 image.presentation_memory_bytes(),
                 vec![("claimed".into(), usize::from(image.claimed))],
             )],
+            WorkspaceTab::Pdf(pdf) => vec![MemorySite::owned(
+                "tab.pdf_viewer",
+                pdf.presentation_memory_bytes(),
+                vec![("pages".into(), pdf.pages.len())],
+            )],
         }
     }
 }
@@ -378,6 +383,25 @@ impl MemoryFootprint for PreviewImageCache {
                 ("completed_bytes".into(), completed_bytes),
                 ("budget_bytes".into(), budget_bytes),
                 ("data_payload_bytes".into(), data_payload_bytes),
+            ],
+        )]
+    }
+}
+
+impl MemoryFootprint for PdfPageCache {
+    fn memory_sites(&self) -> Vec<MemorySite> {
+        let (entries, pending, ready, errors, claims) = self.accounting_counts();
+        vec![MemorySite::owned(
+            "global.pdf_page_cache",
+            self.completed_bytes(),
+            vec![
+                ("entries".into(), entries),
+                ("pending".into(), pending),
+                ("ready".into(), ready),
+                ("errors".into(), errors),
+                ("claims".into(), claims),
+                ("completed_bytes".into(), self.completed_bytes()),
+                ("budget_bytes".into(), PDF_CACHE_MAX_BYTES),
             ],
         )]
     }
@@ -586,6 +610,23 @@ impl MarkionApp {
 
         let mut global_sites = Vec::new();
         global_sites.extend(self.preview_image_cache.memory_sites());
+        global_sites.extend(self.pdf_page_cache.memory_sites());
+        let combined_presentation_bytes = self
+            .preview_image_cache
+            .accounting_counts()
+            .3
+            .saturating_add(self.pdf_page_cache.completed_bytes());
+        global_sites.push(MemorySite::shared(
+            "global.combined_image_pdf_presentation",
+            combined_presentation_bytes,
+            vec![
+                (
+                    "image_bytes".into(),
+                    self.preview_image_cache.accounting_counts().3,
+                ),
+                ("pdf_bytes".into(), self.pdf_page_cache.completed_bytes()),
+            ],
+        ));
         global_sites.extend(self.diagram_cache.memory_sites());
         global_sites.extend(self.math_cache.memory_sites());
         global_sites.extend(highlight_cache_sites(&self.highlight_cache));

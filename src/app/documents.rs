@@ -234,6 +234,7 @@ impl MarkionApp {
             let _ = delete_recovery_file(recovery);
         }
         let active = self.active_tab;
+        self.close_tab_pdf_resources(active, cx);
         self.release_tab_image_claims(active, cx);
         if self.tabs.len() <= 1 {
             // Closing the last tab leaves a fresh untitled document.
@@ -608,6 +609,7 @@ impl MarkionApp {
                 let document = self.tabs[index].document.instance_id();
                 self.image_operations.invalidate_document(document);
             }
+            self.close_tab_pdf_resources(index, cx);
             self.release_tab_image_claims(index, cx);
             if let Some(state) = self.tabs[index].document_tab_mut()
                 && let Some(recovery) = state.last_recovery_file.take()
@@ -750,8 +752,16 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.active_tab().is_image() {
-            self.status = t(self.language, Msg::StatusImageActionUnavailable).into();
+        if self.active_tab().is_read_only() {
+            self.status = t(
+                self.language,
+                if self.active_tab().is_pdf() {
+                    Msg::StatusPdfActionUnavailable
+                } else {
+                    Msg::StatusImageActionUnavailable
+                },
+            )
+            .into();
             cx.notify();
             return;
         }

@@ -3470,6 +3470,7 @@ dependencies = [
  "markion-git-sync",
  "markion-html-import",
  "markion-pdf",
+ "markion-pdf-viewer",
  "miniz_oxide",
  "percent-encoding",
  "pulldown-cmark",
@@ -3557,7 +3558,7 @@ dependencies = [
 
 [[package]]
 name = "markion-pdf-viewer"
-version = "0.3.9"
+version = "0.3.12"
 dependencies = [
  "base64",
  "pdfium-render",

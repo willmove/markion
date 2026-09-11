@@ -14,7 +14,7 @@ use std::path::Path;
 
 use gpui::{AssetSource, Rgba, SharedString, Svg, prelude::*, px, svg};
 
-use markion::image_extension_supported;
+use markion::{image_extension_supported, is_pdf_path};
 
 /// Declares the icon set: variant name → `assets/icons/ui/<file>.svg`.
 ///
@@ -117,6 +117,7 @@ pub enum IconKind {
     Json,
     Markdown,
     Image,
+    Pdf,
     Config,
     File,
 }
@@ -151,6 +152,7 @@ pub fn icon_for(path: &Path, is_dir: bool) -> IconKind {
         "json" | "jsonc" => IconKind::Json,
         "md" | "markdown" => IconKind::Markdown,
         _ if image_extension_supported(path) => IconKind::Image,
+        _ if is_pdf_path(path) => IconKind::Pdf,
         "toml" | "yaml" | "yml" | "ini" => IconKind::Config,
         _ => IconKind::File,
     }
@@ -179,7 +181,7 @@ pub fn file_tree_icon(kind: IconKind, expanded: bool, file_color: Rgba, folder_c
         // Markdown keeps the "text document" glyph; plain-text files
         // (`.txt`/`.log`/`.csv`/…, which `icon_for` maps to `IconKind::File`)
         // get the plain file outline so the two are visually distinct.
-        IconKind::Markdown => (Icon::FileText, file_color),
+        IconKind::Markdown | IconKind::Pdf => (Icon::FileText, file_color),
         IconKind::File => (Icon::File, file_color),
         IconKind::Image => (Icon::FileImage, file_color),
         IconKind::Config => (Icon::FileCog, file_color),
@@ -229,6 +231,7 @@ mod tests {
                 IconKind::Image
             );
         }
+        assert_eq!(icon_for(Path::new("reference.PDF"), false), IconKind::Pdf);
         assert_eq!(icon_for(Path::new("unknown.xyz"), false), IconKind::File);
     }
 }

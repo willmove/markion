@@ -2886,6 +2886,9 @@ impl MarkionApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.confirm_pdf_page_input(cx) {
+            return;
+        }
         match self.search_focus {
             Some(SearchField::Git(_)) => {
                 self.save_git_settings(cx);
@@ -2916,6 +2919,9 @@ impl MarkionApp {
         }
         if self.link_editor.is_some() {
             self.confirm_link_editor(_window, cx);
+            return;
+        }
+        if self.active_tab().is_read_only() {
             return;
         }
         self.sync_slash_command_state(cx);
@@ -3158,6 +3164,9 @@ impl MarkionApp {
         if self.pop_text_input(cx) {
             return;
         }
+        if self.active_tab().is_read_only() {
+            return;
+        }
 
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && self.active_tab().selected_range.is_empty()
@@ -3221,6 +3230,9 @@ impl MarkionApp {
             return;
         }
         if self.pop_text_input(cx) {
+            return;
+        }
+        if self.active_tab().is_read_only() {
             return;
         }
 

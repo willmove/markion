@@ -46,7 +46,7 @@ pub(super) fn status_bar_context(
     view_mode: ViewMode,
     branch: Option<&str>,
 ) -> StatusBarContext {
-    if tab.is_image() {
+    if tab.is_read_only() {
         return StatusBarContext {
             characters: 0,
             words: 0,

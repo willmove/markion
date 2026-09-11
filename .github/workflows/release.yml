@@ -80,6 +80,28 @@ jobs:
             libvulkan-dev \
             libasound2-dev
 
+      - name: Verify PDF dependency features and notices
+        shell: pwsh
+        run: ./scripts/test-pdf-compliance.ps1
+
+      - name: Stage and test pinned target-only PDFium
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stageOutput = @(./scripts/stage-pdfium.ps1 -TargetTriple '${{ matrix.target }}')
+          $stage = $stageOutput[-1] | ConvertFrom-Json
+          $resourceRoot = Join-Path $PWD 'assets/pdfium'
+          if (Test-Path -LiteralPath $resourceRoot) {
+            throw 'The release source unexpectedly already contains assets/pdfium.'
+          }
+          New-Item -ItemType Directory -Path $resourceRoot | Out-Null
+          Copy-Item -LiteralPath $stage.runtime_path -Destination $resourceRoot
+          cargo run --release --locked -p markion-pdf-viewer --bin pdf-runtime-probe -- --runtime $stage.runtime_path
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned PDFium runtime probe failed.' }
+          $env:MARKION_PDFIUM_RUNTIME = $stage.runtime_path
+          cargo test --release --locked -p markion-pdf-viewer --test native_pdfium -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Native PDFium fixture matrix failed.' }
+
       # The public key is intentionally embedded only in the tagged Windows
       # binary. Untagged and local builds keep the browser-download path.
       - name: Configure updater public key for tagged builds
@@ -110,7 +132,7 @@ jobs:
       - name: Package (${{ matrix.formats }})
         run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }}
 
-      - name: Verify packaged MarkNice workspace (${{ matrix.formats }})
+      - name: Verify packaged workspace and PDF runtime (${{ matrix.formats }})
         shell: pwsh
         run: |
           '${{ matrix.formats }}'.Split(',') | ForEach-Object {
