@@ -115,7 +115,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Push-Location $env:MARKION_PDF_CONTROL
           try {
-            cargo build --release --locked
+            # The copied candidate lock contains the candidate root package's
+            # PDF dependency. Let Cargo reconcile only that root-package edge
+            # with the immutable PDF-disabled control manifest before locking
+            # every following command to the resulting versions.
+            cargo build --release
             if ($LASTEXITCODE -ne 0) { throw 'Control build failed.' }
             cargo run --release --locked -p wechat-workspace --bin verify-bundle -- assets/marknice-workspace
             if ($LASTEXITCODE -ne 0) { throw 'Control bundled-workspace verification failed.' }
