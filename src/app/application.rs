@@ -298,6 +298,11 @@ impl MarkionApp {
             highlight_cache: RefCell::new(HashMap::new()),
             diagram_cache: DiagramCache::new(DIAGRAM_CACHE_CAPACITY),
             preview_image_cache: PreviewImageCache::new(PREVIEW_IMAGE_CACHE_CAPACITY),
+            pdf_service: None,
+            pdf_service_error: None,
+            pdf_event_poll_scheduled: false,
+            pdf_page_cache: PdfPageCache::new(),
+            pdf_page_input: None,
             failed_data_uri_fingerprints: std::collections::HashSet::new(),
             #[cfg(test)]
             visual_field_projection_builds: std::cell::Cell::new(0),
@@ -362,8 +367,9 @@ impl MarkionApp {
             }
         }
         if previous != index {
-            if self.tabs[previous].is_document() && self.tabs[index].is_image() {
-                // Image viewing must not invalidate the document's derived
+            self.release_tab_pdf_claims(previous, cx);
+            if self.tabs[previous].is_document() && self.tabs[index].is_read_only() {
+                // Read-only viewing must not invalidate the document's derived
                 // Markdown caches. Only release its decoded-image claims.
                 self.release_tab_image_claims(previous, cx);
             } else {
@@ -377,6 +383,7 @@ impl MarkionApp {
             }
         }
         self.active_tab = index;
+        self.pdf_page_input = None;
         if previous != index {
             self.reveal_active_tab_in_strip();
         }
@@ -384,7 +391,7 @@ impl MarkionApp {
         self.slash_commands = None;
         self.dismissed_slash_query = None;
         self.dismiss_visual_block_menu();
-        if self.active_tab().is_image() {
+        if self.active_tab().is_read_only() {
             self.search_visible = false;
             self.replace_visible = false;
             self.search_focus = None;
@@ -758,7 +765,7 @@ impl MarkionApp {
     }
 
     pub(super) fn after_document_changed(&mut self, cx: &mut Context<Self>) {
-        if self.active_tab().is_image() {
+        if self.active_tab().is_read_only() {
             return;
         }
         if let Some(path) = self.active_tab().path() {
@@ -1173,7 +1180,7 @@ impl MarkionApp {
     }
 
     pub(super) fn discard_current_recovery_file(&mut self) {
-        if self.active_tab().is_image() {
+        if self.active_tab().is_read_only() {
             return;
         }
         if let Some(recovery) = self.active_tab_mut().last_recovery_file.take() {
@@ -1204,9 +1211,10 @@ impl MarkionApp {
         self.open_tab_in_new_tab(tab, cx);
     }
 
-    fn open_tab_in_new_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
+    pub(super) fn open_tab_in_new_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
         let previous = self.active_tab;
-        let opening_image = tab.is_image();
+        let opening_read_only = tab.is_read_only();
+        self.release_tab_pdf_claims(previous, cx);
         // Opening a new tab leaves the previous one inactive — same dormancy
         // policy as switch_active_tab.
         if self.tabs[previous].is_document() {
@@ -1215,7 +1223,7 @@ impl MarkionApp {
             self.tabs[previous].clear_visual_caret_affinity();
             self.tabs[previous].marked_range = None;
         }
-        if self.tabs[previous].is_document() && opening_image {
+        if self.tabs[previous].is_document() && opening_read_only {
             self.release_tab_image_claims(previous, cx);
         } else {
             let released = self.tabs[previous].enter_dormant();
@@ -1226,8 +1234,9 @@ impl MarkionApp {
         }
         self.tabs.push(tab);
         self.active_tab = self.tabs.len() - 1;
+        self.pdf_page_input = None;
         self.tab_context_menu = None;
-        if self.active_tab().is_image() {
+        if self.active_tab().is_read_only() {
             self.search_visible = false;
             self.replace_visible = false;
             self.search_focus = None;
@@ -1274,8 +1283,9 @@ impl MarkionApp {
         self.replace_active_with_tab(tab, cx);
     }
 
-    fn replace_active_with_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
+    pub(super) fn replace_active_with_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
         let active = self.active_tab;
+        self.close_tab_pdf_resources(active, cx);
         self.release_tab_image_claims(active, cx);
         if self.tabs[active].is_document()
             && let Some(recovery) = self.tabs[active].last_recovery_file.take()
@@ -1283,9 +1293,10 @@ impl MarkionApp {
             let _ = delete_recovery_file(recovery);
         }
         self.tabs[active] = tab;
+        self.pdf_page_input = None;
         // The replaced tab no longer exists; any menu targeting it is stale.
         self.tab_context_menu = None;
-        if self.active_tab().is_image() {
+        if self.active_tab().is_read_only() {
             self.search_visible = false;
             self.replace_visible = false;
             self.search_focus = None;
@@ -1444,7 +1455,7 @@ impl MarkionApp {
     }
 
     pub(super) fn schedule_autosave(&mut self, cx: &mut Context<Self>) {
-        if self.active_tab().is_image() {
+        if self.active_tab().is_read_only() {
             return;
         }
         // Bump the generation even when disabled so a pending timer from a
@@ -1487,7 +1498,7 @@ impl MarkionApp {
         let Some(tab) = self.tabs.get(active_index) else {
             return;
         };
-        if tab.is_image() || tab.autosave_generation != generation || !tab.document.is_dirty() {
+        if !tab.is_document() || tab.autosave_generation != generation || !tab.document.is_dirty() {
             return;
         }
 
@@ -2147,31 +2158,40 @@ impl MarkionApp {
             return Ok(());
         }
 
-        if image_extension_supported(&path) {
-            if !*replaced_initial && self.active_tab().is_safe_to_replace() {
-                self.replace_active_tab_with_image(path, cx);
-                *replaced_initial = true;
-            } else {
-                self.open_image_in_new_tab(path, cx);
+        match classify_supported_path(&path) {
+            Some(SupportedPathKind::Image) => {
+                if !*replaced_initial && self.active_tab().is_safe_to_replace() {
+                    self.replace_active_tab_with_image(path, cx);
+                    *replaced_initial = true;
+                } else {
+                    self.open_image_in_new_tab(path, cx);
+                }
+                Ok(())
             }
-            return Ok(());
-        }
-
-        if is_markdown_path(&path) || is_text_path(&path) {
-            let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
-            if !*replaced_initial
-                && !self.active_tab().is_dirty()
-                && self.active_tab().is_document()
-            {
-                self.replace_active_tab(document, cx);
-                *replaced_initial = true;
-            } else {
-                self.open_in_new_tab(document, cx);
+            Some(SupportedPathKind::Pdf) => {
+                if !*replaced_initial && self.active_tab().is_safe_to_replace() {
+                    self.replace_active_tab_with_pdf(path, cx);
+                    *replaced_initial = true;
+                } else {
+                    self.open_pdf_in_new_tab(path, cx);
+                }
+                Ok(())
             }
-            return Ok(());
+            Some(SupportedPathKind::Document) => {
+                let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
+                if !*replaced_initial
+                    && !self.active_tab().is_dirty()
+                    && self.active_tab().is_document()
+                {
+                    self.replace_active_tab(document, cx);
+                    *replaced_initial = true;
+                } else {
+                    self.open_in_new_tab(document, cx);
+                }
+                Ok(())
+            }
+            None => Err(format!("unsupported session path: {}", path.display())),
         }
-
-        Err(format!("unsupported session path: {}", path.display()))
     }
 
     /// Explicit workspace switch: snapshot current, close clean tabs, keep dirty
@@ -2226,12 +2246,7 @@ impl MarkionApp {
         let surviving: Vec<PathBuf> = snapshot
             .open_files
             .iter()
-            .filter(|path| {
-                path.is_file()
-                    && (is_markdown_path(path)
-                        || is_text_path(path)
-                        || image_extension_supported(path))
-            })
+            .filter(|path| path.is_file() && classify_supported_path(path).is_some())
             .cloned()
             .collect();
         let active_file = snapshot
@@ -2379,6 +2394,7 @@ impl MarkionApp {
             self.search_focus,
             Some(SearchField::Git(_) | SearchField::GitSetup(_) | SearchField::GitCommit)
         ) || self.pending_name_input.is_some()
+            || self.pdf_page_input.is_some()
             || self.link_editor.is_some()
             || self.file_tree_query_focused
             || (self.search_visible && self.search_control_focus.is_some())
@@ -2390,6 +2406,9 @@ impl MarkionApp {
                 .pending_name_input
                 .as_mut()
                 .map(|pending| &mut pending.buffer);
+        }
+        if self.pdf_page_input.is_some() {
+            return self.pdf_page_input.as_mut();
         }
         match self.link_editor.as_mut() {
             Some(editor) => Some(match editor.field {
@@ -2443,6 +2462,11 @@ impl MarkionApp {
             // The name prompt edits a single buffer; no search/tree filtering
             // runs while it is open.
             self.status = t(self.language, Msg::StatusNamingEntry).into();
+        } else if let Some(input) = self.pdf_page_input.as_mut() {
+            input.retain(|character| character.is_ascii_digit());
+            if input.len() > 6 {
+                input.truncate(6);
+            }
         } else if self.link_editor.is_some() {
             self.status = p0_t(self.language, P0Msg::EditingLink).into();
         } else if self.file_tree_query_focused {

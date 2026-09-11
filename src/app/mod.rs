@@ -44,33 +44,35 @@ use markion::{
     PdfPageSize, PreviewBlock, RecoveryInventoryEntry, RecoverySourceState, RichText,
     SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions, SearchPattern, SessionLayout,
     SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery,
-    TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor,
-    VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualHtmlImage, VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge,
-    VisualSourceIslandKind, WorkspaceSnapshot, adjacent_reorder_target, backend_status_msg,
-    block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
+    SupportedPathKind, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock,
+    VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField,
+    VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget, VisualProjection,
+    VisualQuoteGroupEdge, VisualSourceIslandKind, WorkspaceSnapshot, adjacent_reorder_target,
+    backend_status_msg, block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
     build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
-    builtin_theme_definitions, bundled_resource_path, check_path_state, data_uri_payload_ranges,
-    default_git_sync_policy_path, default_preferences_path, default_recovery_dir,
-    default_session_path, default_themes_dir, delete_block, delete_recovery_file,
-    diagram_backend_id, duplicate_block, elided_payload_token, highlight_code, html_preview_parts,
-    html_preview_plain_text, html_table_column_weights, html_table_grid_line_end,
-    html_table_row_has_visible_header, image_extension_supported, import_image_bytes,
-    import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
-    is_text_path, layout_rect_is_visible, list_theme_definitions, load_app_preferences,
-    load_recovery_file, load_session_state, markdown_reference, normalize_auto_save_delay_secs,
-    normalize_code_font_size, normalize_editor_font_size, normalize_heading_menu_max_level,
-    normalize_paragraph_spacing, normalize_rendered_font_size, organize_candidates, p0_t, p0_tf,
-    p1_t, p1_tf, pandoc_available, read_document_source, reorder_block, resolve_font_family,
-    resolve_html_img_display_size, save_app_preferences, save_session_state, save_text_snapshot,
-    save_theme_definition, serialize_inline_image, serialize_inline_link, shortcut_catalog,
-    sidebar_tab_label, slash_command_edit, slash_query_at, t, table_column_flex_weights, tf,
-    title_from_path, transform_block, validate_block_target, workspace_relative_path,
+    builtin_theme_definitions, bundled_resource_path, check_path_state, classify_supported_path,
+    data_uri_payload_ranges, default_git_sync_policy_path, default_preferences_path,
+    default_recovery_dir, default_session_path, default_themes_dir, delete_block,
+    delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
+    highlight_code, html_preview_parts, html_preview_plain_text, html_table_column_weights,
+    html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
+    import_image_bytes, import_image_file, inline_image_at, inline_link_at, inspect_recovery_files,
+    is_markdown_path, is_text_path, layout_rect_is_visible, list_theme_definitions,
+    load_app_preferences, load_recovery_file, load_session_state, markdown_reference,
+    normalize_auto_save_delay_secs, normalize_code_font_size, normalize_editor_font_size,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    organize_candidates, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, read_document_source,
+    reorder_block, resolve_font_family, resolve_html_img_display_size, save_app_preferences,
+    save_session_state, save_text_snapshot, save_theme_definition, serialize_inline_image,
+    serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
+    t, table_column_flex_weights, tf, title_from_path, transform_block, validate_block_target,
+    workspace_relative_path,
 };
 use markion_git_sync::{
     BackgroundFetchScheduler, ExclusiveAdmission, GitOperationRegistry, PolicyStore, ReadEpoch,
     WriteAdmission,
 };
+use markion_pdf_viewer::{DocumentId, Generation, PageGeometry, PdfErrorKind, RequestId};
 use unicode_segmentation::UnicodeSegmentation;
 
 actions!(
@@ -2185,6 +2187,7 @@ pub(super) mod layout;
 mod math_render;
 mod memory;
 mod network;
+mod pdf_viewer;
 mod preview;
 mod preview_image;
 mod process_memory;
@@ -2219,6 +2222,7 @@ use bootstrap::{bind_app_keys, install_menus};
 use diagram::*;
 use editor_element::EditorElement;
 use math_render::*;
+use pdf_viewer::*;
 use preview::*;
 use preview_image::*;
 use process_memory::*;
@@ -2469,6 +2473,15 @@ struct MarkionApp {
     diagram_cache: DiagramCache,
     /// Decoded Markdown preview images owned by Markion (not GPUI loading_assets).
     preview_image_cache: PreviewImageCache,
+    /// Native PDF service is initialized lazily on the first interactive PDF
+    /// open, so ordinary Markdown startup does not load PDFium.
+    pdf_service: Option<markion_pdf_viewer::PdfService>,
+    pdf_service_error: Option<PdfErrorKind>,
+    pdf_event_poll_scheduled: bool,
+    pdf_page_cache: PdfPageCache,
+    /// Transient numeric page-entry buffer for the active PDF toolbar.
+    /// It is never persisted and is cleared on tab changes.
+    pdf_page_input: Option<String>,
     /// SHA-256 identities of data-URI destinations whose decode failed.
     /// The image source toggle matches against this set to force the payload
     /// editor visible without re-deriving a multi-megabyte cache key per

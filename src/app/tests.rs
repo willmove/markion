@@ -7,6 +7,7 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 // here (rather than in `mod.rs`) so non-test release builds stay warning-free
 // under `-D warnings`.
 use markion::{FileTreeFileKind, ThemeFonts};
+use markion_pdf_viewer::{PageRaster, PdfEvent, RenderPriority, RenderRequest};
 
 fn assert_visual_typewriter_frames(
     app: &Entity<MarkionApp>,
@@ -1319,6 +1320,25 @@ fn interactive_image_open_does_not_change_external_drop_import_semantics() {
     assert_eq!(
         classify_external_drop_path(Path::new("notes.txt")),
         ExternalDropIntent::Ignore
+    );
+    assert_eq!(
+        classify_external_drop_path(Path::new("reference.PDF")),
+        ExternalDropIntent::Ignore,
+        "interactive PDF support must not broaden OS external-drop opening"
+    );
+}
+
+#[test]
+fn cli_startup_still_rejects_pdf_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let pdf = temp.path().join("reference.PdF");
+    fs::write(&pdf, b"%PDF-1.7\n").unwrap();
+    assert_eq!(
+        StartupOpenIntent::from_path(pdf.clone()),
+        StartupOpenIntent::Invalid {
+            path: pdf,
+            reason: StartupOpenInvalidReason::UnsupportedFile,
+        }
     );
 }
 
@@ -10276,6 +10296,433 @@ fn image_tabs_share_path_identity_without_dirty_document_state() {
     assert_eq!(find_tab_with_document_path(&tabs, &path), Some(0));
 }
 
+#[test]
+fn pdf_tabs_keep_only_read_only_presentation_state() {
+    let path = PathBuf::from("docs/Reference.PDF");
+    let tab = EditorTab::new_pdf(path.clone(), RequestId(41));
+    assert!(tab.is_pdf());
+    assert!(tab.is_read_only());
+    assert!(!tab.is_image());
+    assert!(!tab.is_document());
+    assert!(!tab.is_dirty());
+    assert!(!tab.requires_discard_confirmation());
+    assert!(tab.is_safe_to_replace());
+    assert_eq!(tab.path(), Some(path.as_path()));
+    assert_eq!(tab.focus_identity(), Some(comparable_document_path(&path)));
+    assert!(tab.document_tab().is_none());
+    assert!(tab.image().is_none());
+    let pdf = tab.pdf().expect("PDF-specific state");
+    assert_eq!(pdf.request_id, RequestId(41));
+    assert_eq!(pdf.document_id, None);
+    assert_eq!(pdf.generation, Generation(1));
+    assert!(pdf.pages.is_empty());
+    assert_eq!(pdf.zoom, PdfZoomMode::FitWidth);
+    assert_eq!(pdf.current_page, 0);
+    assert_eq!(pdf.load_state, PdfLoadState::Loading);
+}
+
+#[gpui::test]
+fn pdf_interactive_router_honors_target_dedupes_and_preserves_dirty_document(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let pdf_path = dir.path().join("Reference.PdF");
+    fs::write(&pdf_path, b"%PDF-1.7\n").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = config_dir.path().join("config.toml");
+        app.pdf_service_error = Some(PdfErrorKind::RuntimeMissing);
+        app.open_in_current_tab = true;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("unsaved draft");
+        let cached = app.active_tab().document.preview_blocks_shared();
+        let instance = app.active_tab().document.instance_id();
+        app.open_tree_file_confirmed(pdf_path.clone(), cx);
+        assert_eq!(app.tabs.len(), 2, "dirty document must not be replaced");
+        assert!(app.active_tab().is_pdf());
+        assert_eq!(app.active_tab().path(), Some(pdf_path.as_path()));
+        assert_eq!(
+            app.active_tab().pdf().unwrap().load_state,
+            PdfLoadState::Error(PdfErrorKind::RuntimeMissing)
+        );
+        assert_eq!(app.tabs[0].document.instance_id(), instance);
+        assert_eq!(app.tabs[0].document.text(), "unsaved draft");
+        assert!(Arc::ptr_eq(
+            &cached,
+            &app.tabs[0].document.preview_blocks_shared()
+        ));
+        assert_eq!(
+            app.session.recent_files.first(),
+            Some(&comparable_document_path(&pdf_path))
+        );
+
+        app.switch_active_tab(0, cx);
+        app.open_file_in_new_tab_from_path(pdf_path.clone(), cx);
+        assert_eq!(
+            app.tabs.len(),
+            2,
+            "duplicate PDF path focuses its existing tab"
+        );
+        assert!(app.active_tab().is_pdf());
+        assert_eq!(app.active_tab().path(), Some(pdf_path.as_path()));
+        assert_eq!(app.tabs[0].document.instance_id(), instance);
+        assert!(Arc::ptr_eq(
+            &cached,
+            &app.tabs[0].document.preview_blocks_shared()
+        ));
+    });
+}
+
+#[test]
+fn restorable_sessions_include_pdf_without_pdf_specific_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("workspace");
+    fs::create_dir(&root).unwrap();
+    let pdf = root.join("manual.PDF");
+    let image = root.join("cover.png");
+    let binary = root.join("archive.bin");
+    fs::write(&pdf, b"%PDF-1.7\n").unwrap();
+    fs::write(&image, b"image").unwrap();
+    fs::write(&binary, b"binary").unwrap();
+    let session = SessionState {
+        workspace_root: Some(root.clone()),
+        open_files: vec![pdf.clone(), image.clone(), binary],
+        active_file: Some(pdf.clone()),
+        ..SessionState::default()
+    };
+    let (restored_root, open_files, active) = filter_restorable_session(&session);
+    assert_eq!(restored_root, Some(root));
+    assert_eq!(open_files, vec![pdf.clone(), image]);
+    assert_eq!(active, Some(pdf));
+}
+
+#[gpui::test]
+fn pdf_tabs_follow_workspace_rename_move_and_delete_lifecycle(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let archive = root.join("archive");
+    fs::create_dir(&archive).unwrap();
+    let original = root.join("manual.PDF");
+    fs::write(&original, b"%PDF-1.7\n").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.tabs = vec![EditorTab::new_pdf(original.clone(), RequestId(9))];
+        app.selected_tree_path = Some(original.clone());
+        app
+    });
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.rename_tree_entry(&RenameTreeEntry, window, cx);
+            let pending = app.pending_name_input.as_mut().expect("rename prompt");
+            pending.buffer = "renamed.pdf".to_string();
+            pending.cursor = pending.buffer.len();
+            pending.anchor = pending.cursor;
+            app.confirm_pending_name(&ConfirmPendingName, window, cx);
+        });
+    });
+    let renamed = root.join("renamed.pdf");
+    app.update(cx, |app, _| {
+        assert!(renamed.is_file());
+        assert!(!original.exists());
+        assert_eq!(app.active_tab().path(), Some(renamed.as_path()));
+        assert!(app.active_tab().is_pdf());
+    });
+
+    app.update(cx, |app, cx| {
+        app.handle_file_tree_drop(&renamed, &archive, cx)
+    });
+    let moved = archive.join("renamed.pdf");
+    app.update(cx, |app, _| {
+        assert!(moved.is_file());
+        assert!(!renamed.exists());
+        assert_eq!(app.active_tab().path(), Some(moved.as_path()));
+        assert!(app.active_tab().is_pdf());
+        app.selected_tree_path = Some(moved.clone());
+    });
+
+    let delete_label = app.update(cx, |app, _| {
+        t(app.language, Msg::DialogButtonDelete).to_string()
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.delete_tree_entry(&DeleteTreeEntry, window, cx)
+        });
+    });
+    cx.simulate_prompt_answer(&delete_label);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(!moved.exists());
+        assert!(app.active_tab().is_document());
+        assert!(app.active_tab().path().is_none());
+    });
+}
+
+#[gpui::test]
+fn pdf_memory_diagnostics_count_tab_pending_ready_and_combined_presentation_bytes(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new_pdf(
+            PathBuf::from("reference.pdf"),
+            RequestId(5),
+        )];
+        let pending = PdfPageKey {
+            document_id: DocumentId(1),
+            generation: Generation(1),
+            page_index: 0,
+            width_bucket_px: 64,
+        };
+        app.pdf_page_cache.claim(pending);
+        assert!(app.pdf_page_cache.reserve_pending(pending));
+        let ready_key = PdfPageKey {
+            page_index: 1,
+            ..pending
+        };
+        app.pdf_page_cache.claim(ready_key);
+        assert!(app.pdf_page_cache.reserve_pending(ready_key));
+        let buffer = image::RgbaImage::from_raw(2, 2, vec![0; 16]).unwrap();
+        let ready = PdfPageReady {
+            image: Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])),
+            byte_len: 16,
+            width_px: 2,
+            height_px: 2,
+        };
+        assert!(app.pdf_page_cache.complete(ready_key, ready).is_empty());
+        app
+    });
+
+    app.update(cx, |app, _| {
+        let report = app.memory_report();
+        let tab = report
+            .find_site("tabs[0].pdf_viewer")
+            .expect("PDF tab state site");
+        assert!(tab.estimated_bytes > 0);
+        let pdf = report
+            .find_site("global.pdf_page_cache")
+            .expect("PDF raster cache site");
+        assert_eq!(
+            pdf.counts
+                .iter()
+                .find(|(name, _)| name == "pending")
+                .map(|(_, count)| *count),
+            Some(1)
+        );
+        assert_eq!(
+            pdf.counts
+                .iter()
+                .find(|(name, _)| name == "ready")
+                .map(|(_, count)| *count),
+            Some(1)
+        );
+        assert_eq!(pdf.estimated_bytes, 16);
+        let combined = report
+            .find_site("global.combined_image_pdf_presentation")
+            .expect("combined presentation site");
+        assert_eq!(combined.estimated_bytes, 16);
+        assert_eq!(
+            combined.contributes_bytes(),
+            0,
+            "summary must not double count"
+        );
+    });
+}
+
+fn ready_pdf_tab(path: PathBuf, request_id: u64, pages: &[PageGeometry]) -> EditorTab {
+    let mut tab = EditorTab::new_pdf(path, RequestId(request_id));
+    let pdf = tab.pdf_mut().unwrap();
+    pdf.document_id = Some(DocumentId(request_id));
+    pdf.pages = Arc::from(pages.to_vec());
+    pdf.page_list.reset(pdf.pages.len());
+    pdf.load_state = PdfLoadState::Ready;
+    tab
+}
+
+#[gpui::test]
+fn pdf_surface_progressively_replaces_loading_pages_and_releases_pending_on_close(
+    cx: &mut TestAppContext,
+) {
+    let pages = [
+        PageGeometry::new(320.0, 420.0).unwrap(),
+        PageGeometry::new(420.0, 320.0).unwrap(),
+        PageGeometry::new(300.0, 500.0).unwrap(),
+    ];
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![ready_pdf_tab(PathBuf::from("mixed.pdf"), 17, &pages)];
+        app
+    });
+    cx.simulate_resize(size(px(760.), px(680.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("pdf-tab-surface").is_some());
+    assert!(cx.debug_bounds("pdf-page-input").is_some());
+    assert!(cx.debug_bounds("pdf-page-row-0").is_some());
+    assert!(cx.debug_bounds("pdf-page-loading-0").is_some());
+
+    let request = app.update(cx, |app, _| {
+        let key = app
+            .active_tab()
+            .pdf()
+            .unwrap()
+            .claimed_pages
+            .iter()
+            .find(|key| key.page_index == 0)
+            .copied()
+            .expect("first visible page is claimed");
+        RenderRequest {
+            document_id: key.document_id,
+            generation: key.generation,
+            page_index: key.page_index,
+            target_width_px: key.width_bucket_px,
+            priority: RenderPriority::Visible,
+        }
+    });
+    app.update(cx, |app, cx| {
+        app.apply_pdf_event(
+            PdfEvent::PageReady {
+                request,
+                raster: PageRaster::new(32, 42, vec![255; 32 * 42 * 4]).unwrap(),
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("pdf-page-ready-0").is_some());
+
+    app.update(cx, |app, cx| {
+        app.apply_pdf_event(
+            PdfEvent::PageFailed {
+                request,
+                error: PdfErrorKind::PageUnavailable,
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("pdf-page-error-0").is_some());
+
+    app.update(cx, |app, _| {
+        assert_eq!(app.pdf_page_cache.completed_bytes(), 0);
+        assert!(app.pdf_page_cache.pending_count() > 0);
+    });
+    cx.dispatch_action(CloseTab);
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().is_document());
+        assert_eq!(app.pdf_page_cache.pending_count(), 0);
+        assert_eq!(app.pdf_page_cache.completed_bytes(), 0);
+    });
+}
+
+#[gpui::test]
+fn stale_pdf_completion_is_dropped_and_replace_releases_pending_claims(cx: &mut TestAppContext) {
+    let page = PageGeometry::new(600.0, 800.0).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![ready_pdf_tab(PathBuf::from("stale.pdf"), 31, &[page])];
+        app
+    });
+    app.update(cx, |app, cx| {
+        app.prepare_pdf_surface(px(700.), 1.0, cx);
+        let old = *app
+            .active_tab()
+            .pdf()
+            .unwrap()
+            .claimed_pages
+            .iter()
+            .next()
+            .unwrap();
+        app.invalidate_pdf_generation(0, cx);
+        app.apply_pdf_event(
+            PdfEvent::PageReady {
+                request: RenderRequest {
+                    document_id: old.document_id,
+                    generation: old.generation,
+                    page_index: old.page_index,
+                    target_width_px: old.width_bucket_px,
+                    priority: RenderPriority::Visible,
+                },
+                raster: PageRaster::new(4, 4, vec![255; 64]).unwrap(),
+            },
+            cx,
+        );
+        assert_eq!(app.pdf_page_cache.completed_bytes(), 0);
+        assert_eq!(app.pdf_page_cache.pending_count(), 0);
+
+        app.schedule_pdf_visible_range(0, 0..1, cx);
+        assert!(app.pdf_page_cache.pending_count() > 0);
+        app.replace_active_tab(MarkdownDocument::from_text("replacement"), cx);
+        assert!(app.active_tab().is_document());
+        assert_eq!(app.pdf_page_cache.pending_count(), 0);
+        assert_eq!(app.pdf_page_cache.completed_bytes(), 0);
+    });
+}
+
+#[gpui::test]
+fn pdf_page_entry_zoom_bounds_and_fit_width_resize_are_validated(cx: &mut TestAppContext) {
+    let pages = [PageGeometry::new(600.0, 800.0).unwrap(); 5];
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![ready_pdf_tab(PathBuf::from("pages.pdf"), 23, &pages)];
+        app
+    });
+    cx.simulate_resize(size(px(800.), px(700.)));
+    cx.run_until_parked();
+
+    let page_input = cx.debug_bounds("pdf-page-input").expect("page input");
+    cx.simulate_click(page_input.center(), Modifiers::none());
+    app.update(cx, |app, cx| app.push_text_input("3", cx));
+    cx.dispatch_action(InsertNewline);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().pdf().unwrap().current_page, 2);
+        assert!(app.pdf_page_input.is_none());
+    });
+
+    let page_input = cx
+        .debug_bounds("pdf-page-input")
+        .expect("page input after jump");
+    cx.simulate_click(page_input.center(), Modifiers::none());
+    app.update(cx, |app, cx| app.push_text_input("99", cx));
+    cx.dispatch_action(InsertNewline);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().pdf().unwrap().current_page, 2);
+        assert_eq!(app.pdf_page_input.as_deref(), Some("99"));
+        assert_eq!(app.status, t(app.language, Msg::PdfPageInvalid));
+    });
+    cx.dispatch_action(ClearFileTreeSearch);
+
+    app.update(cx, |app, cx| {
+        app.set_pdf_zoom(PdfZoomMode::numeric(25.0), cx);
+        app.step_pdf_zoom(-100.0, cx);
+        assert_eq!(app.active_tab().pdf().unwrap().zoom.percent(), Some(25.0));
+        app.set_pdf_zoom(PdfZoomMode::numeric(400.0), cx);
+        app.step_pdf_zoom(100.0, cx);
+        assert_eq!(app.active_tab().pdf().unwrap().zoom.percent(), Some(400.0));
+        app.set_pdf_zoom(PdfZoomMode::FitWidth, cx);
+        let before = app.active_tab().pdf().unwrap().generation;
+        app.prepare_pdf_surface(px(900.), 1.0, cx);
+        assert!(app.active_tab().pdf().unwrap().generation.0 > before.0);
+        app.set_pdf_zoom(PdfZoomMode::numeric(100.0), cx);
+        let numeric = app.active_tab().pdf().unwrap().generation;
+        app.prepare_pdf_surface(px(920.), 1.0, cx);
+        assert_eq!(app.active_tab().pdf().unwrap().generation, numeric);
+        app.schedule_pdf_visible_range(0, 4..5, cx);
+        assert_eq!(app.active_tab().pdf().unwrap().current_page, 4);
+    });
+}
+
 #[gpui::test]
 fn git_image_only_reconciliation_releases_image_bytes_without_rebuilding_markdown(
     cx: &mut TestAppContext,
@@ -10990,6 +11437,85 @@ fn image_tabs_disable_document_shortcuts_and_menus_and_close_without_a_prompt(
         assert_eq!(app.tabs.len(), 1);
         assert!(app.active_tab().is_document());
         assert_eq!(app.preview_image_cache.claim_count(&key), 0);
+    });
+}
+
+#[gpui::test]
+fn pdf_tabs_disable_document_input_shortcuts_and_menus_without_touching_document_state(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let pdf_path = dir.path().join("reference.pdf");
+    fs::write(&pdf_path, b"%PDF-1.7\n").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let document = EditorTab::new(MarkdownDocument::from_text("preserved"));
+        let pdf = EditorTab::new_pdf(pdf_path.clone(), RequestId(7));
+        app.tabs = vec![document, pdf];
+        app.active_tab = 1;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    let (version, instance, preview, status_before) = app.update(cx, |app, cx| {
+        let version = app.tabs[0].document.version();
+        let instance = app.tabs[0].document.instance_id();
+        let preview = app.tabs[0].document.preview_blocks_shared();
+        app.active_menu = Some(AppMenu::Edit);
+        cx.notify();
+        (version, instance, preview, app.status.clone())
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("pdf-document-actions-unavailable")
+            .is_some(),
+        "PDF tabs should replace document commands with a localized unavailable row"
+    );
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let mut actual = None;
+            assert_eq!(
+                EntityInputHandler::text_for_range(app, 0..0, &mut actual, window, cx),
+                None
+            );
+            assert!(EntityInputHandler::selected_text_range(app, false, window, cx).is_none());
+            assert_eq!(EntityInputHandler::marked_text_range(app, window, cx), None);
+            EntityInputHandler::replace_text_in_range(app, None, "ignored", window, cx);
+            EntityInputHandler::replace_and_mark_text_in_range(
+                app, None, "ignored", None, window, cx,
+            );
+            EntityInputHandler::unmark_text(app, window, cx);
+        });
+    });
+    cx.dispatch_action(Undo);
+    cx.dispatch_action(ShowFind);
+    cx.dispatch_action(SaveDocument);
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().is_pdf());
+        assert_eq!(app.status, status_before);
+        assert!(!app.search_visible);
+        assert_eq!(app.tabs[0].document.instance_id(), instance);
+        assert_eq!(app.tabs[0].document.version(), version);
+        assert_eq!(app.tabs[0].document.text(), "preserved");
+        assert!(Arc::ptr_eq(
+            &preview,
+            &app.tabs[0].document.preview_blocks_shared()
+        ));
+    });
+
+    cx.dispatch_action(CloseTab);
+    app.update(cx, |app, _| {
+        assert_eq!(app.tabs.len(), 1);
+        assert!(app.active_tab().is_document());
+        assert_eq!(app.active_tab().document.instance_id(), instance);
+        assert!(Arc::ptr_eq(
+            &preview,
+            &app.active_tab().document.preview_blocks_shared()
+        ));
     });
 }
 

@@ -45,10 +45,19 @@ impl EntityInputHandler for MarkionApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
+        if let Some(input) = self.pdf_page_input.as_ref() {
+            let start = range_utf16.start.min(input.len());
+            let end = range_utf16.end.max(start).min(input.len());
+            actual_range.replace(start..end);
+            return input.get(start..end).map(ToString::to_string);
+        }
         if let Some(field) = self.focused_search_field() {
             let range = field.range_from_utf16(range_utf16);
             actual_range.replace(field.byte_to_utf16(range.start)..field.byte_to_utf16(range.end));
             return field.buffer.get(range).map(ToString::to_string);
+        }
+        if self.active_tab().is_read_only() {
+            return None;
         }
         let tab = self.active_tab();
         let range = tab.range_from_utf16(&range_utf16)?;
@@ -66,12 +75,21 @@ impl EntityInputHandler for MarkionApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if let Some(input) = self.pdf_page_input.as_ref() {
+            return Some(UTF16Selection {
+                range: input.len()..input.len(),
+                reversed: false,
+            });
+        }
         if let Some(field) = self.focused_search_field() {
             let range = field.selection();
             return Some(UTF16Selection {
                 range: field.byte_to_utf16(range.start)..field.byte_to_utf16(range.end),
                 reversed: field.cursor < field.anchor,
             });
+        }
+        if self.active_tab().is_read_only() {
+            return None;
         }
         let tab = self.active_tab();
         let selected_range = tab.safe_selected_range();
@@ -88,11 +106,20 @@ impl EntityInputHandler for MarkionApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
+        if let Some(input) = self.pdf_page_input.as_ref() {
+            let start = input
+                .len()
+                .saturating_sub(self.input_marked_len.min(input.len()));
+            return (start < input.len()).then_some(start..input.len());
+        }
         if let Some(field) = self.focused_search_field() {
             return field
                 .marked_range
                 .as_ref()
                 .map(|range| field.byte_to_utf16(range.start)..field.byte_to_utf16(range.end));
+        }
+        if self.active_tab().is_read_only() {
+            return None;
         }
         let tab = self.active_tab();
         tab.marked_range
@@ -102,9 +129,18 @@ impl EntityInputHandler for MarkionApp {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        if self.pdf_page_input.is_some() {
+            self.input_marked_len = 0;
+            return;
+        }
         if let Some(field) = self.focused_search_field_mut() {
             field.marked_range = None;
             self.input_marked_len = 0;
+            return;
+        }
+        if self.active_tab().is_read_only() {
+            self.input_marked_len = 0;
+            self.ime_input_target = None;
             return;
         }
         let tab = self.active_tab_mut();
@@ -128,6 +164,9 @@ impl EntityInputHandler for MarkionApp {
         }
         if self.has_text_input_focus() {
             self.push_text_input(new_text, cx);
+            return;
+        }
+        if self.active_tab().is_read_only() {
             return;
         }
 
@@ -341,6 +380,9 @@ impl EntityInputHandler for MarkionApp {
             self.insert_redirected_text(new_text, true, cx);
             return;
         }
+        if self.active_tab().is_read_only() {
+            return;
+        }
 
         if self.active_git_path_locked() {
             self.status = self.git_label(GitMsg::Busy).into();
@@ -543,6 +585,9 @@ impl EntityInputHandler for MarkionApp {
                 point(right.max(left + px(2.)), field_bounds.bottom() - px(4.)),
             ));
         }
+        if self.active_tab().is_read_only() {
+            return None;
+        }
         self.note_document_input_target();
         let tab = self.active_tab();
         if matches!(self.view_mode, ViewMode::VisualEdit) {
@@ -597,6 +642,9 @@ impl EntityInputHandler for MarkionApp {
                 byte += ch.len_utf8();
             }
             return Some(field.byte_to_utf16(byte));
+        }
+        if self.active_tab().is_read_only() {
+            return None;
         }
         let tab = self.active_tab();
         if tab.last_lines.is_empty() {

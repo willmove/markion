@@ -16,8 +16,10 @@ impl Render for MarkionApp {
             tab.visual_frame_generation = tab.visual_frame_generation.wrapping_add(1);
             tab.visual_last_caret_paint = None;
         }
+        let active_is_document = self.active_tab().is_document();
         let active_is_image = self.active_tab().is_image();
-        if active_is_image {
+        let active_is_pdf = self.active_tab().is_pdf();
+        if !active_is_document {
             self.slash_commands = None;
             self.dismissed_slash_query = None;
         } else {
@@ -30,32 +32,33 @@ impl Render for MarkionApp {
         // keystroke and, on large documents, is the dominant per-key cost
         // (~4ms at 100 KB, ~25ms at 600 KB); paying it while nothing renders it
         // is pure waste. Split/Read still parse eagerly as before.
-        let preview_blocks: std::sync::Arc<Vec<PreviewBlock>> =
-            if active_is_image || matches!(self.view_mode, ViewMode::Edit | ViewMode::VisualEdit) {
-                std::sync::Arc::new(Vec::new())
-            } else {
-                // Debounced: mid-typing renders reuse the previous parse and a
-                // timer re-renders once typing settles (see PREVIEW_DEBOUNCE).
-                // The parse itself runs on a background thread and lands via
-                // spawn_preview_parse, so it never stalls a frame.
-                let blocks = self.preview_blocks_debounced(cx);
-                // Fold the blocks into the virtualized preview list (splices
-                // only the changed range, preserving scroll; a reused Arc is a
-                // pointer-compare no-op).
-                self.active_tab_mut().sync_preview_list(&blocks);
-                if self.search_visible
-                    && matches!(self.view_mode, ViewMode::Read)
-                    && matches!(self.search_result, SearchResultState::PendingPreview)
-                    && self.active_tab().preview_reflects_version
-                        == Some(self.active_tab().document.version())
-                {
-                    self.search_generation = None;
-                    self.refresh_search_matches();
-                }
-                blocks
-            };
+        let preview_blocks: std::sync::Arc<Vec<PreviewBlock>> = if !active_is_document
+            || matches!(self.view_mode, ViewMode::Edit | ViewMode::VisualEdit)
+        {
+            std::sync::Arc::new(Vec::new())
+        } else {
+            // Debounced: mid-typing renders reuse the previous parse and a
+            // timer re-renders once typing settles (see PREVIEW_DEBOUNCE).
+            // The parse itself runs on a background thread and lands via
+            // spawn_preview_parse, so it never stalls a frame.
+            let blocks = self.preview_blocks_debounced(cx);
+            // Fold the blocks into the virtualized preview list (splices
+            // only the changed range, preserving scroll; a reused Arc is a
+            // pointer-compare no-op).
+            self.active_tab_mut().sync_preview_list(&blocks);
+            if self.search_visible
+                && matches!(self.view_mode, ViewMode::Read)
+                && matches!(self.search_result, SearchResultState::PendingPreview)
+                && self.active_tab().preview_reflects_version
+                    == Some(self.active_tab().document.version())
+            {
+                self.search_generation = None;
+                self.refresh_search_matches();
+            }
+            blocks
+        };
         let visual_blocks: std::sync::Arc<Vec<VisualBlock>> =
-            if !active_is_image && matches!(self.view_mode, ViewMode::VisualEdit) {
+            if active_is_document && matches!(self.view_mode, ViewMode::VisualEdit) {
                 let blocks = self.active_tab().document.visual_blocks_shared();
                 self.active_tab_mut().sync_visual_list(&blocks);
                 let padding_changed = self.active_tab_mut().refresh_visual_end_padding();
@@ -80,7 +83,7 @@ impl Render for MarkionApp {
             } else {
                 std::sync::Arc::new(Vec::new())
             };
-        let document_dir = (!active_is_image)
+        let document_dir = active_is_document
             .then(|| self.active_tab().document.path())
             .flatten()
             .and_then(Path::parent)
@@ -88,7 +91,7 @@ impl Render for MarkionApp {
         let active_tab = self.active_tab;
         if let Some(key) = self.active_tab().image().map(|image| image.key.clone()) {
             self.ensure_image_tab(active_tab, key, cx);
-        } else {
+        } else if active_is_document {
             self.refresh_tab_image_claims(
                 active_tab,
                 &preview_blocks,
@@ -116,7 +119,7 @@ impl Render for MarkionApp {
         }
         // Source-mapped Split Preview coupling runs after the list reflects the
         // current debounced blocks and before scrollbar thumbs read offsets.
-        if !active_is_image {
+        if active_is_document {
             let entity = cx.entity();
             self.active_tab()
                 .preview_list
@@ -137,7 +140,7 @@ impl Render for MarkionApp {
                 Msg::TitleSaved
             },
         );
-        let status_feedback = if active_is_image {
+        let status_feedback = if !active_is_document {
             self.status.to_string()
         } else {
             status_bar_feedback(save_state, self.status.as_ref())
@@ -237,7 +240,10 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::next_tab))
             .on_action(cx.listener(Self::prev_tab))
             .on_action(cx.listener(Self::report_memory))
-            .when(!active_is_image, |root| {
+            .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::insert_newline))
+            .when(active_is_document, |root| {
                 root.on_action(cx.listener(Self::save_document))
                     .on_action(cx.listener(Self::save_document_as))
                     .on_action(cx.listener(Self::export_html))
@@ -266,8 +272,6 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::replace_all_matches))
                     .on_action(cx.listener(Self::toggle_find_case_sensitive))
                     .on_action(cx.listener(Self::toggle_find_regex))
-                    .on_action(cx.listener(Self::backspace))
-                    .on_action(cx.listener(Self::delete))
                     .on_action(cx.listener(Self::left))
                     .on_action(cx.listener(Self::right))
                     .on_action(cx.listener(Self::up))
@@ -279,7 +283,6 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::select_all))
                     .on_action(cx.listener(Self::home))
                     .on_action(cx.listener(Self::end))
-                    .on_action(cx.listener(Self::insert_newline))
                     .on_action(cx.listener(Self::search_previous_or_newline))
                     .on_action(cx.listener(Self::indent))
                     .on_action(cx.listener(Self::outdent))
@@ -436,7 +439,10 @@ impl Render for MarkionApp {
                             .when(active_is_image, |column| {
                                 column.child(image_tab_view(self, palette, window.viewport_size()))
                             })
-                            .when(!active_is_image, |column| {
+                            .when(active_is_pdf, |column| {
+                                column.child(pdf_tab_view(self, palette, window, cx))
+                            })
+                            .when(active_is_document, |column| {
                                 column.child(
                                 div()
                                     .id("main-content-row")
@@ -734,7 +740,7 @@ impl Render for MarkionApp {
                                         .child(branch),
                                 )
                             })
-                            .when(!active_is_image, |row| {
+                            .when(active_is_document, |row| {
                                 row.when(has_status_branch, |row| row.child("|"))
                                     .child(status_characters)
                                     .child("|")
@@ -750,7 +756,12 @@ impl Render for MarkionApp {
                 self.language,
                 self.heading_menu_max_level,
                 &self.shortcut_overrides,
-                !active_is_image,
+                active_is_document,
+                if active_is_pdf {
+                    Msg::StatusPdfActionUnavailable
+                } else {
+                    Msg::StatusImageActionUnavailable
+                },
                 self.docx_import.is_running(),
                 palette,
                 cx,
@@ -1236,6 +1247,285 @@ fn image_tab_view(
         .overflow_y_scroll()
         .track_scroll(&image_tab.scroll)
         .child(content)
+}
+
+fn pdf_toolbar_button(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    tooltip: impl Into<SharedString>,
+    palette: ThemePalette,
+) -> Stateful<Div> {
+    let tooltip = tooltip.into();
+    div()
+        .id(id)
+        .tooltip(move |_, cx| {
+            cx.new(|_| SearchTooltip {
+                palette,
+                label: tooltip.clone(),
+            })
+            .into()
+        })
+        .h(px(28.))
+        .min_w(px(32.))
+        .px_2()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .border_1()
+        .border_color(palette.border)
+        .bg(palette.surface_bg)
+        .text_size(px(12.))
+        .text_color(palette.text)
+        .cursor_pointer()
+        .hover(move |style| style.bg(palette.active_bg))
+        .child(label.into())
+}
+
+fn pdf_tab_view(
+    app: &mut MarkionApp,
+    palette: ThemePalette,
+    window: &mut Window,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let viewport = window.viewport_size();
+    app.prepare_pdf_surface(viewport.width, window.scale_factor(), cx);
+    let pdf = app
+        .active_tab()
+        .pdf()
+        .expect("PDF tab view is rendered only for PDF content");
+    let path = pdf.path.display().to_string();
+    let load_state = pdf.load_state;
+    let pages = Arc::clone(&pdf.pages);
+    let page_list = pdf.page_list.clone();
+    let zoom = pdf.zoom;
+    let viewport_width = f32::from(pdf.viewport_width);
+    let display_scale = pdf.display_scale;
+    let current_page = pdf.current_page;
+    let page_count = pages.len();
+    let page_input = app.pdf_page_input.clone();
+    let page_value = page_input
+        .clone()
+        .unwrap_or_else(|| current_page.saturating_add(1).to_string());
+    let page_count_label = page_count.to_string();
+
+    let body = match load_state {
+        PdfLoadState::Loading => div()
+            .debug_selector(|| "pdf-tab-loading".to_string())
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(palette.muted)
+            .child(app.tr(Msg::StatusPdfLoading).to_string())
+            .into_any_element(),
+        PdfLoadState::Error(error) => div()
+            .debug_selector(|| "pdf-tab-error".to_string())
+            .flex_1()
+            .px_6()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_center()
+            .text_color(palette.muted)
+            .child(app.trf(
+                Msg::StatusPdfUnavailable,
+                &[&path, app.tr(pdf_error_message(error))],
+            ))
+            .into_any_element(),
+        PdfLoadState::Ready => {
+            let items = Arc::clone(&pages);
+            list(
+                page_list,
+                cx.processor(move |app, index: usize, _, _| {
+                    let geometry = items[index];
+                    let (logical_width, logical_height, _) =
+                        pdf_page_layout(geometry, zoom, viewport_width, display_scale);
+                    let content = match app.pdf_page_entry(index) {
+                        Some(PdfPageEntry::Ready(ready)) => {
+                            let covered_width = ready.width_px as f32 / display_scale.max(1.0);
+                            let width = logical_width.min(covered_width);
+                            let height =
+                                width * ready.height_px as f32 / ready.width_px.max(1) as f32;
+                            div()
+                                .debug_selector(move || format!("pdf-page-ready-{index}"))
+                                .child(
+                                    img(ImageSource::Render(ready.image))
+                                        .w(px(width))
+                                        .h(px(height)),
+                                )
+                                .into_any_element()
+                        }
+                        Some(PdfPageEntry::Error(error)) => div()
+                            .debug_selector(move || format!("pdf-page-error-{index}"))
+                            .w(px(logical_width))
+                            .h(px(logical_height))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(palette.muted)
+                            .child(app.tr(pdf_error_message(error)).to_string())
+                            .into_any_element(),
+                        Some(PdfPageEntry::Pending) | None => div()
+                            .debug_selector(move || format!("pdf-page-loading-{index}"))
+                            .w(px(logical_width))
+                            .h(px(logical_height))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(palette.muted)
+                            .child(app.tr(Msg::StatusPdfLoading).to_string())
+                            .into_any_element(),
+                    };
+                    div()
+                        .debug_selector(move || format!("pdf-page-row-{index}"))
+                        .w_full()
+                        .py_3()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            div()
+                                .border_1()
+                                .border_color(palette.border)
+                                .bg(rgb(0xffffff))
+                                .child(content),
+                        )
+                        .into_any_element()
+                }),
+            )
+            .size_full()
+            .into_any_element()
+        }
+    };
+
+    let entity = cx.entity();
+    let page_indicator = div()
+        .id("pdf-page-input")
+        .debug_selector(|| "pdf-page-input".to_string())
+        .min_w(px(72.))
+        .h(px(28.))
+        .px_2()
+        .border_1()
+        .border_color(if page_input.is_some() {
+            palette.active_bg
+        } else {
+            palette.border
+        })
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_center()
+        .text_size(px(12.))
+        .cursor(CursorStyle::IBeam)
+        .child(app.trf(Msg::PdfPageOf, &[&page_value, &page_count_label]))
+        .on_mouse_down(MouseButton::Left, {
+            let entity = entity.clone();
+            move |_, window, cx| {
+                cx.stop_propagation();
+                entity.update(cx, |app, cx| app.begin_pdf_page_input(window, cx));
+            }
+        });
+    let toolbar =
+        div()
+            .h(px(40.))
+            .px_3()
+            .border_b_1()
+            .border_color(palette.border)
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(
+                pdf_toolbar_button("pdf-zoom-out", "−", app.tr(Msg::PdfZoomOut), palette)
+                    .on_mouse_up(MouseButton::Left, {
+                        let entity = entity.clone();
+                        move |_, _, cx| entity.update(cx, |app, cx| app.step_pdf_zoom(-25.0, cx))
+                    }),
+            )
+            .child(
+                pdf_toolbar_button(
+                    "pdf-actual-size",
+                    "100%",
+                    app.tr(Msg::PdfActualSize),
+                    palette,
+                )
+                .on_mouse_up(MouseButton::Left, {
+                    let entity = entity.clone();
+                    move |_, _, cx| {
+                        entity.update(cx, |app, cx| {
+                            app.set_pdf_zoom(PdfZoomMode::numeric(100.0), cx)
+                        })
+                    }
+                }),
+            )
+            .child(
+                pdf_toolbar_button("pdf-fit-width", "↔", app.tr(Msg::PdfFitWidth), palette)
+                    .on_mouse_up(MouseButton::Left, {
+                        let entity = entity.clone();
+                        move |_, _, cx| {
+                            entity.update(cx, |app, cx| app.set_pdf_zoom(PdfZoomMode::FitWidth, cx))
+                        }
+                    }),
+            )
+            .child(
+                pdf_toolbar_button("pdf-zoom-in", "+", app.tr(Msg::PdfZoomIn), palette)
+                    .on_mouse_up(MouseButton::Left, {
+                        let entity = entity.clone();
+                        move |_, _, cx| entity.update(cx, |app, cx| app.step_pdf_zoom(25.0, cx))
+                    }),
+            )
+            .child(
+                pdf_toolbar_button(
+                    "pdf-previous-page",
+                    "‹",
+                    app.tr(Msg::PdfPreviousPage),
+                    palette,
+                )
+                .on_mouse_up(MouseButton::Left, {
+                    let entity = entity.clone();
+                    move |_, _, cx| {
+                        entity.update(cx, |app, cx| {
+                            let page = app
+                                .active_tab()
+                                .pdf()
+                                .map(|pdf| pdf.current_page)
+                                .unwrap_or(0);
+                            app.jump_to_pdf_page(page.saturating_sub(1), cx);
+                        })
+                    }
+                }),
+            )
+            .child(page_indicator)
+            .child(
+                pdf_toolbar_button("pdf-next-page", "›", app.tr(Msg::PdfNextPage), palette)
+                    .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                        entity.update(cx, |app, cx| {
+                            let Some(pdf) = app.active_tab().pdf() else {
+                                return;
+                            };
+                            let page = pdf
+                                .current_page
+                                .saturating_add(1)
+                                .min(pdf.pages.len().saturating_sub(1));
+                            app.jump_to_pdf_page(page, cx);
+                        })
+                    }),
+            );
+
+    div()
+        .debug_selector(|| "pdf-tab-surface".to_string())
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .m(px(PANE_OUTER_PADDING))
+        .border_1()
+        .border_color(palette.border)
+        .bg(palette.surface_bg)
+        .flex()
+        .flex_col()
+        .child(toolbar)
+        .child(body)
 }
 
 fn visual_block_menu_overlay_view(
@@ -3301,7 +3591,7 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
         .when(app.sidebar_visible, |container| {
             container.child(match active_tab {
                 SidebarTab::Files => file_tree_panel_body(app, cx),
-                SidebarTab::Outline if app.active_tab().is_image() => div()
+                SidebarTab::Outline if app.active_tab().is_read_only() => div()
                     .flex_1()
                     .flex()
                     .items_center()
@@ -3310,7 +3600,14 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
                     .text_center()
                     .text_size(px(12.))
                     .text_color(palette.muted)
-                    .child(app.tr(Msg::StatusImageActionUnavailable).to_string()),
+                    .child(
+                        app.tr(if app.active_tab().is_pdf() {
+                            Msg::StatusPdfActionUnavailable
+                        } else {
+                            Msg::StatusImageActionUnavailable
+                        })
+                        .to_string(),
+                    ),
                 SidebarTab::Outline => outline_panel_body(app, cx),
             })
         })
@@ -3997,9 +4294,18 @@ pub(super) fn menu_muted_label(label: impl Into<SharedString>, palette: ThemePal
         .child(label.into())
 }
 
-fn image_action_unavailable_menu_row(language: Language, palette: ThemePalette) -> Div {
-    menu_muted_label(t(language, Msg::StatusImageActionUnavailable), palette)
-        .debug_selector(|| "image-document-actions-unavailable".to_string())
+fn read_only_action_unavailable_menu_row(
+    language: Language,
+    message: Msg,
+    palette: ThemePalette,
+) -> Div {
+    menu_muted_label(t(language, message), palette).debug_selector(move || {
+        if message == Msg::StatusPdfActionUnavailable {
+            "pdf-document-actions-unavailable".to_string()
+        } else {
+            "image-document-actions-unavailable".to_string()
+        }
+    })
 }
 
 pub(super) fn menu_separator(palette: ThemePalette) -> Div {
@@ -4038,6 +4344,7 @@ pub(super) fn active_menu_dropdown(
     heading_menu_max_level: u8,
     shortcut_overrides: &BTreeMap<String, String>,
     document_actions_enabled: bool,
+    read_only_action_unavailable: Msg,
     docx_import_in_progress: bool,
     palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
@@ -4223,7 +4530,11 @@ pub(super) fn active_menu_dropdown(
                     ))
             })
             .when(!document_actions_enabled, |panel| {
-                panel.child(image_action_unavailable_menu_row(language, palette))
+                panel.child(read_only_action_unavailable_menu_row(
+                    language,
+                    read_only_action_unavailable,
+                    palette,
+                ))
             })
             .child(menu_separator(palette))
             .child(file_action_item!(
@@ -4275,9 +4586,9 @@ pub(super) fn active_menu_dropdown(
                 Quit,
                 menu_shortcuts::QUIT
             )),
-        AppMenu::Edit if !document_actions_enabled => {
-            panel.child(image_action_unavailable_menu_row(language, palette))
-        }
+        AppMenu::Edit if !document_actions_enabled => panel.child(
+            read_only_action_unavailable_menu_row(language, read_only_action_unavailable, palette),
+        ),
         AppMenu::Edit => panel
             .child(action_item!(
                 Msg::ItemUndo,
@@ -4313,7 +4624,11 @@ pub(super) fn active_menu_dropdown(
                 menu_shortcuts::SELECT_ALL
             )),
         AppMenu::View if !document_actions_enabled => panel
-            .child(image_action_unavailable_menu_row(language, palette))
+            .child(read_only_action_unavailable_menu_row(
+                language,
+                read_only_action_unavailable,
+                palette,
+            ))
             .child(menu_separator(palette))
             .child(action_item!(
                 Msg::ItemToggleSidebar,
@@ -4434,9 +4749,9 @@ pub(super) fn active_menu_dropdown(
                 CycleTheme,
                 menu_shortcuts::CYCLE_THEME
             )),
-        AppMenu::Format if !document_actions_enabled => {
-            panel.child(image_action_unavailable_menu_row(language, palette))
-        }
+        AppMenu::Format if !document_actions_enabled => panel.child(
+            read_only_action_unavailable_menu_row(language, read_only_action_unavailable, palette),
+        ),
         AppMenu::Format => {
             let with_core_headings = panel
                 .child(action_item!(
@@ -4587,9 +4902,9 @@ pub(super) fn active_menu_dropdown(
                     menu_shortcuts::TABLE_DELETE_COLUMN
                 ))
         }
-        AppMenu::Export if !document_actions_enabled => {
-            panel.child(image_action_unavailable_menu_row(language, palette))
-        }
+        AppMenu::Export if !document_actions_enabled => panel.child(
+            read_only_action_unavailable_menu_row(language, read_only_action_unavailable, palette),
+        ),
         AppMenu::Export => panel
             .child(action_item!(
                 Msg::ItemExportHtml,

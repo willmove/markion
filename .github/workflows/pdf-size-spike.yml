@@ -7,10 +7,12 @@ on:
       - ".github/workflows/pdf-size-spike.yml"
       - "config/pdf-viewing.json"
       - "crates/pdf-viewer/**"
+      - "src/**"
       - "scripts/*pdf*.ps1"
       - "Cargo.toml"
       - "Cargo.lock"
       - "packager.toml"
+      - "THIRD_PARTY_NOTICES.md"
 
 concurrency:
   group: pdf-size-spike-${{ github.ref }}
@@ -103,6 +105,10 @@ jobs:
         shell: pwsh
         run: cargo install cargo-packager --version 0.11.8 --locked --force
 
+      - name: Verify PDF dependency features and notices
+        shell: pwsh
+        run: ./scripts/test-pdf-compliance.ps1
+
       - name: Build and package PDF-disabled control
         shell: pwsh
         run: |
@@ -146,6 +152,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Candidate bundled-workspace verification failed.' }
           cargo packager --release --config packager.toml --formats '${{ matrix.package_formats }}'
           if ($LASTEXITCODE -ne 0) { throw 'Candidate packaging failed.' }
+
+      - name: Verify packaged workspace and PDF runtime
+        shell: pwsh
+        run: |
+          '${{ matrix.report_formats }}'.Split(',') | ForEach-Object {
+            ./scripts/verify-packaged-workspace.ps1 -Format $_ -ArtifactsRoot dist
+          }
 
       - name: Measure package and installed-payload deltas
         shell: pwsh

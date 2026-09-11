@@ -3470,6 +3470,7 @@ dependencies = [
  "markion-git-sync",
  "markion-html-import",
  "markion-pdf",
+ "markion-pdf-viewer",
  "miniz_oxide",
  "percent-encoding",
  "pulldown-cmark",
