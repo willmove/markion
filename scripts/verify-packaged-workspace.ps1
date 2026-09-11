@@ -123,8 +123,21 @@ try {
     if ($runtime.Name -ne $target[0].installed_library) {
         throw "Wrong-target PDFium runtime in $Format output: $($runtime.Name)"
     }
-    if ($runtime.Length -ne $target[0].runtime_size_bytes) {
-        throw "PDFium runtime size mismatch in $Format output: expected $($target[0].runtime_size_bytes), got $($runtime.Length)"
+    $expectedRuntimeBytes = [long]$target[0].runtime_size_bytes
+    $expectedPackagedRuntimeBytes = if ($Format -eq 'appimage') {
+        # cargo-packager 0.11.8 applies a deterministic ELF rpath rewrite to
+        # AppImage shared objects. Pin its observed post-rewrite length too;
+        # staging still verifies the source archive digest and exact raw size.
+        if (-not ($target[0].PSObject.Properties.Name -contains 'appimage_runtime_size_bytes')) {
+            throw 'The PDF viewing manifest omits the exact AppImage PDFium runtime size'
+        }
+        [long]$target[0].appimage_runtime_size_bytes
+    }
+    else {
+        $expectedRuntimeBytes
+    }
+    if ($runtime.Length -ne $expectedPackagedRuntimeBytes) {
+        throw "PDFium runtime size mismatch in $Format output: expected $expectedPackagedRuntimeBytes, got $($runtime.Length)"
     }
     $relativeRuntime = $runtime.FullName.Substring($inspectionRoot.Length).TrimStart('\', '/').Replace('\', '/')
     if ($relativeRuntime -notmatch "(^|/)assets/pdfium/$([regex]::Escape($runtime.Name))$") {

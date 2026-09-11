@@ -132,6 +132,12 @@ function Read-PdfViewingManifest {
             throw "installed_library must be a file name, not a path."
         }
         if (@($target.package_formats).Count -eq 0) { throw "Each target must define at least one package format." }
+        if ($target.triple -eq 'x86_64-unknown-linux-gnu') {
+            Assert-RequiredProperty -Value $target -Name 'appimage_runtime_size_bytes'
+            if ($target.appimage_runtime_size_bytes -le $target.runtime_size_bytes) {
+                throw "The AppImage PDFium size must record the exact post-rpath-rewrite length."
+            }
+        }
     }
 
     return $manifest
