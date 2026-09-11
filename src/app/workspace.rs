@@ -1156,11 +1156,16 @@ impl MarkionApp {
             return;
         }
 
+        // Capture the source identity while it still exists. On Windows the
+        // caller may hold an 8.3 alias; canonicalizing it only after the move
+        // would fail and leave an already-open tab pointing at the old path.
+        let source_identity = comparable_document_path(source);
+
         let affects_dirty = self.tabs.iter().any(|tab| {
             tab.is_dirty()
-                && tab
-                    .path()
-                    .is_some_and(|path| remap_path_after_move(path, source, source).is_some())
+                && tab.path().is_some_and(|path| {
+                    remap_path_after_move(path, &source_identity, &source_identity).is_some()
+                })
         });
         if affects_dirty {
             self.status = t(self.language, Msg::StatusSaveBeforeMove).into();
@@ -1194,11 +1199,12 @@ impl MarkionApp {
             .and_then(|tree| tree.move_entry(source, dest_parent));
         match result {
             Ok(new_path) => {
-                if comparable_document_path(&new_path) == comparable_document_path(source) {
+                let new_path_identity = comparable_document_path(&new_path);
+                if new_path_identity == source_identity {
                     cx.notify();
                     return;
                 }
-                self.remap_tabs_after_move(source, &new_path, cx);
+                self.remap_tabs_after_move(&source_identity, &new_path_identity, cx);
                 self.selected_tree_path = Some(new_path.clone());
                 self.status = self.trf(Msg::StatusMovedTo, &[&new_path.display().to_string()]);
             }

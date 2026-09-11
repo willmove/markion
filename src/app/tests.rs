@@ -10443,8 +10443,9 @@ fn pdf_tabs_follow_workspace_rename_move_and_delete_lifecycle(cx: &mut TestAppCo
         assert!(app.active_tab().is_pdf());
     });
 
+    let renamed_alias = root.join(".").join("renamed.pdf");
     app.update(cx, |app, cx| {
-        app.handle_file_tree_drop(&renamed, &archive, cx)
+        app.handle_file_tree_drop(&renamed_alias, &archive, cx)
     });
     let moved = archive.join("renamed.pdf");
     app.update(cx, |app, _| {
