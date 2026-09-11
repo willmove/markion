@@ -52,9 +52,9 @@
 
 - [x] 7.1 Stage exactly one verified PDFium runtime into the installed resource location for each native target and update `packager.toml`/release CI without packaging the acquisition cache, archives, headers, import libraries, fixtures, debug files, other-target runtimes, V8/XFA, JavaScript, or fonts.
 - [x] 7.2 Update `THIRD_PARTY_NOTICES.md` and packaged notices for `pdfium-render`, PDFium, and required transitive notices; add dependency/license checks that reject an incomplete notice set or forbidden runtime feature.
-- [ ] 7.3 Extend packaged-resource verification to inspect each NSIS, `.app`/DMG, DEB, and AppImage payload, assert exactly one matching runtime, and load/render a tiny PDF through the exact installed resource-discovery path with no network or external PDF tool.
-- [ ] 7.4 Rerun the same-environment control/candidate size matrix after full integration, retain byte-exact reports for every format, and fail unless each compressed delta is at most 6 MiB and each installed/staged delta is at most 10 MiB.
-- [ ] 7.5 Review final release dependency/features and largest-file reports; remove unused PDF features/assets and prove no persistent PDF raster cache or runtime download path contributes to installation or user-data storage.
+- [x] 7.3 Extend packaged-resource verification to inspect each NSIS, `.app`/DMG, DEB, and AppImage payload, assert exactly one matching runtime, and load/render a tiny PDF through the exact installed resource-discovery path with no network or external PDF tool.
+- [x] 7.4 Rerun the same-environment control/candidate size matrix after full integration, retain byte-exact reports for every format, and fail unless each compressed delta is at most 6 MiB and each installed/staged delta is at most 10 MiB.
+- [x] 7.5 Review final release dependency/features and largest-file reports; remove unused PDF features/assets and prove no persistent PDF raster cache or runtime download path contributes to installation or user-data storage.
 
 ## 8. Cross-Change Reconciliation and Verification
 
