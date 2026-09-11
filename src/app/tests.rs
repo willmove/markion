@@ -1409,7 +1409,7 @@ fn startup_application_flow_reuses_existing_open_behaviour() {
 #[test]
 fn backup_sync_center_is_transient_responsive_and_keyboard_operable() {
     let root = include_str!("root_view.rs");
-    let panel = include_str!("git_panel.rs");
+    let panel = include_str!("git_panel.rs").replace("\r\n", "\n");
 
     assert!(root.contains("self.git_ui.center_open"));
     assert!(root.contains("git_panel::center_view(self, cx)"));
