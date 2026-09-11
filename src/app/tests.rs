@@ -10321,6 +10321,13 @@ fn pdf_tabs_keep_only_read_only_presentation_state() {
     assert_eq!(pdf.load_state, PdfLoadState::Loading);
 }
 
+fn assert_same_normalized_path(actual: Option<&std::path::Path>, expected: &std::path::Path) {
+    assert_eq!(
+        actual.map(comparable_document_path),
+        Some(comparable_document_path(expected))
+    );
+}
+
 #[gpui::test]
 fn pdf_interactive_router_honors_target_dedupes_and_preserves_dirty_document(
     cx: &mut TestAppContext,
@@ -10344,7 +10351,7 @@ fn pdf_interactive_router_honors_target_dedupes_and_preserves_dirty_document(
         app.open_tree_file_confirmed(pdf_path.clone(), cx);
         assert_eq!(app.tabs.len(), 2, "dirty document must not be replaced");
         assert!(app.active_tab().is_pdf());
-        assert_eq!(app.active_tab().path(), Some(pdf_path.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &pdf_path);
         assert_eq!(
             app.active_tab().pdf().unwrap().load_state,
             PdfLoadState::Error(PdfErrorKind::RuntimeMissing)
@@ -10368,7 +10375,7 @@ fn pdf_interactive_router_honors_target_dedupes_and_preserves_dirty_document(
             "duplicate PDF path focuses its existing tab"
         );
         assert!(app.active_tab().is_pdf());
-        assert_eq!(app.active_tab().path(), Some(pdf_path.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &pdf_path);
         assert_eq!(app.tabs[0].document.instance_id(), instance);
         assert!(Arc::ptr_eq(
             &cached,
@@ -10432,7 +10439,7 @@ fn pdf_tabs_follow_workspace_rename_move_and_delete_lifecycle(cx: &mut TestAppCo
     app.update(cx, |app, _| {
         assert!(renamed.is_file());
         assert!(!original.exists());
-        assert_eq!(app.active_tab().path(), Some(renamed.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &renamed);
         assert!(app.active_tab().is_pdf());
     });
 
@@ -10443,7 +10450,7 @@ fn pdf_tabs_follow_workspace_rename_move_and_delete_lifecycle(cx: &mut TestAppCo
     app.update(cx, |app, _| {
         assert!(moved.is_file());
         assert!(!renamed.exists());
-        assert_eq!(app.active_tab().path(), Some(moved.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &moved);
         assert!(app.active_tab().is_pdf());
         app.selected_tree_path = Some(moved.clone());
     });
@@ -10829,7 +10836,7 @@ fn replace_active_router_switches_between_document_and_image_content(cx: &mut Te
         assert_eq!(app.tabs.len(), 1);
         assert!(app.active_tab().is_document());
         assert_eq!(app.active_tab().document.text(), "plain text");
-        assert_eq!(app.active_tab().path(), Some(text_path.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &text_path);
     });
 }
 
@@ -10856,12 +10863,12 @@ fn image_tree_and_open_recent_entry_points_follow_open_target_preference(cx: &mu
         app.open_tree_file_confirmed(tree_image.clone(), cx);
         assert_eq!(app.tabs.len(), 1);
         assert!(app.active_tab().is_image());
-        assert_eq!(app.active_tab().path(), Some(tree_image.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &tree_image);
 
         app.open_recent_path(recent_image.clone(), cx);
         assert_eq!(app.tabs.len(), 1);
         assert!(app.active_tab().is_image());
-        assert_eq!(app.active_tab().path(), Some(recent_image.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &recent_image);
         assert_eq!(
             app.session.recent_files.first(),
             Some(&comparable_document_path(&recent_image))
@@ -10874,7 +10881,7 @@ fn image_tree_and_open_recent_entry_points_follow_open_target_preference(cx: &mu
         app.toggle_open_in_current_tab(cx);
         app.open_tree_file_confirmed(tree_image.clone(), cx);
         assert_eq!(app.tabs.len(), 2);
-        assert_eq!(app.active_tab().path(), Some(tree_image.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &tree_image);
 
         app.open_recent_path(recent_image.clone(), cx);
         assert_eq!(
@@ -10882,7 +10889,7 @@ fn image_tree_and_open_recent_entry_points_follow_open_target_preference(cx: &mu
             2,
             "already-open paths must dedupe, not append"
         );
-        assert_eq!(app.active_tab().path(), Some(recent_image.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &recent_image);
     });
 }
 
@@ -10911,13 +10918,13 @@ fn default_open_intent_replaces_only_safe_active_tabs(cx: &mut TestAppContext) {
         assert_eq!(app.default_open_intent(), OpenPathIntent::ReplaceActive);
         app.open_tree_file_confirmed(alpha.clone(), cx);
         assert_eq!(app.tabs.len(), 1);
-        assert_eq!(app.active_tab().path(), Some(alpha.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &alpha);
 
         // Clean saved document → still replace.
         assert_eq!(app.default_open_intent(), OpenPathIntent::ReplaceActive);
         app.open_recent_path(beta.clone(), cx);
         assert_eq!(app.tabs.len(), 1);
-        assert_eq!(app.active_tab().path(), Some(beta.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &beta);
 
         // Dirty document → divert to a new tab, never replace.
         app.active_tab_mut().document.set_text("edited");
@@ -10925,7 +10932,7 @@ fn default_open_intent_replaces_only_safe_active_tabs(cx: &mut TestAppContext) {
         assert_eq!(app.default_open_intent(), OpenPathIntent::OpenInNewTab);
         app.open_tree_file_confirmed(alpha.clone(), cx);
         assert_eq!(app.tabs.len(), 2);
-        assert_eq!(app.active_tab().path(), Some(alpha.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &alpha);
         assert!(app.tabs[0].document.is_dirty());
         assert_eq!(app.tabs[0].document.text(), "edited");
     });
@@ -10941,7 +10948,7 @@ fn default_open_intent_replaces_only_safe_active_tabs(cx: &mut TestAppContext) {
         assert_eq!(app.default_open_intent(), OpenPathIntent::OpenInNewTab);
         app.open_tree_file_confirmed(alpha.clone(), cx);
         assert_eq!(app.tabs.len(), 2);
-        assert_eq!(app.active_tab().path(), Some(alpha.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &alpha);
     });
 }
 
@@ -10978,7 +10985,7 @@ fn gesture_open_with_dirty_tab_appends_and_preserves_work(cx: &mut TestAppContex
             2,
             "a dirty active tab must divert to a new tab"
         );
-        assert_eq!(app.active_tab().path(), Some(other.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &other);
         let dirty = app.tabs[0].document_tab().unwrap();
         assert_eq!(dirty.document.text(), "unsaved edits");
         assert!(dirty.document.is_dirty());
@@ -11020,7 +11027,7 @@ fn untitled_dirty_open_appends_and_preserves_work(cx: &mut TestAppContext) {
 
         app.open_tree_file_confirmed(other.clone(), cx);
         assert_eq!(app.tabs.len(), 2, "untitled dirty must divert on tree open");
-        assert_eq!(app.active_tab().path(), Some(other.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &other);
         let draft = app.tabs[0].document_tab().unwrap();
         assert_eq!(draft.document.text(), "unsaved untitled draft");
         assert!(draft.document.is_dirty());
@@ -11247,9 +11254,9 @@ fn multi_file_drop_replaces_once_then_appends(cx: &mut TestAppContext) {
     app.update(cx, |app, cx| {
         app.open_dropped_documents(&[alpha.clone(), beta.clone(), gamma.clone()], cx);
         assert_eq!(app.tabs.len(), 3);
-        assert_eq!(app.tabs[0].path(), Some(alpha.as_path()));
-        assert_eq!(app.tabs[1].path(), Some(beta.as_path()));
-        assert_eq!(app.active_tab().path(), Some(gamma.as_path()));
+        assert_same_normalized_path(app.tabs[0].path(), &alpha);
+        assert_same_normalized_path(app.tabs[1].path(), &beta);
+        assert_same_normalized_path(app.active_tab().path(), &gamma);
     });
 
     // Preference off: a drop batch only appends; the welcome tab survives.
@@ -11267,7 +11274,7 @@ fn multi_file_drop_replaces_once_then_appends(cx: &mut TestAppContext) {
                 .document_tab()
                 .is_some_and(|tab| tab.document.path().is_none())
         );
-        assert_eq!(app.active_tab().path(), Some(beta.as_path()));
+        assert_same_normalized_path(app.active_tab().path(), &beta);
     });
 }
 
@@ -11296,7 +11303,7 @@ fn image_open_router_preserves_documents_deduplicates_and_releases_cache_claims(
                 .unwrap();
             assert_eq!(app.tabs.len(), 2);
             assert!(app.active_tab().is_image());
-            assert_eq!(app.active_tab().path(), Some(image_path.as_path()));
+            assert_same_normalized_path(app.active_tab().path(), &image_path);
             assert!(!app.active_tab().is_dirty());
             assert_eq!(app.workspace_root, comparable_document_path(dir.path()));
             assert_eq!(
@@ -18565,7 +18572,7 @@ fn file_tree_drop_remaps_clean_tab_and_refuses_dirty(cx: &mut TestAppContext) {
     app.update(cx, |app, _| {
         assert!(moved.exists());
         assert!(!path.exists());
-        assert_eq!(app.tabs[0].path(), Some(moved.as_path()));
+        assert_same_normalized_path(app.tabs[0].path(), &moved);
         assert_eq!(app.tabs[0].document.text(), "# Daily");
         assert_eq!(
             app.status,
