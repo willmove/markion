@@ -361,7 +361,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = PolicyStore::new(dir.path().join("git-sync.toml"));
         let mut policies = SyncPolicies::empty();
-        policies.upsert(policy(dir.path()));
+        let normalized_root = dunce::canonicalize(dir.path()).unwrap();
+        policies.upsert(policy(&normalized_root));
         store.save(&policies).unwrap();
         assert_eq!(store.load().unwrap(), policies);
 
