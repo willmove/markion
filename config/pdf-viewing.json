@@ -54,6 +54,7 @@
       "archive_member": "lib/libpdfium.so",
       "installed_library": "libpdfium.so",
       "runtime_size_bytes": 7645184,
+      "appimage_runtime_size_bytes": 7664592,
       "package_formats": ["deb", "appimage"]
     }
   ]

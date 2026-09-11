@@ -43,6 +43,17 @@ try {
     $rejected = Invoke-SeparatePowerShell -Arguments @('-File', $stageScript, '-ManifestPath', $invalidPath, '-ValidateManifestOnly')
     if ($rejected.ExitCode -eq 0) { throw 'Manifest validation accepted a forbidden V8 archive.' }
 
+    $badAppImageSizePath = Join-Path $testRoot 'bad-appimage-size-manifest.json'
+    $badAppImageSize = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    $badAppImageSize.targets[2].appimage_runtime_size_bytes = $badAppImageSize.targets[2].runtime_size_bytes
+    [System.IO.File]::WriteAllText(
+        $badAppImageSizePath,
+        (($badAppImageSize | ConvertTo-Json -Depth 10) + [Environment]::NewLine),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $appImageSizeRejected = Invoke-SeparatePowerShell -Arguments @('-File', $stageScript, '-ManifestPath', $badAppImageSizePath, '-ValidateManifestOnly')
+    if ($appImageSizeRejected.ExitCode -eq 0) { throw 'Manifest validation accepted an invalid AppImage runtime size.' }
+
     $badArchivePath = Join-Path $testRoot 'bad-pdfium.tgz'
     [System.IO.File]::WriteAllBytes($badArchivePath, [byte[]](1..20))
     $badDigestManifestPath = Join-Path $testRoot 'bad-digest-manifest.json'
