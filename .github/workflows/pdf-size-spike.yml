@@ -1,0 +1,183 @@
+name: pdf-size-spike
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/pdf-size-spike.yml"
+      - "config/pdf-viewing.json"
+      - "crates/pdf-viewer/**"
+      - "scripts/*pdf*.ps1"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "packager.toml"
+
+concurrency:
+  group: pdf-size-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  native-size-spike:
+    name: PDF size spike (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            package_formats: nsis
+            report_formats: nsis
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            package_formats: app,dmg
+            report_formats: dmg
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            package_formats: deb,appimage
+            report_formats: deb,appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout candidate with control history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install stable Rust for the native target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache candidate and control Cargo outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: pdf-size-${{ matrix.target }}
+          cache-all-crates: true
+
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y `
+            build-essential `
+            clang `
+            cmake `
+            pkg-config `
+            libglib2.0-dev `
+            libssl-dev `
+            libfontconfig1-dev `
+            libwayland-dev `
+            libxkbcommon-dev `
+            libxkbcommon-x11-dev `
+            libxcb1-dev `
+            libxcb-render0-dev `
+            libxcb-shape0-dev `
+            libxcb-xfixes0-dev `
+            libvulkan-dev `
+            libasound2-dev
+
+      - name: Validate immutable size manifest and create control worktree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/stage-pdfium.ps1 -ValidateManifestOnly | Out-Null
+          $manifest = Get-Content -Raw config/pdf-viewing.json | ConvertFrom-Json
+          $controlRoot = Join-Path $env:RUNNER_TEMP "markion-pdf-control-${{ matrix.target }}"
+          git worktree add --detach $controlRoot $manifest.base_revision
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to create the immutable control worktree.' }
+          Copy-Item -LiteralPath Cargo.lock -Destination (Join-Path $controlRoot 'Cargo.lock') -Force
+          "MARKION_PDF_CONTROL=$controlRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install pinned cargo-packager
+        shell: pwsh
+        run: cargo install cargo-packager --version 0.11.8 --locked --force
+
+      - name: Build and package PDF-disabled control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location $env:MARKION_PDF_CONTROL
+          try {
+            cargo build --release --locked
+            if ($LASTEXITCODE -ne 0) { throw 'Control build failed.' }
+            cargo run --release --locked -p wechat-workspace --bin verify-bundle -- assets/marknice-workspace
+            if ($LASTEXITCODE -ne 0) { throw 'Control bundled-workspace verification failed.' }
+            cargo packager --release --config packager.toml --formats '${{ matrix.package_formats }}'
+            if ($LASTEXITCODE -ne 0) { throw 'Control packaging failed.' }
+          }
+          finally { Pop-Location }
+
+      - name: Stage and probe pinned target-only PDFium
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stageOutput = @(./scripts/stage-pdfium.ps1 -TargetTriple '${{ matrix.target }}')
+          $stage = $stageOutput[-1] | ConvertFrom-Json
+          $resourceRoot = Join-Path $PWD 'assets/pdfium'
+          if (Test-Path -LiteralPath $resourceRoot) {
+            throw 'The candidate source unexpectedly already contains assets/pdfium.'
+          }
+          New-Item -ItemType Directory -Path $resourceRoot | Out-Null
+          Copy-Item -LiteralPath $stage.runtime_path -Destination $resourceRoot
+          cargo run --release --locked -p markion-pdf-viewer --bin pdf-runtime-probe -- --runtime $stage.runtime_path
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned PDFium runtime probe failed.' }
+          $env:MARKION_PDFIUM_RUNTIME = $stage.runtime_path
+          cargo test --release --locked -p markion-pdf-viewer --test native_pdfium -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Native PDFium fixture matrix failed.' }
+
+      - name: Build and package minimal PDF candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate build failed.' }
+          cargo run --release --locked -p wechat-workspace --bin verify-bundle -- assets/marknice-workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate bundled-workspace verification failed.' }
+          cargo packager --release --config packager.toml --formats '${{ matrix.package_formats }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate packaging failed.' }
+
+      - name: Measure package and installed-payload deltas
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reportRoot = Join-Path $PWD 'target/pdf-size-reports/${{ matrix.target }}'
+          New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
+          foreach ($format in '${{ matrix.report_formats }}'.Split(',')) {
+            $controlExtractRoot = Join-Path $env:RUNNER_TEMP "pdf-control-${{ matrix.target }}-$format"
+            $candidateExtractRoot = Join-Path $env:RUNNER_TEMP "pdf-candidate-${{ matrix.target }}-$format"
+            $controlOutput = @(
+              ./scripts/extract-package-payload.ps1 `
+                -Format $format `
+                -ArtifactsRoot (Join-Path $env:MARKION_PDF_CONTROL 'dist') `
+                -OutputRoot $controlExtractRoot
+            )
+            $candidateOutput = @(
+              ./scripts/extract-package-payload.ps1 `
+                -Format $format `
+                -ArtifactsRoot dist `
+                -OutputRoot $candidateExtractRoot
+            )
+            $control = $controlOutput[-1] | ConvertFrom-Json
+            $candidate = $candidateOutput[-1] | ConvertFrom-Json
+            ./scripts/measure-pdf-size.ps1 `
+              -Format $format `
+              -TargetTriple '${{ matrix.target }}' `
+              -ControlArtifact $control.artifact_path `
+              -CandidateArtifact $candidate.artifact_path `
+              -ControlPayloadRoot $control.payload_root `
+              -CandidatePayloadRoot $candidate.payload_root `
+              -OutputPath (Join-Path $reportRoot "$format.json") | Out-Host
+          }
+
+      - name: Retain byte-exact size reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-size-${{ matrix.target }}
+          path: target/pdf-size-reports/${{ matrix.target }}/*.json
+          if-no-files-found: error
+          retention-days: 30
