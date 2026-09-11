@@ -1,7 +1,9 @@
 ## ADDED Requirements
 
-### Requirement: Git preferences SHALL be additive and background writes disabled
-Preferences SHALL expose Git executable detection/override and an opt-in background remote-check setting with safe defaults. Missing settings SHALL preserve existing editing behavior and keep background checking off. Background write synchronization SHALL not be offered in this change. Repository-specific connection, scope and message settings SHALL be accessible from Sync setup/details and persisted atomically in a versioned local policy file separate from session data and Git-owned remote/upstream configuration.
+### Requirement: Backup and Sync preferences SHALL separate ordinary choices from advanced Git settings
+Preferences SHALL expose an ordinary Backup and Sync section for connection state, human-readable sync location, opt-in checks for updates from other devices, disconnect, and recovery access. The background-check label and description SHALL state that checking does not automatically upload or apply changes. Missing settings SHALL preserve existing editing behavior and keep background checking off; background write synchronization SHALL not be offered in this change.
+
+Git executable detection/override, branch/endpoints, approved roots, message template, commit author identity, raw diagnostics, and transport details SHALL remain accessible under Advanced Git Settings or troubleshooting rather than appearing as ordinary sync choices. Repository-specific settings SHALL be persisted atomically in a versioned local policy file separate from session data and Git-owned remote/upstream configuration. Global and per-repository background settings SHALL identify their respective default/current-workspace scope.
 
 #### Scenario: Existing installation upgrades
 - **WHEN** the app loads configuration without Git keys or a repository policy file
@@ -9,11 +11,19 @@ Preferences SHALL expose Git executable detection/override and an opt-in backgro
 
 #### Scenario: Git override is invalid
 - **WHEN** the user selects an unusable executable path
-- **THEN** the preferences report the failed detection without making ordinary document operations unavailable
+- **THEN** Advanced Git Settings report the failed detection without making ordinary document operations unavailable
 
-#### Scenario: Global Git settings are grouped
+#### Scenario: Ordinary settings are opened
 - **WHEN** the user opens the General preferences category
-- **THEN** it shows one Git Sync section at the end containing both executable selection and background remote checking, with informational lines using the same text size as other General settings
+- **THEN** it shows one Backup and Sync section using note/device language and keeps executable selection behind an Advanced Git disclosure
+
+#### Scenario: Background checking is offered
+- **WHEN** the user reviews the background update-check option
+- **THEN** the interface states that it checks for updates from other devices and does not automatically upload or apply them
+
+#### Scenario: Repository-specific background setting is shown
+- **WHEN** the current workspace has a per-repository background-check override
+- **THEN** preferences distinguish that workspace setting from the global default rather than presenting two unlabeled equivalent toggles
 
 ### Requirement: Repository policies SHALL outlive recent sessions and fail closed
 Recent-workspace eviction and general Preferences reset SHALL NOT delete repository policies, Git history, credentials or unresolved recovery. Disconnect SHALL remove the sync binding/scheduling without deleting files, `.git` or remotes. Invalid/unsupported policy data SHALL disable writes with actionable feedback rather than broaden allowed scope. Replaced/moved repository identities SHALL require reconnection before using prior authorization.

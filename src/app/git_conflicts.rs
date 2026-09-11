@@ -15,6 +15,7 @@ pub(super) struct ConflictView {
     pub draft_path: Option<PathBuf>,
     pub source_paths: [Option<PathBuf>; 3],
     pub hunks: Vec<TextHunk>,
+    pub advanced: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,8 +192,7 @@ impl MarkionApp {
         let Some(admission) = self.git_conflict_admission.as_ref() else {
             self.arm_git_recovery(cx);
             self.status = self.git_label(GitMsg::Recovery).into();
-            self.sidebar_visible = true;
-            self.set_sidebar_tab(SidebarTab::Sync, cx);
+            self.git_ui.center_open = true;
             return;
         };
         let Some(identity) = admission.identity().cloned() else {
@@ -205,8 +205,7 @@ impl MarkionApp {
             .clone()
             .unwrap_or_else(|| "git".into());
         self.git_ui.conflict_busy = true;
-        self.sidebar_visible = true;
-        self.set_sidebar_tab(SidebarTab::Sync, cx);
+        self.git_ui.center_open = false;
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -216,7 +215,10 @@ impl MarkionApp {
             let _ = this.update(cx, |app, cx| {
                 app.git_ui.conflict_busy = false;
                 match result {
-                    Ok(view) => app.git_ui.conflict = Some(view),
+                    Ok(view) => {
+                        app.git_ui.conflict = Some(view);
+                        app.git_ui.conflict_surface_open = true;
+                    }
                     Err(error) => app.status = app.trf(Msg::StatusGitSyncFailed, &[&error]),
                 }
                 cx.notify();
@@ -234,6 +236,7 @@ impl MarkionApp {
         else {
             return;
         };
+        self.git_ui.conflict_surface_open = false;
         if let Some(index) = self
             .tabs
             .iter()
@@ -252,8 +255,7 @@ impl MarkionApp {
                         app.open_in_new_tab(document, cx);
                         app.view_mode = ViewMode::Edit;
                         // A resolution draft does not change the connected workspace.
-                        app.sidebar_visible = true;
-                        app.sidebar_tab = SidebarTab::Sync;
+                        // Conflict resolution stays in its dedicated transient flow.
                     }
                     Err(error) => {
                         app.status = app.trf(Msg::StatusGitSyncFailed, &[&error.to_string()])
@@ -495,7 +497,10 @@ impl MarkionApp {
             let _ = this.update(cx, |app, cx| {
                 app.git_ui.conflict_busy = false;
                 match result {
-                    Ok(view) => app.git_ui.conflict = Some(view),
+                    Ok(view) => {
+                        app.git_ui.conflict = Some(view);
+                        app.git_ui.conflict_surface_open = true;
+                    }
                     Err(error) => app.status = app.trf(Msg::StatusGitSyncFailed, &[&error]),
                 }
                 app.refresh_git_details(cx);
@@ -529,6 +534,7 @@ fn prepare_conflict_view(
         draft_path: None,
         source_paths: [None, None, None],
         hunks: Vec::new(),
+        advanced: false,
     };
     let Some(file) = view.session.files.first() else {
         return Ok(view);
@@ -659,8 +665,10 @@ pub(super) fn conflict_panel(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> 
         .flex()
         .flex_col()
         .gap_2()
-        .child(app.tr(Msg::ItemGitResolveConflict))
-        .child(view.identity.worktree_root.display().to_string());
+        .child(app.git_label(GitMsg::StateConflict))
+        .when(view.advanced, |body| {
+            body.child(view.identity.worktree_root.display().to_string())
+        });
     if let Some(file) = view.session.files.first() {
         body = body.child(file.path.display().to_string());
         if !file.supports_in_app_resolution() {
@@ -668,12 +676,31 @@ pub(super) fn conflict_panel(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> 
                 .child(app.git_label(GitMsg::ExternalRecovery))
                 .child(button(
                     "git-conflict-details",
-                    app.git_label(GitMsg::Details),
+                    app.git_label(if view.advanced {
+                        GitMsg::HideAdvancedGitDetails
+                    } else {
+                        GitMsg::AdvancedGitDetails
+                    }),
                     enabled,
                     palette,
                     cx,
                     |app, _, cx| {
-                        app.git_ui.conflict = None;
+                        if let Some(view) = &mut app.git_ui.conflict {
+                            view.advanced = !view.advanced;
+                        }
+                        cx.notify();
+                    },
+                ))
+                .child(button(
+                    "git-conflict-external-review",
+                    app.git_label(GitMsg::Review),
+                    enabled,
+                    palette,
+                    cx,
+                    |app, _, cx| {
+                        app.git_ui.conflict_surface_open = false;
+                        app.git_ui.center_open = true;
+                        app.git_ui.advanced_open = true;
                         app.refresh_git_details(cx);
                         cx.notify();
                     },
@@ -687,22 +714,32 @@ pub(super) fn conflict_panel(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> 
             .flex()
             .flex_col()
             .gap_2();
-        for (index, label) in [
-            app.git_label(GitMsg::Base),
-            app.tr(Msg::DialogButtonThisComputer),
-            app.tr(Msg::DialogButtonRemoteVersion),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        let source_labels = if view.advanced {
+            vec![
+                (0, app.git_label(GitMsg::Base)),
+                (1, app.tr(Msg::DialogButtonThisComputer)),
+                (2, app.tr(Msg::DialogButtonRemoteVersion)),
+            ]
+        } else {
+            vec![
+                (1, app.tr(Msg::DialogButtonThisComputer)),
+                (2, app.tr(Msg::DialogButtonRemoteVersion)),
+            ]
+        };
+        for (index, label) in source_labels {
             let mut source_view = div()
                 .p_2()
                 .border_1()
                 .border_color(palette.border)
                 .child(label);
             if let Some(source) = &view.sources[index] {
-                source_view =
-                    source_view.child(format!("{} · {} B", source.oid.short(), source.bytes.len()));
+                if view.advanced {
+                    source_view = source_view.child(format!(
+                        "{} · {} B",
+                        source.oid.short(),
+                        source.bytes.len()
+                    ));
+                }
                 if let Some(path) = &view.source_paths[index] {
                     source_view = source_view.child(img(path.clone()).max_w_full().max_h(px(180.)));
                 } else if !source.binary && !source.truncated {
@@ -728,7 +765,9 @@ pub(super) fn conflict_panel(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> 
                     .p_1()
                     .border_1()
                     .border_color(palette.border)
-                    .child(format!("@@ {} @@", hunk.range.start))
+                    .when(view.advanced, |row| {
+                        row.child(format!("@@ {} @@", hunk.range.start))
+                    })
                     .child(
                         div()
                             .flex()
@@ -756,7 +795,7 @@ pub(super) fn conflict_panel(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> 
                             ))
                             .child(button(
                                 ("git-hunk-both", index),
-                                app.git_label(GitMsg::KeepBoth),
+                                app.git_label(GitMsg::CombinedVersion),
                                 enabled,
                                 palette,
                                 cx,
@@ -789,7 +828,7 @@ pub(super) fn conflict_panel(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> 
                     ))
                     .child(button(
                         "git-draft-both",
-                        app.git_label(GitMsg::KeepBoth),
+                        app.git_label(GitMsg::CombinedVersion),
                         enabled,
                         palette,
                         cx,
@@ -888,13 +927,18 @@ pub(super) fn conflict_panel(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> 
     }
     body = body.child(button(
         "git-conflict-details",
-        app.git_label(GitMsg::Details),
+        app.git_label(if view.advanced {
+            GitMsg::HideAdvancedGitDetails
+        } else {
+            GitMsg::AdvancedGitDetails
+        }),
         enabled,
         palette,
         cx,
         |app, _, cx| {
-            app.git_ui.conflict = None;
-            app.refresh_git_details(cx);
+            if let Some(view) = &mut app.git_ui.conflict {
+                view.advanced = !view.advanced;
+            }
             cx.notify();
         },
     ));
@@ -906,9 +950,43 @@ pub(super) fn conflict_panel(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> 
         cx,
         |app, window, cx| {
             app.git_ui.conflict = None;
+            app.git_ui.conflict_surface_open = false;
             app.finish_git_conflict(&ResolveGitConflict, window, cx);
         },
     ))
+}
+
+pub(super) fn conflict_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
+    let palette = app.palette();
+    div()
+        .id("git-conflict-overlay")
+        .absolute()
+        .inset_0()
+        .occlude()
+        .bg(rgba(0x00000066))
+        .p_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .id("git-conflict-panel")
+                .occlude()
+                .w_full()
+                .max_w(px(920.))
+                .max_h_full()
+                .p_4()
+                .bg(palette.panel_bg)
+                .border_1()
+                .border_color(palette.border)
+                .rounded_lg()
+                .shadow_lg()
+                .text_color(palette.text)
+                .text_size(px(13.))
+                .flex()
+                .flex_col()
+                .child(conflict_panel(app, cx)),
+        )
 }
 
 #[cfg(test)]

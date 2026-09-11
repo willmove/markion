@@ -227,6 +227,29 @@ impl GitRepository {
         .is_ok()
     }
 
+    /// Return the complete bounded inventory of paths tracked by the index.
+    ///
+    /// This intentionally does not infer repository scope from the editor's
+    /// filtered file tree: setup needs to notice unrelated tracked content
+    /// before it can offer the ordinary dedicated-notes authorization.
+    pub fn tracked_paths(&self) -> Result<Vec<PathBuf>, RepositoryError> {
+        let output = self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args(["ls-files", "-z"])
+                .read_only(true),
+            CommandLimits {
+                max_stdout_bytes: 16 * 1024 * 1024,
+                ..CommandLimits::default()
+            },
+        )?;
+        if output.stdout_truncated {
+            return Err(RepositoryError::InvalidOutput(
+                "tracked path inventory exceeds limit".into(),
+            ));
+        }
+        nul_delimited_paths(&output.stdout)
+    }
+
     pub fn path_is_ignored(&self, path: &Path) -> bool {
         self.run(
             GitCommand::new(&self.identity.worktree_root)
@@ -744,27 +767,7 @@ impl GitRepository {
                 "commit path inventory exceeds limit".into(),
             ));
         }
-        let mut paths = Vec::new();
-        for bytes in output
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter(|bytes| !bytes.is_empty())
-        {
-            #[cfg(unix)]
-            let path = {
-                use std::os::unix::ffi::OsStringExt;
-                PathBuf::from(OsString::from_vec(bytes.to_vec()))
-            };
-            #[cfg(not(unix))]
-            let path = PathBuf::from(
-                std::str::from_utf8(bytes)
-                    .map_err(|_| RepositoryError::InvalidOutput("unrepresentable path".into()))?,
-            );
-            paths.push(path);
-        }
-        paths.sort();
-        paths.dedup();
-        Ok(paths)
+        nul_delimited_paths(&output.stdout)
     }
 
     pub fn commit_diff(
@@ -1011,6 +1014,29 @@ impl GitRepository {
     }
 }
 
+fn nul_delimited_paths(bytes: &[u8]) -> Result<Vec<PathBuf>, RepositoryError> {
+    let mut paths = Vec::new();
+    for bytes in bytes
+        .split(|byte| *byte == 0)
+        .filter(|bytes| !bytes.is_empty())
+    {
+        #[cfg(unix)]
+        let path = {
+            use std::os::unix::ffi::OsStringExt;
+            PathBuf::from(OsString::from_vec(bytes.to_vec()))
+        };
+        #[cfg(not(unix))]
+        let path = PathBuf::from(
+            std::str::from_utf8(bytes)
+                .map_err(|_| RepositoryError::InvalidOutput("unrepresentable path".into()))?,
+        );
+        paths.push(path);
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 fn canonical_git_path<const N: usize>(
     runner: &GitCommandRunner,
     start: &Path,
@@ -1181,6 +1207,21 @@ mod tests {
         let patch = String::from_utf8(comparison.content.bytes).unwrap();
         assert!(patch.contains("-second"));
         assert!(patch.contains("+working"));
+    }
+
+    #[test]
+    fn inventories_all_tracked_paths_without_absorbing_untracked_files() {
+        let dir = initialized_repository();
+        fs::write(dir.path().join("project.toml"), "kind = 'unrelated'\n").unwrap();
+        git(dir.path(), ["add", "--", "project.toml"]);
+        git(dir.path(), ["commit", "-q", "-m", "mixed content"]);
+        fs::write(dir.path().join("private.bin"), [0, 1, 2]).unwrap();
+
+        let repository = GitRepository::discover(GitCommandRunner::new("git"), dir.path()).unwrap();
+        assert_eq!(
+            repository.tracked_paths().unwrap(),
+            vec![PathBuf::from("notes.md"), PathBuf::from("project.toml")]
+        );
     }
 
     #[test]

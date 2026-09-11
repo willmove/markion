@@ -1131,7 +1131,7 @@ fn every_menu_title_wires_click_and_hover_behavior() {
 }
 
 #[test]
-fn git_actions_live_only_in_repository_menus() {
+fn backup_sync_actions_are_grouped_while_file_history_stays_contextual() {
     let root_view = include_str!("root_view.rs").replace("\r\n", "\n");
     let in_window_file = root_view
         .split_once("AppMenu::File => panel")
@@ -1151,7 +1151,7 @@ fn git_actions_live_only_in_repository_menus() {
         })
         .expect("native File menu");
     let native_repository = bootstrap
-        .split_once("name: t(language, Msg::MenuRepository)")
+        .split_once("name: git_t(language, GitMsg::BackupAndSync)")
         .and_then(|(_, rest)| {
             rest.split_once("name: t(language, Msg::MenuHelp)")
                 .map(|(repo, _)| repo)
@@ -1160,11 +1160,6 @@ fn git_actions_live_only_in_repository_menus() {
 
     for token in [
         "Msg::ItemGitSyncNow",
-        "GitMsg::Details",
-        "GitMsg::Commit",
-        "GitMsg::Fetch",
-        "GitMsg::Pull",
-        "GitMsg::Push",
         "Msg::ItemGitResolveConflict",
         "Msg::ItemGitSyncSetup",
     ] {
@@ -1185,13 +1180,33 @@ fn git_actions_live_only_in_repository_menus() {
             "native File menu retained {token}"
         );
     }
+    assert!(in_window_repository.contains("GitMsg::BackupAndSync"));
+    assert!(native_repository.contains("GitMsg::ViewStatus"));
+    assert!(in_window_repository.contains("GitMsg::AdvancedGitTools"));
+    assert!(native_repository.contains("GitMsg::AdvancedGitTools"));
+
+    let advanced_window = root_view
+        .split_once("pub(super) fn advanced_git_submenu_panel")
+        .expect("in-window Advanced Git Tools submenu")
+        .1;
+    for token in [
+        "GitMsg::Commit",
+        "GitMsg::Fetch",
+        "GitMsg::Pull",
+        "GitMsg::Push",
+    ] {
+        assert!(advanced_window.contains(token));
+        assert!(native_repository.contains(token));
+    }
+    assert!(in_window_file.contains("GitMsg::VersionHistory"));
+    assert!(native_file.contains("GitMsg::VersionHistory"));
 
     let native_export = bootstrap
         .find("Msg::MenuExport")
         .expect("native Export menu");
     let native_repository = bootstrap
-        .find("Msg::MenuRepository")
-        .expect("native Repository menu");
+        .find("GitMsg::BackupAndSync")
+        .expect("native Backup and Sync menu");
     let native_help = bootstrap.find("Msg::MenuHelp").expect("native Help menu");
     assert!(native_export < native_repository && native_repository < native_help);
 }
@@ -1389,6 +1404,124 @@ fn startup_application_flow_reuses_existing_open_behaviour() {
     assert!(apply_fn.contains("Msg::StatusOpened"));
     assert!(apply_fn.contains("Msg::StatusOpenFailed"));
     assert!(!apply_fn.contains("Msg::StatusStartup"));
+}
+
+#[test]
+fn backup_sync_center_is_transient_responsive_and_keyboard_operable() {
+    let root = include_str!("root_view.rs");
+    let panel = include_str!("git_panel.rs");
+
+    assert!(root.contains("self.git_ui.center_open"));
+    assert!(root.contains("git_panel::center_view(self, cx)"));
+    assert!(panel.contains(".w_full()\n                .max_w(px(640.))"));
+    assert!(panel.contains(".overflow_y_scroll()"));
+
+    // State is always conveyed by localized text; focus adds a thicker border
+    // in addition to color, and every shared button supports keyboard traversal
+    // and activation.
+    for cue in [
+        "GitMsg::StateOff",
+        "GitMsg::StateRunning",
+        "GitMsg::StatePending",
+        "GitMsg::StateIncoming",
+        "GitMsg::StateSynchronized",
+        "GitMsg::StateOffline",
+        "GitMsg::StateAuthentication",
+        "GitMsg::StateConflict",
+        "GitMsg::StateUncertain",
+        "GitMsg::StateAttention",
+        "GitMsg::StateUnknown",
+    ] {
+        assert!(panel.contains(cue), "missing non-color state cue {cue}");
+    }
+    assert!(panel.contains(".focus(|style| style.border_2()"));
+    assert!(panel.contains("event.keystroke.key == \"tab\""));
+    assert!(panel.contains("matches!(event.keystroke.key.as_str(), \"enter\" | \"space\")"));
+    assert!(panel.contains("\"backup-sync-center-cancel\""));
+    assert!(panel.contains("app.cancel_git_operation(cx)"));
+    assert!(panel.contains("GitMsg::NotesFolder"));
+    assert!(panel.contains("GitMsg::RepositoryFolder"));
+
+    let disclosure = panel
+        .find("\"backup-sync-advanced-toggle\"")
+        .expect("advanced disclosure");
+    let advanced = panel
+        .find("fn advanced_panel_body")
+        .expect("advanced Git surface");
+    assert!(disclosure < advanced);
+    for technical_action in [
+        "\"git-commit\"",
+        "\"git-fetch\"",
+        "\"git-pull\"",
+        "\"git-push\"",
+    ] {
+        assert!(panel[advanced..].contains(technical_action));
+    }
+}
+
+#[test]
+fn backup_sync_menus_group_technical_operations_and_expose_version_history() {
+    let root = include_str!("root_view.rs");
+    let bootstrap = include_str!("bootstrap.rs");
+    let module = include_str!("mod.rs");
+
+    assert!(root.contains("GitMsg::AdvancedGitTools"));
+    assert!(root.contains("advanced_git_submenu_panel"));
+    assert!(bootstrap.contains("MenuItem::submenu(Menu"));
+    let native_advanced = bootstrap
+        .find("name: git_t(language, GitMsg::AdvancedGitTools)")
+        .expect("native Advanced Git Tools submenu");
+    for action in ["CommitLocally", "CheckRemote", "PullUpdates", "PushCommits"] {
+        assert!(bootstrap[native_advanced..].contains(action));
+    }
+
+    assert!(module.contains("ShowFileVersionHistory"));
+    assert!(root.contains("GitMsg::VersionHistory"));
+    assert!(bootstrap.contains("ShowFileVersionHistory"));
+    assert!(module.contains("FileTreeContextAction::VersionHistory"));
+    assert!(module.contains("TabContextAction::VersionHistory"));
+}
+
+#[test]
+fn conflict_resolution_uses_a_focused_plain_language_surface() {
+    let root = include_str!("root_view.rs");
+    let conflicts = include_str!("git_conflicts.rs");
+    let translations = include_str!("../i18n.rs");
+
+    assert!(root.contains("self.git_ui.conflict_surface_open"));
+    assert!(root.contains("git_conflicts::conflict_view(self, cx)"));
+    assert!(conflicts.contains(".max_w(px(920.))"));
+    assert!(conflicts.contains("GitMsg::AdvancedGitDetails"));
+    assert!(conflicts.contains("view.advanced"));
+    assert!(translations.contains("This Computer's Version"));
+    assert!(translations.contains("Synced Version"));
+    assert!(translations.contains("Finish and Continue Sync"));
+    assert!(conflicts.contains("GitMsg::CombinedVersion"));
+    assert!(conflicts.contains("GitMsg::KeepBoth"));
+    assert!(conflicts.contains("finish_git_conflict"));
+    assert!(conflicts.contains("ConflictResolution::Delete"));
+    assert!(conflicts.contains("ConflictResolution::KeepBoth"));
+}
+
+#[gpui::test]
+fn per_file_version_history_preserves_the_requested_workspace_path(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let note = directory.path().join("note.md");
+    let foreign = directory.path().with_extension("other").join("foreign.md");
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+
+    app.update(cx, |app, _| {
+        app.workspace_root = directory.path().to_path_buf();
+        assert!(app.select_file_version_history(note.clone()));
+        assert!(app.git_ui.center_open);
+        assert_eq!(app.git_ui.page, super::git_panel::GitPage::FileHistory);
+        assert_eq!(app.git_ui.history_path_override.as_ref(), Some(&note));
+
+        app.git_ui.center_open = false;
+        assert!(!app.select_file_version_history(foreign));
+        assert!(!app.git_ui.center_open);
+        assert_eq!(app.git_ui.history_path_override.as_ref(), Some(&note));
+    });
 }
 
 #[test]
@@ -2335,6 +2468,7 @@ fn file_tree_context_actions_are_scoped_by_target_kind() {
         &[
             FileTreeContextAction::Open,
             FileTreeContextAction::OpenInNewTab,
+            FileTreeContextAction::VersionHistory,
             FileTreeContextAction::Rename,
             FileTreeContextAction::Delete,
             FileTreeContextAction::ShowInFileManager,
@@ -3325,11 +3459,11 @@ fn general_preferences_group_git_controls_once_at_the_end() {
     assert_eq!(
         panel.matches(git_entry).count(),
         1,
-        "General preferences must render one Git Sync section"
+        "General preferences must render one Backup and Sync section"
     );
     assert!(
         panel.find("PrefPanelAutoSaveSection").unwrap() < panel.find(git_entry).unwrap(),
-        "Git Sync must follow the other General preference sections"
+        "Backup and Sync must follow the other General preference sections"
     );
     assert!(
         !panel.contains("PrefPanelGitBackgroundCheck"),
@@ -3343,15 +3477,38 @@ fn general_preferences_group_git_controls_once_at_the_end() {
         .map(|(body, _)| body)
         .expect("Git preferences component");
     for control in [
-        "Msg::PrefPanelGitSection",
+        "GitMsg::BackupAndSync",
+        "GitMsg::GlobalBackgroundCheck",
+        "GitMsg::BackgroundCheckHelp",
+        "GitMsg::AdvancedGitSettings",
         "GitMsg::Executable",
-        "Msg::PrefPanelGitBackgroundCheck",
     ] {
         assert!(
             git_preferences.contains(control),
-            "Git Sync section omitted {control}"
+            "Backup and Sync preferences omitted {control}"
         );
     }
+    assert!(
+        git_preferences
+            .contains(".when(app.git_ui.preferences_advanced, |view| view.child(advanced))")
+    );
+    let advanced = git_preferences
+        .split_once("let advanced = div()")
+        .and_then(|(_, rest)| rest.split_once(";\n    div()").map(|(body, _)| body))
+        .expect("Advanced Git settings body");
+    assert!(advanced.contains("GitMsg::Executable"));
+    assert!(advanced.contains("git-choose-executable"));
+    assert!(advanced.contains("git-default-executable"));
+
+    let repository_settings = git_panel
+        .split_once("pub(super) fn settings_view")
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn onboarding_view"))
+        .map(|(body, _)| body)
+        .expect("repository Backup and Sync settings");
+    assert!(repository_settings.contains("GitMsg::WorkspaceBackgroundCheck"));
+    assert!(repository_settings.contains("GitMsg::BackgroundCheckHelp"));
+    assert!(repository_settings.contains(".when(form.advanced, |view|"));
+    assert!(repository_settings.contains("view.child(app.git_label(GitMsg::WholeHistory))"));
     for line in ["git-executable-summary", "git-executable-status"] {
         let style = git_preferences
             .split_once(&format!(".id(\"{line}\")"))
@@ -10158,6 +10315,7 @@ fn git_image_only_reconciliation_releases_image_bytes_without_rebuilding_markdow
         app.apply_git_sync_completion(
             super::git_sync::GitSyncCompletion {
                 _exclusive: exclusive,
+                operation: markion_git_sync::OperationKind::SyncNow,
                 outcome: markion_git_sync::SyncOutcome::UpToDate,
                 buffers: vec![super::git_sync::GitBufferResult {
                     instance,
@@ -17322,6 +17480,7 @@ fn tab_context_actions_require_path_only_for_file_backed_items() {
         TabContextAction::Rename,
         TabContextAction::CopyPath,
         TabContextAction::RevealInFileManager,
+        TabContextAction::VersionHistory,
     ] {
         assert!(
             !tab_context_action_enabled(action, false),
@@ -19181,6 +19340,7 @@ fn git_settings_input_tab_escape_and_undo_do_not_mutate_document(cx: &mut TestAp
         app.git_ui.settings = Some(super::git_panel::GitSettings {
             policy,
             fields: std::array::from_fn(|_| SearchFieldState::default()),
+            advanced: false,
         });
         app.search_focus = Some(SearchField::Git(0));
         app
@@ -19219,7 +19379,10 @@ fn git_quick_setup_derives_clone_folder_and_keeps_input_out_of_document(cx: &mut
         app.git_ui.onboarding = Some(super::git_panel::GitOnboarding {
             mode: super::git_panel::GitOnboardingMode::CloneRepository,
             fields: std::array::from_fn(|_| SearchFieldState::default()),
+            repository_root: None,
             advanced: false,
+            advanced_required: false,
+            alternatives_open: false,
             destination_edited: false,
             sync_after_setup: false,
             busy: false,

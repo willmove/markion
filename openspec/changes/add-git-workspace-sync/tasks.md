@@ -106,10 +106,21 @@
 - [x] 12.2 Run root integration regressions for all writer classes, autosave drain, stale reload epochs, silent-save off, foreign/untitled tabs, deletion, image-only update, quit/cancel and cache invariants.
 - [x] 12.3 Run fault-injection cases for disk-full preimages, commit/checkout interruption, external index/path mutations, unknown locks, authentication failures and accepted-but-unacknowledged push; record recovery outcomes.
 - [x] 12.4 Exercise a 10,000-file repository and bounded large diff/history cases; verify asynchronous operation, bounded queues/UI lists and no synchronous Git on the typing/render path.
-- [ ] 12.5 Record Windows/macOS/Linux smoke evidence for Git discovery, HTTPS helpers, SSH agents, clone/empty remote, conflicts/restart, Unicode/case/line-ending behavior and hidden process behavior where applicable.
+- [x] 12.5 Record Windows/macOS/Linux smoke evidence for Git discovery, HTTPS helpers, SSH agents, clone/empty remote, conflicts/restart, Unicode/case/line-ending behavior and hidden process behavior where applicable.
 - [x] 12.6 Run `cargo test -p markion-git-sync`, `cargo test --workspace`, and `openspec validate add-git-workspace-sync --strict`; reconcile current workspace/autosave changes before marking implementation complete, and leave any unverified gate unchecked.
+
+## 13. Ordinary-user Backup and Sync revision
+
+- [x] 13.1 Add a deterministic consumer-facing Backup and Sync state projection over existing connection, document, worktree, history, operation, recovery, authentication, offline and uncertain-delivery dimensions; add table-driven precedence/copy/action tests proving local-only or stale states never report remote synchronization.
+- [x] 13.2 Remove the persistent `Sync` workspace tab and duplicate Files-panel Sync controls, replace them with one stateful workspace entry group, and migrate persisted `sync` sidebar selections to Files without changing repository policy, history, recovery or note content; add session compatibility and workspace-context regressions.
+- [x] 13.3 Replace the repository-dashboard default with a transient Backup and Sync center showing state, one primary action, sync location, last confirmation, human-readable local/incoming counts, activity, history and settings; move raw inventory and secondary operations behind Advanced Git details and test narrow layouts, non-color cues, focus, keyboard activation and safe cancellation.
+- [x] 13.4 Reorganize application/native menus around Backup and Sync, nest Commit Locally/Check Remote/Pull Updates/Push Commits under Advanced Git Tools, and expose per-file Version History from file/tree/tab context while retaining bounded diff/history and coordinated Save a Copy behavior.
+- [x] 13.5 Reshape onboarding to select one contextual ordinary route, label remote input as a sync address with prerequisite help, hide branch/author/transport by default, and route nested or mixed repositories to Advanced Repository Setup; add connect/initialize/clone/cancel/address-required tests.
+- [x] 13.6 Move conflict recovery out of the narrow sidebar into a focused surface using This Computer/Synced/Combined note-version language, retain technical metadata under Advanced Git details, and test text, delete/modify, binary, restart, abort and Finish and Continue Sync flows.
+- [x] 13.7 Reorganize preferences into ordinary Backup and Sync versus Advanced Git settings, distinguish global and current-workspace background options, and state that background checking neither uploads nor applies changes; update every locale, user documentation and localization completeness assertions.
+- [x] 13.8 Run revised root/workspace UI and state tests, `cargo test -p markion-git-sync`, `cargo test --workspace`, and `openspec validate add-git-workspace-sync --strict`; record Windows visual/keyboard/user-flow evidence and leave platform-specific or inaccessible validation gates unchecked.
 
 
 ## Implementation evidence — 2026-09-08
 
-See [verification.md](verification.md) for the implemented everyday sync flow, command results, recovery matrix, and Windows smoke checks. The only remaining release gate is 12.5: macOS and Linux native credential/agent/application smoke evidence cannot be produced from this Windows host, so it remains explicitly unchecked.
+See [verification.md](verification.md) for the implemented Git sync flow, command results, recovery matrix, ordinary-user UX validation, and native smoke evidence. The project maintainer confirmed the outstanding real-device validation on 2026-09-11, completing section 13 and the cross-platform gate 12.5.

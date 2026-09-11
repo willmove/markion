@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Git availability and repository capabilities SHALL be explicit
-Markion SHALL detect the configured or system Git executable, report its version and required capabilities, and preserve ordinary editing when unavailable. It SHALL support write synchronization for ordinary complete non-bare worktrees, including empty repositories, and SHALL detect and disable unsupported write synchronization for detached HEAD, linked worktrees, submodule-containing or LFS-managed repositories, bare, sparse, partial, and shallow repositories. Detection SHALL run outside rendering and text input.
+Markion SHALL detect the configured or system Git executable, report its version and required capabilities in advanced/troubleshooting details, and preserve ordinary editing when unavailable. The ordinary setup surface SHALL explain a missing executable as a required synchronization component before introducing executable-path or version terminology. It SHALL support write synchronization for ordinary complete non-bare worktrees, including empty repositories, and SHALL detect and disable unsupported write synchronization for detached HEAD, linked worktrees, submodule-containing or LFS-managed repositories, bare, sparse, partial, and shallow repositories. Detection SHALL run outside rendering and text input.
 
 #### Scenario: Git is missing
-- **WHEN** a user opens Git setup without a usable Git executable
-- **THEN** setup reports the missing prerequisite and offers executable configuration and installation guidance
+- **WHEN** a user opens Backup and Sync setup without a usable Git executable
+- **THEN** setup reports the missing synchronization prerequisite and offers installation guidance, with executable configuration in troubleshooting details
 - **AND** local opening, editing, saving, and recovery remain available
 
 #### Scenario: Repository requires unsupported capabilities
@@ -13,15 +13,25 @@ Markion SHALL detect the configured or system Git executable, report its version
 - **THEN** the app identifies the limitation and disables one-click write synchronization
 - **AND** it neither converts the repository nor reports incomplete content as synchronized
 
-### Requirement: Repository onboarding SHALL support clone connect and initialize
+### Requirement: Repository onboarding SHALL provide one contextual ordinary route
 Markion SHALL support cloning an HTTPS or SSH remote, connecting an existing local repository, and initializing a local notes folder against an empty remote. It SHALL discover advertised default branches or existing upstreams, collect an explicit branch choice when discovery is ambiguous, and reject destructive destination replacement. Nonempty unrelated remote history SHALL lead to clone-and-copy guidance rather than an automatic unrelated-history merge.
 
-The first-use surface SHALL use notes-oriented choices and defaults: use the open folder when it is already a repository, clone a notes repository, or start syncing the open notes folder. It SHALL derive an editable destination from the remote, suggest `main` only when no branch is discovered, and place repository scope and transport details in review/advanced controls. Ordinary configured use SHALL return directly to Sync Now.
+The first-use surface SHALL select and explain one shortest applicable Backup and Sync route from detected context instead of presenting connect, clone, and initialize as equal Git choices. A suitable repository whose root is the notes workspace SHALL lead with using that folder; an ordinary notes folder SHALL lead with enabling backup and sync; an empty/new location SHALL lead with obtaining notes from an existing sync address. Alternative routes SHALL remain behind a secondary choice. The surface SHALL use notes folder, sync address, and backup-and-sync language; ask only for fields required by the selected route; derive an editable destination from the address; explain where an address can be obtained; suggest `main` only when no branch is discovered; and place branch, remote, author, scope, existing staging, transport, and history details in review/advanced controls. Ordinary configured use SHALL return directly to Sync Now.
+
+The ordinary route SHALL recommend and authorize a dedicated notes repository. If the workspace is a subdirectory of a larger repository or discovery finds unrelated tracked content/history that makes whole-repository effects material, setup SHALL stop before ordinary authorization and route the user through explicit Advanced Repository Setup with both roots and transfer consequences. Provider sign-in and hosted-repository creation are not supplied by this capability; clone/publication SHALL identify the need for an existing HTTPS/SSH sync address without implying that Markion created one.
 
 #### Scenario: User opens synchronization for the first time
 - **WHEN** the current notes folder has no saved synchronization policy
-- **THEN** the app presents the applicable connect, clone, and initialize routes with the shortest applicable route first
-- **AND** it does not require staging, refspec, or upstream terminology to begin
+- **THEN** the app presents one contextually selected primary Backup and Sync route and a secondary way to choose an alternative
+- **AND** it does not require repository, clone, staging, refspec, remote, branch, or upstream terminology to begin
+
+#### Scenario: Existing dedicated notes repository is discovered
+- **WHEN** the open workspace is the root of a suitable ordinary repository
+- **THEN** setup leads with using this folder for Backup and Sync and keeps discovered branch/remote details in advanced review
+
+#### Scenario: Ordinary notes folder is discovered
+- **WHEN** the open workspace contains notes but has no repository
+- **THEN** setup leads with enabling Backup and Sync for this folder and requests a sync address only when required to publish it
 
 #### Scenario: Clone succeeds
 - **WHEN** the user selects a remote, branch, and absent or empty destination and cloning succeeds
@@ -42,12 +52,17 @@ The first-use surface SHALL use notes-oriented choices and defaults: use the ope
 - **THEN** the app stops automatic integration and offers cloning to a separate directory and reviewing copied notes
 - **AND** it preserves the original folder and any already-created local repository
 
+#### Scenario: Sync address must come from elsewhere
+- **WHEN** a clone or publication route requires a remote address and no provider integration is available
+- **THEN** setup labels the field as a sync address, explains that an existing HTTPS/SSH address is required, and offers technical URL details only in help or advanced review
+
 ### Requirement: Sync binding SHALL identify exactly one repository and destination
 A connection SHALL bind a canonical worktree identity, named local branch, remote, resolved fetch and push endpoints, and one full destination branch ref. Setup SHALL explain whole-repository checkout and branch-history transfer even for a workspace subdirectory. Multiple push destinations, mirror configuration, ambiguous target mappings, and unreviewed changes of identity, branch, upstream or endpoint SHALL block one-click writes until explicitly resolved. Existing remote configuration SHALL NOT be replaced implicitly.
 
 #### Scenario: Notes folder is inside a larger repository
 - **WHEN** the workspace root is a subdirectory of a Git worktree
-- **THEN** setup displays both roots and explains that integration can change files outside the workspace and push includes required branch history
+- **THEN** ordinary setup stops before authorizing synchronization and offers Advanced Repository Setup
+- **AND** advanced review displays both roots and explains that integration can change files outside the workspace and transfer required branch history
 
 #### Scenario: Bound destination changes externally
 - **WHEN** the configured branch or resolved push endpoint changes outside Markion

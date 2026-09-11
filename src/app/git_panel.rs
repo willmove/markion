@@ -1,9 +1,11 @@
 //! Workspace Git presentation. All repository reads happen on the background executor.
 use super::*;
 use markion_git_sync::{
-    CancellationToken, DiffRequest, GitCommandRunner, GitObjectId, GitRepository, HistoryEntry,
-    HistoryRelation, JournalStore, OperationCheckpoint, OperationKind, PathDecision,
-    RepositoryIdentity, RepositoryPolicy, RepositoryState,
+    BackgroundFetchResult, BackupSyncAction, BackupSyncFacts, BackupSyncPresentation,
+    BackupSyncState, CancellationToken, ConnectionState, DiffRequest, DocumentSyncState,
+    GitCommandRunner, GitObjectId, GitRepository, HistoryEntry, HistoryRelation, JournalStore,
+    OperationCheckpoint, OperationKind, OperationPhase, OperationProgress, PathDecision, RemoteUrl,
+    RepositoryIdentity, RepositoryPolicy, RepositoryState, SyncOutcome,
 };
 use std::time::SystemTime;
 
@@ -39,9 +41,12 @@ pub(super) enum GitOnboardingMode {
 
 pub(super) struct GitOnboarding {
     pub mode: GitOnboardingMode,
-    /// Remote URL, clone destination, branch, author name, author email.
+    /// Sync address, local destination, branch, author name, author email.
     pub fields: [SearchFieldState; 5],
+    pub repository_root: Option<PathBuf>,
     pub advanced: bool,
+    pub advanced_required: bool,
+    pub alternatives_open: bool,
     pub destination_edited: bool,
     pub sync_after_setup: bool,
     pub busy: bool,
@@ -51,10 +56,13 @@ pub(super) struct GitOnboarding {
 
 #[derive(Default)]
 pub(super) struct GitUi {
+    pub center_open: bool,
+    pub advanced_open: bool,
     pub snapshot: Option<Arc<GitDetails>>,
     pub refreshing: bool,
     pub page: GitPage,
     pub offset: usize,
+    pub history_path_override: Option<PathBuf>,
     pub inspection: Option<GitInspection>,
     pub inspection_generation: u64,
     pub inspection_loading: bool,
@@ -71,11 +79,17 @@ pub(super) struct GitUi {
     pub phase: Arc<std::sync::Mutex<Option<markion_git_sync::OperationPhase>>>,
     pub pending_exit: Option<(gpui::AnyWindowHandle, UnsavedExitKind)>,
     pub remote_checks: HashMap<PathBuf, SystemTime>,
+    pub remote_confirmations: HashMap<PathBuf, SystemTime>,
+    pub last_outcomes: HashMap<RepositoryIdentity, SyncOutcome>,
+    pub background_results: HashMap<RepositoryIdentity, BackgroundFetchResult>,
     pub settings: Option<GitSettings>,
     pub onboarding: Option<GitOnboarding>,
+    pub onboarding_probe_generation: u64,
     pub conflict: Option<git_conflicts::ConflictView>,
+    pub conflict_surface_open: bool,
     pub conflict_busy: bool,
     pub executable_status: Option<String>,
+    pub preferences_advanced: bool,
     pub commit_draft: Option<GitCommitDraft>,
     pub retry_operation: Option<(RepositoryIdentity, OperationKind)>,
 }
@@ -83,6 +97,7 @@ pub(super) struct GitUi {
 pub(super) struct GitSettings {
     pub policy: RepositoryPolicy,
     pub fields: [SearchFieldState; 5],
+    pub advanced: bool,
 }
 
 pub(super) struct GitDetails {
@@ -169,7 +184,11 @@ impl MarkionApp {
             SearchFieldState::default(),
             SearchFieldState::default(),
         ];
-        self.git_ui.settings = Some(GitSettings { policy, fields });
+        self.git_ui.settings = Some(GitSettings {
+            policy,
+            fields,
+            advanced: false,
+        });
         self.search_visible = false;
         self.search_focus = Some(SearchField::Git(0));
         self.search_control_focus = None;
@@ -306,9 +325,9 @@ impl MarkionApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sidebar_visible = true;
-        self.set_sidebar_tab(SidebarTab::Sync, cx);
+        self.git_ui.center_open = true;
         self.active_menu = None;
+        self.refresh_git_details(cx);
         cx.notify();
     }
 
@@ -319,11 +338,7 @@ impl MarkionApp {
                 Timer::after(Duration::from_secs(5)).await;
                 if this
                     .update(cx, |app, cx| {
-                        if (app.sidebar_visible && app.sidebar_tab == SidebarTab::Sync)
-                            || app.git_ui.running.is_some()
-                        {
-                            app.refresh_git_details(cx);
-                        }
+                        app.refresh_git_details(cx);
                     })
                     .is_err()
                 {
@@ -347,7 +362,11 @@ impl MarkionApp {
             .unwrap_or_else(|| "git".into());
         let page = self.git_ui.page;
         let offset = self.git_ui.offset;
-        let active_path = self.active_tab().path().map(Path::to_path_buf);
+        let active_path = self
+            .git_ui
+            .history_path_override
+            .clone()
+            .or_else(|| self.active_tab().path().map(Path::to_path_buf));
         let live_notes: HashMap<_, _> = self
             .tabs
             .iter()
@@ -578,10 +597,46 @@ impl MarkionApp {
     }
 
     pub(super) fn set_git_page(&mut self, page: GitPage, cx: &mut Context<Self>) {
+        self.git_ui.history_path_override = None;
         self.git_ui.page = page;
         self.git_ui.offset = 0;
         self.refresh_git_details(cx);
         cx.notify();
+    }
+
+    pub(super) fn show_file_version_history(
+        &mut self,
+        _: &ShowFileVersionHistory,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.active_tab().path().map(Path::to_path_buf) else {
+            return;
+        };
+        self.open_file_version_history(path, cx);
+    }
+
+    pub(super) fn open_file_version_history(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if !self.select_file_version_history(path) {
+            return;
+        }
+        self.refresh_git_details(cx);
+        cx.notify();
+    }
+
+    pub(super) fn select_file_version_history(&mut self, path: PathBuf) -> bool {
+        if !path.starts_with(&self.workspace_root) {
+            return false;
+        }
+        self.git_ui.history_path_override = Some(path);
+        self.git_ui.page = GitPage::FileHistory;
+        self.git_ui.offset = 0;
+        self.git_ui.center_open = true;
+        self.git_ui.advanced_open = false;
+        self.active_menu = None;
+        self.file_tree_context_menu = None;
+        self.tab_context_menu = None;
+        true
     }
 
     fn sync_git_commit_draft(&mut self, details: &GitDetails) {
@@ -1107,6 +1162,7 @@ pub(super) fn button(
         .text_color(if enabled { palette.text } else { palette.muted })
         .border_1()
         .border_color(palette.border)
+        .focus(|style| style.border_2().border_color(palette.active_text))
         .when(enabled, |button| {
             button
                 .cursor_pointer()
@@ -1138,45 +1194,557 @@ pub(super) fn button(
         }))
 }
 
-pub(super) fn sidebar_entry(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Stateful<Div> {
-    button(
-        "sidebar-sync",
-        app.git_label(GitMsg::Details),
-        true,
-        app.palette(),
-        cx,
-        |app, window, cx| app.show_git_sync(&ShowGitSync, window, cx),
-    )
-    .mb_1()
-    .when(app.sidebar_tab == SidebarTab::Sync, |entry| {
-        entry.bg(app.palette().active_bg)
+pub(super) fn backup_sync_presentation(app: &MarkionApp) -> BackupSyncPresentation {
+    let details = app
+        .git_ui
+        .snapshot
+        .as_ref()
+        .filter(|details| details.workspace == app.workspace_root);
+    let Some(details) = details else {
+        return BackupSyncPresentation::project(BackupSyncFacts {
+            connection: ConnectionState::NotConfigured,
+            documents: DocumentSyncState::default(),
+            pending_paths: 0,
+            history: HistoryRelation::Unknown,
+            operation: None,
+            has_conflicts: false,
+            recovery_items: 0,
+            attention_items: 0,
+            has_external_staging: false,
+            has_external_operation: false,
+            delivery_uncertain: false,
+            last_confirmed_at: None,
+        });
+    };
+
+    let dirty_named_paths = app
+        .tabs
+        .iter()
+        .filter_map(|tab| {
+            (tab.is_dirty())
+                .then(|| tab.path())
+                .flatten()
+                .and_then(|path| path.strip_prefix(&details.identity.worktree_root).ok())
+                .map(Path::to_path_buf)
+        })
+        .collect::<HashSet<_>>();
+    let named_unsaved = dirty_named_paths.len();
+    let omitted_untitled = app
+        .tabs
+        .iter()
+        .filter(|tab| tab.is_dirty() && tab.path().is_none())
+        .count();
+    let external_conflicts = app
+        .tabs
+        .iter()
+        .filter(|tab| {
+            tab.path()
+                .is_some_and(|path| path.starts_with(&details.identity.worktree_root))
+                && tab
+                    .document_tab()
+                    .is_some_and(|tab| tab.external_conflict.is_some())
+        })
+        .count();
+    let background = app.git_ui.background_results.get(&details.identity);
+    let last_outcome = app.git_ui.last_outcomes.get(&details.identity);
+    let connection = if details.policy.is_none() {
+        ConnectionState::NotConfigured
+    } else if !details.state.capabilities.supports_write_sync() {
+        ConnectionState::Unsupported
+    } else if app
+        .git_ui
+        .retry_operation
+        .as_ref()
+        .is_some_and(|(identity, _)| identity == &details.identity)
+        || matches!(
+            background,
+            Some(BackgroundFetchResult::AuthenticationNeeded)
+        )
+    {
+        ConnectionState::AuthenticationNeeded
+    } else if matches!(background, Some(BackgroundFetchResult::Offline))
+        || matches!(last_outcome, Some(SyncOutcome::AwaitingUpload { .. }))
+    {
+        ConnectionState::Offline
+    } else {
+        ConnectionState::Available
+    };
+    let operation = app
+        .git_ui
+        .running
+        .as_ref()
+        .filter(|(identity, _, _)| identity == &details.identity)
+        .map(|(_, kind, _)| OperationProgress {
+            operation_id: "foreground".into(),
+            kind: *kind,
+            phase: app
+                .git_ui
+                .phase
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or(OperationPhase::Preparing),
+            detail: None,
+        })
+        .or_else(|| {
+            (app.git_background_scheduler.in_flight()
+                && app.git_background_scheduler.active_identity() == Some(&details.identity))
+            .then(|| OperationProgress {
+                operation_id: "background".into(),
+                kind: OperationKind::CheckRemote,
+                phase: OperationPhase::Fetching,
+                detail: None,
+            })
+        });
+    let history = match (background, details.state.history) {
+        (
+            Some(BackgroundFetchResult::Incoming { commits }),
+            HistoryRelation::Ahead { commits: ahead },
+        ) => HistoryRelation::Diverged {
+            ahead,
+            behind: *commits,
+        },
+        (
+            Some(BackgroundFetchResult::Incoming { commits }),
+            HistoryRelation::Equal | HistoryRelation::Unknown,
+        ) => HistoryRelation::Behind { commits: *commits },
+        _ => details.state.history,
+    };
+    let outcome_attention = usize::from(matches!(
+        last_outcome,
+        Some(SyncOutcome::NeedsAttention { .. })
+    ));
+    let background_attention = usize::from(matches!(
+        background,
+        Some(BackgroundFetchResult::ActionableError(_))
+    ));
+    let delivery_uncertain = matches!(last_outcome, Some(SyncOutcome::UncertainDelivery { .. }));
+    let pending_paths = details
+        .state
+        .worktree
+        .changes
+        .iter()
+        .map(|change| change.path.clone())
+        .chain(dirty_named_paths)
+        .collect::<HashSet<_>>()
+        .len();
+
+    BackupSyncPresentation::project(BackupSyncFacts {
+        connection,
+        documents: DocumentSyncState {
+            unsaved: named_unsaved,
+            external_conflicts,
+            omitted_untitled,
+        },
+        // Include edits made after the last repository refresh while
+        // deduplicating paths already present in the Git inventory.
+        pending_paths,
+        history,
+        operation,
+        has_conflicts: details.state.worktree.has_conflicts
+            || app
+                .git_ui
+                .conflict
+                .as_ref()
+                .is_some_and(|view| view.identity == details.identity),
+        recovery_items: details.recovery.len(),
+        attention_items: details.attention.len()
+            + details.attachments.len()
+            + outcome_attention
+            + background_attention,
+        has_external_staging: details.state.worktree.has_external_staging,
+        has_external_operation: details.state.worktree.operation_in_progress.is_some(),
+        delivery_uncertain,
+        last_confirmed_at: app
+            .git_ui
+            .remote_confirmations
+            .get(&details.identity.worktree_root)
+            .copied(),
     })
 }
 
+fn backup_sync_state_label(
+    app: &MarkionApp,
+    presentation: &BackupSyncPresentation,
+) -> SharedString {
+    match presentation.state {
+        BackupSyncState::NotConfigured => app.git_label(GitMsg::StateOff).into(),
+        BackupSyncState::Running => {
+            let phase = app
+                .git_ui
+                .phase
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .map(|phase| format!(" · {}", phase_label(app.language, phase)))
+                .unwrap_or_default();
+            git_tf(app.language, GitMsg::StateRunning, &[&phase]).into()
+        }
+        BackupSyncState::PendingLocal => git_tf(
+            app.language,
+            GitMsg::StatePending,
+            &[&presentation.local_items.to_string()],
+        )
+        .into(),
+        BackupSyncState::Incoming => git_tf(
+            app.language,
+            GitMsg::StateIncoming,
+            &[&presentation.incoming_commits.to_string()],
+        )
+        .into(),
+        BackupSyncState::PendingBoth => git_tf(
+            app.language,
+            GitMsg::StatePendingBoth,
+            &[
+                &presentation.local_items.to_string(),
+                &presentation.incoming_commits.to_string(),
+            ],
+        )
+        .into(),
+        BackupSyncState::Synchronized => app.git_label(GitMsg::StateSynchronized).into(),
+        BackupSyncState::Offline => app.git_label(GitMsg::StateOffline).into(),
+        BackupSyncState::AuthenticationNeeded => app.git_label(GitMsg::StateAuthentication).into(),
+        BackupSyncState::ConflictOrRecovery => app.git_label(GitMsg::StateConflict).into(),
+        BackupSyncState::UncertainDelivery => app.git_label(GitMsg::StateUncertain).into(),
+        BackupSyncState::NeedsAttention => app.git_label(GitMsg::StateAttention).into(),
+        BackupSyncState::RemoteUnknown => app.git_label(GitMsg::StateUnknown).into(),
+    }
+}
+
+fn backup_sync_action_label(app: &MarkionApp, action: BackupSyncAction) -> SharedString {
+    match action {
+        BackupSyncAction::TurnOn => app.git_label(GitMsg::TurnOn).into(),
+        BackupSyncAction::ViewProgress => app.git_label(GitMsg::ViewProgress).into(),
+        BackupSyncAction::SyncNow => app.tr(Msg::ItemGitSyncNow).into(),
+        BackupSyncAction::ViewStatus => app.git_label(GitMsg::ViewStatus).into(),
+        BackupSyncAction::Retry => app.git_label(GitMsg::Retry).into(),
+        BackupSyncAction::Reconnect => app.git_label(GitMsg::Reconnect).into(),
+        BackupSyncAction::Resolve => app.tr(Msg::ItemGitResolveConflict).into(),
+        BackupSyncAction::CheckStatus => app.git_label(GitMsg::CheckStatus).into(),
+        BackupSyncAction::Review => app.git_label(GitMsg::Review).into(),
+    }
+}
+
+fn run_backup_sync_action(
+    app: &mut MarkionApp,
+    action: BackupSyncAction,
+    window: &mut Window,
+    cx: &mut Context<MarkionApp>,
+) {
+    match action {
+        BackupSyncAction::TurnOn => app.setup_git_sync(&SetupGitSync, window, cx),
+        BackupSyncAction::ViewProgress
+        | BackupSyncAction::ViewStatus
+        | BackupSyncAction::Review => app.show_git_sync(&ShowGitSync, window, cx),
+        BackupSyncAction::SyncNow | BackupSyncAction::Retry => app.sync_now(&SyncNow, window, cx),
+        BackupSyncAction::Reconnect => {
+            if app.git_ui.retry_operation.is_some() {
+                app.retry_git_operation(cx);
+            } else {
+                app.check_remote(&CheckRemote, window, cx);
+            }
+        }
+        BackupSyncAction::Resolve => app.resolve_git_conflict(&ResolveGitConflict, window, cx),
+        BackupSyncAction::CheckStatus => app.check_remote(&CheckRemote, window, cx),
+    }
+}
+
 pub(super) fn workspace_entry(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+    let presentation = backup_sync_presentation(app);
+    let action = presentation.action;
+    let enabled = action == BackupSyncAction::ViewProgress || app.git_ui.running.is_none();
     div()
         .flex()
+        .items_center()
         .gap_1()
-        .mb_1()
         .child(button(
-            "workspace-sync-now",
-            app.tr(Msg::ItemGitSyncNow),
-            app.git_ui.running.is_none(),
-            app.palette(),
-            cx,
-            |app, window, cx| app.sync_now(&SyncNow, window, cx),
-        ))
-        .child(button(
-            "workspace-sync-details",
-            app.git_label(GitMsg::Details),
+            "workspace-backup-sync-status",
+            backup_sync_state_label(app, &presentation),
             true,
             app.palette(),
             cx,
             |app, window, cx| app.show_git_sync(&ShowGitSync, window, cx),
         ))
+        .child(button(
+            "workspace-backup-sync-action",
+            backup_sync_action_label(app, action),
+            enabled,
+            app.palette(),
+            cx,
+            move |app, window, cx| run_backup_sync_action(app, action, window, cx),
+        ))
+}
+
+fn sync_location(details: &GitDetails) -> Option<String> {
+    let policy = details.policy.as_ref()?;
+    let remote = RemoteUrl::parse(policy.target.fetch_url.clone()).ok()?;
+    Some(match remote.host {
+        Some(host) => host,
+        None => Path::new(remote.as_str())
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| remote.as_str().to_string()),
+    })
 }
 
 pub(super) fn panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
+    let palette = app.palette();
+    let presentation = backup_sync_presentation(app);
+    let action = presentation.action;
+    let running = presentation.state == BackupSyncState::Running;
+    let details = app
+        .git_ui
+        .snapshot
+        .as_ref()
+        .filter(|details| details.workspace == app.workspace_root);
+    let action_enabled = action == BackupSyncAction::ViewProgress || app.git_ui.running.is_none();
+    let mut body = div()
+        .id("backup-sync-center-scroll")
+        .overflow_y_scroll()
+        .flex_1()
+        .min_h_0()
+        .p_4()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .text_size(px(13.))
+        .text_color(palette.text)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(17.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(app.git_label(GitMsg::BackupAndSync)),
+                )
+                .child(button(
+                    "backup-sync-center-close",
+                    app.git_label(GitMsg::Close),
+                    true,
+                    palette,
+                    cx,
+                    |app, _, cx| {
+                        app.git_ui.center_open = false;
+                        app.git_ui.advanced_open = false;
+                        cx.notify();
+                    },
+                )),
+        )
+        .child(
+            div()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(palette.border)
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(backup_sync_state_label(app, &presentation)),
+                )
+                .child(button(
+                    "backup-sync-center-primary",
+                    backup_sync_action_label(app, action),
+                    action_enabled,
+                    palette,
+                    cx,
+                    move |app, window, cx| run_backup_sync_action(app, action, window, cx),
+                ))
+                .when(running, |card| {
+                    card.child(button(
+                        "backup-sync-center-cancel",
+                        app.git_label(GitMsg::Cancel),
+                        true,
+                        palette,
+                        cx,
+                        |app, _, cx| app.cancel_git_operation(cx),
+                    ))
+                }),
+        );
+
+    if let Some(details) = details {
+        if let Some(location) = sync_location(details) {
+            body = body.child(div().text_color(palette.muted).child(format!(
+                "{}: {}",
+                app.git_label(GitMsg::SyncLocation),
+                location
+            )));
+        }
+        body = body
+            .child(div().flex().gap_3().flex_wrap().children([
+                div().child(git_tf(
+                    app.language,
+                    GitMsg::LocalItems,
+                    &[&presentation.local_items.to_string()],
+                )),
+                div().child(git_tf(
+                    app.language,
+                    GitMsg::IncomingItems,
+                    &[&presentation.incoming_commits.to_string()],
+                )),
+            ]))
+            .when_some(presentation.last_confirmed_at, |body, confirmed| {
+                body.child(
+                    div().text_color(palette.muted).child(git_tf(
+                        app.language,
+                        GitMsg::LastConfirmed,
+                        &[&confirmed
+                            .elapsed()
+                            .unwrap_or_default()
+                            .as_secs()
+                            .to_string()],
+                    )),
+                )
+            });
+    }
+
+    if details
+        .and_then(|details| details.policy.as_ref())
+        .is_some()
+    {
+        body = body.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(
+                    button(
+                        "backup-sync-activity",
+                        app.git_label(GitMsg::SyncActivity),
+                        true,
+                        palette,
+                        cx,
+                        |app, _, cx| app.set_git_page(GitPage::Recent, cx),
+                    )
+                    .when(app.git_ui.page == GitPage::Recent, |button| {
+                        button.bg(palette.active_bg)
+                    }),
+                )
+                .child(
+                    button(
+                        "backup-sync-version-history",
+                        app.git_label(GitMsg::VersionHistory),
+                        true,
+                        palette,
+                        cx,
+                        |app, _, cx| app.set_git_page(GitPage::FileHistory, cx),
+                    )
+                    .when(app.git_ui.page == GitPage::FileHistory, |button| {
+                        button.bg(palette.active_bg)
+                    }),
+                )
+                .child(button(
+                    "backup-sync-settings",
+                    app.git_label(GitMsg::Settings),
+                    true,
+                    palette,
+                    cx,
+                    |app, window, cx| app.edit_git_settings(window, cx),
+                )),
+        );
+    }
+
+    if matches!(app.git_ui.page, GitPage::Recent | GitPage::FileHistory)
+        && let Some(details) = details
+        && details.page == app.git_ui.page
+    {
+        let mut history = div().flex().flex_col().gap_1();
+        for (index, commit) in details.history.iter().take(12).enumerate() {
+            let identity = details.identity.clone();
+            let oid = commit.oid.clone();
+            let path = (details.page == GitPage::FileHistory)
+                .then(|| details.history_path.clone())
+                .flatten();
+            history = history.child(button(
+                ("backup-sync-history", index),
+                format!(
+                    "{} · {} · {}",
+                    commit.subject, commit.author_name, commit.authored_iso
+                ),
+                true,
+                palette,
+                cx,
+                move |app, _, cx| {
+                    app.inspect_git(
+                        identity.clone(),
+                        Some(oid.clone()),
+                        path.clone(),
+                        false,
+                        false,
+                        cx,
+                    )
+                },
+            ));
+        }
+        if details.history.is_empty() {
+            history = history.child(
+                if details.page == GitPage::FileHistory && details.history_path.is_none() {
+                    app.git_label(GitMsg::FileHistoryUnavailable)
+                } else {
+                    app.git_label(GitMsg::Empty)
+                },
+            );
+        }
+        body = body.child(history);
+    }
+
+    body = body.child(button(
+        "backup-sync-advanced-toggle",
+        app.git_label(if app.git_ui.advanced_open {
+            GitMsg::HideAdvancedGitDetails
+        } else {
+            GitMsg::AdvancedGitDetails
+        }),
+        true,
+        palette,
+        cx,
+        |app, _, cx| {
+            app.git_ui.advanced_open = !app.git_ui.advanced_open;
+            cx.notify();
+        },
+    ));
+    body.when(app.git_ui.advanced_open, |body| {
+        body.child(advanced_panel_body(app, cx))
+    })
+}
+
+pub(super) fn center_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
+    let palette = app.palette();
+    div()
+        .id("backup-sync-center-overlay")
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .bg(rgba(0x00000055))
+        .px_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .id("backup-sync-center-panel")
+                .occlude()
+                .w_full()
+                .max_w(px(640.))
+                .max_h(px(760.))
+                .bg(palette.panel_bg)
+                .border_1()
+                .border_color(palette.border)
+                .rounded_lg()
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .child(panel_body(app, cx)),
+        )
+}
+
+fn advanced_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
     let palette = app.palette();
     let details = app
         .git_ui
@@ -1205,7 +1773,6 @@ pub(super) fn panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl
                         .unwrap_or_else(|| app.workspace_root.display().to_string()),
                 ),
         )
-        .child(workspace_entry(app, cx))
         .child(button(
             "git-refresh",
             app.git_label(GitMsg::Refresh),
@@ -1238,14 +1805,6 @@ pub(super) fn panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl
                 cx,
                 |app, _, cx| app.cancel_git_operation(cx),
             ));
-    }
-    if app
-        .git_ui
-        .conflict
-        .as_ref()
-        .is_some_and(|view| details.is_some_and(|details| view.identity == details.identity))
-    {
-        return body.child(git_conflicts::conflict_panel(app, cx));
     }
     let Some(details) = details else {
         return body
@@ -1911,7 +2470,7 @@ impl MarkionApp {
                 match result {
                     Ok(()) => {
                         app.git_ui.recovery_guards.remove(&identity);
-                        if app.git_conflict_admission.as_ref().and_then(|guard| guard.identity()) == Some(&identity) { app.git_conflict_admission = None; app.git_ui.conflict = None; }
+                        if app.git_conflict_admission.as_ref().and_then(|guard| guard.identity()) == Some(&identity) { app.git_conflict_admission = None; app.git_ui.conflict = None; app.git_ui.conflict_surface_open = false; }
                         app.status = app.tr(Msg::StatusGitSyncComplete).into();
                     }
                     Err(error) => app.status = app.trf(Msg::StatusGitSyncFailed, &[&error]),
@@ -1965,6 +2524,7 @@ fn parse_scope(value: &str) -> Result<Vec<PathBuf>, ()> {
 pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let form = app.git_ui.settings.as_ref().expect("settings visible");
     let palette = app.palette();
+    let presentation = backup_sync_presentation(app);
     let labels = [
         GitMsg::TrackedRoots,
         GitMsg::NewRoots,
@@ -1972,6 +2532,35 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> D
         GitMsg::Name,
         GitMsg::Email,
     ];
+    let mut advanced_fields = div().flex().flex_col().gap_2();
+    for (index, label) in labels.into_iter().enumerate() {
+        advanced_fields = advanced_fields.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(app.git_label(label))
+                .child(search_field_view(
+                    SearchField::Git(index),
+                    &form.fields[index],
+                    app.search_focus == Some(SearchField::Git(index)),
+                    false,
+                    palette,
+                    cx,
+                )),
+        );
+    }
+    let location = RemoteUrl::parse(form.policy.target.fetch_url.clone())
+        .ok()
+        .and_then(|remote| remote.host)
+        .unwrap_or_else(|| form.policy.target.remote.clone());
+    let recovery_items = app
+        .git_ui
+        .snapshot
+        .as_ref()
+        .filter(|details| details.identity == form.policy.identity)
+        .map_or(0, |details| details.recovery.len());
     div()
         .absolute()
         .inset_0()
@@ -1993,30 +2582,18 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> D
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(app.git_label(GitMsg::Settings))
-                .child(form.policy.identity.worktree_root.display().to_string())
-                .child(app.git_label(GitMsg::WholeHistory))
-                .children(labels.into_iter().enumerate().map(|(index, label)| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .child(app.git_label(label))
-                        .child(search_field_view(
-                            SearchField::Git(index),
-                            &form.fields[index],
-                            app.search_focus == Some(SearchField::Git(index)),
-                            false,
-                            palette,
-                            cx,
-                        ))
-                }))
+                .child(app.git_label(GitMsg::BackupAndSync))
+                .child(backup_sync_state_label(app, &presentation))
+                .child(format!(
+                    "{}: {}",
+                    app.git_label(GitMsg::SyncLocation),
+                    location
+                ))
                 .child(button(
                     "git-policy-background",
                     format!(
                         "{}: {}",
-                        app.tr(Msg::PrefPanelGitBackgroundCheck),
+                        app.git_label(GitMsg::WorkspaceBackgroundCheck),
                         app.git_label(if form.policy.background_fetch {
                             GitMsg::Enabled
                         } else {
@@ -2033,6 +2610,51 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> D
                         cx.notify();
                     },
                 ))
+                .child(
+                    div()
+                        .text_color(palette.muted)
+                        .child(app.git_label(GitMsg::BackgroundCheckHelp)),
+                )
+                .when(recovery_items > 0, |view| {
+                    view.child(format!(
+                        "{}: {}",
+                        app.git_label(GitMsg::Recovery),
+                        recovery_items
+                    ))
+                })
+                .child(button(
+                    "git-disconnect-workspace",
+                    app.git_label(GitMsg::Disconnect),
+                    app.git_ui.running.is_none(),
+                    palette,
+                    cx,
+                    |app, _, cx| {
+                        app.git_ui.settings = None;
+                        app.search_focus = None;
+                        app.disconnect_git(cx);
+                    },
+                ))
+                .child(button(
+                    "git-settings-advanced",
+                    app.git_label(if form.advanced {
+                        GitMsg::HideAdvancedGitSettings
+                    } else {
+                        GitMsg::AdvancedGitSettings
+                    }),
+                    app.git_ui.running.is_none(),
+                    palette,
+                    cx,
+                    |app, _, cx| {
+                        if let Some(form) = &mut app.git_ui.settings {
+                            form.advanced = !form.advanced;
+                        }
+                        cx.notify();
+                    },
+                ))
+                .when(form.advanced, |view| {
+                    view.child(app.git_label(GitMsg::WholeHistory))
+                        .child(advanced_fields)
+                })
                 .child(
                     div()
                         .flex()
@@ -2073,6 +2695,8 @@ pub(super) fn onboarding_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
     };
     let primary = if setup.error.is_some() {
         app.git_label(GitMsg::Retry)
+    } else if setup.advanced_required {
+        app.git_label(GitMsg::AdvancedRepositorySetup)
     } else {
         app.git_label(match setup.mode {
             GitOnboardingMode::UseCurrentFolder => GitMsg::UseThisFolder,
@@ -2082,9 +2706,9 @@ pub(super) fn onboarding_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
     };
     let labels = [
         if setup.mode == GitOnboardingMode::UseCurrentFolder {
-            GitMsg::RemoteUrlOptional
+            GitMsg::SyncAddressOptional
         } else {
-            GitMsg::RemoteUrl
+            GitMsg::SyncAddress
         },
         GitMsg::Destination,
         GitMsg::Branch,
@@ -2141,7 +2765,7 @@ pub(super) fn onboarding_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
                 .flex()
                 .flex_col()
                 .gap_3()
-                .child(app.tr(Msg::ItemGitSyncSetup))
+                .child(app.git_label(GitMsg::TurnOn))
                 .child(
                     div()
                         .text_color(palette.muted)
@@ -2149,76 +2773,143 @@ pub(super) fn onboarding_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
                 )
                 .child(
                     div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .child(button(
-                            "git-setup-current",
-                            selected_label(
-                                GitOnboardingMode::UseCurrentFolder,
-                                GitMsg::UseThisFolder,
-                            ),
-                            !setup.busy,
-                            palette,
-                            cx,
-                            |app, window, cx| {
-                                app.set_git_onboarding_mode(
-                                    GitOnboardingMode::UseCurrentFolder,
-                                    window,
-                                    cx,
-                                )
-                            },
-                        ))
-                        .child(button(
-                            "git-setup-clone",
-                            selected_label(
-                                GitOnboardingMode::CloneRepository,
-                                GitMsg::CloneNotesRepository,
-                            ),
-                            !setup.busy,
-                            palette,
-                            cx,
-                            |app, window, cx| {
-                                app.set_git_onboarding_mode(
-                                    GitOnboardingMode::CloneRepository,
-                                    window,
-                                    cx,
-                                )
-                            },
-                        ))
-                        .child(button(
-                            "git-setup-initialize",
-                            selected_label(
-                                GitOnboardingMode::InitializeFolder,
-                                GitMsg::StartSyncingFolder,
-                            ),
-                            !setup.busy,
-                            palette,
-                            cx,
-                            |app, window, cx| {
-                                app.set_git_onboarding_mode(
-                                    GitOnboardingMode::InitializeFolder,
-                                    window,
-                                    cx,
-                                )
+                        .text_size(px(12.))
+                        .text_color(palette.muted)
+                        .child(app.git_label(GitMsg::SyncMirrorsChangesHelp)),
+                )
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(selected_label(
+                            setup.mode,
+                            match setup.mode {
+                                GitOnboardingMode::UseCurrentFolder => GitMsg::UseThisFolder,
+                                GitOnboardingMode::CloneRepository => GitMsg::CloneNotesRepository,
+                                GitOnboardingMode::InitializeFolder => GitMsg::StartSyncingFolder,
                             },
                         )),
                 )
-                .child(fields)
                 .child(button(
-                    "git-setup-advanced",
-                    app.git_label(GitMsg::Advanced),
+                    "git-setup-alternatives",
+                    app.git_label(if setup.alternatives_open {
+                        GitMsg::HideSetupOptions
+                    } else {
+                        GitMsg::OtherSetupOptions
+                    }),
                     !setup.busy,
                     palette,
                     cx,
-                    |app, _, cx| app.toggle_git_onboarding_advanced(cx),
+                    |app, _, cx| app.toggle_git_onboarding_alternatives(cx),
                 ))
-                .when(setup.advanced, |view| {
+                .when(setup.alternatives_open, |view| {
                     view.child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_1()
+                            .child(button(
+                                "git-setup-current",
+                                selected_label(
+                                    GitOnboardingMode::UseCurrentFolder,
+                                    GitMsg::UseThisFolder,
+                                ),
+                                !setup.busy,
+                                palette,
+                                cx,
+                                |app, window, cx| {
+                                    app.set_git_onboarding_mode(
+                                        GitOnboardingMode::UseCurrentFolder,
+                                        window,
+                                        cx,
+                                    )
+                                },
+                            ))
+                            .child(button(
+                                "git-setup-clone",
+                                selected_label(
+                                    GitOnboardingMode::CloneRepository,
+                                    GitMsg::CloneNotesRepository,
+                                ),
+                                !setup.busy,
+                                palette,
+                                cx,
+                                |app, window, cx| {
+                                    app.set_git_onboarding_mode(
+                                        GitOnboardingMode::CloneRepository,
+                                        window,
+                                        cx,
+                                    )
+                                },
+                            ))
+                            .child(button(
+                                "git-setup-initialize",
+                                selected_label(
+                                    GitOnboardingMode::InitializeFolder,
+                                    GitMsg::StartSyncingFolder,
+                                ),
+                                !setup.busy,
+                                palette,
+                                cx,
+                                |app, window, cx| {
+                                    app.set_git_onboarding_mode(
+                                        GitOnboardingMode::InitializeFolder,
+                                        window,
+                                        cx,
+                                    )
+                                },
+                            )),
+                    )
+                })
+                .child(fields)
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(palette.muted)
+                        .child(app.git_label(GitMsg::SyncAddressHelp)),
+                )
+                .when(setup.advanced_required, |view| {
+                    view.child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(app.git_label(GitMsg::AdvancedRepositorySetup)),
+                    )
+                })
+                .when(!setup.advanced_required, |view| {
+                    view.child(button(
+                        "git-setup-advanced",
+                        app.git_label(GitMsg::Advanced),
+                        !setup.busy,
+                        palette,
+                        cx,
+                        |app, _, cx| app.toggle_git_onboarding_advanced(cx),
+                    ))
+                })
+                .when(setup.advanced, |view| {
+                    let view = view.child(
                         div()
                             .text_color(palette.muted)
                             .child(app.git_label(GitMsg::WholeHistory)),
-                    )
+                    );
+                    match setup.repository_root.as_deref() {
+                        Some(repository_root)
+                            if repository_root != app.workspace_root.as_path() =>
+                        {
+                            view.child(div().text_color(palette.muted).child(format!(
+                                "{}: {}",
+                                app.git_label(GitMsg::NotesFolder),
+                                app.workspace_root.display()
+                            )))
+                            .child(
+                                div().text_color(palette.muted).child(format!(
+                                    "{}: {}",
+                                    app.git_label(GitMsg::RepositoryFolder),
+                                    repository_root.display()
+                                )),
+                            )
+                        }
+                        _ => view,
+                    }
                 })
                 .when_some(setup.error.clone(), |view, error| {
                     view.child(div().text_color(palette.invalid).child(error))
@@ -2252,7 +2943,7 @@ pub(super) fn onboarding_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
 
 pub(super) fn preferences_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let palette = app.palette();
-    div()
+    let advanced = div()
         .flex()
         .flex_col()
         .gap_1()
@@ -2261,7 +2952,7 @@ pub(super) fn preferences_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -
                 .text_size(px(12.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(palette.muted)
-                .child(app.tr(Msg::PrefPanelGitSection)),
+                .child(app.git_label(GitMsg::AdvancedGitSettings)),
         )
         .child(
             div()
@@ -2310,12 +3001,23 @@ pub(super) fn preferences_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -
                         app.detect_git_executable(cx);
                     },
                 )),
+        );
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(palette.muted)
+                .child(app.git_label(GitMsg::BackupAndSync)),
         )
         .child(button(
-            "git-background-setting",
+            "git-global-background-setting",
             format!(
                 "{}: {}",
-                app.tr(Msg::PrefPanelGitBackgroundCheck),
+                app.git_label(GitMsg::GlobalBackgroundCheck),
                 app.git_label(if app.git_preferences.background_check {
                     GitMsg::Enabled
                 } else {
@@ -2330,6 +3032,28 @@ pub(super) fn preferences_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -
                 app.poll_git_background_check(cx);
             },
         ))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(palette.muted)
+                .child(app.git_label(GitMsg::BackgroundCheckHelp)),
+        )
+        .child(button(
+            "git-preferences-advanced",
+            app.git_label(if app.git_ui.preferences_advanced {
+                GitMsg::HideAdvancedGitSettings
+            } else {
+                GitMsg::AdvancedGitSettings
+            }),
+            app.git_ui.running.is_none(),
+            palette,
+            cx,
+            |app, _, cx| {
+                app.git_ui.preferences_advanced = !app.git_ui.preferences_advanced;
+                cx.notify();
+            },
+        ))
+        .when(app.git_ui.preferences_advanced, |view| view.child(advanced))
 }
 
 pub(super) fn inspection_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {

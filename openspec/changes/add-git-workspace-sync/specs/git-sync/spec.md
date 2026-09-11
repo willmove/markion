@@ -1,15 +1,30 @@
 ## ADDED Requirements
 
-### Requirement: Repository status SHALL distinguish all persistence layers
-Markion SHALL independently expose unsaved buffers, full-repository tracked/untracked/index changes, incoming/outgoing commit counts when known, in-progress operations, connectivity, and last remote confirmation time. The Git inventory SHALL include changes hidden or unsupported by the document tree. An unavailable remote observation SHALL be unknown or stale, not zero. Status reads SHALL be asynchronous, bounded, and independent of document parsing.
+### Requirement: Repository status SHALL project one truthful consumer-facing sync state
+Markion SHALL retain independent source dimensions for unsaved buffers, full-repository tracked/untracked/index changes, incoming/outgoing commit counts when known, in-progress operations, connectivity, conflicts/recovery, authentication, policy/capability blocks, uncertain delivery, and last remote confirmation time. It SHALL project them into one prioritized ordinary state: not configured, running, pending locally, incoming updates, synchronized with confirmation time, offline with local work retained, authentication needed, conflict/recovery, uncertain delivery, or needs attention. Conflict/recovery, uncertain delivery, policy/capability blocks, and authentication SHALL take precedence over healthy idle summaries; running progress SHALL take precedence over idle counts.
+
+The ordinary state SHALL use note and device language while complete technical dimensions remain available in Advanced Git details. The app SHALL NOT call a file save or local-only commit a remote backup, SHALL NOT call an unknown/stale remote observation synchronized, and SHALL qualify a confirmed delivered snapshot when newer local edits remain. Setup/help SHALL explain that synchronization propagates supported edits and deletions and that Version History, not an implied immutable archive, is the recovery path. The complete Git inventory SHALL include changes hidden or unsupported by the document tree. An unavailable remote observation SHALL be unknown or stale, not zero. Status reads SHALL be asynchronous, bounded, and independent of document parsing.
 
 #### Scenario: Hidden file changes outside the document tree
 - **WHEN** Git reports a changed path absent from the document tree
-- **THEN** the Sync inventory includes that path with its actual status and indicates its document-tree omission
+- **THEN** the ordinary state reports an item needing attention and Advanced Git inventory includes that path with its actual status and document-tree omission
 
 #### Scenario: Network is unavailable
 - **WHEN** the app cannot refresh remote state
-- **THEN** it preserves local status and the last remote check time while marking remote information stale or unavailable
+- **THEN** it preserves local status and the last confirmed time while ordinary wording states that work remains saved on this computer and remote information is unavailable
+- **AND** it does not report synchronized merely because local files or history are intact
+
+#### Scenario: Confirmed delivery has newer local edits
+- **WHEN** a previously captured snapshot is confirmed at the sync location and the user has since changed a note
+- **THEN** the ordinary state distinguishes the confirmed snapshot from the new items waiting to synchronize
+
+#### Scenario: Delivery outcome is uncertain
+- **WHEN** a push response is lost and remote history cannot yet confirm the intended commit
+- **THEN** uncertain delivery overrides a healthy or pending summary and the primary action checks status before another upload attempt
+
+#### Scenario: User reviews backup semantics
+- **WHEN** setup or Backup and Sync help explains what synchronization protects
+- **THEN** it states that edits and deletions propagate to the sync location and points to Version History for recovery without promising immutable or unlimited retention
 
 ### Requirement: Sync Now SHALL provide the complete one-click manual workflow
 After initial connection/policy approval, Sync Now SHALL save eligible named buffers, create a nonempty local commit with an automatic message when required, fetch the bound remote, safely integrate changes, push the captured result, and confirm the outcome. Routine eligible changes SHALL NOT require repeated file selection or message entry. Unnamed, foreign and excluded buffers SHALL remain untouched and visibly excluded. Eligible save failure SHALL stop before staging/commit while preserving successful saves and all recoverable work.
@@ -85,8 +100,12 @@ The app SHALL push a captured commit OID to exactly the bound full remote branch
 - **WHEN** the captured commit is confirmed remotely but the user has since edited a note
 - **THEN** the app reports the captured content delivered and separately reports pending local changes
 
-### Requirement: Secondary Git actions SHALL have predictable effects
-Commit Locally SHALL save and commit eligible content without networking. Check Remote SHALL fetch without saving, committing, integrating, or pushing. Pull Updates SHALL fetch and safely integrate without implicitly saving dirty buffers or creating a content snapshot commit, although divergence can create a merge commit. Push Commits SHALL send existing captured history without saving or committing files and without integrating remote changes.
+### Requirement: Advanced Git actions SHALL remain available with predictable effects
+Commit Locally, Check Remote, Pull Updates, and Push Commits SHALL be available only after an explicit Advanced Git disclosure or command invocation rather than as equal ordinary Backup and Sync actions. Commit Locally SHALL save and commit eligible content without networking. Check Remote SHALL fetch without saving, committing, integrating, or pushing. Pull Updates SHALL fetch and safely integrate without implicitly saving dirty buffers or creating a content snapshot commit, although divergence can create a merge commit. Push Commits SHALL send existing captured history without saving or committing files and without integrating remote changes.
+
+#### Scenario: Ordinary center is opened
+- **WHEN** a user opens Backup and Sync details without expanding Advanced Git tools
+- **THEN** the app shows one state-appropriate primary action and does not require choosing among commit, fetch, pull, or push
 
 #### Scenario: User checks for remote changes while editing
 - **WHEN** Check Remote runs while a buffer is dirty
@@ -116,7 +135,7 @@ The app SHALL serialize operations per repository and coordinate shared Git dire
 - **THEN** the app reaches a safe boundary or stops owned processes and reconciles state before resuming repository writes
 
 ### Requirement: Optional background checks SHALL never write synchronization changes
-Background remote checking SHALL default off and be separately enabled. It SHALL operate only for the currently active connected workspace, use bounded scheduling/backoff with one request at a time, and perform fetch only. It SHALL NOT save documents, create commits, integrate, push, or open repeated interactive authentication prompts. Inactive repositories SHALL NOT receive new scheduled checks. Unchanged results SHALL stay quiet.
+Background remote checking SHALL default off and be separately enabled. Ordinary labels and descriptions SHALL state that it checks for updates from other devices and does not automatically upload or apply changes. It SHALL operate only for the currently active connected workspace, use bounded scheduling/backoff with one request at a time, and perform fetch only. It SHALL NOT save documents, create commits, integrate, push, or open repeated interactive authentication prompts. Inactive repositories SHALL NOT receive new scheduled checks. Unchanged results SHALL stay quiet.
 
 #### Scenario: Background check discovers remote changes
 - **WHEN** an enabled background fetch finds new remote commits

@@ -39,9 +39,10 @@ pub use journal::{
     OperationSummary, PreimageEntry, PreimageManifest,
 };
 pub use model::{
-    ChangeKind, ConflictKind, ConnectionState, DocumentSyncState, FileChange, GitObjectId,
-    HistoryRelation, OperationKind, OperationPhase, OperationProgress, RepositoryCapabilities,
-    RepositoryIdentity, RepositorySnapshot, SyncOutcome, SyncPlan, SyncTarget, WorktreeState,
+    BackupSyncAction, BackupSyncFacts, BackupSyncPresentation, BackupSyncState, ChangeKind,
+    ConflictKind, ConnectionState, DocumentSyncState, FileChange, GitObjectId, HistoryRelation,
+    OperationKind, OperationPhase, OperationProgress, RepositoryCapabilities, RepositoryIdentity,
+    RepositorySnapshot, SyncOutcome, SyncPlan, SyncTarget, WorktreeState,
 };
 pub use policy::{
     NewFileClass, NewFileRule, PathDecision, PolicyError, PolicyStore, RepositoryPolicy,

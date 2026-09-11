@@ -1,6 +1,6 @@
 ## Context
 
-The confirmed user priority is personal notes across computers with one-click sync. Git is the transport and durable local history; routine use must not require staging knowledge, a commit-message form, or repeated approval of unchanged policy. Collaboration-grade conflict safety is still necessary because one person can edit the same note on two devices.
+The confirmed user priority is personal notes across computers with one-click sync. Git is the transport and durable local history, but the first UI implementation exposes a persistent Sync navigation mode, repeated Sync/Sync Now entry points, repository structure, staging/history layers, and secondary Git operations during routine note-taking. Ordinary use must instead answer one question—whether notes are safely synchronized—without requiring Git vocabulary, while collaboration-grade conflict safety remains necessary because one person can edit the same note on two devices.
 
 Current integration points:
 
@@ -14,6 +14,8 @@ Current integration points:
 | `configure-silent-save-in-preferences` permits recovery-only autosave | Explicit Sync Now saves eligible named documents even with silent save off; background fetch never does. |
 | The document tree filters file types and directories | Git status needs an independent complete inventory. |
 | Managed images have document-relative URLs | Include their bytes in the approved policy and invalidate changed images independently of Markdown source versions. |
+| The left rail persists `Files`, `Outline`, or `Sync` while Files and status chrome also expose sync controls | Replace the navigation mode and duplicate actions with one workspace-bound, stateful entry; migrate a persisted `Sync` selection to `Files`. |
+| The implemented details panel exposes low-level status and four secondary Git operations at equal prominence | Preserve those capabilities under an advanced disclosure while projecting a smaller, truthful everyday state. |
 
 Some completed changes are not archived and stable specs still describe older session/autosave behavior. Apply against the current code and those changes, retain their behavior, and reconcile archive ordering rather than restoring obsolete contracts. The added requirements here do not replace their complete requirement blocks.
 
@@ -22,8 +24,10 @@ Some completed changes are not archived and stable specs still describe older se
 **Goals:**
 
 - A configured notes workspace synchronizes through one user action with automatic local commits and messages.
-- Clone/connect/initialize onboarding works for ordinary repositories over HTTPS and SSH.
+- A person can understand setup, current safety, required action, and recovery without knowing commits, remotes, branches, staging, fetch, pull, or push.
+- Clone/connect/initialize onboarding works for ordinary repositories over HTTPS and SSH through one contextual default route and advanced alternatives.
 - Distinguish memory, disk, local history, and last-confirmed remote state.
+- Retain full technical inspection and explicit Git operations for advanced users without making them part of the default navigation hierarchy.
 - Preserve unsaved content, existing staging, attachments, local commits, and conflict drafts across errors and interruption.
 - Keep all process/network/scanning work off the GPUI render and typing paths.
 - Deliver the full manual conflict/recovery loop before exposing the feature as ready.
@@ -32,6 +36,7 @@ Some completed changes are not archived and stable specs still describe older se
 
 - Background commit, merge, or push; automatic last-writer-wins conflict choices.
 - General branch management, interactive rebase, stash UI, force pushes, history rewriting, whole-repository restore, host-specific repository creation APIs.
+- Managed Markion storage, provider sign-in, or automatic creation of a hosted repository; the first release still requires an existing HTTPS/SSH sync address when publishing or obtaining notes.
 - Bundling Git; writing linked worktrees, submodules, LFS-managed repositories, bare/sparse/partial/shallow repositories. Detect these and explain limitations without changing them.
 - Synchronizing credentials, application settings, layout, session records, or recovery directories between computers.
 
@@ -65,7 +70,7 @@ Controllers are keyed by repository identity. Serialize their operations and use
 
 Alternative: attach sync state to `EditorTab` or only to recent-workspace entries. Rejected because tabs can be foreign and recent entries are evicted.
 
-### 3. Three onboarding routes, one binding model
+### 3. Contextual onboarding routes, one binding model
 
 | Route | Behavior |
 | --- | --- |
@@ -77,7 +82,18 @@ Use the remote's advertised default branch where available; if absent/ambiguous 
 
 First sync has a setup review of candidate files and outgoing history. Subsequent ordinary sync has no confirmation. Cancelling setup preserves the current workspace; local initialization already completed before a network failure remains visible and reconnectable instead of being destructively rolled back.
 
-The application presents these routes as a compact quick-start sheet rather than a Git configuration form. If the open folder is already an ordinary repository, **Use This Folder** is primary. Otherwise **Clone Notes Repository** asks only for the remote URL and destination (derived from the repository name), while **Start Syncing This Folder** asks for a remote URL only when publishing is wanted. The suggested initial branch is `main`; discovered upstream/default branches replace the suggestion. Repository scope, endpoints, author identity, and the whole-history explanation remain visible in a review/advanced section before writes are authorized.
+The three backend routes remain available, but the application does not present them as three equal Git choices. Discovery selects one contextual primary route:
+
+| Detected context | Ordinary primary route | Secondary path |
+| --- | --- | --- |
+| The open folder is the root of a suitable ordinary notes repository | **Use This Folder for Backup and Sync** | Review another sync address or Git details |
+| The open folder contains notes but is not a repository | **Enable Backup and Sync for This Folder** | Obtain an existing set of notes instead |
+| The user is opening an empty/new location to obtain notes | **Get Notes from an Existing Sync Address** | Choose another local destination |
+| The workspace is nested in a larger repository or discovery finds unrelated tracked content/history | **Review Advanced Repository Setup** | Cancel without changing the folder |
+
+The basic sheet uses **sync address**, **notes folder**, and **backup and sync** language. It asks only for information required by the selected route, derives the destination where possible, explains where an address comes from, and reveals alternatives through a secondary link. Branch, remote name, author identity, policy exceptions, existing staging, and whole-history consequences stay in advanced review. The suggested initial branch is `main` only when no branch is discovered. A nested or mixed repository never receives a broad ordinary-mode authorization merely because the workspace is inside it.
+
+This contextual presentation does not remove the transport prerequisite: without provider APIs the user must already have an HTTPS/SSH sync address for clone or publication. Installation, missing-Git, credential, and address guidance use task language first and identify Git only in troubleshooting/advanced details.
 
 Clone and initialize run in background tasks and reuse `OnboardingService`; workspace activation happens only after the destination is complete. Initialization against an empty remote persists a resumable first-publication state so a network or authentication failure can be retried without repeating initialization or losing the local commit. The ordinary configured state collapses setup and keeps **Sync Now** as the primary action.
 
@@ -104,7 +120,7 @@ Explicit setup and synchronization operations enable system Git's foreground cre
 
 Initial bounded defaults: 15 seconds for ordinary metadata commands, 60 seconds network inactivity with a visible extension/retry action, and a visible long-operation state after 10 seconds for local mutations. Never assume a killed mutation rolled back. Text diff display limit: 2 MiB per file and 10 MiB per view; larger files show metadata and an explicit external-open option. History pages contain 50 commits. These are app presentation/runtime limits, not remote hosting limits.
 
-### 5. Independent status dimensions and a small everyday surface
+### 5. Independent status dimensions projected into one everyday state
 
 | Dimension | Representative values |
 | --- | --- |
@@ -114,23 +130,42 @@ Initial bounded defaults: 15 seconds for ordinary metadata commands, 60 seconds 
 | History relation | Unknown, equal, ahead, behind, diverged, unrelated, rewritten/deleted target |
 | Operation | Idle, preparing, saving, committing, fetching, integrating, resolving, pushing, verifying, needs attention |
 
-Counts for ahead/behind are relative to a known remote snapshot and display its checked time. No upstream means unknown, not zero. A successful operation can coexist with new local edits. Offline state retains the last confirmation timestamp.
+Counts for ahead/behind are relative to a known remote snapshot and display its checked time. No upstream means unknown, not zero. A successful operation can coexist with new local edits. Offline state retains the last confirmation timestamp. These independent dimensions remain the technical source of truth, but ordinary chrome projects them into one prioritized state:
+
+| Projected state | Example ordinary wording | Primary action |
+| --- | --- | --- |
+| Not configured | Backup and sync is off | Turn On |
+| Running | Saving and syncing 3 items | View Progress |
+| Pending locally | 3 items waiting to sync | Sync Now |
+| Incoming | Another device has updates | Sync Now |
+| Synchronized | Synchronized · today 14:32 | View Status |
+| Offline | Saved on this computer; waiting for a connection | Retry |
+| Authentication needed | Reconnect the sync location | Reconnect |
+| Conflict or recovery | 1 note version needs attention | Resolve |
+| Delivery uncertain | The last upload needs verification | Check Status |
+| Unsupported or policy-blocked | Backup and sync needs attention | Review |
+
+Conflict/recovery, uncertain delivery, unsupported/policy-blocked state, and authentication take precedence over clean/pending summaries. A running operation takes precedence over idle counts. Offline qualifies local preservation but does not erase pending or last-confirmed information. **Synchronized** is permitted only when the configured target has a durable confirmation and the displayed local snapshot is known delivered; a local file save or local commit alone is never called a backup to another location. When new edits exist after confirmed delivery, the state reports both the delivered snapshot and the new pending items.
+
+Backup and Sync setup/help states that synchronization mirrors supported edits and deletions to the configured location; it is not an immutable archive. Version History is presented as the way to inspect or recover earlier note content, subject to the retained Git history rather than an unlimited-retention promise.
 
 ```text
-My Notes                                      [Sync Now]
-Saved locally - 3 changes
-Last synchronized: today 14:32                 [View Changes]
+My Notes                 [3 items waiting to sync] [Sync Now]
+                         last confirmed today 14:32
 
-Sync sidebar details:
-Repository / remote / branch / last check
-Complete changes | outgoing commits | recent history
-Activity and actionable errors
-More: Commit Locally / Check Remote / Pull Updates / Push Commits
+Backup and Sync center (transient):
+State / primary action / actionable explanation
+Sync location / last confirmed time
+Items waiting here / updates from another device
+Sync activity | version history | settings
+Advanced Git details (collapsed)
 ```
 
-The sidebar is optional during routine sync. Existing workspace-header click/drag behavior stays intact by using a distinct sync control. File-tree decorations only annotate already-visible rows; omitted files still appear in the full Git list. Commands use existing action registration and customizable shortcuts without assigning conflicting defaults. Compact widths collapse details rather than overlapping the existing status row. Status is conveyed by text/icons as well as color.
+Workspace chrome contains one compact Backup and Sync entry group: its summary opens the transient center and its single context-sensitive action preserves the one-click routine path. There is no persistent Sync sidebar tab and Files does not repeat another Sync/Sync Now pair. The center closes without becoming a workspace navigation state. The application menu mirrors the same ordinary actions; Commit Locally, Check Remote, Pull Updates, Push Commits, raw status, branch/upstream/path, staged/unstaged layers, outgoing commits, and repository diagnostics live under **Advanced Git Tools** or **Advanced Git Details**.
 
-Recent history is read-only with commit/file diff and Save a Copy from a historical blob; restoring an entire repository or rewriting a current branch is deferred. Any copy saved into the repository uses the same write coordination as other file writes.
+Existing workspace-header click/drag behavior stays intact by using a distinct sync control. File-tree decorations only annotate already-visible rows; omitted files still appear in the advanced complete Git inventory. Commands use existing action registration and customizable shortcuts without assigning conflicting defaults. Compact widths shorten labels or move nonessential timestamp detail into the center rather than overlapping metrics, hiding the primary error, or creating uncontrolled rows. Status is conveyed by text/icons as well as color; the entry and center retain keyboard operation and visible focus.
+
+Recent sync activity is read-only with bounded commit/file diff and Save a Copy from a historical blob; restoring an entire repository or rewriting a current branch is deferred. Per-file **Version History** is available from file/tree/tab context so recovery does not require navigating a repository dashboard. Any copy saved into the repository uses the same write coordination as other file writes.
 
 ### 6. Operation semantics and checkpoints
 
@@ -192,7 +227,7 @@ Invalidate image-tab/preview cache entries for changed resource paths even if re
 
 Never enter integration until existing dirty-buffer/disk conflicts have been resolved through their current UI. For a Git merge conflict, record operation ID, base/local/remote OIDs and indexed conflict stages. Ordinary document views of conflict-owned paths become read-only with a link to the resolver; pre-existing views cannot silently autosave merge-marker text.
 
-The resolver shows local, base and remote source plus an editable result. Use personal language (This Computer / Remote Version) with branch and commit metadata in details, since a remote commit may originate from a different device or person. Support per-hunk local/remote/both choices and full-source edits; Markdown preview is optional and is not the conflict source of truth.
+The resolver opens as a focused, adequately sized dialog or dedicated recovery surface rather than inside the narrow navigation rail. Its default comparison uses **This Computer Version**, **Synced Version**, and **Combined Result**; common actions use **Use This Version**, **Keep Both**, **This File Is Resolved**, and **Finish and Continue Sync**. Base source, branch/commit metadata, OIDs, index stages, and raw hunk information stay in technical details because a remote commit may originate from a different device or person. Support per-hunk local/remote/both choices and full-source edits; Markdown preview is optional and is not the conflict source of truth.
 
 | Conflict | Resolution |
 | --- | --- |
@@ -204,7 +239,7 @@ The resolver shows local, base and remote source plus an editable result. Use pe
 
 Draft save does not stage or complete a resolution. Explicit Mark Resolved writes the chosen result through the coordinator and updates the conflict index only after verifying session OIDs and current path identities. Consult index stages, not only marker-string scanning. A legitimate Markdown document can quote conflict markers. Keep-both does not guarantee valid Markdown or correct references and exposes the result for inspection.
 
-Finish Merge is enabled only after all index conflicts are cleared and draft versions match written results. It creates the merge commit, respects signing/hooks, and returns to the sync flow; after interactive resolution provide an explicit Finish and Push action rather than surprising background upload. Abort persists user drafts first, verifies that this app owns the merge state, and uses supported Git abort behavior. Retain the local snapshot commit created before merge. External repository changes block automatic abort; offer recovery copies and external inspection instead. External resolution can be adopted only after comparing the actual merge/HEAD/index state.
+Finish is enabled only after all index conflicts are cleared and draft versions match written results. It creates the merge commit, respects signing/hooks, and returns to the sync flow; after interactive resolution **Finish and Continue Sync** is explicit rather than a surprising background upload. Advanced details can identify this as Finish Merge/Push for Git users. Abort persists user drafts first, verifies that this app owns the merge state, and uses supported Git abort behavior. Retain the local snapshot commit created before merge. External repository changes block automatic abort; offer recovery copies and external inspection instead. External resolution can be adopted only after comparing the actual merge/HEAD/index state.
 
 ### 10. Durable journal and recovery ownership
 
@@ -231,6 +266,8 @@ Retire successful operation data only after durable confirmation and no unresolv
 Use configured HTTPS credential helpers first, with a controlled askpass bridge for missing interactive input. Offer session-only credentials or storage through a detected secure helper; if none is available, do not configure plaintext credential storage. SSH uses user configuration, agent and known_hosts with explicit handling for unknown/changed host keys and encrypted keys. Never disable TLS/SSH verification to make sync work. Connection settings expose author name/email separately from remote login, default author changes to repository-local config, and keep signing requirements.
 
 Treat credential input, URL userinfo, helper output, stderr and redirects as sensitive for logging. Do not put tokens in process arguments or remote URLs. Credential helpers can open login UI only for explicit user operations; opt-in background fetch must use noninteractive capability or stop with Authentication Needed. If a helper cannot be reliably made noninteractive, background fetch for that binding is disabled.
+
+The ordinary **Backup and Sync** settings show whether the workspace is connected, a human-readable sync location, background update-check preference, disconnect, and recovery access. The background label explicitly states that it checks for updates from other devices and does not automatically upload or apply changes. Repository branch/endpoints, approved roots, message template, author identity, executable override/detection, and raw diagnostics are grouped under **Advanced Git Settings** or troubleshooting; global and per-repository background choices state their scope rather than appearing as duplicate unnamed toggles.
 
 Persist:
 
@@ -266,20 +303,24 @@ Document Windows/macOS/Linux executable, HTTPS helper, SSH-agent, clone, empty r
 - [Filters/LFS/special repositories exceed initial compatibility] -> Explicit detection and disabled write actions; never treat missing content or LFS pointers as synchronized images.
 - [Merge/history and recovery storage grow] -> Bounded display/log caches and retirement of confirmed owned recovery; no implicit Git GC/history rewriting or deletion of unresolved drafts.
 - [Scope is large despite simple UI] -> Stage implementation internally, but release only once the manual save/commit/merge/push/conflict/recovery path passes. Background writes remain a separate future change.
+- [A single projected state can hide a material distinction] -> Keep independent dimensions as source data, define explicit precedence, show last confirmation/pending qualifiers, and make complete diagnostics available under advanced details.
+- [Simplified wording could overpromise backup safety] -> Reserve synchronized/backup confirmation for verified remote delivery; say saved on this computer for disk/local-history states and identify propagated deletions/conflicts honestly.
+- [Existing advanced users lose a familiar persistent panel] -> Preserve every secondary command and inspection surface under Advanced Git Tools while removing only its default navigation prominence.
+- [First-use still requires Git and a remote address] -> State the prerequisite plainly and keep provider sign-in/managed storage as a separate future capability rather than implying this UI revision solves it.
 
 ## Migration Plan
 
-1. Introduce core models/process adapter and headless fixtures, then local settings with safe missing-field defaults. Do not change existing repositories on app launch.
-2. Integrate write admission and checked reload epochs across existing writers before enabling Git worktree mutation in UI.
-3. Implement onboarding, scope and manual operations, followed by complete conflict and restart recovery.
-4. Add compact UI, optional inspection and opt-in background fetch, all localization and user docs; pass automated and platform gates.
-5. Archive only after tasks and validation complete. Reconcile the unarchived workspace/autosave baseline; stable specs change only via normal delta sync/archive.
+1. Preserve the implemented core models, repository policy, write admission, operation journal, and Git execution semantics as the technical source of truth.
+2. Add and test the deterministic consumer-state projection before replacing entry points, so every prior engine outcome has an honest ordinary label and action.
+3. Replace the persistent Sync navigation tab and duplicate actions with the stateful entry/transient center. On load, map a persisted `Sync` sidebar selection to `Files` without changing repository policy, notes, or recovery.
+4. Reshape contextual onboarding, focused conflict recovery, menus, file-context history, and ordinary-versus-advanced settings; update every locale and user guide.
+5. Re-run root/workspace tests plus layout, keyboard, state-copy, onboarding, conflict, migration and two-clone regressions. Archive only after the remaining platform gate and revised tasks pass.
 
-Rollback disables the feature and scheduling without altering user repositories or dropping journals. Old app versions ignore additive global keys and the separate Git files. If rollback occurs during an unresolved merge, retain recovery and explain how to finish/abort with Git; never make downgrade silently write over that state.
+Rollback can restore the prior entry/panel while leaving engine state untouched; the sidebar migration is one-way only for presentation and does not remove repository data. Disabling the feature or scheduling never alters user repositories or drops journals. Old app versions ignore additive global keys and the separate Git files. If rollback occurs during an unresolved merge, retain recovery and explain how to finish/abort with Git; never make downgrade silently write over that state.
 
 ## Open Questions
 
-No product decision blocks implementation. The one-click priority, manual-write scope, system-Git backend, ordinary merge policy, and deferred capabilities are fixed for this proposal.
+No product decision blocks implementation. The single everyday entry, transient sync center, advanced Git layer, contextual setup, truthful state vocabulary, one-click priority, manual-write scope, system-Git backend, ordinary merge policy, and deferred provider/automatic-write capabilities are fixed for this proposal.
 
 Implementation validation items are explicit tasks: verify feature probes/minimum Git on each platform; prove credential-helper background noninteraction; exercise process-tree cancellation and interrupted-checkout recovery. If any cannot meet this contract, keep the affected operation disabled and revise this change's planning artifacts before widening support.
 

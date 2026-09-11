@@ -1,85 +1,92 @@
-# Git synchronization
+# Backup and Sync
 
-Markion can synchronize a notes workspace through an ordinary Git repository. The everyday action is **Sync Now** in the Repository menu or status bar. It saves eligible named notes from that repository, creates a local snapshot commit when content changed, fetches the configured upstream branch, fast-forwards or merges ordinary divergent history, and pushes one exact commit to the configured branch.
+Markion can keep a notes folder backed up at a sync location and bring changes made on another computer into the same folder. The feature is powered by Git, but routine use does not require Git knowledge: use the **Backup and Sync** status in the bottom bar, then choose the one action Markion offers.
 
-## Prerequisites
+## Before you start
 
-- Install Git 2.39 or newer and make `git` available on `PATH`. An alternate executable can be set with `[git] executable` in `config.toml`.
-- Use an ordinary, non-bare worktree on a named branch with one upstream remote branch.
-- Markion asks for a repository-local author name and email only when Git does not already have them. Login credentials are separate from commit authorship.
-- For HTTPS, use a secure platform credential helper such as Git Credential Manager or macOS Keychain. An explicit setup or sync can open the helper's system login prompt and offers Retry after authentication. Markion does not enable Git's plaintext `credential-store` helper or persist passwords and tokens.
-- For SSH, configure the user's SSH agent, keys, `~/.ssh/config`, and `known_hosts`. Markion does not disable host-key verification.
+- Install Git 2.39 or later. Markion normally finds it automatically.
+- Get a sync address from the service that will hold the notes. It is usually an HTTPS or SSH address and may require an account and access permission.
+- A dedicated folder or repository for notes is recommended. Markion will not silently include unrelated or unsafe files.
 
-Linked worktrees, submodules, Git LFS, bare, sparse, partial, shallow, detached-HEAD, and nested-repository workspaces are detected but remain read-only for synchronization.
+Passwords and access tokens are handled by the operating system or Git credential helper. Markion does not store them in its preferences, notes folder, logs, or command history. SSH users should configure their SSH agent, keys, host settings, and trusted hosts before connecting.
 
-## Start synchronizing notes
+## Turn on Backup and Sync
 
-Choose **Repository → Set Up Git Sync** or choose **Sync Now** in a folder that has not been connected yet. The quick start offers the three ordinary ways to begin:
+Open the notes folder and select **Backup and Sync → Turn on Backup and Sync**, or use the status-bar entry. Markion examines the folder and presents one recommended route:
 
-- **Use this folder** connects an already cloned Git repository. Markion discovers its branch and remote and enables the default notes policy.
-- **Clone notes repository** asks for an HTTPS or SSH repository address. The destination is filled from the repository name, and the advanced section lets you override the branch. Markion keeps the current workspace open until the clone is complete, then switches to the cloned notes folder.
-- **Start syncing this folder** initializes the open folder, attaches `origin`, creates a first version from eligible notes and attachments, and publishes `main`. It stages only the reviewed notes files; hidden files, private keys and unrelated binaries stay out of the first version.
+- **Use this folder for Backup and Sync** when it is already a dedicated notes repository. Markion reuses its existing sync address, or you can paste one if it is not connected yet.
+- **Enable Backup and Sync for this folder** when it contains local notes that have not been connected yet. Paste the sync address to send them.
+- **Get notes from an existing sync address** when the open folder is empty and the notes already exist at a sync location. Paste the sync address and choose where the local copy should be created.
 
-The normal path needs only the repository address. Open **Advanced** when you need a different branch or repository-local author identity. If an empty remote is cloned, create and save the first note, then choose **Sync Now** to finish the first publication. If login or publication fails, the local repository and first commit remain intact and Retry resumes the same step; the remote is never silently replaced.
+Other routes are available under **Other setup options**. A normal setup asks for at most the sync address. Branch, author identity, destination overrides, and transport details remain under **Advanced setup**.
 
-The initial policy permits changes to already tracked files and new Markdown, supported text, and supported image files in the repository. Hidden paths, symlinks, nested repositories, and other binaries stop one-click synchronization for review. A dedicated repository for notes is recommended.
+If the folder is inside another repository or mixes notes with unrelated project content, Markion opens **Advanced repository setup** instead of guessing. Unsupported repository shapes remain inspectable but read-only for synchronization. These include linked worktrees, submodules, Git LFS, bare, sparse, partial, shallow, detached-branch, and nested-repository workspaces.
 
-## What Sync Now changes
+An empty sync location is valid. Finish setup, create and save a note, then choose **Sync Now**. If login or first publication fails, the local notes and version are retained; correct the account or permission problem and choose **Retry**.
 
-Markion distinguishes four states:
+## Everyday use
 
-1. The editor buffer may contain unsaved text.
-2. The worktree contains the saved files.
-3. The local Git branch contains snapshot commits.
-4. The remote branch contains the last confirmed pushed commit.
+The bottom bar shows one plain-language state and one relevant action. Selecting the state opens the transient **Backup and Sync** center, which shows the sync location, local item count, incoming update count, last confirmed check, recent activity, version history, and settings.
 
-**Sync Now** covers all four states for policy-approved named notes. **Commit Locally** only reaches local history; **Check Remote** only fetches; **Pull Updates** integrates a fetched commit; and **Push Commits** only uploads a fixed local commit. These actions are available in the Sync sidebar and Repository menu. They can be assigned shortcuts in Preferences → Shortcuts. Fetch and Push preserve staged and unstaged edits; Pull requires saved buffers and a clean repository. Network phases permit continued editing; integration reacquires the repository write guard and refuses a stale snapshot.
+Common states include:
 
-Markion never performs an automatic rebase, stash, force push, reset, clean, tag push, mirror push, or branch deletion. Existing foreign staging, disk conflicts, unexpected paths, active Git operations, target drift, or unsafe incoming paths stop synchronization without absorbing those changes.
+- **Backup and sync is off** — choose **Turn on backup and sync**.
+- **Local items waiting to sync** or **Updates available** — choose **Sync Now**.
+- **Everything is synchronized** — the local and remote versions were confirmed equal by a recent remote operation.
+- **Saved on this computer; sync will retry when online** — no local work was lost.
+- **Reconnect to continue syncing** — complete the system login and retry.
+- **Choose which note changes to keep** — open the guided conflict screen.
+- **The sync location has not been checked** — choose **Sync Now** to check and synchronize. Markion never claims that everything is synchronized from stale or local-only information.
 
-## Create a deliberate local version
+**Sync Now** saves eligible named notes, creates a local version when content changed, checks the sync location, safely combines compatible updates, and uploads the exact prepared version. Network work does not block editing. When Markion must update files, it briefly coordinates with saving and refuses stale or unsafe inputs.
 
-Use **Sync → Changes → Create local version** when you want a named checkpoint without contacting the remote. Select the whole files that belong together, enter a commit message, and choose **Create version**. The selection starts with policy-approved changes; **Select all** and **Clear selection** make it easy to adjust the group. Markion saves only selected named buffers, stages only those literal repository paths, and leaves unselected saved or unsaved work for a later version.
+Synchronization mirrors supported edits and deletions to the sync location; it is not an immutable archive. Use **Version history** to inspect or recover earlier content retained in the underlying history.
 
-The draft is tied to the reviewed HEAD and file contents. If a selected file changes, the branch advances, a conflict starts, or another tool has staged content, Markion stops and asks you to refresh rather than committing different bytes. A hook or signing failure keeps the message and safe selection for retry and retains the existing recovery journal. Creating a local version never fetches, pulls, pushes, amends, rebases, resets, stashes, switches branches, creates tags, or rewrites history.
+Closing the center does not cancel an operation. Use **Cancel operation** when available. Quitting while a synchronization request is active waits for it to reconcile before the normal unsaved-document flow.
+
+## Version history
+
+Open **Version history** from the File menu, a file-tree context menu, or a tab context menu to inspect versions of that file. The Backup and Sync center also exposes bounded recent history and outgoing history.
+
+For a regular UTF-8 Markdown or supported text file, **Restore in editor** loads the old source as one unsaved, undoable edit. It does not immediately overwrite the file or move the repository to an older state. Replacing a dirty editor requires confirmation, and Markion cancels the restore if the path, tab, or disk version changed while it was being prepared. Binary, linked, deleted, invalid-UTF-8, and oversized historical content cannot replace an editor buffer. **Save a Copy** remains available when the bytes can be exported safely and never replaces an existing file.
+
+## When two computers changed the same note
+
+Markion opens a focused note-version chooser instead of putting conflict work in the sidebar. For text, compare **This Computer** and **Synced**, choose individual sections or a whole **Combined version**, and edit that result in a normal editor tab. Save the draft, choose **Use this version**, then choose **Finish and Continue Sync**. Image and other binary conflicts offer a side choice and **Keep Both** at a safe unused path; delete/change conflicts also offer deletion.
+
+Markion checks that the same files and synchronization attempt are still active before applying a choice. You can undo the current synchronization attempt with **Abort**; if another Git tool changed the repository meanwhile, Markion leaves everything untouched for manual inspection. Drafts and recovery copies survive restart and disconnection.
 
 ## Attachments
 
-Local Markdown image references are checked against the repository and synchronization policy. Approved image files participate in the same commit as their note. Missing, ignored, out-of-repository, unsupported, or out-of-policy resources stop Sync Now with the affected authored URL. Repair the reference or use **Organize Images** to copy eligible local images into the note's asset folder, then retry. The Sync sidebar links to repair, scope settings and image organization. A specific omitted reference can be acknowledged; changing its URL invalidates that acknowledgment. Markion preserves authored relative URLs and never downloads a remote URL as part of synchronization.
+Local Markdown image references are checked along with their note. Supported images are included in the same version. Missing, ignored, out-of-folder, unsupported, or excluded resources pause synchronization and identify the authored link. Repair the link or use **Organize Images**, then retry. A particular omitted attachment can be acknowledged, but editing its URL invalidates that acknowledgment. Markion preserves authored relative links and never downloads remote images during synchronization.
 
-## Conflicts and recovery
+## Preferences and background checks
 
-Concurrent edits on two computers can produce a merge conflict. The Sync sidebar shows the base, local and remote source for each actual index conflict. For text, choose individual hunks or a whole source, open a separate result draft in the editor, save the draft, and explicitly mark it resolved. Image/binary conflicts offer side selection and Keep Both at a validated unused path; delete/modify conflicts also offer deletion. The resolver verifies the operation, index, and conflicted worktree bytes before writing and staging a choice. Text that literally contains `<<<<<<<` is allowed; marker text is not used to decide whether a conflict is resolved.
+General Preferences contains a **Backup and Sync** section. **Background checks for workspaces** is the global default. Each connected workspace has a separate **Background checks for this workspace** option in Connection settings.
 
-Finish Merge preserves Git hooks and signing settings. Upload after manual resolution is explicit. Abort first verifies that the same operation still owns `HEAD`, `MERGE_HEAD`, and the journal. If external Git changes those identities, Markion leaves the repository and drafts untouched for manual inspection.
+Background checking only looks for updates. It never saves or uploads notes, creates versions, combines updates, applies file changes, or opens repeated login prompts. It is off by default, checks only the active workspace, allows one request at a time, and backs off when the service is unavailable. It stays quiet when nothing changed. If the configured credential method cannot be guaranteed noninteractive, Markion disables background checks for that workspace.
 
-Before staging or worktree integration, Markion writes a versioned operation journal outside the repository. Required file preimages are bounded and saved before checkout or merge. On restart it restores an active Markion-owned conflict guard and exposes **Resolve Git Conflicts** again. The sidebar also exposes ownership-checked unstaging (retaining files), adoption of completed local operations, and remote verification of uncertain push delivery. Recovery discovers journals even after disconnect. Ambiguous checkout/external changes remain guarded with access to recovery copies and external inspection; they are not reset automatically. Unknown or user-created recovery files are never removed by operation cleanup.
+Git executable selection and technical repository policy fields are under **Advanced Git settings**.
 
-An offline fetch keeps local commits. If a push response is lost, Markion fetches the target and verifies whether it contains the intended commit. It reports an uncertain result when delivery cannot be proven; retrying does not create a duplicate content snapshot commit.
+## Advanced Git details
 
-## Optional remote checks
+The normal Backup and Sync center deliberately hides Git terminology. Users who work with Git can open **Advanced Git details**, and the Backup and Sync menu contains an **Advanced Git Tools** submenu with **Commit Locally**, **Check Remote**, **Pull Updates**, and **Push Commits**.
 
-Background checking is disabled by default:
+These layers are distinct:
 
-```toml
-[git]
-# executable = "C:/Program Files/Git/bin/git.exe"
-background_check = false
-```
+1. An editor buffer may contain unsaved text.
+2. The worktree contains saved files.
+3. The local branch contains snapshot commits.
+4. The upstream branch contains the last confirmed pushed commit.
 
-The switch is available both globally under General Preferences and per repository under Sync settings. Local remotes, Git Credential Manager, the in-memory `cache` helper, Windows `wincred`, and macOS `osxkeychain` are eligible on their supported platforms. Arbitrary helper commands, `store`, `libsecret`, and SSH background checks remain disabled because Markion cannot guarantee that they will stay noninteractive. Background requests disable terminal, GCM and askpass prompts. A missing credential pauses further checks instead of repeatedly opening login UI. When enabled for an eligible repository, Markion checks only the active workspace, allows one request at a time, starts at a nominal five-minute interval, and backs off to thirty minutes. It stays quiet when unchanged. A background check never saves, commits, merges, pushes, changes an inactive workspace, or opens recurring login prompts.
+**Sync Now** covers all four layers for policy-approved named notes. **Commit Locally** stops at local history, **Check Remote** only fetches, **Pull Updates** integrates a fetched commit, and **Push Commits** uploads one fixed local commit. Fetch and push preserve staged and unstaged edits. Pull requires saved buffers and a clean repository.
 
-Repository policy is stored in versioned `git-sync.toml`; operation journals, drafts, and preimages use the separate app-local Git sync data directory. Neither is synchronized through the notes repository. Resetting Preferences or evicting a recent workspace does not remove them. Disconnecting removes automatic binding while preserving the repository, remotes, commits, credentials, and unresolved recovery.
+The default policy permits changes to tracked files and new Markdown, supported text, and supported images. Hidden paths, symlinks, nested repositories, unsupported binaries, foreign staging, disk conflicts, unexpected paths, active Git operations, unsafe incoming paths, or a changed upstream target stop one-click synchronization for review. Connection settings can narrow semicolon-separated tracked roots and new-file roots (`.` means repository root), change the automatic commit message (`{count}` is expanded), and supply a repository-local author name and email. Scope changes affect new snapshots; a push still transfers the branch's complete outgoing history.
 
+Markion never automatically rebases, stashes, force-pushes, resets, cleans, pushes tags, mirrors, deletes branches, bypasses hooks/signing, replaces an existing remote, or absorbs unrelated staging. It pushes one exact object to one full branch reference and permits only one bounded retry after a non-fast-forward rejection.
 
-## Inspecting and configuring synchronization
+Before worktree or index mutation, Markion writes a bounded operation journal and required preimages outside the notes repository. On restart it restores owned guards and can verify uncertain upload delivery without creating a duplicate content snapshot. If identities or paths changed externally, it keeps recovery copies and requires review rather than resetting anything.
 
-Open **Sync** from the sidebar or the workspace header. The panel separates unsaved buffers, changed files and incoming/outgoing history, with the time of the last successful remote check. The file list includes changes excluded from the normal document tree and uses 50-item pages. It shows both index and worktree status; inspection lets you switch between staged and unstaged content.
+Repository policy is stored in versioned `git-sync.toml`; operation journals, drafts, and preimages use the separate app-local Git sync data directory. Neither is synchronized through the notes repository. Resetting Preferences or removing a recent-workspace entry does not remove them. Disconnecting disables the automatic binding while preserving the repository, remote, commits, credentials, and unresolved recovery data.
 
-**Recent history** shows bounded repository history. **File history** follows the active repository file through ordinary renames, and **Outgoing commits** shows local history awaiting upload. Entries include the commit subject, author, authored time, full object-backed identity, parent count, and changed-path drilldown. **Compare with current** shows a bounded diff from the selected commit to the working file with external diff drivers and text conversion disabled.
-
-For a regular UTF-8 Markdown or supported text file, **Restore in editor** loads the historical source as one unsaved, undoable editor edit. It does not write the file, stage content, move HEAD, or create a commit. A dirty target requires explicit replacement confirmation, and a changed path, tab, or disk identity cancels a stale restore. Binary, symlink, deleted, invalid-UTF-8, and oversized historical content cannot replace an editor buffer. **Save a Copy** remains available when the historical bytes can be exported safely; it preserves extensions, refuses to replace an existing file, and respects repository write guards.
-
-**Connection settings** supports semicolon-separated tracked roots and new-file roots (`.` means the repository root), the automatic commit message (`{count}` is expanded), optional local author name/email, and the repository background-check preference. File scope controls the new snapshot; pushes still transfer the branch's complete outgoing history.
-
-Use Cancel to request cancellation. Closing or quitting during a synchronization request waits for the operation to return and reconcile before the usual unsaved-document flow. If a local mutation cannot be reconciled, its journal and path guards remain available for recovery.
+For background checks, local remotes, Git Credential Manager, the in-memory `cache` helper, Windows `wincred`, and macOS `osxkeychain` are eligible on their supported platforms. Arbitrary helper commands, plaintext `store`, `libsecret`, and SSH background checks are rejected because Markion cannot guarantee that they remain noninteractive. Explicit foreground synchronization can still use supported HTTPS or SSH system authentication.

@@ -139,9 +139,6 @@ impl MarkionApp {
     /// not lazily scanned here: on the welcome document the Files tab shows an
     /// empty-state placeholder by design.
     pub(super) fn set_sidebar_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
-        if tab == SidebarTab::Sync {
-            self.refresh_git_details(cx);
-        }
         if self.sidebar_tab == tab {
             return;
         }
@@ -166,7 +163,6 @@ impl MarkionApp {
             match tab {
                 SidebarTab::Files => Msg::StatusFileTreeShown,
                 SidebarTab::Outline => Msg::StatusOutlineShown,
-                SidebarTab::Sync => Msg::PrefPanelGitSection,
             },
         )
         .into();
@@ -607,6 +603,11 @@ impl MarkionApp {
             FileTreeContextAction::OpenInNewTab => {
                 if let FileTreeContextTarget::File(path) = target {
                     self.open_file_in_new_tab_from_path(path, cx);
+                }
+            }
+            FileTreeContextAction::VersionHistory => {
+                if let FileTreeContextTarget::File(path) = target {
+                    self.open_file_version_history(path, cx);
                 }
             }
             FileTreeContextAction::CreateFile => {

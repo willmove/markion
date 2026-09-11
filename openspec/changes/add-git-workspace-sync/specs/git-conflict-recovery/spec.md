@@ -1,19 +1,19 @@
 ## ADDED Requirements
 
-### Requirement: Git conflicts SHALL own a durable resolution session
-An app-started merge conflict SHALL create a session tied to repository/operation identity and base/local/remote commits with indexed conflict stages. It SHALL persist editable drafts outside the repository and keep conflict-owned paths out of ordinary document autosave. The app SHALL distinguish this session from an existing unsaved-buffer/external-disk conflict, which must be resolved before integration.
+### Requirement: Version conflicts SHALL own a durable focused resolution session
+An app-started merge conflict SHALL create a session tied to repository/operation identity and base/local/remote commits with indexed conflict stages. It SHALL persist editable drafts outside the repository and keep conflict-owned paths out of ordinary document autosave. The app SHALL distinguish this session from an existing unsaved-buffer/external-disk conflict, which must be resolved before integration. The ordinary resolver SHALL open in an adequately sized focused dialog or dedicated recovery surface rather than inside the narrow workspace navigation rail, and SHALL describe the problem as competing note versions before exposing Git metadata in technical details.
 
 #### Scenario: Same note conflicts across devices
 - **WHEN** Git cannot automatically merge two versions of a note
-- **THEN** the app presents local, base, remote and editable result content in a conflict session
+- **THEN** the app presents This Computer Version, Synced Version and an editable Combined Result in a focused conflict session, with base and Git metadata available as details
 - **AND** ordinary tabs for that path cannot overwrite the conflict result through autosave
 
 #### Scenario: App closes with an unfinished resolution
 - **WHEN** a conflict draft has been durably saved and the app restarts
 - **THEN** the matching session and draft remain recoverable after actual repository-state verification
 
-### Requirement: Conflict choices SHALL reflect content and path semantics
-The resolver SHALL support text hunk choices and manual source editing, delete/modify decisions, image/binary side selection or distinct-path preservation, and explicit simple rename choices. Unsupported complex/encoding/path conflicts SHALL remain unresolved with external-tool guidance. Draft saving SHALL NOT mark a conflict resolved. Explicit resolution SHALL validate current identities, write the chosen result through repository coordination, and clear the corresponding index conflict stages. Marker text alone SHALL NOT determine resolution state.
+### Requirement: Conflict choices SHALL reflect content and path semantics in ordinary language
+The resolver SHALL support text hunk choices and manual source editing, delete/modify decisions, image/binary side selection or distinct-path preservation, and explicit simple rename choices. Its default controls SHALL use note-version wording such as Use This Version, Keep Both, and This File Is Resolved; raw OIDs, index stages, hunk notation, branch names, and merge terminology SHALL remain in Advanced Git details unless needed to explain an unsupported case. Unsupported complex/encoding/path conflicts SHALL remain unresolved with external-tool guidance. Draft saving SHALL NOT mark a conflict resolved. Explicit resolution SHALL validate current identities, write the chosen result through repository coordination, and clear the corresponding index conflict stages. Marker text alone SHALL NOT determine resolution state.
 
 #### Scenario: User keeps both text fragments
 - **WHEN** the user selects both sides of a text conflict
@@ -31,11 +31,11 @@ The resolver SHALL support text hunk choices and manual source editing, delete/m
 - **WHEN** a user resolves the Git index conflict while keeping literal marker text in the document
 - **THEN** resolved state follows the index and explicit user action rather than marker-string detection alone
 
-### Requirement: Merge completion and abort SHALL preserve recoverable work
-Finish Merge SHALL require no remaining index conflicts and current written draft versions, respect author/signing/hooks, and create the actual merge commit. After interactive resolution the app SHALL expose explicit Finish and Push intent. Abort SHALL durably preserve edited drafts, verify app-owned merge state, and preserve the pre-merge local snapshot commit. External state drift SHALL block unattended completion/abort instead of triggering reset/clean.
+### Requirement: Conflict completion and abort SHALL preserve recoverable work
+Completion SHALL require no remaining index conflicts and current written draft versions, respect author/signing/hooks, and create the actual merge commit. After interactive resolution the ordinary action SHALL be explicit **Finish and Continue Sync**; Advanced Git details may identify the underlying Finish Merge and push stages. Abort SHALL durably preserve edited drafts, verify app-owned merge state, and preserve the pre-merge local snapshot commit. External state drift SHALL block unattended completion/abort instead of triggering reset/clean.
 
 #### Scenario: All conflicts are resolved
-- **WHEN** every conflict is resolved and the user chooses Finish and Push
+- **WHEN** every conflict is resolved and the user chooses Finish and Continue Sync
 - **THEN** the app verifies the session, creates the merge commit, and resumes fixed-target push under normal checks
 
 #### Scenario: User aborts a merge after editing the result

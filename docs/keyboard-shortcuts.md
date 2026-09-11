@@ -145,20 +145,20 @@ Find searches authored Markdown in Edit, Visual Edit, and Split modes. In Read m
 - If a binding does not behave as expected, check whether your window manager or OS has reserved it.
 
 
-## Git synchronization
+## Backup and Sync
 
-The Repository menu and Sync sidebar expose these actions. They have no default bindings, avoiding conflicts with document editing; assign them in Preferences → Shortcuts.
+The Backup and Sync menu and status-bar entry expose the ordinary actions. They have no default bindings, avoiding conflicts with document editing; assign them in Preferences → Shortcuts. Technical actions live under **Backup and Sync → Advanced Git Tools**.
 
 | Action | Action ID |
 |---|---|
-| Sync details | `show-git-sync` |
+| Backup and Sync status | `show-git-sync` |
 | Sync Now | `sync-now` |
 | Commit Locally | `commit-locally` |
 | Check Remote | `check-remote` |
 | Pull Updates | `pull-updates` |
 | Push Commits | `push-commits` |
-| Resolve Git Conflicts | `resolve-git-conflict` |
+| Choose Note Versions | `resolve-git-conflict` |
 
-Sync buttons support keyboard focus and Enter/Space. In connection settings, Tab/Shift+Tab move between text fields, Enter saves, and Escape closes the form. Editing a conflict result happens in a separate ordinary editor tab; marking it resolved is explicit.
+Backup and Sync buttons support keyboard focus and Enter/Space. In connection settings, Tab/Shift+Tab move between text fields, Enter saves, and Escape closes the form. Editing a combined note version happens in a separate ordinary editor tab; marking it resolved is explicit.
 
-The **Create local version** composer is available on **Sync → Changes** and has no separate global action ID or default shortcut. Focus its commit-message field to type, use the selectable file rows to choose whole paths, and activate **Create version** with Enter/Space. **Recent history**, **File history**, **Compare with current**, **Restore in editor**, and **Save a Copy** are likewise keyboard-focusable controls in the Sync sidebar and version-detail dialog.
+The **Create local version** composer is available under **Advanced Git details → Changes** and has no separate global action ID or default shortcut. Focus its commit-message field to type, use the selectable file rows to choose whole paths, and activate **Create version** with Enter/Space. **Version history** is available from the File menu and file/tree/tab context menus. Its **Compare with current**, **Restore in editor**, and **Save a Copy** controls are likewise keyboard-focusable.

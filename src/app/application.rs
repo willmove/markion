@@ -177,6 +177,7 @@ impl MarkionApp {
             focus_handle: cx.focus_handle(),
             active_menu: None,
             open_recent_submenu_open: false,
+            advanced_git_submenu_open: false,
             workspace_switcher_open: false,
             workspace_switcher_anchor: None,
             about_dialog_open: false,

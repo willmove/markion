@@ -1518,6 +1518,7 @@ impl MarkionApp {
             Some(menu)
         };
         self.open_recent_submenu_open = false;
+        self.advanced_git_submenu_open = false;
         self.close_workspace_switcher();
         cx.notify();
     }
@@ -1527,6 +1528,7 @@ impl MarkionApp {
         if next_menu != self.active_menu {
             self.active_menu = next_menu;
             self.open_recent_submenu_open = false;
+            self.advanced_git_submenu_open = false;
             self.close_workspace_switcher();
             cx.notify();
         }
@@ -1554,6 +1556,21 @@ impl MarkionApp {
         cx.notify();
     }
 
+    pub(super) fn open_advanced_git_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.active_menu == Some(AppMenu::Repository) && !self.advanced_git_submenu_open {
+            self.advanced_git_submenu_open = true;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_advanced_git_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.active_menu != Some(AppMenu::Repository) {
+            return;
+        }
+        self.advanced_git_submenu_open = !self.advanced_git_submenu_open;
+        cx.notify();
+    }
+
     pub(super) fn close_menu(
         &mut self,
         _: &MouseDownEvent,
@@ -1572,6 +1589,7 @@ impl MarkionApp {
         if had_transient_ui {
             self.active_menu = None;
             self.open_recent_submenu_open = false;
+            self.advanced_git_submenu_open = false;
             self.file_tree_context_menu = None;
             self.preview_context_menu = None;
             self.tab_context_menu = None;
@@ -1727,6 +1745,13 @@ impl MarkionApp {
                     }
                 }
                 cx.notify();
+            }
+            TabContextAction::VersionHistory => {
+                let Some(path) = target.path.clone() else {
+                    return;
+                };
+                self.switch_active_tab(index, cx);
+                self.open_file_version_history(path, cx);
             }
         }
     }

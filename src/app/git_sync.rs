@@ -2,9 +2,10 @@ use super::*;
 use markion_git_sync::{
     Authentication, BackgroundFetchResult, BackgroundNotification, CancellationToken,
     ConflictManager, ExclusiveAdmission, GitCommandRunner, GitRepository, GitSyncEngine,
-    JournalStore, NewFileClass, NewFileRule, OnboardingService, RecoveryAssessment,
-    RecoveryManager, RemoteTransport, RemoteUrl, RepositoryPolicy, RepositoryState, SyncOptions,
-    SyncOutcome, SyncPlan, SyncPolicies, SyncTarget, inspect_note_attachments,
+    JournalStore, NewFileClass, NewFileRule, OnboardingService, OperationKind, RecoveryAssessment,
+    RecoveryManager, RemoteTransport, RemoteUrl, RepositoryCapabilities, RepositoryPolicy,
+    RepositoryState, SyncOptions, SyncOutcome, SyncPlan, SyncPolicies, SyncTarget,
+    inspect_note_attachments,
 };
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -47,6 +48,7 @@ pub(super) struct GitImageResult {
 
 pub(super) struct GitSyncCompletion {
     pub(super) _exclusive: ExclusiveAdmission,
+    pub(super) operation: OperationKind,
     pub(super) outcome: SyncOutcome,
     pub(super) buffers: Vec<GitBufferResult>,
     pub(super) images: Vec<GitImageResult>,
@@ -83,6 +85,39 @@ fn sync_now_route(
         .max_by_key(|policy| policy.identity.worktree_root.components().count())
         .map(SyncNowRoute::Configured)
         .unwrap_or(SyncNowRoute::SetupExistingRepository)
+}
+
+fn onboarding_route(
+    workspace_root: &Path,
+    repository_root: Option<&Path>,
+    has_notes: bool,
+    has_mixed_content: bool,
+) -> (git_panel::GitOnboardingMode, bool) {
+    match repository_root {
+        Some(repository_root) => (
+            git_panel::GitOnboardingMode::UseCurrentFolder,
+            repository_root != workspace_root || has_mixed_content,
+        ),
+        None if has_notes => (git_panel::GitOnboardingMode::InitializeFolder, false),
+        None => (git_panel::GitOnboardingMode::CloneRepository, false),
+    }
+}
+
+fn has_unrelated_tracked_content(paths: &[PathBuf]) -> bool {
+    paths
+        .iter()
+        .any(|path| NewFileClass::classify(path).is_none())
+}
+
+fn repository_onboarding_requires_advanced(
+    workspace_root: &Path,
+    repository_root: &Path,
+    capabilities: RepositoryCapabilities,
+    tracked_paths: &[PathBuf],
+) -> bool {
+    repository_root != workspace_root
+        || !capabilities.supports_write_sync()
+        || has_unrelated_tracked_content(tracked_paths)
 }
 
 impl MarkionApp {
@@ -226,6 +261,8 @@ impl MarkionApp {
                 })
                 .await;
             let _ = this.update(cx, |app, cx| {
+                let checked_at = std::time::SystemTime::now();
+                let raw_result = result.clone();
                 match app
                     .git_background_scheduler
                     .finish(&identity, result, Instant::now())
@@ -244,6 +281,21 @@ impl MarkionApp {
                         cx.notify();
                     }
                 }
+                if matches!(
+                    raw_result,
+                    BackgroundFetchResult::Unchanged | BackgroundFetchResult::Incoming { .. }
+                ) {
+                    app.git_ui
+                        .remote_checks
+                        .insert(identity.worktree_root.clone(), checked_at);
+                    app.git_ui
+                        .remote_confirmations
+                        .insert(identity.worktree_root.clone(), checked_at);
+                }
+                app.git_ui
+                    .background_results
+                    .insert(identity.clone(), raw_result);
+                app.refresh_git_details(cx);
             });
         })
         .detach();
@@ -358,10 +410,11 @@ impl MarkionApp {
             cx.notify();
             return;
         }
-        let current_repository_hint = self
+        let current_repository_root = self
             .workspace_root
             .ancestors()
-            .any(|directory| directory.join(".git").exists());
+            .find(|directory| directory.join(".git").exists())
+            .map(Path::to_path_buf);
         let current_folder_has_notes = self
             .file_tree
             .as_ref()
@@ -371,13 +424,22 @@ impl MarkionApp {
                     path.starts_with(&self.workspace_root) && NewFileClass::classify(path).is_some()
                 })
             });
-        let mode = if current_repository_hint {
-            git_panel::GitOnboardingMode::UseCurrentFolder
-        } else if current_folder_has_notes {
-            git_panel::GitOnboardingMode::InitializeFolder
-        } else {
-            git_panel::GitOnboardingMode::CloneRepository
-        };
+        let repository_probe_required = current_repository_root.is_some();
+        // Until the complete tracked inventory has been read in the
+        // background, an existing repository stays behind the safe advanced
+        // gate. The probe may relax that gate for a dedicated notes repo.
+        let (mode, mut advanced_required) = onboarding_route(
+            &self.workspace_root,
+            current_repository_root.as_deref(),
+            current_folder_has_notes,
+            repository_probe_required,
+        );
+        if repository_probe_required {
+            advanced_required = true;
+        }
+        self.git_ui.onboarding_probe_generation =
+            self.git_ui.onboarding_probe_generation.wrapping_add(1);
+        let probe_generation = self.git_ui.onboarding_probe_generation;
         self.git_ui.onboarding = Some(git_panel::GitOnboarding {
             mode,
             fields: [
@@ -391,10 +453,13 @@ impl MarkionApp {
                 SearchFieldState::default(),
                 SearchFieldState::default(),
             ],
-            advanced: false,
+            repository_root: current_repository_root.clone(),
+            advanced: advanced_required,
+            advanced_required,
+            alternatives_open: false,
             destination_edited: false,
             sync_after_setup,
-            busy: false,
+            busy: repository_probe_required,
             cancellation: None,
             error: None,
         });
@@ -402,8 +467,77 @@ impl MarkionApp {
         self.search_control_focus = None;
         self.search_focus = Some(SearchField::GitSetup(0));
         self.active_menu = None;
+        self.git_ui.center_open = false;
         window.focus(&self.focus_handle);
         cx.notify();
+
+        if !repository_probe_required {
+            return;
+        }
+
+        let workspace = self.workspace_root.clone();
+        let executable = self
+            .git_preferences
+            .executable
+            .clone()
+            .unwrap_or_else(|| "git".to_string());
+        cx.spawn(async move |this, cx| {
+            let probed_workspace = workspace.clone();
+            let result = cx
+                .background_spawn(async move {
+                    let canonical_workspace = dunce::canonicalize(&probed_workspace)
+                        .map_err(|error| error.to_string())?;
+                    let repository = GitRepository::discover(
+                        GitCommandRunner::new(executable),
+                        &canonical_workspace,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    let capabilities = repository
+                        .capabilities()
+                        .map_err(|error| error.to_string())?;
+                    let tracked_paths = repository
+                        .tracked_paths()
+                        .map_err(|error| error.to_string())?;
+                    let repository_root = repository.identity().worktree_root.clone();
+                    Ok::<_, String>((
+                        repository_root.clone(),
+                        repository_onboarding_requires_advanced(
+                            &canonical_workspace,
+                            &repository_root,
+                            capabilities,
+                            &tracked_paths,
+                        ),
+                    ))
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                if app.workspace_root != workspace
+                    || app.git_ui.onboarding_probe_generation != probe_generation
+                {
+                    return;
+                }
+                let Some(setup) = &mut app.git_ui.onboarding else {
+                    return;
+                };
+                setup.busy = false;
+                match result {
+                    Ok((repository_root, advanced_required)) => {
+                        setup.mode = git_panel::GitOnboardingMode::UseCurrentFolder;
+                        setup.repository_root = Some(repository_root);
+                        setup.advanced_required = advanced_required;
+                        setup.advanced = advanced_required;
+                        setup.error = None;
+                    }
+                    Err(error) => {
+                        setup.advanced_required = true;
+                        setup.advanced = true;
+                        setup.error = Some(error);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn set_git_onboarding_mode(
@@ -465,8 +599,18 @@ impl MarkionApp {
     pub(super) fn toggle_git_onboarding_advanced(&mut self, cx: &mut Context<Self>) {
         if let Some(setup) = &mut self.git_ui.onboarding
             && !setup.busy
+            && !setup.advanced_required
         {
             setup.advanced = !setup.advanced;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_git_onboarding_alternatives(&mut self, cx: &mut Context<Self>) {
+        if let Some(setup) = &mut self.git_ui.onboarding
+            && !setup.busy
+        {
+            setup.alternatives_open = !setup.alternatives_open;
             cx.notify();
         }
     }
@@ -1201,6 +1345,7 @@ impl MarkionApp {
                 app.apply_git_sync_completion(
                     GitSyncCompletion {
                         _exclusive: admission.take().expect("conflict admission is owned"),
+                        operation: OperationKind::ResolveConflict,
                         outcome,
                         buffers,
                         images,
@@ -1223,6 +1368,7 @@ impl MarkionApp {
     ) {
         let GitSyncCompletion {
             _exclusive: exclusive,
+            operation,
             outcome,
             buffers,
             images,
@@ -1330,6 +1476,22 @@ impl MarkionApp {
                     .remote_checks
                     .insert(identity.worktree_root.clone(), std::time::SystemTime::now());
             }
+        }
+        if let Some(identity) = exclusive.identity().cloned() {
+            let remotely_confirmed = matches!(
+                &outcome,
+                SyncOutcome::Synchronized { .. }
+                    | SyncOutcome::RemoteChecked {
+                        relation: markion_git_sync::HistoryRelation::Equal
+                    }
+            ) || (matches!(&outcome, SyncOutcome::UpToDate)
+                && operation != OperationKind::CommitLocally);
+            if remotely_confirmed {
+                self.git_ui
+                    .remote_confirmations
+                    .insert(identity.worktree_root.clone(), std::time::SystemTime::now());
+            }
+            self.git_ui.last_outcomes.insert(identity, outcome.clone());
         }
         self.status = match outcome {
             SyncOutcome::RemoteChecked { relation } => {
@@ -2075,6 +2237,7 @@ fn run_git_operation(
         .collect();
     Ok(GitSyncCompletion {
         _exclusive: exclusive,
+        operation,
         outcome,
         buffers,
         images,
@@ -2143,6 +2306,68 @@ mod tests {
     }
 
     #[test]
+    fn onboarding_selects_one_contextual_route_and_escalates_mixed_repositories() {
+        let workspace = Path::new("notes");
+        let ordinary = RepositoryCapabilities {
+            ordinary_worktree: true,
+            ..RepositoryCapabilities::default()
+        };
+        assert_eq!(
+            onboarding_route(workspace, None, false, false),
+            (git_panel::GitOnboardingMode::CloneRepository, false)
+        );
+        assert_eq!(
+            onboarding_route(workspace, None, true, false),
+            (git_panel::GitOnboardingMode::InitializeFolder, false)
+        );
+        assert_eq!(
+            onboarding_route(workspace, Some(workspace), true, false),
+            (git_panel::GitOnboardingMode::UseCurrentFolder, false)
+        );
+        assert_eq!(
+            onboarding_route(workspace, Some(workspace), true, true),
+            (git_panel::GitOnboardingMode::UseCurrentFolder, true)
+        );
+        assert_eq!(
+            onboarding_route(workspace, Some(Path::new(".")), true, false),
+            (git_panel::GitOnboardingMode::UseCurrentFolder, true)
+        );
+        assert!(!has_unrelated_tracked_content(&[
+            PathBuf::from("notes.md"),
+            PathBuf::from("draft.txt"),
+            PathBuf::from("images/diagram.png"),
+        ]));
+        assert!(has_unrelated_tracked_content(&[
+            PathBuf::from("notes.md"),
+            PathBuf::from("Cargo.toml"),
+        ]));
+        assert!(!repository_onboarding_requires_advanced(
+            workspace,
+            workspace,
+            ordinary,
+            &[PathBuf::from("notes.md"), PathBuf::from("diagram.png")],
+        ));
+        assert!(repository_onboarding_requires_advanced(
+            workspace,
+            workspace,
+            ordinary,
+            &[PathBuf::from("notes.md"), PathBuf::from("Cargo.toml")],
+        ));
+        assert!(repository_onboarding_requires_advanced(
+            workspace,
+            Path::new("."),
+            ordinary,
+            &[PathBuf::from("notes.md")],
+        ));
+        assert!(repository_onboarding_requires_advanced(
+            workspace,
+            workspace,
+            RepositoryCapabilities::default(),
+            &[PathBuf::from("notes.md")],
+        ));
+    }
+
+    #[test]
     fn clone_destination_is_derived_from_https_and_ssh_repository_names() {
         let workspace = PathBuf::from("C:/notes/current");
         assert_eq!(
@@ -2157,6 +2382,7 @@ mod tests {
 
     #[test]
     fn user_onboarding_rejects_local_transport_and_nested_clone_destination() {
+        assert!(validate_user_remote("", Language::En).is_err());
         assert!(validate_user_remote("../remote.git", Language::En).is_err());
         assert!(
             validate_user_remote("https://example.invalid/user/notes.git", Language::En).is_ok()

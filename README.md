@@ -46,7 +46,7 @@ Switching modes preserves the active document, cursor and selection, undo histor
 - The Files and Outline panels are toggleable, and sidebar and split-pane dividers are draggable.
 - The Outline panel lists the document's heading hierarchy as a collapsible tree: each heading with descendants exposes a disclosure control, outlines start fully expanded, folding is per-document and session-only, and the section containing the cursor is highlighted. Clicking a heading jumps to its source position—or to the rendered heading in Read mode.
 - The native window title shows the active file name after the Markion brand, with a `*` suffix when the document has unsaved changes. The status bar keeps save state and transient operation feedback, plus a compact persistent context: the active document's character and word count, the caret's one-based line and column when an editing surface is present, and the current Git branch when the document or workspace belongs to a repository.
-- **Git Sync** connects an ordinary notes repository to one upstream branch. **Sync Now** saves policy-approved notes and attachments, commits them with a deterministic message, safely fetches and merges, then pushes one exact commit. See the [Git synchronization guide](docs/git-sync.md) for setup, authentication, conflict recovery, and supported repository shapes.
+- **Backup and Sync** keeps a notes folder protected at a sync location with a one-click **Sync Now** flow and plain-language status. Git powers the safe version history underneath; technical controls stay in Advanced Git details. See the [Backup and Sync guide](docs/git-sync.md) for setup, authentication, conflicts, and recovery.
 
 ## Markdown editing and preview
 

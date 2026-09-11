@@ -131,6 +131,7 @@ actions!(
         SaveDocument,
         SaveDocumentAs,
         ShowGitSync,
+        ShowFileVersionHistory,
         CommitLocally,
         CheckRemote,
         PullUpdates,
@@ -741,7 +742,7 @@ impl AppMenu {
             (
                 Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
                 AppMenu::Help,
-            ) => px(402.),
+            ) => px(454.),
             // Chinese labels (文件/編輯/檢視/格式/匯出/說明) — narrower. Both
             // Simplified and Traditional share this column: the glyph widths
             // are nearly identical, so the hand-tuned offsets apply to both.
@@ -751,7 +752,7 @@ impl AppMenu {
             (Language::ZhHans | Language::ZhHant, AppMenu::Format) => px(134.),
             (Language::ZhHans | Language::ZhHant, AppMenu::Export) => px(178.),
             (Language::ZhHans | Language::ZhHant, AppMenu::Repository) => px(222.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(264.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(312.),
         }
     }
 
@@ -765,7 +766,7 @@ impl AppMenu {
             AppMenu::View => px(304.),
             AppMenu::Format => px(344.),
             AppMenu::Export => px(288.),
-            AppMenu::Repository => px(304.),
+            AppMenu::Repository => px(328.),
             AppMenu::Help => px(280.),
         }
     }
@@ -951,6 +952,7 @@ impl FileTreeContextTarget {
 enum FileTreeContextAction {
     Open,
     OpenInNewTab,
+    VersionHistory,
     CreateFile,
     CreateFolder,
     Rename,
@@ -965,6 +967,7 @@ enum FileTreeContextAction {
 const FILE_TREE_FILE_CONTEXT_ACTIONS: &[FileTreeContextAction] = &[
     FileTreeContextAction::Open,
     FileTreeContextAction::OpenInNewTab,
+    FileTreeContextAction::VersionHistory,
     FileTreeContextAction::Rename,
     FileTreeContextAction::Delete,
     FileTreeContextAction::ShowInFileManager,
@@ -1000,30 +1003,39 @@ fn file_tree_context_actions(kind: FileTreeContextTargetKind) -> &'static [FileT
     }
 }
 
-fn file_tree_context_action_label(action: FileTreeContextAction) -> Msg {
+fn file_tree_context_action_label(
+    language: Language,
+    action: FileTreeContextAction,
+) -> &'static str {
     match action {
-        FileTreeContextAction::Open => Msg::FileTreeContextOpen,
-        FileTreeContextAction::OpenInNewTab => Msg::FileTreeContextOpenInNewTab,
-        FileTreeContextAction::CreateFile => Msg::FileTreeContextCreateFile,
-        FileTreeContextAction::CreateFolder => Msg::FileTreeContextCreateFolder,
-        FileTreeContextAction::Rename => Msg::FileTreeContextRename,
-        FileTreeContextAction::Delete => Msg::FileTreeContextDelete,
-        FileTreeContextAction::ShowInFileManager => Msg::FileTreeContextShowInFileManager,
-        FileTreeContextAction::CopyPath => Msg::FileTreeContextCopyPath,
-        FileTreeContextAction::CopyRelativePath => Msg::FileTreeContextCopyRelativePath,
-        FileTreeContextAction::Refresh => Msg::FileTreeContextRefresh,
-        FileTreeContextAction::FilterFiles => Msg::FileTreeContextFilterFiles,
+        FileTreeContextAction::VersionHistory => git_t(language, GitMsg::VersionHistory),
+        FileTreeContextAction::Open => t(language, Msg::FileTreeContextOpen),
+        FileTreeContextAction::OpenInNewTab => t(language, Msg::FileTreeContextOpenInNewTab),
+        FileTreeContextAction::CreateFile => t(language, Msg::FileTreeContextCreateFile),
+        FileTreeContextAction::CreateFolder => t(language, Msg::FileTreeContextCreateFolder),
+        FileTreeContextAction::Rename => t(language, Msg::FileTreeContextRename),
+        FileTreeContextAction::Delete => t(language, Msg::FileTreeContextDelete),
+        FileTreeContextAction::ShowInFileManager => {
+            t(language, Msg::FileTreeContextShowInFileManager)
+        }
+        FileTreeContextAction::CopyPath => t(language, Msg::FileTreeContextCopyPath),
+        FileTreeContextAction::CopyRelativePath => {
+            t(language, Msg::FileTreeContextCopyRelativePath)
+        }
+        FileTreeContextAction::Refresh => t(language, Msg::FileTreeContextRefresh),
+        FileTreeContextAction::FilterFiles => t(language, Msg::FileTreeContextFilterFiles),
     }
 }
 
-fn tab_context_action_label(action: TabContextAction) -> Msg {
+fn tab_context_action_label(language: Language, action: TabContextAction) -> &'static str {
     match action {
-        TabContextAction::CloseTab => Msg::ItemTabClose,
-        TabContextAction::CloseOthers => Msg::ItemTabCloseOthers,
-        TabContextAction::CloseToTheRight => Msg::ItemTabCloseToTheRight,
-        TabContextAction::Rename => Msg::ItemTabRename,
-        TabContextAction::CopyPath => Msg::ItemTabCopyPath,
-        TabContextAction::RevealInFileManager => Msg::ItemTabRevealInFileManager,
+        TabContextAction::VersionHistory => git_t(language, GitMsg::VersionHistory),
+        TabContextAction::CloseTab => t(language, Msg::ItemTabClose),
+        TabContextAction::CloseOthers => t(language, Msg::ItemTabCloseOthers),
+        TabContextAction::CloseToTheRight => t(language, Msg::ItemTabCloseToTheRight),
+        TabContextAction::Rename => t(language, Msg::ItemTabRename),
+        TabContextAction::CopyPath => t(language, Msg::ItemTabCopyPath),
+        TabContextAction::RevealInFileManager => t(language, Msg::ItemTabRevealInFileManager),
     }
 }
 
@@ -2100,6 +2112,7 @@ enum TabContextAction {
     Rename,
     CopyPath,
     RevealInFileManager,
+    VersionHistory,
 }
 
 /// Menu items in display order; each inner slice becomes one group separated
@@ -2112,6 +2125,7 @@ const TAB_CONTEXT_ACTION_GROUPS: &[&[TabContextAction]] = &[
         TabContextAction::CloseToTheRight,
     ],
     &[
+        TabContextAction::VersionHistory,
         TabContextAction::Rename,
         TabContextAction::CopyPath,
         TabContextAction::RevealInFileManager,
@@ -2228,6 +2242,8 @@ struct MarkionApp {
     /// File → Open Recent nested submenu visibility. Cleared whenever
     /// `active_menu` leaves File or the whole menu closes.
     open_recent_submenu_open: bool,
+    /// Backup and Sync → Advanced Git Tools nested submenu visibility.
+    advanced_git_submenu_open: bool,
     /// Files-panel workspace-name recent-folder switcher visibility.
     workspace_switcher_open: bool,
     /// Window-space anchor for the root-hosted workspace switcher overlay.

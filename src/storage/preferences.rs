@@ -314,7 +314,6 @@ impl From<&AppPreferences> for PreferencesFile {
             sidebar_tab: match preferences.sidebar_tab {
                 SidebarTab::Files => "files".to_string(),
                 SidebarTab::Outline => "outline".to_string(),
-                SidebarTab::Sync => "sync".to_string(),
             },
             auto_save: AutoSaveFile {
                 enabled: preferences.auto_save.enabled,
@@ -376,7 +375,10 @@ impl From<PreferencesFile> for AppPreferences {
             sidebar_visible: file.sidebar_visible,
             sidebar_tab: match file.sidebar_tab.to_ascii_lowercase().as_str() {
                 "outline" => SidebarTab::Outline,
-                "sync" => SidebarTab::Sync,
+                // `sync` was a persistent sidebar destination before Backup
+                // and Sync moved to transient workspace chrome. Treat it as
+                // Files without touching any repository policy or recovery.
+                "sync" => SidebarTab::Files,
                 _ => SidebarTab::Files,
             },
             auto_save: AutoSavePreferences {
@@ -504,7 +506,7 @@ pub fn parse_legacy_app_preferences(text: &str) -> io::Result<AppPreferences> {
             "sidebar_tab" => {
                 preferences.sidebar_tab = match value.trim().to_ascii_lowercase().as_str() {
                     "outline" => SidebarTab::Outline,
-                    "sync" => SidebarTab::Sync,
+                    "sync" => SidebarTab::Files,
                     // Unknown / missing values fall back to Files.
                     _ => SidebarTab::Files,
                 };
@@ -732,6 +734,18 @@ mod tests {
     #[test]
     fn sync_scroll_defaults_to_false() {
         assert!(!AppPreferences::default().sync_scroll);
+    }
+
+    #[test]
+    fn legacy_sync_sidebar_selection_migrates_to_files() {
+        let parsed = parse_app_preferences("sidebar_tab = \"sync\"\n").unwrap();
+        assert_eq!(parsed.sidebar_tab, SidebarTab::Files);
+        let rendered = render_app_preferences(&parsed);
+        assert!(rendered.contains("sidebar_tab = \"files\""));
+        assert!(!rendered.contains("sidebar_tab = \"sync\""));
+
+        let legacy = parse_legacy_app_preferences("sidebar_tab = sync\n").unwrap();
+        assert_eq!(legacy.sidebar_tab, SidebarTab::Files);
     }
 
     #[test]
