@@ -10453,7 +10453,7 @@ fn pdf_tabs_follow_workspace_rename_move_and_delete_lifecycle(cx: &mut TestAppCo
         assert!(!renamed.exists());
         assert_same_normalized_path(app.active_tab().path(), &moved);
         assert!(app.active_tab().is_pdf());
-        app.selected_tree_path = Some(moved.clone());
+        app.selected_tree_path = Some(archive.join(".").join("renamed.pdf"));
     });
 
     let delete_label = app.update(cx, |app, _| {
@@ -18566,8 +18566,9 @@ fn file_tree_drop_remaps_clean_tab_and_refuses_dirty(cx: &mut TestAppContext) {
         app
     });
 
+    let path_alias = notes.join(".").join("daily.md");
     app.update(cx, |app, cx| {
-        app.handle_file_tree_drop(&path, &archive, cx);
+        app.handle_file_tree_drop(&path_alias, &archive, cx);
     });
     let moved = archive.join("daily.md");
     app.update(cx, |app, _| {
