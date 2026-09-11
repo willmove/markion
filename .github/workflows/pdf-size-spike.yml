@@ -90,6 +90,13 @@ jobs:
           git worktree add --detach $controlRoot $manifest.base_revision
           if ($LASTEXITCODE -ne 0) { throw 'Unable to create the immutable control worktree.' }
           Copy-Item -LiteralPath Cargo.lock -Destination (Join-Path $controlRoot 'Cargo.lock') -Force
+          # Keep the candidate lockfile valid without linking the PDF crate into
+          # the control app. Cargo prunes lock entries for absent workspace
+          # members even when the root package does not depend on that member.
+          Copy-Item `
+            -LiteralPath (Join-Path $PWD 'crates/pdf-viewer') `
+            -Destination (Join-Path $controlRoot 'crates/pdf-viewer') `
+            -Recurse
           "MARKION_PDF_CONTROL=$controlRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install pinned cargo-packager
