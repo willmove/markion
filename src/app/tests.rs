@@ -6603,7 +6603,9 @@ fn visual_ragged_table_stays_a_grid_when_focused(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn visual_math_pending_or_error_is_not_a_source_island(cx: &mut TestAppContext) {
-    let source = "$$\n\\notavalid{{{{{\n$$";
+    // Display math always carries a payload editor, including when KaTeX is
+    // still Pending or later Error; the view must not demote it to an island.
+    let source = "$$\n\\notacommand\n$$";
     let document = MarkdownDocument::from_text(source);
     let payload_start = document
         .visual_blocks()
