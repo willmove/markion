@@ -61,6 +61,8 @@ A ready PDF tab SHALL display pages in document order as a centered, single-colu
 ### Requirement: PDF loading and rendering SHALL be finite and off the render path
 PDF file inspection, document loading, page metadata access, and page rasterization SHALL execute outside GPUI frame rendering. Native PDF calls SHALL be serialized so no two calls execute concurrently in the process. Markion SHALL schedule only visible pages plus at most one adjacent page before and after the visible range. Each completed page raster SHALL be limited to 32 MiB, and the completed PDF raster cache SHALL be limited to 64 MiB; when an immediately visible raster temporarily requires the cache to exceed that total, the overshoot SHALL be limited to one page and SHALL be paid down as soon as the page is no longer claimed. Source files larger than 512 MiB and documents reporting more than 10,000 pages SHALL be rejected before page rendering. PDF rasters SHALL remain memory-only and SHALL NOT be written to a persistent disk cache.
 
+Release builds SHALL discover PDFium only at the packaged target-specific resource path. Development builds SHALL prefer an explicit developer override, then a packaged resource, and MAY finally use the target-specific runtime produced beneath the repository `target/` directory by the checksum-validating staging script. Neither build mode SHALL search the current working directory or system library paths, and application startup SHALL NOT download a runtime.
+
 #### Scenario: Frame rendering encounters an uncached page
 - **WHEN** a visible page has no ready raster at the current zoom bucket
 - **THEN** the frame renders a bounded placeholder and enqueues background work
@@ -80,6 +82,11 @@ PDF file inspection, document loading, page metadata access, and page rasterizat
 - **WHEN** a PDF exceeds the 512 MiB source-size limit or reports more than 10,000 pages
 - **THEN** Markion shows a localized unavailable-PDF state before rendering any page
 - **AND** no existing tab or file is modified
+
+#### Scenario: A development build uses an explicitly staged runtime
+- **WHEN** Markion runs as a development build without a packaged PDFium resource or developer override and the repository staging script has produced the matching target runtime
+- **THEN** runtime discovery loads that target-scoped staged file and PDF viewing works under a normal `cargo run`
+- **AND** release discovery remains restricted to the packaged resource path
 
 #### Scenario: Closing a PDF releases transient resources
 - **WHEN** a PDF tab closes or is replaced while metadata or raster work is pending

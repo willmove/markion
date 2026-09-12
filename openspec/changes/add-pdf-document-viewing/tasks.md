@@ -9,7 +9,7 @@
 ## 2. GPUI-Free PDF Renderer Core
 
 - [x] 2.1 Define pure request/result types for document IDs, generations, page geometry, raw RGBA rasters, safe error categories, and the 512 MiB source / 10,000-page / 32 MiB raster limits; expose no native handles across the crate boundary.
-- [x] 2.2 Implement deterministic runtime discovery that uses the packaged target-specific resource path in release builds, permits only an explicit developer override in non-release builds, and never downloads or silently binds an arbitrary system/current-directory library at application startup.
+- [x] 2.2 Implement deterministic runtime discovery that uses only the packaged target-specific resource path in release builds, permits an explicit override or the checksum-staged matching-target runtime in non-release builds, and never downloads or silently binds an arbitrary system/current-directory library at application startup.
 - [x] 2.3 Implement document open and metadata extraction on the renderer owner, including case-independent path input, finite file/page checks, natural page dimensions, encrypted/password-required detection, and safe mapping of native diagnostics.
 - [x] 2.4 Implement page rasterization to owned RGBA bytes with target-width bucketing, aspect preservation, pre-allocation pixel/byte reduction, and page-scoped render errors; avoid enabling broad image decoder features.
 - [x] 2.5 Implement the bounded single-owner service thread and command/event protocol with one native call at a time, bounded/coalesced request queues, visible-range priority, close/shutdown handling, and stale `(document_id, generation)` rejection.
