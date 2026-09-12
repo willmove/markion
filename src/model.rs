@@ -1402,6 +1402,11 @@ pub enum VisualBlockKind {
         /// reuse constant-size identities instead of rescanning data URIs.
         images: Vec<HtmlImageDescriptor>,
     },
+    /// Leading YAML `---` / `...` document header with a collapsible source
+    /// payload. Parsed `title` is presentation-only for the collapsed chrome.
+    FrontMatter {
+        title: Option<String>,
+    },
     Rule,
     Table {
         rows: Vec<Vec<RichText>>,
@@ -1534,6 +1539,9 @@ pub enum VisualBlockEditor {
     Html {
         payload: VisualEditorField,
     },
+    FrontMatter {
+        payload: VisualEditorField,
+    },
     /// One complete proven inline-image span, presented by Visual Edit as an
     /// image with an on-demand whole-span source payload. Unlike the removed
     /// structured field editor, this payload covers the complete authored
@@ -1554,7 +1562,9 @@ impl VisualBlockEditor {
             Self::Code { payload, info, .. } => vec![payload, info],
             Self::Math { payload, .. } => vec![payload],
             Self::Table { cells } => cells.iter().map(|cell| &cell.field).collect(),
-            Self::Html { payload } | Self::Image { payload, .. } => vec![payload],
+            Self::Html { payload }
+            | Self::FrontMatter { payload }
+            | Self::Image { payload, .. } => vec![payload],
         }
     }
 
@@ -1570,6 +1580,8 @@ pub enum VisualEditorFieldKind {
     CodePayload,
     MathPayload,
     HtmlSource,
+    /// Complete authored YAML front-matter span, including `---` delimiters.
+    FrontMatterSource,
     ImageAlt,
     ImageDestination,
     ImageTitle,

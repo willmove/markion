@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use pulldown_cmark::{Event, LinkType, Tag, TagEnd};
 
-use crate::frontmatter::split_front_matter;
+use crate::frontmatter::{parse_front_matter, split_front_matter};
 use crate::model::{
     AlertKind, InlineStyle, MathDelimiter, MathLayoutStyle, MathSource, PreviewBlock, VisualBlock,
     VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
@@ -565,14 +565,10 @@ pub(crate) fn build_visual_blocks(
         reference_definitions.push_str(&footnote_stubs);
     }
     let mut blocks = Vec::with_capacity(preview.len() + 1);
-    if let Some((_, body_start)) = split_front_matter(text)
+    if let Some((raw, body_start)) = split_front_matter(text)
         && body_start > 0
     {
-        blocks.push(source_island(
-            0..body_start,
-            VisualSourceIslandKind::FrontMatter,
-            &mut allocate_id,
-        ));
+        blocks.push(front_matter_visual_block(raw, body_start, &mut allocate_id));
     }
 
     // Blockquotes are containers only. Their ordered leaf children become
@@ -1117,6 +1113,33 @@ fn callout_title_block(
     }
 }
 
+fn front_matter_visual_block(
+    raw: &str,
+    body_start: usize,
+    allocate_id: &mut impl FnMut() -> VisualBlockId,
+) -> VisualBlock {
+    let title = parse_front_matter(raw).ok().and_then(|matter| matter.title);
+    let payload = 0..body_start;
+    VisualBlock {
+        id: allocate_id(),
+        kind: VisualBlockKind::FrontMatter { title },
+        source_range: payload.clone(),
+        editable_runs: Vec::new(),
+        reveal_groups: Vec::new(),
+        marker_ranges: Vec::new(),
+        block_prefix: None,
+        height_signature: None,
+        quote_context: None,
+        source_island: None,
+        editor: Some(VisualBlockEditor::FrontMatter {
+            payload: VisualEditorField {
+                kind: VisualEditorFieldKind::FrontMatterSource,
+                source_range: payload,
+            },
+        }),
+    }
+}
+
 fn source_island(
     range: Range<usize>,
     kind: VisualSourceIslandKind,
@@ -1330,15 +1353,24 @@ fn visual_block_editor(
             })
         }
         PreviewBlock::MathBlock { delimiter, .. } => {
-            let (payload_range, opening_delimiter, closing_delimiter) = match delimiter {
-                MathDelimiter::DisplayDollar => dollar_math_payload_ranges(text, source_range)?,
-                MathDelimiter::Fenced => {
-                    let (payload, _, opening, closing) =
-                        fenced_payload_ranges(text, source_range, '`', '~')?;
-                    (payload, opening, closing)
+            let split = match delimiter {
+                MathDelimiter::DisplayDollar => {
+                    dollar_math_payload_ranges(text, source_range.clone())
                 }
-                MathDelimiter::InlineDollar => return None,
+                MathDelimiter::Fenced => {
+                    fenced_payload_ranges(text, source_range.clone(), '`', '~')
+                        .map(|(payload, _, opening, closing)| (payload, opening, closing))
+                }
+                MathDelimiter::InlineDollar => None,
             };
+            let (payload_range, opening_delimiter, closing_delimiter) =
+                split.unwrap_or_else(|| {
+                    (
+                        source_range.clone(),
+                        source_range.start..source_range.start,
+                        source_range.end..source_range.end,
+                    )
+                });
             Some(VisualBlockEditor::Math {
                 opening_delimiter,
                 payload: VisualEditorField {
@@ -1349,11 +1381,11 @@ fn visual_block_editor(
             })
         }
         PreviewBlock::Table { rows, .. } => {
-            let source = text.get(source_range.clone())?;
-            let cell_ranges = table_cell_source_ranges(source)?;
-            if cell_ranges.len() != rows.iter().map(Vec::len).sum::<usize>() {
+            if rows.is_empty() {
                 return None;
             }
+            let source = text.get(source_range.clone())?;
+            let cell_ranges = table_cell_source_ranges(source)?;
             Some(VisualBlockEditor::Table {
                 cells: cell_ranges
                     .into_iter()
@@ -1376,29 +1408,21 @@ fn visual_block_editor(
             })
         }
         PreviewBlock::Image { identity, .. } => {
-            // Conservative whole-span proof: the block must be exactly one
-            // complete inline image whose label and destination bounds
-            // resolve without guessing. The closing `)` must be unescaped
-            // (otherwise the authored title could swallow it) and, outside an
-            // angle destination, no unescaped `)` may appear before it.
-            // Reference-style and multiline forms end with `]` or fail the
-            // scan and keep `editor: None` (today's island fallback) instead
-            // of a guessed payload range.
+            // Conservative whole-span proof: one complete single-line image
+            // (inline `![alt](dest)` or reference `![alt][label]` / shortcut).
+            // Multiline and unclosed forms keep `editor: None`.
             let authored = text.get(source_range.clone())?;
-            if !authored.starts_with("![")
-                || authored.len() < 6
-                || authored.contains(['\n', '\r'])
-                || !crate::inline_edit::find_unescaped(authored, 0, b')')
-                    .is_some_and(|close| close == authored.len() - 1)
-            {
+            if !crate::inline_edit::proven_single_line_image_span(authored) {
                 return None;
             }
-            let destination = crate::inline_edit::authored_image_destination_range(authored)?;
-            let destination_inner = &authored[destination.clone()];
-            if !destination_inner.starts_with('<')
-                && crate::inline_edit::find_unescaped(destination_inner, 0, b')').is_some()
-            {
-                return None;
+            if authored.ends_with(')') {
+                let destination = crate::inline_edit::authored_image_destination_range(authored)?;
+                let destination_inner = &authored[destination.clone()];
+                if !destination_inner.starts_with('<')
+                    && crate::inline_edit::find_unescaped(destination_inner, 0, b')').is_some()
+                {
+                    return None;
+                }
             }
             Some(VisualBlockEditor::Image {
                 payload: VisualEditorField {
@@ -4461,16 +4485,25 @@ mod tests {
     #[test]
     fn remaining_source_islands_stay_source_backed() {
         let front = MarkdownDocument::from_text("---\ntitle: Demo\n---\n\nBody");
-        let island = front
+        let header = front
             .visual_blocks()
             .into_iter()
-            .find(|block| block.source_island == Some(VisualSourceIslandKind::FrontMatter))
-            .expect("front matter island");
+            .find(|block| matches!(block.kind, VisualBlockKind::FrontMatter { .. }))
+            .expect("front matter header");
+        assert!(header.source_island.is_none());
+        assert!(matches!(
+            header.editor,
+            Some(VisualBlockEditor::FrontMatter { .. })
+        ));
         assert!(
-            front.text()[island.source_range.clone()].starts_with("---"),
-            "front matter island should cover the YAML region"
+            front.text()[header.source_range.clone()].starts_with("---"),
+            "front matter header should cover the YAML region"
         );
-        assert!(front.text()[island.source_range.clone()].contains("title: Demo"));
+        assert!(front.text()[header.source_range.clone()].contains("title: Demo"));
+        let VisualBlockKind::FrontMatter { title } = &header.kind else {
+            panic!("expected FrontMatter kind");
+        };
+        assert_eq!(title.as_deref(), Some("Demo"));
 
         let unclosed = "```rust\nfn main() {}\n";
         let block = MarkdownDocument::from_text(unclosed)
@@ -4481,6 +4514,22 @@ mod tests {
         assert_eq!(block.source_island, Some(VisualSourceIslandKind::Code));
         assert!(block.editor.is_none());
         assert_eq!(&unclosed[block.source_range.clone()], unclosed);
+
+        let invalid = MarkdownDocument::from_text("---\n: not mapping\n---\n\nBody");
+        let header = invalid
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::FrontMatter { .. }))
+            .expect("invalid YAML still has a header");
+        assert!(header.source_island.is_none());
+        assert!(matches!(
+            header.editor,
+            Some(VisualBlockEditor::FrontMatter { .. })
+        ));
+        let VisualBlockKind::FrontMatter { title } = &header.kind else {
+            panic!("expected FrontMatter kind");
+        };
+        assert!(title.is_none());
     }
 
     #[test]
@@ -5623,10 +5672,15 @@ mod tests {
             "---\ntitle: Demo\n---\n\n```rust\nfn main() {}\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n",
         );
         let blocks = doc.visual_blocks();
-        assert_eq!(
-            blocks[0].source_island,
-            Some(VisualSourceIslandKind::FrontMatter)
-        );
+        assert!(matches!(
+            blocks[0].kind,
+            VisualBlockKind::FrontMatter { .. }
+        ));
+        assert!(blocks[0].source_island.is_none());
+        assert!(matches!(
+            blocks[0].editor,
+            Some(VisualBlockEditor::FrontMatter { .. })
+        ));
         assert!(
             blocks
                 .iter()
@@ -5864,9 +5918,19 @@ mod tests {
         // matching the other payload-editor blocks.
         assert!(block.source_island.is_none());
 
+        let reference = "![alt][asset]\n\n[asset]: image.png";
+        let image = MarkdownDocument::from_text(reference)
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+            .expect("reference-style image block");
+        let Some(VisualBlockEditor::Image { payload, .. }) = &image.editor else {
+            panic!("reference-style image should carry an Image payload editor");
+        };
+        assert_eq!(&reference[payload.source_range.clone()], "![alt][asset]");
+        assert!(image.source_island.is_none());
+
         for ambiguous in [
-            // Reference-style: no proven destination parentheses.
-            "![alt][asset]\n\n[asset]: image.png",
             // Multiline: provable by the parser but outside the payload proof.
             "![alt](image.png\n \"title\")",
         ] {
@@ -6245,6 +6309,60 @@ mod tests {
     }
 
     #[test]
+    fn ragged_table_keeps_padded_cell_editors() {
+        let source = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 |";
+        let block = MarkdownDocument::from_text(source)
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+            .expect("table");
+        assert!(block.source_island.is_none());
+        let Some(VisualBlockEditor::Table { cells }) = block.editor else {
+            panic!("ragged table should keep a Table editor");
+        };
+        assert_eq!(cells.len(), 6);
+        assert_eq!(&source[cells[3].field.source_range.clone()], "1");
+        assert_eq!(&source[cells[4].field.source_range.clone()], "2");
+        assert!(cells[5].field.source_range.is_empty());
+    }
+
+    #[test]
+    fn extra_table_cells_keep_source_ranges_and_the_table_editor() {
+        let source = "| A | B |\n| --- | --- |\n| 1 | 2 | extra |";
+        let block = MarkdownDocument::from_text(source)
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+            .expect("table");
+        assert!(block.source_island.is_none());
+        let Some(VisualBlockEditor::Table { cells }) = block.editor else {
+            panic!("extra-cell table should keep a Table editor");
+        };
+        assert!(
+            cells
+                .iter()
+                .any(|cell| source[cell.field.source_range.clone()].contains("extra")),
+            "extra cells must remain editable: {cells:?}"
+        );
+    }
+
+    #[test]
+    fn display_math_always_carries_a_payload_editor() {
+        for source in ["$$\n\\frac{1}{2}\n$$", "```math\n\\alpha\n```"] {
+            let block = MarkdownDocument::from_text(source)
+                .visual_blocks()
+                .into_iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::MathBlock { .. }))
+                .unwrap_or_else(|| panic!("expected math block for {source:?}"));
+            assert!(block.source_island.is_none());
+            assert!(
+                matches!(block.editor, Some(VisualBlockEditor::Math { .. })),
+                "display/fenced math must keep a Math payload editor: {source:?}"
+            );
+        }
+    }
+
+    #[test]
     fn block_image_editor_covers_exactly_the_authored_span() {
         for source in [
             "![alt](pic.png)",
@@ -6265,26 +6383,39 @@ mod tests {
             assert!(authored.starts_with("![") && authored.ends_with(')'));
             assert!(block.source_island.is_none());
         }
-    }
 
-    #[test]
-    fn unprovable_image_spans_keep_the_source_island() {
-        // Reference-style and multiline image forms cannot be proven by the
-        // whole-span byte scan, so they must not get an Image payload editor.
         for source in [
             "![alt][ref]\n\n[ref]: pic.png",
-            "![alt](image.png\n \"title\")",
+            "![alt][]\n\n[alt]: pic.png",
+            "![logo]\n\n[logo]: pic.png",
         ] {
             let block = MarkdownDocument::from_text(source)
                 .visual_blocks()
                 .into_iter()
-                .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }));
-            if let Some(block) = block {
-                assert!(
-                    !matches!(block.editor, Some(VisualBlockEditor::Image { .. })),
-                    "unprovable image span must not gain an Image editor for {source:?}"
-                );
-            }
+                .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+                .unwrap_or_else(|| panic!("expected block image for {source:?}"));
+            let Some(VisualBlockEditor::Image { payload, .. }) = block.editor else {
+                panic!("reference-style image should carry an Image editor for {source:?}");
+            };
+            let authored = &source[payload.source_range.clone()];
+            assert!(authored.starts_with("![") && authored.ends_with(']'));
+            assert!(block.source_island.is_none());
+        }
+    }
+
+    #[test]
+    fn unprovable_image_spans_keep_the_source_island() {
+        // Multiline image forms cannot be proven by the whole-span byte scan.
+        let source = "![alt](image.png\n \"title\")";
+        let block = MarkdownDocument::from_text(source)
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }));
+        if let Some(block) = block {
+            assert!(
+                !matches!(block.editor, Some(VisualBlockEditor::Image { .. })),
+                "unprovable image span must not gain an Image editor for {source:?}"
+            );
         }
     }
 

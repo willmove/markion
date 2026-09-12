@@ -206,32 +206,44 @@ pub(crate) fn table_cell_source_ranges(source: &str) -> Option<Vec<TableCellSour
     if separator_index == 0 {
         return None;
     }
-    let expected_columns =
+    let separator_columns =
         markdown_table_cell_ranges(lines[separator_index].trim_end_matches(['\r', '\n'])).len();
-    if expected_columns < 2 {
-        return None;
-    }
 
-    let mut result = Vec::new();
+    let mut body_rows = Vec::new();
     let mut source_offset = 0usize;
     let mut logical_row = 0usize;
     for (line_index, line_with_newline) in lines.iter().enumerate() {
         let line = line_with_newline.trim_end_matches(['\r', '\n']);
-        let ranges = markdown_table_cell_ranges(line);
-        if ranges.len() != expected_columns {
-            return None;
-        }
         if line_index != separator_index {
-            for (column, range) in ranges.into_iter().enumerate() {
-                result.push(TableCellSourceRange {
-                    row: logical_row,
-                    column,
-                    source_range: source_offset + range.start..source_offset + range.end,
-                });
-            }
+            let ranges = markdown_table_cell_ranges(line);
+            let content_end = line.trim_end().len();
+            body_rows.push((logical_row, source_offset, content_end, ranges));
             logical_row += 1;
         }
         source_offset += line_with_newline.len();
+    }
+    let column_count = body_rows
+        .iter()
+        .map(|(_, _, _, ranges)| ranges.len())
+        .max()
+        .unwrap_or(0)
+        .max(separator_columns);
+    if column_count < 2 {
+        return None;
+    }
+
+    let mut result = Vec::new();
+    for (row, line_start, content_end, mut ranges) in body_rows {
+        while ranges.len() < column_count {
+            ranges.push(content_end..content_end);
+        }
+        for (column, range) in ranges.into_iter().enumerate() {
+            result.push(TableCellSourceRange {
+                row,
+                column,
+                source_range: line_start + range.start..line_start + range.end,
+            });
+        }
     }
     Some(result)
 }
@@ -667,6 +679,27 @@ mod tests {
         let range = formatted_table_cell_range(&table, 1, 0).expect("formatted cell");
         assert_eq!(&formatted[range], "宽字符 and longer");
         assert_eq!(parse_markdown_table(&formatted).expect("round trip"), table);
+    }
+
+    #[test]
+    fn cell_ranges_pad_short_rows_and_keep_extra_cells() {
+        let short = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 |";
+        let padded = table_cell_source_ranges(short).expect("padded short row");
+        assert_eq!(padded.len(), 6);
+        assert_eq!(&short[padded[3].source_range.clone()], "1");
+        assert_eq!(&short[padded[4].source_range.clone()], "2");
+        assert!(padded[5].source_range.is_empty());
+        assert_eq!(padded[5].row, 1);
+        assert_eq!(padded[5].column, 2);
+
+        let extra = "| A | B |\n| --- | --- |\n| 1 | 2 | extra |";
+        let cells = table_cell_source_ranges(extra).expect("extra cells");
+        assert!(
+            cells
+                .iter()
+                .any(|cell| extra[cell.source_range.clone()].contains("extra")),
+            "extra pipe cells must keep source ranges: {cells:?}"
+        );
     }
 
     #[test]

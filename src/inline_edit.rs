@@ -44,6 +44,29 @@ pub fn inline_image_at(source: &str, offset: usize) -> Option<InlineMarkdownTarg
     inline_target_at(source, offset, true)
 }
 
+/// True when `authored` is one complete single-line Markdown image: inline
+/// `![alt](dest)`, reference `![alt][label]`, collapsed `![alt][]`, or
+/// shortcut `![alt]`. Multiline and unclosed forms return `false`.
+pub fn proven_single_line_image_span(authored: &str) -> bool {
+    if !authored.starts_with("![") || authored.contains(['\n', '\r']) {
+        return false;
+    }
+    let Some(label_end) = find_unescaped(authored, 2, b']') else {
+        return false;
+    };
+    let after = label_end + 1;
+    if after == authored.len() {
+        return true;
+    }
+    match authored.as_bytes().get(after) {
+        Some(b'(') => find_unescaped(authored, after + 1, b')')
+            .is_some_and(|close| close + 1 == authored.len()),
+        Some(b'[') => find_unescaped(authored, after + 1, b']')
+            .is_some_and(|close| close + 1 == authored.len()),
+        _ => false,
+    }
+}
+
 /// Byte range of the authored destination inside a complete inline-image span
 /// `![label](destination "title")`, relative to the span start. Returns
 /// `None` for any span whose destination cannot be located with certainty;
@@ -341,5 +364,19 @@ mod tests {
         let parsed = inline_image_at(&rendered, 5).unwrap();
         assert_eq!(parsed.presentation, Some(presentation));
         assert_eq!(parsed.title.as_deref(), Some("Caption"));
+    }
+
+    #[test]
+    fn proven_single_line_image_covers_reference_and_inline_forms() {
+        assert!(proven_single_line_image_span("![alt](url.png)"));
+        assert!(proven_single_line_image_span("![alt][ref]"));
+        assert!(proven_single_line_image_span("![alt][]"));
+        assert!(proven_single_line_image_span("![logo]"));
+        assert!(!proven_single_line_image_span(
+            "![alt](url.png\n \"title\")"
+        ));
+        assert!(!proven_single_line_image_span("![alt](url.png"));
+        assert!(!proven_single_line_image_span("![alt][ref"));
+        assert!(inline_image_at("![alt][ref]", 3).is_none());
     }
 }

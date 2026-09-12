@@ -3792,16 +3792,12 @@ fn visual_block_content_view(
         .any(|run| run.html_image.is_some());
     let always_source = matches!(
         block.source_island,
-        Some(
-            VisualSourceIslandKind::FrontMatter
-                | VisualSourceIslandKind::Code
-                | VisualSourceIslandKind::Unsupported
-        )
+        Some(VisualSourceIslandKind::Code | VisualSourceIslandKind::Unsupported)
     );
     // Conservative inline-HTML fragments stay in the mixed rendered path
     // (verbatim tag atoms) instead of promoting the whole paragraph to a
-    // source island. Front matter, unclosed code, and unsupported parser
-    // gaps still use the whole-block source box.
+    // source island. Unclosed code and unsupported parser gaps still use
+    // the whole-block source box. YAML front matter is a collapsible header.
     // A Whitespace row that owns the caret is ordinary inter-paragraph
     // spacing, not a code-like block. Promoting it to a source-island box
     // (border + padding + monospace + gray background) makes a normal blank
@@ -3813,8 +3809,8 @@ fn visual_block_content_view(
     // Empty editable_runs alone must not island a rendered kind: empty ATX
     // headings and empty list items keep heading/list typography and reveal
     // their structural prefix. Island chrome is reserved for blocks that
-    // actually carry a source_island kind (front matter, unclosed code,
-    // residual unsupported gaps).
+    // actually carry a source_island kind (unclosed code, residual
+    // unsupported gaps). YAML front matter uses the collapsible header.
     let focused_conservative = owns_caret
         && !is_whitespace
         && !is_reference_definition
@@ -4111,43 +4107,7 @@ fn visual_block_content_view(
                     cx,
                 );
             }
-            match app.math_entry(
-                latex,
-                MathLayoutStyle::Display,
-                typography.display_math_font_size,
-                1.0,
-                display_scale,
-                app.palette().text,
-            ) {
-                MathCacheEntry::Ready(image) => {
-                    let width = image.size.width;
-                    div().child(
-                        div()
-                            .id(ElementId::from(("visual-math-scroll", block_index)))
-                            .mb_3()
-                            .w_full()
-                            .overflow_x_scroll()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .min_w(width)
-                                    .py_2()
-                                    .flex()
-                                    .justify_center()
-                                    .child(visual_math_atom(
-                                        app,
-                                        image,
-                                        block.source_range.clone(),
-                                        None,
-                                        cx,
-                                    )),
-                            ),
-                    )
-                }
-                MathCacheEntry::Pending | MathCacheEntry::Error(_) => {
-                    visual_source_island_view(app, block, block_index, cx)
-                }
-            }
+            visual_source_island_view(app, block, block_index, cx)
         }
         VisualBlockKind::CodeBlock { language } => {
             if let Some(VisualBlockEditor::Code { payload, info, .. }) = block.editor.as_ref() {
@@ -4183,6 +4143,13 @@ fn visual_block_content_view(
             }
         }
         VisualBlockKind::Unsupported => visual_source_island_view(app, block, block_index, cx),
+        VisualBlockKind::FrontMatter { title } => {
+            if let Some(VisualBlockEditor::FrontMatter { payload }) = block.editor.as_ref() {
+                visual_front_matter_editor(app, block, block_index, title.as_deref(), payload, cx)
+            } else {
+                visual_source_island_view(app, block, block_index, cx)
+            }
+        }
         VisualBlockKind::Html { html, images } => {
             if let Some(VisualBlockEditor::Html { payload }) = block.editor.as_ref() {
                 visual_html_editor(
@@ -4801,6 +4768,7 @@ fn visual_editor_field_element(
         field.kind,
         VisualEditorFieldKind::ImageSource
             | VisualEditorFieldKind::HtmlSource
+            | VisualEditorFieldKind::FrontMatterSource
             | VisualEditorFieldKind::TableCell { .. }
     ) {
         // Opaque-payload fields (image source toggles, raw-HTML blocks, and
@@ -4986,6 +4954,7 @@ pub(super) fn visual_editor_field_projection(
         VisualEditorFieldKind::CodePayload
         | VisualEditorFieldKind::MathPayload
         | VisualEditorFieldKind::HtmlSource
+        | VisualEditorFieldKind::FrontMatterSource
         | VisualEditorFieldKind::ImageSource
         | VisualEditorFieldKind::CodeInfo => None,
     };
@@ -5226,6 +5195,76 @@ fn visual_html_editor(
         payload,
         false,
         bordered,
+        false,
+        presentation.into_any_element(),
+        payload_editor,
+        cx,
+    ))
+}
+
+fn visual_front_matter_editor(
+    app: &MarkionApp,
+    block: &VisualBlock,
+    block_index: usize,
+    title: Option<&str>,
+    payload: &VisualEditorField,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let typography = app.typography_metrics();
+    let payload_start = payload.source_range.start;
+    let presentation = div()
+        .px_3()
+        .py_2()
+        .bg(rgb(0xf8fafc))
+        .flex()
+        .items_center()
+        .gap_2()
+        .cursor(CursorStyle::IBeam)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |app, _, _, cx| app.move_to(payload_start, cx)),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .line_height(px(14.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x475569))
+                .child(app.tr(Msg::LabelYaml)),
+        )
+        .children(title.filter(|title| !title.is_empty()).map(|title| {
+            div()
+                .text_size(px(typography.rendered_font_size))
+                .line_height(px(typography.paragraph_line_height))
+                .text_color(rgb(0x0f172a))
+                .child(title.to_string())
+        }));
+    let payload_editor = move |cx: &mut Context<MarkionApp>| {
+        div()
+            .border_t_1()
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xf8fafc))
+            .p_2()
+            .font(code_slot_font(&app.resolved_font_families.code))
+            .text_size(px(typography.source_island_font_size))
+            .line_height(px(typography.source_island_line_height))
+            .child(visual_editor_field_element(
+                app,
+                block_index,
+                payload,
+                ElementId::from(("visual-front-matter-payload", block.id.as_u64())),
+                None,
+                None,
+                cx,
+            ))
+            .into_any_element()
+    };
+    div().child(visual_collapsible_source_block(
+        app,
+        block.id,
+        payload,
+        false,
+        true,
         false,
         presentation.into_any_element(),
         payload_editor,

@@ -4072,6 +4072,7 @@ fn sanitize_visual_field_replacement(
         VisualEditorFieldKind::CodePayload
         | VisualEditorFieldKind::MathPayload
         | VisualEditorFieldKind::HtmlSource
+        | VisualEditorFieldKind::FrontMatterSource
         | VisualEditorFieldKind::ImageSource => replacement.to_string(),
         VisualEditorFieldKind::CodeInfo => replacement
             .chars()

@@ -2455,6 +2455,7 @@ impl MarkionApp {
                 VisualEditorFieldKind::CodePayload
                 | VisualEditorFieldKind::MathPayload
                 | VisualEditorFieldKind::HtmlSource
+                | VisualEditorFieldKind::FrontMatterSource
                 | VisualEditorFieldKind::ImageSource => {
                     self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
                     self.replace_text_in_range(None, "\n", _window, cx);
