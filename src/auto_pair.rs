@@ -34,13 +34,14 @@ pub enum AutoPairAction {
     Skip { caret: usize },
 }
 
-/// Fenced-code, block-math, diagram, and HTML payload editors do not pair.
+/// Fenced-code, block-math, diagram, HTML, and YAML payload editors do not pair.
 pub fn is_auto_pair_restricted_field(kind: VisualEditorFieldKind) -> bool {
     matches!(
         kind,
         VisualEditorFieldKind::CodePayload
             | VisualEditorFieldKind::MathPayload
             | VisualEditorFieldKind::HtmlSource
+            | VisualEditorFieldKind::FrontMatterSource
             | VisualEditorFieldKind::CodeInfo
     )
 }
@@ -270,6 +271,9 @@ mod tests {
         ));
         assert!(is_auto_pair_restricted_field(
             VisualEditorFieldKind::HtmlSource
+        ));
+        assert!(is_auto_pair_restricted_field(
+            VisualEditorFieldKind::FrontMatterSource
         ));
         assert!(is_auto_pair_restricted_field(
             VisualEditorFieldKind::CodeInfo

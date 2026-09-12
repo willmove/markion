@@ -687,6 +687,8 @@ pub enum Msg {
     LabelOutline,
     /// "Table" preview block toolbar heading.
     LabelTable,
+    /// Collapsed Visual Edit YAML front-matter header label.
+    LabelYaml,
     /// Compact Visual Edit control that deletes the entire table.
     VisualTableDeleteTable,
     LabelImageAlt,
@@ -3672,6 +3674,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::LabelFiles => "Files",
         Msg::LabelOutline => "Outline",
         Msg::LabelTable => "Table",
+        Msg::LabelYaml => "YAML",
         Msg::VisualTableDeleteTable => "-Tbl",
         Msg::LabelImageAlt => "Alt text",
         Msg::LabelImageDestination => "Destination",
@@ -4328,6 +4331,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::LabelFiles => "ファイル",
         Msg::LabelOutline => "アウトライン",
         Msg::LabelTable => "表",
+        Msg::LabelYaml => "YAML",
         Msg::VisualTableDeleteTable => "表削除",
         Msg::LabelImageAlt => "代替テキスト",
         Msg::LabelImageDestination => "URL",
@@ -4974,6 +4978,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::LabelFiles => "Fichiers",
         Msg::LabelOutline => "Plan",
         Msg::LabelTable => "Tableau",
+        Msg::LabelYaml => "YAML",
         Msg::VisualTableDeleteTable => "-Tab",
         Msg::LabelImageAlt => "Texte alternatif",
         Msg::LabelImageDestination => "Destination",
@@ -5658,6 +5663,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::LabelFiles => "Dateien",
         Msg::LabelOutline => "Gliederung",
         Msg::LabelTable => "Tabelle",
+        Msg::LabelYaml => "YAML",
         Msg::VisualTableDeleteTable => "-Tab",
         Msg::LabelImageAlt => "Alternativtext",
         Msg::LabelImageDestination => "Ziel",
@@ -6324,6 +6330,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::LabelFiles => "Archivos",
         Msg::LabelOutline => "Esquema",
         Msg::LabelTable => "Tabla",
+        Msg::LabelYaml => "YAML",
         Msg::VisualTableDeleteTable => "-Tab",
         Msg::LabelImageAlt => "Texto alternativo",
         Msg::LabelImageDestination => "Destino",
@@ -6987,6 +6994,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::LabelFiles => "文件",
         Msg::LabelOutline => "大纲",
         Msg::LabelTable => "表格",
+        Msg::LabelYaml => "YAML 头",
         Msg::VisualTableDeleteTable => "删表",
         Msg::LabelImageAlt => "替代文本",
         Msg::LabelImageDestination => "目标",
@@ -7612,6 +7620,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::LabelFiles => "檔案",
         Msg::LabelOutline => "大綱",
         Msg::LabelTable => "表格",
+        Msg::LabelYaml => "YAML 頭",
         Msg::VisualTableDeleteTable => "刪表",
         Msg::LabelImageAlt => "替代文字",
         Msg::LabelImageDestination => "目標",
@@ -8540,6 +8549,17 @@ mod tests {
     }
 
     #[test]
+    fn yaml_header_label_is_localized() {
+        assert_eq!(t(Language::En, Msg::LabelYaml), "YAML");
+        assert_eq!(t(Language::ZhHans, Msg::LabelYaml), "YAML 头");
+        assert_eq!(t(Language::ZhHant, Msg::LabelYaml), "YAML 頭");
+        assert_eq!(t(Language::Ja, Msg::LabelYaml), "YAML");
+        assert_eq!(t(Language::Fr, Msg::LabelYaml), "YAML");
+        assert_eq!(t(Language::De, Msg::LabelYaml), "YAML");
+        assert_eq!(t(Language::Es, Msg::LabelYaml), "YAML");
+    }
+
+    #[test]
     fn every_message_returns_non_empty_text_for_every_language() {
         // Exhaustiveness guard: if a new Msg variant is added without a
         // translation arm, this still compiles (the match is total) but a
@@ -8641,6 +8661,7 @@ mod tests {
             Msg::LabelFiles,
             Msg::LabelOutline,
             Msg::LabelTable,
+            Msg::LabelYaml,
             Msg::VisualTableDeleteTable,
             Msg::LabelImageAlt,
             Msg::LabelImageDestination,
