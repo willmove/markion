@@ -295,6 +295,12 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.pdf_page_input.take().is_some() {
+            self.input_marked_len = 0;
+            window.focus(&self.focus_handle);
+            cx.notify();
+            return;
+        }
         if self.git_ui.settings.is_some()
             || self.git_ui.onboarding.is_some()
             || self.git_ui.inspection.is_some()
@@ -412,6 +418,7 @@ impl MarkionApp {
         intent: OpenPathIntent,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        let path = comparable_document_path(&path);
         let display_path = path.display().to_string();
         if self.focus_existing_tab_for_path(&path, cx) {
             self.record_recent_path(&path);
@@ -421,23 +428,29 @@ impl MarkionApp {
             return Ok(());
         }
 
-        if image_extension_supported(&path) {
-            match intent {
+        match classify_supported_path(&path) {
+            Some(SupportedPathKind::Image) => match intent {
                 OpenPathIntent::ReplaceActive => {
                     self.replace_active_tab_with_image(path.clone(), cx)
                 }
                 OpenPathIntent::OpenInNewTab => self.open_image_in_new_tab(path.clone(), cx),
+            },
+            Some(SupportedPathKind::Document) => {
+                let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
+                match intent {
+                    OpenPathIntent::ReplaceActive => self.replace_active_tab(document, cx),
+                    OpenPathIntent::OpenInNewTab => self.open_in_new_tab(document, cx),
+                }
             }
-        } else if is_markdown_path(&path) || is_text_path(&path) {
-            let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
-            match intent {
-                OpenPathIntent::ReplaceActive => self.replace_active_tab(document, cx),
-                OpenPathIntent::OpenInNewTab => self.open_in_new_tab(document, cx),
+            Some(SupportedPathKind::Pdf) => match intent {
+                OpenPathIntent::ReplaceActive => self.replace_active_tab_with_pdf(path.clone(), cx),
+                OpenPathIntent::OpenInNewTab => self.open_pdf_in_new_tab(path.clone(), cx),
+            },
+            None => {
+                return Err(self
+                    .trf(Msg::StatusUnsupportedFile, &[&display_path])
+                    .to_string());
             }
-        } else {
-            return Err(self
-                .trf(Msg::StatusUnsupportedFile, &[&display_path])
-                .to_string());
         }
 
         self.update_workspace_root_from_document(cx);
@@ -930,6 +943,7 @@ impl MarkionApp {
             cx.notify();
             return;
         };
+        let path_identity = comparable_document_path(&path);
 
         let detail = tf(
             self.language,
@@ -1003,7 +1017,6 @@ impl MarkionApp {
                     return;
                 }
 
-                let was_active = app.active_tab().path() == Some(path.as_path());
                 let _admission = match app.git_operations.try_write(&path) {
                     Ok(admission) => admission,
                     Err(_) => {
@@ -1015,6 +1028,21 @@ impl MarkionApp {
                         return;
                     }
                 };
+                // Resolve tab membership before deletion while Windows path
+                // aliases can still be canonicalized to the selected entry.
+                let affected: Vec<usize> = app
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, tab)| {
+                        tab.path()
+                            .is_some_and(|tab_path| {
+                                remap_path_after_move(tab_path, &path_identity, &path_identity)
+                                    .is_some()
+                            })
+                            .then_some(index)
+                    })
+                    .collect();
                 let result = app
                     .file_tree
                     .as_mut()
@@ -1026,21 +1054,11 @@ impl MarkionApp {
                         // Any content tab for the deleted file (or a descendant
                         // of a deleted folder) becomes a fresh document. This
                         // also releases an image viewer's cache claim.
-                        let affected: Vec<usize> = app
-                            .tabs
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, tab)| {
-                                tab.path()
-                                    .is_some_and(|p| p == path.as_path() || p.starts_with(&path))
-                                    .then_some(index)
-                            })
-                            .collect();
                         for index in affected {
+                            app.close_tab_pdf_resources(index, cx);
                             app.release_tab_image_claims(index, cx);
                             app.tabs[index] = app.editor_tab_for_document(MarkdownDocument::new());
                         }
-                        let _ = was_active;
                         app.status = app.trf(Msg::StatusDeleted, &[&path.display().to_string()]);
                     }
                     Err(err) => app.status = app.trf(Msg::StatusDeleteFailed, &[&err.to_string()]),
@@ -1142,12 +1160,24 @@ impl MarkionApp {
             return;
         }
 
-        let affects_dirty = self.tabs.iter().any(|tab| {
-            tab.is_dirty()
-                && tab
-                    .path()
-                    .is_some_and(|path| remap_path_after_move(path, source, source).is_some())
-        });
+        // Capture the source identity while it still exists. On Windows the
+        // caller may hold an 8.3 alias; canonicalizing it only after the move
+        // would fail and leave an already-open tab pointing at the old path.
+        let source_identity = comparable_document_path(source);
+        let matching_tabs: Vec<(usize, PathBuf)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| {
+                let unchanged =
+                    remap_path_after_move(tab.path()?, &source_identity, &source_identity)?;
+                let relative = unchanged.strip_prefix(&source_identity).ok()?.to_path_buf();
+                Some((index, relative))
+            })
+            .collect();
+        let affects_dirty = matching_tabs
+            .iter()
+            .any(|(index, _)| self.tabs[*index].is_dirty());
         if affects_dirty {
             self.status = t(self.language, Msg::StatusSaveBeforeMove).into();
             cx.notify();
@@ -1180,11 +1210,19 @@ impl MarkionApp {
             .and_then(|tree| tree.move_entry(source, dest_parent));
         match result {
             Ok(new_path) => {
-                if comparable_document_path(&new_path) == comparable_document_path(source) {
+                let new_path_identity = comparable_document_path(&new_path);
+                if new_path_identity == source_identity {
                     cx.notify();
                     return;
                 }
-                self.remap_tabs_after_move(source, &new_path, cx);
+                for (index, relative) in matching_tabs {
+                    let tab_path = if relative.as_os_str().is_empty() {
+                        new_path_identity.clone()
+                    } else {
+                        new_path_identity.join(relative)
+                    };
+                    self.repoint_tab_to_path(index, &tab_path, cx);
+                }
                 self.selected_tree_path = Some(new_path.clone());
                 self.status = self.trf(Msg::StatusMovedTo, &[&new_path.display().to_string()]);
             }
@@ -1203,22 +1241,6 @@ impl MarkionApp {
             }
         }
         cx.notify();
-    }
-
-    fn remap_tabs_after_move(&mut self, source: &Path, new_source: &Path, cx: &mut Context<Self>) {
-        let matching: Vec<(usize, PathBuf)> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter_map(|(i, tab)| {
-                tab.path()
-                    .and_then(|path| remap_path_after_move(path, source, new_source))
-                    .map(|new_path| (i, new_path))
-            })
-            .collect();
-        for (index, new_path) in matching {
-            self.repoint_tab_to_path(index, &new_path, cx);
-        }
     }
 
     fn remap_tabs_after_path_change(
@@ -1253,6 +1275,9 @@ impl MarkionApp {
             WorkspaceTab::Image(image) => {
                 image.path = new_path.to_path_buf();
                 image.key = PreviewImageKey::from_local_path(new_path);
+            }
+            WorkspaceTab::Pdf(pdf) => {
+                pdf.path = comparable_document_path(new_path);
             }
         }
     }

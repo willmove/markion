@@ -1,0 +1,13 @@
+[package]
+name = "markion-pdf-viewer"
+description = "Markion's GPUI-free PDF metadata and rasterization service."
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+
+[dependencies]
+pdfium-render = { version = "=0.9.3", default-features = false, features = ["pdfium_7881"] }
+
+[dev-dependencies]
+base64 = "0.22"
+tempfile = "3.20"

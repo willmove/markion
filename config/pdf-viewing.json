@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "base_revision": "546aeed1a2cc205150430b87410565b7ccd620a3",
+  "byte_unit": "binary",
+  "bytes_per_mib": 1048576,
+  "package_delta_limit_bytes": 6291456,
+  "installed_delta_limit_bytes": 10485760,
+  "control_build": {
+    "rule": "Build the base revision and candidate on the same native runner with the candidate Cargo.lock, the same stable Rust toolchain, release profile, assets except for the staged PDFium runtime, and cargo-packager 0.11.8.",
+    "cargo_packager_version": "0.11.8"
+  },
+  "pdfium": {
+    "build": 7881,
+    "binding_crate": "pdfium-render",
+    "binding_version": "0.9.3",
+    "binding_feature": "pdfium_7881",
+    "forbidden_features": [
+      "default",
+      "image_api",
+      "pdfium_enable_v8",
+      "pdfium_enable_xfa",
+      "static"
+    ]
+  },
+  "targets": [
+    {
+      "triple": "x86_64-pc-windows-msvc",
+      "archive": "pdfium-win-x64.tgz",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7881/pdfium-win-x64.tgz",
+      "sha256": "73cc0de638ac2095e7445bf56a38200a5b7c7ca0e9f4ba144598f2457377ac08",
+      "archive_size_bytes": 3733154,
+      "archive_member": "bin/pdfium.dll",
+      "installed_library": "pdfium.dll",
+      "runtime_size_bytes": 7211520,
+      "package_formats": ["nsis"]
+    },
+    {
+      "triple": "aarch64-apple-darwin",
+      "archive": "pdfium-mac-arm64.tgz",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7881/pdfium-mac-arm64.tgz",
+      "sha256": "52e94ca5aa8847934330daf3f8150c190682c5ca93831468794f8b90d4392e40",
+      "archive_size_bytes": 3533019,
+      "archive_member": "lib/libpdfium.dylib",
+      "installed_library": "libpdfium.dylib",
+      "runtime_size_bytes": 7732336,
+      "package_formats": ["dmg"]
+    },
+    {
+      "triple": "x86_64-unknown-linux-gnu",
+      "archive": "pdfium-linux-x64.tgz",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7881/pdfium-linux-x64.tgz",
+      "sha256": "1470e21b8b4a3b4ad7f85684e2da11d94f3b69a86d81dee11b9b6709d927ac1d",
+      "archive_size_bytes": 3644759,
+      "archive_member": "lib/libpdfium.so",
+      "installed_library": "libpdfium.so",
+      "runtime_size_bytes": 7645184,
+      "appimage_runtime_size_bytes": 7664592,
+      "package_formats": ["deb", "appimage"]
+    }
+  ]
+}

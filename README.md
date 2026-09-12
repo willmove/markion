@@ -182,10 +182,16 @@ Source-mapped Visual Edit incrementally reuses independently parseable regions a
 Rust stable is required. From the repository root:
 
 ```powershell
+pwsh ./scripts/stage-pdfium.ps1
 cargo run
 cargo build
 pwsh ./scripts/check-quality.ps1
 ```
+
+The staging command checksum-verifies the pinned PDFium runtime beneath
+`target/pdfium-runtime/<host-target>/`; debug builds discover that target-scoped
+file automatically. Release packages remain self-contained and never use this
+development fallback.
 
 The quality command checks Rust formatting and lints, the full Cargo workspace
 test suite, the pinned MarkNice bundle, and every OpenSpec artifact in strict

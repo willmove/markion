@@ -111,6 +111,7 @@ same-file.workspace = true
 markion-diagram = { path = "crates/diagram", features = ["mermaid"] }
 markion-git-sync = { path = "crates/git-sync" }
 markion-pdf = { path = "crates/pdf" }
+markion-pdf-viewer = { path = "crates/pdf-viewer" }
 wechat-workspace = { path = "crates/wechat-workspace" }
 # Drives syntect scope parsing directly in src/highlight.rs (colors keep coming
 # from Markion's theme-mapped token classes, not syntect themes). two-face
@@ -212,6 +213,9 @@ opt-level = 2
 # markion-pdf shapes text and subsets fonts on the export path; unoptimized
 # debug builds would make PDF export take seconds per page.
 [profile.dev.package.markion-pdf]
+opt-level = 2
+
+[profile.dev.package.markion-pdf-viewer]
 opt-level = 2
 
 [profile.dev.package.markion-diagram]

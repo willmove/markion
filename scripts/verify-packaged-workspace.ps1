@@ -100,6 +100,83 @@ try {
         Assert-ExportBundleClosure $manifest.Directory
     }
     Write-Host "Verified $($manifests.Count) packaged MarkNice workspace tree(s) in $Format output"
+
+    $viewingManifest = Get-Content -LiteralPath (Join-Path $repoRoot 'config/pdf-viewing.json') -Raw | ConvertFrom-Json
+    $target = if ($IsWindows) {
+        @($viewingManifest.targets | Where-Object { $_.triple -eq 'x86_64-pc-windows-msvc' })
+    }
+    elseif ($IsMacOS) {
+        @($viewingManifest.targets | Where-Object { $_.triple -eq 'aarch64-apple-darwin' })
+    }
+    else {
+        @($viewingManifest.targets | Where-Object { $_.triple -eq 'x86_64-unknown-linux-gnu' })
+    }
+    if ($target.Count -ne 1) { throw 'Unable to select the native PDFium package manifest entry' }
+    $runtimeNames = @('pdfium.dll', 'libpdfium.dylib', 'libpdfium.so')
+    $runtimes = @(Get-ChildItem -LiteralPath $inspectionRoot -File -Recurse | Where-Object {
+        $runtimeNames -contains $_.Name
+    })
+    if ($runtimes.Count -ne 1) {
+        throw "Expected exactly one PDFium runtime in $Format output, found $($runtimes.Count): $($runtimes.FullName -join ', ')"
+    }
+    $runtime = $runtimes[0]
+    if ($runtime.Name -ne $target[0].installed_library) {
+        throw "Wrong-target PDFium runtime in $Format output: $($runtime.Name)"
+    }
+    $expectedRuntimeBytes = [long]$target[0].runtime_size_bytes
+    $expectedPackagedRuntimeBytes = if ($Format -eq 'appimage') {
+        # cargo-packager 0.11.8 applies a deterministic ELF rpath rewrite to
+        # AppImage shared objects. Pin its observed post-rewrite length too;
+        # staging still verifies the source archive digest and exact raw size.
+        if (-not ($target[0].PSObject.Properties.Name -contains 'appimage_runtime_size_bytes')) {
+            throw 'The PDF viewing manifest omits the exact AppImage PDFium runtime size'
+        }
+        [long]$target[0].appimage_runtime_size_bytes
+    }
+    else {
+        $expectedRuntimeBytes
+    }
+    if ($runtime.Length -ne $expectedPackagedRuntimeBytes) {
+        throw "PDFium runtime size mismatch in $Format output: expected $expectedPackagedRuntimeBytes, got $($runtime.Length)"
+    }
+    $relativeRuntime = $runtime.FullName.Substring($inspectionRoot.Length).TrimStart('\', '/').Replace('\', '/')
+    if ($relativeRuntime -notmatch "(^|/)assets/pdfium/$([regex]::Escape($runtime.Name))$") {
+        throw "PDFium runtime is outside the installed resource location: $relativeRuntime"
+    }
+    $pdfiumDirectory = $runtime.Directory
+    if ($pdfiumDirectory.Name -ne 'pdfium' -or $pdfiumDirectory.Parent.Name -ne 'assets') {
+        throw "PDFium runtime resource ancestry is invalid: $($runtime.FullName)"
+    }
+    $resourceRoot = $pdfiumDirectory.Parent.Parent.FullName
+
+    $forbiddenPdfFiles = @(Get-ChildItem -LiteralPath $inspectionRoot -File -Recurse | Where-Object {
+        $lower = $_.Name.ToLowerInvariant()
+        ($lower -match 'pdfium' -and $_.FullName -ne $runtime.FullName) -or
+        $lower -match '\.(h|hpp|lib|a|pdb|dSYM|tgz|zip)$' -or
+        $lower -match 'pdfium.*(v8|xfa|javascript|sample|debug)'
+    })
+    if ($forbiddenPdfFiles) {
+        throw "Packaged output contains forbidden PDF development/runtime assets: $($forbiddenPdfFiles.FullName -join ', ')"
+    }
+
+    $notices = @(Get-ChildItem -LiteralPath $inspectionRoot -Filter 'THIRD_PARTY_NOTICES.md' -File -Recurse)
+    if ($notices.Count -lt 1) { throw "Packaged third-party notices are missing from $Format output" }
+    $noticeText = Get-Content -LiteralPath $notices[0].FullName -Raw
+    if ($noticeText -notlike '*pdfium-render 0.9.3*' -or $noticeText -notlike '*PDFium build 7881*') {
+        throw "Packaged third-party notices omit PDFium provenance in $Format output"
+    }
+
+    $encodedFixture = Get-Content -LiteralPath (Join-Path $repoRoot 'crates/pdf-viewer/tests/fixtures/one-page-embedded.pdf.b64') -Raw
+    $fixturePath = Join-Path $cleanupRoot 'one-page-embedded.pdf'
+    [System.IO.File]::WriteAllBytes(
+        $fixturePath,
+        [Convert]::FromBase64String(($encodedFixture -replace '\s', ''))
+    )
+    Invoke-Native "Packaged PDF runtime render smoke" {
+        cargo run --release --locked -p markion-pdf-viewer --bin pdf-packaged-smoke -- `
+            --resource-root $resourceRoot --fixture $fixturePath
+    }
+    Write-Host "Verified one target-matching PDFium runtime and an offline page render in $Format output"
 }
 finally {
     if ($mountedDmg) { & hdiutil detach $mountedDmg -quiet }

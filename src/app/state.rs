@@ -559,6 +559,7 @@ pub(super) fn compact_history_entry(older: &EditorSnapshot, newer_text: &str) ->
 pub(super) enum WorkspaceTab {
     Document(DocumentTabState),
     Image(ImageTabState),
+    Pdf(PdfTabState),
 }
 
 /// Presentation-only identity for the source editor geometry used by
@@ -713,6 +714,89 @@ impl ImageTabState {
             + std::mem::size_of::<PreviewImageKey>()
             + std::mem::size_of::<ScrollHandle>()
             + std::mem::size_of::<bool>()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum PdfZoomMode {
+    FitWidth,
+    Percent(f32),
+}
+
+impl PdfZoomMode {
+    pub(super) const MIN_PERCENT: f32 = 25.0;
+    pub(super) const MAX_PERCENT: f32 = 400.0;
+
+    pub(super) fn percent(self) -> Option<f32> {
+        match self {
+            Self::FitWidth => None,
+            Self::Percent(percent) => Some(percent),
+        }
+    }
+
+    pub(super) fn numeric(percent: f32) -> Self {
+        Self::Percent(percent.clamp(Self::MIN_PERCENT, Self::MAX_PERCENT))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PdfLoadState {
+    Loading,
+    Ready,
+    Error(PdfErrorKind),
+}
+
+/// Read-only, transient PDF presentation state. Native handles and source
+/// bytes remain owned by the GPUI-free renderer service.
+pub(super) struct PdfTabState {
+    pub(super) path: PathBuf,
+    pub(super) request_id: RequestId,
+    pub(super) document_id: Option<DocumentId>,
+    pub(super) generation: Generation,
+    pub(super) pages: std::sync::Arc<[PageGeometry]>,
+    pub(super) page_scroll: ScrollHandle,
+    pub(super) page_layout: std::sync::Arc<[PdfPagePlacement]>,
+    pub(super) page_content_height: Pixels,
+    pub(super) visible_range: Range<usize>,
+    pub(super) layout_zoom: Option<PdfZoomMode>,
+    pub(super) layout_viewport_width: Pixels,
+    pub(super) zoom: PdfZoomMode,
+    pub(super) current_page: usize,
+    pub(super) viewport_width: Pixels,
+    pub(super) display_scale: f32,
+    pub(super) load_state: PdfLoadState,
+    pub(super) claimed_pages: HashSet<PdfPageKey>,
+}
+
+impl PdfTabState {
+    pub(super) fn new(path: PathBuf, request_id: RequestId) -> Self {
+        Self {
+            path,
+            request_id,
+            document_id: None,
+            generation: Generation(1),
+            pages: std::sync::Arc::from([]),
+            page_scroll: ScrollHandle::new(),
+            page_layout: std::sync::Arc::from([]),
+            page_content_height: px(0.),
+            visible_range: 0..0,
+            layout_zoom: None,
+            layout_viewport_width: px(0.),
+            zoom: PdfZoomMode::FitWidth,
+            current_page: 0,
+            viewport_width: px(0.),
+            display_scale: 1.0,
+            load_state: PdfLoadState::Loading,
+            claimed_pages: HashSet::new(),
+        }
+    }
+
+    pub(super) fn presentation_memory_bytes(&self) -> usize {
+        self.path.as_os_str().len()
+            + self.pages.len() * std::mem::size_of::<PageGeometry>()
+            + self.page_layout.len() * std::mem::size_of::<PdfPagePlacement>()
+            + self.claimed_pages.capacity() * std::mem::size_of::<PdfPageKey>()
+            + std::mem::size_of::<Self>()
     }
 }
 
@@ -901,10 +985,15 @@ impl WorkspaceTab {
         })
     }
 
+    pub(super) fn new_pdf(path: PathBuf, request_id: RequestId) -> Self {
+        Self::Pdf(PdfTabState::new(path, request_id))
+    }
+
     pub(super) fn path(&self) -> Option<&Path> {
         match self {
             Self::Document(tab) => tab.document.path(),
             Self::Image(image) => Some(&image.path),
+            Self::Pdf(pdf) => Some(&pdf.path),
         }
     }
 
@@ -922,6 +1011,14 @@ impl WorkspaceTab {
 
     pub(super) fn is_document(&self) -> bool {
         matches!(self, Self::Document(_))
+    }
+
+    pub(super) fn is_pdf(&self) -> bool {
+        matches!(self, Self::Pdf(_))
+    }
+
+    pub(super) fn is_read_only(&self) -> bool {
+        !self.is_document()
     }
 
     pub(super) fn is_dirty(&self) -> bool {
@@ -948,28 +1045,42 @@ impl WorkspaceTab {
     pub(super) fn document_tab(&self) -> Option<&DocumentTabState> {
         match self {
             Self::Document(tab) => Some(tab),
-            Self::Image(_) => None,
+            Self::Image(_) | Self::Pdf(_) => None,
         }
     }
 
     pub(super) fn document_tab_mut(&mut self) -> Option<&mut DocumentTabState> {
         match self {
             Self::Document(tab) => Some(tab),
-            Self::Image(_) => None,
+            Self::Image(_) | Self::Pdf(_) => None,
         }
     }
 
     pub(super) fn image(&self) -> Option<&ImageTabState> {
         match self {
             Self::Image(image) => Some(image),
-            Self::Document(_) => None,
+            Self::Document(_) | Self::Pdf(_) => None,
         }
     }
 
     pub(super) fn image_mut(&mut self) -> Option<&mut ImageTabState> {
         match self {
             Self::Image(image) => Some(image),
-            Self::Document(_) => None,
+            Self::Document(_) | Self::Pdf(_) => None,
+        }
+    }
+
+    pub(super) fn pdf(&self) -> Option<&PdfTabState> {
+        match self {
+            Self::Pdf(pdf) => Some(pdf),
+            Self::Document(_) | Self::Image(_) => None,
+        }
+    }
+
+    pub(super) fn pdf_mut(&mut self) -> Option<&mut PdfTabState> {
+        match self {
+            Self::Pdf(pdf) => Some(pdf),
+            Self::Document(_) | Self::Image(_) => None,
         }
     }
 
@@ -983,6 +1094,7 @@ impl WorkspaceTab {
                     HashSet::new()
                 }
             }
+            Self::Pdf(_) => HashSet::new(),
         }
     }
 
@@ -999,6 +1111,7 @@ impl WorkspaceTab {
                     HashSet::new()
                 }
             }
+            Self::Pdf(_) => HashSet::new(),
         }
     }
 
@@ -1015,14 +1128,14 @@ impl std::ops::Deref for WorkspaceTab {
 
     fn deref(&self) -> &Self::Target {
         self.document_tab()
-            .expect("document-only state accessed while an image tab is active")
+            .expect("document-only state accessed while read-only content is active")
     }
 }
 
 impl std::ops::DerefMut for WorkspaceTab {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.document_tab_mut()
-            .expect("document-only state accessed while an image tab is active")
+            .expect("document-only state accessed while read-only content is active")
     }
 }
 
@@ -2250,10 +2363,7 @@ pub(super) fn filter_restorable_session(
         .unwrap_or(session.open_files.as_slice());
     let open_files: Vec<PathBuf> = candidate_files
         .iter()
-        .filter(|path| {
-            path.is_file()
-                && (is_markdown_path(path) || is_text_path(path) || image_extension_supported(path))
-        })
+        .filter(|path| path.is_file() && classify_supported_path(path).is_some())
         .cloned()
         .collect();
     let active_candidate = current

@@ -52,6 +52,36 @@ pub fn is_text_path(path: &Path) -> bool {
         .is_some_and(|extension| TEXT_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
 }
 
+/// The content kinds accepted by Markion's interactive open-path router.
+///
+/// Call sites with deliberately narrower scope (notably CLI startup and OS
+/// external drops) must keep their own explicit Markdown-only policy instead
+/// of using this classifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportedPathKind {
+    Document,
+    Image,
+    Pdf,
+}
+
+pub fn is_pdf_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
+pub fn classify_supported_path(path: &Path) -> Option<SupportedPathKind> {
+    if is_markdown_path(path) || is_text_path(path) {
+        Some(SupportedPathKind::Document)
+    } else if image_extension_supported(path) {
+        Some(SupportedPathKind::Image)
+    } else if is_pdf_path(path) {
+        Some(SupportedPathKind::Pdf)
+    } else {
+        None
+    }
+}
+
 /// The category of a regular file listed in the tree. Only meaningful when
 /// `FileTreeEntry::kind == File`; directory entries carry `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +89,7 @@ pub enum FileTreeFileKind {
     Markdown,
     Text,
     Image,
+    Pdf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,14 +423,14 @@ fn collect_file_tree_entries(
 
         // Regular file: classify once by extension. Markdown, curated text,
         // and supported images are collected; everything else is skipped.
-        let file_kind = if is_markdown_path(&path) {
-            FileTreeFileKind::Markdown
-        } else if is_text_path(&path) {
-            FileTreeFileKind::Text
-        } else if image_extension_supported(&path) {
-            FileTreeFileKind::Image
-        } else {
-            continue;
+        let file_kind = match classify_supported_path(&path) {
+            Some(SupportedPathKind::Document) if is_markdown_path(&path) => {
+                FileTreeFileKind::Markdown
+            }
+            Some(SupportedPathKind::Document) => FileTreeFileKind::Text,
+            Some(SupportedPathKind::Image) => FileTreeFileKind::Image,
+            Some(SupportedPathKind::Pdf) => FileTreeFileKind::Pdf,
+            None => continue,
         };
 
         entries.push(FileTreeEntry {
@@ -547,12 +578,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
 
-        // A mix of Markdown, plain-text, image, and unsupported files.
+        // A mix of Markdown, plain-text, image, PDF, and unsupported files.
         write(root, "intro.md", "# Intro");
         write(root, "notes.markdown", "# Notes");
         write(root, "todo.txt", "- buy milk");
         write(root, "run.csv", "a,b\n1,2");
         write(root, "image.png", "png-bytes");
+        write(root, "reference.PdF", "pdf-bytes");
         write(root, "src/main.rs", "fn main() {}");
         write(root, "docs/guide.md", "# Guide");
         write(root, "docs/debug.log", "trace");
@@ -570,6 +602,7 @@ mod tests {
         assert!(names.contains(&"debug.log"));
         // Supported images appear; unrelated source files remain absent.
         assert!(names.contains(&"image.png"));
+        assert!(names.contains(&"reference.PdF"));
         assert!(!names.contains(&"main.rs"));
         // Every collected file is classified.
         for entry in tree
@@ -581,6 +614,7 @@ mod tests {
                 Some(FileTreeFileKind::Markdown) => assert!(is_markdown_path(&entry.path)),
                 Some(FileTreeFileKind::Text) => assert!(is_text_path(&entry.path)),
                 Some(FileTreeFileKind::Image) => assert!(image_extension_supported(&entry.path)),
+                Some(FileTreeFileKind::Pdf) => assert!(is_pdf_path(&entry.path)),
                 None => panic!("file entry missing file_kind: {:?}", entry.path),
             }
         }
@@ -599,6 +633,47 @@ mod tests {
                 .iter()
                 .any(|e| e.name == "image.png" && e.file_kind == Some(FileTreeFileKind::Image))
         );
+        assert!(
+            tree.entries
+                .iter()
+                .any(|e| e.name == "reference.PdF" && e.file_kind == Some(FileTreeFileKind::Pdf))
+        );
+    }
+
+    #[test]
+    fn shared_supported_path_classifier_covers_every_registered_extension() {
+        for extension in MARKDOWN_EXTENSIONS.iter().chain(TEXT_EXTENSIONS) {
+            assert_eq!(
+                classify_supported_path(Path::new(&format!("document.{extension}"))),
+                Some(SupportedPathKind::Document)
+            );
+            assert_eq!(
+                classify_supported_path(Path::new(&format!(
+                    "document.{}",
+                    extension.to_uppercase()
+                ))),
+                Some(SupportedPathKind::Document)
+            );
+        }
+        for extension in crate::storage::IMAGE_EXTENSIONS {
+            assert_eq!(
+                classify_supported_path(Path::new(&format!("image.{extension}"))),
+                Some(SupportedPathKind::Image)
+            );
+            assert_eq!(
+                classify_supported_path(Path::new(&format!("image.{}", extension.to_uppercase()))),
+                Some(SupportedPathKind::Image)
+            );
+        }
+        for path in ["reference.pdf", "reference.PDF", "reference.PdF"] {
+            assert_eq!(
+                classify_supported_path(Path::new(path)),
+                Some(SupportedPathKind::Pdf)
+            );
+        }
+        for path in ["archive.bin", "README", "source.rs"] {
+            assert_eq!(classify_supported_path(Path::new(path)), None);
+        }
     }
 
     #[test]
