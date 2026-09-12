@@ -8004,6 +8004,410 @@ fn assert_visual_edit_gap_click_places_caret(cx: &mut TestAppContext, source: &'
     });
 }
 
+// --- Visual Edit typing loop (auto-pair, prefix hide, checkbox, emoji) ---
+
+#[gpui::test]
+fn markdown_auto_pair_inserts_wraps_skips_and_unwraps(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(""))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app.markdown_auto_pair = true;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    cx.simulate_input("*");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "**");
+        assert_eq!(app.active_tab().selected_range, 1..1);
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "");
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+
+    cx.simulate_input("*");
+    let version_after_pair = app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "**");
+        app.active_tab().document.version()
+    });
+    cx.simulate_input("*");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "**");
+        assert_eq!(app.active_tab().selected_range, 2..2);
+        assert_eq!(app.active_tab().document.version(), version_after_pair);
+    });
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("hi"))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 0..2;
+        app.move_to(0, cx);
+        app.select_to(2, cx);
+    });
+    cx.simulate_input("(");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "(hi)");
+        assert_eq!(app.active_tab().selected_range, 1..3);
+    });
+
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("**"))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 1..1;
+    });
+    cx.dispatch_action(Backspace);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn markdown_auto_pair_off_inserts_literal_opener(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(""))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.markdown_auto_pair = false;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.simulate_input("*");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "*");
+        assert_eq!(app.active_tab().selected_range, 1..1);
+    });
+}
+
+#[gpui::test]
+fn markdown_auto_pair_toggle_does_not_bump_document_version(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("hello"))];
+        app
+    });
+    let (version, blocks) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+    app.update(cx, |app, cx| app.toggle_markdown_auto_pair(cx));
+    app.update(cx, |app, _| {
+        assert!(!app.markdown_auto_pair);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(Arc::ptr_eq(
+            &blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+        assert!(!app.active_tab().document.is_dirty());
+    });
+}
+
+#[gpui::test]
+fn visual_edit_enter_after_heading_hides_hashes_without_rewriting_source(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(""))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.markdown_auto_pair = true;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.simulate_input("## Title");
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(
+            tab.document.text().starts_with("## Title\n"),
+            "source must keep hashes, got {:?}",
+            tab.document.text()
+        );
+        let blocks = tab.document.visual_blocks_shared();
+        let heading = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Heading { level: 2 }))
+            .expect("typed ATX line should classify as a heading");
+        let caret = tab.cursor_offset();
+        let proj = build_visual_projection(tab.document.text(), heading, caret..caret, caret);
+        assert!(
+            !proj.text.contains("##"),
+            "unfocused heading should hide hashes, got {:?}",
+            proj.text
+        );
+        assert!(proj.text.contains("Title"));
+    });
+}
+
+#[gpui::test]
+fn visual_edit_list_enter_hides_previous_marker(cx: &mut TestAppContext) {
+    let source = "- item";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "- item\n- ");
+        let blocks = tab.document.visual_blocks_shared();
+        let first = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .unwrap();
+        let caret = tab.cursor_offset();
+        let proj = build_visual_projection(tab.document.text(), first, caret..caret, caret);
+        assert!(
+            !proj.text.contains("- "),
+            "previous list row should hide the marker, got {:?}",
+            proj.text
+        );
+        assert!(proj.text.contains("item"));
+    });
+}
+
+#[gpui::test]
+fn visual_edit_click_away_hides_heading_prefix_without_version_bump(cx: &mut TestAppContext) {
+    let source = "## Heading\n\nBody";
+    let cursor = source.find("Heading").unwrap() + 1;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let body = source.find("Body").unwrap() + 1;
+    let (version, blocks) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+    app.update(cx, |app, cx| app.move_to(body, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+        let heading = tab
+            .document
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Heading { .. }))
+            .unwrap();
+        let caret = tab.cursor_offset();
+        let proj = build_visual_projection(tab.document.text(), &heading, caret..caret, caret);
+        assert!(!proj.text.contains("##"));
+        assert!(!tab.document.is_dirty());
+    });
+}
+
+#[gpui::test]
+fn visual_edit_task_checkbox_click_toggles_and_undoes(cx: &mut TestAppContext) {
+    let source = "- [ ] task\n\nnext";
+    let away = source.find("next").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = away..away;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        app.toggle_visual_task_checkbox(0, cx);
+        assert_eq!(app.active_tab().document.text(), "- [x] task\n\nnext");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        app.toggle_visual_task_checkbox(0, cx);
+        assert_eq!(app.active_tab().document.text(), "- [ ] task\n\nnext");
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "- [x] task\n\nnext");
+    });
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("- [X] done"))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 10..10;
+        app.view_mode = ViewMode::VisualEdit;
+        app.toggle_visual_task_checkbox(0, cx);
+        assert_eq!(app.active_tab().document.text(), "- [ ] done");
+    });
+}
+
+#[gpui::test]
+fn visual_edit_revealed_task_prefix_click_does_not_toggle(cx: &mut TestAppContext) {
+    let source = "- [ ] task";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    app.update(cx, |app, cx| {
+        let version = app.active_tab().document.version();
+        app.toggle_visual_task_checkbox(0, cx);
+        assert_eq!(app.active_tab().document.text(), source);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+}
+
+#[gpui::test]
+fn read_and_split_preview_task_checkbox_stays_inert(cx: &mut TestAppContext) {
+    let source = "- [ ] task";
+    for mode in [ViewMode::Read, ViewMode::Split] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.view_mode = mode;
+            app
+        });
+        app.update(cx, |app, cx| {
+            let version = app.active_tab().document.version();
+            app.toggle_visual_task_checkbox(0, cx);
+            assert_eq!(app.active_tab().document.text(), source);
+            assert_eq!(app.active_tab().document.version(), version);
+            assert!(!app.active_tab().document.is_dirty());
+            assert!(app.active_tab().undo_stack.is_empty());
+        });
+    }
+}
+
+#[gpui::test]
+fn emoji_completer_opens_confirms_and_escape_is_version_stable(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("hello "))];
+        app.active_tab_mut().selected_range = 6..6;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.simulate_input(":smi");
+    cx.run_until_parked();
+    let version = app.update(cx, |app, cx| {
+        app.sync_emoji_completer_state(cx);
+        assert!(app.emoji_completer.is_some());
+        assert_eq!(app.emoji_completer.as_ref().unwrap().query.query, "smi");
+        app.active_tab().document.version()
+    });
+    cx.dispatch_action(ClearFileTreeSearch);
+    app.update(cx, |app, _| {
+        assert!(app.emoji_completer.is_none());
+        assert_eq!(app.active_tab().document.text(), "hello :smi");
+        assert_eq!(app.active_tab().document.version(), version);
+    });
+
+    app.update(cx, |app, cx| {
+        app.dismissed_emoji_query = None;
+        app.active_tab_mut().selected_range =
+            app.active_tab().document.text().len()..app.active_tab().document.text().len();
+        app.sync_emoji_completer_state(cx);
+        assert!(app.confirm_selected_emoji(cx));
+        assert_eq!(app.active_tab().document.text(), "hello :smile:");
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), "hello :smi");
+    });
+}
+
+#[gpui::test]
+fn emoji_completer_ignores_time_urls_and_yields_to_slash(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("12:30"))];
+        app.active_tab_mut().selected_range = 5..5;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    app.update(cx, |app, cx| {
+        app.sync_emoji_completer_state(cx);
+        assert!(app.emoji_completer.is_none());
+    });
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "https://example.com",
+        ))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 8..8;
+        app.sync_emoji_completer_state(cx);
+        assert!(app.emoji_completer.is_none());
+    });
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("/h"))];
+        app.active_tab = 0;
+        app.active_tab_mut().selected_range = 2..2;
+        app.dismissed_slash_query = None;
+        app.sync_slash_command_state(cx);
+        app.sync_emoji_completer_state(cx);
+        assert!(app.slash_commands.is_some());
+        assert!(app.emoji_completer.is_none());
+    });
+}
+
+#[gpui::test]
+fn markdown_auto_pair_skips_fenced_code_payload(cx: &mut TestAppContext) {
+    let source = "```\n\n```";
+    let caret = 4;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = caret..caret;
+        app.view_mode = ViewMode::VisualEdit;
+        app.markdown_auto_pair = true;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.simulate_input("*");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "```\n*\n```");
+    });
+}
+
 #[gpui::test]
 fn visual_edit_heading_to_heading_gap_click_places_caret(cx: &mut TestAppContext) {
     assert_visual_edit_gap_click_places_caret(cx, "## H2\n\n### H3");

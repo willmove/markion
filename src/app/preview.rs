@@ -3890,6 +3890,10 @@ fn visual_block_content_view(
                 }
             };
             let visual_level = if prefix_revealed { 1 } else { *level };
+            let clickable_checkbox = matches!(app.view_mode, ViewMode::VisualEdit)
+                && checked.is_some()
+                && !prefix_revealed;
+            let checkbox_index = block_index;
             div()
                 .mb_1()
                 .ml(px((visual_level as f32 - 1.).max(0.) * 18.))
@@ -3899,10 +3903,20 @@ fn visual_block_content_view(
                 .items_start()
                 .child(
                     div()
+                        .id(("visual-task-checkbox", block_index))
+                        .debug_selector(move || format!("visual-task-checkbox-{checkbox_index}"))
                         .flex_none()
                         .min_w(px(22.))
                         .pr_1()
                         .text_color(rgb(0x64748b))
+                        .when(clickable_checkbox, |marker| {
+                            marker.cursor_pointer().on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                    app.toggle_visual_task_checkbox(checkbox_index, cx);
+                                }),
+                            )
+                        })
                         .child(marker),
                 )
                 .child(

@@ -31,7 +31,7 @@ Markion's Visual Edit mode is WYSIWYG-first: rendering is the default presentati
 Every user-visible construct belongs to exactly one of three classes:
 
 1. **Rendered WYSIWYG** — shown in its rendered form. Dedicated field/payload editors (fenced code payload plus the hover/caret-revealed info-token chip, block math, diagrams, Markdown and inline-HTML images with the collapsible whole-span source toggle above the image, GFM tables with cell editors, HTML blocks via `VisualBlockEditor::Html`) are the rendered form of their constructs. Covers prose rows, headings (including empty ATX headings), lists/task items (including empty items), blockquote flows, GFM alerts, horizontal rules, whitespace rows, footnote definitions/references, link reference definitions, and HTML blocks (shared pipeline plus collapsible source payload).
-2. **Progressive-reveal WYSIWYG** — rendered by default; reveals its smallest complete source syntax group when the caret enters it. Covers emphasis, strong, strikethrough, inline code, highlight, super/subscript, links (including reference-style and angle-bracket autolinks), inline math, backslash escapes, decoded HTML entity references (proven named table, including multi-codepoint names), the supported inline-HTML subset (style pairs with ignorable `class`/`id`/`clear`, `<br>`, inline `<img>`), inert unknown inline-HTML atoms, structural prefixes, and heading attributes.
+2. **Progressive-reveal WYSIWYG** — rendered by default; reveals its smallest complete source syntax group when the caret enters it. Covers emphasis, strong, strikethrough, inline code, highlight, super/subscript, links (including reference-style and angle-bracket autolinks), inline math, backslash escapes, decoded HTML entity references (proven named table, including multi-codepoint names), `:shortcode:` emoji tokens, the supported inline-HTML subset (style pairs with ignorable `class`/`id`/`clear`, `<br>`, inline `<img>`), inert unknown inline-HTML atoms, structural prefixes, and heading attributes.
 3. **WYSIWYG coverage gap** — currently shows authored source as a transitional affordance; tracked on the roadmap below until a change closes it.
 
 The old five-class taxonomy folded its "dedicated editor" class into rendered WYSIWYG and reclassified "source island" as roadmap gaps.
@@ -47,16 +47,17 @@ Prioritized open gaps (refreshed 2026-08-29; each closes via a future change cit
 | 3 | Unclosed/malformed fenced code | Code island | Rendered (highlighted code, fences visible) | Small | `src/visual.rs:1164-1268` |
 | 4 | Reference-style/malformed inline images | Renders unfocused; focused → island; no field controls | Rendered | Medium | `src/inline_edit.rs:66-82` (`LinkType::Inline` only) |
 | 5 | Malformed tables (ragged rows) | Best-effort grid unfocused; island focused | Rendered | Small | `src/table.rs:182-221` |
-| 7 | Task-list checkbox click | Glyph not interactive | Rendered (click toggles `[ ]`/`[x]`) | Small | `src/app/preview.rs:2919-2944` |
 | 9 | GFM definition lists | Not enabled; `: Def` renders as literal prose | Rendered | Small–Medium | `src/parse.rs:1738-1747` (`ENABLE_DEFINITION_LIST` absent) |
 | 11 | Math render-failure states | Island on focus while KaTeX is Pending/Error | Rendered (payload editor until Ready) | Small | `src/app/preview.rs:3149-3151` |
 | 12 | Residual gap bytes between known blocks | Lightweight Unsupported island (catch-all) | Closed construct-by-construct | — | `src/visual.rs:857-892` |
+
+Closed in `add-visual-edit-typing-loop`: task-list checkbox click (former gap 7) toggles `[ ]`/`[x]` on the Visual Edit glyph; unfocused `:shortcode:` tokens render as emoji glyphs with progressive source reveal.
 
 Closed in `keep-empty-structure-visual-and-soften-islands`: empty ATX headings and empty list items (former gap 10) stay rendered with prefix reveal; remaining source islands use lightweight chrome instead of a padded bordered card.
 
 Closed in `improve-visual-edit-html-rendering`: unsupported inline HTML (former gap 6) is mixed inert atoms; angle-bracket autolinks (former gap 8) share link reveal; residual named/multi-codepoint entities (former gap 13) decode through the proven tables.
 
-Reviewed divergences (deliberate, not gaps): bare-URL autolinking and `:emoji:` conversion are Preview-only (`src/parse.rs` extended-inline vs Visual Edit `visual_markdown_options`); GFM *pipe*-table cells that contain HTML `<img>` stay flattened to alt/URL text (Read-mode parity). HTML `<td>`/`<th>` images and links render through the HTML-parts table grid.
+Reviewed divergences (deliberate, not gaps): bare-URL autolinking remains Preview-only (`src/parse.rs` extended-inline vs Visual Edit `visual_markdown_options`); GFM *pipe*-table cells that contain HTML `<img>` stay flattened to alt/URL text (Read-mode parity). HTML `<td>`/`<th>` images and links render through the HTML-parts table grid. `:emoji:` shortcodes now render on both Preview and unfocused Visual Edit.
 
 ## Source-Range Invariants
 

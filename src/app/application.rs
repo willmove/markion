@@ -236,6 +236,7 @@ impl MarkionApp {
             sync_scroll: preferences.sync_scroll,
             show_hidden_files: preferences.show_hidden_files,
             open_in_current_tab: preferences.open_in_current_tab,
+            markdown_auto_pair: preferences.markdown_auto_pair,
             language: Language::from_code(&preferences.language),
             check_for_updates_on_startup: preferences.check_for_updates_on_startup,
             last_update_check: preferences.last_update_check,
@@ -272,6 +273,8 @@ impl MarkionApp {
             recovery_manager: None,
             slash_commands: None,
             dismissed_slash_query: None,
+            emoji_completer: None,
+            dismissed_emoji_query: None,
             block_menu: None,
             search_visible: false,
             replace_visible: false,
@@ -383,6 +386,8 @@ impl MarkionApp {
         self.tab_context_menu = None;
         self.slash_commands = None;
         self.dismissed_slash_query = None;
+        self.emoji_completer = None;
+        self.dismissed_emoji_query = None;
         self.dismiss_visual_block_menu();
         if self.active_tab().is_image() {
             self.search_visible = false;
@@ -766,6 +771,8 @@ impl MarkionApp {
         }
         self.slash_commands = None;
         self.dismissed_slash_query = None;
+        self.emoji_completer = None;
+        self.dismissed_emoji_query = None;
         self.dismiss_visual_block_menu();
         let tab = self.active_tab_mut();
         tab.clear_visual_caret_affinity();
@@ -879,6 +886,8 @@ impl MarkionApp {
         self.input_marked_len = 0;
         self.slash_commands = None;
         self.dismissed_slash_query = None;
+        self.emoji_completer = None;
+        self.dismissed_emoji_query = None;
         self.dismiss_visual_block_menu();
         self.status = p0_t(self.language, P0Msg::IntegrityMutationRejected).into();
     }
@@ -1921,6 +1930,7 @@ impl MarkionApp {
             sync_scroll: self.sync_scroll,
             show_hidden_files: self.show_hidden_files,
             open_in_current_tab: self.open_in_current_tab,
+            markdown_auto_pair: self.markdown_auto_pair,
             sidebar_visible: self.sidebar_visible,
             sidebar_tab: self.sidebar_tab,
             language: self.language.code().to_string(),

@@ -193,12 +193,43 @@ impl EntityInputHandler for MarkionApp {
             cx.notify();
             return;
         }
+        let markdown_auto_pair = self.markdown_auto_pair;
         let tab = self.active_tab_mut();
-        let range = range_utf16
+        let mut range = range_utf16
             .as_ref()
             .and_then(|range_utf16| tab.range_from_utf16(range_utf16))
             .or(active_marked_range.clone())
             .unwrap_or_else(|| tab.safe_selected_range());
+
+        let mut paired_text: Option<String> = None;
+        let mut pair_selection: Option<Range<usize>> = None;
+        let skip_ime_pair = active_marked_range.is_some() || committing_ime;
+        let restricted_pair_field = visual_edit
+            && tab
+                .document
+                .visual_editor_field_at(&range)
+                .is_some_and(|field| is_auto_pair_restricted_field(field.kind));
+        if markdown_auto_pair && !skip_ime_pair && !restricted_pair_field {
+            match auto_pair_action(tab.document.text(), range.clone(), new_text) {
+                Some(AutoPairAction::Skip { caret }) => {
+                    tab.selected_range = caret..caret;
+                    tab.selection_reversed = false;
+                    cx.notify();
+                    return;
+                }
+                Some(AutoPairAction::Replace {
+                    range: pair_range,
+                    replacement,
+                    selection_after,
+                }) => {
+                    range = pair_range;
+                    paired_text = Some(replacement);
+                    pair_selection = Some(selection_after);
+                }
+                None => {}
+            }
+        }
+        let new_text = paired_text.as_deref().unwrap_or(new_text);
 
         let direct_edit = visual_edit
             .then(|| {
@@ -295,10 +326,17 @@ impl EntityInputHandler for MarkionApp {
             }
         }
         let tab = self.active_tab_mut();
-        tab.selected_range = direct_edit.as_ref().map_or_else(
-            || range.start + replacement.len()..range.start + replacement.len(),
-            |edit| edit.selection_after.clone(),
-        );
+        tab.selected_range = match (pair_selection, direct_edit.as_ref()) {
+            (Some(sel), Some(edit)) => {
+                let opener_len = sel.start.saturating_sub(range.start);
+                let inner_len = sel.end.saturating_sub(sel.start);
+                let start = edit.inserted_range_after.start + opener_len;
+                start..start + inner_len
+            }
+            (Some(sel), None) => sel,
+            (None, Some(edit)) => edit.selection_after.clone(),
+            (None, None) => range.start + replacement.len()..range.start + replacement.len(),
+        };
         tab.marked_range.take();
         if committing_ime {
             tab.finish_undo_capture();

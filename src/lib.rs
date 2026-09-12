@@ -11,10 +11,12 @@ use std::{
 use pulldown_cmark::{Alignment, CodeBlockKind, CowStr, Event, Parser, Tag, TagEnd, html};
 use regex::RegexBuilder;
 
+mod auto_pair;
 pub mod block_edit;
 mod diagram;
 mod document_memory;
 mod editing;
+mod emoji;
 mod escape;
 mod export;
 mod frontmatter;
@@ -181,7 +183,7 @@ pub use model::{
 };
 pub use visual::{
     build_visual_projection, build_visual_projection_with_marked_range, data_uri_payload_ranges,
-    destination_data_uri_fingerprint, elided_payload_token, format_byte_size,
+    destination_data_uri_fingerprint, elided_payload_token, format_byte_size, task_checkbox_toggle,
 };
 
 /// A compiled find pattern shared by source-document and rendered-preview
@@ -225,6 +227,7 @@ impl SearchPattern {
     }
 }
 
+pub use auto_pair::{AutoPairAction, auto_pair_action, is_auto_pair_restricted_field};
 pub use block_edit::{
     BlockEdit, BlockEditError, BlockPlacement, BlockTarget, BlockTransform, SlashCommand,
     SlashQuery, adjacent_reorder_target, block_can_reorder, block_can_reorder_at,
@@ -233,6 +236,10 @@ pub use block_edit::{
     validate_block_target,
 };
 pub use diagram::{builtin_diagram_registry, diagram_backend_id};
+pub use emoji::{
+    EmojiQuery, emoji_confirm_replacement, emoji_for_shortcode, emoji_query_at,
+    emoji_shortcodes_matching, emoji_tokens_in,
+};
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
 pub use i18n::{
     Language, MarkdownReferenceSection, Msg, P0Msg, P1Msg, ShortcutAction, ShortcutCatalog,
@@ -7850,6 +7857,7 @@ Intro.
             sync_scroll: true,
             show_hidden_files: true,
             open_in_current_tab: false,
+            markdown_auto_pair: false,
             sidebar_visible: false,
             sidebar_tab: SidebarTab::Outline,
             language: "zh".to_string(),
@@ -7885,6 +7893,7 @@ Intro.
         assert!(written.contains("background_check = true"));
         assert!(written.contains("heading_menu_max_level = 6"));
         assert!(written.contains("sync_scroll = true"));
+        assert!(written.contains("markdown_auto_pair = false"));
         assert!(written.contains("[auto_save]"));
         assert!(written.contains("silent_save = false"));
         assert!(written.contains("delay_secs = 30"));
@@ -7898,6 +7907,7 @@ Intro.
         assert_eq!(parsed.custom_theme, None);
         assert_eq!(parsed.language, "en");
         assert!(!parsed.preview_adaptive_width);
+        assert!(parsed.markdown_auto_pair);
         assert_eq!(parsed.editor_font_size, DEFAULT_EDITOR_FONT_SIZE);
         assert_eq!(parsed.rendered_font_size, DEFAULT_RENDERED_FONT_SIZE);
         assert_eq!(parsed.paragraph_spacing, DEFAULT_PARAGRAPH_SPACING);

@@ -381,6 +381,10 @@ pub enum Msg {
     StatusOpenInCurrentTabOn,
     /// Status: non-explicit opens now always append a new tab.
     StatusOpenInCurrentTabOff,
+    /// Status: Markdown delimiter auto-pair enabled.
+    StatusMarkdownAutoPairOn,
+    /// Status: Markdown delimiter auto-pair disabled.
+    StatusMarkdownAutoPairOff,
     /// Silent save-to-file enabled.
     StatusSilentSaveOn,
     /// Silent save-to-file disabled (recovery-only).
@@ -841,6 +845,8 @@ pub enum Msg {
     PrefPanelShowHiddenFiles,
     /// "Open documents in current tab" row label.
     PrefPanelOpenInCurrentTab,
+    /// "Markdown auto-pair" row label.
+    PrefPanelMarkdownAutoPair,
     /// "Sidebar" row label.
     PrefPanelSidebar,
     /// "Heading menu" row label.
@@ -1293,9 +1299,11 @@ pub enum P1Msg {
     Close,
     TextAndHeadings,
     Lists,
+    EmojiShortcodes,
+    NoEmojiMatches,
 }
 
-const P1_EN: [&str; 39] = [
+const P1_EN: [&str; 41] = [
     "Recover documents",
     "Choose which recovery snapshots to restore or discard. Unselected snapshots stay safe on disk.",
     "Restore All",
@@ -1335,8 +1343,10 @@ const P1_EN: [&str; 39] = [
     "Close",
     "Text and Headings",
     "Lists",
+    "Emoji",
+    "No matching emoji",
 ];
-const P1_ZH_HANS: [&str; 39] = [
+const P1_ZH_HANS: [&str; 41] = [
     "恢复文档",
     "选择要恢复或放弃的恢复快照。未选择的快照会安全保留在磁盘上。",
     "全部恢复",
@@ -1376,8 +1386,10 @@ const P1_ZH_HANS: [&str; 39] = [
     "关闭",
     "文本与标题",
     "列表",
+    "表情符号",
+    "没有匹配的表情",
 ];
-const P1_ZH_HANT: [&str; 39] = [
+const P1_ZH_HANT: [&str; 41] = [
     "復原文件",
     "選擇要復原或捨棄的復原快照。未選取的快照會安全保留在磁碟上。",
     "全部復原",
@@ -1417,8 +1429,10 @@ const P1_ZH_HANT: [&str; 39] = [
     "關閉",
     "文字與標題",
     "清單",
+    "表情符號",
+    "沒有符合的表情",
 ];
-const P1_JA: [&str; 39] = [
+const P1_JA: [&str; 41] = [
     "文書を復元",
     "復元または破棄するスナップショットを選択します。未選択のものはディスクに保持されます。",
     "すべて復元",
@@ -1458,8 +1472,10 @@ const P1_JA: [&str; 39] = [
     "閉じる",
     "テキストと見出し",
     "リスト",
+    "絵文字",
+    "一致する絵文字はありません",
 ];
-const P1_FR: [&str; 39] = [
+const P1_FR: [&str; 41] = [
     "Récupérer des documents",
     "Choisissez les instantanés à restaurer ou supprimer. Les autres restent sur le disque.",
     "Tout restaurer",
@@ -1499,8 +1515,10 @@ const P1_FR: [&str; 39] = [
     "Fermer",
     "Texte et titres",
     "Listes",
+    "Emoji",
+    "Aucun emoji correspondant",
 ];
-const P1_DE: [&str; 39] = [
+const P1_DE: [&str; 41] = [
     "Dokumente wiederherstellen",
     "Wählen Sie Wiederherstellungen aus. Nicht gewählte bleiben sicher auf dem Datenträger.",
     "Alle wiederherstellen",
@@ -1540,8 +1558,10 @@ const P1_DE: [&str; 39] = [
     "Schließen",
     "Text und Überschriften",
     "Listen",
+    "Emoji",
+    "Keine passenden Emoji",
 ];
-const P1_ES: [&str; 39] = [
+const P1_ES: [&str; 41] = [
     "Recuperar documentos",
     "Elige qué instantáneas restaurar o descartar. Las demás permanecen seguras en el disco.",
     "Restaurar todo",
@@ -1581,6 +1601,8 @@ const P1_ES: [&str; 39] = [
     "Cerrar",
     "Texto y encabezados",
     "Listas",
+    "Emoji",
+    "No hay emojis coincidentes",
 ];
 
 pub fn p1_t(lang: Language, msg: P1Msg) -> &'static str {
@@ -3342,6 +3364,8 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "Show hidden files off",
         Msg::StatusOpenInCurrentTabOn => "Open in current tab on",
         Msg::StatusOpenInCurrentTabOff => "Open in current tab off",
+        Msg::StatusMarkdownAutoPairOn => "Markdown auto-pair on",
+        Msg::StatusMarkdownAutoPairOff => "Markdown auto-pair off",
         Msg::StatusSilentSaveOn => "Auto-save to file on",
         Msg::StatusSilentSaveOff => "Auto-save to file off (recovery only)",
         Msg::StatusAutoSaveDelay => "Auto-save delay: {0}s",
@@ -3638,6 +3662,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::PrefPanelSyncScroll => "Sync scroll",
         Msg::PrefPanelShowHiddenFiles => "Show hidden files",
         Msg::PrefPanelOpenInCurrentTab => "Open documents in current tab",
+        Msg::PrefPanelMarkdownAutoPair => "Markdown auto-pair",
         Msg::PrefPanelSidebar => "Sidebar",
         Msg::PrefPanelHeadingMenu => "Heading menu",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
@@ -3993,6 +4018,8 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "非表示ファイルの表示オフ",
         Msg::StatusOpenInCurrentTabOn => "現在のタブで開くオン",
         Msg::StatusOpenInCurrentTabOff => "現在のタブで開くオフ",
+        Msg::StatusMarkdownAutoPairOn => "Markdown 自動ペアオン",
+        Msg::StatusMarkdownAutoPairOff => "Markdown 自動ペアオフ",
         Msg::StatusSilentSaveOn => "ファイルへの自動保存オン",
         Msg::StatusSilentSaveOff => "ファイルへの自動保存オフ（復旧のみ）",
         Msg::StatusAutoSaveDelay => "自動保存の間隔: {0}秒",
@@ -4294,6 +4321,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::PrefPanelSyncScroll => "同期スクロール",
         Msg::PrefPanelShowHiddenFiles => "非表示ファイルを表示",
         Msg::PrefPanelOpenInCurrentTab => "現在のタブでドキュメントを開く",
+        Msg::PrefPanelMarkdownAutoPair => "Markdown 自動ペア",
         Msg::PrefPanelHeadingMenu => "見出しメニュー",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
@@ -4637,6 +4665,8 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "Afficher les fichiers cachés désactivé",
         Msg::StatusOpenInCurrentTabOn => "Ouvrir dans l'onglet actif activé",
         Msg::StatusOpenInCurrentTabOff => "Ouvrir dans l'onglet actif désactivé",
+        Msg::StatusMarkdownAutoPairOn => "Appariement Markdown activé",
+        Msg::StatusMarkdownAutoPairOff => "Appariement Markdown désactivé",
         Msg::StatusSilentSaveOn => "Enregistrement auto vers le fichier activé",
         Msg::StatusSilentSaveOff => {
             "Enregistrement auto vers le fichier désactivé (récupération seule)"
@@ -4969,6 +4999,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::PrefPanelSyncScroll => "Défilement synchronisé",
         Msg::PrefPanelShowHiddenFiles => "Afficher les fichiers cachés",
         Msg::PrefPanelOpenInCurrentTab => "Ouvrir les documents dans l'onglet actif",
+        Msg::PrefPanelMarkdownAutoPair => "Appariement automatique Markdown",
         Msg::PrefPanelHeadingMenu => "Menu des titres",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
@@ -5312,6 +5343,8 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "Versteckte Dateien anzeigen aus",
         Msg::StatusOpenInCurrentTabOn => "Im aktuellen Tab öffnen ein",
         Msg::StatusOpenInCurrentTabOff => "Im aktuellen Tab öffnen aus",
+        Msg::StatusMarkdownAutoPairOn => "Markdown-Autopaarung ein",
+        Msg::StatusMarkdownAutoPairOff => "Markdown-Autopaarung aus",
         Msg::StatusSilentSaveOn => "Automatisch in Datei speichern ein",
         Msg::StatusSilentSaveOff => "Automatisch in Datei speichern aus (nur Wiederherstellung)",
         Msg::StatusAutoSaveDelay => "Autospeicher-Intervall: {0}s",
@@ -5630,6 +5663,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::PrefPanelSyncScroll => "Synchrones Scrollen",
         Msg::PrefPanelShowHiddenFiles => "Versteckte Dateien anzeigen",
         Msg::PrefPanelOpenInCurrentTab => "Dokumente im aktuellen Tab öffnen",
+        Msg::PrefPanelMarkdownAutoPair => "Markdown-Autopaarung",
         Msg::PrefPanelHeadingMenu => "Überschriftenmenü",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
@@ -5973,6 +6007,8 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "Mostrar archivos ocultos desactivado",
         Msg::StatusOpenInCurrentTabOn => "Abrir en la pestaña actual activado",
         Msg::StatusOpenInCurrentTabOff => "Abrir en la pestaña actual desactivado",
+        Msg::StatusMarkdownAutoPairOn => "Autopareado Markdown activado",
+        Msg::StatusMarkdownAutoPairOff => "Autopareado Markdown desactivado",
         Msg::StatusSilentSaveOn => "Autoguardar en archivo activado",
         Msg::StatusSilentSaveOff => "Autoguardar en archivo desactivado (solo recuperación)",
         Msg::StatusAutoSaveDelay => "Retraso de autoguardado: {0}s",
@@ -6283,6 +6319,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::PrefPanelSyncScroll => "Desplazamiento sincronizado",
         Msg::PrefPanelShowHiddenFiles => "Mostrar archivos ocultos",
         Msg::PrefPanelOpenInCurrentTab => "Abrir documentos en la pestaña actual",
+        Msg::PrefPanelMarkdownAutoPair => "Autopareado Markdown",
         Msg::PrefPanelHeadingMenu => "Menú de encabezados",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
@@ -6628,6 +6665,8 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "显示隐藏文件已关闭",
         Msg::StatusOpenInCurrentTabOn => "在当前标签页打开已开启",
         Msg::StatusOpenInCurrentTabOff => "在当前标签页打开已关闭",
+        Msg::StatusMarkdownAutoPairOn => "Markdown 自动配对已开启",
+        Msg::StatusMarkdownAutoPairOff => "Markdown 自动配对已关闭",
         Msg::StatusSilentSaveOn => "已开启自动保存到原文件",
         Msg::StatusSilentSaveOff => "已关闭自动保存到原文件（仅保留恢复快照）",
         Msg::StatusAutoSaveDelay => "自动保存间隔：{0} 秒",
@@ -6908,6 +6947,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::PrefPanelSyncScroll => "同步滚动",
         Msg::PrefPanelShowHiddenFiles => "显示隐藏的文件夹/文件",
         Msg::PrefPanelOpenInCurrentTab => "在当前标签页打开文档",
+        Msg::PrefPanelMarkdownAutoPair => "Markdown 自动配对",
         Msg::PrefPanelSidebar => "侧边栏",
         Msg::PrefPanelHeadingMenu => "标题菜单",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
@@ -7248,6 +7288,8 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusShowHiddenFilesOff => "顯示隱藏檔案已關閉",
         Msg::StatusOpenInCurrentTabOn => "在目前分頁開啟已開啟",
         Msg::StatusOpenInCurrentTabOff => "在目前分頁開啟已關閉",
+        Msg::StatusMarkdownAutoPairOn => "Markdown 自動配對已開啟",
+        Msg::StatusMarkdownAutoPairOff => "Markdown 自動配對已關閉",
         Msg::StatusSilentSaveOn => "已開啟自動儲存到原檔案",
         Msg::StatusSilentSaveOff => "已關閉自動儲存到原檔案（僅保留還原快照）",
         Msg::StatusAutoSaveDelay => "自動儲存間隔：{0} 秒",
@@ -7528,6 +7570,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::PrefPanelSyncScroll => "同步捲動",
         Msg::PrefPanelShowHiddenFiles => "顯示隱藏的資料夾/檔案",
         Msg::PrefPanelOpenInCurrentTab => "在目前分頁開啟文件",
+        Msg::PrefPanelMarkdownAutoPair => "Markdown 自動配對",
         Msg::PrefPanelSidebar => "側邊欄",
         Msg::PrefPanelHeadingMenu => "標題選單",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
@@ -7740,8 +7783,10 @@ mod tests {
             P1Msg::Close,
             P1Msg::TextAndHeadings,
             P1Msg::Lists,
+            P1Msg::EmojiShortcodes,
+            P1Msg::NoEmojiMatches,
         ];
-        assert_eq!(messages.len(), 39);
+        assert_eq!(messages.len(), 41);
         for language in Language::all() {
             for message in messages {
                 assert!(!p1_t(*language, message).trim().is_empty());
@@ -8247,6 +8292,8 @@ mod tests {
             Msg::StatusShowHiddenFilesOff,
             Msg::StatusOpenInCurrentTabOn,
             Msg::StatusOpenInCurrentTabOff,
+            Msg::StatusMarkdownAutoPairOn,
+            Msg::StatusMarkdownAutoPairOff,
             Msg::StatusSilentSaveOn,
             Msg::StatusSilentSaveOff,
             Msg::StatusAutoSaveDelay,
@@ -8490,6 +8537,7 @@ mod tests {
             Msg::PrefPanelSyncScroll,
             Msg::PrefPanelShowHiddenFiles,
             Msg::PrefPanelOpenInCurrentTab,
+            Msg::PrefPanelMarkdownAutoPair,
             Msg::PrefPanelSidebar,
             Msg::PrefPanelHeadingMenu,
             Msg::PrefPanelTabGeneral,

@@ -463,6 +463,9 @@ pub struct AppPreferences {
     /// welcome document); a dirty active tab — named or untitled — makes
     /// the open divert to a new tab instead. Enabled by default.
     pub open_in_current_tab: bool,
+    /// When enabled, typing a Markdown opener (`*`, `_`, `` ` ``, `$`, `(`,
+    /// `[`, `{`, `"`, `'`) inserts the matching closer. Enabled by default.
+    pub markdown_auto_pair: bool,
     pub sidebar_visible: bool,
     pub sidebar_tab: SidebarTab,
     /// Interface language preference code (e.g. "en", "zh"). Stored as a
@@ -513,6 +516,7 @@ impl Default for AppPreferences {
             sync_scroll: false,
             show_hidden_files: false,
             open_in_current_tab: true,
+            markdown_auto_pair: true,
             sidebar_visible: true,
             sidebar_tab: SidebarTab::default(),
             language: "en".to_string(),
@@ -1482,6 +1486,9 @@ pub enum VisualRevealKind {
     /// decoded character renders while the complete authored `&…;` token
     /// stays hidden until the caret enters it.
     Entity,
+    /// One `:shortcode:` emoji token: the glyph renders while the complete
+    /// authored `:name:` stays hidden until the caret enters it.
+    Emoji,
     /// One supported inline-HTML element (style pair or `<br>`): the tags stay
     /// hidden markers while the content renders with the mapped style.
     InlineHtml,
