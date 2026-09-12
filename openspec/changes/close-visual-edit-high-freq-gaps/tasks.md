@@ -26,4 +26,4 @@
 
 - [x] 5.1 Localize the YAML header label in all seven languages with exhaustiveness coverage
 - [x] 5.2 Update `docs/visual-editing-quality.md` matrix and roadmap: close gaps 1, 4 (reference-style), 5, and 11; leave indented/unclosed code, multiline images, and definition lists open
-- [ ] 5.3 Run `cargo fmt --check`, `cargo test --workspace` (fix regressions in pairing/YAML/image/table/math/i18n only), and `openspec validate close-visual-edit-high-freq-gaps`
+- [x] 5.3 Run `cargo fmt --check`, `cargo test --workspace` (fix regressions in pairing/YAML/image/table/math/i18n only), and `openspec validate close-visual-edit-high-freq-gaps`
