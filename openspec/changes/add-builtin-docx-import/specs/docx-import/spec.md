@@ -14,7 +14,7 @@ Markion SHALL provide File → Import Word (.docx) in its native and in-app menu
 - **AND** it creates no Markdown output or document tab
 
 ### Requirement: Conversion SHALL preserve supported text and list semantics
-The importer SHALL preserve body text, paragraph order, explicit line breaks, heading levels 1–6, bold, italic, strikethrough, underline, superscript/subscript, safe hyperlinks, and supported bookmarks using Markion-compatible Markdown or limited safe inline HTML. Heading and numbering resolution SHALL honor direct properties and inherited styles with bounded cycle detection. Lists SHALL retain hierarchy, start/restart and continuation; significant numbering labels not representable as Markdown markers SHALL remain readable in item text with a normalization diagnostic. Markdown delimiters, URLs, table separators, and authored text SHALL be escaped by context without changing their visible meaning. Heading depths beyond six SHALL retain their text at level six with a simplification diagnostic.
+The importer SHALL preserve body text, paragraph order, explicit line breaks, heading levels 1–6, bold, italic, strikethrough, underline, superscript/subscript, safe hyperlinks, and supported bookmarks using Markion-compatible Markdown or limited safe HTML. Bookmark targets SHALL be standalone block HTML rather than inline heading content so Visual Edit does not expose anchor source as document text. Heading and numbering resolution SHALL honor direct properties and inherited styles with bounded cycle detection. Lists SHALL retain hierarchy, start/restart and continuation; significant numbering labels not representable as Markdown markers SHALL remain readable in item text with a normalization diagnostic. Markdown delimiters, URLs, table separators, and authored text SHALL be escaped by context without changing their visible meaning. Heading depths beyond six SHALL retain their text at level six with a simplification diagnostic.
 
 #### Scenario: Styled multilingual manuscript is converted
 - **WHEN** a document uses inherited heading styles, mixed Chinese/Latin text, literal Markdown delimiters, explicit line breaks, and adjacent differently formatted runs
@@ -29,6 +29,11 @@ The importer SHALL preserve body text, paragraph order, explicit line breaks, he
 #### Scenario: Malformed style inheritance is encountered
 - **WHEN** styles contain a cycle or exceed the configured inheritance depth
 - **THEN** conversion stops with a bounded structural-limit or invalid-document error rather than looping
+
+#### Scenario: Word-generated bookmarks precede headings
+- **WHEN** a paragraph contains authored or Word-generated `_Toc`/`_Ref` bookmark targets and layout-only leading breaks before heading text
+- **THEN** the targets remain resolvable as standalone HTML blocks
+- **AND** the heading contains its Markdown marker and visible title on the same line rather than inline anchor source or an empty heading
 
 ### Requirement: Table conversion SHALL retain content and cell structure
 The importer SHALL convert supported rectangular tables to GFM tables without discarding body rows or inventing a semantic header from the first data row. Headerless tables SHALL use an empty GFM header. Supported horizontal/vertical merged cells SHALL be represented by one safe HTML table using colspan/rowspan that remains one CommonMark HTML block on LF and CRLF files. Unsupported nested or complex table structures SHALL preserve readable cell content where available and report structural simplification or content loss accurately.
@@ -55,6 +60,11 @@ The importer SHALL return supported PNG/JPEG/GIF/WebP embedded images as separat
 - **WHEN** an embedded image is missing, corrupt, or uses an unsupported format
 - **THEN** the report identifies the affected location and the content loss
 - **AND** the proposed Markdown contains a visible fallback with available alt text
+
+#### Scenario: A decorative DrawingML shape has no image relationship
+- **WHEN** a run contains a non-picture DrawingML shape without image data or an image relationship
+- **THEN** the importer does not count it as an embedded image
+- **AND** it does not emit a missing-image placeholder or content-loss diagnostic for that decoration
 
 #### Scenario: Multiple references share a footnote
 - **WHEN** a footnote is referenced more than once and its definition contains multiple paragraphs
@@ -92,6 +102,11 @@ The save action for content-loss results SHALL explicitly name continuation with
 - **WHEN** all document content is supported but fonts, colors, and page geometry are not preserved
 - **THEN** the report summarizes the normalization and offers Save as Markdown
 - **AND** it does not claim that the original page layout was preserved
+
+#### Scenario: A document contains many cached Word fields
+- **WHEN** TOC, HYPERLINK, PAGEREF, SEQ, or similar field instructions have readable cached results
+- **THEN** the cached visible results are retained and executable field instructions are not emitted as document text
+- **AND** repeated instructions are summarized by field kind instead of producing one report row per instruction
 
 #### Scenario: No content is recoverable
 - **WHEN** the reader produces only placeholders or no recoverable content

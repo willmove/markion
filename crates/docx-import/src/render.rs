@@ -247,6 +247,7 @@ impl Converter<'_> {
 
     fn inventory(&mut self, root: Node<'_, '_>, part: &str) {
         let mut unsupported = BTreeMap::<&str, usize>::new();
+        let mut field_instructions = BTreeMap::<String, usize>::new();
         let mut move_ranges = BTreeMap::<String, [usize; 4]>::new();
         for node in root.descendants().filter(Node::is_element) {
             match node.tag_name().name() {
@@ -271,16 +272,32 @@ impl Converter<'_> {
                     *unsupported.entry(node.tag_name().name()).or_default() += 1
                 }
                 "instrText" => {
-                    self.diagnostic(
-                        DiagnosticCode::FieldResultPreserved,
-                        DiagnosticSeverity::Info,
-                        part,
-                        None,
-                        node.text().map(ToOwned::to_owned),
-                    );
+                    if let Some(kind) = node.text().and_then(field_instruction_kind) {
+                        *field_instructions.entry(kind).or_default() += 1;
+                    }
+                }
+                "fldSimple" => {
+                    if let Some(kind) = attr_local(node, "instr").and_then(field_instruction_kind) {
+                        *field_instructions.entry(kind).or_default() += 1;
+                    }
                 }
                 _ => {}
             }
+        }
+        if !field_instructions.is_empty() {
+            let count = field_instructions.values().sum::<usize>();
+            let summary = field_instructions
+                .iter()
+                .map(|(kind, count)| format!("{kind} x{count}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.diagnostic(
+                DiagnosticCode::FieldResultPreserved,
+                DiagnosticSeverity::Info,
+                part,
+                Some(format!("{count} field instruction(s)")),
+                Some(summary),
+            );
         }
         if self.summary.revisions_accepted {
             self.diagnostic(
@@ -388,6 +405,7 @@ impl Converter<'_> {
     ) -> Result<(), ImportError> {
         self.summary.paragraphs += 1;
         let location = Some(format!("paragraph {}", self.summary.paragraphs));
+        self.render_bookmark_blocks(paragraph, writer);
         if let Some(math_para) = paragraph
             .descendants()
             .find(|node| is_m(*node, "oMathPara"))
@@ -440,6 +458,16 @@ impl Converter<'_> {
                 Some((id.to_owned(), level))
             });
 
+        let mut inline = ChunkWriter::default();
+        self.render_inline_children(paragraph, part, &mut inline, location.clone())?;
+        if heading.is_some() {
+            trim_leading_inline_whitespace(&mut inline.chunks);
+        }
+        if !chunks_have_visible_content(&inline.chunks) {
+            writer.text("\n\n");
+            return Ok(());
+        }
+
         if let Some(prefix) = prefix_override {
             writer.text(prefix);
         } else if let Some(level) = heading {
@@ -473,9 +501,30 @@ impl Converter<'_> {
             }
         }
 
-        self.render_inline_children(paragraph, part, writer, location)?;
+        writer.recovered_content |= inline.recovered_content;
+        append_chunks(writer, inline.chunks);
         writer.text("\n\n");
         Ok(())
+    }
+
+    fn render_bookmark_blocks(&self, paragraph: Node<'_, '_>, writer: &mut ChunkWriter) {
+        let mut rendered = false;
+        for bookmark in paragraph
+            .descendants()
+            .filter(|node| is_w(*node, "bookmarkStart"))
+        {
+            let Some(name) = attr_local(bookmark, "name") else {
+                continue;
+            };
+            let Some(anchor) = self.bookmarks.get(name) else {
+                continue;
+            };
+            writer.text(format!("<div id=\"{}\"></div>\n", escape_html_attr(anchor)));
+            rendered = true;
+        }
+        if rendered {
+            writer.text("\n");
+        }
     }
 
     fn resolve_style(
@@ -524,16 +573,10 @@ impl Converter<'_> {
             if excluded_revision(node) {
                 continue;
             }
-            if is_w(node, "pPr") || is_w(node, "bookmarkEnd") {
+            if is_w(node, "pPr") || is_w(node, "bookmarkStart") || is_w(node, "bookmarkEnd") {
                 continue;
             }
-            if is_w(node, "bookmarkStart") {
-                if let Some(name) = attr_local(node, "name")
-                    && let Some(anchor) = self.bookmarks.get(name)
-                {
-                    writer.text(format!("<a id=\"{}\"></a>", escape_html_attr(anchor)));
-                }
-            } else if is_w(node, "r") {
+            if is_w(node, "r") {
                 self.render_run(node, part, writer, location.clone())?;
             } else if is_w(node, "hyperlink") {
                 self.render_hyperlink(node, part, writer, location.clone())?;
@@ -564,13 +607,6 @@ impl Converter<'_> {
             ) {
                 self.render_inline_children(node, part, writer, location.clone())?;
             } else if is_w(node, "fldSimple") {
-                self.diagnostic(
-                    DiagnosticCode::FieldResultPreserved,
-                    DiagnosticSeverity::Info,
-                    part,
-                    location.clone(),
-                    attr_local(node, "instr").map(ToOwned::to_owned),
-                );
                 self.render_inline_children(node, part, writer, location.clone())?;
             } else {
                 let text = visible_text(node);
@@ -589,7 +625,10 @@ impl Converter<'_> {
         writer: &mut ChunkWriter,
         location: Option<String>,
     ) -> Result<(), ImportError> {
-        if let Some(drawing) = run.descendants().find(|node| is_w(*node, "drawing")) {
+        if let Some(drawing) = run
+            .descendants()
+            .find(|node| is_w(*node, "drawing") && drawing_has_image_reference(*node))
+        {
             self.render_image(drawing, part, writer, location.clone())?;
         }
         if let Some(reference) = run
@@ -1415,12 +1454,53 @@ fn flatten_text(chunks: &[MarkdownChunk]) -> String {
         .collect()
 }
 
+fn chunks_have_visible_content(chunks: &[MarkdownChunk]) -> bool {
+    chunks.iter().any(|chunk| match chunk {
+        MarkdownChunk::Text(text) => text.chars().any(|character| !character.is_whitespace()),
+        MarkdownChunk::AssetUrl(_) => true,
+    })
+}
+
+fn trim_leading_inline_whitespace(chunks: &mut Vec<MarkdownChunk>) {
+    loop {
+        let Some(first) = chunks.first_mut() else {
+            return;
+        };
+        match first {
+            MarkdownChunk::Text(text) => {
+                let trimmed = text.trim_start_matches(char::is_whitespace);
+                if trimmed.is_empty() {
+                    chunks.remove(0);
+                } else {
+                    *text = trimmed.to_owned();
+                    return;
+                }
+            }
+            MarkdownChunk::AssetUrl(_) => return,
+        }
+    }
+}
+
 fn is_w(node: Node<'_, '_>, name: &str) -> bool {
     node.is_element() && node.tag_name().namespace() == Some(W_NS) && node.tag_name().name() == name
 }
 
 fn is_m(node: Node<'_, '_>, name: &str) -> bool {
     node.is_element() && node.tag_name().namespace() == Some(M_NS) && node.tag_name().name() == name
+}
+
+fn drawing_has_image_reference(drawing: Node<'_, '_>) -> bool {
+    drawing
+        .descendants()
+        .any(|node| node.is_element() && node.tag_name().name() == "blip")
+}
+
+fn field_instruction_kind(instruction: &str) -> Option<String> {
+    instruction
+        .split_whitespace()
+        .next()
+        .filter(|kind| !kind.is_empty())
+        .map(str::to_ascii_uppercase)
 }
 
 fn attr_local<'a>(node: Node<'a, 'a>, name: &str) -> Option<&'a str> {

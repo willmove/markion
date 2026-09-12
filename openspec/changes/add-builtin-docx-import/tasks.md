@@ -14,20 +14,20 @@
 ## 3. Text, styles, numbering, and tables
 
 - [x] 3.1 Convert paragraphs and runs with text/order/meaningful whitespace preservation and context-aware Markdown escaping; cover Chinese/Latin text, delimiters, explicit breaks, and adjacent mixed formatting in golden semantic tests.
-- [x] 3.2 Resolve direct/inherited heading and run styles with cycle/depth bounds; serialize headings and supported emphasis/underline/sup/sub with diagnostics for deeper headings and normalized layout.
-- [x] 3.3 Map safe hyperlinks and internal bookmarks to stable destinations; test Unicode and delimiter-containing URLs, missing bookmarks, and rejected schemes retaining readable link text.
+- [x] 3.2 Resolve direct/inherited heading and run styles with cycle/depth bounds; serialize headings and supported emphasis/underline/sup/sub with diagnostics for deeper headings and normalized layout, trimming layout-only leading breaks so visible titles remain on their heading marker.
+- [x] 3.3 Map safe hyperlinks and internal bookmarks to stable destinations; emit Word-generated and authored bookmark targets as standalone safe HTML blocks so heading text never exposes inline anchor source, and test Unicode/delimiter-containing URLs, missing bookmarks, and rejected schemes retaining readable link text.
 - [x] 3.4 Implement nested ordered/unordered lists, start/restart/continuation and significant custom labels; test lists separated by paragraphs, multi-digit markers, inherited numbering and Roman/Chinese labels without flattening hierarchy.
 - [x] 3.5 Convert rectangular/headerless tables to escaped GFM, preserving body rows and supported cell content; verify output through the shared Markdown parser.
 - [x] 3.6 Convert supported merged tables into one safe HTML block; test horizontal/vertical spans and LF/CRLF output through existing table consumers, with explicit fallback/diagnostics for nested or unsupported structures.
 
 ## 4. Images, notes, equations, and fidelity
 
-- [x] 4.1 Read and validate supported embedded raster assets with byte/count/dimension/decoder limits, deduplicate identical bytes, and preserve alt text/order; test broken media, unsupported formats, floating placement, external images, and bounded animated-image handling.
+- [x] 4.1 Read and validate supported embedded raster assets with byte/count/dimension/decoder limits, deduplicate identical bytes, and preserve alt text/order; distinguish decorative/non-picture DrawingML from referenced images, and test broken media, unsupported formats, floating placement, external images, and bounded animated-image handling.
 - [x] 4.2 Convert footnotes with deterministic labels, repeated references and multi-paragraph supported definitions; test separator-note exclusion and missing/unsupported note content diagnostics.
 - [x] 4.3 Convert the defined OMML subset to inline/display LaTeX and validate with the existing math path; add exact expected fixtures and visible diagnosed fallbacks for unsupported structures.
 - [x] 4.4 Apply accepted-view inline insert/delete/move/current-format semantics and emit a revision-policy summary; test content expectations independent of converter-generated output.
 - [x] 4.5 Handle accepted-view paragraph/block boundary revisions and detect ambiguous revisions; test paragraph joins/splits and move wrappers without omission or duplicate moved text.
-- [x] 4.6 Complete informational/formatting/content-loss diagnostic classification and source-location context, unsupported nonempty-node inventory and readable fallbacks; test comments/endnotes/headers/text boxes/objects/fields and fatal placeholder-only or empty results.
+- [x] 4.6 Complete informational/formatting/content-loss diagnostic classification and source-location context, unsupported nonempty-node inventory and readable fallbacks; aggregate repeated field instructions by kind while preserving cached visible results, and test comments/endnotes/headers/text boxes/objects/fields and fatal placeholder-only or empty results.
 
 ## 5. Managed resource staging and create-only publication
 

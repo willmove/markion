@@ -171,7 +171,7 @@ fn inherited_run_styles_numbering_links_and_bookmarks_are_semantic() {
         ("word/_rels/document.xml.rels", rels),
     ]);
     let markdown = result.render_markdown(|_| None).unwrap();
-    assert!(markdown.contains("<a id=\"章节-一\"></a>***Styled***"));
+    assert!(markdown.contains("<div id=\"章节-一\"></div>\n\n***Styled***"));
     assert!(markdown.contains("12. twelve"));
     assert!(markdown.contains("    - nested"));
     assert!(markdown.contains("1. XII. roman"));
@@ -180,6 +180,81 @@ fn inherited_run_styles_numbering_links_and_bookmarks_are_semantic() {
     assert!(markdown.contains("kept"));
     assert!(!markdown.contains("javascript:"));
     assert!(markdown.contains("[jump](#章节-一)"));
+}
+
+#[test]
+fn word_bookmarks_are_block_anchors_and_decorative_drawings_are_not_images() {
+    let styles = br#"<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="Heading2"><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>
+    </w:styles>"#;
+    let xml = document(
+        r#"<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr>
+<w:r><w:drawing><wp:anchor><wp:docPr id="1" name="empty decorative rectangle"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"/></a:graphic></wp:anchor></w:drawing></w:r></w:p>
+<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr>
+<w:bookmarkStart w:id="1" w:name="_Toc100670227"/>
+<w:bookmarkStart w:id="2" w:name="_Ref13"/>
+<w:r><w:drawing><wp:anchor><wp:docPr id="2" name="decorative rectangle"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"/></a:graphic></wp:anchor></w:drawing></w:r>
+<w:r><w:br/><w:t>目的</w:t></w:r></w:p>"#,
+    );
+    let result = convert(&[
+        ("word/document.xml", xml.as_bytes()),
+        ("word/styles.xml", styles),
+    ]);
+    let markdown = result.render_markdown(|_| None).unwrap();
+    assert!(
+        markdown.contains("<div id=\"_toc100670227\"></div>\n<div id=\"_ref13\"></div>\n\n## 目的")
+    );
+    assert!(markdown.contains("## 目的"));
+    assert!(!markdown.lines().any(|line| line.trim() == "##"));
+    assert!(!markdown.contains("## <"));
+    assert!(!markdown.contains("<a id="));
+    assert!(!markdown.contains("[Missing image:"));
+    let mut block_anchors = String::new();
+    let mut inline_anchor_count = 0;
+    for event in pulldown_cmark::Parser::new(&markdown) {
+        match event {
+            pulldown_cmark::Event::Html(html) if html.contains("<div id=") => {
+                block_anchors.push_str(&html)
+            }
+            pulldown_cmark::Event::InlineHtml(html) if html.contains("id=") => {
+                inline_anchor_count += 1
+            }
+            _ => {}
+        }
+    }
+    assert!(block_anchors.contains("id=\"_toc100670227\""));
+    assert!(block_anchors.contains("id=\"_ref13\""));
+    assert_eq!(inline_anchor_count, 0);
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|item| item.code == DiagnosticCode::MissingImage)
+    );
+}
+
+#[test]
+fn field_result_diagnostics_are_aggregated_by_instruction_kind() {
+    let xml = document(
+        r#"<w:p><w:r><w:instrText> HYPERLINK &quot;https://example.com&quot; </w:instrText></w:r><w:r><w:t>linked result</w:t></w:r></w:p>
+<w:p><w:r><w:instrText> PAGEREF _Toc1 </w:instrText></w:r><w:r><w:t>12</w:t></w:r></w:p>
+<w:p><w:fldSimple w:instr="DATE"><w:r><w:t>cached date</w:t></w:r></w:fldSimple></w:p>"#,
+    );
+    let result = convert(&[("word/document.xml", xml.as_bytes())]);
+    let markdown = result.render_markdown(|_| None).unwrap();
+    assert!(markdown.contains("linked result"));
+    assert!(markdown.contains("cached date"));
+    assert!(!markdown.contains("HYPERLINK"));
+    let field_diagnostics = result
+        .diagnostics
+        .iter()
+        .filter(|item| item.code == DiagnosticCode::FieldResultPreserved)
+        .collect::<Vec<_>>();
+    assert_eq!(field_diagnostics.len(), 1);
+    let context = field_diagnostics[0].context.as_deref().unwrap_or_default();
+    assert!(context.contains("DATE x1"));
+    assert!(context.contains("HYPERLINK x1"));
+    assert!(context.contains("PAGEREF x1"));
 }
 
 #[test]
