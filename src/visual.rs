@@ -4339,7 +4339,7 @@ mod tests {
             heading_proj.text
         );
         assert!(heading_proj.text.contains("Title"));
-        assert_eq!(&source[heading.source_range.clone()].trim_end(), "## Title");
+        assert_eq!(source[heading.source_range.clone()].trim_end(), "## Title");
 
         let list_proj = build_visual_projection(source, list, away..away, away);
         assert!(

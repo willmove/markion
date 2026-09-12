@@ -193,6 +193,7 @@ impl EntityInputHandler for MarkionApp {
             cx.notify();
             return;
         }
+        let markdown_auto_pair = self.markdown_auto_pair;
         let tab = self.active_tab_mut();
         let mut range = range_utf16
             .as_ref()
@@ -208,7 +209,7 @@ impl EntityInputHandler for MarkionApp {
                 .document
                 .visual_editor_field_at(&range)
                 .is_some_and(|field| is_auto_pair_restricted_field(field.kind));
-        if self.markdown_auto_pair && !skip_ime_pair && !restricted_pair_field {
+        if markdown_auto_pair && !skip_ime_pair && !restricted_pair_field {
             match auto_pair_action(tab.document.text(), range.clone(), new_text) {
                 Some(AutoPairAction::Skip { caret }) => {
                     tab.selected_range = caret..caret;

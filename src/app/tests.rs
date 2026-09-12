@@ -8292,7 +8292,7 @@ fn visual_edit_revealed_task_prefix_click_does_not_toggle(cx: &mut TestAppContex
 #[gpui::test]
 fn read_and_split_preview_task_checkbox_stays_inert(cx: &mut TestAppContext) {
     let source = "- [ ] task";
-    for mode in [ViewMode::Read, ViewMode::SplitPreview] {
+    for mode in [ViewMode::Read, ViewMode::Split] {
         let (app, cx) = cx.add_window_view(|_, cx| {
             let mut app = MarkionApp::new(cx);
             app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
