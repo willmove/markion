@@ -754,7 +754,12 @@ pub(super) struct PdfTabState {
     pub(super) document_id: Option<DocumentId>,
     pub(super) generation: Generation,
     pub(super) pages: std::sync::Arc<[PageGeometry]>,
-    pub(super) page_list: ListState,
+    pub(super) page_scroll: ScrollHandle,
+    pub(super) page_layout: std::sync::Arc<[PdfPagePlacement]>,
+    pub(super) page_content_height: Pixels,
+    pub(super) visible_range: Range<usize>,
+    pub(super) layout_zoom: Option<PdfZoomMode>,
+    pub(super) layout_viewport_width: Pixels,
     pub(super) zoom: PdfZoomMode,
     pub(super) current_page: usize,
     pub(super) viewport_width: Pixels,
@@ -771,7 +776,12 @@ impl PdfTabState {
             document_id: None,
             generation: Generation(1),
             pages: std::sync::Arc::from([]),
-            page_list: ListState::new(0, ListAlignment::Top, px(0.)),
+            page_scroll: ScrollHandle::new(),
+            page_layout: std::sync::Arc::from([]),
+            page_content_height: px(0.),
+            visible_range: 0..0,
+            layout_zoom: None,
+            layout_viewport_width: px(0.),
             zoom: PdfZoomMode::FitWidth,
             current_page: 0,
             viewport_width: px(0.),
@@ -784,6 +794,7 @@ impl PdfTabState {
     pub(super) fn presentation_memory_bytes(&self) -> usize {
         self.path.as_os_str().len()
             + self.pages.len() * std::mem::size_of::<PageGeometry>()
+            + self.page_layout.len() * std::mem::size_of::<PdfPagePlacement>()
             + self.claimed_pages.capacity() * std::mem::size_of::<PdfPageKey>()
             + std::mem::size_of::<Self>()
     }

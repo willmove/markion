@@ -16,6 +16,16 @@ pub(super) const PDF_CACHE_MAX_BYTES: usize = 64 * 1_048_576;
 const PDF_CACHE_MAX_ENTRIES: usize = 128;
 const PDF_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const PDF_DEFAULT_RENDER_WIDTH_PX: u32 = 1024;
+pub(super) const PDF_PAGE_ROW_PADDING_Y: f32 = 12.0;
+pub(super) const PDF_PAGE_BORDER_WIDTH: f32 = 1.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct PdfPagePlacement {
+    pub(super) top: f32,
+    pub(super) logical_width: f32,
+    pub(super) logical_height: f32,
+    pub(super) row_height: f32,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) struct PdfPageKey {
@@ -249,6 +259,54 @@ pub(super) fn pdf_page_layout(
     (logical_width, logical_height.max(1.0), target_width)
 }
 
+pub(super) fn pdf_page_placements(
+    pages: &[PageGeometry],
+    zoom: PdfZoomMode,
+    viewport_width: f32,
+    display_scale: f32,
+) -> (Vec<PdfPagePlacement>, f32) {
+    let mut top = 0.0;
+    let placements = pages
+        .iter()
+        .copied()
+        .map(|geometry| {
+            let (logical_width, logical_height, _) =
+                pdf_page_layout(geometry, zoom, viewport_width, display_scale);
+            let row_height =
+                logical_height + PDF_PAGE_ROW_PADDING_Y * 2.0 + PDF_PAGE_BORDER_WIDTH * 2.0;
+            let placement = PdfPagePlacement {
+                top,
+                logical_width,
+                logical_height,
+                row_height,
+            };
+            top += row_height;
+            placement
+        })
+        .collect();
+    (placements, top)
+}
+
+pub(super) fn pdf_visible_range(
+    placements: &[PdfPagePlacement],
+    scroll_top: f32,
+    viewport_height: f32,
+) -> Range<usize> {
+    if placements.is_empty() {
+        return 0..0;
+    }
+    let scroll_top = scroll_top.max(0.0);
+    let scroll_bottom = scroll_top + viewport_height.max(1.0);
+    let start = placements
+        .partition_point(|page| page.top + page.row_height <= scroll_top)
+        .min(placements.len() - 1);
+    let end = placements
+        .partition_point(|page| page.top < scroll_bottom)
+        .max(start + 1)
+        .min(placements.len());
+    start..end
+}
+
 pub(super) fn pdf_prefetch_range(page_count: usize, visible: Range<usize>) -> Range<usize> {
     if page_count == 0 {
         return 0..0;
@@ -446,7 +504,10 @@ impl MarkionApp {
                 if let Some(pdf) = self.tabs[index].pdf_mut() {
                     pdf.document_id = Some(opened.document_id);
                     pdf.pages = Arc::from(opened.pages);
-                    pdf.page_list.reset(pdf.pages.len());
+                    pdf.page_layout = Arc::from([]);
+                    pdf.page_content_height = px(0.);
+                    pdf.visible_range = 0..0;
+                    pdf.page_scroll.set_offset(point(px(0.), px(0.)));
                     pdf.load_state = PdfLoadState::Ready;
                     pdf.current_page = 0;
                 }
@@ -536,15 +597,34 @@ impl MarkionApp {
         };
         pdf.viewport_width = viewport_width;
         pdf.display_scale = display_scale.max(1.0);
-        let list = pdf.page_list.clone();
-        let entity = cx.entity();
-        list.set_scroll_handler(move |event, _, cx| {
-            entity.update(cx, |app, cx| {
-                app.schedule_pdf_visible_range(index, event.visible_range.clone(), cx);
-            });
-        });
-        let top = pdf.current_page.min(pdf.pages.len().saturating_sub(1));
-        self.schedule_pdf_visible_range(index, top..top.saturating_add(1), cx);
+        let layout_changed = pdf.page_layout.len() != pdf.pages.len()
+            || pdf.layout_zoom != Some(pdf.zoom)
+            || (matches!(pdf.zoom, PdfZoomMode::FitWidth)
+                && (f32::from(pdf.layout_viewport_width) - f32::from(viewport_width)).abs() >= 1.0);
+        if layout_changed {
+            let anchor = pdf.current_page.min(pdf.pages.len().saturating_sub(1));
+            let (placements, content_height) = pdf_page_placements(
+                &pdf.pages,
+                pdf.zoom,
+                f32::from(viewport_width),
+                pdf.display_scale,
+            );
+            pdf.page_layout = Arc::from(placements);
+            pdf.page_content_height = px(content_height);
+            pdf.layout_zoom = Some(pdf.zoom);
+            pdf.layout_viewport_width = viewport_width;
+            let anchor_top = pdf
+                .page_layout
+                .get(anchor)
+                .map(|page| page.top)
+                .unwrap_or(0.0);
+            pdf.page_scroll.set_offset(point(px(0.), px(-anchor_top)));
+        }
+        let viewport_height = f32::from(pdf.page_scroll.bounds().size.height).max(1.0);
+        let scroll_top = (-f32::from(pdf.page_scroll.offset().y)).max(0.0);
+        let visible = pdf_visible_range(&pdf.page_layout, scroll_top, viewport_height);
+        pdf.visible_range = visible.clone();
+        self.schedule_pdf_visible_range(index, visible, cx);
     }
 
     pub(super) fn schedule_pdf_visible_range(
@@ -738,7 +818,9 @@ impl MarkionApp {
             return;
         }
         pdf.current_page = page_index;
-        pdf.page_list.scroll_to_reveal_item(page_index);
+        if let Some(page) = pdf.page_layout.get(page_index) {
+            pdf.page_scroll.set_offset(point(px(0.), px(-page.top)));
+        }
         self.schedule_pdf_visible_range(index, page_index..page_index + 1, cx);
         cx.notify();
     }
@@ -816,6 +898,32 @@ mod tests {
             (150.0, 200.0, 300)
         );
         assert_eq!(PdfZoomMode::numeric(500.0).percent(), Some(400.0));
+    }
+
+    #[test]
+    fn page_placements_expose_full_scroll_height_without_mounting_every_page() {
+        let pages = [
+            PageGeometry::new(600.0, 800.0).unwrap(),
+            PageGeometry::new(800.0, 400.0).unwrap(),
+            PageGeometry::new(400.0, 600.0).unwrap(),
+        ];
+        let (placements, content_height) =
+            pdf_page_placements(&pages, PdfZoomMode::FitWidth, 448.0, 1.0);
+        assert_eq!(placements.len(), 3);
+        assert!((placements[1].top - placements[0].row_height).abs() < 0.001);
+        assert!(
+            (placements[2].top - (placements[0].row_height + placements[1].row_height)).abs()
+                < 0.001
+        );
+        assert!(
+            (content_height - placements.iter().map(|page| page.row_height).sum::<f32>()).abs()
+                < 0.001
+        );
+        assert_eq!(pdf_visible_range(&placements, 0.0, 500.0), 0..1);
+        assert_eq!(
+            pdf_visible_range(&placements, placements[1].top + 1.0, 100.0),
+            1..2
+        );
     }
 
     #[test]

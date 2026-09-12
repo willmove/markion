@@ -91,7 +91,7 @@ OS-originated image drop currently means import-as-resource, while the separate 
 
 ### 5. Separate virtual page geometry from raster ownership
 
-Opening a document first obtains page count and natural page sizes. The root PDF surface builds a virtual single-column list from those immutable dimensions, zoom mode, viewport width, and fixed page gaps. Placeholder height is known before rendering, so scrolling and page navigation never depend on decoded raster availability.
+Opening a document first obtains page count and natural page sizes. The root PDF surface builds a virtual single-column layout from those immutable dimensions, zoom mode, viewport width, and fixed page gaps. It precomputes only compact page placements and a total scroll height, then mounts page nodes for the current visible range while a plain tracked scroll container supplies continuous pixel scrolling. Placeholder height is therefore known before rendering, so scrolling and page navigation never depend on decoded raster availability or GPUI measuring an off-screen variable-height row.
 
 ```text
 path
@@ -106,7 +106,7 @@ path
 
 Layout uses exact logical zoom, while render identity quantizes the requested physical width upward into a small fixed bucket (initially 64 physical pixels). A cached raster can be presented smaller within its bucket but never enlarged beyond its pixel coverage. This prevents continuous resize from producing a new raster for every pixel while preserving crispness. Fit-width resize invalidates only affected visible PDF keys; numeric zoom actions use discrete values inside the specified 25–400% range.
 
-The current page is the page intersecting a stable reading anchor near the top of the viewport. Page-number navigation scrolls to the corresponding virtual item before requesting its raster. The PDF toolbar is part of the PDF surface, not the global Markdown view-mode controls.
+The current page is the page intersecting a stable reading anchor near the top of the viewport. Page-number navigation maps the requested page through the precomputed placement table and sets the tracked scroll offset before requesting its raster. The PDF toolbar is part of the PDF surface, not the global Markdown view-mode controls.
 
 ### 6. Add a dedicated bounded PDF page cache with explicit GPU release
 

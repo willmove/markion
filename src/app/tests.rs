@@ -10549,9 +10549,57 @@ fn ready_pdf_tab(path: PathBuf, request_id: u64, pages: &[PageGeometry]) -> Edit
     let pdf = tab.pdf_mut().unwrap();
     pdf.document_id = Some(DocumentId(request_id));
     pdf.pages = Arc::from(pages.to_vec());
-    pdf.page_list.reset(pdf.pages.len());
     pdf.load_state = PdfLoadState::Ready;
     tab
+}
+
+#[gpui::test]
+fn pdf_page_stream_consumes_wheel_events_and_advances_current_page(cx: &mut TestAppContext) {
+    let pages = [PageGeometry::new(600.0, 800.0).unwrap(); 3];
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![ready_pdf_tab(PathBuf::from("scroll.pdf"), 16, &pages)];
+        app
+    });
+    cx.simulate_resize(size(px(800.), px(700.)));
+    cx.run_until_parked();
+
+    let surface = cx
+        .debug_bounds("pdf-tab-surface")
+        .expect("PDF surface should render");
+    let before = app.update(cx, |app, _| {
+        let pdf = app.active_tab().pdf().unwrap();
+        (pdf.page_scroll.offset(), pdf.current_page)
+    });
+
+    cx.simulate_event(ScrollWheelEvent {
+        position: surface.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-1_200.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+
+    assert!(
+        cx.debug_bounds("pdf-page-row-1").is_some(),
+        "the second page should be mounted after scrolling beyond the first"
+    );
+
+    app.update(cx, |app, _| {
+        let pdf = app.active_tab().pdf().unwrap();
+        let after = pdf.page_scroll.offset();
+        assert!(
+            after.y < before.0.y,
+            "wheel input over the PDF surface should move the virtual page stream"
+        );
+        assert!(
+            pdf.current_page > before.1,
+            "wheel input should advance the toolbar's current-page state"
+        );
+        assert!(
+            pdf.claimed_pages.iter().any(|key| key.page_index == 2),
+            "the newly visible page and its neighbor should be scheduled after one wheel event"
+        );
+    });
 }
 
 #[gpui::test]
@@ -10695,6 +10743,7 @@ fn pdf_page_entry_zoom_bounds_and_fit_width_resize_are_validated(cx: &mut TestAp
     cx.dispatch_action(InsertNewline);
     app.update(cx, |app, _| {
         assert_eq!(app.active_tab().pdf().unwrap().current_page, 2);
+        assert!(app.active_tab().pdf().unwrap().page_scroll.offset().y < px(0.));
         assert!(app.pdf_page_input.is_none());
     });
 

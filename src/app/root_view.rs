@@ -1297,9 +1297,10 @@ fn pdf_tab_view(
     let path = pdf.path.display().to_string();
     let load_state = pdf.load_state;
     let pages = Arc::clone(&pdf.pages);
-    let page_list = pdf.page_list.clone();
-    let zoom = pdf.zoom;
-    let viewport_width = f32::from(pdf.viewport_width);
+    let page_scroll = pdf.page_scroll.clone();
+    let page_layout = Arc::clone(&pdf.page_layout);
+    let page_content_height = pdf.page_content_height;
+    let visible_range = pdf.visible_range.clone();
     let display_scale = pdf.display_scale;
     let current_page = pdf.current_page;
     let page_count = pages.len();
@@ -1334,13 +1335,11 @@ fn pdf_tab_view(
             ))
             .into_any_element(),
         PdfLoadState::Ready => {
-            let items = Arc::clone(&pages);
-            list(
-                page_list,
-                cx.processor(move |app, index: usize, _, _| {
-                    let geometry = items[index];
-                    let (logical_width, logical_height, _) =
-                        pdf_page_layout(geometry, zoom, viewport_width, display_scale);
+            let mut page_canvas = div().relative().w_full().h(page_content_height).flex_none();
+            for index in visible_range {
+                if let Some(placement) = page_layout.get(index).copied() {
+                    let logical_width = placement.logical_width;
+                    let logical_height = placement.logical_height;
                     let content = match app.pdf_page_entry(index) {
                         Some(PdfPageEntry::Ready(ready)) => {
                             let covered_width = ready.width_px as f32 / display_scale.max(1.0);
@@ -1377,24 +1376,36 @@ fn pdf_tab_view(
                             .child(app.tr(Msg::StatusPdfLoading).to_string())
                             .into_any_element(),
                     };
-                    div()
-                        .debug_selector(move || format!("pdf-page-row-{index}"))
-                        .w_full()
-                        .py_3()
-                        .flex()
-                        .justify_center()
-                        .child(
-                            div()
-                                .border_1()
-                                .border_color(palette.border)
-                                .bg(rgb(0xffffff))
-                                .child(content),
-                        )
-                        .into_any_element()
-                }),
-            )
-            .size_full()
-            .into_any_element()
+                    page_canvas = page_canvas.child(
+                        div()
+                            .debug_selector(move || format!("pdf-page-row-{index}"))
+                            .absolute()
+                            .top(px(placement.top))
+                            .left_0()
+                            .w_full()
+                            .h(px(placement.row_height))
+                            .py(px(PDF_PAGE_ROW_PADDING_Y))
+                            .flex()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .border_1()
+                                    .border_color(palette.border)
+                                    .bg(rgb(0xffffff))
+                                    .child(content),
+                            ),
+                    );
+                }
+            }
+            div()
+                .id("pdf-page-scroll")
+                .debug_selector(|| "pdf-page-scroll".to_string())
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&page_scroll)
+                .child(page_canvas)
+                .into_any_element()
         }
     };
 
