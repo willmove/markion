@@ -530,6 +530,7 @@ pub fn build_visual_projection_with_marked_range(
     }
     projection
 }
+use crate::emoji::{emoji_for_shortcode, emoji_tokens_in};
 use crate::parse::{
     ExtendedInlineKind, InlineHtmlStyleKind, InlineHtmlStyleTag, coalesced_offset_events,
     extended_inline_matches, parse_inline_html_image, parse_inline_html_style_tag,
@@ -2912,7 +2913,8 @@ const NAMED_ENTITY_DECODES: &[(&str, char)] = &[
 const NAMED_ENTITY_DECODES_MULTI: &[(&str, &str)] = &[("NotEqualTilde", "\u{2242}\u{0338}")];
 
 /// Emits an identity-mapped text slice: the slice equals its visible text, so
-/// it is pushed directly or split around extended inline markers.
+/// it is pushed directly or split around extended inline markers and emoji
+/// shortcodes (`:name:` tokens render as glyphs until the caret reveals them).
 fn push_identity_text_runs(
     runs: &mut Vec<VisualInlineRun>,
     candidates: &mut Vec<RevealCandidate>,
@@ -2924,7 +2926,8 @@ fn push_identity_text_runs(
     navigation: Option<VisualNavigationTarget>,
 ) {
     let extended = extended_inline_matches(event_source);
-    if extended.is_empty() {
+    let emojis = emoji_tokens_in(event_source);
+    if extended.is_empty() && emojis.is_empty() {
         push_run(
             runs,
             source,
@@ -2960,6 +2963,16 @@ fn push_identity_text_runs(
             link_target_range: None,
         });
     }
+    for (token_range, glyph) in &emojis {
+        boundaries.extend([token_range.start, token_range.end]);
+        candidates.push(RevealCandidate {
+            kind: VisualRevealKind::Emoji,
+            source_range: event_range.start + token_range.start
+                ..event_range.start + token_range.end,
+            link_target_range: None,
+        });
+        let _ = glyph;
+    }
     boundaries.sort_unstable();
     boundaries.dedup();
 
@@ -2984,6 +2997,20 @@ fn push_identity_text_runs(
                     ExtendedInlineKind::Subscript => style.subscript = true,
                 }
             }
+        }
+        if let Some((_, glyph)) = emojis
+            .iter()
+            .find(|(token, _)| token.start == local_range.start && token.end == local_range.end)
+        {
+            push_decoded_entity_run(
+                runs,
+                glyph,
+                event_range.start + local_range.start..event_range.start + local_range.end,
+                style,
+                link_target_range.clone(),
+                navigation.clone(),
+            );
+            continue;
         }
         let global_range =
             event_range.start + local_range.start..event_range.start + local_range.end;
@@ -3165,6 +3192,12 @@ fn reveal_candidate_is_exact(
                 && source.as_bytes()[1].is_ascii_punctuation()
         }
         VisualRevealKind::Entity => decode_entity_token(source).is_some(),
+        VisualRevealKind::Emoji => {
+            source.starts_with(':')
+                && source.ends_with(':')
+                && source.len() >= 3
+                && emoji_for_shortcode(&source[1..source.len() - 1]).is_some()
+        }
         VisualRevealKind::InlineHtml => {
             matches!(
                 parse_inline_html_style_tag(source),
@@ -3347,6 +3380,36 @@ fn skip_ascii_spacing(text: &str, mut offset: usize) -> usize {
         offset += 1;
     }
     offset
+}
+
+/// Toggle the `[ ]` / `[x]` / `[X]` token inside a task-list prefix.
+/// `[X]` turns off to `[ ]`. Returns the exact marker range and replacement.
+pub fn task_checkbox_toggle(
+    source: &str,
+    prefix: &VisualBlockPrefix,
+) -> Option<(Range<usize>, String)> {
+    if !matches!(prefix.kind, VisualBlockPrefixKind::TaskList { .. }) {
+        return None;
+    }
+    let prefix_text = source.get(prefix.source_range.clone())?;
+    let relative = prefix_text
+        .find("[ ]")
+        .or_else(|| prefix_text.find("[x]").or_else(|| prefix_text.find("[X]")))?;
+    let start = prefix.source_range.start + relative;
+    let end = start + 3;
+    if end > prefix.source_range.end
+        || !source.is_char_boundary(start)
+        || !source.is_char_boundary(end)
+    {
+        return None;
+    }
+    let token = source.get(start..end)?;
+    let replacement = match token {
+        "[ ]" => "[x]",
+        "[x]" | "[X]" => "[ ]",
+        _ => return None,
+    };
+    Some((start..end, replacement.to_string()))
 }
 
 pub(crate) fn structural_prefix_at(text: &str, byte_index: usize) -> Option<VisualBlockPrefix> {
@@ -4243,6 +4306,123 @@ mod tests {
         let hidden = build_visual_projection(titled, block, interior..interior, interior);
         assert_eq!(hidden.text, "Hello");
         assert!(hidden.revealed_source_ranges.is_empty());
+    }
+
+    #[test]
+    fn unfocused_heading_list_and_quote_hide_structural_prefixes() {
+        let source = "## Title\n\n- item\n\n> quoted\n\nnext";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let heading = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Heading { level: 2 }))
+            .unwrap();
+        let list = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .unwrap();
+        let quote = blocks
+            .iter()
+            .find(|block| {
+                block
+                    .quote_context
+                    .as_ref()
+                    .is_some_and(|quote| quote.depth >= 1)
+                    && matches!(block.kind, VisualBlockKind::Paragraph)
+            })
+            .unwrap();
+        let away = source.find("next").unwrap();
+        let heading_proj = build_visual_projection(source, heading, away..away, away);
+        assert!(
+            !heading_proj.text.contains("##"),
+            "unfocused heading should hide hashes, got {:?}",
+            heading_proj.text
+        );
+        assert!(heading_proj.text.contains("Title"));
+        assert_eq!(&source[heading.source_range.clone()].trim_end(), "## Title");
+
+        let list_proj = build_visual_projection(source, list, away..away, away);
+        assert!(
+            !list_proj.text.contains("- "),
+            "unfocused list should hide the marker, got {:?}",
+            list_proj.text
+        );
+        assert!(list_proj.text.contains("item"));
+
+        let quote_proj = build_visual_projection(source, quote, away..away, away);
+        assert!(
+            !quote_proj.text.contains('>'),
+            "unfocused quote should hide the marker, got {:?}",
+            quote_proj.text
+        );
+        assert!(quote_proj.text.contains("quoted"));
+    }
+
+    #[test]
+    fn typed_atx_line_classifies_as_heading_not_prose() {
+        let source = "## Title\n\n";
+        let doc = MarkdownDocument::from_text(source);
+        let heading = doc
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Heading { level: 2 }))
+            .expect("typed ATX line should be a heading");
+        assert_eq!(heading.source_island, None);
+        let away = source.len();
+        let proj = build_visual_projection(source, &heading, away..away, away);
+        assert!(!proj.text.contains("##"));
+        assert!(proj.text.contains("Title"));
+    }
+
+    #[test]
+    fn unfocused_emoji_shortcode_renders_the_glyph() {
+        let source = "hi :smile: there";
+        let doc = MarkdownDocument::from_text(source);
+        let block = &doc.visual_blocks()[0];
+        let away = 0;
+        let hidden = build_visual_projection(source, block, away..away, away);
+        assert!(
+            hidden.text.contains("🙂"),
+            "unfocused Visual Edit should show the emoji glyph, got {:?}",
+            hidden.text
+        );
+        assert!(
+            !hidden.text.contains(":smile:"),
+            "shortcode should stay hidden until revealed, got {:?}",
+            hidden.text
+        );
+        assert!(block.reveal_groups.iter().any(|group| {
+            group.kind == VisualRevealKind::Emoji
+                && &source[group.source_range.clone()] == ":smile:"
+        }));
+        let inside = source.find("smile").unwrap();
+        let revealed = build_visual_projection(source, block, inside..inside, inside);
+        assert!(
+            revealed.text.contains(":smile:"),
+            "caret inside the token should reveal the shortcode, got {:?}",
+            revealed.text
+        );
+    }
+
+    #[test]
+    fn task_checkbox_toggle_flips_markers() {
+        let source = "- [ ] one\n- [x] two\n- [X] three";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks();
+        let prefixes: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| block.block_prefix.as_ref())
+            .collect();
+        assert_eq!(prefixes.len(), 3);
+        let (range, replacement) = super::task_checkbox_toggle(source, prefixes[0]).unwrap();
+        assert_eq!(&source[range.clone()], "[ ]");
+        assert_eq!(replacement, "[x]");
+        let (range, replacement) = super::task_checkbox_toggle(source, prefixes[1]).unwrap();
+        assert_eq!(&source[range.clone()], "[x]");
+        assert_eq!(replacement, "[ ]");
+        let (range, replacement) = super::task_checkbox_toggle(source, prefixes[2]).unwrap();
+        assert_eq!(&source[range.clone()], "[X]");
+        assert_eq!(replacement, "[ ]");
     }
 
     #[test]

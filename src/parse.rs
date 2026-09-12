@@ -2336,7 +2336,7 @@ fn parse_extended_inline_segments(text: &str) -> Vec<ExtendedInlineSegment> {
             && let Some(end) = stripped.find(':')
         {
             let shortcode = &stripped[..end];
-            if let Some(emoji) = emoji_for_shortcode(shortcode) {
+            if let Some(emoji) = crate::emoji::emoji_for_shortcode(shortcode) {
                 segments.push(ExtendedInlineSegment::Emoji(emoji));
                 index += end + 2;
                 continue;
@@ -2455,36 +2455,6 @@ fn is_autolink_boundary(text: &str, start: usize) -> bool {
         .chars()
         .next_back()
         .is_none_or(|ch| ch.is_whitespace() || matches!(ch, '(' | '[' | '{'))
-}
-
-fn emoji_for_shortcode(shortcode: &str) -> Option<&'static str> {
-    if shortcode.is_empty()
-        || shortcode.len() > 32
-        || !shortcode.chars().all(|ch| {
-            ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '_' | '-' | '+')
-        })
-    {
-        return None;
-    }
-
-    match shortcode {
-        "smile" | "slightly_smiling_face" => Some("🙂"),
-        "heart" => Some("❤️"),
-        "+1" | "thumbsup" => Some("👍"),
-        "-1" | "thumbsdown" => Some("👎"),
-        "check" | "white_check_mark" => Some("✅"),
-        "x" => Some("❌"),
-        "warning" => Some("⚠️"),
-        "bulb" | "idea" => Some("💡"),
-        "rocket" => Some("🚀"),
-        "fire" => Some("🔥"),
-        "star" => Some("⭐"),
-        "book" => Some("📘"),
-        "memo" => Some("📝"),
-        "bug" => Some("🐛"),
-        "sparkles" => Some("✨"),
-        _ => None,
-    }
 }
 
 /// pulldown events with adjacent, offset-contiguous `Text` fragments merged.

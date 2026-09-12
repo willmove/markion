@@ -134,6 +134,7 @@ impl MarkionApp {
                     app.heading_menu_max_level = preferences.heading_menu_max_level;
                     app.sync_scroll = preferences.sync_scroll;
                     app.open_in_current_tab = preferences.open_in_current_tab;
+                    app.markdown_auto_pair = preferences.markdown_auto_pair;
                     app.sidebar_visible = preferences.sidebar_visible;
                     app.sidebar_tab = preferences.sidebar_tab;
                     app.auto_save_preferences = preferences.auto_save;
@@ -489,6 +490,21 @@ impl MarkionApp {
                 Msg::StatusOpenInCurrentTabOn
             } else {
                 Msg::StatusOpenInCurrentTabOff
+            },
+        )
+        .into();
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn toggle_markdown_auto_pair(&mut self, cx: &mut Context<Self>) {
+        self.markdown_auto_pair = !self.markdown_auto_pair;
+        self.status = t(
+            self.language,
+            if self.markdown_auto_pair {
+                Msg::StatusMarkdownAutoPairOn
+            } else {
+                Msg::StatusMarkdownAutoPairOff
             },
         )
         .into();

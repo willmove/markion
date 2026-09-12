@@ -84,6 +84,8 @@ struct PreferencesFile {
     show_hidden_files: bool,
     #[serde(deserialize_with = "deserialize_bool_or_true")]
     open_in_current_tab: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_true")]
+    markdown_auto_pair: bool,
     sidebar_visible: bool,
     /// "files" or "outline"; unknown values fall back to Files like the
     /// legacy format did.
@@ -310,6 +312,7 @@ impl From<&AppPreferences> for PreferencesFile {
             sync_scroll: preferences.sync_scroll,
             show_hidden_files: preferences.show_hidden_files,
             open_in_current_tab: preferences.open_in_current_tab,
+            markdown_auto_pair: preferences.markdown_auto_pair,
             sidebar_visible: preferences.sidebar_visible,
             sidebar_tab: match preferences.sidebar_tab {
                 SidebarTab::Files => "files".to_string(),
@@ -372,6 +375,7 @@ impl From<PreferencesFile> for AppPreferences {
             sync_scroll: file.sync_scroll,
             show_hidden_files: file.show_hidden_files,
             open_in_current_tab: file.open_in_current_tab,
+            markdown_auto_pair: file.markdown_auto_pair,
             sidebar_visible: file.sidebar_visible,
             sidebar_tab: match file.sidebar_tab.to_ascii_lowercase().as_str() {
                 "outline" => SidebarTab::Outline,
@@ -996,6 +1000,43 @@ mod tests {
         let text = "theme = \"Paper\"\nopen_in_current_tab = \"yes\"\n";
         let parsed = parse_app_preferences(text).unwrap();
         assert!(parsed.open_in_current_tab);
+    }
+
+    #[test]
+    fn markdown_auto_pair_defaults_to_true() {
+        assert!(AppPreferences::default().markdown_auto_pair);
+    }
+
+    #[test]
+    fn markdown_auto_pair_round_trips_through_toml() {
+        let preferences = AppPreferences {
+            markdown_auto_pair: false,
+            ..AppPreferences::default()
+        };
+        let rendered = render_app_preferences(&preferences);
+        assert!(
+            rendered.contains("markdown_auto_pair = false"),
+            "rendered TOML should set markdown_auto_pair = false: {rendered}"
+        );
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert!(
+            !parsed.markdown_auto_pair,
+            "parsed markdown_auto_pair should be false"
+        );
+    }
+
+    #[test]
+    fn missing_markdown_auto_pair_falls_back_to_true() {
+        let text = "theme = \"Paper\"\nlanguage = \"en\"\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert!(parsed.markdown_auto_pair);
+    }
+
+    #[test]
+    fn invalid_markdown_auto_pair_value_falls_back_to_true() {
+        let text = "theme = \"Paper\"\nmarkdown_auto_pair = \"yes\"\n";
+        let parsed = parse_app_preferences(text).unwrap();
+        assert!(parsed.markdown_auto_pair);
     }
 
     #[test]

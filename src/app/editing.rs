@@ -176,6 +176,164 @@ impl MarkionApp {
         }
     }
 
+    pub(super) fn sync_emoji_completer_state(&mut self, cx: &mut Context<Self>) {
+        if self.slash_commands.is_some() {
+            if self.emoji_completer.take().is_some() {
+                cx.notify();
+            }
+            return;
+        }
+        let query = if self.link_editor.is_none()
+            && matches!(self.view_mode, ViewMode::Edit | ViewMode::VisualEdit)
+            && self.active_tab().selected_range.is_empty()
+            && self.active_tab().marked_range.is_none()
+        {
+            let tab = self.active_tab();
+            let caret = tab.cursor_offset();
+            let restricted = tab
+                .document
+                .visual_editor_field_at(&(caret..caret))
+                .is_some_and(|field| is_auto_pair_restricted_field(field.kind));
+            if restricted {
+                None
+            } else {
+                emoji_query_at(tab.document.text(), caret, tab.document.version())
+            }
+        } else {
+            None
+        };
+        let Some(query) = query else {
+            if self.emoji_completer.take().is_some() {
+                cx.notify();
+            }
+            return;
+        };
+        if self.dismissed_emoji_query.as_ref() == Some(&query) {
+            if self.emoji_completer.take().is_some() {
+                cx.notify();
+            }
+            return;
+        }
+        self.dismissed_emoji_query = None;
+        let count = emoji_shortcodes_matching(&query.query).len();
+        if let Some(state) = &mut self.emoji_completer
+            && state.query == query
+        {
+            state.selected = state.selected.min(count.saturating_sub(1));
+            return;
+        }
+        self.emoji_completer = Some(EmojiCompleterState { query, selected: 0 });
+        cx.notify();
+    }
+
+    pub(super) fn move_emoji_selection(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
+        let Some(state) = &mut self.emoji_completer else {
+            return false;
+        };
+        let count = emoji_shortcodes_matching(&state.query.query)
+            .len()
+            .min(EMOJI_PALETTE_LIMIT);
+        if count == 0 {
+            return true;
+        }
+        state.selected = if forward {
+            (state.selected + 1) % count
+        } else if state.selected == 0 {
+            count - 1
+        } else {
+            state.selected - 1
+        };
+        cx.notify();
+        true
+    }
+
+    pub(super) fn confirm_selected_emoji(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(state) = self.emoji_completer.clone() else {
+            return false;
+        };
+        let matches: Vec<_> = emoji_shortcodes_matching(&state.query.query)
+            .into_iter()
+            .take(EMOJI_PALETTE_LIMIT)
+            .collect();
+        let Some((name, _)) = matches.get(state.selected).copied() else {
+            return true;
+        };
+        self.execute_emoji_completion(state.query, name, cx);
+        true
+    }
+
+    pub(super) fn execute_emoji_completion(
+        &mut self,
+        query: EmojiQuery,
+        name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(replacement) = emoji_confirm_replacement(name) else {
+            return;
+        };
+        let end = query.source_range.start + replacement.len();
+        self.apply_exact_block_edit(
+            BlockEdit {
+                document_version: query.document_version,
+                range: query.source_range,
+                replacement,
+                selection_after: end..end,
+            },
+            p1_t(self.language, P1Msg::EmojiShortcodes).into(),
+            cx,
+        );
+    }
+
+    pub(super) fn toggle_visual_task_checkbox(
+        &mut self,
+        block_index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.view_mode, ViewMode::VisualEdit) {
+            return;
+        }
+        let tab = self.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let Some(block) = blocks.get(block_index) else {
+            return;
+        };
+        let Some(prefix) = block.block_prefix.clone() else {
+            return;
+        };
+        let cursor = tab.cursor_offset();
+        let prefix_revealed = prefix.source_range.contains(&cursor)
+            || cursor == prefix.source_range.end
+            || (block.editable_runs.is_empty()
+                && (block.source_range.contains(&cursor) || cursor == block.source_range.end));
+        if prefix_revealed {
+            return;
+        }
+        let Some((range, replacement)) = task_checkbox_toggle(tab.document.text(), &prefix) else {
+            return;
+        };
+        let caret = prefix.source_range.end;
+        self.push_undo_snapshot();
+        let mutation = {
+            let tab = self.active_tab_mut();
+            tab.document
+                .prepare_range_mutation(MutationOrigin::StructuralEdit, range, &replacement)
+        };
+        if self
+            .apply_document_mutation("toggle_task_checkbox", mutation)
+            .is_none()
+        {
+            cx.notify();
+            return;
+        }
+        let tab = self.active_tab_mut();
+        tab.selected_range = caret..caret;
+        tab.selection_reversed = false;
+        tab.marked_range = None;
+        self.status = t(self.language, Msg::StatusEditing).into();
+        self.after_document_changed(cx);
+        cx.notify();
+    }
+
     pub(super) fn open_visual_block_menu(
         &mut self,
         target: BlockTarget,
@@ -208,6 +366,7 @@ impl MarkionApp {
             submenu_selected: 0,
         });
         self.slash_commands = None;
+        self.emoji_completer = None;
         self.preview_context_menu = None;
         self.file_tree_context_menu = None;
         self.tab_context_menu = None;
@@ -645,6 +804,8 @@ impl MarkionApp {
         tab.marked_range = None;
         self.slash_commands = None;
         self.dismissed_slash_query = None;
+        self.emoji_completer = None;
+        self.dismissed_emoji_query = None;
         self.dismiss_visual_block_menu();
         self.status = status;
         self.after_document_changed(cx);
@@ -654,6 +815,8 @@ impl MarkionApp {
     fn report_block_edit_error(&mut self, error: BlockEditError, cx: &mut Context<Self>) {
         self.slash_commands = None;
         self.dismissed_slash_query = None;
+        self.emoji_completer = None;
+        self.dismissed_emoji_query = None;
         self.dismiss_visual_block_menu();
         self.status = p1_t(
             self.language,
@@ -2118,6 +2281,9 @@ impl MarkionApp {
         if self.move_slash_selection(false, cx) {
             return;
         }
+        if self.move_emoji_selection(false, cx) {
+            return;
+        }
         if self.move_visual_vertical(VisualNavigationDirection::Up, false, cx) {
             return;
         }
@@ -2140,6 +2306,9 @@ impl MarkionApp {
         }
         self.sync_slash_command_state(cx);
         if self.move_slash_selection(true, cx) {
+            return;
+        }
+        if self.move_emoji_selection(true, cx) {
             return;
         }
         if self.move_visual_vertical(VisualNavigationDirection::Down, false, cx) {
@@ -2263,6 +2432,10 @@ impl MarkionApp {
         }
         self.sync_slash_command_state(cx);
         if self.confirm_selected_slash_command(cx) {
+            return;
+        }
+        self.sync_emoji_completer_state(cx);
+        if self.confirm_selected_emoji(cx) {
             return;
         }
         let selected = self.active_tab().selected_range.clone();
@@ -2396,6 +2569,10 @@ impl MarkionApp {
         }
         if self.search_visible && self.search_control_focus.is_some() {
             self.cycle_search_overlay_focus(true, cx);
+            return;
+        }
+        self.sync_emoji_completer_state(cx);
+        if self.confirm_selected_emoji(cx) {
             return;
         }
         let selected = self.active_tab().selected_range.clone();

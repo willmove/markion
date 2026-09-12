@@ -31,6 +31,8 @@ impl MarkionApp {
         }
         self.slash_commands = None;
         self.dismissed_slash_query = None;
+        self.emoji_completer = None;
+        self.dismissed_emoji_query = None;
         self.dismiss_visual_block_menu();
         self.active_tab_mut().clear_visual_caret_affinity();
         self.active_tab_mut().clear_visual_navigation_intent();
@@ -330,6 +332,11 @@ impl MarkionApp {
         }
         if self.slash_commands.is_some() {
             self.dismissed_slash_query = self.slash_commands.take().map(|state| state.query);
+            cx.notify();
+            return;
+        }
+        if self.emoji_completer.is_some() {
+            self.dismissed_emoji_query = self.emoji_completer.take().map(|state| state.query);
             cx.notify();
             return;
         }

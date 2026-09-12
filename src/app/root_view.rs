@@ -20,8 +20,11 @@ impl Render for MarkionApp {
         if active_is_image {
             self.slash_commands = None;
             self.dismissed_slash_query = None;
+            self.emoji_completer = None;
+            self.dismissed_emoji_query = None;
         } else {
             self.sync_slash_command_state(cx);
+            self.sync_emoji_completer_state(cx);
         }
         let palette = self.palette();
         let typography = self.typography_metrics();
@@ -828,6 +831,10 @@ impl Render for MarkionApp {
             .when(self.slash_commands.is_some(), |root| {
                 root.child(slash_command_palette_view(self, cx))
             })
+            .when(
+                self.emoji_completer.is_some() && self.slash_commands.is_none(),
+                |root| root.child(emoji_completer_palette_view(self, cx)),
+            )
             .when(self.recovery_manager.is_some(), |root| {
                 root.child(recovery_manager_view(self, cx))
             })
@@ -1356,6 +1363,107 @@ fn slash_command_element_id(index: usize) -> &'static str {
         "slash-command-11",
         "slash-command-12",
         "slash-command-13",
+    ];
+    IDS[index.min(IDS.len() - 1)]
+}
+
+fn emoji_completer_palette_view(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let palette = app.palette();
+    let state = app
+        .emoji_completer
+        .clone()
+        .expect("emoji palette is rendered only while its state is present");
+    let matches: Vec<_> = emoji_shortcodes_matching(&state.query.query)
+        .into_iter()
+        .take(EMOJI_PALETTE_LIMIT)
+        .collect();
+    let query = state.query;
+    div()
+        .id("emoji-completer-palette")
+        .debug_selector(|| "emoji-completer-palette".to_string())
+        .absolute()
+        .right(px(28.))
+        .top(px(72.))
+        .w(px(280.))
+        .max_h(px(520.))
+        .occlude()
+        .p_2()
+        .bg(palette.panel_bg)
+        .border_1()
+        .border_color(palette.border)
+        .rounded_lg()
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .px_2()
+                .py_1()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(palette.muted)
+                .child(p1_t(app.language, P1Msg::EmojiShortcodes)),
+        )
+        .when(matches.is_empty(), |panel| {
+            panel.child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_size(px(12.))
+                    .text_color(palette.muted)
+                    .child(p1_t(app.language, P1Msg::NoEmojiMatches)),
+            )
+        })
+        .children(
+            matches
+                .into_iter()
+                .enumerate()
+                .map(|(index, (name, glyph))| {
+                    let selected = index == state.selected;
+                    let query = query.clone();
+                    div()
+                        .id(emoji_completer_element_id(index))
+                        .debug_selector(move || emoji_completer_element_id(index).to_string())
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_size(px(12.))
+                        .cursor_pointer()
+                        .when(selected, |row| {
+                            row.bg(palette.active_bg).text_color(palette.active_text)
+                        })
+                        .when(!selected, |row| {
+                            row.hover(move |style| style.bg(palette.surface_bg))
+                        })
+                        .child(format!("{glyph}  :{name}:"))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                app.execute_emoji_completion(query.clone(), name, cx);
+                            }),
+                        )
+                }),
+        )
+}
+
+fn emoji_completer_element_id(index: usize) -> &'static str {
+    const IDS: [&str; 12] = [
+        "emoji-completer-0",
+        "emoji-completer-1",
+        "emoji-completer-2",
+        "emoji-completer-3",
+        "emoji-completer-4",
+        "emoji-completer-5",
+        "emoji-completer-6",
+        "emoji-completer-7",
+        "emoji-completer-8",
+        "emoji-completer-9",
+        "emoji-completer-10",
+        "emoji-completer-11",
     ];
     IDS[index.min(IDS.len() - 1)]
 }
@@ -5228,6 +5336,17 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                                                 cx.listener(
                                                     |app, _: &MouseUpEvent, _window, cx| {
                                                         app.toggle_open_in_current_tab(cx);
+                                                    },
+                                                ),
+                                            ))
+                                            .child(preference_boolean_row(
+                                                app.tr(Msg::PrefPanelMarkdownAutoPair),
+                                                app.markdown_auto_pair,
+                                                app.language,
+                                                palette,
+                                                cx.listener(
+                                                    |app, _: &MouseUpEvent, _window, cx| {
+                                                        app.toggle_markdown_auto_pair(cx);
                                                     },
                                                 ),
                                             ))
