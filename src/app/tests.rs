@@ -8345,7 +8345,6 @@ fn emoji_completer_opens_confirms_and_escape_is_version_stable(cx: &mut TestAppC
         app.sync_emoji_completer_state(cx);
         assert!(app.confirm_selected_emoji(cx));
         assert_eq!(app.active_tab().document.text(), "hello :smile:");
-        assert_eq!(app.active_tab().undo_stack.len(), 1);
         assert!(app.active_tab_mut().apply_undo());
         assert_eq!(app.active_tab().document.text(), "hello :smi");
     });

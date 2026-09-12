@@ -311,8 +311,8 @@ impl MarkionApp {
         let Some((range, replacement)) = task_checkbox_toggle(tab.document.text(), &prefix) else {
             return;
         };
-        let caret = prefix.source_range.end;
-        self.push_undo_snapshot();
+        self.active_tab_mut().finish_undo_capture();
+        let snapshot = self.snapshot();
         let mutation = {
             let tab = self.active_tab_mut();
             tab.document
@@ -325,9 +325,8 @@ impl MarkionApp {
             cx.notify();
             return;
         }
+        self.commit_undo_snapshot(snapshot);
         let tab = self.active_tab_mut();
-        tab.selected_range = caret..caret;
-        tab.selection_reversed = false;
         tab.marked_range = None;
         self.status = t(self.language, Msg::StatusEditing).into();
         self.after_document_changed(cx);

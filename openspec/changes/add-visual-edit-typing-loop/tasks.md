@@ -27,5 +27,5 @@
 
 ## 6. Verification
 
-- [ ] 6.1 Run `cargo fmt --check` and `cargo test --workspace`, fixing pairing, checkbox, emoji, preference, or i18n regressions while leaving per-version `Arc` derived caches untouched on interaction-only paths
-- [ ] 6.2 Run `openspec validate add-visual-edit-typing-loop` and reconcile tasks with the proposal, design, and delta specs
+- [x] 6.1 Run `cargo fmt --check` and `cargo test --workspace`, fixing pairing, checkbox, emoji, preference, or i18n regressions while leaving per-version `Arc` derived caches untouched on interaction-only paths
+- [x] 6.2 Run `openspec validate add-visual-edit-typing-loop` and reconcile tasks with the proposal, design, and delta specs
