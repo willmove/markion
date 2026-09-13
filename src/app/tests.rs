@@ -6,7 +6,7 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 // Only test code in this module classifies file-tree entries by kind; import it
 // here (rather than in `mod.rs`) so non-test release builds stay warning-free
 // under `-D warnings`.
-use markion::{FileTreeFileKind, ThemeFonts};
+use markion::{FileTreeFileKind, ThemeFonts, inline_image_at};
 
 fn assert_visual_typewriter_frames(
     app: &Entity<MarkionApp>,
@@ -6422,6 +6422,228 @@ fn visual_block_math_source_expands_and_collapses_without_editing(cx: &mut TestA
         assert_eq!(app.active_tab().document.text(), source);
         assert!(app.active_tab().undo_stack.is_empty());
         cx.notify();
+    });
+}
+
+#[gpui::test]
+fn visual_yaml_header_is_not_a_source_island_and_stays_version_stable(cx: &mut TestAppContext) {
+    let source = "---\ntitle: Demo\n---\n\nBody";
+    let document = MarkdownDocument::from_text(source);
+    let header = document
+        .visual_blocks()
+        .into_iter()
+        .find(|block| matches!(block.kind, VisualBlockKind::FrontMatter { .. }))
+        .expect("YAML header");
+    let header_id = header.id;
+    let payload_start = match header.editor {
+        Some(VisualBlockEditor::FrontMatter { payload }) => payload.source_range.start,
+        _ => panic!("YAML header must carry a FrontMatter payload editor"),
+    };
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::ZhHans;
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = payload_start..payload_start;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let version = app.update(cx, |app, _| {
+        assert_eq!(app.tr(Msg::LabelYaml), "YAML 头");
+        let tab = app.active_tab();
+        let block = tab
+            .document
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::FrontMatter { .. }))
+            .expect("YAML header after render");
+        assert!(block.source_island.is_none());
+        assert!(matches!(
+            block.editor,
+            Some(VisualBlockEditor::FrontMatter { .. })
+        ));
+        let VisualBlockKind::FrontMatter { title } = &block.kind else {
+            panic!("expected FrontMatter kind");
+        };
+        assert_eq!(title.as_deref(), Some("Demo"));
+        tab.document.version()
+    });
+
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.toggle_visual_source_expanded(header_id);
+        assert!(tab.is_visual_source_expanded(header_id));
+        tab.hovered_visual_source_block = Some(header_id);
+        cx.notify();
+    });
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().retain_visual_source_expand = None;
+        app.active_tab_mut().apply_visual_source_outside_click();
+        assert!(!app.active_tab().is_visual_source_expanded(header_id));
+        app.active_tab_mut().hovered_visual_source_block = None;
+        assert_eq!(app.active_tab().document.version(), version);
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(app.active_tab().undo_stack.is_empty());
+        cx.notify();
+    });
+}
+
+#[gpui::test]
+fn visual_reference_image_stays_rendered_when_focused(cx: &mut TestAppContext) {
+    let source = "![alt][asset]\n\n[asset]: pic.png";
+    let document = MarkdownDocument::from_text(source);
+    let image_start = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.kind {
+            VisualBlockKind::Image { .. } => Some(block.source_range.start),
+            _ => None,
+        })
+        .expect("reference image");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = image_start..image_start;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab();
+        let block = tab
+            .document
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
+            .expect("image block");
+        assert!(block.source_island.is_none());
+        assert!(matches!(
+            block.editor,
+            Some(VisualBlockEditor::Image { .. })
+        ));
+        assert!(
+            inline_image_at(tab.document.text(), image_start).is_none(),
+            "reference images must not expose inline destination controls"
+        );
+        let version = tab.document.version();
+        app.set_image_presentation_at(
+            image_start,
+            ImagePresentation {
+                width_percent: 50,
+                alignment: ImageAlignment::Right,
+            },
+            cx,
+        );
+        assert_eq!(app.active_tab().document.text(), source);
+        assert_eq!(app.active_tab().document.version(), version);
+    });
+}
+
+#[gpui::test]
+fn visual_ragged_table_stays_a_grid_when_focused(cx: &mut TestAppContext) {
+    let source = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 |";
+    let document = MarkdownDocument::from_text(source);
+    let cell_start = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Table { cells }) => cells
+                .into_iter()
+                .next()
+                .map(|cell| cell.field.source_range.start),
+            _ => None,
+        })
+        .expect("ragged table cell");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = cell_start..cell_start;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let block = tab
+            .document
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+            .expect("table");
+        assert!(block.source_island.is_none());
+        let Some(VisualBlockEditor::Table { cells }) = &block.editor else {
+            panic!("focused ragged table must keep cell editors");
+        };
+        assert_eq!(cells.len(), 6);
+        assert!(
+            tab.document
+                .visual_editor_field_at(&tab.selected_range)
+                .is_some_and(|field| matches!(field.kind, VisualEditorFieldKind::TableCell { .. }))
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_math_pending_or_error_is_not_a_source_island(cx: &mut TestAppContext) {
+    // Display math always carries a payload editor, including when KaTeX is
+    // still Pending or later Error; the view must not demote it to an island.
+    let source = "$$\n\\notacommand\n$$";
+    let document = MarkdownDocument::from_text(source);
+    let payload_start = document
+        .visual_blocks()
+        .into_iter()
+        .find_map(|block| match block.editor {
+            Some(VisualBlockEditor::Math { payload, .. }) => Some(payload.source_range.start),
+            _ => None,
+        })
+        .expect("math payload");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = payload_start..payload_start;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let block = tab
+            .document
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::MathBlock { .. }))
+            .expect("math block");
+        assert!(block.source_island.is_none());
+        assert!(matches!(block.editor, Some(VisualBlockEditor::Math { .. })));
+        assert!(
+            tab.document
+                .visual_editor_field_at(&tab.selected_range)
+                .is_some_and(|field| field.kind == VisualEditorFieldKind::MathPayload)
+        );
     });
 }
 

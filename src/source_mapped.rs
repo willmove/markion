@@ -818,7 +818,7 @@ fn shift_block_editor(editor: &mut VisualBlockEditor, delta: isize) -> Option<()
                 shift_editor_field(&mut cell.field, delta)?;
             }
         }
-        VisualBlockEditor::Html { payload } => {
+        VisualBlockEditor::Html { payload } | VisualBlockEditor::FrontMatter { payload } => {
             shift_editor_field(payload, delta)?;
         }
         VisualBlockEditor::Image {
