@@ -14,7 +14,7 @@ use crate::model::{
     VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualTableCell,
 };
 use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fence};
-use crate::table::table_cell_source_ranges;
+use crate::table::{table_cell_source_ranges, table_column_width_prefix_len};
 use crate::text_util::char_run_range;
 
 /// Collects the document's link reference definition lines so that per-block
@@ -1350,7 +1350,9 @@ fn visual_block_editor(
         }
         PreviewBlock::Table { rows, .. } => {
             let source = text.get(source_range.clone())?;
-            let cell_ranges = table_cell_source_ranges(source)?;
+            let markdown_start = table_column_width_prefix_len(source);
+            let markdown = source.get(markdown_start..)?;
+            let cell_ranges = table_cell_source_ranges(markdown)?;
             if cell_ranges.len() != rows.iter().map(Vec::len).sum::<usize>() {
                 return None;
             }
@@ -1358,8 +1360,9 @@ fn visual_block_editor(
                 cells: cell_ranges
                     .into_iter()
                     .map(|cell| {
-                        let source_range = source_range.start + cell.source_range.start
-                            ..source_range.start + cell.source_range.end;
+                        let source_range =
+                            source_range.start + markdown_start + cell.source_range.start
+                                ..source_range.start + markdown_start + cell.source_range.end;
                         VisualTableCell {
                             row: cell.row,
                             column: cell.column,

@@ -1409,7 +1409,8 @@ fn startup_application_flow_reuses_existing_open_behaviour() {
 #[test]
 fn backup_sync_center_is_transient_responsive_and_keyboard_operable() {
     let root = include_str!("root_view.rs");
-    let panel = include_str!("git_panel.rs");
+    // `include_str!` follows checkout line endings; Windows CI may check out CRLF.
+    let panel = include_str!("git_panel.rs").replace("\r\n", "\n");
 
     assert!(root.contains("self.git_ui.center_open"));
     assert!(root.contains("git_panel::center_view(self, cx)"));
@@ -16649,6 +16650,181 @@ fn selection_format_target_requires_one_safe_exact_editable_run() {
     );
 }
 
+#[test]
+fn selection_format_target_accepts_a_single_table_cell() {
+    let document = MarkdownDocument::from_text("| A | B |\n| --- | --- |\n| hello | world |");
+    let hello = visual_table_cell_range(&document, 0, 1, 0);
+    let world = visual_table_cell_range(&document, 0, 1, 1);
+    let blocks = document.visual_blocks_shared();
+    let table = blocks
+        .iter()
+        .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+        .expect("table block");
+    let target = BlockTarget::from_block(document.version(), table);
+    let mut tab = EditorTab::new(document);
+    tab.selected_range = hello.clone();
+    let exact = visual_selection_format_target_for_block(&tab, &blocks, &target)
+        .expect("cell selection should be format-safe");
+    assert_eq!(exact.range, hello);
+
+    tab.selected_range = hello.start..world.end;
+    assert!(visual_selection_format_target_for_block(&tab, &blocks, &target).is_none());
+}
+
+#[gpui::test]
+fn visual_table_cell_selection_formats_bold_from_context_menu(cx: &mut TestAppContext) {
+    const SOURCE: &str = "| A | B |\n| --- | --- |\n| hello | world |";
+    let document = MarkdownDocument::from_text(SOURCE);
+    let selection = visual_table_cell_range(&document, 0, 1, 0);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = selection.clone();
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let initial_version = app.update(cx, |app, _| app.active_tab().document.version());
+    let row = cx
+        .debug_bounds("visual-block-row-0")
+        .expect("table context target");
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: row.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let menu = app.block_menu.as_ref().expect("cell context menu");
+        assert!(menu.selection_format.is_some());
+        assert_eq!(app.active_tab().document.version(), initial_version);
+    });
+    let bold = cx
+        .debug_bounds("visual-selection-format-bold")
+        .expect("cell Bold command");
+    cx.simulate_click(bold.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(
+            app.active_tab()
+                .document
+                .text()
+                .contains("| **hello** | world |")
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
+}
+
+#[gpui::test]
+fn visual_table_column_width_commit_is_one_undo(cx: &mut TestAppContext) {
+    const SOURCE: &str = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let (initial_version, offset) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.text().find('A').unwrap(),
+        )
+    });
+    let handle = cx
+        .debug_bounds("visual-table-col-handle-0-0")
+        .expect("column resize handle");
+    app.update(cx, |app, _| {
+        app.active_tab_mut().visual_table_column_drag = Some(VisualTableColumnDrag {
+            block_id: app.active_tab().document.visual_blocks_shared()[0].id,
+            left_column: 0,
+            start_x: 0.0,
+            table_width: 200.0,
+            start_percents: vec![50, 50],
+            live_percents: vec![30, 70],
+            document_version: initial_version,
+            table_offset: offset,
+        });
+        assert_eq!(app.active_tab().document.version(), initial_version);
+        assert!(handle.size.width > px(0.));
+    });
+    app.update(cx, |app, cx| {
+        app.set_table_column_widths_at(offset, vec![30, 70], cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(
+            app.active_tab()
+                .document
+                .text()
+                .starts_with("<!-- markion-cols:30,70 -->")
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert_eq!(app.active_tab().document.version(), initial_version + 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
+}
+
+#[gpui::test]
+fn visual_image_width_drag_commit_is_one_undo(cx: &mut TestAppContext) {
+    const SOURCE: &str = "![alt](https://example.com/a.png)";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 2..2;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let initial_version = app.update(cx, |app, _| app.active_tab().document.version());
+    app.update(cx, |app, cx| {
+        app.set_image_presentation_at(
+            0,
+            ImagePresentation {
+                width_percent: 40,
+                alignment: ImageAlignment::Center,
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(
+            app.active_tab()
+                .document
+                .text()
+                .contains("{width=40 align=center}")
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert_eq!(app.active_tab().document.version(), initial_version + 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
+}
+
 #[gpui::test]
 fn memory_harness_tab_growth_and_close_release(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
@@ -18440,10 +18616,14 @@ fn file_tree_drop_remaps_clean_tab_and_refuses_dirty(cx: &mut TestAppContext) {
         app.handle_file_tree_drop(&path, &archive, cx);
     });
     let moved = archive.join("daily.md");
+    let moved_cmp = comparable_document_path(&moved);
     app.update(cx, |app, _| {
         assert!(moved.exists());
         assert!(!path.exists());
-        assert_eq!(app.tabs[0].path(), Some(moved.as_path()));
+        assert_eq!(
+            app.tabs[0].path().map(comparable_document_path),
+            Some(moved_cmp.clone())
+        );
         assert_eq!(app.tabs[0].document.text(), "# Daily");
         assert_eq!(
             app.status,

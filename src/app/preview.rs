@@ -3957,21 +3957,32 @@ fn visual_block_content_view(
             ..
         } => {
             let offset = block.source_range.start;
+            let document_version = app.active_tab().document.version();
             let exact_image = inline_image_at(app.active_tab().document.text(), offset);
             let image_presentation = exact_image
                 .as_ref()
                 .and_then(|image| image.presentation)
                 .unwrap_or_default();
+            let display_percent = app
+                .active_tab()
+                .visual_image_resize_drag
+                .as_ref()
+                .filter(|drag| drag.offset == offset && drag.document_version == document_version)
+                .map(|drag| drag.live_percent)
+                .unwrap_or(image_presentation.width_percent);
             let caption = exact_image
                 .as_ref()
                 .and_then(|image| image.title.as_deref())
                 .or(image_title.as_deref())
                 .filter(|title| !title.is_empty())
                 .or_else(|| (!image_alt.is_empty()).then_some(image_alt.as_str()));
+            let can_resize = owns_caret && exact_image.is_some();
             let image = div()
-                .w(gpui::relative(
-                    image_presentation.width_percent as f32 / 100.,
-                ))
+                .relative()
+                .w(gpui::relative(display_percent as f32 / 100.))
+                .on_drag_move::<DraggedImageResizeHandle>(
+                    cx.listener(MarkionApp::on_visual_image_resize_drag_move),
+                )
                 .child(preview_image_view(
                     app,
                     url,
@@ -3979,7 +3990,26 @@ fn visual_block_content_view(
                     document_dir,
                     None,
                     None,
-                ));
+                ))
+                .when(can_resize, |image| {
+                    let handle = DraggedImageResizeHandle {
+                        offset,
+                        document_version,
+                    };
+                    image.child(
+                        div()
+                            .id(("visual-image-resize-handle", offset))
+                            .debug_selector(move || format!("visual-image-resize-handle-{offset}"))
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right_0()
+                            .w(px(8.))
+                            .cursor(CursorStyle::ResizeColumn)
+                            .block_mouse_except_scroll()
+                            .on_drag(handle, |_, _, _, cx| cx.new(|_| Empty)),
+                    )
+                });
             let image = match image_presentation.alignment {
                 ImageAlignment::Left => div().w_full().flex().items_start().child(image),
                 ImageAlignment::Center => div().w_full().flex().items_center().child(image),
@@ -5795,8 +5825,9 @@ fn preview_table_cell_flex(weight: f32) -> Div {
 fn preview_table_column_weights(
     rows: &[Vec<RichText>],
     typography: &DocumentTypographyMetrics,
+    authored_percents: Option<&[u8]>,
 ) -> Vec<f32> {
-    table_column_flex_weights(rows, typography.table_font_size)
+    table_column_flex_weights_with_authored(rows, typography.table_font_size, authored_percents)
 }
 
 pub(super) fn visual_table_view(
@@ -5807,8 +5838,26 @@ pub(super) fn visual_table_view(
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
     let typography = app.typography_metrics();
-    let column_weights = preview_table_column_weights(rows, &typography);
-    let table_offset = block.source_range.start;
+    let text = app.active_tab().document.text();
+    let markdown_start = text
+        .get(block.source_range.clone())
+        .map(table_column_width_prefix_len)
+        .unwrap_or(0);
+    let table_offset = block.source_range.start + markdown_start;
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let overlay = app
+        .active_tab()
+        .visual_table_column_drag
+        .as_ref()
+        .filter(|drag| {
+            drag.block_id == block.id
+                && drag.document_version == app.active_tab().document.version()
+        });
+    let authored = overlay.map(|drag| drag.live_percents.clone()).or_else(|| {
+        text.get(block.source_range.clone())
+            .and_then(|source| authored_table_column_percents(source, column_count))
+    });
+    let column_weights = preview_table_column_weights(rows, &typography, authored.as_deref());
     let block_id = block.id;
     let document_version = app.active_tab().document.version();
     let toolbar_target =
@@ -5847,6 +5896,9 @@ pub(super) fn visual_table_view(
             tab.hovered_visual_table_block = next;
             cx.notify();
         }))
+        .on_drag_move::<DraggedTableColumnHandle>(
+            cx.listener(MarkionApp::on_visual_table_column_drag_move),
+        )
         .when(show_toolbar, |table| {
             table.child(
                 div()
@@ -5904,6 +5956,7 @@ pub(super) fn visual_table_view(
                             .map(|cell| &cell.field)
                     });
                     preview_table_cell_flex(column_weights.get(cell_index).copied().unwrap_or(1.0))
+                        .relative()
                         .p_2()
                         .when(!is_last_cell, |style| {
                             style.border_r_1().border_color(rgb(0xe2e8f0))
@@ -5949,6 +6002,39 @@ pub(super) fn visual_table_view(
                                 cx,
                             )
                         })
+                        .when(
+                            cells.is_some() && !is_last_cell && column_count >= 2,
+                            |cell_view| {
+                                let handle = DraggedTableColumnHandle {
+                                    block_id,
+                                    left_column: cell_index,
+                                    document_version,
+                                    table_offset: offset,
+                                };
+                                cell_view.child(
+                                    div()
+                                        .id(ElementId::from((
+                                            "visual-table-col-handle",
+                                            (block_id.as_u64() << 24)
+                                                | ((row_index as u64) << 12)
+                                                | cell_index as u64,
+                                        )))
+                                        .debug_selector(move || {
+                                            format!(
+                                                "visual-table-col-handle-{block_index}-{cell_index}"
+                                            )
+                                        })
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .right_0()
+                                        .w(px(6.))
+                                        .cursor(CursorStyle::ResizeColumn)
+                                        .block_mouse_except_scroll()
+                                        .on_drag(handle, |_, _, _, cx| cx.new(|_| Empty)),
+                                )
+                            },
+                        )
                 }))
         }))
 }
@@ -6900,11 +6986,21 @@ pub(super) fn preview_block_view(
                 document_dir,
                 cx,
             ))),
-        PreviewBlock::Table { rows, .. } => {
+        PreviewBlock::Table {
+            rows, source_range, ..
+        } => {
             // Split Preview and Read mode share this branch. Table mutation
             // belongs in Visual Edit or the source commands, so the preview
             // grid intentionally has no editing header or callbacks.
-            let column_weights = preview_table_column_weights(rows, &typography);
+            let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+            let authored = app
+                .active_tab()
+                .document
+                .text()
+                .get(source_range.clone())
+                .and_then(|source| authored_table_column_percents(source, column_count));
+            let column_weights =
+                preview_table_column_weights(rows, &typography, authored.as_deref());
             div()
                 .mb_3()
                 .border_1()

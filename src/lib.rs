@@ -38,8 +38,9 @@ mod visual;
 
 pub use document_memory::{DocumentMemoryBreakdown, DocumentMemorySite};
 pub use inline_edit::{
-    ImageAlignment, ImagePresentation, InlineMarkdownTarget, inline_image_at, inline_link_at,
-    serialize_inline_image, serialize_inline_link,
+    ImageAlignment, ImagePresentation, InlineMarkdownTarget, clamp_image_width_percent,
+    inline_image_at, inline_link_at, serialize_inline_image, serialize_inline_link,
+    snap_image_width_percent,
 };
 
 /// Markdown shown in the first in-memory document when Markion starts.
@@ -267,11 +268,18 @@ pub use storage::{
     save_session_state, save_theme_definition, workspace_relative_path,
 };
 
-pub use table::table_column_flex_weights;
 use table::{
-    TableDraft, format_markdown_table, formatted_table_cell_range, parse_markdown_table,
-    table_cell_source_ranges, table_position_at, table_preview_source_range,
-    table_range_at as table_range_at_fn, table_ranges as table_ranges_fn,
+    TableDraft, adjust_column_percents_for_delete, adjust_column_percents_for_insert,
+    format_markdown_table, format_table_column_width_comment, formatted_table_cell_range,
+    leading_table_column_width_comment_range, normalize_column_percents, parse_markdown_table,
+    parse_table_column_width_comment, selection_is_within_one_table_cell, table_cell_source_ranges,
+    table_position_at, table_preview_source_range, table_range_at as table_range_at_fn,
+    table_ranges as table_ranges_fn,
+};
+pub use table::{
+    authored_table_column_percents, percents_from_flex_weights,
+    redistribute_adjacent_column_percents, table_column_flex_weights,
+    table_column_flex_weights_with_authored, table_column_width_prefix_len,
 };
 
 use parse::{
@@ -1820,6 +1828,19 @@ impl MarkdownDocument {
         format: MarkdownFormat,
     ) -> std::ops::Range<usize> {
         let range = clamp_range_to_char_boundaries(&self.text, range);
+        if let Some(inside_one_cell) = selection_is_within_one_table_cell(&self.text, range.clone())
+        {
+            let inline_ok = matches!(
+                format,
+                MarkdownFormat::Bold
+                    | MarkdownFormat::Italic
+                    | MarkdownFormat::InlineCode
+                    | MarkdownFormat::Link
+            );
+            if !inside_one_cell || !inline_ok {
+                return range;
+            }
+        }
         match format {
             MarkdownFormat::Bold => self.wrap_inline(range, "**", "**", "bold"),
             MarkdownFormat::Italic => self.wrap_inline(range, "*", "*", "italic"),
@@ -1848,13 +1869,21 @@ impl MarkdownDocument {
     pub fn edit_table_at(&mut self, byte_index: usize, edit: TableEdit) -> Option<TableEditResult> {
         let byte_index = clamp_to_char_boundary(&self.text, byte_index);
         let table_range = self.table_range_at(byte_index)?;
-        let table_source = &self.text[table_range.clone()];
-        let table_position = table_position_at(table_source, byte_index - table_range.start)?;
-        let mut table = parse_markdown_table(table_source)?;
+        let table_source = self.text[table_range.clone()].to_string();
+        let table_position = table_position_at(&table_source, byte_index - table_range.start)?;
+        let mut table = parse_markdown_table(&table_source)?;
         let mut selected_row = table_position.row.min(table.rows.len().saturating_sub(1));
         let mut selected_column = table_position
             .column
             .min(table.column_count().saturating_sub(1));
+        let old_column_count = table.column_count();
+        let leading_comment =
+            leading_table_column_width_comment_range(&self.text, table_range.start);
+        let old_percents = leading_comment.as_ref().and_then(|range| {
+            parse_table_column_width_comment(&self.text[range.clone()])
+                .filter(|percents| percents.len() == old_column_count)
+        });
+        let mut column_edit: Option<(bool, usize)> = None;
 
         match edit {
             TableEdit::Format => {}
@@ -1894,36 +1923,93 @@ impl MarkdownDocument {
                 }
                 table.alignments.insert(insert_at, TableAlignment::Default);
                 selected_column = insert_at;
+                column_edit = Some((true, insert_at));
             }
             TableEdit::DeleteColumn => {
                 if table.column_count() <= 1 {
                     return None;
                 }
+                let deleted = selected_column;
                 for row in &mut table.rows {
                     row.remove(selected_column);
                 }
                 table.alignments.remove(selected_column);
                 selected_column = selected_column.min(table.column_count().saturating_sub(1));
+                column_edit = Some((false, deleted));
             }
         }
 
         table.normalize();
-        let replacement = format_markdown_table(&table);
+        let table_replacement = format_markdown_table(&table);
         let selection_in_table =
             formatted_table_cell_range(&table, selected_row, selected_column).unwrap_or(0..0);
-        let selected_range = table_range.start + selection_in_table.start
-            ..table_range.start + selection_in_table.end;
 
-        if replacement != table_source {
-            self.apply_current_range(MutationOrigin::TableEdit, table_range.clone(), &replacement);
+        let rewritten_percents = match (column_edit, old_percents) {
+            (Some((true, insert_at)), Some(percents)) => {
+                adjust_column_percents_for_insert(&percents, insert_at)
+            }
+            (Some((false, deleted)), Some(percents)) => {
+                adjust_column_percents_for_delete(&percents, deleted)
+            }
+            _ => None,
+        };
+
+        let (replace_range, replacement, table_start) =
+            if let (Some(comment_range), Some(percents)) =
+                (leading_comment.clone(), rewritten_percents)
+            {
+                let comment = format_table_column_width_comment(&percents);
+                let replacement = format!("{comment}\n{table_replacement}");
+                (
+                    comment_range.start..table_range.end,
+                    replacement,
+                    comment_range.start + comment.len() + 1,
+                )
+            } else {
+                (
+                    table_range.clone(),
+                    table_replacement.clone(),
+                    table_range.start,
+                )
+            };
+
+        let selected_range =
+            table_start + selection_in_table.start..table_start + selection_in_table.end;
+
+        if replacement != self.text[replace_range.clone()] {
+            self.apply_current_range(MutationOrigin::TableEdit, replace_range, &replacement);
         }
 
         Some(TableEditResult {
-            table_range: table_range.start..table_range.start + replacement.len(),
+            table_range: table_start..table_start + table_replacement.len(),
             selected_range,
             row: selected_row,
             column: selected_column,
         })
+    }
+
+    pub fn set_table_column_widths_at(
+        &mut self,
+        byte_index: usize,
+        percents: &[u8],
+    ) -> Option<Range<usize>> {
+        let byte_index = clamp_to_char_boundary(&self.text, byte_index);
+        let table_range = self.table_range_at(byte_index)?;
+        let table = parse_markdown_table(&self.text[table_range.clone()])?;
+        let columns = table.column_count();
+        if percents.len() != columns {
+            return None;
+        }
+        let percents = normalize_column_percents(percents)?;
+        let comment = format_table_column_width_comment(&percents);
+        let line = format!("{comment}\n");
+        let replace_range = leading_table_column_width_comment_range(&self.text, table_range.start)
+            .unwrap_or(table_range.start..table_range.start);
+        if self.text.get(replace_range.clone()) == Some(line.as_str()) {
+            return Some(replace_range.start..replace_range.start + line.len());
+        }
+        self.apply_current_range(MutationOrigin::TableEdit, replace_range.clone(), &line);
+        Some(replace_range.start..replace_range.start + line.len())
     }
 
     fn wrap_inline(
@@ -3636,6 +3722,7 @@ impl MarkdownDocument {
         // export, and sync scroll alike. For documents without nesting the
         // stream is already ordered, so this is a no-op there.
         blocks.sort_by_key(|block| block.source_range().start);
+        absorb_table_column_width_comments(&mut blocks);
 
         (blocks, headings)
     }
@@ -4282,6 +4369,39 @@ fn emit_finished_paragraph(
             source_range: paragraph_range,
         },
     );
+}
+
+fn absorb_table_column_width_comments(blocks: &mut Vec<PreviewBlock>) {
+    let mut index = 0;
+    while index < blocks.len() {
+        if matches!(&blocks[index], PreviewBlock::BlockQuote { .. }) {
+            if let PreviewBlock::BlockQuote { children, .. } = &mut blocks[index] {
+                absorb_table_column_width_comments(children);
+            }
+            index += 1;
+            continue;
+        }
+        let html_start = match &blocks[index] {
+            PreviewBlock::Html {
+                html, source_range, ..
+            } if parse_table_column_width_comment(html).is_some()
+                && blocks
+                    .get(index + 1)
+                    .is_some_and(|next| matches!(next, PreviewBlock::Table { .. })) =>
+            {
+                Some(source_range.start)
+            }
+            _ => None,
+        };
+        if let Some(html_start) = html_start {
+            if let PreviewBlock::Table { source_range, .. } = &mut blocks[index + 1] {
+                source_range.start = html_start;
+            }
+            blocks.remove(index);
+            continue;
+        }
+        index += 1;
+    }
 }
 
 /// True when consecutive `Event::Html` ranges should become one preview
@@ -7052,6 +7172,84 @@ mod tests {
             tables.iter().all(|range| !range.is_empty()),
             "preview table ranges must not be empty placeholders"
         );
+    }
+
+    #[test]
+    fn column_width_comment_is_absorbed_into_the_following_table() {
+        let source = "<!-- markion-cols:30,70 -->\n| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+        assert!(
+            blocks
+                .iter()
+                .all(|block| !matches!(block, PreviewBlock::Html { .. })),
+            "column-width comments must not remain Html islands"
+        );
+        let PreviewBlock::Table {
+            source_range, rows, ..
+        } = &blocks[0]
+        else {
+            panic!("expected absorbed table");
+        };
+        assert_eq!(source_range.start, 0);
+        assert!(source[source_range.clone()].starts_with("<!-- markion-cols:30,70 -->"));
+        assert_eq!(
+            authored_table_column_percents(&source[source_range.clone()], 2),
+            Some(vec![30, 70])
+        );
+        let visual = doc.visual_blocks();
+        let VisualBlockEditor::Table { cells } = visual[0].editor.as_ref().unwrap() else {
+            panic!("expected table editor");
+        };
+        assert_eq!(&source[cells[0].field.source_range.clone()], "A");
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn set_table_column_widths_inserts_and_replaces_comment() {
+        let mut doc = MarkdownDocument::from_text("| A | B |\n| --- | --- |\n| 1 | 2 |");
+        let cursor = doc.text().find('A').unwrap();
+        doc.set_table_column_widths_at(cursor, &[30, 70]).unwrap();
+        assert!(
+            doc.text()
+                .starts_with("<!-- markion-cols:30,70 -->\n| A | B |")
+        );
+        let cursor = doc.text().find('A').unwrap();
+        doc.set_table_column_widths_at(cursor, &[25, 75]).unwrap();
+        assert!(
+            doc.text()
+                .starts_with("<!-- markion-cols:25,75 -->\n| A | B |")
+        );
+        assert_eq!(doc.text().matches("markion-cols").count(), 1);
+    }
+
+    #[test]
+    fn add_column_rewrites_existing_width_comment_in_one_mutation() {
+        let mut doc = MarkdownDocument::from_text(
+            "<!-- markion-cols:40,60 -->\n| A | B |\n| --- | --- |\n| 1 | 2 |",
+        );
+        let cursor = doc.text().find('A').unwrap();
+        doc.edit_table_at(cursor, TableEdit::AddColumn).unwrap();
+        assert_eq!(doc.text().matches("markion-cols").count(), 1);
+        let comment_line = doc.text().lines().next().unwrap();
+        let percents = crate::table::parse_table_column_width_comment(comment_line).unwrap();
+        assert_eq!(percents.len(), 3);
+        assert_eq!(percents.iter().map(|value| *value as u16).sum::<u16>(), 100);
+    }
+
+    #[test]
+    fn markdown_format_rejects_cross_cell_table_selection() {
+        let source = "| A | B |\n| --- | --- |\n| hello | world |";
+        let mut doc = MarkdownDocument::from_text(source);
+        let hello = source.find("hello").unwrap();
+        let world = source.find("world").unwrap();
+        let range = doc.apply_markdown_format(hello..world + 5, MarkdownFormat::Bold);
+        assert_eq!(doc.text(), source);
+        assert_eq!(range, hello..world + 5);
+
+        let wrapped = doc.apply_markdown_format(hello..hello + 5, MarkdownFormat::Bold);
+        assert!(doc.text().contains("| **hello** | world |"));
+        assert_eq!(&doc.text()[wrapped.clone()], "hello");
     }
 
     #[test]
