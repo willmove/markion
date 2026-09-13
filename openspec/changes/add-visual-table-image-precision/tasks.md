@@ -27,4 +27,4 @@
 ## 6. Docs and verification
 
 - [x] 6.1 Update `docs/visual-editing-quality.md` and the README limitation bullets for cell format controls, column-width comments, and image drag-resize
-- [ ] 6.2 Run `cargo fmt --all -- --check`, `openspec validate add-visual-table-image-precision`, and `cargo test --workspace` (fix regressions in table/image/format tests only)
+- [x] 6.2 Run `cargo fmt --all -- --check`, `openspec validate add-visual-table-image-precision`, and `cargo test --workspace` (fix regressions in table/image/format tests only)
