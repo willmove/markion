@@ -48,12 +48,13 @@ use markion::{
     ViewMode, VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity,
     VisualEditorField, VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget,
     VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind, WorkspaceSnapshot,
-    adjacent_reorder_target, auto_pair_action, backend_status_msg, block_can_reorder_at,
-    block_can_transform_at, build_publishing_snapshot, build_visual_projection,
-    build_visual_projection_with_marked_range, builtin_diagram_registry, builtin_theme_definitions,
-    bundled_resource_path, check_path_state, data_uri_payload_ranges, default_git_sync_policy_path,
-    default_preferences_path, default_recovery_dir, default_session_path, default_themes_dir,
-    delete_block, delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
+    adjacent_reorder_target, authored_table_column_percents, auto_pair_action, backend_status_msg,
+    block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
+    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
+    builtin_theme_definitions, bundled_resource_path, check_path_state, clamp_image_width_percent,
+    data_uri_payload_ranges, default_git_sync_policy_path, default_preferences_path,
+    default_recovery_dir, default_session_path, default_themes_dir, delete_block,
+    delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
     emoji_confirm_replacement, emoji_query_at, emoji_shortcodes_matching, highlight_code,
     html_preview_parts, html_preview_plain_text, html_table_column_weights,
     html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
@@ -63,11 +64,13 @@ use markion::{
     markdown_reference, normalize_auto_save_delay_secs, normalize_code_font_size,
     normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
     normalize_rendered_font_size, organize_candidates, p0_t, p0_tf, p1_t, p1_tf, pandoc_available,
-    read_document_source, reorder_block, resolve_font_family, resolve_html_img_display_size,
-    save_app_preferences, save_session_state, save_text_snapshot, save_theme_definition,
-    serialize_inline_image, serialize_inline_link, shortcut_catalog, sidebar_tab_label,
-    slash_command_edit, slash_query_at, t, table_column_flex_weights, task_checkbox_toggle, tf,
-    title_from_path, transform_block, validate_block_target, workspace_relative_path,
+    percents_from_flex_weights, read_document_source, redistribute_adjacent_column_percents,
+    reorder_block, resolve_font_family, resolve_html_img_display_size, save_app_preferences,
+    save_session_state, save_text_snapshot, save_theme_definition, serialize_inline_image,
+    serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
+    snap_image_width_percent, t, table_column_flex_weights,
+    table_column_flex_weights_with_authored, table_column_width_prefix_len, task_checkbox_toggle,
+    tf, title_from_path, transform_block, validate_block_target, workspace_relative_path,
 };
 use markion_git_sync::{
     BackgroundFetchScheduler, ExclusiveAdmission, GitOperationRegistry, PolicyStore, ReadEpoch,
@@ -1868,6 +1871,18 @@ fn document_tab_band_height(tab_count: usize) -> f32 {
 struct DraggedEditorSplitHandle;
 #[derive(Debug, Clone)]
 struct DraggedSidebarHandle;
+#[derive(Debug, Clone)]
+struct DraggedTableColumnHandle {
+    block_id: VisualBlockId,
+    left_column: usize,
+    document_version: u64,
+    table_offset: usize,
+}
+#[derive(Debug, Clone)]
+struct DraggedImageResizeHandle {
+    offset: usize,
+    document_version: u64,
+}
 #[derive(Debug, Clone)]
 struct DraggedVisualBlock {
     target: BlockTarget,
