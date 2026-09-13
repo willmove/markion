@@ -63,7 +63,8 @@ Switching modes preserves the active document, cursor and selection, undo histor
 
 Rendered preview supports:
 
-- Bold, italic, strikethrough, inline code, links, highlights, superscript, subscript, footnotes, task lists, common emoji shortcodes, and automatic links.
+- Bold, italic, strikethrough, inline code, links, highlights, superscript, subscript, footnotes (hover a reference to read its definition), task lists, common emoji shortcodes, and automatic links.
+- In-document `[TOC]` / `[toc]` tokens rendered as a live, clickable outline, and `[text](#heading)` / `{#id}` heading jumps that stay inside the document.
 - Correct ordered-list start numbers, nested lists, per-depth bullets, hanging indentation, images, and embedded HTML.
 - Selectable preview text with a context menu for copying as plain text, Markdown, or HTML, plus link-address copying where applicable.
 - `$...$` inline math and `$$...$$` block math, typeset offline into cached SVG by an embedded RaTeX (KaTeX-compatible) engine with bundled fonts — no network access or external LaTeX install required.

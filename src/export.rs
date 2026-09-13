@@ -265,7 +265,7 @@ fn pdf_single_block(
         PreviewBlock::Table {
             rows, alignments, ..
         } => pdf_table_block(rows, alignments, footnotes),
-        PreviewBlock::FootnoteDefinition { .. } => None,
+        PreviewBlock::FootnoteDefinition { .. } | PreviewBlock::TableOfContents { .. } => None,
         PreviewBlock::Html { .. } => {
             unreachable!("Html blocks are handled by pdf_blocks_from_preview_block")
         }
@@ -1687,6 +1687,9 @@ fn render_docx_block(state: &mut DocxRenderState, block: &PreviewBlock) {
         PreviewBlock::FootnoteDefinition { .. } => {
             state.end_list_group();
         }
+        PreviewBlock::TableOfContents { .. } => {
+            state.end_list_group();
+        }
         PreviewBlock::Table {
             rows, alignments, ..
         } => {
@@ -1823,6 +1826,7 @@ fn bolded(rich: &RichText) -> RichText {
                 link: None,
                 math: None,
                 image: None,
+                footnote: None,
             });
         }
         return rich;
@@ -2809,6 +2813,7 @@ mod tests {
                 link: None,
                 math: None,
                 image: None,
+                footnote: None,
             }],
         };
         let runs = state.rich_runs(&rich);
@@ -2829,6 +2834,7 @@ mod tests {
                 link: Some(String::new()),
                 math: None,
                 image: None,
+                footnote: None,
             }],
         };
         let runs = state.rich_runs(&rich);

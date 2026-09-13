@@ -12074,6 +12074,135 @@ fn outline_navigation_visual_edit_top_aligns_heading_block(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn hash_link_activation_jumps_without_mutating_or_opening_url(cx: &mut TestAppContext) {
+    let source = "## Hello\n\n[go](#hello)\n";
+    let heading_offset = source.find("## Hello").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut tab = EditorTab::new(MarkdownDocument::from_text(source));
+        let preview = tab.document.preview_blocks_shared();
+        tab.sync_preview_list(&preview);
+        tab.push_undo_snapshot();
+        app.tabs = vec![tab];
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.view_mode = ViewMode::Read;
+        let version = app.active_tab().document.version();
+        let dirty = app.active_tab().document.is_dirty();
+        let undo_len = app.active_tab().undo_stack.len();
+        app.activate_document_or_external_link("#hello", cx);
+        let tab = app.active_tab();
+        assert_eq!(tab.selected_range, heading_offset..heading_offset);
+        assert_eq!(tab.document.text(), source);
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.document.is_dirty(), dirty);
+        assert_eq!(tab.undo_stack.len(), undo_len);
+        app.view_mode = ViewMode::VisualEdit;
+        app.activate_visual_navigation(
+            &VisualNavigationTarget::Heading {
+                anchor: "hello".into(),
+            },
+            cx,
+        );
+        let tab = app.active_tab();
+        assert_eq!(tab.selected_range, heading_offset..heading_offset);
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.document.text(), source);
+    });
+}
+
+#[gpui::test]
+fn toc_entry_click_jumps_without_mutating_source(cx: &mut TestAppContext) {
+    let source = "# Alpha\n\n[TOC]\n\n## Beta\n\nBody\n";
+    let heading_offset = source.find("## Beta").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut tab = EditorTab::new(MarkdownDocument::from_text(source));
+        let preview = tab.document.preview_blocks_shared();
+        tab.sync_preview_list(&preview);
+        tab.push_undo_snapshot();
+        app.tabs = vec![tab];
+        app.view_mode = ViewMode::Read;
+        app
+    });
+    cx.simulate_resize(size(px(1000.), px(720.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (version, dirty, undo_len, redo_len) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.undo_stack.len(),
+            tab.redo_stack.len(),
+        )
+    });
+
+    let label = cx
+        .debug_bounds("preview-toc-heading-1")
+        .expect("TOC heading entry should be rendered");
+    cx.simulate_click(label.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.selected_range, heading_offset..heading_offset);
+        assert_eq!(tab.document.text(), source);
+        assert!(tab.document.text().contains("[TOC]"));
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.document.is_dirty(), dirty);
+        assert_eq!(tab.undo_stack.len(), undo_len);
+        assert_eq!(tab.redo_stack.len(), redo_len);
+        assert_eq!(
+            tab.document.current_heading_index(tab.cursor_offset()),
+            Some(1)
+        );
+    });
+}
+
+#[gpui::test]
+fn footnote_definition_lookup_is_presentation_only(cx: &mut TestAppContext) {
+    let source = "See the note[^details].\n\n[^details]: Footnote body\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut tab = EditorTab::new(MarkdownDocument::from_text(source));
+        tab.push_undo_snapshot();
+        app.tabs = vec![tab];
+        app
+    });
+
+    app.update(cx, |app, _| {
+        let version = app.active_tab().document.version();
+        let dirty = app.active_tab().document.is_dirty();
+        let undo_len = app.active_tab().undo_stack.len();
+        assert_eq!(
+            app.active_tab()
+                .document
+                .footnote_definition_text("details")
+                .as_deref(),
+            Some("Footnote body")
+        );
+        assert_eq!(
+            app.active_tab()
+                .document
+                .footnote_definition_text("missing"),
+            None
+        );
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), source);
+        assert_eq!(tab.document.version(), version);
+        assert_eq!(tab.document.is_dirty(), dirty);
+        assert_eq!(tab.undo_stack.len(), undo_len);
+    });
+}
+
+#[gpui::test]
 fn outline_disclosures_fold_nested_rows_without_navigation(cx: &mut TestAppContext) {
     let source = "# Root\n\n## Branch\n\n### Leaf\n\n## Other\n\n# Sibling\n";
     let leaf_offset = source.find("### Leaf").unwrap();

@@ -1206,6 +1206,7 @@ fn visual_block_from_preview(
             Some(VisualSourceIslandKind::Image),
         ),
         PreviewBlock::Rule { .. } => (VisualBlockKind::Rule, None),
+        PreviewBlock::TableOfContents { .. } => (VisualBlockKind::TableOfContents, None),
         PreviewBlock::Table {
             rows, alignments, ..
         } => (
@@ -1657,6 +1658,13 @@ fn fenced_payload_ranges(
     ))
 }
 
+fn navigation_target_for_destination(url: &str) -> VisualNavigationTarget {
+    match crate::parse::document_heading_fragment(url) {
+        Some(anchor) => VisualNavigationTarget::Heading { anchor },
+        None => VisualNavigationTarget::Url(url.to_string()),
+    }
+}
+
 fn dollar_math_payload_ranges(
     text: &str,
     source_range: Range<usize>,
@@ -1874,7 +1882,7 @@ fn inline_runs(
         let current_link_target = current_link.as_ref().and_then(|(range, _)| range.clone());
         let current_link_nav = current_link
             .as_ref()
-            .map(|(_, url)| VisualNavigationTarget::Url(url.clone()));
+            .map(|(_, url)| navigation_target_for_destination(url));
         let is_leaf_event = matches!(
             event,
             Event::Text(_)
@@ -6687,6 +6695,83 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
                     if url == "https://github.com/willmove/markion"
             )),
             "inline link must expose a URL navigation target"
+        );
+    }
+
+    #[test]
+    fn hash_link_projects_heading_navigation_target() {
+        let source =
+            "## Hello\n\n[go](#hello)\n\n[missing](#nope)\n\n[web](https://example.com#hello)\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let hello = blocks
+            .iter()
+            .find(|block| {
+                matches!(block.kind, VisualBlockKind::Paragraph)
+                    && source[block.source_range.clone()].contains("[go](#hello)")
+            })
+            .expect("hash-link paragraph");
+        assert!(
+            hello.editable_runs.iter().any(|run| {
+                matches!(
+                    &run.navigation,
+                    Some(VisualNavigationTarget::Heading { anchor }) if anchor == "hello"
+                )
+            }),
+            "bare #hello must become a heading navigation target"
+        );
+        let missing = blocks
+            .iter()
+            .find(|block| {
+                matches!(block.kind, VisualBlockKind::Paragraph)
+                    && source[block.source_range.clone()].contains("[missing](#nope)")
+            })
+            .expect("unresolved hash-link paragraph");
+        assert!(
+            missing.editable_runs.iter().any(|run| {
+                matches!(
+                    &run.navigation,
+                    Some(VisualNavigationTarget::Heading { anchor }) if anchor == "nope"
+                )
+            }),
+            "unresolved fragments still attach a heading target"
+        );
+        let web = blocks
+            .iter()
+            .find(|block| {
+                matches!(block.kind, VisualBlockKind::Paragraph)
+                    && source[block.source_range.clone()].contains("https://example.com#hello")
+            })
+            .expect("external hash paragraph");
+        assert!(
+            web.editable_runs.iter().any(|run| {
+                matches!(
+                    &run.navigation,
+                    Some(VisualNavigationTarget::Url(url))
+                        if url == "https://example.com#hello"
+                )
+            }),
+            "external URLs with fragments stay URL targets"
+        );
+    }
+
+    #[test]
+    fn toc_token_projects_table_of_contents_kind() {
+        let source = "# Hello\n\n[TOC]\n\n- [TOC]\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        assert!(
+            blocks
+                .iter()
+                .any(|block| matches!(block.kind, VisualBlockKind::TableOfContents)),
+            "standalone [TOC] must become a Visual Edit TOC widget"
+        );
+        assert!(
+            blocks.iter().any(|block| {
+                matches!(block.kind, VisualBlockKind::ListItem { .. })
+                    && source[block.source_range.clone()].contains("[TOC]")
+            }),
+            "list-item [TOC] must stay a list item"
         );
     }
 

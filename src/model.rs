@@ -1294,6 +1294,8 @@ pub struct InlineSpan {
     pub link: Option<String>,
     pub math: Option<MathSource>,
     pub image: Option<InlineImage>,
+    /// Footnote reference label (`[^label]`). Distinct from superscript.
+    pub footnote: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1411,6 +1413,8 @@ pub enum VisualBlockKind {
     FootnoteDefinition {
         label: String,
     },
+    /// Typora-style `[TOC]` paragraph rendered as a live outline.
+    TableOfContents,
     /// Standalone link reference definition line(s) (`[label]: url`).
     ReferenceDefinition,
     /// Whitespace-only source not owned by a parsed preview block. Visual Edit
@@ -1464,6 +1468,7 @@ pub struct VisualHtmlImage {
 pub enum VisualNavigationTarget {
     Url(String),
     Footnote { label: String },
+    Heading { anchor: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1747,6 +1752,7 @@ impl RichText {
                 link: None,
                 math: None,
                 image: None,
+                footnote: None,
             }],
             text,
         }
@@ -1858,6 +1864,10 @@ pub enum PreviewBlock {
         text: RichText,
         source_range: Range<usize>,
     },
+    /// Standalone `[TOC]` / `[toc]` paragraph. Source stays the token.
+    TableOfContents {
+        source_range: Range<usize>,
+    },
 }
 
 impl PreviewBlock {
@@ -1874,7 +1884,8 @@ impl PreviewBlock {
             | Self::Image { source_range, .. }
             | Self::Rule { source_range }
             | Self::Table { source_range, .. }
-            | Self::FootnoteDefinition { source_range, .. } => source_range,
+            | Self::FootnoteDefinition { source_range, .. }
+            | Self::TableOfContents { source_range } => source_range,
         }
     }
 
@@ -1896,7 +1907,7 @@ impl PreviewBlock {
             Self::MathBlock { latex, .. } => latex.clone(),
             Self::Html { html, .. } => html.clone(),
             Self::Image { alt, .. } => alt.clone(),
-            Self::Rule { .. } => String::new(),
+            Self::Rule { .. } | Self::TableOfContents { .. } => String::new(),
             Self::Table { rows, .. } => rows
                 .iter()
                 .flat_map(|row| row.iter())

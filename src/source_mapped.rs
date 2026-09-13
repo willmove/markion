@@ -741,7 +741,8 @@ pub(crate) fn shift_preview_block(block: &mut PreviewBlock, delta: isize) -> Opt
         | PreviewBlock::Html { source_range, .. }
         | PreviewBlock::Image { source_range, .. }
         | PreviewBlock::Rule { source_range }
-        | PreviewBlock::Table { source_range, .. } => {
+        | PreviewBlock::Table { source_range, .. }
+        | PreviewBlock::TableOfContents { source_range } => {
             *source_range = shift_range(source_range, delta)?;
         }
     }

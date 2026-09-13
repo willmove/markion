@@ -249,8 +249,9 @@ pub use i18n::{
 pub use math::{render_math, validate_latex};
 pub use parse::{
     HtmlAlign, HtmlListMarker, HtmlPreviewPart, HtmlTableCell, HtmlTableCellImage, HtmlTableGrid,
-    html_image_descriptors, html_preview_parts, html_preview_plain_text, html_table_column_weights,
-    html_table_grid_line_end, html_table_row_has_visible_header, resolve_html_img_display_size,
+    document_heading_fragment, html_image_descriptors, html_preview_parts, html_preview_plain_text,
+    html_table_column_weights, html_table_grid_line_end, html_table_row_has_visible_header,
+    resolve_html_img_display_size,
 };
 pub use publishing::build_publishing_snapshot;
 
@@ -276,10 +277,11 @@ use table::{
 
 use parse::{
     ImageDraft, InlineStateDraft, ListItemDestination, ListItemDraft, ListLevelDraft,
-    append_preview_image, append_span, clean_preview_text, coalesced_offset_events,
-    finish_rich_text, flush_list_item, gfm_alert_kind, heading_level_to_u8, markdown_options,
-    push_nonempty_block, push_preview_math, push_preview_rich, render_extended_html_text_nodes,
-    slugify, standalone_inline_images,
+    absorb_table_of_contents, append_preview_image, append_span, clean_preview_text,
+    coalesced_offset_events, finish_rich_text, flush_list_item, gfm_alert_kind,
+    heading_anchor_base, heading_level_to_u8, markdown_options, push_nonempty_block,
+    push_preview_footnote, push_preview_math, push_preview_rich, render_extended_html_text_nodes,
+    standalone_inline_images, uniquify_heading_anchors,
 };
 
 use diagram::collect_html_diagrams;
@@ -2497,6 +2499,7 @@ impl MarkdownDocument {
                     output.push_str("\\end{figure}\n\n");
                 }
                 PreviewBlock::Rule { .. } => output.push_str("\\hrule\n\n"),
+                PreviewBlock::TableOfContents { .. } => {}
                 PreviewBlock::FootnoteDefinition { label, text, .. } => {
                     output.push_str(&format!(
                         "[{}] {}\n\n",
@@ -3056,7 +3059,7 @@ impl MarkdownDocument {
             .unwrap_or((text, 0));
         let mut blocks = Vec::new();
         let mut headings: Vec<Heading> = Vec::new();
-        let mut outline_current: Option<(u8, usize, String)> = None;
+        let mut outline_current: Option<(u8, usize, String, Option<String>)> = None;
         let mut heading: Option<(u8, Vec<InlineSpan>, std::ops::Range<usize>)> = None;
         let mut paragraph: Option<(Vec<InlineSpan>, std::ops::Range<usize>)> = None;
         let mut quote_depth = 0usize;
@@ -3075,10 +3078,16 @@ impl MarkdownDocument {
         for (event, range) in coalesced_offset_events(body, markdown_options()) {
             let source_range = body_offset + range.start..body_offset + range.end;
             match event {
-                Event::Start(Tag::Heading { level, .. }) => {
+                Event::Start(Tag::Heading { level, id, .. }) => {
                     let level = heading_level_to_u8(level);
                     heading = Some((level, Vec::new(), source_range.clone()));
-                    outline_current = Some((level, source_range.start, String::new()));
+                    outline_current = Some((
+                        level,
+                        source_range.start,
+                        String::new(),
+                        id.filter(|value| !value.is_empty())
+                            .map(|value| value.to_string()),
+                    ));
                 }
                 Event::End(TagEnd::Heading(_)) => {
                     if let Some((level, spans, heading_range)) = heading.take() {
@@ -3091,10 +3100,10 @@ impl MarkdownDocument {
                             },
                         );
                     }
-                    if let Some((level, offset, title)) = outline_current.take() {
+                    if let Some((level, offset, title, authored_id)) = outline_current.take() {
                         headings.push(Heading {
                             level,
-                            anchor: slugify(&title),
+                            anchor: heading_anchor_base(authored_id.as_deref(), &title),
                             offset,
                             title,
                         });
@@ -3419,14 +3428,14 @@ impl MarkdownDocument {
                         inline.link(),
                         true,
                     );
-                    if let Some((_, _, title)) = outline_current.as_mut() {
+                    if let Some((_, _, title, _)) = outline_current.as_mut() {
                         title.push_str(&text);
                     }
                 }
                 Event::Code(text) => {
                     let mut style = inline.style();
                     style.code = true;
-                    if let Some((_, _, title)) = outline_current.as_mut() {
+                    if let Some((_, _, title, _)) = outline_current.as_mut() {
                         title.push_str(&text);
                     }
                     push_preview_rich(
@@ -3523,19 +3532,15 @@ impl MarkdownDocument {
                 Event::FootnoteReference(text) => {
                     let mut style = inline.style();
                     style.superscript = true;
-                    push_preview_rich(
+                    push_preview_footnote(
                         &mut heading,
                         &mut paragraph,
                         &mut quote,
                         quote_depth,
                         &mut list_item,
-                        &mut image,
-                        &mut code,
                         &mut table,
                         &text,
                         style,
-                        inline.link(),
-                        false,
                     );
                 }
                 Event::InlineMath(latex) => {
@@ -3636,6 +3641,8 @@ impl MarkdownDocument {
         // export, and sync scroll alike. For documents without nesting the
         // stream is already ordered, so this is a no-op there.
         blocks.sort_by_key(|block| block.source_range().start);
+        absorb_table_of_contents(&mut blocks);
+        uniquify_heading_anchors(&mut headings);
 
         (blocks, headings)
     }
@@ -3741,27 +3748,29 @@ impl MarkdownDocument {
     fn compute_outline_only(&self) -> Vec<Heading> {
         let (body, body_offset) = self.body_text_and_offset();
         let mut headings = Vec::new();
-        let mut current: Option<(u8, usize, String)> = None;
+        let mut current: Option<(u8, usize, String, Option<String>)> = None;
 
         for (event, range) in Parser::new_ext(body, markdown_options()).into_offset_iter() {
             match event {
-                Event::Start(Tag::Heading { level, .. }) => {
+                Event::Start(Tag::Heading { level, id, .. }) => {
                     current = Some((
                         heading_level_to_u8(level),
                         body_offset + range.start,
                         String::new(),
+                        id.filter(|value| !value.is_empty())
+                            .map(|value| value.to_string()),
                     ));
                 }
                 Event::Text(text) | Event::Code(text) => {
-                    if let Some((_, _, title)) = current.as_mut() {
+                    if let Some((_, _, title, _)) = current.as_mut() {
                         title.push_str(&text);
                     }
                 }
                 Event::End(TagEnd::Heading(_)) => {
-                    if let Some((level, offset, title)) = current.take() {
+                    if let Some((level, offset, title, authored_id)) = current.take() {
                         headings.push(Heading {
                             level,
-                            anchor: slugify(&title),
+                            anchor: heading_anchor_base(authored_id.as_deref(), &title),
                             offset,
                             title,
                         });
@@ -3770,6 +3779,7 @@ impl MarkdownDocument {
                 _ => {}
             }
         }
+        uniquify_heading_anchors(&mut headings);
         headings
     }
 
@@ -3780,6 +3790,29 @@ impl MarkdownDocument {
             .take_while(|(_, heading)| heading.offset <= offset)
             .map(|(index, _)| index)
             .last()
+    }
+
+    pub fn heading_offset_for_anchor(&self, anchor: &str) -> Option<usize> {
+        let needle = anchor.trim();
+        if needle.is_empty() {
+            return None;
+        }
+        self.outline()
+            .into_iter()
+            .find(|heading| heading.anchor == needle)
+            .map(|heading| heading.offset)
+    }
+
+    /// Definition body for a footnote label, if the document defines one.
+    pub fn footnote_definition_text(&self, label: &str) -> Option<String> {
+        let needle = label.trim();
+        if needle.is_empty() {
+            return None;
+        }
+        self.footnotes()
+            .into_iter()
+            .find(|note| note.label == needle)
+            .map(|note| note.text)
     }
 
     pub fn search(&self, needle: &str) -> Vec<SearchMatch> {
@@ -4787,6 +4820,100 @@ mod tests {
     }
 
     #[test]
+    fn heading_anchors_prefer_authored_ids_uniquify_and_keep_cjk() {
+        let doc = MarkdownDocument::from_text(
+            "## Hello {#custom}\n\n## Hello\n\n## Hello\n\n## 中文标题\n\n#\n",
+        );
+        let outline = doc.outline();
+        assert_eq!(outline[0].anchor, "custom");
+        assert_eq!(outline[1].anchor, "hello");
+        assert_eq!(outline[2].anchor, "hello-1");
+        assert_eq!(outline[3].anchor, "中文标题");
+        assert_eq!(outline[4].anchor, "section");
+        assert_eq!(
+            doc.heading_offset_for_anchor("custom"),
+            Some(outline[0].offset)
+        );
+        assert_eq!(
+            doc.heading_offset_for_anchor("hello-1"),
+            Some(outline[2].offset)
+        );
+        assert_eq!(
+            doc.heading_offset_for_anchor("中文标题"),
+            Some(outline[3].offset)
+        );
+    }
+
+    #[test]
+    fn toc_token_becomes_table_of_contents_and_keeps_source() {
+        let source = "# Hello\n\n[TOC]\n\n## Nested\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+        assert!(
+            matches!(blocks[1], PreviewBlock::TableOfContents { .. }),
+            "standalone [TOC] must become a table-of-contents widget, got {:?}",
+            blocks[1]
+        );
+        assert_eq!(doc.text(), source);
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| matches!(block, PreviewBlock::Paragraph { text, .. } if is_toc_marker_text(&text.text))),
+            "TOC token must not remain a paragraph"
+        );
+    }
+
+    fn is_toc_marker_text(text: &str) -> bool {
+        text.trim().eq_ignore_ascii_case("[toc]")
+    }
+
+    #[test]
+    fn list_item_toc_stays_ordinary_text() {
+        let doc = MarkdownDocument::from_text("- [TOC]\n");
+        let blocks = doc.preview_blocks();
+        assert!(
+            matches!(
+                &blocks[0],
+                PreviewBlock::ListItem { text, .. } if text.text == "[TOC]"
+            ),
+            "list-item [TOC] must stay a list item, got {:?}",
+            blocks[0]
+        );
+    }
+
+    #[test]
+    fn quoted_toc_token_is_absorbed() {
+        let doc = MarkdownDocument::from_text("> [toc]\n");
+        let PreviewBlock::BlockQuote { children, .. } = &doc.preview_blocks()[0] else {
+            panic!("expected quote, got {:?}", doc.preview_blocks());
+        };
+        assert!(
+            matches!(children.as_slice(), [PreviewBlock::TableOfContents { .. }]),
+            "quoted [TOC] must become a TOC widget, got {children:?}"
+        );
+    }
+
+    #[test]
+    fn footnote_reference_span_carries_label() {
+        let doc = MarkdownDocument::from_text("See[^note].\n\n[^note]: body text\n");
+        let PreviewBlock::Paragraph { text, .. } = &doc.preview_blocks()[0] else {
+            panic!("expected paragraph, got {:?}", doc.preview_blocks());
+        };
+        assert!(
+            text.spans
+                .iter()
+                .any(|span| span.footnote.as_deref() == Some("note")),
+            "footnote reference must keep its label, got {:?}",
+            text.spans
+        );
+        assert_eq!(
+            doc.footnote_definition_text("note").as_deref(),
+            Some("body text")
+        );
+        assert_eq!(doc.footnote_definition_text("missing"), None);
+    }
+
+    #[test]
     fn edits_at_utf8_boundaries() {
         let mut doc = MarkdownDocument::from_text("a文c");
         doc.insert(2, "字");
@@ -5701,6 +5828,7 @@ mod tests {
                         link: None,
                         math: None,
                         image: None,
+                        footnote: None,
                     },
                     InlineSpan {
                         text: " text.".into(),
