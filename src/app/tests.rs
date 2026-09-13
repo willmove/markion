@@ -1409,7 +1409,8 @@ fn startup_application_flow_reuses_existing_open_behaviour() {
 #[test]
 fn backup_sync_center_is_transient_responsive_and_keyboard_operable() {
     let root = include_str!("root_view.rs");
-    let panel = include_str!("git_panel.rs");
+    // `include_str!` follows checkout line endings; Windows CI may check out CRLF.
+    let panel = include_str!("git_panel.rs").replace("\r\n", "\n");
 
     assert!(root.contains("self.git_ui.center_open"));
     assert!(root.contains("git_panel::center_view(self, cx)"));
@@ -18615,10 +18616,14 @@ fn file_tree_drop_remaps_clean_tab_and_refuses_dirty(cx: &mut TestAppContext) {
         app.handle_file_tree_drop(&path, &archive, cx);
     });
     let moved = archive.join("daily.md");
+    let moved_cmp = comparable_document_path(&moved);
     app.update(cx, |app, _| {
         assert!(moved.exists());
         assert!(!path.exists());
-        assert_eq!(app.tabs[0].path(), Some(moved.as_path()));
+        assert_eq!(
+            app.tabs[0].path().map(comparable_document_path),
+            Some(moved_cmp.clone())
+        );
         assert_eq!(app.tabs[0].document.text(), "# Daily");
         assert_eq!(
             app.status,
