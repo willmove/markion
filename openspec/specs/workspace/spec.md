@@ -5,10 +5,10 @@
 Covers the file tree panel and the auto-save / crash-recovery subsystem. The file tree supports left-drag moves into folders or the workspace root, plus Copy Path and Copy Relative Path on file and folder context menus.
 ## Requirements
 ### Requirement: File tree panel with filename filtering
-The editor SHALL provide a toggleable file tree panel whose workspace root can be established either by explicitly choosing File → Open Folder or, when opening supported content outside the current workspace, from that content's parent directory. The panel SHALL display Markdown files (`.md`/`.markdown`/`.mdown`), a curated set of plain-text files (`.txt`, `.text`, `.log`, `.csv`, `.tsv`, `.org`, `.rst`, `.adoc`, `.asciidoc`), and supported image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`, `.svg`) nested under their containing folders. It SHALL list folders that exist on disk even when they contain no supported files, open Markdown and plain-text files on click as UTF-8 text, open supported image files on click as read-only images, mark the current file, support filename filtering, and support basic create / rename / delete / refresh operations for files and folders. Create File, Create Folder, and Rename SHALL collect a name through an in-app inline name editor: the editor renders inside the panel in place of the renamed row or directly below the parent folder row for create actions, and falls back to the top of the panel when that row is not visible; the editor is also rendered as a labeled prompt under the tab bar when the Files panel is hidden. Editing keys and clicks SHALL act on the name buffer only and SHALL NOT move the document caret or selection. Deleting a folder SHALL remove it recursively, including all of its contents, gated by a second confirmation for non-empty folders. Directories on a hard-coded ignore list (version-control, build-output, dependency/cache, and IDE directories) and hidden directories (whose name begins with `.`) SHALL NOT be listed. Other unsupported files (binaries, source code, and unsupported image formats) SHALL NOT appear in the tree. An explicitly selected workspace root SHALL be preserved while contained files are opened. The panel SHALL NOT scan the working directory on startup while only the in-memory welcome document is open; instead it SHALL show an empty-state placeholder until a file or folder is opened. The panel SHALL let the user move a listed file or folder into another listed folder or the workspace root by left-dragging it onto that folder, onto a file inside that folder, or onto the workspace root. File and folder context menus SHALL include Copy Path and Copy Relative Path.
+The editor SHALL provide a toggleable file tree panel whose workspace root can be established by explicitly choosing File → Open Folder, by opening supported content outside the current workspace (from that content's parent directory), by restoring a previous session's workspace root on launch, or by a CLI folder open intent. The panel SHALL display Markdown files (`.md`/`.markdown`/`.mdown`), a curated set of plain-text files (`.txt`, `.text`, `.log`, `.csv`, `.tsv`, `.org`, `.rst`, `.adoc`, `.asciidoc`), and supported image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`, `.svg`) nested under their containing folders. It SHALL list folders that exist on disk even when they contain no supported files, open Markdown and plain-text files on click as UTF-8 text, open supported image files on click as read-only images, mark the current file, support filename filtering, and support basic create / rename / delete / refresh operations for files and folders. Create File, Create Folder, and Rename SHALL collect a name through an in-app inline name editor: the editor renders inside the panel in place of the renamed row or directly below the parent folder row for create actions, and falls back to the top of the panel when that row is not visible; the editor is also rendered as a labeled prompt under the tab bar when the Files panel is hidden. Editing keys and clicks SHALL act on the name buffer only and SHALL NOT move the document caret or selection. Deleting a folder SHALL remove it recursively, including all of its contents, gated by a second confirmation for non-empty folders. Directories on a hard-coded ignore list (version-control, build-output, dependency/cache, and IDE directories) and hidden directories (whose name begins with `.`) SHALL NOT be listed. Other unsupported files (binaries, source code, and unsupported image formats) SHALL NOT appear in the tree. An explicitly selected workspace root SHALL be preserved while contained files are opened. The panel SHALL NOT scan the working directory on startup while only the in-memory welcome document is open and no session or CLI workspace root is available; instead it SHALL show an empty-state placeholder until a file or folder is opened or a session workspace root is restored. The panel SHALL let the user move a listed file or folder into another listed folder or the workspace root by left-dragging it onto that folder, onto a file inside that folder, or onto the workspace root. File and folder context menus SHALL include Copy Path and Copy Relative Path.
 
 #### Scenario: Workspace scan displays supported files
-- **WHEN** a workspace root is established via File → Open Folder, the File → Open dialog, the sidebar, or Save As
+- **WHEN** a workspace root is established via File → Open Folder, the File → Open dialog, the sidebar, Save As, session restore, or a CLI folder open intent
 - **THEN** the file tree scans the applicable root on a background executor, displays Markdown, curated plain-text, and supported image files nested under the folders that contain them, lists folders that exist on disk even when empty, and renders a bounded number of rows per frame
 - **AND** unsupported files and ignored or hidden directories are not listed
 
@@ -27,7 +27,7 @@ The editor SHALL provide a toggleable file tree panel whose workspace root can b
 - **THEN** the directory is still listed in the file tree as a nesting row
 
 #### Scenario: Empty state on startup
-- **WHEN** the editor launches with the in-memory welcome document and no file or folder is open
+- **WHEN** the editor launches with the in-memory welcome document and no file, folder, session workspace root, or CLI workspace root is available
 - **THEN** the file tree does not scan the working directory and shows an empty-state placeholder instead of the directory hierarchy
 
 #### Scenario: Open folder establishes the workspace and reveals Files
@@ -347,6 +347,50 @@ The tab-context-menu Rename action SHALL rename the tab's file on disk through t
 
 - **WHEN** the user picks Rename on a tab with unsaved changes
 - **THEN** no prompt opens and a status message instructs the user to save first
+
+### Requirement: Session restore for workspace root and open documents
+The editor SHALL persist a session snapshot containing the current file-tree workspace root (when one is established), the ordered list of open saved Markdown document paths, and the active document path when it has a file path. The snapshot SHALL be stored in a dedicated `session.toml` under the Markion config directory, separate from `config.toml`. On launch with no CLI file/folder open intent, the editor SHALL restore that session: re-establish a still-valid workspace root and scan it asynchronously, reopen still-existing Markdown document paths as tabs, and focus the restored active document when it is among the reopened tabs. Untitled or recovery-only tabs SHALL NOT be written into the session snapshot. Missing paths SHALL be skipped on restore. Crash-recovery prompting SHALL continue to run after session restore. A CLI file or folder open intent SHALL take precedence over the conflicting session fields for that launch while still allowing the recent-files list to load.
+
+#### Scenario: Workspace root restores on launch
+- **WHEN** the previous session recorded a workspace root that still exists and the app launches without a CLI open intent
+- **THEN** that directory becomes the file-tree workspace root and is scanned asynchronously
+- **AND** the Files panel shows the restored workspace instead of the empty-state placeholder
+
+#### Scenario: Open saved tabs restore on launch
+- **WHEN** the previous session recorded one or more saved Markdown paths that still exist and the app launches without a CLI file open intent
+- **THEN** those documents reopen as tabs in the recorded order
+- **AND** the recorded active path is focused when it is among the restored tabs
+
+#### Scenario: Missing session paths are skipped
+- **WHEN** a recorded open-file or workspace-root path no longer exists at launch
+- **THEN** that path is skipped without failing startup
+- **AND** any remaining valid session paths still restore
+
+#### Scenario: CLI open intent overrides session restore
+- **WHEN** the app launches with a CLI file or folder open intent and a session snapshot also exists
+- **THEN** the CLI intent is applied for the requested file or folder
+- **AND** conflicting session restore for those fields is not applied on that launch
+
+#### Scenario: Untitled tabs are not persisted in the session
+- **WHEN** the only open tab is an untitled welcome or recovery document with no saved path
+- **THEN** the session snapshot does not record that tab as an open file
+- **AND** a previously recorded workspace root may still be persisted and restored
+
+### Requirement: Recent files list
+The editor SHALL maintain a bounded recent-files list of Markdown paths the user has opened or successfully saved, stored alongside the session snapshot. Opening or saving a path SHALL move it to the front of the list and deduplicate it. The list SHALL drop entries that fail to open because the file is missing. Clearing recent files SHALL empty the persisted list.
+
+#### Scenario: Opening a file updates recent files
+- **WHEN** the user opens or successfully saves a Markdown document with a file path
+- **THEN** that path becomes the most recent entry in the recent-files list
+- **AND** duplicate older entries for the same path are removed
+
+#### Scenario: Recent list is bounded
+- **WHEN** more distinct Markdown paths are opened than the configured recent-files bound
+- **THEN** the oldest entries beyond the bound are dropped from the persisted list
+
+#### Scenario: Clear recent files empties the list
+- **WHEN** the user invokes Clear Recent Files
+- **THEN** the recent-files list becomes empty and the empty list is persisted
 
 ### Requirement: Session snapshot includes chrome layout
 The session file (`session.toml` under the Markion config directory) SHALL accept an optional `[layout]` table that records chrome geometry: window origin (`x`, `y`), window size (`width`, `height`), maximized flag, sidebar width, and editor/preview split ratio. Every field SHALL be optional. A missing table or missing field SHALL leave that value at the built-in default. Unknown extra keys SHALL be ignored. Loading a session for a CLI file or folder open intent SHALL still load `[layout]` even when document and workspace-root restore is skipped for that launch. Saving layout SHALL reuse the existing atomic session write and MUST NOT require a second session file.
