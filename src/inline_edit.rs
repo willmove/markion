@@ -27,6 +27,25 @@ impl Default for ImagePresentation {
     }
 }
 
+pub const IMAGE_WIDTH_PERCENT_MIN: u8 = 10;
+pub const IMAGE_WIDTH_PERCENT_MAX: u8 = 100;
+const IMAGE_WIDTH_SNAP_PRESETS: [u8; 4] = [25, 50, 75, 100];
+const IMAGE_WIDTH_SNAP_DISTANCE: u8 = 3;
+
+pub fn clamp_image_width_percent(percent: u8) -> u8 {
+    percent.clamp(IMAGE_WIDTH_PERCENT_MIN, IMAGE_WIDTH_PERCENT_MAX)
+}
+
+pub fn snap_image_width_percent(percent: u8) -> u8 {
+    let clamped = clamp_image_width_percent(percent);
+    for preset in IMAGE_WIDTH_SNAP_PRESETS {
+        if clamped.abs_diff(preset) <= IMAGE_WIDTH_SNAP_DISTANCE {
+            return preset;
+        }
+    }
+    clamped
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineMarkdownTarget {
     pub source_range: Range<usize>,
@@ -230,7 +249,9 @@ fn compose_title(title: Option<&str>, presentation: Option<ImagePresentation>) -
             };
             let metadata = format!(
                 "{{width={} align={alignment}}}",
-                presentation.width_percent.clamp(25, 100)
+                presentation
+                    .width_percent
+                    .clamp(IMAGE_WIDTH_PERCENT_MIN, IMAGE_WIDTH_PERCENT_MAX)
             );
             Some(if title.is_empty() {
                 metadata
@@ -256,10 +277,9 @@ fn split_presentation_title(title: &str) -> (Option<String>, Option<ImagePresent
     let mut alignment = None;
     for part in body.split_whitespace() {
         if let Some(value) = part.strip_prefix("width=") {
-            width = value
-                .parse::<u8>()
-                .ok()
-                .filter(|value| matches!(value, 25 | 50 | 75 | 100));
+            width = value.parse::<u8>().ok().filter(|value| {
+                (IMAGE_WIDTH_PERCENT_MIN..=IMAGE_WIDTH_PERCENT_MAX).contains(value)
+            });
         } else if let Some(value) = part.strip_prefix("align=") {
             alignment = match value {
                 "left" => Some(ImageAlignment::Left),
@@ -341,5 +361,23 @@ mod tests {
         let parsed = inline_image_at(&rendered, 5).unwrap();
         assert_eq!(parsed.presentation, Some(presentation));
         assert_eq!(parsed.title.as_deref(), Some("Caption"));
+    }
+
+    #[test]
+    fn image_width_accepts_integer_percents_from_10_to_100() {
+        let presentation = ImagePresentation {
+            width_percent: 40,
+            alignment: ImageAlignment::Center,
+        };
+        let rendered = serialize_inline_image("alt", "a.png", None, Some(presentation));
+        assert!(rendered.contains("{width=40 align=center}"));
+        let parsed = inline_image_at(&rendered, 2).unwrap();
+        assert_eq!(parsed.presentation, Some(presentation));
+
+        let rejected = "![alt](a.png \"{width=9 align=center}\")";
+        assert!(inline_image_at(rejected, 2).unwrap().presentation.is_none());
+        assert_eq!(snap_image_width_percent(48), 50);
+        assert_eq!(snap_image_width_percent(40), 40);
+        assert_eq!(clamp_image_width_percent(3), 10);
     }
 }

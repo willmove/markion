@@ -553,6 +553,28 @@ pub(super) fn compact_history_entry(older: &EditorSnapshot, newer_text: &str) ->
     }
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct VisualTableColumnDrag {
+    pub(super) block_id: VisualBlockId,
+    pub(super) left_column: usize,
+    pub(super) start_x: f32,
+    pub(super) table_width: f32,
+    pub(super) start_percents: Vec<u8>,
+    pub(super) live_percents: Vec<u8>,
+    pub(super) document_version: u64,
+    pub(super) table_offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct VisualImageResizeDrag {
+    pub(super) offset: usize,
+    pub(super) start_x: f32,
+    pub(super) start_percent: u8,
+    pub(super) start_image_width: f32,
+    pub(super) live_percent: u8,
+    pub(super) document_version: u64,
+}
+
 /// One content tab in the workspace. Documents retain the existing editor
 /// state wholesale, while image tabs carry only their read-only presentation
 /// state and can therefore never acquire document dirty/undo/recovery state.
@@ -757,6 +779,10 @@ pub(super) struct DocumentTabState {
     pub(super) hovered_visual_source_block: Option<VisualBlockId>,
     /// Table currently under the pointer for showing the Visual Edit table header.
     pub(super) hovered_visual_table_block: Option<VisualBlockId>,
+    /// Presentation-only overlay while a Visual Edit column handle is dragged.
+    pub(super) visual_table_column_drag: Option<VisualTableColumnDrag>,
+    /// Presentation-only overlay while a focused inline image is resized.
+    pub(super) visual_image_resize_drag: Option<VisualImageResizeDrag>,
     /// Code fence currently under the pointer for revealing its editable
     /// language label (hidden again when the pointer leaves and the fence does
     /// not own the caret).
@@ -1048,6 +1074,8 @@ impl DocumentTabState {
             expanded_visual_source_blocks: HashSet::new(),
             hovered_visual_source_block: None,
             hovered_visual_table_block: None,
+            visual_table_column_drag: None,
+            visual_image_resize_drag: None,
             hovered_visual_code_block: None,
             retain_visual_source_expand: None,
             visual_cursor_reveal_pending: false,
@@ -1177,6 +1205,18 @@ impl DocumentTabState {
         {
             self.hovered_visual_table_block = None;
         }
+        if self.visual_table_column_drag.as_ref().is_some_and(|drag| {
+            drag.document_version != self.document.version() || !live_ids.contains(&drag.block_id)
+        }) {
+            self.visual_table_column_drag = None;
+        }
+        if self
+            .visual_image_resize_drag
+            .as_ref()
+            .is_some_and(|drag| drag.document_version != self.document.version())
+        {
+            self.visual_image_resize_drag = None;
+        }
         if self
             .hovered_visual_code_block
             .is_some_and(|id| !live_ids.contains(&id))
@@ -1294,6 +1334,8 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.hovered_visual_table_block = None;
+        self.visual_table_column_drag = None;
+        self.visual_image_resize_drag = None;
         self.hovered_visual_code_block = None;
         self.retain_visual_source_expand = None;
         self.visual_end_padding_height = None;
@@ -1349,6 +1391,8 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.hovered_visual_table_block = None;
+        self.visual_table_column_drag = None;
+        self.visual_image_resize_drag = None;
         self.hovered_visual_code_block = None;
         self.retain_visual_source_expand = None;
         self.visual_end_padding_height = None;

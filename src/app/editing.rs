@@ -65,6 +65,20 @@ pub(super) fn visual_selection_format_target_for_block(
         return None;
     }
     let (_, block) = validate_block_target(tab.document.version(), blocks, target).ok()?;
+    if let Some(VisualBlockEditor::Table { cells }) = block.editor.as_ref() {
+        let inside_cell = cells.iter().any(|cell| {
+            cell.field.source_range.start <= selection.start
+                && cell.field.source_range.end >= selection.end
+        });
+        if block.source_island.is_none() && inside_cell {
+            return Some(VisualSelectionFormatTarget {
+                document_version: tab.document.version(),
+                range: selection.clone(),
+                block_id: block.id,
+            });
+        }
+        return None;
+    }
     if block.source_island.is_some()
         || !block.editable_runs.iter().any(|run| {
             !run.conservative_fallback
@@ -944,9 +958,256 @@ impl MarkionApp {
             &target.label,
             &target.url,
             target.title.as_deref(),
-            Some(presentation),
+            Some(ImagePresentation {
+                width_percent: clamp_image_width_percent(presentation.width_percent),
+                alignment: presentation.alignment,
+            }),
         );
         self.replace_exact_inline_target(target.source_range, replacement, cx);
+    }
+
+    pub(super) fn set_table_column_widths_at(
+        &mut self,
+        offset: usize,
+        percents: Vec<u8>,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_tab_mut().finish_undo_capture();
+        let snapshot = self.snapshot();
+        let tab = self.active_tab_mut();
+        if tab
+            .document
+            .set_table_column_widths_at(offset, &percents)
+            .is_none()
+        {
+            return;
+        }
+        if tab.document.text() != snapshot.document.text() {
+            self.commit_undo_snapshot(snapshot);
+            self.after_document_changed(cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_visual_table_column_drag_move(
+        &mut self,
+        event: &DragMoveEvent<DraggedTableColumnHandle>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let handle = event.drag(cx).clone();
+        let table_width = f32::from(event.bounds.size.width);
+        self.update_visual_table_column_drag(
+            &handle,
+            f32::from(event.event.position.x),
+            table_width,
+            cx,
+        );
+    }
+
+    pub(super) fn on_visual_table_column_drag_drop(
+        &mut self,
+        _: &DraggedTableColumnHandle,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_visual_table_column_drag(cx);
+    }
+
+    pub(super) fn on_visual_image_resize_drag_move(
+        &mut self,
+        event: &DragMoveEvent<DraggedImageResizeHandle>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let handle = event.drag(cx).clone();
+        let image_width = f32::from(event.bounds.size.width);
+        self.update_visual_image_resize_drag(
+            &handle,
+            f32::from(event.event.position.x),
+            image_width,
+            cx,
+        );
+    }
+
+    pub(super) fn on_visual_image_resize_drag_drop(
+        &mut self,
+        _: &DraggedImageResizeHandle,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_visual_image_resize_drag(cx);
+    }
+
+    fn update_visual_table_column_drag(
+        &mut self,
+        handle: &DraggedTableColumnHandle,
+        mouse_x: f32,
+        table_width: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let font_size = self.typography_metrics().table_font_size;
+        let tab = self.active_tab_mut();
+        if tab.document.version() != handle.document_version {
+            tab.visual_table_column_drag = None;
+            return;
+        }
+        if let Some(drag) = tab.visual_table_column_drag.as_mut() {
+            if drag.block_id != handle.block_id || drag.left_column != handle.left_column {
+                return;
+            }
+            if table_width > 1.0 {
+                drag.table_width = table_width;
+            }
+            let width = drag.table_width.max(1.0);
+            let delta = ((mouse_x - drag.start_x) / width * 100.0).round() as i16;
+            let start_left = i16::from(
+                drag.start_percents
+                    .get(drag.left_column)
+                    .copied()
+                    .unwrap_or(50),
+            );
+            let new_left = (start_left + delta).clamp(0, 100) as u8;
+            if let Some(next) = redistribute_adjacent_column_percents(
+                &drag.start_percents,
+                drag.left_column,
+                new_left,
+            ) {
+                if drag.live_percents != next {
+                    drag.live_percents = next;
+                    cx.notify();
+                }
+            }
+            return;
+        }
+        let Some(block) = tab
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .find(|block| block.id == handle.block_id)
+            .cloned()
+        else {
+            return;
+        };
+        let VisualBlockKind::Table { rows, .. } = &block.kind else {
+            return;
+        };
+        let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+        if handle.left_column + 1 >= column_count {
+            return;
+        }
+        let source = tab
+            .document
+            .text()
+            .get(block.source_range.clone())
+            .unwrap_or("");
+        let percents = authored_table_column_percents(source, column_count)
+            .or_else(|| percents_from_flex_weights(&table_column_flex_weights(rows, font_size)));
+        let Some(percents) = percents else {
+            return;
+        };
+        let tab = self.active_tab_mut();
+        tab.visual_table_column_drag = Some(VisualTableColumnDrag {
+            block_id: handle.block_id,
+            left_column: handle.left_column,
+            start_x: mouse_x,
+            table_width: table_width.max(1.0),
+            live_percents: percents.clone(),
+            start_percents: percents,
+            document_version: handle.document_version,
+            table_offset: handle.table_offset,
+        });
+        cx.notify();
+    }
+
+    fn commit_visual_table_column_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.active_tab_mut().visual_table_column_drag.take() else {
+            return;
+        };
+        if drag.live_percents == drag.start_percents {
+            cx.notify();
+            return;
+        }
+        self.set_table_column_widths_at(drag.table_offset, drag.live_percents, cx);
+    }
+
+    fn update_visual_image_resize_drag(
+        &mut self,
+        handle: &DraggedImageResizeHandle,
+        mouse_x: f32,
+        image_width: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = self.active_tab_mut();
+        if tab.document.version() != handle.document_version {
+            tab.visual_image_resize_drag = None;
+            return;
+        }
+        if let Some(drag) = tab.visual_image_resize_drag.as_mut() {
+            if drag.offset != handle.offset {
+                return;
+            }
+            if image_width > 1.0 && drag.start_image_width <= 1.0 {
+                drag.start_image_width = image_width;
+            }
+            let start_width = drag.start_image_width.max(1.0);
+            let full_width = start_width / (f32::from(drag.start_percent).max(1.0) / 100.0);
+            let new_percent = ((start_width + (mouse_x - drag.start_x)) / full_width * 100.0)
+                .round()
+                .clamp(10.0, 100.0) as u8;
+            let snapped = snap_image_width_percent(new_percent);
+            if drag.live_percent != snapped {
+                drag.live_percent = snapped;
+                cx.notify();
+            }
+            return;
+        }
+        let Some(target) = inline_image_at(tab.document.text(), handle.offset) else {
+            return;
+        };
+        let start_percent = target
+            .presentation
+            .map(|presentation| clamp_image_width_percent(presentation.width_percent))
+            .unwrap_or(100);
+        tab.visual_image_resize_drag = Some(VisualImageResizeDrag {
+            offset: handle.offset,
+            start_x: mouse_x,
+            start_percent,
+            start_image_width: image_width.max(1.0),
+            live_percent: start_percent,
+            document_version: handle.document_version,
+        });
+        cx.notify();
+    }
+
+    fn commit_visual_image_resize_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.active_tab_mut().visual_image_resize_drag.take() else {
+            return;
+        };
+        let Some(target) = inline_image_at(self.active_tab().document.text(), drag.offset) else {
+            cx.notify();
+            return;
+        };
+        let alignment = target
+            .presentation
+            .map(|presentation| presentation.alignment)
+            .unwrap_or_default();
+        if target
+            .presentation
+            .is_some_and(|presentation| presentation.width_percent == drag.live_percent)
+            && drag.live_percent == drag.start_percent
+        {
+            cx.notify();
+            return;
+        }
+        self.set_image_presentation_at(
+            drag.offset,
+            ImagePresentation {
+                width_percent: drag.live_percent,
+                alignment,
+            },
+            cx,
+        );
     }
 
     pub(super) fn replace_image_resource_at(&mut self, offset: usize, cx: &mut Context<Self>) {

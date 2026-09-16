@@ -410,6 +410,12 @@ impl Render for MarkionApp {
                     .on_drop::<DraggedSidebarHandle>(cx.listener(|_, _, _, cx| {
                         cx.notify();
                     }))
+                    .on_drop::<DraggedTableColumnHandle>(
+                        cx.listener(MarkionApp::on_visual_table_column_drag_drop),
+                    )
+                    .on_drop::<DraggedImageResizeHandle>(
+                        cx.listener(MarkionApp::on_visual_image_resize_drag_drop),
+                    )
                     .child(sidebar_view(self, cx))
                     // Sidebar/pane divider: only when the sidebar is visible.
                     .when(self.sidebar_visible, |d| {

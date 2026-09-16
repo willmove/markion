@@ -363,7 +363,11 @@ mod tests {
         let mut policies = SyncPolicies::empty();
         policies.upsert(policy(dir.path()));
         store.save(&policies).unwrap();
-        assert_eq!(store.load().unwrap(), policies);
+        let mut expected = policies.clone();
+        for repository in &mut expected.repositories {
+            normalize_identity_paths(&mut repository.identity);
+        }
+        assert_eq!(store.load().unwrap(), expected);
 
         let invalid = SyncPolicies {
             schema_version: POLICY_SCHEMA_VERSION + 1,
