@@ -6,14 +6,14 @@
 //! `compute_preview_blocks` driver lives on `MarkdownDocument` and calls into
 //! this module; everything here is pure / stateless.
 
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
 use pulldown_cmark::{BlockQuoteKind, Event, HeadingLevel, Options, Parser};
 
 use crate::escape::escape_html_attribute;
 use crate::model::{
-    HtmlImageDescriptor, HtmlImgLength, ImageSourceIdentity, InlineImage, InlineSpan, InlineStyle,
-    MathSource, PreviewBlock, RichText, VisualHtmlImage,
+    Heading, HtmlImageDescriptor, HtmlImgLength, ImageSourceIdentity, InlineImage, InlineSpan,
+    InlineStyle, MathSource, PreviewBlock, RichText, VisualHtmlImage,
 };
 use crate::table::TableDraft;
 
@@ -402,6 +402,33 @@ pub(crate) fn push_preview_rich(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn push_preview_footnote(
+    heading: &mut Option<(u8, Vec<InlineSpan>, Range<usize>)>,
+    paragraph: &mut Option<(Vec<InlineSpan>, Range<usize>)>,
+    quote: &mut Vec<InlineSpan>,
+    quote_depth: usize,
+    list_item: &mut Option<ListItemDraft>,
+    table: &mut Option<TableDraft>,
+    label: &str,
+    style: InlineStyle,
+) {
+    let spans = if let Some(table) = table.as_mut() {
+        &mut table.current_cell
+    } else if let Some((_, spans, _)) = heading.as_mut() {
+        spans
+    } else if let Some(item) = list_item.as_mut() {
+        &mut item.spans
+    } else if let Some((paragraph, _)) = paragraph.as_mut() {
+        paragraph
+    } else if quote_depth > 0 {
+        quote
+    } else {
+        return;
+    };
+    append_footnote_span(spans, label, style);
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn push_preview_math(
     heading: &mut Option<(u8, Vec<InlineSpan>, Range<usize>)>,
     paragraph: &mut Option<(Vec<InlineSpan>, Range<usize>)>,
@@ -431,6 +458,7 @@ pub(crate) fn push_preview_math(
             link: link.map(str::to_string),
             math: Some(math),
             image: None,
+            footnote: None,
         });
         return;
     }
@@ -454,6 +482,7 @@ pub(crate) fn push_preview_math(
         link: link.map(str::to_string),
         math: Some(math),
         image: None,
+        footnote: None,
     });
 }
 
@@ -473,6 +502,7 @@ fn append_leaf_span(
             link: link.map(str::to_string),
             math: None,
             image: None,
+            footnote: None,
         });
     } else {
         append_span(spans, text, style, link);
@@ -494,6 +524,7 @@ pub(crate) fn append_span(
         && !last.hard_break
         && last.math.is_none()
         && last.image.is_none()
+        && last.footnote.is_none()
     {
         last.text.push_str(text);
         return;
@@ -505,6 +536,24 @@ pub(crate) fn append_span(
         link: link.map(str::to_string),
         math: None,
         image: None,
+        footnote: None,
+    });
+}
+
+/// Footnote references keep their label so hover tooltips do not confuse
+/// ordinary superscript (`^1^`) with `[^1]`.
+pub(crate) fn append_footnote_span(spans: &mut Vec<InlineSpan>, label: &str, style: InlineStyle) {
+    if label.is_empty() {
+        return;
+    }
+    spans.push(InlineSpan {
+        hard_break: false,
+        text: label.to_string(),
+        style,
+        link: None,
+        math: None,
+        image: None,
+        footnote: Some(label.to_string()),
     });
 }
 
@@ -546,6 +595,7 @@ pub(crate) fn append_preview_image(
             source_range: image.source_range,
             identity: image.identity,
         }),
+        footnote: None,
     });
     Ok(())
 }
@@ -678,6 +728,7 @@ fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
                             .then(|| span.math.clone())
                             .flatten(),
                         image: None,
+                        footnote: span.footnote.clone(),
                     });
             }
         }
@@ -716,7 +767,7 @@ fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
         }
         emitted_line = true;
         for span in line {
-            if span.math.is_some() || span.image.is_some() {
+            if span.math.is_some() || span.image.is_some() || span.footnote.is_some() {
                 merged.push(span);
             } else {
                 append_span(&mut merged, &span.text, span.style, span.link.as_deref());
@@ -2774,7 +2825,7 @@ pub(crate) fn slugify(input: &str) -> String {
     let mut previous_dash = false;
 
     for ch in input.chars().flat_map(char::to_lowercase) {
-        if ch.is_ascii_alphanumeric() {
+        if ch.is_alphanumeric() {
             slug.push(ch);
             previous_dash = false;
         } else if !previous_dash && !slug.is_empty() {
@@ -2784,6 +2835,94 @@ pub(crate) fn slugify(input: &str) -> String {
     }
 
     slug.trim_matches('-').to_string()
+}
+
+pub(crate) fn heading_anchor_base(authored_id: Option<&str>, title: &str) -> String {
+    let authored = authored_id.map(str::trim).filter(|id| !id.is_empty());
+    if let Some(id) = authored {
+        return id.to_string();
+    }
+    let slug = slugify(title);
+    if slug.is_empty() {
+        "section".to_string()
+    } else {
+        slug
+    }
+}
+
+pub(crate) fn uniquify_heading_anchors(headings: &mut [Heading]) {
+    let mut used: HashMap<String, usize> = HashMap::new();
+    for heading in headings {
+        let base = heading.anchor.clone();
+        let count = used.entry(base.clone()).or_insert(0);
+        let n = *count;
+        *count += 1;
+        heading.anchor = if n == 0 { base } else { format!("{base}-{n}") };
+    }
+}
+
+/// Typora-style in-document TOC token: a paragraph that is exactly `[TOC]`.
+pub(crate) fn is_toc_marker(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case("[toc]")
+}
+
+/// Replace standalone `[TOC]` paragraphs (including quote children) with a
+/// live table-of-contents widget. List items stay ordinary text.
+pub(crate) fn absorb_table_of_contents(blocks: &mut [PreviewBlock]) {
+    let mut index = 0;
+    while index < blocks.len() {
+        if let PreviewBlock::Paragraph { text, source_range } = &blocks[index]
+            && is_toc_marker(&text.text)
+        {
+            let source_range = source_range.clone();
+            blocks[index] = PreviewBlock::TableOfContents { source_range };
+            index += 1;
+            continue;
+        }
+        if let PreviewBlock::BlockQuote { children, .. } = &mut blocks[index] {
+            absorb_table_of_contents(children);
+        }
+        index += 1;
+    }
+}
+
+/// Bare in-document heading fragment (`#hello`). External URLs keep their `#`.
+pub fn document_heading_fragment(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    let fragment = trimmed.strip_prefix('#')?;
+    if fragment.is_empty() {
+        return None;
+    }
+    Some(percent_decode_fragment(fragment))
+}
+
+fn percent_decode_fragment(fragment: &str) -> String {
+    let bytes = fragment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let Some(hi) = from_hex(bytes[index + 1])
+            && let Some(lo) = from_hex(bytes[index + 2])
+        {
+            decoded.push((hi << 4) | lo);
+            index += 3;
+            continue;
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(decoded).unwrap_or_else(|_| fragment.to_string())
+}
+
+fn from_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -3638,5 +3777,70 @@ mod html_table_tests {
                 |span| span.text == "go" && span.link.as_deref() == Some("https://example.com")
             )
         );
+    }
+}
+
+#[cfg(test)]
+mod heading_anchor_and_toc_tests {
+    use super::{
+        document_heading_fragment, heading_anchor_base, is_toc_marker, slugify,
+        uniquify_heading_anchors,
+    };
+    use crate::model::Heading;
+
+    #[test]
+    fn slugify_keeps_unicode_letters_and_collapses_punctuation() {
+        assert_eq!(slugify("Hello World"), "hello-world");
+        assert_eq!(slugify("中文标题"), "中文标题");
+        assert_eq!(slugify("Hello, World!"), "hello-world");
+        assert_eq!(slugify(""), "");
+    }
+
+    #[test]
+    fn heading_anchor_prefers_authored_id_and_section_fallback() {
+        assert_eq!(heading_anchor_base(Some("custom"), "Hello"), "custom");
+        assert_eq!(heading_anchor_base(Some("  "), "Hello"), "hello");
+        assert_eq!(heading_anchor_base(None, ""), "section");
+        assert_eq!(heading_anchor_base(None, "中文标题"), "中文标题");
+    }
+
+    #[test]
+    fn uniquify_heading_anchors_appends_numeric_suffixes() {
+        let mut headings = vec![
+            Heading {
+                level: 1,
+                title: "Hello".into(),
+                anchor: "hello".into(),
+                offset: 0,
+            },
+            Heading {
+                level: 2,
+                title: "Hello".into(),
+                anchor: "hello".into(),
+                offset: 10,
+            },
+        ];
+        uniquify_heading_anchors(&mut headings);
+        assert_eq!(headings[0].anchor, "hello");
+        assert_eq!(headings[1].anchor, "hello-1");
+    }
+
+    #[test]
+    fn toc_marker_is_exactly_the_token() {
+        assert!(is_toc_marker("[TOC]"));
+        assert!(is_toc_marker("  [toc]\n"));
+        assert!(!is_toc_marker("[TOC] more"));
+        assert!(!is_toc_marker("[toc]: https://example.com"));
+    }
+
+    #[test]
+    fn document_heading_fragment_accepts_bare_hashes() {
+        assert_eq!(document_heading_fragment("#hello"), Some("hello".into()));
+        assert_eq!(
+            document_heading_fragment("#%E4%B8%AD%E6%96%87"),
+            Some("中文".into())
+        );
+        assert_eq!(document_heading_fragment("https://example.com#hello"), None);
+        assert_eq!(document_heading_fragment("#"), None);
     }
 }

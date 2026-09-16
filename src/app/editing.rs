@@ -3884,6 +3884,22 @@ impl MarkionApp {
         cx.notify();
     }
 
+    /// Opens an external URL or jumps to an in-document heading fragment.
+    pub(super) fn activate_document_or_external_link(&mut self, url: &str, cx: &mut Context<Self>) {
+        if let Some(anchor) = markion::document_heading_fragment(url)
+            && let Some(offset) = self
+                .active_tab()
+                .document
+                .heading_offset_for_anchor(&anchor)
+        {
+            self.navigate_to_outline_heading(offset, cx);
+            return;
+        }
+        if !url.trim().is_empty() {
+            cx.open_url(url);
+        }
+    }
+
     /// Opens a URL or jumps to a footnote definition from a Visual Edit icon.
     pub(super) fn activate_visual_navigation(
         &mut self,
@@ -3892,8 +3908,13 @@ impl MarkionApp {
     ) {
         match target {
             VisualNavigationTarget::Url(url) => {
-                if !url.trim().is_empty() {
-                    cx.open_url(url);
+                self.activate_document_or_external_link(url, cx);
+            }
+            VisualNavigationTarget::Heading { anchor } => {
+                if let Some(offset) = self.active_tab().document.heading_offset_for_anchor(anchor) {
+                    self.navigate_to_outline_heading(offset, cx);
+                } else if !anchor.is_empty() {
+                    cx.open_url(&format!("#{anchor}"));
                 }
             }
             VisualNavigationTarget::Footnote { label } => {

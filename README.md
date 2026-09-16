@@ -69,7 +69,8 @@ The **View → Source/Split Preview** command (`Ctrl+/` on Windows/Linux, `Cmd+/
 
 Rendered preview supports:
 
-- Bold, italic, strikethrough, inline code, links, highlights, superscript, subscript, footnotes, task lists, common emoji shortcodes, and automatic links.
+- Bold, italic, strikethrough, inline code, links, highlights, superscript, subscript, footnotes (hover a reference to read its definition), task lists, common emoji shortcodes, and automatic links.
+- In-document `[TOC]` / `[toc]` tokens rendered as a live, clickable outline, and `[text](#heading)` / `{#id}` heading jumps that stay inside the document.
 - Correct ordered-list start numbers, nested lists, per-depth bullets, hanging indentation, images, and embedded HTML.
 - Supported inline HTML has consistent semantics across mixed Markdown, standalone HTML blocks, table cells, and Visual Edit, including safe color spans, links and linked images, `kbd`/`samp`, authored breaks, and positioned superscript/subscript; malformed or unsupported markup falls back without executing scripts.
 - Selectable preview text with a context menu for copying as plain text, Markdown, or HTML, plus link-address copying where applicable.

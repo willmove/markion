@@ -256,7 +256,105 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
                 (0..cols.len()).map(move |col| PreviewTextRunId::TableCell { row, col })
             })
             .collect(),
-        PreviewBlock::Rule { .. } => Vec::new(),
+        PreviewBlock::Rule { .. } | PreviewBlock::TableOfContents { .. } => Vec::new(),
+    }
+}
+
+fn footnote_tooltip_text(app: &MarkionApp, label: &str) -> Option<SharedString> {
+    app.active_tab()
+        .document
+        .footnote_definition_text(label)
+        .filter(|text| !text.trim().is_empty())
+        .map(SharedString::from)
+}
+
+fn with_footnote_tooltip(
+    app: &MarkionApp,
+    label: Option<&str>,
+    child: gpui::AnyElement,
+    element_id: ElementId,
+) -> gpui::AnyElement {
+    let Some(label) = label else {
+        return child;
+    };
+    let Some(text) = footnote_tooltip_text(app, label) else {
+        return child;
+    };
+    let palette = app.palette();
+    div()
+        .id(element_id)
+        .tooltip(move |_, cx| {
+            cx.new(|_| FootnoteTooltip {
+                palette,
+                text: text.clone(),
+            })
+            .into()
+        })
+        .child(child)
+        .into_any_element()
+}
+
+fn document_toc_view(
+    app: &MarkionApp,
+    selector_prefix: &'static str,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let headings = app.active_tab().document.outline();
+    div()
+        .debug_selector(move || selector_prefix.to_string())
+        .mb_3()
+        .py_2()
+        .px_3()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(0xcbd5e1))
+        .bg(rgb(0xf8fafc))
+        .children(headings.into_iter().enumerate().map(|(index, heading)| {
+            let offset = heading.offset;
+            let title = heading.title.clone();
+            let indent = heading.level.saturating_sub(1) as f32 * 16.;
+            let selector = format!("{selector_prefix}-heading-{index}");
+            div()
+                .id(SharedString::from(selector.clone()))
+                .debug_selector(move || selector.clone())
+                .ml(px(indent))
+                .py(px(3.))
+                .text_size(px(13.))
+                .line_height(px(20.))
+                .text_color(rgb(PREVIEW_LINK_COLOR))
+                .cursor(CursorStyle::PointingHand)
+                .hover(|style| style.bg(rgba(0x2563eb22)))
+                .child(title)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |app, _: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        let focus_handle = app.focus_handle.clone();
+                        window.focus(&focus_handle);
+                        app.navigate_to_outline_heading(offset, cx);
+                    }),
+                )
+        }))
+}
+
+struct FootnoteTooltip {
+    palette: ThemePalette,
+    text: SharedString,
+}
+
+impl Render for FootnoteTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .py_1()
+            .px_2()
+            .max_w(px(360.))
+            .rounded_md()
+            .border_1()
+            .border_color(self.palette.border)
+            .bg(self.palette.panel_bg)
+            .text_size(px(12.))
+            .text_color(self.palette.text)
+            .child(self.text.clone())
     }
 }
 
@@ -1484,7 +1582,7 @@ impl Element for SelectablePreviewText {
                         {
                             for (range, url) in link_ranges.iter().zip(link_urls.iter()) {
                                 if range.contains(&anchor) && range.contains(&up_index) {
-                                    cx.open_url(url);
+                                    app.activate_document_or_external_link(url, cx);
                                     break;
                                 }
                             }
@@ -2153,7 +2251,7 @@ pub(super) fn rich_text_with_math_element(
     if !rich
         .spans
         .iter()
-        .any(|span| span.math.is_some() || span.image.is_some())
+        .any(|span| span.math.is_some() || span.image.is_some() || span.footnote.is_some())
     {
         return rich_text_element(
             app,
@@ -2264,6 +2362,43 @@ pub(super) fn rich_text_with_math_element(
                     fragment_index += 1;
                 }
             }
+            continue;
+        }
+        if span.footnote.is_some() {
+            let local_len = span.text.len();
+            let mut highlights = Vec::new();
+            if let Some(style) = preview_span_highlight(span) {
+                highlights.push((0..local_len, style));
+            }
+            let selection = preview_fragment_selection(full_selection.as_ref(), span_range.clone());
+            let search_ranges =
+                preview_fragment_search_ranges(&full_search_ranges, span_range.clone());
+            let child = SelectablePreviewText::new(
+                ElementId::from(SharedString::from(format!(
+                    "{id_prefix}-{block_index}-{fragment_index}"
+                ))),
+                StyledText::new(SharedString::from(span.text.clone())).with_highlights(highlights),
+                block_index,
+                run_id,
+                run_text.clone(),
+                selection,
+                cx.entity(),
+            )
+            .with_search_ranges(search_ranges)
+            .with_run_offset(span_range.start)
+            .into_any_element();
+            mixed_prose_push(
+                &mut lines,
+                with_footnote_tooltip(
+                    app,
+                    span.footnote.as_deref(),
+                    child,
+                    ElementId::from(SharedString::from(format!(
+                        "{id_prefix}-footnote-{block_index}-{fragment_index}"
+                    ))),
+                ),
+            );
+            fragment_index += 1;
             continue;
         }
 
@@ -3158,6 +3293,7 @@ pub(super) fn visual_text_with_math_element(
                 segment.source_range.end,
                 block_index,
                 fragment_index,
+                app,
                 cx,
             );
             continue;
@@ -3183,6 +3319,7 @@ pub(super) fn visual_text_with_math_element(
                 segment.source_range.end,
                 block_index,
                 fragment_index,
+                app,
                 cx,
             );
             continue;
@@ -3265,6 +3402,7 @@ pub(super) fn visual_text_with_math_element(
                             source_range.end,
                             block_index,
                             fragment_index,
+                            app,
                             cx,
                         );
                     }
@@ -3322,6 +3460,7 @@ pub(super) fn visual_text_with_math_element(
                         source_range.end,
                         block_index,
                         fragment_index,
+                        app,
                         cx,
                     );
                 }
@@ -3337,6 +3476,7 @@ pub(super) fn visual_text_with_math_element(
             segment.source_range.end,
             block_index,
             fragment_index,
+            app,
             cx,
         );
     }
@@ -3417,6 +3557,7 @@ fn emit_navigation_icons_after(
     source_end: usize,
     block_index: usize,
     fragment_index: usize,
+    app: &MarkionApp,
     cx: &mut Context<MarkionApp>,
 ) -> usize {
     let mut emitted = 0usize;
@@ -3426,6 +3567,7 @@ fn emit_navigation_icons_after(
             block_index,
             fragment_index + emitted,
             target,
+            app,
             cx,
         ));
         emitted += 1;
@@ -3437,11 +3579,17 @@ fn visual_navigation_icon(
     block_index: usize,
     fragment_index: usize,
     target: VisualNavigationTarget,
+    app: &MarkionApp,
     cx: &mut Context<MarkionApp>,
 ) -> gpui::AnyElement {
     let glyph = match &target {
         VisualNavigationTarget::Url(_) => "↗",
         VisualNavigationTarget::Footnote { .. } => "↓",
+        VisualNavigationTarget::Heading { .. } => "#",
+    };
+    let tooltip = match &target {
+        VisualNavigationTarget::Footnote { label } => footnote_tooltip_text(app, label),
+        _ => None,
     };
     let element_id = ElementId::from(("visual-nav-icon", block_index * 10_000 + fragment_index));
     div()
@@ -3455,6 +3603,16 @@ fn visual_navigation_icon(
         .text_color(rgb(PREVIEW_LINK_COLOR))
         .cursor(CursorStyle::PointingHand)
         .hover(|style| style.bg(rgba(0x2563eb22)))
+        .when_some(tooltip, |icon, text| {
+            let palette = app.palette();
+            icon.tooltip(move |_, cx| {
+                cx.new(|_| FootnoteTooltip {
+                    palette,
+                    text: text.clone(),
+                })
+                .into()
+            })
+        })
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |app, _: &MouseDownEvent, window, cx| {
@@ -4518,6 +4676,18 @@ fn visual_block_content_view(
             ),
         VisualBlockKind::ReferenceDefinition => {
             visual_reference_definition_view(app, block, block_index, cx)
+        }
+        VisualBlockKind::TableOfContents => {
+            let list = document_toc_view(app, "visual-toc", cx);
+            if owns_caret {
+                div()
+                    .line_height(px(typography.paragraph_line_height))
+                    .text_size(px(typography.rendered_font_size))
+                    .child(visual_text_element(block, block_index, app, cx))
+                    .child(list)
+            } else {
+                list
+            }
         }
     };
     let blocks = app.active_tab().document.visual_blocks_shared();
@@ -7287,6 +7457,7 @@ pub(super) fn preview_block_view(
             None,
         )),
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
+        PreviewBlock::TableOfContents { .. } => document_toc_view(app, "preview-toc", cx),
         PreviewBlock::FootnoteDefinition { label, text, .. } => div()
             .mb(px(typography.paragraph_spacing))
             .mt_2()

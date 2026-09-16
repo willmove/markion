@@ -104,7 +104,7 @@ pub(crate) fn preview_block_bytes(block: &PreviewBlock) -> usize {
         PreviewBlock::Image {
             alt, url, title, ..
         } => base + string_bytes(alt) + string_bytes(url) + option_string_bytes(title.as_deref()),
-        PreviewBlock::Rule { .. } => base,
+        PreviewBlock::Rule { .. } | PreviewBlock::TableOfContents { .. } => base,
         PreviewBlock::Table { rows, .. } => {
             base + rows.iter().flatten().map(rich_text_bytes).sum::<usize>()
         }
@@ -123,10 +123,15 @@ fn visual_run_bytes(run: &VisualInlineRun) -> usize {
     if let Some(math) = &run.math {
         total += math_source_bytes(math);
     }
-    if let Some(crate::model::VisualNavigationTarget::Url(url)) = &run.navigation {
-        total += string_bytes(url);
-    } else if let Some(crate::model::VisualNavigationTarget::Footnote { label }) = &run.navigation {
-        total += string_bytes(label);
+    match &run.navigation {
+        Some(crate::model::VisualNavigationTarget::Url(url)) => total += string_bytes(url),
+        Some(crate::model::VisualNavigationTarget::Footnote { label }) => {
+            total += string_bytes(label);
+        }
+        Some(crate::model::VisualNavigationTarget::Heading { anchor }) => {
+            total += string_bytes(anchor);
+        }
+        None => {}
     }
     total
 }
