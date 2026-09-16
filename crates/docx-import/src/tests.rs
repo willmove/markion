@@ -80,7 +80,7 @@ fn imports_heading_runs_breaks_and_accepted_revisions() {
         ("word/styles.xml", styles),
     ]);
     let markdown = result.render_markdown(|_| None).unwrap();
-    assert!(markdown.contains("## **你好 \\*world\\*  \nnext**new"));
+    assert!(markdown.contains("## **你好 \\*world\\*  \nnext** new"));
     assert!(!markdown.contains("old"));
     assert!(result.summary.revisions_accepted);
     assert!(
@@ -89,6 +89,143 @@ fn imports_heading_runs_breaks_and_accepted_revisions() {
             .iter()
             .any(|item| item.code == DiagnosticCode::RevisionsAccepted)
     );
+}
+
+#[test]
+fn bold_boundaries_add_one_portable_space_for_word_like_text() {
+    let styles = br#"<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="character" w:styleId="InheritedBold"><w:rPr><w:b/></w:rPr></w:style>
+</w:styles>"#;
+    let rels = br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="safe" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/>
+</Relationships>"#;
+    let xml = document(
+        r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>粗体</w:t></w:r><w:r><w:t>文字</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r><w:r><w:t>word</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>count</w:t></w:r><w:r><w:t>123</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>wrapped</w:t></w:r><w:r/><w:ins><w:smartTag><w:sdt><w:sdtContent><w:fldSimple w:instr="DATE"><w:r><w:t>result</w:t></w:r></w:fldSimple></w:sdtContent></w:sdt></w:smartTag></w:ins></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="InheritedBold"/></w:rPr><w:t>style</w:t></w:r><w:moveTo><w:r><w:t>plain</w:t></w:r></w:moveTo></w:p>
+<w:p><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>both</w:t></w:r><w:r><w:t>outside</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/><w:strike/></w:rPr><w:t>strike</w:t></w:r><w:r><w:t>outside</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/><w:u w:val="single"/></w:rPr><w:t>underline</w:t></w:r><w:r><w:t>outside</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/><w:vertAlign w:val="superscript"/></w:rPr><w:t>super</w:t></w:r><w:r><w:t>outside</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/><w:vertAlign w:val="subscript"/></w:rPr><w:t>sub</w:t></w:r><w:r><w:t>outside</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>before</w:t></w:r><w:hyperlink r:id="safe"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p>
+<w:p><w:hyperlink r:id="safe"><w:r><w:rPr><w:b/></w:rPr><w:t>linked</w:t></w:r></w:hyperlink><w:r><w:t>after</w:t></w:r></w:p>"#,
+    );
+    let markdown = convert(&[
+        ("word/document.xml", xml.as_bytes()),
+        ("word/styles.xml", styles),
+        ("word/_rels/document.xml.rels", rels),
+    ])
+    .render_markdown(|_| None)
+    .unwrap();
+
+    assert_eq!(
+        markdown,
+        concat!(
+            "**粗体** 文字\n\n",
+            "**bold** word\n\n",
+            "**count** 123\n\n",
+            "**wrapped** result\n\n",
+            "**style** plain\n\n",
+            "***both*** outside\n\n",
+            "**~~strike~~** outside\n\n",
+            "**<u>underline</u>** outside\n\n",
+            "**<sup>super</sup>** outside\n\n",
+            "**<sub>sub</sub>** outside\n\n",
+            "**before** [link](https://example.com)\n\n",
+            "[**linked**](https://example.com) after\n\n",
+        )
+    );
+    assert_eq!(markdown.matches("**粗体** 文字").count(), 1);
+
+    let mut strong_depth = 0usize;
+    let mut saw_both_in_strong = false;
+    let mut saw_outside_after_strong = false;
+    for event in pulldown_cmark::Parser::new(&markdown) {
+        match event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Strong) => strong_depth += 1,
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Strong) => strong_depth -= 1,
+            pulldown_cmark::Event::Text(text) if text.contains("both") => {
+                saw_both_in_strong = strong_depth > 0
+            }
+            pulldown_cmark::Event::Text(text) if text.contains("outside") => {
+                saw_outside_after_strong |= strong_depth == 0
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_both_in_strong);
+    assert!(saw_outside_after_strong);
+}
+
+#[test]
+fn bold_boundaries_preserve_authored_separators_and_non_word_starts() {
+    let xml = document(
+        r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r><w:r><w:t xml:space="preserve"> word</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r><w:r><w:tab/><w:t>word</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r><w:r><w:br/><w:t>word</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r></w:p><w:p><w:r><w:t>word</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r><w:r><w:t>,</w:t></w:r><w:r><w:t>word</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r><w:r><w:t>，</w:t></w:r><w:r><w:t>文字</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r><w:r><w:t>*literal*</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r><w:r><w:t>©word</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r><w:r><w:t>́word</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>one</w:t></w:r><w:r/><w:r><w:rPr><w:b/></w:rPr><w:t>two</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>b</w:t></w:r><m:oMath><m:r><m:t>x</m:t></m:r></m:oMath><w:r><w:t>word</w:t></w:r></w:p>"#,
+    );
+    let markdown = convert(&[("word/document.xml", xml.as_bytes())])
+        .render_markdown(|_| None)
+        .unwrap();
+
+    assert_eq!(
+        markdown,
+        concat!(
+            "**b** word\n\n",
+            "**b**    word\n\n",
+            "**b**  \nword\n\n",
+            "**b**\n\nword\n\n",
+            "**b**,word\n\n",
+            "**b**，文字\n\n",
+            "**b**\\*literal\\*\n\n",
+            "**b**©word\n\n",
+            "**b**́word\n\n",
+            "**one****two**\n\n",
+            "**b**$x$word\n\n",
+        )
+    );
+}
+
+#[test]
+fn bold_boundary_state_stops_at_structural_and_block_boundaries() {
+    let rels = br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="external" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="https://example.com/tracker.png" TargetMode="External"/>
+<Relationship Id="notes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>
+</Relationships>"#;
+    let notes = br#"<?xml version="1.0"?><w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:footnote w:id="2"><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>note</w:t></w:r></w:p><w:p><w:r><w:t>word</w:t></w:r></w:p></w:footnote>
+</w:footnotes>"#;
+    let xml = document(
+        r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>body</w:t></w:r><w:r><w:footnoteReference w:id="2"/></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>image</w:t></w:r><w:r><w:drawing><wp:inline><wp:docPr descr="remote"/><a:graphic><a:graphicData><a:blip r:link="external"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r><w:r><w:t>after</w:t></w:r></w:p>
+<w:tbl><w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>cell</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>word</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    );
+    let markdown = convert(&[
+        ("word/document.xml", xml.as_bytes()),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/footnotes.xml", notes),
+    ])
+    .render_markdown(|_| None)
+    .unwrap();
+
+    assert!(markdown.contains("**body**[^fn2]after"));
+    assert!(markdown.contains("**image**[Blocked external image: remote]after"));
+    assert!(markdown.contains("| cell | word |"), "{markdown}");
+    assert!(!markdown.contains("cell word"));
+    assert!(markdown.contains("[^fn2]: **note**\n    word"));
+    assert!(!markdown.contains("[^fn2] after"));
+    assert!(!markdown.contains("**note** word"));
 }
 
 #[test]

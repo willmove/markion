@@ -44,6 +44,7 @@ pub enum HtmlPreviewPart {
     Image {
         alt: String,
         url: String,
+        link: Option<String>,
         title: Option<String>,
         centered: bool,
         width: Option<HtmlImgLength>,
@@ -94,6 +95,7 @@ pub struct HtmlTableCell {
 pub struct HtmlTableCellImage {
     pub alt: String,
     pub url: String,
+    pub link: Option<String>,
     pub title: Option<String>,
     pub width: Option<HtmlImgLength>,
     pub height: Option<HtmlImgLength>,
@@ -291,20 +293,24 @@ pub(crate) struct InlineStateDraft {
     pub italic: usize,
     pub strikethrough: usize,
     pub links: Vec<String>,
+    pub html: HtmlInlineState,
 }
 
 impl InlineStateDraft {
     pub fn style(&self) -> InlineStyle {
-        InlineStyle {
+        self.html.style(InlineStyle {
             bold: self.bold > 0,
             italic: self.italic > 0,
             strikethrough: self.strikethrough > 0,
             ..InlineStyle::default()
-        }
+        })
     }
 
     pub fn link(&self) -> Option<&str> {
-        self.links.last().map(String::as_str)
+        self.links
+            .last()
+            .map(String::as_str)
+            .or_else(|| self.html.link())
     }
 }
 
@@ -371,7 +377,7 @@ pub(crate) fn push_preview_rich(
         if parse_extended {
             append_extended_text(&mut table.current_cell, text, style, link);
         } else {
-            append_span(&mut table.current_cell, text, style, link);
+            append_leaf_span(&mut table.current_cell, text, style, link);
         }
         return;
     }
@@ -391,7 +397,7 @@ pub(crate) fn push_preview_rich(
     if parse_extended {
         append_extended_text(spans, text, style, link);
     } else {
-        append_span(spans, text, style, link);
+        append_leaf_span(spans, text, style, link);
     }
 }
 
@@ -446,6 +452,7 @@ pub(crate) fn push_preview_math(
     }
     if let Some(table) = table.as_mut() {
         table.current_cell.push(InlineSpan {
+            hard_break: false,
             text: math.authored.clone(),
             style,
             link: link.map(str::to_string),
@@ -469,6 +476,7 @@ pub(crate) fn push_preview_math(
     };
 
     spans.push(InlineSpan {
+        hard_break: false,
         text: math.authored.clone(),
         style,
         link: link.map(str::to_string),
@@ -480,6 +488,27 @@ pub(crate) fn push_preview_math(
 
 /// Appends text to the span list, merging with the previous span when the
 /// style and link target match.
+fn append_leaf_span(
+    spans: &mut Vec<InlineSpan>,
+    text: &str,
+    style: InlineStyle,
+    link: Option<&str>,
+) {
+    if text == "\n" {
+        spans.push(InlineSpan {
+            hard_break: true,
+            text: text.into(),
+            style,
+            link: link.map(str::to_string),
+            math: None,
+            image: None,
+            footnote: None,
+        });
+    } else {
+        append_span(spans, text, style, link);
+    }
+}
+
 pub(crate) fn append_span(
     spans: &mut Vec<InlineSpan>,
     text: &str,
@@ -492,6 +521,7 @@ pub(crate) fn append_span(
     if let Some(last) = spans.last_mut()
         && last.style == style
         && last.link.as_deref() == link
+        && !last.hard_break
         && last.math.is_none()
         && last.image.is_none()
         && last.footnote.is_none()
@@ -500,6 +530,7 @@ pub(crate) fn append_span(
         return;
     }
     spans.push(InlineSpan {
+        hard_break: false,
         text: text.to_string(),
         style,
         link: link.map(str::to_string),
@@ -516,6 +547,7 @@ pub(crate) fn append_footnote_span(spans: &mut Vec<InlineSpan>, label: &str, sty
         return;
     }
     spans.push(InlineSpan {
+        hard_break: false,
         text: label.to_string(),
         style,
         link: None,
@@ -533,7 +565,10 @@ pub(crate) fn append_preview_image(
     list_item: &mut Option<ListItemDraft>,
     table: &mut Option<TableDraft>,
     image: ImageDraft,
+    style: InlineStyle,
+    link: Option<&str>,
 ) -> Result<(), ImageDraft> {
+    let table_alt = table.is_some().then(|| clean_preview_text(&image.alt));
     let spans = if let Some(table) = table.as_mut() {
         &mut table.current_cell
     } else if let Some((_, spans, _)) = heading.as_mut() {
@@ -548,9 +583,10 @@ pub(crate) fn append_preview_image(
         return Err(image);
     };
     spans.push(InlineSpan {
-        text: String::new(),
-        style: InlineStyle::default(),
-        link: None,
+        hard_break: false,
+        text: table_alt.unwrap_or_default(),
+        style,
+        link: link.map(str::to_string),
         math: None,
         image: Some(InlineImage {
             alt: clean_preview_text(&image.alt),
@@ -569,6 +605,9 @@ pub(crate) fn append_preview_image(
 pub(crate) fn standalone_inline_images(rich: &RichText) -> Option<Vec<InlineImage>> {
     let mut images = Vec::new();
     for span in &rich.spans {
+        if span.link.is_some() {
+            return None;
+        }
         if let Some(image) = &span.image {
             images.push(image.clone());
         } else if !span.text.trim().is_empty() {
@@ -640,10 +679,30 @@ fn append_extended_segment(
     }
 }
 
-/// Normalizes accumulated spans into a [`RichText`]: trims every line, drops
-/// blank lines, joins the survivors with `\n`, and merges equal-style
-/// neighbors. This mirrors what `clean_preview_text` does for plain strings.
+/// Normalizes structural whitespace and merges equal-style spans, while
+/// preserving every authored break, including leading/trailing empty lines.
 pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
+    if !spans.iter().any(|span| span.hard_break) {
+        return finish_soft_rich_text(spans);
+    }
+    let mut merged = Vec::new();
+    let mut pending = Vec::new();
+    for span in spans {
+        if span.hard_break {
+            merged.extend(finish_soft_rich_text(std::mem::take(&mut pending)).spans);
+            merged.push(span);
+        } else {
+            pending.push(span);
+        }
+    }
+    merged.extend(finish_soft_rich_text(pending).spans);
+    RichText {
+        text: merged.iter().map(|span| span.text.as_str()).collect(),
+        spans: merged,
+    }
+}
+
+fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
     let mut lines: Vec<Vec<InlineSpan>> = vec![Vec::new()];
     for span in spans {
         if span.image.is_some() {
@@ -661,6 +720,7 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
                     .last_mut()
                     .expect("lines is non-empty")
                     .push(InlineSpan {
+                        hard_break: false,
                         text: part.to_string(),
                         style: span.style,
                         link: span.link.clone(),
@@ -1034,6 +1094,171 @@ pub(crate) enum InlineHtmlStyleKind {
     Highlight,
     Subscript,
     Superscript,
+    Underline,
+    Plain,
+}
+
+/// Semantic contribution of one exact inline element. Source ranges belong
+/// to callers; this descriptor is shared by reading, cells and Visual Edit.
+#[derive(Debug, Clone)]
+pub(crate) struct HtmlInlineElement {
+    pub name: String,
+    pub closing: bool,
+    pub kind: InlineHtmlStyleKind,
+    pub style: InlineStyle,
+    pub href: Option<String>,
+}
+
+pub(crate) fn compose_inline_style(mut base: InlineStyle, added: InlineStyle) -> InlineStyle {
+    base.bold |= added.bold;
+    base.italic |= added.italic;
+    base.strikethrough |= added.strikethrough;
+    base.underline |= added.underline;
+    base.code |= added.code;
+    base.highlight |= added.highlight;
+    if added.superscript || added.subscript {
+        base.superscript = added.superscript;
+        base.subscript = added.subscript;
+    }
+    base.color = added.color.or(base.color);
+    base
+}
+
+#[derive(Default)]
+pub(crate) struct HtmlInlineState {
+    frames: Vec<HtmlInlineElement>,
+}
+
+impl HtmlInlineState {
+    pub fn handle(&mut self, source: &str) -> bool {
+        let Some(element) = parse_html_inline_element(source) else {
+            return false;
+        };
+        if element.closing {
+            if let Some(index) = self
+                .frames
+                .iter()
+                .rposition(|frame| frame.name == element.name)
+            {
+                self.frames.truncate(index);
+            } else {
+                return false;
+            }
+        } else {
+            self.frames.push(element);
+        }
+        true
+    }
+
+    pub fn style(&self, base: InlineStyle) -> InlineStyle {
+        self.frames.iter().fold(base, |style, frame| {
+            compose_inline_style(style, frame.style)
+        })
+    }
+
+    pub fn link(&self) -> Option<&str> {
+        self.frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.href.as_deref())
+    }
+
+    pub fn clear(&mut self) {
+        self.frames.clear();
+    }
+}
+
+pub(crate) fn parse_html_inline_element(source: &str) -> Option<HtmlInlineElement> {
+    let trimmed = source.trim();
+    // ParsedHtmlTag is deliberately tolerant for block HTML; an inline
+    // descriptor must own exactly one complete tag, including quoted `>`.
+    if !trimmed.starts_with('<') || find_html_tag_end(trimmed, 0)? != trimmed.len() {
+        return None;
+    }
+    let tag = ParsedHtmlTag::parse(trimmed)?;
+    if tag.self_closing {
+        return None;
+    }
+    let mut style = InlineStyle::default();
+    let kind = match tag.name.as_str() {
+        "em" | "i" => {
+            style.italic = true;
+            InlineHtmlStyleKind::Emphasis
+        }
+        "strong" | "b" => {
+            style.bold = true;
+            InlineHtmlStyleKind::Strong
+        }
+        "s" | "del" | "strike" => {
+            style.strikethrough = true;
+            InlineHtmlStyleKind::Strikethrough
+        }
+        "code" | "kbd" | "samp" => {
+            style.code = true;
+            InlineHtmlStyleKind::Code
+        }
+        "mark" => {
+            style.highlight = true;
+            InlineHtmlStyleKind::Highlight
+        }
+        "sub" => {
+            style.subscript = true;
+            InlineHtmlStyleKind::Subscript
+        }
+        "sup" => {
+            style.superscript = true;
+            InlineHtmlStyleKind::Superscript
+        }
+        "u" | "ins" => {
+            style.underline = true;
+            InlineHtmlStyleKind::Underline
+        }
+        "span" | "font" | "a" => InlineHtmlStyleKind::Plain,
+        _ => return None,
+    };
+    for (name, value) in &tag.attrs {
+        match name.as_str() {
+            "class" | "id" | "clear" | "title" | "lang" => {}
+            "href" | "target" | "rel" if tag.name == "a" => {}
+            "color" if tag.name == "font" => {
+                style.color = Some(parse_css_color(value)?);
+            }
+            "style" => {
+                for declaration in value.split(';').filter(|decl| !decl.trim().is_empty()) {
+                    let (property, value) = declaration.split_once(':')?;
+                    let value = value.trim();
+                    match property.trim().to_ascii_lowercase().as_str() {
+                        "color" => style.color = Some(parse_css_color(value)?),
+                        "font-weight" if value.eq_ignore_ascii_case("bold") || value == "700" => {
+                            style.bold = true
+                        }
+                        "font-style" if value.eq_ignore_ascii_case("italic") => style.italic = true,
+                        "text-decoration" => {
+                            for token in value.split_whitespace() {
+                                match token.to_ascii_lowercase().as_str() {
+                                    "underline" => style.underline = true,
+                                    "line-through" => style.strikethrough = true,
+                                    _ => return None,
+                                }
+                            }
+                        }
+                        _ => return None,
+                    }
+                }
+            }
+            _ if name.starts_with("data-") || name.starts_with("aria-") => {}
+            _ => return None,
+        }
+    }
+    Some(HtmlInlineElement {
+        href: (tag.name == "a" && !tag.closing)
+            .then(|| tag.attr("href"))
+            .flatten(),
+        name: tag.name,
+        closing: tag.closing,
+        kind,
+        style,
+    })
 }
 
 /// Recognized form of one supported inline-HTML tag.
@@ -1044,48 +1269,38 @@ pub(crate) enum InlineHtmlStyleTag {
     LineBreak,
 }
 
-/// Recognizes exactly one complete inline-HTML tag from the narrow subset the
-/// Visual Edit inline projection can hide as a marker: the style pairs
-/// `em`/`i`, `strong`/`b`, `s`/`del`/`strike`, `code`, `mark`, `sub`, `sup`
-/// (tag names case-insensitive) and the void line-break forms `<br>`, `<br/>`,
-/// `<br />`. Ignorable presentation attributes `class`, `id`, and `clear` are
-/// accepted without mapping to style. Like `parse_inline_html_image`, `source`
-/// must be a single tag slice. Anything else — unknown tags, non-ignorable
-/// attributes, self-closing style pairs, closing `</br>` — returns `None` so
-/// callers keep the conservative fallback.
+/// Recognizes supported inline element pairs and the void line-break forms.
+/// Inline elements share the style/link classifier; breaks accept inert metadata.
+/// Unknown attributes, self-closing pairs and closing `</br>` stay conservative.
 pub(crate) fn parse_inline_html_style_tag(source: &str) -> Option<InlineHtmlStyleTag> {
+    if let Some(element) = parse_html_inline_element(source) {
+        return Some(if element.closing {
+            InlineHtmlStyleTag::Close { kind: element.kind }
+        } else {
+            InlineHtmlStyleTag::Open { kind: element.kind }
+        });
+    }
     let trimmed = source.trim();
-    let inner = trimmed.strip_prefix('<')?.strip_suffix('>')?;
-    if inner.trim().is_empty() || inner.contains('<') || inner.contains('>') {
+    if !trimmed.starts_with('<') || find_html_tag_end(trimmed, 0)? != trimmed.len() {
         return None;
     }
     let tag = ParsedHtmlTag::parse(trimmed)?;
-    if !tag
-        .attrs
-        .iter()
-        .all(|(name, _)| matches!(name.as_str(), "class" | "id" | "clear"))
-    {
+    if !tag.attrs.iter().all(|(name, _)| {
+        matches!(name.as_str(), "class" | "id" | "clear" | "title" | "lang")
+            || name.starts_with("data-")
+            || name.starts_with("aria-")
+    }) {
         return None;
     }
-    let kind = match tag.name.as_str() {
-        "em" | "i" => InlineHtmlStyleKind::Emphasis,
-        "strong" | "b" => InlineHtmlStyleKind::Strong,
-        "s" | "del" | "strike" => InlineHtmlStyleKind::Strikethrough,
-        "code" => InlineHtmlStyleKind::Code,
-        "mark" => InlineHtmlStyleKind::Highlight,
-        "sub" => InlineHtmlStyleKind::Subscript,
-        "sup" => InlineHtmlStyleKind::Superscript,
-        "br" if !tag.closing => return Some(InlineHtmlStyleTag::LineBreak),
-        _ => return None,
-    };
-    if tag.self_closing {
-        return None;
-    }
-    Some(if tag.closing {
-        InlineHtmlStyleTag::Close { kind }
-    } else {
-        InlineHtmlStyleTag::Open { kind }
-    })
+    (tag.name == "br" && !tag.closing).then_some(InlineHtmlStyleTag::LineBreak)
+}
+
+/// Style aliases (such as `em` and `i`) are not interchangeable end tags.
+pub(crate) fn inline_html_tag_names_match(open: &str, close: &str) -> bool {
+    matches!(
+        (ParsedHtmlTag::parse(open.trim()), ParsedHtmlTag::parse(close.trim())),
+        (Some(open), Some(close)) if !open.closing && close.closing && open.name == close.name
+    )
 }
 
 /// Image sources in document order (standalone `<img>`, table-cell images,
@@ -1212,11 +1427,13 @@ struct HtmlTableParser<'a> {
     links: Vec<String>,
     /// Last `<img>` captured in the current cell.
     pending_image: Option<HtmlTableCellImage>,
+    inline: HtmlInlineState,
 }
 
 impl<'a> HtmlTableParser<'a> {
     fn new(html: &'a str) -> Self {
         Self {
+            inline: HtmlInlineState::default(),
             html,
             index: 0,
             in_table: false,
@@ -1276,6 +1493,9 @@ impl<'a> HtmlTableParser<'a> {
     }
 
     fn handle_tag(&mut self, tag: &str) {
+        if self.cell_open && self.inline.handle(tag) {
+            return;
+        }
         let Some(parsed) = ParsedHtmlTag::parse(tag) else {
             return;
         };
@@ -1333,8 +1553,14 @@ impl<'a> HtmlTableParser<'a> {
                     }
                 }
             }
-            "br" if self.cell_open => {
-                self.append_cell_text("\n");
+            "br" if self.cell_open && !parsed.closing => {
+                let style = self.cell_style();
+                append_leaf_span(
+                    &mut self.current_cell_spans,
+                    "\n",
+                    style,
+                    self.inline.link(),
+                );
             }
             "strong" | "b" if self.cell_open => {
                 self.adjust_depth(parsed.closing, |s| &mut s.bold_depth)
@@ -1358,6 +1584,7 @@ impl<'a> HtmlTableParser<'a> {
             "img" if self.cell_open && !parsed.closing => {
                 if let Some(url) = parsed.attr("src") {
                     self.pending_image = Some(HtmlTableCellImage {
+                        link: self.inline.link().map(str::to_string),
                         alt: parsed.attr("alt").unwrap_or_default(),
                         url,
                         title: parsed.attr("title").filter(|title| !title.is_empty()),
@@ -1389,7 +1616,12 @@ impl<'a> HtmlTableParser<'a> {
         self.pending_colspan = colspan;
         self.pending_rowspan = rowspan;
         self.current_cell_spans.clear();
+        self.bold_depth = 0;
+        self.italic_depth = 0;
+        self.code_depth = 0;
+        self.strike_depth = 0;
         self.links.clear();
+        self.inline.clear();
         self.pending_image = None;
         self.cell_open = true;
     }
@@ -1525,7 +1757,11 @@ impl<'a> HtmlTableParser<'a> {
         }
         let decoded = decode_html_entities(text);
         let style = self.cell_style();
-        let link = self.links.last().cloned();
+        let link = self
+            .inline
+            .link()
+            .map(str::to_string)
+            .or_else(|| self.links.last().cloned());
         for ch in decoded.chars() {
             if ch.is_whitespace() {
                 // Collapse runs of whitespace to a single space, mirroring HTML.
@@ -1548,13 +1784,13 @@ impl<'a> HtmlTableParser<'a> {
     }
 
     fn cell_style(&self) -> InlineStyle {
-        InlineStyle {
+        self.inline.style(InlineStyle {
             bold: self.bold_depth > 0,
             italic: self.italic_depth > 0,
             code: self.code_depth > 0,
             strikethrough: self.strike_depth > 0,
             ..InlineStyle::default()
-        }
+        })
     }
 
     /// Adjust an inline-style depth counter on opening/closing style tags,
@@ -1604,6 +1840,7 @@ struct HtmlPreviewBuilder<'a> {
     text_list_marker: Option<HtmlListMarker>,
     text_pre: bool,
     text_align: HtmlAlign,
+    inline: HtmlInlineState,
 }
 
 struct HtmlPendingSpace {
@@ -1615,6 +1852,7 @@ struct HtmlPendingSpace {
 impl<'a> HtmlPreviewBuilder<'a> {
     fn new(html: &'a str) -> Self {
         Self {
+            inline: HtmlInlineState::default(),
             html,
             index: 0,
             parts: Vec::new(),
@@ -1666,6 +1904,10 @@ impl<'a> HtmlPreviewBuilder<'a> {
     }
 
     fn handle_tag(&mut self, tag: &str) {
+        if self.inline.handle(tag) {
+            self.update_style();
+            return;
+        }
         let Some(parsed) = ParsedHtmlTag::parse(tag) else {
             return;
         };
@@ -1679,7 +1921,11 @@ impl<'a> HtmlPreviewBuilder<'a> {
         }
 
         match parsed.name.as_str() {
-            "br" => self.push_line_break(),
+            "br" if !parsed.closing => {
+                self.pending_space = None;
+                self.capture_text_meta();
+                append_leaf_span(&mut self.spans, "\n", self.style, self.inline.link());
+            }
             "pre" => {
                 self.pending_space = None;
                 if parsed.closing {
@@ -1753,7 +1999,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
                     self.apply_open_align(&parsed);
                 }
             }
-            "u" => {
+            "u" | "ins" => {
                 if parsed.closing {
                     self.underline_depth = self.underline_depth.saturating_sub(1);
                 } else if !parsed.self_closing {
@@ -1828,6 +2074,11 @@ impl<'a> HtmlPreviewBuilder<'a> {
                     self.flush_text();
                     let align = self.current_align().combine(parsed.html_align());
                     self.parts.push(HtmlPreviewPart::Image {
+                        link: self
+                            .inline
+                            .link()
+                            .map(str::to_string)
+                            .or_else(|| self.links.last().cloned()),
                         alt: parsed.attr("alt").unwrap_or_default(),
                         url,
                         title: parsed.attr("title").filter(|title| !title.is_empty()),
@@ -1849,12 +2100,14 @@ impl<'a> HtmlPreviewBuilder<'a> {
     }
 
     fn update_style(&mut self) {
+        self.style = InlineStyle::default();
         self.style.bold = self.bold_depth > 0;
         self.style.italic = self.italic_depth > 0;
         self.style.code = self.code_depth > 0;
         self.style.strikethrough = self.strike_depth > 0;
         self.style.underline = self.underline_depth > 0;
         self.style.color = self.colors.iter().rev().find_map(|color| *color);
+        self.style = self.inline.style(self.style);
     }
 
     fn apply_open_align(&mut self, parsed: &ParsedHtmlTag) {
@@ -1908,7 +2161,11 @@ impl<'a> HtmlPreviewBuilder<'a> {
             if ch.is_whitespace() {
                 self.pending_space = Some(HtmlPendingSpace {
                     style: self.style,
-                    link: self.links.last().cloned(),
+                    link: self
+                        .inline
+                        .link()
+                        .map(str::to_string)
+                        .or_else(|| self.links.last().cloned()),
                     centered: self.centered_depth > 0,
                 });
                 continue;
@@ -1928,7 +2185,9 @@ impl<'a> HtmlPreviewBuilder<'a> {
                 &mut self.spans,
                 "\n",
                 InlineStyle::default(),
-                self.links.last().map(String::as_str),
+                self.inline
+                    .link()
+                    .or_else(|| self.links.last().map(String::as_str)),
             );
         }
     }
@@ -1950,7 +2209,9 @@ impl<'a> HtmlPreviewBuilder<'a> {
             &mut self.spans,
             text,
             self.style,
-            self.links.last().map(String::as_str),
+            self.inline
+                .link()
+                .or_else(|| self.links.last().map(String::as_str)),
         );
     }
 
@@ -2138,6 +2399,9 @@ fn parse_css_color(value: &str) -> Option<u32> {
 
 fn parse_hex_color(hex: &str) -> Option<u32> {
     let hex = hex.trim();
+    if !hex.is_ascii() {
+        return None;
+    }
     match hex.len() {
         3 => {
             let red = u32::from_str_radix(&hex[0..1], 16).ok()?;
@@ -2150,7 +2414,7 @@ fn parse_hex_color(hex: &str) -> Option<u32> {
     }
 }
 
-fn find_html_tag_end(html: &str, start: usize) -> Option<usize> {
+pub(crate) fn find_html_tag_end(html: &str, start: usize) -> Option<usize> {
     let mut quote = None;
     for (relative, ch) in html[start..].char_indices() {
         if relative == 0 {
@@ -2834,6 +3098,14 @@ mod inline_html_style_tag_tests {
             ("</code>", T::Close { kind: K::Code }),
             ("<mark>", T::Open { kind: K::Highlight }),
             ("<sub>", T::Open { kind: K::Subscript }),
+            ("<u>", T::Open { kind: K::Underline }),
+            ("</U>", T::Close { kind: K::Underline }),
+            ("<ins>", T::Open { kind: K::Underline }),
+            ("</ins>", T::Close { kind: K::Underline }),
+            (
+                "<u class=\"toc\" id=\"title\">",
+                T::Open { kind: K::Underline },
+            ),
             (
                 "</sup>",
                 T::Close {
@@ -2844,6 +3116,7 @@ mod inline_html_style_tag_tests {
             ("<br/>", T::LineBreak),
             ("<br />", T::LineBreak),
             ("<BR>", T::LineBreak),
+            ("<br title=\"a > b\" data-id=\"x\">", T::LineBreak),
             ("<em class=\"x\">", T::Open { kind: K::Emphasis }),
             ("</em class=\"x\">", T::Close { kind: K::Emphasis }),
             ("<br class=\"clear\">", T::LineBreak),
@@ -2858,11 +3131,12 @@ mod inline_html_style_tag_tests {
     #[test]
     fn rejects_unsupported_forms() {
         let rejected = [
-            "<a>",
-            "</a>",
-            "<u>",
-            "<span>",
-            "<em title>",
+            "<widget>",
+            "</widget>",
+            "<u/>",
+            "<u style=\"color:red\">",
+            "<span onclick=\"x\">",
+            "<em onclick>",
             "<em/>",
             "</br>",
             "text",
@@ -2874,6 +3148,29 @@ mod inline_html_style_tag_tests {
         for source in rejected {
             assert!(parse_inline_html_style_tag(source).is_none(), "{source:?}");
         }
+    }
+
+    #[test]
+    fn inline_html_insertions_render_in_shared_html_blocks() {
+        let parts = super::html_preview_parts("<p>plain <ins>新增</ins> tail</p>");
+        let spans = parts
+            .iter()
+            .flat_map(|part| match part {
+                super::HtmlPreviewPart::Text { text, .. } => text.spans.as_slice(),
+                _ => &[],
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.text.contains("新增") && span.style.underline)
+        );
+        assert!(
+            spans
+                .iter()
+                .filter(|span| span.text.contains("tail"))
+                .all(|span| !span.style.underline)
+        );
     }
 }
 

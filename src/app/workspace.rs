@@ -77,13 +77,18 @@ impl MarkionApp {
         self.set_view_mode(self.view_mode.next(), cx);
     }
 
-    pub(super) fn set_edit_mode(
+    pub(super) fn toggle_source_split_mode(
         &mut self,
-        _: &SetEditMode,
+        _: &ToggleSourceSplitMode,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_view_mode(ViewMode::Edit, cx);
+        let target = if matches!(self.view_mode, ViewMode::Edit) {
+            ViewMode::Split
+        } else {
+            ViewMode::Edit
+        };
+        self.set_view_mode(target, cx);
     }
 
     pub(super) fn set_visual_edit_mode(
@@ -93,15 +98,6 @@ impl MarkionApp {
         cx: &mut Context<Self>,
     ) {
         self.set_view_mode(ViewMode::VisualEdit, cx);
-    }
-
-    pub(super) fn set_split_preview_mode(
-        &mut self,
-        _: &SetSplitPreviewMode,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_view_mode(ViewMode::Split, cx);
     }
 
     pub(super) fn set_read_mode(

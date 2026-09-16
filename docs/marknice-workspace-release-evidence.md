@@ -118,3 +118,15 @@ Carry-overs that still apply, with their reasons:
 - macOS and Linux manual browser checks remain deferred (maintainer-authorized
   since v0.2.1), not represented as passes; their native packaging,
   extraction, and digest verification remain mandatory in the tag workflow.
+
+## v0.3.10 carry-over
+
+`v0.3.9..v0.3.10` contains no changes under `assets/marknice-workspace` or
+`crates/wechat-workspace`, so the v0.2.7 browser/workspace evidence and the
+unchanged WeChat rich-paste evidence carry over to v0.3.10. Before tagging on
+2026-09-15, the source-tree `verify-bundle` command passed on Windows for all
+23 files (3,140,387 bytes) at pinned MarkNice revision
+`c009c1ec7e7c92f89afa5a32edcb126b5296bda7`. The tag workflow must still rerun
+native package extraction and exhaustive bundle verification on Windows,
+macOS Apple Silicon, and Linux. The maintainer-authorized macOS and Linux
+manual-browser deferrals remain recorded as deferrals, not as passes.

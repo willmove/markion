@@ -70,6 +70,70 @@ impl ChunkWriter {
     }
 }
 
+#[derive(Clone, Copy)]
+enum InlineBoundaryEvent {
+    Text { first: char, bold: bool },
+    Structural,
+}
+
+#[derive(Default)]
+struct InlineBoundaryState {
+    pending_bold_boundary: bool,
+    first_event: Option<InlineBoundaryEvent>,
+}
+
+impl InlineBoundaryState {
+    fn prepare_text(&mut self, text: &str, bold: bool, writer: &mut ChunkWriter) {
+        let Some(first) = text.chars().next() else {
+            return;
+        };
+        let event = InlineBoundaryEvent::Text { first, bold };
+        self.record_first(event);
+        self.insert_compatibility_space(event, writer);
+        self.pending_bold_boundary = bold
+            && text
+                .chars()
+                .next_back()
+                .is_some_and(|last| !last.is_whitespace());
+    }
+
+    fn separate(&mut self) {
+        self.record_first(InlineBoundaryEvent::Structural);
+        self.pending_bold_boundary = false;
+    }
+
+    fn prepare_nested_item(&mut self, nested: &Self, writer: &mut ChunkWriter) {
+        let event = nested
+            .first_event
+            .unwrap_or(InlineBoundaryEvent::Structural);
+        self.record_first(event);
+        self.insert_compatibility_space(event, writer);
+    }
+
+    fn finish_nested_item(&mut self, nested: &Self) {
+        self.pending_bold_boundary = nested
+            .first_event
+            .is_some()
+            .then_some(nested.pending_bold_boundary)
+            .unwrap_or(false);
+    }
+
+    fn record_first(&mut self, event: InlineBoundaryEvent) {
+        self.first_event.get_or_insert(event);
+    }
+
+    fn insert_compatibility_space(&self, event: InlineBoundaryEvent, writer: &mut ChunkWriter) {
+        if self.pending_bold_boundary
+            && matches!(
+                event,
+                InlineBoundaryEvent::Text { first, bold: false } if first.is_alphanumeric()
+            )
+        {
+            writer.text(" ");
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct Relationship {
     target: String,
@@ -568,6 +632,18 @@ impl Converter<'_> {
         writer: &mut ChunkWriter,
         location: Option<String>,
     ) -> Result<(), ImportError> {
+        let mut boundary = InlineBoundaryState::default();
+        self.render_inline_children_with_boundary(parent, part, writer, location, &mut boundary)
+    }
+
+    fn render_inline_children_with_boundary(
+        &mut self,
+        parent: Node<'_, '_>,
+        part: &str,
+        writer: &mut ChunkWriter,
+        location: Option<String>,
+        boundary: &mut InlineBoundaryState,
+    ) -> Result<(), ImportError> {
         for node in parent.children().filter(Node::is_element) {
             self.checkpoint()?;
             if excluded_revision(node) {
@@ -577,10 +653,11 @@ impl Converter<'_> {
                 continue;
             }
             if is_w(node, "r") {
-                self.render_run(node, part, writer, location.clone())?;
+                self.render_run(node, part, writer, location.clone(), boundary)?;
             } else if is_w(node, "hyperlink") {
-                self.render_hyperlink(node, part, writer, location.clone())?;
+                self.render_hyperlink(node, part, writer, location.clone(), boundary)?;
             } else if is_m(node, "oMath") {
+                boundary.separate();
                 let tex = omml_children(node);
                 if tex.is_empty() || !omml_supported(node) {
                     let fallback = visible_text(node);
@@ -603,14 +680,27 @@ impl Converter<'_> {
                 }
             } else if matches!(
                 node.tag_name().name(),
-                "ins" | "moveTo" | "smartTag" | "sdt"
+                "ins" | "moveTo" | "smartTag" | "sdt" | "sdtContent" | "customXml"
             ) {
-                self.render_inline_children(node, part, writer, location.clone())?;
+                self.render_inline_children_with_boundary(
+                    node,
+                    part,
+                    writer,
+                    location.clone(),
+                    boundary,
+                )?;
             } else if is_w(node, "fldSimple") {
-                self.render_inline_children(node, part, writer, location.clone())?;
+                self.render_inline_children_with_boundary(
+                    node,
+                    part,
+                    writer,
+                    location.clone(),
+                    boundary,
+                )?;
             } else {
                 let text = visible_text(node);
                 if !text.is_empty() {
+                    boundary.prepare_text(&text, false, writer);
                     writer.recovered_text(escape_markdown_text(&text));
                 }
             }
@@ -624,11 +714,13 @@ impl Converter<'_> {
         part: &str,
         writer: &mut ChunkWriter,
         location: Option<String>,
+        boundary: &mut InlineBoundaryState,
     ) -> Result<(), ImportError> {
         if let Some(drawing) = run
             .descendants()
             .find(|node| is_w(*node, "drawing") && drawing_has_image_reference(*node))
         {
+            boundary.separate();
             self.render_image(drawing, part, writer, location.clone())?;
         }
         if let Some(reference) = run
@@ -636,6 +728,7 @@ impl Converter<'_> {
             .find(|node| is_w(*node, "footnoteReference"))
             .and_then(|node| attr_local(node, "id"))
         {
+            boundary.separate();
             self.footnote_references.insert(reference.to_owned());
             writer.text(format!("[^fn{reference}]"));
         }
@@ -693,6 +786,7 @@ impl Converter<'_> {
                 after.insert_str(0, close);
             }
         }
+        boundary.prepare_text(&text, bold, writer);
         writer.text(before);
         writer.recovered_text(escaped);
         writer.text(after);
@@ -738,9 +832,17 @@ impl Converter<'_> {
         part: &str,
         writer: &mut ChunkWriter,
         location: Option<String>,
+        boundary: &mut InlineBoundaryState,
     ) -> Result<(), ImportError> {
         let mut label_writer = ChunkWriter::default();
-        self.render_inline_children(node, part, &mut label_writer, location.clone())?;
+        let mut label_boundary = InlineBoundaryState::default();
+        self.render_inline_children_with_boundary(
+            node,
+            part,
+            &mut label_writer,
+            location.clone(),
+            &mut label_boundary,
+        )?;
         writer.recovered_content |= label_writer.recovered_content;
         let label = flatten_text(&label_writer.chunks);
         let anchor = attr_local(node, "anchor");
@@ -758,6 +860,7 @@ impl Converter<'_> {
         } else {
             None
         };
+        boundary.prepare_nested_item(&label_boundary, writer);
         if let Some(destination) = destination {
             writer.text("[");
             writer.text(label);
@@ -778,6 +881,7 @@ impl Converter<'_> {
             );
             writer.text(label);
         }
+        boundary.finish_nested_item(&label_boundary);
         Ok(())
     }
 

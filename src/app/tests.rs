@@ -487,6 +487,34 @@ fn organize_local_images_reports_nothing_to_do_for_in_scope_references(cx: &mut 
 }
 
 #[test]
+fn visual_inline_html_underline_reaches_painted_highlights() {
+    let source = "plain <u>中文 **加粗**</u> tail";
+    let doc = MarkdownDocument::from_text(source);
+    let blocks = doc.visual_blocks_shared();
+    let projection = build_visual_projection_with_marked_range(source, &blocks[0], 0..0, 0, None);
+    assert_eq!(projection.text, "plain 中文 加粗 tail");
+    let highlights = visual_projection_highlights(&projection, None);
+    for needle in ["中文", "加粗"] {
+        let start = projection.text.find(needle).unwrap();
+        let (_, style) = highlights
+            .iter()
+            .find(|(range, _)| range.start <= start && range.end >= start + needle.len())
+            .expect("underlined text must produce a paint highlight");
+        assert!(style.underline.is_some());
+        if needle == "加粗" {
+            assert_eq!(style.font_weight, Some(FontWeight::BOLD));
+        }
+    }
+    let tail = projection.text.find("tail").unwrap();
+    assert!(
+        highlights
+            .iter()
+            .filter(|(range, _)| range.contains(&tail))
+            .all(|(_, style)| style.underline.is_none())
+    );
+}
+
+#[test]
 fn visual_pinyin_preedit_composes_sorted_utf8_highlights() {
     let source = "**激活稀疏（Activation Sparsity）**：经过 ReLU、SiLU 这类激活函数后，一部分激活值变成 0（或接近 0）。这是**动态的**——每个 batch、每个 token 的稀疏位置都不一样，硬件必须在**运行时**现场判断哪里是 0、现场建索引、现场跳过。这一\"现场\"是激活稀疏难做的根源。";
     let mut doc = MarkdownDocument::from_text(source);
@@ -575,11 +603,11 @@ fn menu_shortcut_labels_follow_platform_conventions() {
         "Cmd+O"
     );
     assert_eq!(
-        menu_shortcuts::SET_EDIT_MODE.label(ShortcutPlatform::WindowsLinux),
+        menu_shortcuts::SOURCE_SPLIT_MODE.label(ShortcutPlatform::WindowsLinux),
         "Ctrl+/"
     );
     assert_eq!(
-        menu_shortcuts::SET_EDIT_MODE.label(ShortcutPlatform::MacOS),
+        menu_shortcuts::SOURCE_SPLIT_MODE.label(ShortcutPlatform::MacOS),
         "Cmd+/"
     );
     assert_eq!(
@@ -808,6 +836,80 @@ fn structural_format_shortcuts_are_localized_in_every_catalog_variant() {
 }
 
 #[test]
+fn source_split_shortcut_is_localized_as_one_view_catalog_row() {
+    for language in Language::all() {
+        let catalog = shortcut_catalog(*language, EXTENDED_HEADING_MENU_MAX_LEVEL);
+        let view = catalog
+            .section(ShortcutCategory::View)
+            .expect("View shortcut category");
+        let source_split = view
+            .actions
+            .iter()
+            .find(|action| action.ids() == ["set-edit-mode"])
+            .unwrap_or_else(|| panic!("missing Source/Split Preview for {language:?}"));
+
+        assert_eq!(
+            source_split.label,
+            t(*language, Msg::ItemSourceSplitPreview)
+        );
+        assert_eq!(
+            source_split.combinations(ShortcutPlatform::WindowsLinux),
+            ["Ctrl+/"]
+        );
+        assert_eq!(
+            source_split.combinations(ShortcutPlatform::MacOS),
+            ["Cmd+/"]
+        );
+        assert!(
+            view.actions
+                .iter()
+                .all(|action| !action.ids().contains(&"set-split-preview-mode")),
+            "obsolete Split Preview row remained for {language:?}"
+        );
+    }
+}
+
+#[test]
+fn paragraph_shortcut_is_localized_in_every_catalog_variant() {
+    for language in [
+        Language::En,
+        Language::Ja,
+        Language::Fr,
+        Language::De,
+        Language::Es,
+        Language::ZhHans,
+        Language::ZhHant,
+    ] {
+        for heading_depth in [
+            DEFAULT_HEADING_MENU_MAX_LEVEL,
+            EXTENDED_HEADING_MENU_MAX_LEVEL,
+        ] {
+            let catalog = shortcut_catalog(language, heading_depth);
+            let editing = catalog
+                .section(ShortcutCategory::Editing)
+                .expect("Editing shortcut category");
+            let action = editing
+                .actions
+                .iter()
+                .find(|action| action.ids().contains(&"paragraph"))
+                .unwrap_or_else(|| {
+                    panic!("missing paragraph for {language:?} at H{heading_depth}")
+                });
+            assert!(action.label.contains(t(language, Msg::ItemParagraph)));
+            assert_eq!(action.ids().first(), Some(&"paragraph"));
+            assert_eq!(
+                action.combinations(ShortcutPlatform::WindowsLinux).first(),
+                Some(&"Ctrl+0")
+            );
+            assert_eq!(
+                action.combinations(ShortcutPlatform::MacOS).first(),
+                Some(&"Cmd+0")
+            );
+        }
+    }
+}
+
+#[test]
 fn shortcut_effective_binding_and_label_fall_back_to_defaults() {
     let mut overrides = BTreeMap::new();
     overrides.insert("bold".to_string(), "ctrl-alt-b".to_string());
@@ -1005,6 +1107,7 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
         ("Msg::ItemRedo,", "menu_shortcuts::REDO"),
         ("Msg::ItemFind,", "menu_shortcuts::SHOW_FIND"),
         ("Msg::ItemBold,", "menu_shortcuts::BOLD"),
+        ("Msg::ItemParagraph,", "menu_shortcuts::PARAGRAPH"),
         ("Msg::ItemBullets,", "menu_shortcuts::UNORDERED_LIST"),
         ("Msg::ItemNumbers,", "menu_shortcuts::ORDERED_LIST"),
         ("Msg::ItemTask,", "menu_shortcuts::TASK_LIST"),
@@ -1042,6 +1145,49 @@ fn application_menu_shortcuts_distinguish_bound_and_unbound_actions() {
 }
 
 #[test]
+fn source_split_view_menu_uses_one_combined_action_on_both_surfaces() {
+    let root_view = include_str!("root_view.rs").replace("\r\n", "\n");
+    let in_window_view = root_view
+        .split_once("AppMenu::View => panel")
+        .and_then(|(_, rest)| rest.split_once("AppMenu::Format =>").map(|(view, _)| view))
+        .expect("in-window View menu");
+
+    let bootstrap = include_str!("bootstrap.rs").replace("\r\n", "\n");
+    let native_view = bootstrap
+        .split_once("name: t(language, Msg::MenuView).into()")
+        .and_then(|(_, rest)| {
+            rest.split_once("name: t(language, Msg::MenuFormat).into()")
+                .map(|(view, _)| view)
+        })
+        .expect("native View menu");
+    let bindings = bootstrap
+        .split_once("pub(super) fn bind_app_keys")
+        .and_then(|(_, rest)| rest.split_once("pub(super) fn run()").map(|(body, _)| body))
+        .expect("application keymap");
+
+    for (surface, menu) in [("in-window", in_window_view), ("native", native_view)] {
+        assert_eq!(
+            menu.matches("Msg::ItemSourceSplitPreview").count(),
+            1,
+            "{surface} View menu must contain exactly one combined row"
+        );
+        assert!(menu.contains("ToggleSourceSplitMode"));
+        assert!(menu.contains("Msg::ItemVisualEditMode"));
+        assert!(menu.contains("Msg::ItemReadMode"));
+        assert!(menu.contains("Msg::ItemToggleView"));
+        assert!(!menu.contains("Msg::ItemEditMode"));
+        assert!(!menu.contains("Msg::ItemSplitPreviewMode"));
+        assert!(!menu.contains("SetEditMode"));
+        assert!(!menu.contains("SetSplitPreviewMode"));
+    }
+
+    assert!(in_window_view.contains("menu_shortcuts::SOURCE_SPLIT_MODE"));
+    assert!(bindings.contains("eff(&menu_shortcuts::SOURCE_SPLIT_MODE)"));
+    assert!(bindings.contains("ToggleSourceSplitMode"));
+    assert!(!bindings.contains("SET_SPLIT_PREVIEW_MODE"));
+}
+
+#[test]
 fn native_structural_format_menu_actions_share_the_bound_handlers() {
     let bootstrap = include_str!("bootstrap.rs").replace("\r\n", "\n");
     let format_menu = bootstrap
@@ -1057,6 +1203,7 @@ fn native_structural_format_menu_actions_share_the_bound_handlers() {
         .expect("complete application keymap");
 
     for (message, action, descriptor) in [
+        ("Msg::ItemParagraph", "Paragraph", "PARAGRAPH"),
         ("Msg::ItemBullets", "UnorderedList", "UNORDERED_LIST"),
         ("Msg::ItemNumbers", "OrderedList", "ORDERED_LIST"),
         ("Msg::ItemTask", "TaskList", "TASK_LIST"),
@@ -1151,7 +1298,7 @@ fn backup_sync_actions_are_grouped_while_file_history_stays_contextual() {
         })
         .expect("native File menu");
     let native_repository = bootstrap
-        .split_once("name: git_t(language, GitMsg::BackupAndSync)")
+        .split_once("name: git_t(language, GitMsg::SyncMenu)")
         .and_then(|(_, rest)| {
             rest.split_once("name: t(language, Msg::MenuHelp)")
                 .map(|(repo, _)| repo)
@@ -1181,6 +1328,8 @@ fn backup_sync_actions_are_grouped_while_file_history_stays_contextual() {
         );
     }
     assert!(in_window_repository.contains("GitMsg::BackupAndSync"));
+    assert!(root_view.contains("self.git_label(GitMsg::SyncMenu)"));
+    assert!(!root_view.contains("self.git_label(GitMsg::BackupAndSync)"));
     assert!(native_repository.contains("GitMsg::ViewStatus"));
     assert!(in_window_repository.contains("GitMsg::AdvancedGitTools"));
     assert!(native_repository.contains("GitMsg::AdvancedGitTools"));
@@ -1205,8 +1354,8 @@ fn backup_sync_actions_are_grouped_while_file_history_stays_contextual() {
         .find("Msg::MenuExport")
         .expect("native Export menu");
     let native_repository = bootstrap
-        .find("GitMsg::BackupAndSync")
-        .expect("native Backup and Sync menu");
+        .find("GitMsg::SyncMenu")
+        .expect("native Sync menu");
     let native_help = bootstrap.find("Msg::MenuHelp").expect("native Help menu");
     assert!(native_export < native_repository && native_repository < native_help);
 }
@@ -1222,6 +1371,17 @@ fn conditional_heading_menu_wires_only_visible_heading_shortcuts() {
         })
         .expect("Format menu arm");
 
+    let paragraph = format_menu
+        .find("menu_shortcuts::PARAGRAPH")
+        .expect("Paragraph shortcut descriptor");
+    let h1 = format_menu
+        .find("menu_shortcuts::HEADING_1")
+        .expect("H1 shortcut descriptor");
+    assert!(
+        paragraph < h1,
+        "Paragraph must appear immediately before headings"
+    );
+
     for level in 1..=5 {
         assert!(
             format_menu.contains(&format!("menu_shortcuts::HEADING_{level}")),
@@ -1235,6 +1395,20 @@ fn conditional_heading_menu_wires_only_visible_heading_shortcuts() {
         .find("menu_shortcuts::HEADING_6")
         .expect("H6 shortcut descriptor");
     assert!(h6_condition < h6_shortcut);
+
+    let native = include_str!("bootstrap.rs");
+    let native_format = native
+        .split_once("name: t(language, Msg::MenuFormat).into()")
+        .and_then(|(_, rest)| {
+            rest.split_once("name: t(language, Msg::MenuExport).into()")
+                .map(|(format, _)| format)
+        })
+        .expect("native Format menu");
+    assert!(
+        native_format.find("Msg::ItemParagraph").unwrap()
+            < native_format.find("heading_native_menu_items").unwrap(),
+        "native Paragraph must appear before the heading items"
+    );
 }
 
 #[test]
@@ -1409,7 +1583,8 @@ fn startup_application_flow_reuses_existing_open_behaviour() {
 #[test]
 fn backup_sync_center_is_transient_responsive_and_keyboard_operable() {
     let root = include_str!("root_view.rs");
-    let panel = include_str!("git_panel.rs");
+    // `include_str!` follows checkout line endings; Windows CI may check out CRLF.
+    let panel = include_str!("git_panel.rs").replace("\r\n", "\n");
 
     assert!(root.contains("self.git_ui.center_open"));
     assert!(root.contains("git_panel::center_view(self, cx)"));
@@ -3274,7 +3449,7 @@ fn shortcut_catalog_lists_core_workflows() {
     ));
     assert!(has_action(
         ShortcutCategory::View,
-        "Source Mode",
+        "Source/Split Preview",
         "Ctrl+/",
         "Cmd+/"
     ));
@@ -4590,6 +4765,105 @@ fn structural_format_shortcuts_dispatch_and_live_rebind(cx: &mut TestAppContext)
     });
 }
 
+#[gpui::test]
+fn paragraph_action_reports_success_and_noop_without_extra_undo(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("## Heading"))];
+        app.active_tab_mut().selected_range = 5..5;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    cx.dispatch_action(Paragraph);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Heading");
+        assert_eq!(app.active_tab().selected_range, 2..2);
+        assert_eq!(app.status, t(app.language, Msg::StatusFmtParagraph));
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+
+    let (version, undo_len, preview, visual) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().undo_stack.len(),
+            app.active_tab().document.preview_blocks_shared(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+    cx.dispatch_action(Paragraph);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Heading");
+        assert_eq!(app.active_tab().document.version(), version);
+        assert_eq!(app.active_tab().undo_stack.len(), undo_len);
+        assert!(Arc::ptr_eq(
+            &preview,
+            &app.active_tab().document.preview_blocks_shared()
+        ));
+        assert!(Arc::ptr_eq(
+            &visual,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+        assert_eq!(app.status, t(app.language, Msg::StatusNoFormattingChange));
+    });
+}
+
+#[gpui::test]
+fn paragraph_shortcut_dispatches_and_live_rebinds(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    cx.update(|window, cx| {
+        cx.clear_key_bindings();
+        bind_app_keys(cx, &BTreeMap::new());
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("# Default"))];
+        app.active_tab_mut().selected_range = 4..4;
+    });
+    cx.simulate_keystrokes(menu_shortcuts::PARAGRAPH.binding.expect("bound"));
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Default");
+    });
+
+    let mut overrides = BTreeMap::new();
+    overrides.insert("paragraph".to_string(), "ctrl-alt-0".to_string());
+    app.update(cx, |app, _| {
+        app.shortcut_overrides = overrides.clone();
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("## Override"))];
+        app.active_tab_mut().selected_range = 5..5;
+    });
+    cx.update(|_, cx| {
+        cx.clear_key_bindings();
+        bind_app_keys(cx, &overrides);
+    });
+
+    cx.simulate_keystrokes(menu_shortcuts::PARAGRAPH.binding.expect("bound"));
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "## Override");
+    });
+    cx.simulate_keystrokes("ctrl-alt-0");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Override");
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("### Reset"))];
+        app.active_tab_mut().selected_range = 6..6;
+        app.shortcut_overrides.clear();
+    });
+    cx.update(|_, cx| {
+        cx.clear_key_bindings();
+        bind_app_keys(cx, &BTreeMap::new());
+    });
+
+    cx.simulate_keystrokes(menu_shortcuts::PARAGRAPH.binding.expect("bound"));
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "Reset");
+    });
+}
+
 #[test]
 fn show_shortcuts_opens_preferences_on_shortcuts_tab() {
     assert_eq!(
@@ -4648,18 +4922,11 @@ fn show_shortcuts_opens_preferences_on_shortcuts_tab() {
 fn updated_default_shortcuts_and_markdown_reference_are_registered() {
     let expected = [
         (
-            &menu_shortcuts::SET_EDIT_MODE,
+            &menu_shortcuts::SOURCE_SPLIT_MODE,
             "set-edit-mode",
             "secondary-/",
             "Ctrl+/",
             "Cmd+/",
-        ),
-        (
-            &menu_shortcuts::SET_SPLIT_PREVIEW_MODE,
-            "set-split-preview-mode",
-            "secondary-p",
-            "Ctrl+P",
-            "Cmd+P",
         ),
         (
             &menu_shortcuts::NEW_TAB,
@@ -4690,6 +4957,13 @@ fn updated_default_shortcuts_and_markdown_reference_are_registered() {
             "Cmd+Shift+`",
         ),
         (
+            &menu_shortcuts::PARAGRAPH,
+            "paragraph",
+            "secondary-0",
+            "Ctrl+0",
+            "Cmd+0",
+        ),
+        (
             &menu_shortcuts::OPEN_FOLDER,
             "open-folder",
             "secondary-shift-o",
@@ -4717,6 +4991,26 @@ fn updated_default_shortcuts_and_markdown_reference_are_registered() {
         stored.insert(id.to_string(), binding.to_string());
     }
     assert_eq!(sanitized_shortcut_overrides(&stored), stored);
+    assert!(shortcut_by_id("set-split-preview-mode").is_none());
+    assert!(
+        menu_shortcuts::ALL
+            .iter()
+            .all(|shortcut| shortcut.binding != Some("secondary-p"))
+    );
+
+    let mut legacy_overrides = BTreeMap::new();
+    legacy_overrides.insert("set-edit-mode".to_string(), "ctrl-alt-v".to_string());
+    legacy_overrides.insert(
+        "set-split-preview-mode".to_string(),
+        "ctrl-alt-p".to_string(),
+    );
+    let sanitized = sanitized_shortcut_overrides(&legacy_overrides);
+    assert_eq!(
+        sanitized.get("set-edit-mode").map(String::as_str),
+        Some("ctrl-alt-v"),
+        "existing Source overrides must transfer to the combined action"
+    );
+    assert!(!sanitized.contains_key("set-split-preview-mode"));
     assert_eq!(menu_shortcuts::SHOW_SHORTCUTS.binding, None);
     assert_eq!(
         menu_shortcuts::SHOW_SHORTCUTS.effective_binding(&BTreeMap::new()),
@@ -4792,14 +5086,10 @@ fn updated_view_and_tab_default_shortcuts_dispatch(cx: &mut TestAppContext) {
         window.activate_window();
     });
 
-    cx.simulate_keystrokes(menu_shortcuts::SET_EDIT_MODE.binding.expect("bound"));
+    cx.simulate_keystrokes(menu_shortcuts::SOURCE_SPLIT_MODE.binding.expect("bound"));
     app.update(cx, |app, _| assert_eq!(app.view_mode, ViewMode::Edit));
 
-    cx.simulate_keystrokes(
-        menu_shortcuts::SET_SPLIT_PREVIEW_MODE
-            .binding
-            .expect("bound"),
-    );
+    cx.simulate_keystrokes(menu_shortcuts::SOURCE_SPLIT_MODE.binding.expect("bound"));
     app.update(cx, |app, _| assert_eq!(app.view_mode, ViewMode::Split));
 
     cx.simulate_keystrokes(menu_shortcuts::SET_READ_MODE.binding.expect("bound"));
@@ -4819,6 +5109,124 @@ fn updated_view_and_tab_default_shortcuts_dispatch(cx: &mut TestAppContext) {
     );
     cx.run_until_parked();
     app.update(cx, |app, _| assert!(app.markdown_reference_open));
+}
+
+#[gpui::test]
+fn source_split_action_transitions_all_modes_and_preserves_tab_state(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let source = (0..200)
+            .map(|index| format!("paragraph {index}\n\n"))
+            .collect::<String>();
+        let document = MarkdownDocument::recovered(source, None);
+        let mut tab = EditorTab::new(document);
+        tab.selected_range = 1..4;
+        tab.push_undo_snapshot();
+        tab.editor_scroll.set_offset(point(px(0.), px(-120.)));
+        let preview = tab.document.preview_blocks_shared();
+        tab.sync_preview_list(&preview);
+        tab.preview_list.scroll_to(gpui::ListOffset {
+            item_ix: 20,
+            offset_in_item: px(4.),
+        });
+
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![tab];
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    let (
+        instance_id,
+        version,
+        dirty,
+        text,
+        selection,
+        undo_len,
+        redo_len,
+        editor_scroll,
+        preview_scroll,
+        preview_cache,
+        visual_cache,
+    ) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.instance_id(),
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.document.text().to_string(),
+            tab.selected_range.clone(),
+            tab.undo_stack.len(),
+            tab.redo_stack.len(),
+            tab.editor_scroll.offset(),
+            tab.preview_list.logical_scroll_top(),
+            tab.document.preview_blocks_shared(),
+            tab.document.visual_blocks_shared(),
+        )
+    });
+
+    for (start, expected) in [
+        (ViewMode::Edit, ViewMode::Split),
+        (ViewMode::Split, ViewMode::Edit),
+        (ViewMode::VisualEdit, ViewMode::Edit),
+        (ViewMode::Read, ViewMode::Edit),
+    ] {
+        app.update(cx, |app, _| app.view_mode = start);
+        cx.dispatch_action(ToggleSourceSplitMode);
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert_eq!(app.view_mode, expected, "transition from {start:?}");
+            assert_eq!(
+                app.status,
+                t(app.language, view_mode_status_message(expected)),
+                "status from {start:?}"
+            );
+            assert_eq!(tab.document.instance_id(), instance_id);
+            assert_eq!(tab.document.version(), version);
+            assert_eq!(tab.document.is_dirty(), dirty);
+            assert_eq!(tab.document.text(), text);
+            assert_eq!(tab.selected_range, selection);
+            assert_eq!(tab.undo_stack.len(), undo_len);
+            assert_eq!(tab.redo_stack.len(), redo_len);
+            assert_eq!(tab.editor_scroll.offset(), editor_scroll);
+            let current_preview_scroll = tab.preview_list.logical_scroll_top();
+            assert_eq!(current_preview_scroll.item_ix, preview_scroll.item_ix);
+            assert_eq!(
+                current_preview_scroll.offset_in_item,
+                preview_scroll.offset_in_item
+            );
+            assert!(Arc::ptr_eq(
+                &preview_cache,
+                &tab.document.preview_blocks_shared()
+            ));
+            assert!(Arc::ptr_eq(
+                &visual_cache,
+                &tab.document.visual_blocks_shared()
+            ));
+        });
+    }
+}
+
+#[gpui::test]
+fn source_split_shortcut_preserves_the_legacy_override_id(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    let mut overrides = BTreeMap::new();
+    overrides.insert("set-edit-mode".to_string(), "ctrl-alt-v".to_string());
+    cx.update(|window, cx| {
+        cx.clear_key_bindings();
+        bind_app_keys(cx, &overrides);
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+
+    app.update(cx, |app, _| app.view_mode = ViewMode::Edit);
+    cx.simulate_keystrokes(menu_shortcuts::SOURCE_SPLIT_MODE.binding.expect("bound"));
+    app.update(cx, |app, _| assert_eq!(app.view_mode, ViewMode::Edit));
+
+    cx.simulate_keystrokes("ctrl-alt-v");
+    app.update(cx, |app, _| assert_eq!(app.view_mode, ViewMode::Split));
 }
 
 #[gpui::test]
@@ -6204,7 +6612,7 @@ fn visual_direct_code_editor_hides_fences_highlights_and_edits_only_payload(
         assert!(tab.document.is_dirty());
     });
 
-    cx.dispatch_action(SetEditMode);
+    cx.dispatch_action(ToggleSourceSplitMode);
     app.update(cx, |app, _| {
         assert_eq!(app.view_mode, ViewMode::Edit);
         assert_eq!(
@@ -7692,7 +8100,7 @@ fn visual_edit_does_not_duplicate_nested_list_input_in_the_parent(cx: &mut TestA
             .visual_last_projection
             .as_ref()
             .expect("nested child should paint its own projection");
-        assert_eq!(text, "child");
+        assert_eq!(text, "child\n");
     });
 
     cx.simulate_input("X");
@@ -7700,7 +8108,7 @@ fn visual_edit_does_not_duplicate_nested_list_input_in_the_parent(cx: &mut TestA
     app.update(cx, |app, _| {
         assert_eq!(app.active_tab().document.text(), "- parent\n  - chXild\n");
         let (text, _) = app.active_tab().visual_last_projection.as_ref().unwrap();
-        assert_eq!(text, "chXild");
+        assert_eq!(text, "chXild\n");
     });
 
     let parent_cursor = source.find("parent").unwrap() + 1;
@@ -16778,6 +17186,181 @@ fn selection_format_target_requires_one_safe_exact_editable_run() {
     );
 }
 
+#[test]
+fn selection_format_target_accepts_a_single_table_cell() {
+    let document = MarkdownDocument::from_text("| A | B |\n| --- | --- |\n| hello | world |");
+    let hello = visual_table_cell_range(&document, 0, 1, 0);
+    let world = visual_table_cell_range(&document, 0, 1, 1);
+    let blocks = document.visual_blocks_shared();
+    let table = blocks
+        .iter()
+        .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+        .expect("table block");
+    let target = BlockTarget::from_block(document.version(), table);
+    let mut tab = EditorTab::new(document);
+    tab.selected_range = hello.clone();
+    let exact = visual_selection_format_target_for_block(&tab, &blocks, &target)
+        .expect("cell selection should be format-safe");
+    assert_eq!(exact.range, hello);
+
+    tab.selected_range = hello.start..world.end;
+    assert!(visual_selection_format_target_for_block(&tab, &blocks, &target).is_none());
+}
+
+#[gpui::test]
+fn visual_table_cell_selection_formats_bold_from_context_menu(cx: &mut TestAppContext) {
+    const SOURCE: &str = "| A | B |\n| --- | --- |\n| hello | world |";
+    let document = MarkdownDocument::from_text(SOURCE);
+    let selection = visual_table_cell_range(&document, 0, 1, 0);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = selection.clone();
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let initial_version = app.update(cx, |app, _| app.active_tab().document.version());
+    let row = cx
+        .debug_bounds("visual-block-row-0")
+        .expect("table context target");
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: row.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let menu = app.block_menu.as_ref().expect("cell context menu");
+        assert!(menu.selection_format.is_some());
+        assert_eq!(app.active_tab().document.version(), initial_version);
+    });
+    let bold = cx
+        .debug_bounds("visual-selection-format-bold")
+        .expect("cell Bold command");
+    cx.simulate_click(bold.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(
+            app.active_tab()
+                .document
+                .text()
+                .contains("| **hello** | world |")
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
+}
+
+#[gpui::test]
+fn visual_table_column_width_commit_is_one_undo(cx: &mut TestAppContext) {
+    const SOURCE: &str = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let (initial_version, offset) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.text().find('A').unwrap(),
+        )
+    });
+    let handle = cx
+        .debug_bounds("visual-table-col-handle-0-0")
+        .expect("column resize handle");
+    app.update(cx, |app, _| {
+        app.active_tab_mut().visual_table_column_drag = Some(VisualTableColumnDrag {
+            block_id: app.active_tab().document.visual_blocks_shared()[0].id,
+            left_column: 0,
+            start_x: 0.0,
+            table_width: 200.0,
+            start_percents: vec![50, 50],
+            live_percents: vec![30, 70],
+            document_version: initial_version,
+            table_offset: offset,
+        });
+        assert_eq!(app.active_tab().document.version(), initial_version);
+        assert!(handle.size.width > px(0.));
+    });
+    app.update(cx, |app, cx| {
+        app.set_table_column_widths_at(offset, vec![30, 70], cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(
+            app.active_tab()
+                .document
+                .text()
+                .starts_with("<!-- markion-cols:30,70 -->")
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert_eq!(app.active_tab().document.version(), initial_version + 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
+}
+
+#[gpui::test]
+fn visual_image_width_drag_commit_is_one_undo(cx: &mut TestAppContext) {
+    const SOURCE: &str = "![alt](https://example.com/a.png)";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.active_tab_mut().selected_range = 2..2;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let initial_version = app.update(cx, |app, _| app.active_tab().document.version());
+    app.update(cx, |app, cx| {
+        app.set_image_presentation_at(
+            0,
+            ImagePresentation {
+                width_percent: 40,
+                alignment: ImageAlignment::Center,
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(
+            app.active_tab()
+                .document
+                .text()
+                .contains("{width=40 align=center}")
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert_eq!(app.active_tab().document.version(), initial_version + 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), SOURCE);
+    });
+}
+
 #[gpui::test]
 fn memory_harness_tab_growth_and_close_release(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
@@ -18569,10 +19152,14 @@ fn file_tree_drop_remaps_clean_tab_and_refuses_dirty(cx: &mut TestAppContext) {
         app.handle_file_tree_drop(&path, &archive, cx);
     });
     let moved = archive.join("daily.md");
+    let moved_cmp = comparable_document_path(&moved);
     app.update(cx, |app, _| {
         assert!(moved.exists());
         assert!(!path.exists());
-        assert_eq!(app.tabs[0].path(), Some(moved.as_path()));
+        assert_eq!(
+            app.tabs[0].path().map(comparable_document_path),
+            Some(moved_cmp.clone())
+        );
         assert_eq!(app.tabs[0].document.text(), "# Daily");
         assert_eq!(
             app.status,
@@ -20168,5 +20755,344 @@ fn git_quit_requests_cancellation_and_waits_before_closing(cx: &mut TestAppConte
     app.update(cx, |app, _| {
         assert!(app.git_ui.pending_exit.is_some());
         assert!(!app.allow_close);
+    });
+}
+
+#[test]
+fn inline_html_script_metrics_scale_and_shift_baselines() {
+    for scale in [0.75, 1.0, 1.5, 2.0] {
+        let size = 20.0 * scale;
+        let line = 30.0 * scale;
+        let ascent = 16.0 * scale;
+        let descent = 4.0 * scale;
+        let normal_baseline = 5.0 * scale + ascent;
+        for sub in [false, true] {
+            let (small, small_line, top) =
+                preview::inline_script_metrics(size, line, ascent, descent, sub);
+            assert_eq!(small, size * 0.75);
+            let baseline = top + (small_line - (ascent + descent) * 0.75) / 2.0 + ascent * 0.75;
+            let shift = baseline - normal_baseline;
+            assert!((shift - size * if sub { 0.2 } else { -0.35 }).abs() < 0.001);
+        }
+    }
+}
+
+#[gpui::test]
+fn inline_html_script_geometry_in_read_visual_and_tables(cx: &mut TestAppContext) {
+    for mode in [ViewMode::Read, ViewMode::VisualEdit] {
+        for source in [
+            "plain X<sup>上</sup> H<sub>下</sub> end",
+            "| A | B |\n|---|---|\n| X<sup>上</sup> H<sub>下</sub> | plain |",
+            "<table><tr><td>X<sup>上</sup> H<sub>下</sub></td></tr></table>",
+        ] {
+            let (app, cx) = cx.add_window_view(|_, cx| {
+                let mut app = MarkionApp::new(cx);
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+                app.view_mode = mode;
+                let blocks = app.active_tab().document.preview_blocks_shared();
+                let version = app.active_tab().document.version();
+                app.active_tab_mut().preview_reflects_version = Some(version);
+                app.active_tab_mut().sync_preview_list(&blocks);
+                app
+            });
+            cx.simulate_resize(size(px(1100.), px(800.)));
+            cx.run_until_parked();
+            let sup = cx
+                .debug_bounds("inline-superscript")
+                .unwrap_or_else(|| panic!("superscript glyph container: {mode:?}: {source}"));
+            let sub = cx
+                .debug_bounds("inline-subscript")
+                .expect("subscript glyph container");
+            assert!(
+                sup.top() < sub.top(),
+                "{mode:?}: {source}: {sup:?}, {sub:?}"
+            );
+            let metrics = app.update(cx, |app, _| app.typography_metrics());
+            let line = if source.contains("table") || source.starts_with('|') {
+                metrics.table_font_size * 1.5
+            } else {
+                metrics.paragraph_line_height
+            };
+            assert!(
+                f32::from(sup.size.height) < line,
+                "script line must be smaller"
+            );
+            if mode == ViewMode::VisualEdit && !source.starts_with('<') {
+                cx.update(|window, cx| {
+                    window.focus(&app.read(cx).focus_handle);
+                    window.activate_window();
+                });
+                cx.simulate_click(sup.center(), Modifiers::none());
+                cx.run_until_parked();
+                app.update(cx, |app, _| {
+                    assert_eq!(app.active_tab().document.text(), source);
+                    assert!(app.active_tab().visual_caret_bounds.is_some());
+                });
+                let cursor = source.find('上').unwrap();
+                app.update(cx, |app, cx| app.move_to(cursor, cx));
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    app.update(cx, |app, cx| {
+                        EntityInputHandler::replace_and_mark_text_in_range(
+                            app,
+                            None,
+                            "中文🙂",
+                            None,
+                            window,
+                            cx,
+                        );
+                    })
+                });
+                cx.run_until_parked();
+                app.update(cx, |app, _| {
+                    assert!(app.active_tab().visual_marked_range_bounds.is_some());
+                    assert_eq!(app.active_tab().undo_stack.len(), 1);
+                });
+                cx.update(|window, cx| {
+                    app.update(cx, |app, cx| {
+                        EntityInputHandler::unmark_text(app, window, cx);
+                    })
+                });
+                app.update(cx, |app, _| {
+                    assert!(app.active_tab_mut().apply_undo());
+                    assert_eq!(app.active_tab().document.text(), source);
+                });
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn inline_html_empty_break_rows_have_real_height(cx: &mut TestAppContext) {
+    for mode in [ViewMode::Read, ViewMode::VisualEdit] {
+        let source = "<br>AA<br><br>BB<br>";
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.view_mode = mode;
+            let blocks = app.active_tab().document.preview_blocks_shared();
+            let version = app.active_tab().document.version();
+            app.active_tab_mut().preview_reflects_version = Some(version);
+            app.active_tab_mut().sync_preview_list(&blocks);
+            // Keep the first break rendered rather than revealing its tag.
+            app.active_tab_mut().selected_range = 5..5;
+            app
+        });
+        cx.run_until_parked();
+        let line_height = app.update(cx, |app, _| app.typography_metrics().paragraph_line_height);
+        let prefix = if mode == ViewMode::Read {
+            "read-inline-line"
+        } else {
+            "visual-mixed-line"
+        };
+        let mut bottom = None;
+        for row in 0..5 {
+            let bounds = cx
+                .debug_bounds(test_debug_selector(format!("{prefix}-0-{row}")))
+                .unwrap_or_else(|| panic!("missing break row {row}: {mode:?}"));
+            assert!(f32::from(bounds.size.height) >= line_height - 0.1);
+            if let Some(previous) = bottom {
+                assert!(bounds.top() >= previous);
+            }
+            bottom = Some(bounds.bottom());
+        }
+    }
+}
+
+#[gpui::test]
+fn visual_list_enter_creates_visible_row_and_moves_caret(cx: &mut TestAppContext) {
+    for suffix in ["", "\n", "\n\n\n\n"] {
+        let source =
+            format!("测试如果是列表是否回车能正常换行：\n\n- 第一\n- 第二\n- 第三{suffix}");
+        let cursor = source.find("第三").unwrap() + "第三".len();
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+            app.active_tab_mut().selected_range = cursor..cursor;
+            app.active_tab_mut().visual_cursor_reveal_pending = true;
+            app.view_mode = ViewMode::VisualEdit;
+            app.typewriter_mode = false;
+            app
+        });
+        cx.simulate_resize(size(px(1100.), px(800.)));
+        cx.update(|window, cx| {
+            window.focus(&app.read(cx).focus_handle);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+        let before = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+        cx.dispatch_action(InsertNewline);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert_eq!(tab.document.text(), format!("{}\n- {}", &source[..cursor], suffix));
+            let blocks = tab.document.visual_blocks_shared();
+            let fresh = MarkdownDocument::from_text(tab.document.text()).visual_blocks();
+            assert_eq!(blocks.len(), fresh.len());
+            let owner = visual_block_index_for_offset(&blocks, tab.cursor_offset(), tab.document.text().len()).unwrap();
+            assert!(matches!(blocks[owner].kind, VisualBlockKind::ListItem {..}), "new caret owner {suffix:?}: {:?}", blocks[owner]);
+            let after = tab.visual_caret_bounds.expect("new painted caret");
+            assert!(after.top() > before.top() + px(5.), "caret did not move down for {suffix:?}: {before:?} -> {after:?}; blocks {blocks:?}; cursor {}", tab.cursor_offset());
+        });
+
+        // A second Enter exits the empty item but must leave a visible blank
+        // paragraph below the list, not snap the caret back into the last item.
+        cx.dispatch_action(InsertNewline);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert_eq!(tab.document.text(), format!("{}\n{}", &source[..cursor], suffix));
+            let after = tab.visual_caret_bounds.expect("caret after exiting list");
+            assert!(after.top() > before.top() + px(5.), "exiting list lost row for {suffix:?}: {before:?} -> {after:?}; cursor {}; blocks {:?}", tab.cursor_offset(), tab.document.visual_blocks());
+        });
+    }
+}
+
+#[gpui::test]
+fn visual_list_pointer_enter_exit_and_typing_keep_visible_caret(cx: &mut TestAppContext) {
+    for (prefixes, next) in [
+        (["- ", "- ", "- "], ["- ", "- ", "- "]),
+        (["1. ", "2. ", "3. "], ["2. ", "3. ", "4. "]),
+        (["- [x] ", "- [ ] ", "- [ ] "], ["- [ ] "; 3]),
+    ] {
+        for eol in ["\n", "\r\n"] {
+            for item in 0..3 {
+                let labels = ["第一", "第二", "第三"];
+                let source = format!(
+                    "测试列表{eol}{eol}{}第一{eol}{}第二{eol}{}第三{eol}{eol}",
+                    prefixes[0], prefixes[1], prefixes[2]
+                );
+                let cursor = source.find(labels[item]).unwrap() + labels[item].len();
+                let (app, cx) = cx.add_window_view(|_, cx| {
+                    let mut app = MarkionApp::new(cx);
+                    app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+                    app.active_tab_mut().selected_range = cursor..cursor;
+                    app.view_mode = ViewMode::VisualEdit;
+                    app.typewriter_mode = false;
+                    app
+                });
+                cx.simulate_resize(size(px(1100.), px(800.)));
+                cx.update(|window, cx| {
+                    cx.clear_key_bindings();
+                    bind_app_keys(cx, &BTreeMap::new());
+                    window.focus(&app.read(cx).focus_handle);
+                    window.activate_window();
+                });
+                cx.run_until_parked();
+                let before = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+                cx.simulate_click(
+                    point(before.left() + px(1.), before.center().y),
+                    Modifiers::none(),
+                );
+                cx.run_until_parked();
+                app.update(cx, |app, _| {
+                    assert_eq!(
+                        app.active_tab().cursor_offset(),
+                        cursor,
+                        "pointer {source:?}"
+                    )
+                });
+                cx.simulate_keystrokes("enter");
+                cx.run_until_parked();
+                let continued =
+                    format!("{}\n{}{}", &source[..cursor], next[item], &source[cursor..]);
+                app.update(cx, |app, _| {
+                    let tab = app.active_tab();
+                    assert_eq!(tab.document.text(), continued);
+                    assert!(
+                        tab.visual_caret_bounds.unwrap().top() > before.top() + px(5.),
+                        "continued {source:?}"
+                    );
+                });
+                cx.simulate_keystrokes("enter");
+                cx.run_until_parked();
+                app.update(cx, |app, _| {
+                    assert!(
+                        app.active_tab().visual_caret_bounds.unwrap().top() > before.top() + px(5.),
+                        "exit {source:?}"
+                    );
+                    assert!(app.active_tab_mut().apply_undo());
+                    assert_eq!(app.active_tab().document.text(), continued);
+                });
+                cx.update(|window, cx| {
+                    app.update(cx, |app, cx| {
+                        EntityInputHandler::replace_and_mark_text_in_range(
+                            app,
+                            None,
+                            "新项🙂",
+                            None,
+                            window,
+                            cx,
+                        );
+                    })
+                });
+                cx.run_until_parked();
+                app.update(cx, |app, _| {
+                    assert!(app.active_tab().document.text().contains("新项🙂"));
+                    assert!(app.active_tab().visual_marked_range_bounds.is_some());
+                    assert!(
+                        app.active_tab().visual_caret_bounds.unwrap().top() > before.top() + px(5.)
+                    );
+                });
+                cx.update(|window, cx| {
+                    app.update(cx, |app, cx| {
+                        EntityInputHandler::unmark_text(app, window, cx)
+                    })
+                });
+                app.update(cx, |app, _| {
+                    assert!(app.active_tab_mut().apply_undo());
+                    assert_eq!(app.active_tab().document.text(), continued);
+                });
+
+                cx.simulate_keystrokes("enter");
+                cx.run_until_parked();
+                let mut previous = app.update(cx, |app, _| {
+                    app.active_tab().visual_caret_bounds.unwrap().top()
+                });
+                for _ in 0..3 {
+                    cx.simulate_keystrokes("enter");
+                    cx.run_until_parked();
+                    let current = app.update(cx, |app, _| {
+                        app.active_tab().visual_caret_bounds.unwrap().top()
+                    });
+                    assert!(
+                        current > previous + px(5.),
+                        "repeated Enter after exiting {source:?}: {previous:?} -> {current:?}"
+                    );
+                    previous = current;
+                }
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn visual_list_link_tail_blank_row_has_caret(cx: &mut TestAppContext) {
+    let source = "- [链接](https://example.com) 第三\n\n";
+    let cursor = source.trim_end().len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = false;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let before = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+    cx.dispatch_action(InsertNewline);
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(
+            tab.document.text(),
+            "- [链接](https://example.com) 第三\n\n\n"
+        );
+        assert!(tab.visual_caret_bounds.unwrap().top() > before.top() + px(5.));
     });
 }

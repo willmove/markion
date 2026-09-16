@@ -615,6 +615,259 @@ fn clamp_column_share_cap(weights: &mut [f32], mins: &[f32]) {
     }
 }
 
+/// HTML comment written immediately before a GFM pipe table to persist
+/// user-dragged column widths. Other CommonMark tools ignore it.
+pub const TABLE_COLUMN_WIDTH_COMMENT_PREFIX: &str = "markion-cols:";
+
+pub fn parse_table_column_width_comment(html: &str) -> Option<Vec<u8>> {
+    let trimmed = html.trim();
+    let body = trimmed.strip_prefix("<!--")?.strip_suffix("-->")?.trim();
+    let values = body.strip_prefix(TABLE_COLUMN_WIDTH_COMMENT_PREFIX)?;
+    let percents = values
+        .split(',')
+        .map(|part| {
+            part.trim()
+                .parse::<u8>()
+                .ok()
+                .filter(|value| (1..=100).contains(value))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (percents.len() >= 2).then_some(percents)
+}
+
+pub fn format_table_column_width_comment(percents: &[u8]) -> String {
+    let list = percents
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("<!-- {TABLE_COLUMN_WIDTH_COMMENT_PREFIX}{list} -->")
+}
+
+/// Bytes to skip from an absorbed table block before the pipe-table source.
+pub fn table_column_width_prefix_len(source: &str) -> usize {
+    let bytes = source.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    let rest = &source[index..];
+    let Some(comment_end) = leading_column_width_comment_end(rest) else {
+        return 0;
+    };
+    let mut after = index + comment_end;
+    while after < bytes.len() && bytes[after].is_ascii_whitespace() {
+        after += 1;
+    }
+    let line = source[after..].lines().next().unwrap_or("");
+    if is_markdown_table_candidate(line) {
+        after
+    } else {
+        0
+    }
+}
+
+fn leading_column_width_comment_end(source: &str) -> Option<usize> {
+    let trimmed_line_end = source.find('\n').unwrap_or(source.len());
+    let candidate = &source[..trimmed_line_end];
+    parse_table_column_width_comment(candidate)?;
+    let close = candidate.rfind("-->")? + 3;
+    Some(close)
+}
+
+pub fn authored_table_column_percents(block_source: &str, column_count: usize) -> Option<Vec<u8>> {
+    if column_count < 2 {
+        return None;
+    }
+    let prefix = table_column_width_prefix_len(block_source);
+    if prefix == 0 {
+        return None;
+    }
+    let percents = parse_table_column_width_comment(&block_source[..prefix])?;
+    (percents.len() == column_count).then_some(percents)
+}
+
+/// Range covering an existing column-width comment and the whitespace up to
+/// the pipe table, or `None` when the table has no such comment.
+pub(crate) fn leading_table_column_width_comment_range(
+    text: &str,
+    table_start: usize,
+) -> Option<Range<usize>> {
+    if table_start == 0 || table_start > text.len() {
+        return None;
+    }
+    let prefix = &text[..table_start];
+    let trimmed_end = prefix.trim_end();
+    let start = trimmed_end.rfind("<!--")?;
+    parse_table_column_width_comment(&text[start..table_start])?;
+    Some(start..table_start)
+}
+
+pub fn column_percent_floor(columns: usize) -> u8 {
+    if columns == 0 || columns.saturating_mul(5) > 100 {
+        1
+    } else {
+        5
+    }
+}
+
+pub fn normalize_column_percents(percents: &[u8]) -> Option<Vec<u8>> {
+    let n = percents.len();
+    if n < 2 {
+        return None;
+    }
+    let floor = column_percent_floor(n) as u32;
+    let reserved = floor.saturating_mul(n as u32);
+    if reserved > 100 {
+        return None;
+    }
+    let leftover = 100 - reserved;
+    let extras: Vec<f32> = percents
+        .iter()
+        .map(|value| (*value as f32 - floor as f32).max(0.0))
+        .collect();
+    let extra_sum: f32 = extras.iter().sum();
+    let mut result = vec![floor as u8; n];
+    if leftover == 0 {
+        return Some(result);
+    }
+    if extra_sum <= 0.0 {
+        let extra = leftover as usize / n;
+        let mut remain = leftover as usize - extra * n;
+        for slot in &mut result {
+            *slot = slot.saturating_add(extra as u8);
+            if remain > 0 {
+                *slot += 1;
+                remain -= 1;
+            }
+        }
+        return Some(result);
+    }
+    let mut assigned = 0u32;
+    let mut fractions = Vec::with_capacity(n);
+    for (index, extra) in extras.iter().enumerate() {
+        let share = *extra / extra_sum * leftover as f32;
+        let whole = share.floor() as u32;
+        result[index] = result[index].saturating_add(whole as u8);
+        assigned += whole;
+        fractions.push((index, share.fract()));
+    }
+    fractions.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut remain = leftover.saturating_sub(assigned);
+    for (index, _) in fractions {
+        if remain == 0 {
+            break;
+        }
+        result[index] = result[index].saturating_add(1);
+        remain -= 1;
+    }
+    Some(result)
+}
+
+pub fn percents_from_flex_weights(weights: &[f32]) -> Option<Vec<u8>> {
+    if weights.len() < 2 {
+        return None;
+    }
+    let sum: f32 = weights.iter().copied().filter(|weight| *weight > 0.0).sum();
+    if sum <= 0.0 {
+        return None;
+    }
+    let scaled: Vec<u8> = weights
+        .iter()
+        .map(|weight| ((*weight).max(0.0) / sum * 100.0).round().clamp(1.0, 100.0) as u8)
+        .collect();
+    normalize_column_percents(&scaled)
+}
+
+pub fn redistribute_adjacent_column_percents(
+    percents: &[u8],
+    left: usize,
+    new_left: u8,
+) -> Option<Vec<u8>> {
+    if left + 1 >= percents.len() {
+        return None;
+    }
+    let floor = column_percent_floor(percents.len()) as u16;
+    let pair = percents[left] as u16 + percents[left + 1] as u16;
+    if pair < floor * 2 {
+        return None;
+    }
+    let new_left = (new_left as u16).clamp(floor, pair - floor);
+    let mut out = percents.to_vec();
+    out[left] = new_left as u8;
+    out[left + 1] = (pair - new_left) as u8;
+    Some(out)
+}
+
+pub fn adjust_column_percents_for_insert(percents: &[u8], insert_at: usize) -> Option<Vec<u8>> {
+    if insert_at > percents.len() {
+        return None;
+    }
+    let next_count = percents.len() + 1;
+    let min = column_percent_floor(next_count);
+    let mut out = percents.to_vec();
+    let donor = if insert_at == 0 { 0 } else { insert_at - 1 };
+    if out[donor] >= min.saturating_mul(2) {
+        out[donor] -= min;
+        out.insert(insert_at, min);
+    } else {
+        out.insert(insert_at, min);
+    }
+    normalize_column_percents(&out)
+}
+
+pub fn adjust_column_percents_for_delete(percents: &[u8], index: usize) -> Option<Vec<u8>> {
+    if index >= percents.len() || percents.len() < 3 {
+        return None;
+    }
+    let mut out = percents.to_vec();
+    let share = out.remove(index);
+    let neighbor = if index == 0 { 0 } else { index - 1 };
+    out[neighbor] = out[neighbor].saturating_add(share);
+    normalize_column_percents(&out)
+}
+
+pub fn table_column_flex_weights_with_authored(
+    rows: &[Vec<RichText>],
+    table_font_size: f32,
+    authored_percents: Option<&[u8]>,
+) -> Vec<f32> {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if let Some(percents) = authored_percents
+        && percents.len() == columns
+        && columns >= 2
+    {
+        return percents.iter().map(|value| f32::from(*value)).collect();
+    }
+    table_column_flex_weights(rows, table_font_size)
+}
+
+/// `None` = selection does not start inside a GFM table.
+/// `Some(true)` = fully contained in one cell.
+/// `Some(false)` = starts in a table but is not a single-cell range.
+pub(crate) fn selection_is_within_one_table_cell(text: &str, range: Range<usize>) -> Option<bool> {
+    if range.start > text.len() || range.end > text.len() || range.start > range.end {
+        return None;
+    }
+    let table_range = table_range_at(text, range.start)?;
+    if range.end > table_range.end {
+        return Some(false);
+    }
+    let source = &text[table_range.clone()];
+    let cells = table_cell_source_ranges(source)?;
+    let inside = cells.iter().any(|cell| {
+        let start = table_range.start + cell.source_range.start;
+        let end = table_range.start + cell.source_range.end;
+        start <= range.start && end >= range.end
+    });
+    Some(inside)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -859,5 +1112,87 @@ mod tests {
             min + 1e-4 >= TABLE_CELL_HORIZONTAL_PADDING_PX + content / 3.0,
             "header min {min} should be at least one third of unwrapped width {content}"
         );
+    }
+
+    #[test]
+    fn column_width_comment_roundtrips_and_skips_prefix() {
+        let comment = format_table_column_width_comment(&[30, 70]);
+        assert_eq!(comment, "<!-- markion-cols:30,70 -->");
+        assert_eq!(
+            parse_table_column_width_comment("  <!-- markion-cols:30, 70 --> \n"),
+            Some(vec![30, 70])
+        );
+        assert!(parse_table_column_width_comment("<!-- markion-cols:foo -->").is_none());
+        assert!(parse_table_column_width_comment("<!-- other -->").is_none());
+
+        let source = format!("{comment}\n| A | B |\n| --- | --- |\n| 1 | 2 |");
+        let prefix = table_column_width_prefix_len(&source);
+        assert_eq!(&source[..prefix], format!("{comment}\n"));
+        assert_eq!(
+            authored_table_column_percents(&source, 2),
+            Some(vec![30, 70])
+        );
+        assert_eq!(authored_table_column_percents(&source, 3), None);
+        let markdown = &source[prefix..];
+        assert_eq!(
+            table_cell_source_ranges(markdown).map(|cells| cells.len()),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn authored_percents_override_content_heuristic() {
+        let rows = vec![
+            vec![RichText::plain("A"), RichText::plain("long description")],
+            vec![RichText::plain("x"), RichText::plain("more text here")],
+        ];
+        let heuristic = table_column_flex_weights(&rows, 12.0);
+        let authored = table_column_flex_weights_with_authored(&rows, 12.0, Some(&[30, 70]));
+        assert_eq!(authored, vec![30.0, 70.0]);
+        assert_ne!(heuristic, authored);
+        let fallback = table_column_flex_weights_with_authored(&rows, 12.0, Some(&[10, 20, 70]));
+        assert_eq!(fallback, heuristic);
+    }
+
+    #[test]
+    fn adjacent_percent_drag_keeps_other_columns() {
+        let next = redistribute_adjacent_column_percents(&[20, 30, 50], 0, 10).unwrap();
+        assert_eq!(next, vec![10, 40, 50]);
+        let floor = column_percent_floor(2);
+        let clamped = redistribute_adjacent_column_percents(&[30, 70], 0, 1).unwrap();
+        assert_eq!(clamped[0], floor);
+        assert_eq!(clamped[0] + clamped[1], 100);
+    }
+
+    #[test]
+    fn insert_and_delete_column_percents_stay_normalized() {
+        let inserted = adjust_column_percents_for_insert(&[40, 60], 1).unwrap();
+        assert_eq!(inserted.len(), 3);
+        assert_eq!(inserted.iter().map(|value| *value as u16).sum::<u16>(), 100);
+        let deleted = adjust_column_percents_for_delete(&[20, 30, 50], 1).unwrap();
+        assert_eq!(deleted.len(), 2);
+        assert_eq!(deleted.iter().map(|value| *value as u16).sum::<u16>(), 100);
+        assert!(adjust_column_percents_for_delete(&[40, 60], 0).is_none());
+    }
+
+    #[test]
+    fn selection_gate_requires_one_table_cell() {
+        let source = "| A | B |\n| --- | --- |\n| hello | world |";
+        let hello = source.find("hello").unwrap();
+        assert_eq!(
+            selection_is_within_one_table_cell(source, hello..hello + 5),
+            Some(true)
+        );
+        let pipe = source.find("| hello").unwrap();
+        assert_eq!(
+            selection_is_within_one_table_cell(source, pipe..hello + 5),
+            Some(false)
+        );
+        let world = source.find("world").unwrap();
+        assert_eq!(
+            selection_is_within_one_table_cell(source, hello..world + 5),
+            Some(false)
+        );
+        assert_eq!(selection_is_within_one_table_cell("plain text", 0..5), None);
     }
 }

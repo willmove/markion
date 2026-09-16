@@ -14,7 +14,7 @@ use crate::model::{
     VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualTableCell,
 };
 use crate::source_mapped::{is_closing_fence, is_reference_definition, opening_fence};
-use crate::table::table_cell_source_ranges;
+use crate::table::{table_cell_source_ranges, table_column_width_prefix_len};
 use crate::text_util::char_run_range;
 
 /// Collects the document's link reference definition lines so that per-block
@@ -532,9 +532,10 @@ pub fn build_visual_projection_with_marked_range(
 }
 use crate::emoji::{emoji_for_shortcode, emoji_tokens_in};
 use crate::parse::{
-    ExtendedInlineKind, InlineHtmlStyleKind, InlineHtmlStyleTag, coalesced_offset_events,
-    extended_inline_matches, parse_inline_html_image, parse_inline_html_style_tag,
-    visual_markdown_options,
+    ExtendedInlineKind, HtmlInlineElement, InlineHtmlStyleKind, InlineHtmlStyleTag,
+    coalesced_offset_events, compose_inline_style, extended_inline_matches,
+    inline_html_tag_names_match, parse_html_inline_element, parse_inline_html_image,
+    parse_inline_html_style_tag, visual_markdown_options,
 };
 
 #[derive(Clone)]
@@ -1259,6 +1260,9 @@ fn visual_block_from_preview(
     if quote_context.is_some() {
         synthesize_quote_softbreak_runs(text, &source_range, &mut editable_runs);
     }
+    if matches!(kind, VisualBlockKind::ListItem { .. }) && quote_context.is_none() {
+        append_list_blank_line_runs(text, &source_range, &mut editable_runs);
+    }
     let marker_ranges = marker_ranges(source_range.clone(), &editable_runs);
     let editor = visual_block_editor(text, block, source_range.clone());
     if editor.is_some() {
@@ -1351,7 +1355,9 @@ fn visual_block_editor(
         }
         PreviewBlock::Table { rows, .. } => {
             let source = text.get(source_range.clone())?;
-            let cell_ranges = table_cell_source_ranges(source)?;
+            let markdown_start = table_column_width_prefix_len(source);
+            let markdown = source.get(markdown_start..)?;
+            let cell_ranges = table_cell_source_ranges(markdown)?;
             if cell_ranges.len() != rows.iter().map(Vec::len).sum::<usize>() {
                 return None;
             }
@@ -1359,8 +1365,9 @@ fn visual_block_editor(
                 cells: cell_ranges
                     .into_iter()
                     .map(|cell| {
-                        let source_range = source_range.start + cell.source_range.start
-                            ..source_range.start + cell.source_range.end;
+                        let source_range =
+                            source_range.start + markdown_start + cell.source_range.start
+                                ..source_range.start + markdown_start + cell.source_range.end;
                         VisualTableCell {
                             row: cell.row,
                             column: cell.column,
@@ -1737,6 +1744,46 @@ fn append_trailing_horizontal_whitespace_run(
     runs.sort_by_key(|run| (run.content_range.start, run.content_range.end));
 }
 
+/// List container ranges include blank lines which have no inline events.
+/// Keep them as source-backed line breaks: the final separator before another
+/// block belongs to that block's next row, while EOF needs every trailing row.
+fn append_list_blank_line_runs(text: &str, range: &Range<usize>, runs: &mut Vec<VisualInlineRun>) {
+    let content_end = range.start + text[range.clone()].trim_end_matches(['\r', '\n']).len();
+    let mut endings = Vec::new();
+    let mut start = content_end;
+    for (offset, byte) in text[content_end..range.end].bytes().enumerate() {
+        if byte == b'\n' {
+            let end = content_end + offset + 1;
+            endings.push(start..end);
+            start = end;
+        }
+    }
+    if !text[range.end..].trim().is_empty() {
+        endings.pop();
+    }
+    let represented_end = runs
+        .iter()
+        .map(|run| run.content_range.end)
+        .max()
+        .unwrap_or(range.start);
+    for source_range in endings {
+        if source_range.start < represented_end {
+            continue;
+        }
+        runs.push(VisualInlineRun {
+            visible_text: "\n".into(),
+            source_range: source_range.clone(),
+            content_range: source_range,
+            style: InlineStyle::default(),
+            link_target_range: None,
+            navigation: None,
+            math: None,
+            html_image: None,
+            conservative_fallback: false,
+        });
+    }
+}
+
 fn visual_block_source_range(text: &str, block: &PreviewBlock) -> Range<usize> {
     let mut range = block.source_range().clone();
     if matches!(
@@ -1791,39 +1838,11 @@ struct RevealCandidate {
     link_target_range: Option<Range<usize>>,
 }
 
-/// Number of distinct kinds in [`InlineHtmlStyleKind`].
-const HTML_STYLE_KIND_COUNT: usize = 7;
-
 /// One open supported inline-HTML style tag awaiting its close.
 struct HtmlStyleFrame {
     kind: InlineHtmlStyleKind,
     open_range: Range<usize>,
-}
-
-fn html_style_index(kind: InlineHtmlStyleKind) -> usize {
-    match kind {
-        InlineHtmlStyleKind::Emphasis => 0,
-        InlineHtmlStyleKind::Strong => 1,
-        InlineHtmlStyleKind::Strikethrough => 2,
-        InlineHtmlStyleKind::Code => 3,
-        InlineHtmlStyleKind::Highlight => 4,
-        InlineHtmlStyleKind::Subscript => 5,
-        InlineHtmlStyleKind::Superscript => 6,
-    }
-}
-
-/// Composes the Markdown tag style with the open inline-HTML style depths.
-fn with_html_style(base: InlineStyle, html_depths: &[usize; HTML_STYLE_KIND_COUNT]) -> InlineStyle {
-    InlineStyle {
-        italic: base.italic || html_depths[0] > 0,
-        bold: base.bold || html_depths[1] > 0,
-        strikethrough: base.strikethrough || html_depths[2] > 0,
-        code: base.code || html_depths[3] > 0,
-        highlight: base.highlight || html_depths[4] > 0,
-        subscript: base.subscript || html_depths[5] > 0,
-        superscript: base.superscript || html_depths[6] > 0,
-        ..base
-    }
+    element: HtmlInlineElement,
 }
 
 fn inline_runs(
@@ -1858,9 +1877,9 @@ fn inline_runs(
     // Depth counters for supported inline-HTML style tags, kept separate from
     // `markdown_style` so an HTML pair and a Markdown pair nesting each other
     // (e.g. `<em>a *b* c</em>`) cannot clear each other's flags on close.
-    let mut html_depths = [0usize; HTML_STYLE_KIND_COUNT];
     let mut html_style_stack: Vec<HtmlStyleFrame> = Vec::new();
     let mut html_element_ranges: Vec<Range<usize>> = Vec::new();
+    let mut hidden_html_tag_ranges: Vec<Range<usize>> = Vec::new();
     let mut html_pairing_failed = false;
     let mut link_stack: Vec<(Option<Range<usize>>, String)> = Vec::new();
     let mut contains_non_image_html = false;
@@ -1878,7 +1897,12 @@ fn inline_runs(
         }
         let event_range =
             block_range.start + relative_range.start..block_range.start + relative_range.end;
-        let current_link = link_stack.last().cloned();
+        let current_link = link_stack.last().cloned().or_else(|| {
+            html_style_stack
+                .iter()
+                .rev()
+                .find_map(|frame| frame.element.href.as_ref().map(|href| (None, href.clone())))
+        });
         let current_link_target = current_link.as_ref().and_then(|(range, _)| range.clone());
         let current_link_nav = current_link
             .as_ref()
@@ -1895,7 +1919,11 @@ fn inline_runs(
                 | Event::InlineHtml(_)
                 | Event::FootnoteReference(_)
         );
-        let style = with_html_style(markdown_style, &html_depths);
+        let style = html_style_stack
+            .iter()
+            .fold(markdown_style, |style, frame| {
+                compose_inline_style(style, frame.element.style)
+            });
         match event {
             Event::Start(Tag::Strong) => {
                 candidates.push(RevealCandidate {
@@ -2198,23 +2226,27 @@ fn inline_runs(
                             });
                         }
                         InlineHtmlStyleTag::Open { kind } => {
+                            hidden_html_tag_ranges.push(event_range.clone());
                             html_style_stack.push(HtmlStyleFrame {
                                 kind,
                                 open_range: event_range.clone(),
+                                element: parse_html_inline_element(&authored)
+                                    .expect("recognized inline element"),
                             });
-                            html_depths[html_style_index(kind)] += 1;
                             // The reveal candidate is registered when the
                             // matching close arrives so it spans the complete
                             // element source.
                         }
                         InlineHtmlStyleTag::Close { kind } => {
-                            if html_style_stack
-                                .last()
-                                .is_some_and(|frame| frame.kind == kind)
-                            {
+                            if html_style_stack.last().is_some_and(|frame| {
+                                frame.kind == kind
+                                    && inline_html_tag_names_match(
+                                        &text[frame.open_range.clone()],
+                                        &authored,
+                                    )
+                            }) {
+                                hidden_html_tag_ranges.push(event_range.clone());
                                 let frame = html_style_stack.pop().expect("checked top frame");
-                                html_depths[html_style_index(kind)] =
-                                    html_depths[html_style_index(kind)].saturating_sub(1);
                                 html_element_ranges.push(frame.open_range.start..event_range.end);
                                 candidates.push(RevealCandidate {
                                     kind: VisualRevealKind::InlineHtml,
@@ -2297,11 +2329,21 @@ fn inline_runs(
                 run.conservative_fallback = true;
             }
         }
-        for frame in &html_style_stack {
+        // Restore every hidden style tag, including already closed elements.
+        // Otherwise a crossing close could silently drop the tags of a pair
+        // that happened to close later while leaving its contents as source.
+        candidates.retain(|candidate| {
+            candidate.kind != VisualRevealKind::InlineHtml
+                || matches!(
+                    parse_inline_html_style_tag(&text[candidate.source_range.clone()]),
+                    Some(InlineHtmlStyleTag::LineBreak)
+                )
+        });
+        for range in hidden_html_tag_ranges {
             runs.push(VisualInlineRun {
-                visible_text: text[frame.open_range.clone()].to_string(),
-                source_range: frame.open_range.clone(),
-                content_range: frame.open_range.clone(),
+                visible_text: text[range.clone()].to_string(),
+                source_range: range.clone(),
+                content_range: range,
                 style: InlineStyle::default(),
                 link_target_range: None,
                 navigation: None,
@@ -3145,7 +3187,7 @@ fn looks_like_markdown_image(source: &str) -> bool {
 }
 
 fn inline_html_pair_is_exact(source: &str) -> bool {
-    let Some(open_end) = source.find('>') else {
+    let Some(open_end) = crate::parse::find_html_tag_end(source, 0).map(|end| end - 1) else {
         return false;
     };
     let Some(InlineHtmlStyleTag::Open { kind: open_kind }) =
@@ -3157,6 +3199,7 @@ fn inline_html_pair_is_exact(source: &str) -> bool {
         return false;
     };
     close_start > open_end
+        && inline_html_tag_names_match(&source[..=open_end], &source[close_start..])
         && matches!(
             parse_inline_html_style_tag(&source[close_start..]),
             Some(InlineHtmlStyleTag::Close { kind }) if kind == open_kind
@@ -4266,6 +4309,57 @@ mod tests {
     }
 
     #[test]
+    fn list_blank_line_projection_is_source_backed_and_cached() {
+        for prefix in ["- ", "1. ", "- [ ] "] {
+            for eol in ["\n", "\r\n"] {
+                for count in 1..=4 {
+                    let source = format!("{prefix}第三{}", eol.repeat(count));
+                    let doc = MarkdownDocument::from_text(&source);
+                    let blocks = doc.visual_blocks_shared();
+                    let item = &blocks[0];
+                    let projection = build_visual_projection(
+                        &source,
+                        item,
+                        source.len()..source.len(),
+                        source.len(),
+                    );
+                    assert!(
+                        projection.text.ends_with(&"\n".repeat(count)),
+                        "{source:?}: {:?}",
+                        projection.text
+                    );
+                    assert_eq!(
+                        projection.source_for_display(projection.text.len()),
+                        source.len()
+                    );
+                    for segment in &projection.segments {
+                        assert!(source.is_char_boundary(segment.source_range.start));
+                        assert!(source.is_char_boundary(segment.source_range.end));
+                    }
+                    assert!(std::sync::Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+                }
+                let source = format!("{prefix}第一{eol}{eol}{prefix}第二");
+                let doc = MarkdownDocument::from_text(&source);
+                let blocks = doc.visual_blocks_shared();
+                let projection = build_visual_projection(
+                    &source,
+                    &blocks[0],
+                    source.len()..source.len(),
+                    source.len(),
+                );
+                assert!(
+                    projection.text.ends_with('\n'),
+                    "list separator must render: {source:?}"
+                );
+                assert!(
+                    !projection.text.ends_with("\n\n"),
+                    "next row owns the final separator"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn empty_list_items_stay_list_rows_not_source_islands() {
         for source in ["- ", "* ", "1. ", "1) ", "- [ ] "] {
             assert_empty_list_item(source);
@@ -5308,7 +5402,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             projected,
-            ["parent", "child", "grandchild", "ordered", "nested"]
+            ["parent", "child", "grandchild", "ordered", "nested\n"]
         );
     }
 
@@ -7061,6 +7155,169 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
     }
 
     #[test]
+    fn inline_html_toc_links_render_and_reveal_exactly() {
+        let entries = [
+            ("第一章 项目概述", "4", "#_toc232450996"),
+            ("1.1 项目背景", "4", "#_toc232450997"),
+            ("1.2 项目需求分析", "4", "#_toc232450998"),
+            ("1.2.1 业务场景需求概述", "4", "#_toc232450999"),
+            ("1.2.2 算力资源规模需求", "5", "#_toc232451000"),
+        ];
+        let mut source = "**目  录**\n\n".to_string();
+        for (title, page, target) in entries {
+            source.push_str(&format!("[<u>{title}</u>    {page}]({target})\n\n"));
+        }
+        let doc = MarkdownDocument::from_text(&source);
+        let blocks = doc.visual_blocks_shared();
+        let version = doc.version();
+        assert!(blocks[0].editable_runs.iter().any(|run| run.style.bold));
+        for (title, page, target) in entries {
+            let title_start = source.find(title).unwrap();
+            let block = blocks
+                .iter()
+                .find(|block| {
+                    block
+                        .editable_runs
+                        .iter()
+                        .any(|run| run.visible_text == title)
+                })
+                .unwrap();
+            assert!(
+                block
+                    .editable_runs
+                    .iter()
+                    .all(|run| !run.conservative_fallback)
+            );
+            let title_run = block
+                .editable_runs
+                .iter()
+                .find(|run| run.visible_text == title)
+                .unwrap();
+            assert!(title_run.style.underline);
+            assert_eq!(
+                title_run.navigation,
+                Some(VisualNavigationTarget::Heading {
+                    anchor: target
+                        .strip_prefix('#')
+                        .expect("fixture uses a bare document fragment")
+                        .into(),
+                })
+            );
+            assert!(
+                block
+                    .editable_runs
+                    .iter()
+                    .filter(|run| run.visible_text.contains(page))
+                    .all(|run| !run.style.underline)
+            );
+            let hidden = build_visual_projection(&source, block, 0..0, 0);
+            assert_eq!(hidden.text, format!("{title}    {page}"));
+            let shown =
+                build_visual_projection(&source, block, title_start..title_start, title_start);
+            let authored = format!("[<u>{title}</u>    {page}]({target})");
+            assert_eq!(shown.text, authored);
+            assert_eq!(shown.revealed_source_ranges.len(), 1);
+            for offset in shown.revealed_source_ranges[0]
+                .clone()
+                .filter(|offset| source.is_char_boundary(*offset))
+            {
+                let display = shown.display_for_source(offset).unwrap();
+                assert_eq!(shown.source_for_display(display), offset);
+            }
+        }
+        assert_eq!(doc.version(), version);
+        assert!(Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+    }
+
+    #[test]
+    fn inline_html_escaped_markup_remains_literal() {
+        for (source, expected) in [
+            (r"\*\*目  录\*\*", "**目  录**"),
+            (
+                r"[\<u>第一章 项目概述\</u>    4](#_toc232450996)",
+                "<u>第一章 项目概述</u>    4",
+            ),
+            (r"[\*\*目录\*\*](#toc)", "**目录**"),
+            ("&lt;u&gt;目录&lt;/u&gt;", "<u>目录</u>"),
+            ("`<u>目录</u>`", "<u>目录</u>"),
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let block = &blocks[0];
+            let outside = source.len() + 1;
+            let projection = build_visual_projection(source, block, outside..outside, outside);
+            assert_eq!(projection.text, expected, "{source}");
+            assert!(
+                block
+                    .editable_runs
+                    .iter()
+                    .all(|run| !run.style.underline && !run.style.bold),
+                "{source}"
+            );
+            assert!(
+                block
+                    .editable_runs
+                    .iter()
+                    .all(|run| !run.conservative_fallback),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_html_underline_composes_across_prose_contexts() {
+        for source in [
+            "plain <u>中文 **加粗** <u>内部</u> 尾部</u> after",
+            "# plain <U class=\"toc\">中文 **加粗** <ins>内部</ins> 尾部</U> after",
+            "- plain <ins>中文 **加粗** <u>内部</u> 尾部</ins> after",
+            "> plain <u>中文 **加粗** <u>内部</u> 尾部</u> after",
+            "| A |\n|---|\n| plain <u>中文 **加粗** <u>内部</u> 尾部</u> after |",
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let runs = blocks
+                .iter()
+                .flat_map(|block| &block.editable_runs)
+                .collect::<Vec<_>>();
+            for needle in ["中文", "加粗", "内部", "尾部"] {
+                assert!(
+                    runs.iter()
+                        .any(|run| run.visible_text.contains(needle) && run.style.underline),
+                    "{source}: {needle}"
+                );
+            }
+            assert!(
+                runs.iter()
+                    .any(|run| run.visible_text == "加粗" && run.style.bold)
+            );
+            assert!(
+                runs.iter()
+                    .filter(|run| run.visible_text.contains("after"))
+                    .all(|run| !run.style.underline)
+            );
+        }
+    }
+
+    #[test]
+    fn inline_html_style_aliases_must_have_matching_tag_names() {
+        for element in [
+            "<em>中文</i>",
+            "<b>中文</strong>",
+            "<u>中文</ins>",
+            "<u><em>中文</u></em>",
+        ] {
+            let source = format!("before {element} after");
+            let doc = MarkdownDocument::from_text(&source);
+            let blocks = doc.visual_blocks_shared();
+            let projection = build_visual_projection(&source, &blocks[0], 0..0, 0);
+            assert_eq!(
+                projection.text, source,
+                "malformed element must keep all bytes"
+            );
+        }
+    }
+
+    #[test]
     fn inline_html_styles_compose_with_markdown_formatting() {
         let source = "<em>a *b* c</em> and <strong>md **bold**</strong>";
         let doc = MarkdownDocument::from_text(source);
@@ -7130,7 +7387,7 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
     fn visual_edit_keeps_conservative_fallback_for_unsupported_inline_html() {
         // Unsupported inline HTML stays mixed: conservative tag runs, no
         // whole-block island, focused and unfocused alike.
-        let doc = MarkdownDocument::from_text("text <a href=\"u\">link</a> more");
+        let doc = MarkdownDocument::from_text("text <a onclick=\"x\" href=\"u\">link</a> more");
         let blocks = doc.visual_blocks_shared();
         assert_eq!(blocks[0].source_island, None);
         assert!(
@@ -7220,7 +7477,7 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
         );
 
         // The README badge pattern (`<a href><img></a>`) emits the image run
-        // plus conservative source runs for the unsupported `<a>` wrappers.
+        // with supported link wrappers and navigation.
         let doc = MarkdownDocument::from_text("plain <a href=\"u\"><img src=\"x.png\"></a> end");
         let blocks = doc.visual_blocks_shared();
         assert_eq!(blocks[0].source_island, None);
@@ -7235,8 +7492,9 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             blocks[0]
                 .editable_runs
                 .iter()
-                .any(|run| run.conservative_fallback && run.visible_text.contains("<a")),
-            "a-wrapped image keeps conservative source runs for the wrappers"
+                .any(|run| run.html_image.is_some()
+                    && run.navigation == Some(VisualNavigationTarget::Url("u".into()))),
+            "a-wrapped image inherits the link"
         );
 
         // An unclosed `<em>` before an image demotes the styled run while the
@@ -7256,7 +7514,7 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
 
     #[test]
     fn unsupported_inline_html_stays_mixed_layout() {
-        let source = "Hello <span>x</span> world";
+        let source = "Hello <widget>x</widget> world";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
         assert_eq!(blocks.len(), 1);
@@ -7265,7 +7523,7 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
             blocks[0]
                 .editable_runs
                 .iter()
-                .any(|run| run.conservative_fallback && run.visible_text.contains("<span>"))
+                .any(|run| run.conservative_fallback && run.visible_text.contains("<widget>"))
         );
         let visible: String = blocks[0]
             .editable_runs

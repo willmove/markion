@@ -82,9 +82,11 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
             name: t(language, Msg::MenuView).into(),
             items: vec![
                 MenuItem::action(t(language, Msg::ItemToggleView), ToggleViewMode),
-                MenuItem::action(t(language, Msg::ItemEditMode), SetEditMode),
+                MenuItem::action(
+                    t(language, Msg::ItemSourceSplitPreview),
+                    ToggleSourceSplitMode,
+                ),
                 MenuItem::action(t(language, Msg::ItemVisualEditMode), SetVisualEditMode),
-                MenuItem::action(t(language, Msg::ItemSplitPreviewMode), SetSplitPreviewMode),
                 MenuItem::action(t(language, Msg::ItemReadMode), SetReadMode),
                 MenuItem::separator(),
                 MenuItem::action(t(language, Msg::ItemToggleSidebar), ToggleSidebar),
@@ -111,6 +113,7 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemLink), InsertLink),
                 MenuItem::action(t(language, Msg::ItemImage), InsertImage),
                 MenuItem::separator(),
+                MenuItem::action(t(language, Msg::ItemParagraph), Paragraph),
             ]
             .into_iter()
             .chain(heading_native_menu_items(language, heading_menu_max_level))
@@ -151,7 +154,7 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
             ],
         },
         Menu {
-            name: git_t(language, GitMsg::BackupAndSync).into(),
+            name: git_t(language, GitMsg::SyncMenu).into(),
             items: vec![
                 MenuItem::action(git_t(language, GitMsg::ViewStatus), ShowGitSync),
                 MenuItem::separator(),
@@ -231,6 +234,7 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new(eff(&menu_shortcuts::INLINE_CODE), InlineCode, None),
         KeyBinding::new(eff(&menu_shortcuts::INSERT_LINK), InsertLink, None),
         KeyBinding::new(eff(&menu_shortcuts::INSERT_IMAGE), InsertImage, None),
+        KeyBinding::new(eff(&menu_shortcuts::PARAGRAPH), Paragraph, None),
         KeyBinding::new(eff(&menu_shortcuts::HEADING_1), Heading1, None),
         KeyBinding::new(eff(&menu_shortcuts::HEADING_2), Heading2, None),
         KeyBinding::new(eff(&menu_shortcuts::HEADING_3), Heading3, None),
@@ -266,15 +270,14 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new(eff(&menu_shortcuts::EXPORT_PNG), ExportPng, None),
         KeyBinding::new(eff(&menu_shortcuts::EXPORT_JPEG), ExportJpeg, None),
         KeyBinding::new(eff(&menu_shortcuts::TOGGLE_VIEW_MODE), ToggleViewMode, None),
-        KeyBinding::new(eff(&menu_shortcuts::SET_EDIT_MODE), SetEditMode, None),
         KeyBinding::new(
-            eff(&menu_shortcuts::SET_VISUAL_EDIT_MODE),
-            SetVisualEditMode,
+            eff(&menu_shortcuts::SOURCE_SPLIT_MODE),
+            ToggleSourceSplitMode,
             None,
         ),
         KeyBinding::new(
-            eff(&menu_shortcuts::SET_SPLIT_PREVIEW_MODE),
-            SetSplitPreviewMode,
+            eff(&menu_shortcuts::SET_VISUAL_EDIT_MODE),
+            SetVisualEditMode,
             None,
         ),
         KeyBinding::new(eff(&menu_shortcuts::SET_READ_MODE), SetReadMode, None),

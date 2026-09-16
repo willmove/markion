@@ -23,6 +23,8 @@ mod frontmatter;
 mod highlight;
 pub mod i18n;
 mod inline_edit;
+#[cfg(test)]
+mod inline_html_tests;
 pub mod keystroke;
 mod math;
 pub mod model;
@@ -38,8 +40,9 @@ mod visual;
 
 pub use document_memory::{DocumentMemoryBreakdown, DocumentMemorySite};
 pub use inline_edit::{
-    ImageAlignment, ImagePresentation, InlineMarkdownTarget, inline_image_at, inline_link_at,
-    serialize_inline_image, serialize_inline_link,
+    ImageAlignment, ImagePresentation, InlineMarkdownTarget, clamp_image_width_percent,
+    inline_image_at, inline_link_at, serialize_inline_image, serialize_inline_link,
+    snap_image_width_percent,
 };
 
 /// Markdown shown in the first in-memory document when Markion starts.
@@ -268,11 +271,18 @@ pub use storage::{
     save_session_state, save_theme_definition, workspace_relative_path,
 };
 
-pub use table::table_column_flex_weights;
 use table::{
-    TableDraft, format_markdown_table, formatted_table_cell_range, parse_markdown_table,
-    table_cell_source_ranges, table_position_at, table_preview_source_range,
-    table_range_at as table_range_at_fn, table_ranges as table_ranges_fn,
+    TableDraft, adjust_column_percents_for_delete, adjust_column_percents_for_insert,
+    format_markdown_table, format_table_column_width_comment, formatted_table_cell_range,
+    leading_table_column_width_comment_range, normalize_column_percents, parse_markdown_table,
+    parse_table_column_width_comment, selection_is_within_one_table_cell, table_cell_source_ranges,
+    table_position_at, table_preview_source_range, table_range_at as table_range_at_fn,
+    table_ranges as table_ranges_fn,
+};
+pub use table::{
+    authored_table_column_percents, percents_from_flex_weights,
+    redistribute_adjacent_column_percents, table_column_flex_weights,
+    table_column_flex_weights_with_authored, table_column_width_prefix_len,
 };
 
 use parse::{
@@ -1822,12 +1832,26 @@ impl MarkdownDocument {
         format: MarkdownFormat,
     ) -> std::ops::Range<usize> {
         let range = clamp_range_to_char_boundaries(&self.text, range);
+        if let Some(inside_one_cell) = selection_is_within_one_table_cell(&self.text, range.clone())
+        {
+            let inline_ok = matches!(
+                format,
+                MarkdownFormat::Bold
+                    | MarkdownFormat::Italic
+                    | MarkdownFormat::InlineCode
+                    | MarkdownFormat::Link
+            );
+            if !inside_one_cell || !inline_ok {
+                return range;
+            }
+        }
         match format {
             MarkdownFormat::Bold => self.wrap_inline(range, "**", "**", "bold"),
             MarkdownFormat::Italic => self.wrap_inline(range, "*", "*", "italic"),
             MarkdownFormat::InlineCode => self.wrap_inline(range, "`", "`", "code"),
             MarkdownFormat::Link => self.wrap_link(range, false),
             MarkdownFormat::Image => self.wrap_link(range, true),
+            MarkdownFormat::Paragraph => self.apply_paragraph(range),
             MarkdownFormat::Heading(level) => self.apply_heading(range, level.clamp(1, 6)),
             MarkdownFormat::UnorderedList => self.prefix_lines(range, |_, _| "- ".to_string()),
             MarkdownFormat::OrderedList => {
@@ -1850,13 +1874,21 @@ impl MarkdownDocument {
     pub fn edit_table_at(&mut self, byte_index: usize, edit: TableEdit) -> Option<TableEditResult> {
         let byte_index = clamp_to_char_boundary(&self.text, byte_index);
         let table_range = self.table_range_at(byte_index)?;
-        let table_source = &self.text[table_range.clone()];
-        let table_position = table_position_at(table_source, byte_index - table_range.start)?;
-        let mut table = parse_markdown_table(table_source)?;
+        let table_source = self.text[table_range.clone()].to_string();
+        let table_position = table_position_at(&table_source, byte_index - table_range.start)?;
+        let mut table = parse_markdown_table(&table_source)?;
         let mut selected_row = table_position.row.min(table.rows.len().saturating_sub(1));
         let mut selected_column = table_position
             .column
             .min(table.column_count().saturating_sub(1));
+        let old_column_count = table.column_count();
+        let leading_comment =
+            leading_table_column_width_comment_range(&self.text, table_range.start);
+        let old_percents = leading_comment.as_ref().and_then(|range| {
+            parse_table_column_width_comment(&self.text[range.clone()])
+                .filter(|percents| percents.len() == old_column_count)
+        });
+        let mut column_edit: Option<(bool, usize)> = None;
 
         match edit {
             TableEdit::Format => {}
@@ -1896,36 +1928,93 @@ impl MarkdownDocument {
                 }
                 table.alignments.insert(insert_at, TableAlignment::Default);
                 selected_column = insert_at;
+                column_edit = Some((true, insert_at));
             }
             TableEdit::DeleteColumn => {
                 if table.column_count() <= 1 {
                     return None;
                 }
+                let deleted = selected_column;
                 for row in &mut table.rows {
                     row.remove(selected_column);
                 }
                 table.alignments.remove(selected_column);
                 selected_column = selected_column.min(table.column_count().saturating_sub(1));
+                column_edit = Some((false, deleted));
             }
         }
 
         table.normalize();
-        let replacement = format_markdown_table(&table);
+        let table_replacement = format_markdown_table(&table);
         let selection_in_table =
             formatted_table_cell_range(&table, selected_row, selected_column).unwrap_or(0..0);
-        let selected_range = table_range.start + selection_in_table.start
-            ..table_range.start + selection_in_table.end;
 
-        if replacement != table_source {
-            self.apply_current_range(MutationOrigin::TableEdit, table_range.clone(), &replacement);
+        let rewritten_percents = match (column_edit, old_percents) {
+            (Some((true, insert_at)), Some(percents)) => {
+                adjust_column_percents_for_insert(&percents, insert_at)
+            }
+            (Some((false, deleted)), Some(percents)) => {
+                adjust_column_percents_for_delete(&percents, deleted)
+            }
+            _ => None,
+        };
+
+        let (replace_range, replacement, table_start) =
+            if let (Some(comment_range), Some(percents)) =
+                (leading_comment.clone(), rewritten_percents)
+            {
+                let comment = format_table_column_width_comment(&percents);
+                let replacement = format!("{comment}\n{table_replacement}");
+                (
+                    comment_range.start..table_range.end,
+                    replacement,
+                    comment_range.start + comment.len() + 1,
+                )
+            } else {
+                (
+                    table_range.clone(),
+                    table_replacement.clone(),
+                    table_range.start,
+                )
+            };
+
+        let selected_range =
+            table_start + selection_in_table.start..table_start + selection_in_table.end;
+
+        if replacement != self.text[replace_range.clone()] {
+            self.apply_current_range(MutationOrigin::TableEdit, replace_range, &replacement);
         }
 
         Some(TableEditResult {
-            table_range: table_range.start..table_range.start + replacement.len(),
+            table_range: table_start..table_start + table_replacement.len(),
             selected_range,
             row: selected_row,
             column: selected_column,
         })
+    }
+
+    pub fn set_table_column_widths_at(
+        &mut self,
+        byte_index: usize,
+        percents: &[u8],
+    ) -> Option<Range<usize>> {
+        let byte_index = clamp_to_char_boundary(&self.text, byte_index);
+        let table_range = self.table_range_at(byte_index)?;
+        let table = parse_markdown_table(&self.text[table_range.clone()])?;
+        let columns = table.column_count();
+        if percents.len() != columns {
+            return None;
+        }
+        let percents = normalize_column_percents(percents)?;
+        let comment = format_table_column_width_comment(&percents);
+        let line = format!("{comment}\n");
+        let replace_range = leading_table_column_width_comment_range(&self.text, table_range.start)
+            .unwrap_or(table_range.start..table_range.start);
+        if self.text.get(replace_range.clone()) == Some(line.as_str()) {
+            return Some(replace_range.start..replace_range.start + line.len());
+        }
+        self.apply_current_range(MutationOrigin::TableEdit, replace_range.clone(), &line);
+        Some(replace_range.start..replace_range.start + line.len())
     }
 
     fn wrap_inline(
@@ -2123,6 +2212,41 @@ impl MarkdownDocument {
                 );
                 delta += prefix.len() as isize;
             }
+        }
+
+        self.apply_transformed_text(MutationOrigin::MarkdownFormat, transformed);
+        let start = offset_with_delta(range.start, start_delta);
+        let end = offset_with_delta(range.end, end_delta).max(start);
+        start..end
+    }
+
+    fn apply_paragraph(&mut self, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        let line_starts = selected_line_starts(&self.text, range.clone());
+        let mut transformed = self.text.clone();
+        let mut delta: isize = 0;
+        let mut start_delta: isize = 0;
+        let mut end_delta: isize = 0;
+
+        for line_start in line_starts {
+            let adjusted_line_start = (line_start as isize + delta) as usize;
+            let marker_len = heading_marker_len_at(&transformed, adjusted_line_start);
+            if marker_len == 0 {
+                continue;
+            }
+            transformed.replace_range(adjusted_line_start..adjusted_line_start + marker_len, "");
+            adjust_offset_for_line_marker_removal(
+                range.start,
+                line_start,
+                marker_len,
+                &mut start_delta,
+            );
+            adjust_offset_for_line_marker_removal(
+                range.end,
+                line_start,
+                marker_len,
+                &mut end_delta,
+            );
+            delta -= marker_len as isize;
         }
 
         self.apply_transformed_text(MutationOrigin::MarkdownFormat, transformed);
@@ -3090,6 +3214,7 @@ impl MarkdownDocument {
                     ));
                 }
                 Event::End(TagEnd::Heading(_)) => {
+                    inline.html.clear();
                     if let Some((level, spans, heading_range)) = heading.take() {
                         push_nonempty_block(
                             &mut blocks,
@@ -3122,6 +3247,7 @@ impl MarkdownDocument {
                     }
                 }
                 Event::Start(Tag::Paragraph) => {
+                    inline.html.clear();
                     paragraph = Some((Vec::new(), source_range));
                 }
                 Event::End(TagEnd::Paragraph) => {
@@ -3247,6 +3373,7 @@ impl MarkdownDocument {
                     });
                 }
                 Event::End(TagEnd::Item) => {
+                    inline.html.clear();
                     if let Some(item) = list_item.as_mut() {
                         item.source_range = source_range;
                     }
@@ -3292,6 +3419,8 @@ impl MarkdownDocument {
                             &mut list_item,
                             &mut table,
                             image,
+                            inline.style(),
+                            inline.link(),
                         ) {
                             blocks.push(PreviewBlock::Image {
                                 alt: clean_preview_text(&image.alt),
@@ -3407,6 +3536,7 @@ impl MarkdownDocument {
                     }
                 }
                 Event::End(TagEnd::TableCell) => {
+                    inline.html.clear();
                     if let Some(table) = table.as_mut()
                         && let Some(row) = table.current_row.as_mut()
                     {
@@ -3500,6 +3630,50 @@ impl MarkdownDocument {
                     }
                 }
                 Event::InlineHtml(html) => {
+                    if inline.html.handle(&html) {
+                        continue;
+                    }
+                    if let Some(html_image) = parse::parse_inline_html_image(&html) {
+                        let draft = ImageDraft {
+                            alt: html_image.alt,
+                            title: html_image.title,
+                            identity: ImageSourceIdentity::for_url(&html_image.url),
+                            url: html_image.url,
+                            source_range,
+                        };
+                        let _ = append_preview_image(
+                            &mut heading,
+                            &mut paragraph,
+                            &mut quote,
+                            quote_depth,
+                            &mut list_item,
+                            &mut table,
+                            draft,
+                            inline.style(),
+                            inline.link(),
+                        );
+                        continue;
+                    }
+                    if matches!(
+                        parse::parse_inline_html_style_tag(&html),
+                        Some(parse::InlineHtmlStyleTag::LineBreak)
+                    ) {
+                        push_preview_rich(
+                            &mut heading,
+                            &mut paragraph,
+                            &mut quote,
+                            quote_depth,
+                            &mut list_item,
+                            &mut image,
+                            &mut code,
+                            &mut table,
+                            "\n",
+                            inline.style(),
+                            inline.link(),
+                            false,
+                        );
+                        continue;
+                    }
                     let standalone_html = heading.is_none()
                         && paragraph.is_none()
                         && quote_depth == 0
@@ -3641,6 +3815,7 @@ impl MarkdownDocument {
         // export, and sync scroll alike. For documents without nesting the
         // stream is already ordered, so this is a no-op there.
         blocks.sort_by_key(|block| block.source_range().start);
+        absorb_table_column_width_comments(&mut blocks);
         absorb_table_of_contents(&mut blocks);
         uniquify_heading_anchors(&mut headings);
 
@@ -4317,6 +4492,39 @@ fn emit_finished_paragraph(
     );
 }
 
+fn absorb_table_column_width_comments(blocks: &mut Vec<PreviewBlock>) {
+    let mut index = 0;
+    while index < blocks.len() {
+        if matches!(&blocks[index], PreviewBlock::BlockQuote { .. }) {
+            if let PreviewBlock::BlockQuote { children, .. } = &mut blocks[index] {
+                absorb_table_column_width_comments(children);
+            }
+            index += 1;
+            continue;
+        }
+        let html_start = match &blocks[index] {
+            PreviewBlock::Html {
+                html, source_range, ..
+            } if parse_table_column_width_comment(html).is_some()
+                && blocks
+                    .get(index + 1)
+                    .is_some_and(|next| matches!(next, PreviewBlock::Table { .. })) =>
+            {
+                Some(source_range.start)
+            }
+            _ => None,
+        };
+        if let Some(html_start) = html_start {
+            if let PreviewBlock::Table { source_range, .. } = &mut blocks[index + 1] {
+                source_range.start = html_start;
+            }
+            blocks.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+}
+
 /// True when consecutive `Event::Html` ranges should become one preview
 /// block. pulldown-cmark 0.13 omits `\r` from CRLF line ranges, leaving a
 /// CR-only hole that is not a CommonMark block boundary. A `\n` in the gap
@@ -4363,6 +4571,7 @@ fn html_only_paragraph_source(source: &str) -> bool {
     let mut index = 0;
     let mut depth = 0usize;
     let mut saw_tag = false;
+    let mut needs_block_renderer = false;
 
     while index < source.len() {
         if source[index..].starts_with('<') {
@@ -4374,6 +4583,7 @@ fn html_only_paragraph_source(source: &str) -> bool {
                 return false;
             };
             saw_tag = true;
+            needs_block_renderer |= parse::parse_inline_html_style_tag(tag).is_none();
             if parsed.closing {
                 depth = depth.saturating_sub(1);
             } else if !parsed.self_closing {
@@ -4392,7 +4602,7 @@ fn html_only_paragraph_source(source: &str) -> bool {
         index = next_tag;
     }
 
-    saw_tag
+    saw_tag && needs_block_renderer
 }
 
 fn html_tag_end(source: &str, start: usize) -> Option<usize> {
@@ -5816,10 +6026,12 @@ mod tests {
                 text: "Paragraph with bold text.".into(),
                 spans: vec![
                     InlineSpan {
+                        hard_break: false,
                         text: "Paragraph with ".into(),
                         ..InlineSpan::default()
                     },
                     InlineSpan {
+                        hard_break: false,
                         text: "bold".into(),
                         style: InlineStyle {
                             bold: true,
@@ -5831,6 +6043,7 @@ mod tests {
                         footnote: None,
                     },
                     InlineSpan {
+                        hard_break: false,
                         text: " text.".into(),
                         ..InlineSpan::default()
                     },
@@ -6933,6 +7146,69 @@ mod tests {
     }
 
     #[test]
+    fn markdown_format_paragraph_removes_atx_headings_and_preserves_content_ranges() {
+        for level in 1..=6 {
+            let prefix = format!("{} ", "#".repeat(level));
+            let source = format!("{prefix}标题 Title\nBody");
+            let content_start = prefix.len();
+            let content_end = content_start + "标题 Title".len();
+            let mut doc = MarkdownDocument::from_text(&source);
+
+            let range =
+                doc.apply_markdown_format(content_start..content_end, MarkdownFormat::Paragraph);
+
+            assert_eq!(doc.text(), "标题 Title\nBody", "H{level} conversion");
+            assert_eq!(&doc.text()[range], "标题 Title", "H{level} selection");
+        }
+
+        let mut caret = MarkdownDocument::from_text("### Heading\nBody");
+        let range = caret.apply_markdown_format(7..7, MarkdownFormat::Paragraph);
+        assert_eq!(caret.text(), "Heading\nBody");
+        assert_eq!(range, 3..3);
+    }
+
+    #[test]
+    fn markdown_format_paragraph_only_changes_intersected_atx_heading_lines() {
+        let source = "# One\nordinary\n### 标题\n####### not a heading\n##no separator\n    # code";
+        let mut doc = MarkdownDocument::from_text(source);
+        let selected_start = source.find("One").unwrap();
+        let selected_end = source.find("code").unwrap() + "code".len();
+
+        let range =
+            doc.apply_markdown_format(selected_start..selected_end, MarkdownFormat::Paragraph);
+
+        assert_eq!(
+            doc.text(),
+            "One\nordinary\n标题\n####### not a heading\n##no separator\n    # code"
+        );
+        assert_eq!(
+            &doc.text()[range],
+            "One\nordinary\n标题\n####### not a heading\n##no separator\n    # code"
+        );
+    }
+
+    #[test]
+    fn markdown_format_paragraph_noop_preserves_version_dirty_state_and_derived_caches() {
+        let mut doc = MarkdownDocument::from_text("ordinary paragraph");
+        let preview = doc.preview_blocks_shared();
+        let visual = doc.visual_blocks_shared();
+        let version = doc.version();
+        assert!(!doc.is_dirty());
+
+        let range = doc.apply_markdown_format(5..5, MarkdownFormat::Paragraph);
+
+        assert_eq!(range, 5..5);
+        assert_eq!(doc.text(), "ordinary paragraph");
+        assert_eq!(doc.version(), version);
+        assert!(!doc.is_dirty());
+        assert!(std::sync::Arc::ptr_eq(
+            &preview,
+            &doc.preview_blocks_shared()
+        ));
+        assert!(std::sync::Arc::ptr_eq(&visual, &doc.visual_blocks_shared()));
+    }
+
+    #[test]
     fn markdown_format_keeps_partial_line_selection_on_same_text() {
         let mut list = MarkdownDocument::from_text("hello world");
         let range = list.apply_markdown_format(6..11, MarkdownFormat::UnorderedList);
@@ -7180,6 +7456,84 @@ mod tests {
             tables.iter().all(|range| !range.is_empty()),
             "preview table ranges must not be empty placeholders"
         );
+    }
+
+    #[test]
+    fn column_width_comment_is_absorbed_into_the_following_table() {
+        let source = "<!-- markion-cols:30,70 -->\n| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+        assert!(
+            blocks
+                .iter()
+                .all(|block| !matches!(block, PreviewBlock::Html { .. })),
+            "column-width comments must not remain Html islands"
+        );
+        let PreviewBlock::Table {
+            source_range, rows, ..
+        } = &blocks[0]
+        else {
+            panic!("expected absorbed table");
+        };
+        assert_eq!(source_range.start, 0);
+        assert!(source[source_range.clone()].starts_with("<!-- markion-cols:30,70 -->"));
+        assert_eq!(
+            authored_table_column_percents(&source[source_range.clone()], 2),
+            Some(vec![30, 70])
+        );
+        let visual = doc.visual_blocks();
+        let VisualBlockEditor::Table { cells } = visual[0].editor.as_ref().unwrap() else {
+            panic!("expected table editor");
+        };
+        assert_eq!(&source[cells[0].field.source_range.clone()], "A");
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn set_table_column_widths_inserts_and_replaces_comment() {
+        let mut doc = MarkdownDocument::from_text("| A | B |\n| --- | --- |\n| 1 | 2 |");
+        let cursor = doc.text().find('A').unwrap();
+        doc.set_table_column_widths_at(cursor, &[30, 70]).unwrap();
+        assert!(
+            doc.text()
+                .starts_with("<!-- markion-cols:30,70 -->\n| A | B |")
+        );
+        let cursor = doc.text().find('A').unwrap();
+        doc.set_table_column_widths_at(cursor, &[25, 75]).unwrap();
+        assert!(
+            doc.text()
+                .starts_with("<!-- markion-cols:25,75 -->\n| A | B |")
+        );
+        assert_eq!(doc.text().matches("markion-cols").count(), 1);
+    }
+
+    #[test]
+    fn add_column_rewrites_existing_width_comment_in_one_mutation() {
+        let mut doc = MarkdownDocument::from_text(
+            "<!-- markion-cols:40,60 -->\n| A | B |\n| --- | --- |\n| 1 | 2 |",
+        );
+        let cursor = doc.text().find('A').unwrap();
+        doc.edit_table_at(cursor, TableEdit::AddColumn).unwrap();
+        assert_eq!(doc.text().matches("markion-cols").count(), 1);
+        let comment_line = doc.text().lines().next().unwrap();
+        let percents = crate::table::parse_table_column_width_comment(comment_line).unwrap();
+        assert_eq!(percents.len(), 3);
+        assert_eq!(percents.iter().map(|value| *value as u16).sum::<u16>(), 100);
+    }
+
+    #[test]
+    fn markdown_format_rejects_cross_cell_table_selection() {
+        let source = "| A | B |\n| --- | --- |\n| hello | world |";
+        let mut doc = MarkdownDocument::from_text(source);
+        let hello = source.find("hello").unwrap();
+        let world = source.find("world").unwrap();
+        let range = doc.apply_markdown_format(hello..world + 5, MarkdownFormat::Bold);
+        assert_eq!(doc.text(), source);
+        assert_eq!(range, hello..world + 5);
+
+        let wrapped = doc.apply_markdown_format(hello..hello + 5, MarkdownFormat::Bold);
+        assert!(doc.text().contains("| **hello** | world |"));
+        assert_eq!(&doc.text()[wrapped.clone()], "hello");
     }
 
     #[test]
