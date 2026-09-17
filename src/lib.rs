@@ -252,9 +252,9 @@ pub use emoji::{
 };
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
 pub use i18n::{
-    Language, MarkdownReferenceSection, Msg, P0Msg, P1Msg, ShortcutAction, ShortcutCatalog,
-    ShortcutCategory, ShortcutPlatform, ShortcutSection, markdown_reference, p0_t, p0_tf, p1_t,
-    p1_tf, shortcut_catalog, sidebar_tab_label, t, tf,
+    Language, MarkdownReferenceSection, Msg, P0Msg, P1Msg, PluginMsg, ShortcutAction,
+    ShortcutCatalog, ShortcutCategory, ShortcutPlatform, ShortcutSection, markdown_reference, p0_t,
+    p0_tf, p1_t, p1_tf, plugin_t, plugin_tf, shortcut_catalog, sidebar_tab_label, t, tf,
 };
 pub use math::{render_math, validate_latex};
 pub use parse::{
@@ -279,7 +279,8 @@ pub use storage::{
     FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS,
     ImageRecoveryEntry, ImportedImage, MARKDOWN_EXTENSIONS, OrganizeCandidate, PublishedDocxImport,
     RecoveryInventoryEntry, RecoverySourceState, ResourceDirectory, StagedImagePublication,
-    SupportedPathKind, TEXT_EXTENSIONS, classify_supported_path, default_image_recovery_dir,
+    SupportedPathKind, TEXT_EXTENSIONS, classify_supported_path,
+    classify_supported_path_with_plugin_extensions, default_image_recovery_dir,
     delete_recovery_file, discard_image_recovery_record, document_asset_dir, document_scope_root,
     image_extension_supported, import_image_bytes, import_image_bytes_to, import_image_file,
     import_image_file_to, init_logging, inspect_recovery_files, is_markdown_path, is_pdf_path,

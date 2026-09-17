@@ -105,6 +105,53 @@ impl FileHandlerRegistrySnapshot {
         protocol: ProtocolVersion,
         target: &TargetSpec,
     ) -> Result<Self, FileHandlerRegistryError> {
+        Self::build_with_availability(revision, core_handlers, catalog, |plugin| {
+            let state = store.state(&plugin.plugin_id)?;
+            let compatible = plugin.host_version.matches(host_version)
+                && plugin.protocol.supports(protocol)
+                && plugin
+                    .artifacts
+                    .iter()
+                    .any(|artifact| &artifact.target == target);
+            Ok(plugin_availability(plugin, &state, compatible))
+        })
+    }
+
+    /// Builds the immutable bootstrap view before the per-user store has been
+    /// opened. Official types stay discoverable offline, but no handler is
+    /// represented as installed until a store-backed snapshot replaces it.
+    pub fn build_uninstalled(
+        revision: u64,
+        core_handlers: impl IntoIterator<Item = CoreFileHandler>,
+        catalog: &PluginCatalog,
+        host_version: &Version,
+        protocol: ProtocolVersion,
+        target: &TargetSpec,
+    ) -> Result<Self, FileHandlerRegistryError> {
+        Self::build_with_availability(revision, core_handlers, catalog, |plugin| {
+            let compatible = plugin.host_version.matches(host_version)
+                && plugin.protocol.supports(protocol)
+                && plugin
+                    .artifacts
+                    .iter()
+                    .any(|artifact| &artifact.target == target);
+            Ok(if compatible {
+                FileHandlerAvailability::Available
+            } else {
+                FileHandlerAvailability::Incompatible
+            })
+        })
+    }
+
+    fn build_with_availability(
+        revision: u64,
+        core_handlers: impl IntoIterator<Item = CoreFileHandler>,
+        catalog: &PluginCatalog,
+        mut availability_for: impl FnMut(
+            &CatalogPlugin,
+        )
+            -> Result<FileHandlerAvailability, FileHandlerRegistryError>,
+    ) -> Result<Self, FileHandlerRegistryError> {
         let mut candidates = BTreeMap::<String, Vec<FileHandlerCandidate>>::new();
         for core in core_handlers {
             let extension = normalize_extension(&core.extension);
@@ -125,14 +172,7 @@ impl FileHandlerRegistrySnapshot {
         }
 
         for plugin in &catalog.plugins {
-            let state = store.state(&plugin.plugin_id)?;
-            let compatible = plugin.host_version.matches(host_version)
-                && plugin.protocol.supports(protocol)
-                && plugin
-                    .artifacts
-                    .iter()
-                    .any(|artifact| &artifact.target == target);
-            let availability = plugin_availability(plugin, &state, compatible);
+            let availability = availability_for(plugin)?;
             for handler in &plugin.file_handlers {
                 add_plugin_handler(&mut candidates, plugin, handler, availability.clone())?;
             }
@@ -324,7 +364,7 @@ mod tests {
                 target: TargetSpec::current(),
                 url: "https://example.invalid/plugin".to_owned(),
                 length: 10,
-                sha256: "0".repeat(64),
+                sha256: "1".repeat(64),
                 installed_size_bytes: 20,
             }],
         }

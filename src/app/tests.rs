@@ -7,7 +7,6 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 // here (rather than in `mod.rs`) so non-test release builds stay warning-free
 // under `-D warnings`.
 use markion::{FileTreeFileKind, ThemeFonts};
-use markion_pdf_viewer::{PageRaster, PdfEvent, RenderPriority, RenderRequest};
 
 fn tiny_png_bytes() -> Vec<u8> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -2547,6 +2546,7 @@ fn nested_file_tree_fixture(root: &Path) -> FileTree {
     FileTree {
         root: root.to_path_buf(),
         show_hidden: false,
+        plugin_extensions: Arc::from([]),
         entries: vec![
             FileTreeEntry {
                 path: docs.clone(),
@@ -2605,6 +2605,7 @@ fn overflowing_flat_file_tree(root: &Path, count: usize) -> FileTree {
     FileTree {
         root: root.to_path_buf(),
         show_hidden: false,
+        plugin_extensions: Arc::from([]),
         entries: (0..count)
             .map(|index| FileTreeEntry {
                 path: root.join(format!("note-{index:03}.md")),
@@ -2821,6 +2822,7 @@ fn file_tree_visibility_hides_collapsed_descendants() {
     let tree = FileTree {
         root: root.clone(),
         show_hidden: false,
+        plugin_extensions: Arc::from([]),
         entries: vec![
             FileTreeEntry {
                 path: docs.clone(),
@@ -4428,6 +4430,45 @@ fn shortcuts_preferences_renders_in_light_and_dark_themes(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn plugin_preferences_actions_are_transient_and_document_isolated(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_panel_open = true;
+        app
+    });
+    cx.run_until_parked();
+
+    let (preferences, text, version) = app.update(cx, |app, cx| {
+        let preferences = app.current_preferences();
+        let text = app.active_tab().document.text().to_owned();
+        let version = app.active_tab().document.version();
+        app.select_preferences_tab(PreferencesTab::Plugins, cx);
+        app.plugin_ui.begin(
+            "dev.markion.pdf".to_owned(),
+            plugins::PluginOperationPhase::Downloading,
+        );
+        (preferences, text, version)
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        assert_eq!(app.preferences_tab, PreferencesTab::Plugins);
+        assert_eq!(
+            app.plugin_ui
+                .operation
+                .as_ref()
+                .map(|operation| operation.phase),
+            Some(plugins::PluginOperationPhase::Downloading)
+        );
+        app.cancel_plugin_operation(cx);
+        assert!(app.plugin_ui.operation.is_none());
+        assert_eq!(app.current_preferences(), preferences);
+        assert_eq!(app.active_tab().document.text(), text);
+        assert_eq!(app.active_tab().document.version(), version);
+    });
+}
+
+#[gpui::test]
 fn preferences_panel_bodies_render_with_draggable_scroll_handles_on_both_tabs(
     cx: &mut TestAppContext,
 ) {
@@ -5697,6 +5738,8 @@ fn list_scrollbar_marks_sync_driver_only_for_preview() {
         PaneScrollTarget::PreferencesImages,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
+        PaneScrollTarget::PreferencesExport,
+        PaneScrollTarget::PreferencesPlugins,
         PaneScrollTarget::FileTree,
         PaneScrollTarget::Outline,
         PaneScrollTarget::MarkdownReference,
@@ -5724,6 +5767,8 @@ fn preferences_scrollbar_targets_are_no_op_for_sync_scroll(cx: &mut TestAppConte
         PaneScrollTarget::PreferencesImages,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
+        PaneScrollTarget::PreferencesExport,
+        PaneScrollTarget::PreferencesPlugins,
         PaneScrollTarget::FileTree,
         PaneScrollTarget::Outline,
         PaneScrollTarget::MarkdownReference,
@@ -11628,8 +11673,13 @@ fn image_tabs_share_path_identity_without_dirty_document_state() {
 #[test]
 fn pdf_tabs_keep_only_read_only_presentation_state() {
     let path = PathBuf::from("docs/Reference.PDF");
-    let tab = EditorTab::new_pdf(path.clone(), RequestId(41));
-    assert!(tab.is_pdf());
+    let tab = EditorTab::new_plugin_document(
+        "dev.markion.pdf",
+        "paged-document/v1",
+        path.clone(),
+        PagedRequestId(41),
+    );
+    assert!(tab.is_plugin_document());
     assert!(tab.is_read_only());
     assert!(!tab.is_image());
     assert!(!tab.is_document());
@@ -11640,14 +11690,18 @@ fn pdf_tabs_keep_only_read_only_presentation_state() {
     assert_eq!(tab.focus_identity(), Some(comparable_document_path(&path)));
     assert!(tab.document_tab().is_none());
     assert!(tab.image().is_none());
-    let pdf = tab.pdf().expect("PDF-specific state");
-    assert_eq!(pdf.request_id, RequestId(41));
+    let pdf = tab
+        .plugin_document()
+        .expect("plugin-document-specific state");
+    assert_eq!(pdf.plugin_id, "dev.markion.pdf");
+    assert_eq!(pdf.capability, "paged-document/v1");
+    assert_eq!(pdf.request_id, PagedRequestId(41));
     assert_eq!(pdf.document_id, None);
-    assert_eq!(pdf.generation, Generation(1));
+    assert_eq!(pdf.generation, PagedGeneration(1));
     assert!(pdf.pages.is_empty());
-    assert_eq!(pdf.zoom, PdfZoomMode::FitWidth);
+    assert_eq!(pdf.zoom, PagedDocumentZoomMode::FitWidth);
     assert_eq!(pdf.current_page, 0);
-    assert_eq!(pdf.load_state, PdfLoadState::Loading);
+    assert_eq!(pdf.load_state, PagedDocumentLoadState::Loading);
 }
 
 fn assert_same_normalized_path(actual: Option<&std::path::Path>, expected: &std::path::Path) {
@@ -11668,7 +11722,7 @@ fn pdf_interactive_router_honors_target_dedupes_and_preserves_dirty_document(
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.preferences_path = config_dir.path().join("config.toml");
-        app.pdf_service_error = Some(PdfErrorKind::RuntimeMissing);
+        app.paged_document_service_error = Some(PagedHostError::ProviderMissing);
         app.open_in_current_tab = true;
         app
     });
@@ -11679,12 +11733,22 @@ fn pdf_interactive_router_honors_target_dedupes_and_preserves_dirty_document(
         let instance = app.active_tab().document.instance_id();
         app.open_tree_file_confirmed(pdf_path.clone(), cx);
         assert_eq!(app.tabs.len(), 2, "dirty document must not be replaced");
-        assert!(app.active_tab().is_pdf());
+        assert!(app.active_tab().is_plugin_document());
         assert_same_normalized_path(app.active_tab().path(), &pdf_path);
         assert_eq!(
-            app.active_tab().pdf().unwrap().load_state,
-            PdfLoadState::Error(PdfErrorKind::RuntimeMissing)
+            app.active_tab().plugin_document().unwrap().plugin_id,
+            "dev.markion.pdf"
         );
+        assert_eq!(
+            app.active_tab().plugin_document().unwrap().capability,
+            "paged-document/v1"
+        );
+        assert_eq!(
+            app.active_tab().plugin_document().unwrap().load_state,
+            PagedDocumentLoadState::Error(PagedHostError::ProviderMissing)
+        );
+        assert!(app.preferences_panel_open);
+        assert_eq!(app.preferences_tab, PreferencesTab::Plugins);
         assert_eq!(app.tabs[0].document.instance_id(), instance);
         assert_eq!(app.tabs[0].document.text(), "unsaved draft");
         assert!(Arc::ptr_eq(
@@ -11697,13 +11761,19 @@ fn pdf_interactive_router_honors_target_dedupes_and_preserves_dirty_document(
         );
 
         app.switch_active_tab(0, cx);
+        app.preferences_panel_open = false;
         app.open_file_in_new_tab_from_path(pdf_path.clone(), cx);
         assert_eq!(
             app.tabs.len(),
             2,
             "duplicate PDF path focuses its existing tab"
         );
-        assert!(app.active_tab().is_pdf());
+        assert!(app.active_tab().is_plugin_document());
+        assert!(
+            app.preferences_panel_open,
+            "refocusing an unavailable provider re-exposes plugin management"
+        );
+        assert_eq!(app.preferences_tab, PreferencesTab::Plugins);
         assert_same_normalized_path(app.active_tab().path(), &pdf_path);
         assert_eq!(app.tabs[0].document.instance_id(), instance);
         assert!(Arc::ptr_eq(
@@ -11730,7 +11800,8 @@ fn restorable_sessions_include_pdf_without_pdf_specific_schema() {
         active_file: Some(pdf.clone()),
         ..SessionState::default()
     };
-    let (restored_root, open_files, active) = filter_restorable_session(&session);
+    let (restored_root, open_files, active) =
+        filter_restorable_session(&session, &[".pdf".to_owned()]);
     assert_eq!(restored_root, Some(root));
     assert_eq!(open_files, vec![pdf.clone(), image]);
     assert_eq!(active, Some(pdf));
@@ -11748,8 +11819,16 @@ fn pdf_tabs_follow_workspace_rename_move_and_delete_lifecycle(cx: &mut TestAppCo
         let mut app = MarkionApp::new(cx);
         app.language = Language::En;
         app.workspace_root = root.clone();
-        app.file_tree = Some(FileTree::scan(&root).unwrap());
-        app.tabs = vec![EditorTab::new_pdf(original.clone(), RequestId(9))];
+        app.file_tree = Some(
+            FileTree::scan_with_plugin_extensions(&root, false, Arc::from([".pdf".to_owned()]))
+                .unwrap(),
+        );
+        app.tabs = vec![EditorTab::new_plugin_document(
+            "dev.markion.pdf",
+            "paged-document/v1",
+            original.clone(),
+            PagedRequestId(9),
+        )];
         app.selected_tree_path = Some(original.clone());
         app
     });
@@ -11769,7 +11848,7 @@ fn pdf_tabs_follow_workspace_rename_move_and_delete_lifecycle(cx: &mut TestAppCo
         assert!(renamed.is_file());
         assert!(!original.exists());
         assert_same_normalized_path(app.active_tab().path(), &renamed);
-        assert!(app.active_tab().is_pdf());
+        assert!(app.active_tab().is_plugin_document());
     });
 
     let renamed_alias = root.join(".").join("renamed.pdf");
@@ -11781,7 +11860,7 @@ fn pdf_tabs_follow_workspace_rename_move_and_delete_lifecycle(cx: &mut TestAppCo
         assert!(moved.is_file());
         assert!(!renamed.exists());
         assert_same_normalized_path(app.active_tab().path(), &moved);
-        assert!(app.active_tab().is_pdf());
+        assert!(app.active_tab().is_plugin_document());
         app.selected_tree_path = Some(archive.join(".").join("renamed.pdf"));
     });
 
@@ -11808,13 +11887,15 @@ fn pdf_memory_diagnostics_count_tab_pending_ready_and_combined_presentation_byte
 ) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new_pdf(
+        app.tabs = vec![EditorTab::new_plugin_document(
+            "dev.markion.pdf",
+            "paged-document/v1",
             PathBuf::from("reference.pdf"),
-            RequestId(5),
+            PagedRequestId(5),
         )];
         let pending = PdfPageKey {
-            document_id: DocumentId(1),
-            generation: Generation(1),
+            document_id: PagedDocumentId(1),
+            generation: PagedGeneration(1),
             page_index: 0,
             width_bucket_px: 64,
         };
@@ -11873,18 +11954,23 @@ fn pdf_memory_diagnostics_count_tab_pending_ready_and_combined_presentation_byte
     });
 }
 
-fn ready_pdf_tab(path: PathBuf, request_id: u64, pages: &[PageGeometry]) -> EditorTab {
-    let mut tab = EditorTab::new_pdf(path, RequestId(request_id));
-    let pdf = tab.pdf_mut().unwrap();
-    pdf.document_id = Some(DocumentId(request_id));
+fn ready_pdf_tab(path: PathBuf, request_id: u64, pages: &[PagedPageGeometry]) -> EditorTab {
+    let mut tab = EditorTab::new_plugin_document(
+        "dev.markion.pdf",
+        "paged-document/v1",
+        path,
+        PagedRequestId(request_id),
+    );
+    let pdf = tab.plugin_document_mut().unwrap();
+    pdf.document_id = Some(PagedDocumentId(request_id));
     pdf.pages = Arc::from(pages.to_vec());
-    pdf.load_state = PdfLoadState::Ready;
+    pdf.load_state = PagedDocumentLoadState::Ready;
     tab
 }
 
 #[gpui::test]
 fn pdf_page_stream_consumes_wheel_events_and_advances_current_page(cx: &mut TestAppContext) {
-    let pages = [PageGeometry::new(600.0, 800.0).unwrap(); 3];
+    let pages = [PagedPageGeometry::new(600.0, 800.0).unwrap(); 3];
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![ready_pdf_tab(PathBuf::from("scroll.pdf"), 16, &pages)];
@@ -11897,7 +11983,7 @@ fn pdf_page_stream_consumes_wheel_events_and_advances_current_page(cx: &mut Test
         .debug_bounds("pdf-tab-surface")
         .expect("PDF surface should render");
     let before = app.update(cx, |app, _| {
-        let pdf = app.active_tab().pdf().unwrap();
+        let pdf = app.active_tab().plugin_document().unwrap();
         (pdf.page_scroll.offset(), pdf.current_page)
     });
 
@@ -11914,7 +12000,7 @@ fn pdf_page_stream_consumes_wheel_events_and_advances_current_page(cx: &mut Test
     );
 
     app.update(cx, |app, _| {
-        let pdf = app.active_tab().pdf().unwrap();
+        let pdf = app.active_tab().plugin_document().unwrap();
         let after = pdf.page_scroll.offset();
         assert!(
             after.y < before.0.y,
@@ -11936,9 +12022,9 @@ fn pdf_surface_progressively_replaces_loading_pages_and_releases_pending_on_clos
     cx: &mut TestAppContext,
 ) {
     let pages = [
-        PageGeometry::new(320.0, 420.0).unwrap(),
-        PageGeometry::new(420.0, 320.0).unwrap(),
-        PageGeometry::new(300.0, 500.0).unwrap(),
+        PagedPageGeometry::new(320.0, 420.0).unwrap(),
+        PagedPageGeometry::new(420.0, 320.0).unwrap(),
+        PagedPageGeometry::new(300.0, 500.0).unwrap(),
     ];
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -11959,26 +12045,26 @@ fn pdf_surface_progressively_replaces_loading_pages_and_releases_pending_on_clos
     let request = app.update(cx, |app, _| {
         let key = app
             .active_tab()
-            .pdf()
+            .plugin_document()
             .unwrap()
             .claimed_pages
             .iter()
             .find(|key| key.page_index == 0)
             .copied()
             .expect("first visible page is claimed");
-        RenderRequest {
+        PagedRenderRequest {
             document_id: key.document_id,
             generation: key.generation,
             page_index: key.page_index,
             target_width_px: key.width_bucket_px,
-            priority: RenderPriority::Visible,
+            priority: PagedRenderPriority::Visible,
         }
     });
     app.update(cx, |app, cx| {
         app.apply_pdf_event(
-            PdfEvent::PageReady {
+            PagedHostEvent::PageReady {
                 request,
-                raster: PageRaster::new(32, 42, vec![255; 32 * 42 * 4]).unwrap(),
+                raster: PagedRaster::new(32, 42, vec![255; 32 * 42 * 4]).unwrap(),
             },
             cx,
         );
@@ -11988,9 +12074,9 @@ fn pdf_surface_progressively_replaces_loading_pages_and_releases_pending_on_clos
 
     app.update(cx, |app, cx| {
         app.apply_pdf_event(
-            PdfEvent::PageFailed {
+            PagedHostEvent::PageFailed {
                 request,
-                error: PdfErrorKind::PageUnavailable,
+                error: PagedHostError::Internal,
             },
             cx,
         );
@@ -12012,7 +12098,7 @@ fn pdf_surface_progressively_replaces_loading_pages_and_releases_pending_on_clos
 
 #[gpui::test]
 fn stale_pdf_completion_is_dropped_and_replace_releases_pending_claims(cx: &mut TestAppContext) {
-    let page = PageGeometry::new(600.0, 800.0).unwrap();
+    let page = PagedPageGeometry::new(600.0, 800.0).unwrap();
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![ready_pdf_tab(PathBuf::from("stale.pdf"), 31, &[page])];
@@ -12022,7 +12108,7 @@ fn stale_pdf_completion_is_dropped_and_replace_releases_pending_claims(cx: &mut 
         app.prepare_pdf_surface(px(700.), 1.0, cx);
         let old = *app
             .active_tab()
-            .pdf()
+            .plugin_document()
             .unwrap()
             .claimed_pages
             .iter()
@@ -12030,15 +12116,15 @@ fn stale_pdf_completion_is_dropped_and_replace_releases_pending_claims(cx: &mut 
             .unwrap();
         app.invalidate_pdf_generation(0, cx);
         app.apply_pdf_event(
-            PdfEvent::PageReady {
-                request: RenderRequest {
+            PagedHostEvent::PageReady {
+                request: PagedRenderRequest {
                     document_id: old.document_id,
                     generation: old.generation,
                     page_index: old.page_index,
                     target_width_px: old.width_bucket_px,
-                    priority: RenderPriority::Visible,
+                    priority: PagedRenderPriority::Visible,
                 },
-                raster: PageRaster::new(4, 4, vec![255; 64]).unwrap(),
+                raster: PagedRaster::new(4, 4, vec![255; 64]).unwrap(),
             },
             cx,
         );
@@ -12056,7 +12142,7 @@ fn stale_pdf_completion_is_dropped_and_replace_releases_pending_claims(cx: &mut 
 
 #[gpui::test]
 fn pdf_page_entry_zoom_bounds_and_fit_width_resize_are_validated(cx: &mut TestAppContext) {
-    let pages = [PageGeometry::new(600.0, 800.0).unwrap(); 5];
+    let pages = [PagedPageGeometry::new(600.0, 800.0).unwrap(); 5];
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.language = Language::En;
@@ -12071,8 +12157,16 @@ fn pdf_page_entry_zoom_bounds_and_fit_width_resize_are_validated(cx: &mut TestAp
     app.update(cx, |app, cx| app.push_text_input("3", cx));
     cx.dispatch_action(InsertNewline);
     app.update(cx, |app, _| {
-        assert_eq!(app.active_tab().pdf().unwrap().current_page, 2);
-        assert!(app.active_tab().pdf().unwrap().page_scroll.offset().y < px(0.));
+        assert_eq!(app.active_tab().plugin_document().unwrap().current_page, 2);
+        assert!(
+            app.active_tab()
+                .plugin_document()
+                .unwrap()
+                .page_scroll
+                .offset()
+                .y
+                < px(0.)
+        );
         assert!(app.pdf_page_input.is_none());
     });
 
@@ -12083,29 +12177,38 @@ fn pdf_page_entry_zoom_bounds_and_fit_width_resize_are_validated(cx: &mut TestAp
     app.update(cx, |app, cx| app.push_text_input("99", cx));
     cx.dispatch_action(InsertNewline);
     app.update(cx, |app, _| {
-        assert_eq!(app.active_tab().pdf().unwrap().current_page, 2);
+        assert_eq!(app.active_tab().plugin_document().unwrap().current_page, 2);
         assert_eq!(app.pdf_page_input.as_deref(), Some("99"));
         assert_eq!(app.status, t(app.language, Msg::PdfPageInvalid));
     });
     cx.dispatch_action(ClearFileTreeSearch);
 
     app.update(cx, |app, cx| {
-        app.set_pdf_zoom(PdfZoomMode::numeric(25.0), cx);
+        app.set_pdf_zoom(PagedDocumentZoomMode::numeric(25.0), cx);
         app.step_pdf_zoom(-100.0, cx);
-        assert_eq!(app.active_tab().pdf().unwrap().zoom.percent(), Some(25.0));
-        app.set_pdf_zoom(PdfZoomMode::numeric(400.0), cx);
+        assert_eq!(
+            app.active_tab().plugin_document().unwrap().zoom.percent(),
+            Some(25.0)
+        );
+        app.set_pdf_zoom(PagedDocumentZoomMode::numeric(400.0), cx);
         app.step_pdf_zoom(100.0, cx);
-        assert_eq!(app.active_tab().pdf().unwrap().zoom.percent(), Some(400.0));
-        app.set_pdf_zoom(PdfZoomMode::FitWidth, cx);
-        let before = app.active_tab().pdf().unwrap().generation;
+        assert_eq!(
+            app.active_tab().plugin_document().unwrap().zoom.percent(),
+            Some(400.0)
+        );
+        app.set_pdf_zoom(PagedDocumentZoomMode::FitWidth, cx);
+        let before = app.active_tab().plugin_document().unwrap().generation;
         app.prepare_pdf_surface(px(900.), 1.0, cx);
-        assert!(app.active_tab().pdf().unwrap().generation.0 > before.0);
-        app.set_pdf_zoom(PdfZoomMode::numeric(100.0), cx);
-        let numeric = app.active_tab().pdf().unwrap().generation;
+        assert!(app.active_tab().plugin_document().unwrap().generation.0 > before.0);
+        app.set_pdf_zoom(PagedDocumentZoomMode::numeric(100.0), cx);
+        let numeric = app.active_tab().plugin_document().unwrap().generation;
         app.prepare_pdf_surface(px(920.), 1.0, cx);
-        assert_eq!(app.active_tab().pdf().unwrap().generation, numeric);
+        assert_eq!(
+            app.active_tab().plugin_document().unwrap().generation,
+            numeric
+        );
         app.schedule_pdf_visible_range(0, 4..5, cx);
-        assert_eq!(app.active_tab().pdf().unwrap().current_page, 4);
+        assert_eq!(app.active_tab().plugin_document().unwrap().current_page, 4);
     });
 }
 
@@ -12836,7 +12939,12 @@ fn pdf_tabs_disable_document_input_shortcuts_and_menus_without_touching_document
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         let document = EditorTab::new(MarkdownDocument::from_text("preserved"));
-        let pdf = EditorTab::new_pdf(pdf_path.clone(), RequestId(7));
+        let pdf = EditorTab::new_plugin_document(
+            "dev.markion.pdf",
+            "paged-document/v1",
+            pdf_path.clone(),
+            PagedRequestId(7),
+        );
         app.tabs = vec![document, pdf];
         app.active_tab = 1;
         app
@@ -12881,7 +12989,7 @@ fn pdf_tabs_disable_document_input_shortcuts_and_menus_without_touching_document
     cx.dispatch_action(ShowFind);
     cx.dispatch_action(SaveDocument);
     app.update(cx, |app, _| {
-        assert!(app.active_tab().is_pdf());
+        assert!(app.active_tab().is_plugin_document());
         assert_eq!(app.status, status_before);
         assert!(!app.search_visible);
         assert_eq!(app.tabs[0].document.instance_id(), instance);
@@ -15333,7 +15441,7 @@ fn session_restore_skips_missing_paths_and_untitled_tabs() {
         recent_files: Vec::new(),
         layout: SessionLayout::default(),
     };
-    let (root, open_files, active) = filter_restorable_session(&session);
+    let (root, open_files, active) = filter_restorable_session(&session, &[]);
     assert_eq!(root.as_deref(), Some(workspace.as_path()));
     assert_eq!(open_files, vec![existing.clone()]);
     assert!(active.is_none());
@@ -15422,7 +15530,7 @@ fn filter_restorable_session_accepts_text_and_images() {
         recent_files: Vec::new(),
         layout: SessionLayout::default(),
     };
-    let (restored_root, open_files, active) = filter_restorable_session(&session);
+    let (restored_root, open_files, active) = filter_restorable_session(&session, &[]);
     assert_eq!(restored_root.as_deref(), Some(root.as_path()));
     assert_eq!(open_files, vec![md, txt.clone(), png]);
     assert_eq!(active, Some(txt));

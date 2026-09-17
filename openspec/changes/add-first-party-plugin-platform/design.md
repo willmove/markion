@@ -98,7 +98,7 @@ The production store uses the platform application-data directory:
 
 ```text
 plugins/
-  catalog.json + signature
+  catalog.cache              # atomically replaced canonical JSON + signature pair
   staging/<random>/...
   <plugin-id>/
     active.json
@@ -218,4 +218,3 @@ This change does not add placeholder publishing methods to `paged-document/v1` o
 8. Reconcile `add-pdf-document-viewing` artifacts with the optional distribution, run both strict validations plus the repository quality gate, then complete native manual smoke testing before either change is archived.
 
 Rollback keeps user documents untouched. A build may disable plugin discovery and return to the prior built-in PDF implementation until extraction is released. After release, rolling back the app leaves plugin payloads inert when their host range is incompatible; users can remove them from the compatible app's plugin manager or documented data directory. Catalog rollback re-points to the last verified compatible plugin version without modifying PDFs or Markdown files.
-

@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory = $true)][string]$TargetTriple,
     [Parameter(Mandatory = $true)][string]$SecretKeyPath,
     [Parameter(Mandatory = $true)][string]$PublicKeyPath,
-    [Parameter(Mandatory = $true)][string]$OutputRoot
+    [Parameter(Mandatory = $true)][string]$OutputRoot,
+    [string]$CatalogPath = (Join-Path $PSScriptRoot '../assets/plugins/catalog.json')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,6 +73,18 @@ $runtime = Resolve-RequiredFile -Path $RuntimePath -Label 'PDFium runtime'
 $notice = Resolve-RequiredFile -Path $NoticePath -Label 'Third-party notices'
 $secretKey = Resolve-RequiredFile -Path $SecretKeyPath -Label 'Fixture secret key'
 $publicKey = Resolve-RequiredFile -Path $PublicKeyPath -Label 'Fixture public key'
+$catalogFile = Resolve-RequiredFile -Path $CatalogPath -Label 'Signed catalog source'
+$catalog = Get-Content -Raw -LiteralPath $catalogFile.FullName | ConvertFrom-Json
+$catalogPlugins = @($catalog.plugins | Where-Object { $_.plugin_id -eq 'dev.markion.pdf' })
+if ($catalogPlugins.Count -ne 1) { throw 'Catalog must contain exactly one dev.markion.pdf entry.' }
+$catalogPlugin = $catalogPlugins[0]
+$catalogArtifact = @($catalogPlugin.artifacts | Where-Object {
+    $_.target.os -eq $target.os -and $_.target.arch -eq $target.arch
+})
+if ($catalogArtifact.Count -ne 1) { throw "Catalog lacks one artifact slot for $TargetTriple." }
+if ($catalogPlugin.version -ne '0.1.0') {
+    throw "PDF worker version and catalog version differ: worker=0.1.0 catalog=$($catalogPlugin.version)"
+}
 $resolvedOutput = [System.IO.Path]::GetFullPath($OutputRoot)
 New-EmptyDirectory -Path $resolvedOutput
 $stageRoot = Join-Path $resolvedOutput 'stage'
@@ -86,13 +99,7 @@ foreach ($relative in $paths.Keys) {
     Copy-Item -LiteralPath $paths[$relative] -Destination (Join-Path $stageRoot $relative)
 }
 
-$identities = [ordered]@{}
-foreach ($locale in @('de', 'en', 'es', 'fr', 'ja', 'zh-Hans', 'zh-Hant')) {
-    $identities[$locale] = [ordered]@{
-        name = 'Markion PDF Viewer'
-        description = 'Read local PDF documents in Markion.'
-    }
-}
+$identities = ConvertTo-CanonicalValue $catalogPlugin.identities
 $members = foreach ($relative in $paths.Keys) {
     $item = Get-Item -LiteralPath (Join-Path $stageRoot $relative)
     [ordered]@{
@@ -104,15 +111,15 @@ $members = foreach ($relative in $paths.Keys) {
 }
 $manifest = [ordered]@{
     schema_version = 1
-    plugin_id = 'dev.markion.pdf'
-    version = '0.1.0'
-    publisher = 'Markion'
-    host_version = '>=0.3.9, <0.4.0'
-    protocol = [ordered]@{ major = 1; min_minor = 0; max_minor = 0 }
+    plugin_id = $catalogPlugin.plugin_id
+    version = $catalogPlugin.version
+    publisher = $catalogPlugin.publisher
+    host_version = $catalogPlugin.host_version
+    protocol = ConvertTo-CanonicalValue $catalogPlugin.protocol
     target = [ordered]@{ os = $target.os; arch = $target.arch }
     entry_point = "bin/$($target.executable)"
     identities = $identities
-    permissions = @('read-selected-files')
+    permissions = @($catalogPlugin.permissions)
     capabilities = @(
         [ordered]@{
             id = 'paged-document/v1'
@@ -124,14 +131,7 @@ $manifest = [ordered]@{
             }
         }
     )
-    file_handlers = @(
-        [ordered]@{
-            extensions = @('.pdf')
-            capability = 'paged-document/v1'
-            priority = 100
-            icon = 'document-pdf'
-        }
-    )
+    file_handlers = ConvertTo-CanonicalValue $catalogPlugin.file_handlers
     archive_size_bytes = 6291456
     installed_size_bytes = 10485760
     members = @($members)
@@ -140,14 +140,14 @@ $manifestPath = Join-Path $stageRoot 'plugin.json'
 $signaturePath = Join-Path $stageRoot 'plugin.json.minisig'
 $manifestJson = ConvertTo-CanonicalValue $manifest | ConvertTo-Json -Depth 12 -Compress
 [System.IO.File]::WriteAllText($manifestPath, $manifestJson, [System.Text.UTF8Encoding]::new($false))
-Invoke-Native -Label 'PDF prototype manifest signing' -Command {
-    minisign -S -s $secretKey.FullName -m $manifestPath -x $signaturePath -t 'Markion PDF plugin prototype' -q
+Invoke-Native -Label 'PDF plugin manifest signing' -Command {
+    minisign -S -s $secretKey.FullName -m $manifestPath -x $signaturePath -t 'Markion official PDF plugin' -q
 }
-Invoke-Native -Label 'PDF prototype signature verification' -Command {
+Invoke-Native -Label 'PDF plugin signature verification' -Command {
     minisign -Vm $manifestPath -p $publicKey.FullName -x $signaturePath -q
 }
 
-$archivePath = Join-Path $resolvedOutput "markion-pdf-0.1.0-$TargetTriple.markion-plugin"
+$archivePath = Join-Path $resolvedOutput "$($catalogPlugin.plugin_id)-$($catalogPlugin.version)-$TargetTriple.markion-plugin"
 Add-Type -AssemblyName System.IO.Compression
 $archive = [System.IO.Compression.ZipFile]::Open($archivePath, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
@@ -155,6 +155,7 @@ try {
     foreach ($relative in $orderedEntries) {
         $source = Join-Path $stageRoot $relative
         $entry = $archive.CreateEntry($relative, [System.IO.Compression.CompressionLevel]::Optimal)
+        $entry.LastWriteTime = [DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
         $mode = if ($relative -like 'bin/*') { 0x81ED } else { 0x81A4 }
         $entry.ExternalAttributes = [System.BitConverter]::ToInt32(
             [System.BitConverter]::GetBytes(([uint32]$mode) -shl 16), 0

@@ -24,8 +24,230 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  build-plugins:
+    name: Build optional PDF plugin (${{ matrix.target }})
+    if: github.event_name != 'workflow_dispatch' || inputs.mirror_tag == ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            executable_suffix: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            executable_suffix: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            executable_suffix: .exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-plugin-${{ matrix.target }}
+          cache-all-crates: true
+
+      - name: Install Linux build dependencies and pinned Minisign
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake pkg-config libglib2.0-dev libssl-dev libfontconfig1-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev libasound2-dev
+          $archive = Join-Path $env:RUNNER_TEMP 'minisign-0.12-linux.tar.gz'
+          Invoke-WebRequest -Uri 'https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz' -OutFile $archive
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash -ne '9A599B48BA6EB7B1E80F12F36B94CECA7C00B7A5173C95C3EFC88D9822957E73') { throw 'Minisign digest mismatch.' }
+          $toolRoot = Join-Path $env:RUNNER_TEMP 'minisign-0.12'
+          New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
+          tar -xzf $archive -C $toolRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to extract Minisign.' }
+          $binRoot = Join-Path $toolRoot 'minisign-linux/x86_64'
+          chmod +x (Join-Path $binRoot 'minisign')
+          $binRoot | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install pinned Minisign on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'minisign-0.12-win64.zip'
+          Invoke-WebRequest -Uri 'https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-win64.zip' -OutFile $archive
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash -ne '37B600344E20C19314B2E82813DB2BFDCC408B77B876F7727889DBD46D539479') { throw 'Minisign digest mismatch.' }
+          $toolRoot = Join-Path $env:RUNNER_TEMP 'minisign-0.12'
+          Expand-Archive -LiteralPath $archive -DestinationPath $toolRoot -Force
+          (Join-Path $toolRoot 'minisign-win64/x86_64') | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install Minisign on macOS
+        if: runner.os == 'macOS'
+        shell: pwsh
+        run: brew install minisign
+
+      - name: Configure repository test plugin key
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: pwsh
+        run: |
+          $keyRoot = Join-Path $env:RUNNER_TEMP 'markion-plugin-key'
+          New-Item -ItemType Directory -Path $keyRoot -Force | Out-Null
+          Copy-Item crates/plugin-protocol/tests/fixtures/signing/catalog-test.key (Join-Path $keyRoot 'plugin.key')
+          Copy-Item crates/plugin-protocol/tests/fixtures/signing/catalog-test.pub (Join-Path $keyRoot 'plugin.pub')
+          "MARKION_PLUGIN_KEY_ROOT=$keyRoot" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Configure production plugin signing key
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          PLUGIN_PRIVATE_KEY_BASE64: ${{ secrets.MARKION_PLUGIN_SIGN_PRIVATE_KEY }}
+          PLUGIN_PUBLIC_KEY_BASE64: ${{ secrets.MARKION_PLUGIN_SIGN_PUBLIC_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PLUGIN_PRIVATE_KEY_BASE64) -or [string]::IsNullOrWhiteSpace($env:PLUGIN_PUBLIC_KEY_BASE64)) { throw 'Dedicated plugin signing secrets are required for tagged releases.' }
+          $keyRoot = Join-Path $env:RUNNER_TEMP 'markion-plugin-key'
+          New-Item -ItemType Directory -Path $keyRoot -Force | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $keyRoot 'plugin.key'), [Convert]::FromBase64String($env:PLUGIN_PRIVATE_KEY_BASE64))
+          [IO.File]::WriteAllBytes((Join-Path $keyRoot 'plugin.pub'), [Convert]::FromBase64String($env:PLUGIN_PUBLIC_KEY_BASE64))
+          "MARKION_PLUGIN_KEY_ROOT=$keyRoot" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build, test, sign, and inspect PDF plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/test-pdf-compliance.ps1
+          cargo build --release --locked -p markion-plugin-protocol --bin plugin-package-inspect
+          if ($LASTEXITCODE -ne 0) { throw 'Plugin package inspector build failed.' }
+          cargo build --release --locked -p markion-pdf-plugin --bin markion-plugin-pdf
+          if ($LASTEXITCODE -ne 0) { throw 'PDF plugin worker build failed.' }
+          $stageOutput = @(./scripts/stage-pdfium.ps1 -TargetTriple '${{ matrix.target }}')
+          $stage = $stageOutput[-1] | ConvertFrom-Json
+          cargo run --release --locked -p markion-pdf-viewer --bin pdf-runtime-probe -- --runtime $stage.runtime_path
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned PDFium probe failed.' }
+          $env:MARKION_PDFIUM_RUNTIME = $stage.runtime_path
+          cargo test --release --locked -p markion-pdf-viewer --test native_pdfium -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Native PDF fixture matrix failed.' }
+          cargo test --release --locked -p markion-pdf-plugin --test native_worker -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Native PDF protocol worker matrix failed.' }
+          $outputRoot = Join-Path $PWD 'target/release-plugin'
+          if (Test-Path -LiteralPath $outputRoot) { Remove-Item -LiteralPath $outputRoot -Recurse -Force }
+          $packageOutput = @(
+            ./scripts/build-pdf-plugin-prototype.ps1 `
+              -WorkerPath (Join-Path $PWD 'target/release/markion-plugin-pdf${{ matrix.executable_suffix }}') `
+              -RuntimePath $stage.runtime_path `
+              -NoticePath (Join-Path $PWD 'crates/pdf-plugin/THIRD_PARTY_NOTICES.md') `
+              -TargetTriple '${{ matrix.target }}' `
+              -SecretKeyPath (Join-Path $env:MARKION_PLUGIN_KEY_ROOT 'plugin.key') `
+              -PublicKeyPath (Join-Path $env:MARKION_PLUGIN_KEY_ROOT 'plugin.pub') `
+              -OutputRoot $outputRoot
+          )
+          $report = $packageOutput[-1] | ConvertFrom-Json
+          $inspector = Join-Path $PWD 'target/release/plugin-package-inspect${{ matrix.executable_suffix }}'
+          $smokePath = Join-Path $outputRoot 'one-page-smoke.pdf'
+          $encodedFixture = (Get-Content crates/pdf-viewer/tests/fixtures/one-page-embedded.pdf.b64 -Raw) -replace '\s', ''
+          [IO.File]::WriteAllBytes($smokePath, [Convert]::FromBase64String($encodedFixture))
+          & $inspector $report.archive_path (Join-Path $env:MARKION_PLUGIN_KEY_ROOT 'plugin.pub') (Join-Path $outputRoot 'verified 插件 extract') $smokePath
+          if ($LASTEXITCODE -ne 0) { throw 'Signed PDF plugin inspection or extracted health check failed.' }
+          $archive = Get-Item -LiteralPath $report.archive_path
+          Move-Item -LiteralPath (Join-Path $outputRoot 'size-report.json') -Destination (Join-Path $outputRoot "$($archive.Name).size-report.json")
+          "$($report.archive_sha256)  $($archive.Name)" | Set-Content -LiteralPath (Join-Path $outputRoot "$($archive.Name).sha256") -Encoding utf8NoBOM
+          Copy-Item crates/pdf-plugin/THIRD_PARTY_NOTICES.md (Join-Path $outputRoot "$($archive.Name).THIRD_PARTY_NOTICES.md")
+          [ordered]@{ schema_version = 1; source_revision = '${{ github.sha }}'; target = '${{ matrix.target }}'; worker_package = 'markion-pdf-plugin'; pdfium_build = 7881; pdfium_binding = 'pdfium-render 0.9.3'; archive_sha256 = $report.archive_sha256 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot "$($archive.Name).provenance.json") -Encoding utf8NoBOM
+
+      - name: Upload optional plugin assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: markion-plugin-${{ matrix.target }}
+          path: |
+            target/release-plugin/*.markion-plugin
+            target/release-plugin/*.json
+            target/release-plugin/*.sha256
+            target/release-plugin/*.md
+          if-no-files-found: error
+          retention-days: 14
+
+  prepare-plugin-catalog:
+    name: Prepare signed plugin catalog
+    needs: build-plugins
+    if: github.event_name != 'workflow_dispatch' || inputs.mirror_tag == ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust and Minisign
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Download plugin assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: markion-plugin-*
+          path: plugin-dist
+
+      - name: Configure catalog signing key
+        shell: pwsh
+        env:
+          PLUGIN_PRIVATE_KEY_BASE64: ${{ secrets.MARKION_PLUGIN_SIGN_PRIVATE_KEY }}
+          PLUGIN_PUBLIC_KEY_BASE64: ${{ secrets.MARKION_PLUGIN_SIGN_PUBLIC_KEY }}
+        run: |
+          $keyRoot = Join-Path $env:RUNNER_TEMP 'markion-plugin-key'
+          New-Item -ItemType Directory -Path $keyRoot -Force | Out-Null
+          if ('${{ startsWith(github.ref, 'refs/tags/v') }}' -eq 'true') {
+            if ([string]::IsNullOrWhiteSpace($env:PLUGIN_PRIVATE_KEY_BASE64) -or [string]::IsNullOrWhiteSpace($env:PLUGIN_PUBLIC_KEY_BASE64)) { throw 'Dedicated plugin signing secrets are required for tagged releases.' }
+            [IO.File]::WriteAllBytes((Join-Path $keyRoot 'plugin.key'), [Convert]::FromBase64String($env:PLUGIN_PRIVATE_KEY_BASE64))
+            [IO.File]::WriteAllBytes((Join-Path $keyRoot 'plugin.pub'), [Convert]::FromBase64String($env:PLUGIN_PUBLIC_KEY_BASE64))
+          } else {
+            Copy-Item crates/plugin-protocol/tests/fixtures/signing/catalog-test.key (Join-Path $keyRoot 'plugin.key')
+            Copy-Item crates/plugin-protocol/tests/fixtures/signing/catalog-test.pub (Join-Path $keyRoot 'plugin.pub')
+          }
+          "MARKION_PLUGIN_KEY_ROOT=$keyRoot" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Finalize and sign tagged catalog
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path catalog-dist -Force | Out-Null
+          $sequence = ([long]'${{ github.run_number }}' * 1000) + [long]'${{ github.run_attempt }}'
+          ./scripts/finalize-plugin-catalog.ps1 -BaseCatalogPath assets/plugins/catalog.json -ReportsRoot plugin-dist -OutputPath catalog-dist/catalog.json -ReleaseTag '${{ github.ref_name }}' -Repository '${{ github.repository }}' -Sequence $sequence
+          ./scripts/sign-plugin-catalog.ps1 -CatalogPath catalog-dist/catalog.json -SecretKeyPath (Join-Path $env:MARKION_PLUGIN_KEY_ROOT 'plugin.key') -PublicKeyPath (Join-Path $env:MARKION_PLUGIN_KEY_ROOT 'plugin.pub')
+
+      - name: Reuse development bootstrap catalog
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path catalog-dist -Force | Out-Null
+          Copy-Item assets/plugins/catalog.json catalog-dist/catalog.json
+          Copy-Item assets/plugins/catalog.json.minisig catalog-dist/catalog.json.minisig
+
+      - name: Export the exact embedded public key
+        shell: pwsh
+        run: |
+          $keyLine = @(Get-Content (Join-Path $env:MARKION_PLUGIN_KEY_ROOT 'plugin.pub') | Where-Object { $_ -and -not $_.StartsWith('untrusted comment:') })[-1]
+          if ([string]::IsNullOrWhiteSpace($keyLine)) { throw 'Plugin public key is invalid.' }
+          [IO.File]::WriteAllText((Join-Path $PWD 'catalog-dist/plugin-public-key-line.txt'), $keyLine.Trim(), [Text.UTF8Encoding]::new($false))
+          Copy-Item catalog-dist/catalog.json catalog-dist/plugin-catalog.json
+          Copy-Item catalog-dist/catalog.json.minisig catalog-dist/plugin-catalog.json.minisig
+          $catalogHash = (Get-FileHash -Algorithm SHA256 catalog-dist/plugin-catalog.json).Hash.ToLowerInvariant()
+          "$catalogHash  plugin-catalog.json" | Set-Content catalog-dist/plugin-catalog.json.sha256 -Encoding utf8NoBOM
+
+      - name: Upload signed plugin catalog
+        uses: actions/upload-artifact@v4
+        with:
+          name: markion-plugin-catalog
+          path: catalog-dist/*
+          if-no-files-found: error
+          retention-days: 14
+
   build:
     name: Build & package (${{ matrix.os }})
+    needs: prepare-plugin-catalog
     if: github.event_name != 'workflow_dispatch' || inputs.mirror_tag == ''
     strategy:
       fail-fast: false
@@ -58,6 +280,21 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install signed bootstrap plugin catalog
+        uses: actions/download-artifact@v4
+        with:
+          name: markion-plugin-catalog
+          path: target/release-catalog
+
+      - name: Embed the verified plugin trust root
+        shell: pwsh
+        run: |
+          Copy-Item target/release-catalog/catalog.json assets/plugins/catalog.json -Force
+          Copy-Item target/release-catalog/catalog.json.minisig assets/plugins/catalog.json.minisig -Force
+          $keyLine = (Get-Content target/release-catalog/plugin-public-key-line.txt -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($keyLine)) { throw 'Plugin public key is unavailable.' }
+          "MARKION_PLUGIN_PUBLIC_KEY=$keyLine" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -83,24 +320,6 @@ jobs:
       - name: Verify PDF dependency features and notices
         shell: pwsh
         run: ./scripts/test-pdf-compliance.ps1
-
-      - name: Stage and test pinned target-only PDFium
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $stageOutput = @(./scripts/stage-pdfium.ps1 -TargetTriple '${{ matrix.target }}')
-          $stage = $stageOutput[-1] | ConvertFrom-Json
-          $resourceRoot = Join-Path $PWD 'assets/pdfium'
-          if (Test-Path -LiteralPath $resourceRoot) {
-            throw 'The release source unexpectedly already contains assets/pdfium.'
-          }
-          New-Item -ItemType Directory -Path $resourceRoot | Out-Null
-          Copy-Item -LiteralPath $stage.runtime_path -Destination $resourceRoot
-          cargo run --release --locked -p markion-pdf-viewer --bin pdf-runtime-probe -- --runtime $stage.runtime_path
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned PDFium runtime probe failed.' }
-          $env:MARKION_PDFIUM_RUNTIME = $stage.runtime_path
-          cargo test --release --locked -p markion-pdf-viewer --test native_pdfium -- --ignored --nocapture
-          if ($LASTEXITCODE -ne 0) { throw 'Native PDFium fixture matrix failed.' }
 
       # The public key is intentionally embedded only in the tagged Windows
       # binary. Untagged and local builds keep the browser-download path.
@@ -132,7 +351,7 @@ jobs:
       - name: Package (${{ matrix.formats }})
         run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }}
 
-      - name: Verify packaged workspace and PDF runtime (${{ matrix.formats }})
+      - name: Verify packaged workspace and optional-payload closure (${{ matrix.formats }})
         shell: pwsh
         run: |
           '${{ matrix.formats }}'.Split(',') | ForEach-Object {
@@ -266,7 +485,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [build, prepare-update]
+    needs: [build, build-plugins, prepare-plugin-catalog, prepare-update]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -305,13 +524,15 @@ jobs:
   # 200, so a "successful" job always means the mirror actually works.
   mirror-oss:
     name: Mirror installers to Aliyun OSS
-    needs: [build, prepare-update]
+    needs: [build, build-plugins, prepare-plugin-catalog, prepare-update]
     if: >-
       ${{
         always() &&
         (
           (startsWith(github.ref, 'refs/tags/v') &&
             needs.build.result == 'success' &&
+            needs['build-plugins'].result == 'success' &&
+            needs['prepare-plugin-catalog'].result == 'success' &&
             needs.prepare-update.result == 'success') ||
           (github.event_name == 'workflow_dispatch' && inputs.mirror_tag != '')
         )
@@ -359,7 +580,9 @@ jobs:
             --pattern "markion_${VERSION}_amd64.deb" \
             --pattern "markion_${VERSION}_x86_64.AppImage" \
             --pattern "markion_${VERSION}_x64-setup.exe.sig" \
-            --pattern "update.json"
+            --pattern "update.json" \
+            --pattern "dev.markion.pdf-*" \
+            --pattern "plugin-catalog.json*"
 
       - name: List artifacts to mirror
         run: ls -laR dist
@@ -367,7 +590,7 @@ jobs:
       - name: Compute SHA-256 digests for each installer
         run: |
           cd dist
-          sha256sum *.exe *.dmg *.deb *.AppImage > sha256sums.txt
+          sha256sum *.exe *.dmg *.deb *.AppImage *.markion-plugin plugin-catalog.json > sha256sums.txt
           cat sha256sums.txt
 
       - name: Rewrite update.json installer URL to the OSS host
@@ -449,6 +672,7 @@ jobs:
           # 404 while the job still reported success).
           prefix="${OSS_PREFIX%/}"
           prefix_dir="${prefix}/latest"
+          versioned_plugin_dir="${prefix}/releases/${RELEASE_TAG}"
 
           upload() {
             local src="$1" dest="$2"
@@ -503,6 +727,12 @@ jobs:
           upload "dist/manifest.json" "${prefix_dir}/manifest.json"
           upload "dist/sha256sums.txt" "${prefix_dir}/sha256sums.txt"
           upload "packager.toml" "${prefix_dir}/packager.toml"
+          for src in dist/dev.markion.pdf-* dist/plugin-catalog.json*; do
+            test -f "${src}" || continue
+            name="$(basename "${src}")"
+            upload "${src}" "${prefix_dir}/${name}"
+            upload "${src}" "${versioned_plugin_dir}/${name}"
+          done
 
       - name: Verify mirrored assets are publicly reachable
         shell: bash
@@ -538,4 +768,19 @@ jobs:
             echo "Mirror verification failed: update.json installer URL is not on the OSS host" >&2
             exit 1
           }
+          for src in dist/dev.markion.pdf-* dist/plugin-catalog.json*; do
+            test -f "${src}" || continue
+            f="$(basename "${src}")"
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 30 --max-time 300 "${base}/${f}")"
+            test "${code}" = "200" || {
+              echo "Mirror verification failed: ${base}/${f} returned HTTP ${code}" >&2
+              exit 1
+            }
+            versioned="${OSS_PUBLIC_BASE%/}/${OSS_PREFIX#/}/releases/${RELEASE_TAG}/${f}"
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 30 --max-time 300 "${versioned}")"
+            test "${code}" = "200" || {
+              echo "Versioned plugin mirror verification failed: ${versioned} returned HTTP ${code}" >&2
+              exit 1
+            }
+          done
           echo "All mirrored assets verified at ${base}/"

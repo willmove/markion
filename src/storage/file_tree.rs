@@ -3,6 +3,7 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use super::image_extension_supported;
@@ -61,7 +62,7 @@ pub fn is_text_path(path: &Path) -> bool {
 pub enum SupportedPathKind {
     Document,
     Image,
-    Pdf,
+    PluginDocument,
 }
 
 pub fn is_pdf_path(path: &Path) -> bool {
@@ -75,8 +76,6 @@ pub fn classify_supported_path(path: &Path) -> Option<SupportedPathKind> {
         Some(SupportedPathKind::Document)
     } else if image_extension_supported(path) {
         Some(SupportedPathKind::Image)
-    } else if is_pdf_path(path) {
-        Some(SupportedPathKind::Pdf)
     } else {
         None
     }
@@ -89,7 +88,7 @@ pub enum FileTreeFileKind {
     Markdown,
     Text,
     Image,
-    Pdf,
+    PluginDocument,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +110,9 @@ pub struct FileTree {
     /// at scan time so `refresh` (called by create/rename/move/delete) keeps
     /// the same visibility rule without the caller having to pass it back in.
     pub show_hidden: bool,
+    /// Extensions supplied by one immutable plugin-registry snapshot for this
+    /// scan. Retained so filesystem mutations refresh with identical routing.
+    pub plugin_extensions: Arc<[String]>,
 }
 
 impl FileTree {
@@ -124,13 +126,22 @@ impl FileTree {
     /// included subject to the Markdown/text extension filter and the
     /// always-excluded noise list. `scan` is a thin wrapper over this.
     pub fn scan_with_options(root: impl AsRef<Path>, show_hidden: bool) -> io::Result<Self> {
+        Self::scan_with_plugin_extensions(root, show_hidden, Arc::from([]))
+    }
+
+    pub fn scan_with_plugin_extensions(
+        root: impl AsRef<Path>,
+        show_hidden: bool,
+        plugin_extensions: Arc<[String]>,
+    ) -> io::Result<Self> {
         let root = root.as_ref().to_path_buf();
         let mut entries = Vec::new();
-        collect_file_tree_entries(&root, 0, &mut entries, show_hidden)?;
+        collect_file_tree_entries(&root, 0, &mut entries, show_hidden, &plugin_extensions)?;
         Ok(Self {
             root,
             entries,
             show_hidden,
+            plugin_extensions,
         })
     }
 
@@ -263,7 +274,13 @@ impl FileTree {
     pub fn refresh(&mut self) -> io::Result<()> {
         self.entries.clear();
         // An empty tree is a valid result for a content-free root.
-        collect_file_tree_entries(&self.root, 0, &mut self.entries, self.show_hidden)?;
+        collect_file_tree_entries(
+            &self.root,
+            0,
+            &mut self.entries,
+            self.show_hidden,
+            &self.plugin_extensions,
+        )?;
         Ok(())
     }
 
@@ -392,6 +409,7 @@ fn collect_file_tree_entries(
     depth: usize,
     entries: &mut Vec<FileTreeEntry>,
     show_hidden: bool,
+    plugin_extensions: &[String],
 ) -> io::Result<()> {
     let mut children = fs::read_dir(root)?
         .filter_map(Result::ok)
@@ -417,21 +435,22 @@ fn collect_file_tree_entries(
                 kind: FileTreeEntryKind::Directory,
                 file_kind: None,
             });
-            collect_file_tree_entries(&path, depth + 1, entries, show_hidden)?;
+            collect_file_tree_entries(&path, depth + 1, entries, show_hidden, plugin_extensions)?;
             continue;
         }
 
         // Regular file: classify once by extension. Markdown, curated text,
         // and supported images are collected; everything else is skipped.
-        let file_kind = match classify_supported_path(&path) {
-            Some(SupportedPathKind::Document) if is_markdown_path(&path) => {
-                FileTreeFileKind::Markdown
-            }
-            Some(SupportedPathKind::Document) => FileTreeFileKind::Text,
-            Some(SupportedPathKind::Image) => FileTreeFileKind::Image,
-            Some(SupportedPathKind::Pdf) => FileTreeFileKind::Pdf,
-            None => continue,
-        };
+        let file_kind =
+            match classify_supported_path_with_plugin_extensions(&path, plugin_extensions) {
+                Some(SupportedPathKind::Document) if is_markdown_path(&path) => {
+                    FileTreeFileKind::Markdown
+                }
+                Some(SupportedPathKind::Document) => FileTreeFileKind::Text,
+                Some(SupportedPathKind::Image) => FileTreeFileKind::Image,
+                Some(SupportedPathKind::PluginDocument) => FileTreeFileKind::PluginDocument,
+                None => continue,
+            };
 
         entries.push(FileTreeEntry {
             path: path.clone(),
@@ -443,6 +462,27 @@ fn collect_file_tree_entries(
     }
 
     Ok(())
+}
+
+pub fn classify_supported_path_with_plugin_extensions(
+    path: &Path,
+    plugin_extensions: &[String],
+) -> Option<SupportedPathKind> {
+    classify_supported_path(path).or_else(|| {
+        plugin_extension_matches(path, plugin_extensions)
+            .then_some(SupportedPathKind::PluginDocument)
+    })
+}
+
+fn plugin_extension_matches(path: &Path, plugin_extensions: &[String]) -> bool {
+    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+        return false;
+    };
+    plugin_extensions.iter().any(|candidate| {
+        candidate
+            .trim_start_matches('.')
+            .eq_ignore_ascii_case(extension)
+    })
 }
 
 fn should_skip_file_tree_path(path: &Path, show_hidden: bool) -> bool {
@@ -589,7 +629,9 @@ mod tests {
         write(root, "docs/guide.md", "# Guide");
         write(root, "docs/debug.log", "trace");
 
-        let tree = FileTree::scan(root).unwrap();
+        let tree =
+            FileTree::scan_with_plugin_extensions(root, false, Arc::from([".pdf".to_owned()]))
+                .unwrap();
         let names: Vec<&str> = tree.entries.iter().map(|e| e.name.as_str()).collect();
 
         // Markdown files present.
@@ -614,7 +656,7 @@ mod tests {
                 Some(FileTreeFileKind::Markdown) => assert!(is_markdown_path(&entry.path)),
                 Some(FileTreeFileKind::Text) => assert!(is_text_path(&entry.path)),
                 Some(FileTreeFileKind::Image) => assert!(image_extension_supported(&entry.path)),
-                Some(FileTreeFileKind::Pdf) => assert!(is_pdf_path(&entry.path)),
+                Some(FileTreeFileKind::PluginDocument) => assert!(is_pdf_path(&entry.path)),
                 None => panic!("file entry missing file_kind: {:?}", entry.path),
             }
         }
@@ -634,9 +676,8 @@ mod tests {
                 .any(|e| e.name == "image.png" && e.file_kind == Some(FileTreeFileKind::Image))
         );
         assert!(
-            tree.entries
-                .iter()
-                .any(|e| e.name == "reference.PdF" && e.file_kind == Some(FileTreeFileKind::Pdf))
+            tree.entries.iter().any(|e| e.name == "reference.PdF"
+                && e.file_kind == Some(FileTreeFileKind::PluginDocument))
         );
     }
 
@@ -666,14 +707,43 @@ mod tests {
             );
         }
         for path in ["reference.pdf", "reference.PDF", "reference.PdF"] {
+            assert_eq!(classify_supported_path(Path::new(path)), None);
             assert_eq!(
-                classify_supported_path(Path::new(path)),
-                Some(SupportedPathKind::Pdf)
+                classify_supported_path_with_plugin_extensions(
+                    Path::new(path),
+                    &[".pdf".to_owned()]
+                ),
+                Some(SupportedPathKind::PluginDocument)
             );
         }
         for path in ["archive.bin", "README", "source.rs"] {
             assert_eq!(classify_supported_path(Path::new(path)), None);
         }
+    }
+
+    #[test]
+    fn plugin_extensions_are_snapshot_scoped_and_survive_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "manual.PDF", "pdf");
+        write(dir.path(), "book.epub", "epub");
+        assert!(FileTree::scan(dir.path()).unwrap().entries.is_empty());
+
+        let mut tree = FileTree::scan_with_plugin_extensions(
+            dir.path(),
+            false,
+            Arc::from([".pdf".to_owned(), ".epub".to_owned()]),
+        )
+        .unwrap();
+        assert_eq!(
+            tree.entries
+                .iter()
+                .filter(|entry| entry.file_kind == Some(FileTreeFileKind::PluginDocument))
+                .count(),
+            2
+        );
+        write(dir.path(), "later.pdf", "pdf");
+        tree.refresh().unwrap();
+        assert!(tree.entries.iter().any(|entry| entry.name == "later.pdf"));
     }
 
     #[test]

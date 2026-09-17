@@ -13,6 +13,7 @@ use semver::Version;
 use thiserror::Error;
 
 mod catalog;
+mod manager;
 mod paged_document;
 mod registry;
 mod store;
@@ -20,6 +21,9 @@ mod supervisor;
 
 pub use catalog::{
     CatalogManager, CatalogSnapshot, CatalogSnapshotSource, CatalogUpdate, PluginCatalogError,
+};
+pub use manager::{
+    ManagedPluginEntry, ManagedPluginStatus, PluginInstallPlan, PluginManager, PluginManagerError,
 };
 pub use paged_document::{
     DEFAULT_MAX_PAGES, DEFAULT_MAX_RASTER_BYTES, DEFAULT_MAX_SOURCE_BYTES, PagedDocument,
@@ -40,14 +44,15 @@ pub use supervisor::{
 };
 
 const BOOTSTRAP_CATALOG: &str = include_str!("../assets/plugins/catalog.json");
+const BOOTSTRAP_CATALOG_SIGNATURE: &str = include_str!("../assets/plugins/catalog.json.minisig");
 const REQUIRED_LOCALES: &[&str] = &["en", "zh-Hans", "zh-Hant", "ja", "fr", "de", "es"];
 
-// This public key/signature pair is the Minisign upstream reference vector. It
-// makes the feasibility build retain and exercise the exact verifier that the
-// production bootstrap/package path uses. A release-key-signed catalog replaces
-// this self-test when release publication is implemented; it is not a trust root.
-const VERIFIER_REFERENCE_PUBLIC_KEY: &str = "untrusted comment: minisign public key: A7090F0642B4E81F\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
-const VERIFIER_REFERENCE_SIGNATURE: &str = "untrusted comment: signature from minisign secret key\nRUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\ntrusted comment: timestamp:1633700835\tfile:test\tprehashed\nwLMDjy9FLAuxZ3q4NlEvkgtyhrr0gtTu6KC4KBJdITbbOeAi1zBIYo0v4iTgt8jJpIidRJnp94ABQkJAgAooBQ==";
+// Debug/test builds deliberately trust only this repository-controlled test
+// key. Release builds never contain it: their public half is injected by the
+// release job as the single-line Minisign key in MARKION_PLUGIN_PUBLIC_KEY.
+#[cfg(debug_assertions)]
+const DEVELOPMENT_PUBLIC_KEY: &str =
+    include_str!("../crates/plugin-protocol/tests/fixtures/signing/catalog-test.pub");
 
 static BOOTSTRAP: OnceLock<Result<PluginHostBootstrap, String>> = OnceLock::new();
 
@@ -55,6 +60,7 @@ static BOOTSTRAP: OnceLock<Result<PluginHostBootstrap, String>> = OnceLock::new(
 pub struct PluginHostBootstrap {
     catalog: Arc<PluginCatalog>,
     canonical_catalog: Arc<[u8]>,
+    public_key: Arc<str>,
 }
 
 impl PluginHostBootstrap {
@@ -65,6 +71,55 @@ impl PluginHostBootstrap {
     pub fn canonical_catalog(&self) -> &[u8] {
         &self.canonical_catalog
     }
+
+    pub fn public_key(&self) -> &str {
+        &self.public_key
+    }
+
+    pub fn catalog_manager(&self, paths: PluginStorePaths) -> CatalogManager {
+        CatalogManager::first_party(
+            paths,
+            self.public_key.to_string(),
+            self.canonical_catalog.clone(),
+            Arc::<[u8]>::from(BOOTSTRAP_CATALOG_SIGNATURE.as_bytes()),
+            Version::parse(env!("CARGO_PKG_VERSION")).expect("package version is semver"),
+            ProtocolVersion::V1_0,
+            TargetSpec::current(),
+            REQUIRED_LOCALES,
+        )
+    }
+
+    /// Opens the recovered per-user store and binds the newest locally
+    /// verified catalog snapshot to the production supervisor. This is the
+    /// only constructor used by application UI, so cached-catalog fallback,
+    /// package trust, compatibility, and recovery cannot drift apart.
+    pub fn plugin_manager(
+        &self,
+        paths: PluginStorePaths,
+    ) -> Result<PluginManager, PluginRuntimeError> {
+        let snapshot = self.catalog_manager(paths.clone()).load()?;
+        let store = PluginStore::new(paths);
+        store.recover()?;
+        let supervisor = PluginSupervisor::new(store.clone(), PluginSupervisorPolicy::default());
+        Ok(PluginManager::first_party(
+            Arc::new(snapshot.catalog().clone()),
+            store,
+            supervisor,
+            self.public_key.to_string(),
+            Version::parse(env!("CARGO_PKG_VERSION")).expect("package version is semver"),
+            ProtocolVersion::V1_0,
+            TargetSpec::current(),
+            REQUIRED_LOCALES,
+        ))
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum PluginRuntimeError {
+    #[error("plugin catalog is unavailable")]
+    Catalog(#[from] PluginCatalogError),
+    #[error("plugin store is unavailable")]
+    Store(#[from] PluginStoreError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,10 +131,16 @@ pub struct PluginHostSummary {
 
 #[derive(Debug, Error)]
 pub enum PluginBootstrapError {
+    #[error("release plugin trust root is unavailable")]
+    TrustRootUnavailable,
     #[error("bootstrap catalog is invalid JSON")]
     Json(#[from] serde_json::Error),
+    #[error("bootstrap catalog JSON is not canonical")]
+    NonCanonical,
     #[error("bootstrap catalog failed validation")]
     Validation(#[from] markion_plugin_protocol::ValidationError),
+    #[error("bootstrap catalog requires unsupported capability {0}")]
+    UnsupportedCapability(String),
 }
 
 pub fn bootstrap() -> Result<&'static PluginHostBootstrap, PluginBootstrapError> {
@@ -101,23 +162,43 @@ pub fn bootstrap_summary() -> Result<PluginHostSummary, PluginBootstrapError> {
 }
 
 fn load_bootstrap() -> Result<PluginHostBootstrap, PluginBootstrapError> {
-    verify_minisign(
-        VERIFIER_REFERENCE_PUBLIC_KEY,
-        VERIFIER_REFERENCE_SIGNATURE,
-        b"test",
-    )?;
     let catalog: PluginCatalog = serde_json::from_str(BOOTSTRAP_CATALOG)?;
+    let canonical_catalog = Arc::<[u8]>::from(canonical_json(&catalog)?);
+    if canonical_catalog.as_ref() != BOOTSTRAP_CATALOG.as_bytes() {
+        return Err(PluginBootstrapError::NonCanonical);
+    }
+    let public_key = release_public_key()?;
+    verify_minisign(&public_key, BOOTSTRAP_CATALOG_SIGNATURE, &canonical_catalog)?;
     catalog.validate(
         &Version::parse(env!("CARGO_PKG_VERSION")).expect("package version is semver"),
         ProtocolVersion::V1_0,
         &TargetSpec::current(),
         REQUIRED_LOCALES,
     )?;
-    let canonical_catalog = Arc::<[u8]>::from(canonical_json(&catalog)?);
+    if let Some(capability) = catalog::unsupported_capability(&catalog) {
+        return Err(PluginBootstrapError::UnsupportedCapability(capability));
+    }
     Ok(PluginHostBootstrap {
         catalog: Arc::new(catalog),
         canonical_catalog,
+        public_key: public_key.into(),
     })
+}
+
+#[cfg(debug_assertions)]
+fn release_public_key() -> Result<String, PluginBootstrapError> {
+    Ok(DEVELOPMENT_PUBLIC_KEY.to_owned())
+}
+
+#[cfg(not(debug_assertions))]
+fn release_public_key() -> Result<String, PluginBootstrapError> {
+    let encoded = option_env!("MARKION_PLUGIN_PUBLIC_KEY")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(PluginBootstrapError::TrustRootUnavailable)?;
+    Ok(format!(
+        "untrusted comment: Markion official plugin signing key\n{}",
+        encoded.trim()
+    ))
 }
 
 #[cfg(test)]
@@ -126,11 +207,27 @@ mod tests {
 
     #[test]
     fn bootstrap_catalog_is_valid_and_locale_complete() {
+        let catalog: PluginCatalog = serde_json::from_str(BOOTSTRAP_CATALOG).unwrap();
+        let canonical = canonical_json(&catalog).unwrap();
+        assert_eq!(canonical, BOOTSTRAP_CATALOG.as_bytes());
+        verify_minisign(
+            DEVELOPMENT_PUBLIC_KEY,
+            BOOTSTRAP_CATALOG_SIGNATURE,
+            &canonical,
+        )
+        .unwrap();
         let bootstrap = load_bootstrap().unwrap();
         assert_eq!(bootstrap.catalog.sequence, 1);
         assert_eq!(bootstrap.catalog.plugins.len(), 1);
         assert_eq!(bootstrap.catalog.plugins[0].plugin_id, "dev.markion.pdf");
         assert!(!bootstrap.canonical_catalog.is_empty());
+        assert!(!bootstrap.public_key().is_empty());
+        assert!(
+            bootstrap
+                .catalog_manager(PluginStorePaths::new("plugins"))
+                .load()
+                .is_ok()
+        );
     }
 
     #[test]

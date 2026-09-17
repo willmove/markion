@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     env,
     io::{self},
 };
@@ -34,12 +33,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = stdin.lock();
     let mut writer = stdout.lock();
     let mut handshaken = false;
-    let mut seen_request_ids = BTreeSet::new();
+    let mut last_request_id = 0_u64;
 
     while let Some(frame) = read_frame(&mut reader, limits)? {
-        if frame.request_id == 0 || !seen_request_ids.insert(frame.request_id) {
-            return Err("invalid or duplicate request id".into());
+        if frame.request_id == 0 || frame.request_id <= last_request_id {
+            return Err("invalid, duplicate, or reordered request id".into());
         }
+        last_request_id = frame.request_id;
         if frame.protocol != ProtocolVersion::V1_0 {
             return Err("unsupported protocol version".into());
         }

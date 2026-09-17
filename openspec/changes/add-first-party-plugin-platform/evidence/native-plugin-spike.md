@@ -54,11 +54,14 @@ smoke executable in the next run.
 | macOS arm64 | 3,815,994 B | 8,713,271 B | 6,291,456 B | 10,485,760 B | pass |
 | Linux x86_64 | 3,955,016 B | 8,762,516 B | 6,291,456 B | 10,485,760 B | pass |
 
-Windows local composition with the real `markion-plugin-pdf` protocol worker
-produced a 4,040,468-byte archive and an 8,286,060-byte extracted payload. Its
-1,070,080-byte worker, 7,211,520-byte PDFium DLL, manifest, signature, and
-notices all remain inside the 6 MiB / 10 MiB gates. Native CI remains the final
-authority for the real worker on every target.
+The 2026-09-17 Windows local composition with the real
+`markion-plugin-pdf` protocol worker produced a reproducible 4,047,124-byte
+archive and an 8,297,772-byte extracted payload. Its 1,082,880-byte worker,
+7,211,520-byte PDFium DLL, manifest, signature, and notices all remain inside
+the 6 MiB / 10 MiB gates. The exact signed archive was extracted beneath a
+space-and-non-ASCII path, launched, and used to open and rasterize the one-page
+fixture before clean shutdown. Native CI remains the final authority for the
+real worker on every target.
 
 ## Interpretation for the product decision
 

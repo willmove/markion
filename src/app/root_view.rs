@@ -18,7 +18,7 @@ impl Render for MarkionApp {
         }
         let active_is_document = self.active_tab().is_document();
         let active_is_image = self.active_tab().is_image();
-        let active_is_pdf = self.active_tab().is_pdf();
+        let active_is_pdf = self.active_tab().is_plugin_document();
         if !active_is_document {
             self.slash_commands = None;
             self.dismissed_slash_query = None;
@@ -1325,7 +1325,7 @@ fn pdf_tab_view(
     app.prepare_pdf_surface(viewport.width, window.scale_factor(), cx);
     let pdf = app
         .active_tab()
-        .pdf()
+        .plugin_document()
         .expect("PDF tab view is rendered only for PDF content");
     let path = pdf.path.display().to_string();
     let load_state = pdf.load_state;
@@ -1344,7 +1344,7 @@ fn pdf_tab_view(
     let page_count_label = page_count.to_string();
 
     let body = match load_state {
-        PdfLoadState::Loading => div()
+        PagedDocumentLoadState::Loading => div()
             .debug_selector(|| "pdf-tab-loading".to_string())
             .flex_1()
             .flex()
@@ -1353,7 +1353,7 @@ fn pdf_tab_view(
             .text_color(palette.muted)
             .child(app.tr(Msg::StatusPdfLoading).to_string())
             .into_any_element(),
-        PdfLoadState::Error(error) => div()
+        PagedDocumentLoadState::Error(error) => div()
             .debug_selector(|| "pdf-tab-error".to_string())
             .flex_1()
             .px_6()
@@ -1367,7 +1367,7 @@ fn pdf_tab_view(
                 &[&path, app.tr(pdf_error_message(error))],
             ))
             .into_any_element(),
-        PdfLoadState::Ready => {
+        PagedDocumentLoadState::Ready => {
             let mut page_canvas = div().relative().w_full().h(page_content_height).flex_none();
             for index in visible_range {
                 if let Some(placement) = page_layout.get(index).copied() {
@@ -1498,7 +1498,7 @@ fn pdf_tab_view(
                     let entity = entity.clone();
                     move |_, _, cx| {
                         entity.update(cx, |app, cx| {
-                            app.set_pdf_zoom(PdfZoomMode::numeric(100.0), cx)
+                            app.set_pdf_zoom(PagedDocumentZoomMode::numeric(100.0), cx)
                         })
                     }
                 }),
@@ -1508,7 +1508,9 @@ fn pdf_tab_view(
                     .on_mouse_up(MouseButton::Left, {
                         let entity = entity.clone();
                         move |_, _, cx| {
-                            entity.update(cx, |app, cx| app.set_pdf_zoom(PdfZoomMode::FitWidth, cx))
+                            entity.update(cx, |app, cx| {
+                                app.set_pdf_zoom(PagedDocumentZoomMode::FitWidth, cx)
+                            })
                         }
                     }),
             )
@@ -1532,7 +1534,7 @@ fn pdf_tab_view(
                         entity.update(cx, |app, cx| {
                             let page = app
                                 .active_tab()
-                                .pdf()
+                                .plugin_document()
                                 .map(|pdf| pdf.current_page)
                                 .unwrap_or(0);
                             app.jump_to_pdf_page(page.saturating_sub(1), cx);
@@ -1545,7 +1547,7 @@ fn pdf_tab_view(
                 pdf_toolbar_button("pdf-next-page", "›", app.tr(Msg::PdfNextPage), palette)
                     .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                         entity.update(cx, |app, cx| {
-                            let Some(pdf) = app.active_tab().pdf() else {
+                            let Some(pdf) = app.active_tab().plugin_document() else {
                                 return;
                             };
                             let page = pdf
@@ -3775,7 +3777,7 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
                     .text_size(px(12.))
                     .text_color(palette.muted)
                     .child(
-                        app.tr(if app.active_tab().is_pdf() {
+                        app.tr(if app.active_tab().is_plugin_document() {
                             Msg::StatusPdfActionUnavailable
                         } else {
                             Msg::StatusImageActionUnavailable
@@ -3803,6 +3805,7 @@ pub(super) fn pane_scrollbar_view(
         PaneScrollTarget::PreferencesShortcutCategories => "preferences-categories-scrollbar",
         PaneScrollTarget::PreferencesShortcutActions => "preferences-actions-scrollbar",
         PaneScrollTarget::PreferencesExport => "preferences-export-scrollbar",
+        PaneScrollTarget::PreferencesPlugins => "preferences-plugins-scrollbar",
         PaneScrollTarget::FileTree => "file-tree-scrollbar",
         PaneScrollTarget::Outline => "outline-scrollbar",
         PaneScrollTarget::MarkdownReference => "markdown-reference-scrollbar",
@@ -5630,7 +5633,10 @@ pub(super) fn open_recent_submenu_panel(
 pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let palette = app.palette();
     let active_tab = app.preferences_tab;
-    let panel_width = if active_tab == PreferencesTab::Shortcuts {
+    let panel_width = if matches!(
+        active_tab,
+        PreferencesTab::Shortcuts | PreferencesTab::Plugins
+    ) {
         720.
     } else {
         640.
@@ -5931,6 +5937,9 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                 })
                 .when(active_tab == PreferencesTab::Export, |panel| {
                     panel.child(preferences_export_body(app, palette, cx))
+                })
+                .when(active_tab == PreferencesTab::Plugins, |panel| {
+                    panel.child(preferences_plugins_body(app, palette, cx))
                 }),
         )
 }
@@ -5987,6 +5996,411 @@ fn preferences_tab_strip(
                 app.select_preferences_tab(PreferencesTab::Export, cx);
             }),
         ))
+        .child(preferences_tab_button(
+            plugin_t(app.language, PluginMsg::Tab),
+            app.preferences_tab == PreferencesTab::Plugins,
+            palette,
+            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                app.select_preferences_tab(PreferencesTab::Plugins, cx);
+            }),
+        ))
+}
+
+fn preferences_plugins_body(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let operation = app.plugin_ui.operation.clone();
+    let catalog_operation = plugins::catalog_operation(operation.as_ref());
+    let startup_failure = app.plugin_ui.startup_failure;
+    let entries = app.plugin_ui.entries.clone();
+    let language = app.language;
+    let mut content = div()
+        .id("preferences-plugins-body")
+        .size_full()
+        .px_4()
+        .py_3()
+        .overflow_y_scroll()
+        .scrollbar_width(px(PANE_SCROLLBAR_RESERVED_WIDTH))
+        .track_scroll(&app.preferences_plugins_scroll)
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(palette.muted)
+                        .child(plugin_t(language, PluginMsg::OfficialSection)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(palette.muted)
+                                .child(plugin_t(language, PluginMsg::RestartNotRequired)),
+                        )
+                        .when_some(catalog_operation, |row, operation| {
+                            row.child(
+                                div().text_size(px(11.)).text_color(palette.muted).child(
+                                    plugins::plugin_operation_label(language, operation.phase),
+                                ),
+                            )
+                        })
+                        .when(
+                            catalog_operation.is_none_or(|operation| {
+                                matches!(operation.phase, plugins::PluginOperationPhase::Failed(_))
+                            }),
+                            |row| {
+                                row.child(plugin_action_button(
+                                    plugin_t(language, PluginMsg::ActionRefresh),
+                                    true,
+                                    false,
+                                    palette,
+                                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                                        app.refresh_plugin_catalog(cx);
+                                    }),
+                                ))
+                            },
+                        ),
+                ),
+        );
+
+    if let Some(failure) = startup_failure {
+        content = content.child(
+            div()
+                .p_3()
+                .rounded_md()
+                .border_1()
+                .border_color(palette.border)
+                .bg(palette.surface_bg)
+                .text_size(px(12.))
+                .text_color(palette.muted)
+                .child(plugins::plugin_operation_label(
+                    language,
+                    plugins::PluginOperationPhase::Failed(failure),
+                )),
+        );
+    } else if entries.is_empty() {
+        content = content.child(
+            div()
+                .p_3()
+                .text_size(px(12.))
+                .text_color(palette.muted)
+                .child(plugin_t(language, PluginMsg::Empty)),
+        );
+    } else {
+        content =
+            content.children(entries.into_iter().map(|entry| {
+                plugin_manager_card(entry, operation.as_ref(), language, palette, cx)
+            }));
+    }
+
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .child(content)
+        .child(pane_scrollbar_view(
+            PaneScrollTarget::PreferencesPlugins,
+            &app.preferences_plugins_scroll,
+            palette,
+            cx,
+        ))
+}
+
+fn plugin_manager_card(
+    entry: markion::plugin_platform::ManagedPluginEntry,
+    operation: Option<&plugins::PluginOperationState>,
+    language: Language,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let plugin_id = entry.plugin_id.clone();
+    let operation = operation.filter(|state| state.plugin_id == plugin_id);
+    let capabilities = plugins::plugin_capabilities_label(language, &entry.capabilities);
+    let permissions = plugins::plugin_permissions_label(language, &entry.permissions);
+    let status = plugins::plugin_status_label(language, entry.status);
+    let catalog_version = format!("v{}", entry.catalog_version);
+    let installed_version = entry
+        .active_version
+        .as_ref()
+        .map(|version| format!("v{version}"));
+    let version = installed_version.unwrap_or(catalog_version);
+    let mut actions = div().flex().items_center().gap_2();
+
+    if operation.is_none() {
+        match entry.status {
+            markion::plugin_platform::ManagedPluginStatus::Available => {
+                let id = plugin_id.clone();
+                actions = actions.child(plugin_action_button(
+                    plugin_t(language, PluginMsg::ActionInstall),
+                    true,
+                    true,
+                    palette,
+                    cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                        app.prompt_plugin_install(id.clone(), window, cx);
+                    }),
+                ));
+            }
+            markion::plugin_platform::ManagedPluginStatus::UpdateAvailable => {
+                let id = plugin_id.clone();
+                actions = actions.child(plugin_action_button(
+                    plugin_t(language, PluginMsg::ActionUpdate),
+                    true,
+                    true,
+                    palette,
+                    cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                        app.prompt_plugin_install(id.clone(), window, cx);
+                    }),
+                ));
+                let id = plugin_id.clone();
+                actions = actions.child(plugin_action_button(
+                    plugin_t(language, PluginMsg::ActionDisable),
+                    true,
+                    false,
+                    palette,
+                    cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                        app.set_plugin_enabled(id.clone(), false, cx);
+                    }),
+                ));
+            }
+            markion::plugin_platform::ManagedPluginStatus::Disabled => {
+                let id = plugin_id.clone();
+                actions = actions.child(plugin_action_button(
+                    plugin_t(language, PluginMsg::ActionEnable),
+                    true,
+                    true,
+                    palette,
+                    cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                        app.set_plugin_enabled(id.clone(), true, cx);
+                    }),
+                ));
+            }
+            markion::plugin_platform::ManagedPluginStatus::Installed => {
+                let id = plugin_id.clone();
+                actions = actions.child(plugin_action_button(
+                    plugin_t(language, PluginMsg::ActionDisable),
+                    true,
+                    false,
+                    palette,
+                    cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                        app.set_plugin_enabled(id.clone(), false, cx);
+                    }),
+                ));
+            }
+            markion::plugin_platform::ManagedPluginStatus::Incompatible
+            | markion::plugin_platform::ManagedPluginStatus::Quarantined => {}
+        }
+        if entry.rollback_available() {
+            let id = plugin_id.clone();
+            actions = actions.child(plugin_action_button(
+                plugin_t(language, PluginMsg::ActionRollback),
+                true,
+                false,
+                palette,
+                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                    app.prompt_plugin_rollback(id.clone(), window, cx);
+                }),
+            ));
+        }
+        if entry.active_version.is_some() {
+            let id = plugin_id.clone();
+            actions = actions.child(plugin_action_button(
+                plugin_t(language, PluginMsg::ActionUninstall),
+                true,
+                false,
+                palette,
+                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                    app.prompt_plugin_uninstall(id.clone(), window, cx);
+                }),
+            ));
+        }
+    }
+
+    if let Some(operation) = operation {
+        actions = actions.child(
+            div()
+                .text_size(px(11.))
+                .text_color(palette.muted)
+                .child(plugins::plugin_operation_label(language, operation.phase)),
+        );
+        match operation.phase {
+            plugins::PluginOperationPhase::Downloading => {
+                actions = actions.child(plugin_action_button(
+                    plugin_t(language, PluginMsg::ActionCancel),
+                    true,
+                    false,
+                    palette,
+                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                        app.cancel_plugin_operation(cx);
+                    }),
+                ));
+            }
+            plugins::PluginOperationPhase::Failed(_) => {
+                actions = actions.child(plugin_action_button(
+                    plugin_t(language, PluginMsg::ActionRetry),
+                    true,
+                    true,
+                    palette,
+                    cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                        app.retry_plugin_operation(window, cx);
+                    }),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    let metadata = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .text_size(px(11.))
+        .text_color(palette.muted)
+        .child(format!(
+            "{}: {}",
+            plugin_t(language, PluginMsg::PublisherLabel),
+            entry.publisher
+        ))
+        .child(format!(
+            "{}: {}",
+            plugin_t(language, PluginMsg::CapabilitiesLabel),
+            capabilities
+        ))
+        .child(format!(
+            "{}: {}",
+            plugin_t(language, PluginMsg::PermissionsLabel),
+            permissions
+        ));
+    let metadata = if let Some(estimate) = entry.estimate {
+        metadata
+            .child(format!(
+                "{}: {}",
+                plugin_t(language, PluginMsg::DownloadSizeLabel),
+                plugins::format_plugin_bytes(estimate.download_bytes)
+            ))
+            .child(format!(
+                "{}: {}",
+                plugin_t(language, PluginMsg::InstalledSizeLabel),
+                plugins::format_plugin_bytes(estimate.installed_bytes)
+            ))
+    } else {
+        metadata
+    };
+    let metadata = if entry.usage.total_bytes() > 0 {
+        metadata.child(format!(
+            "{}: {}",
+            plugin_t(language, PluginMsg::StorageLabel),
+            plugins::format_plugin_bytes(entry.usage.total_bytes())
+        ))
+    } else {
+        metadata
+    };
+
+    div()
+        .w_full()
+        .p_3()
+        .rounded_md()
+        .border_1()
+        .border_color(palette.border)
+        .bg(palette.surface_bg)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(entry.identity.name),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(palette.muted)
+                                .child(version),
+                        ),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .bg(palette.panel_bg)
+                        .text_size(px(11.))
+                        .text_color(palette.muted)
+                        .child(status),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(palette.text)
+                .child(entry.identity.description),
+        )
+        .child(metadata)
+        .child(actions)
+}
+
+fn plugin_action_button(
+    label: &'static str,
+    enabled: bool,
+    accent: bool,
+    palette: ThemePalette,
+    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    let background = if accent {
+        palette.active_bg
+    } else {
+        palette.panel_bg
+    };
+    let foreground = if accent {
+        palette.active_text
+    } else {
+        palette.text
+    };
+    div()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(if accent {
+            palette.active_bg
+        } else {
+            palette.border
+        })
+        .bg(background)
+        .text_color(if enabled { foreground } else { palette.muted })
+        .text_size(px(11.))
+        .when(enabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(move |style| style.border_color(palette.active_bg))
+                .on_mouse_up(MouseButton::Left, listener)
+        })
+        .child(label)
 }
 
 fn preferences_images_body(

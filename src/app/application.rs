@@ -219,6 +219,8 @@ impl MarkionApp {
             preferences_categories_scroll: ScrollHandle::new(),
             preferences_actions_scroll: ScrollHandle::new(),
             preferences_export_scroll: ScrollHandle::new(),
+            preferences_plugins_scroll: ScrollHandle::new(),
+            plugin_ui: plugins::PluginUiState::default(),
             pandoc_available_cached: None,
             shortcut_platform: ShortcutPlatform::current(),
             shortcut_category: ShortcutCategory::Files,
@@ -310,9 +312,10 @@ impl MarkionApp {
             highlight_cache: RefCell::new(HashMap::new()),
             diagram_cache: DiagramCache::new(DIAGRAM_CACHE_CAPACITY),
             preview_image_cache: PreviewImageCache::new(PREVIEW_IMAGE_CACHE_CAPACITY),
-            pdf_service: None,
-            pdf_service_error: None,
-            pdf_event_poll_scheduled: false,
+            paged_document_service: None,
+            paged_document_provider: None,
+            paged_document_service_error: None,
+            paged_document_event_poll_scheduled: false,
             pdf_page_cache: PdfPageCache::new(),
             pdf_page_input: None,
             failed_data_uri_fingerprints: std::collections::HashSet::new(),
@@ -1104,6 +1107,7 @@ impl MarkionApp {
             workspace_root_needs_reset(&self.workspace_root, self.file_tree.is_some(), &root);
 
         if root_changed {
+            self.plugin_ui.ensure_initialized(self.language);
             self.collapsed_tree_paths.clear();
             self.file_tree_needs_initial_collapse = true;
             self.selected_tree_path = None;
@@ -1112,6 +1116,7 @@ impl MarkionApp {
                 root: root.clone(),
                 entries: Vec::new(),
                 show_hidden: false,
+                plugin_extensions: self.plugin_ui.file_handler_extensions(),
             });
         }
 
@@ -1159,11 +1164,19 @@ impl MarkionApp {
         let requested_root = self.workspace_root.clone();
         let scan_root = requested_root.clone();
         let show_hidden = self.show_hidden_files;
+        self.plugin_ui.ensure_initialized(self.language);
+        let plugin_extensions = self.plugin_ui.file_handler_extensions();
         cx.spawn(async move |this, cx| {
             // Run the filesystem traversal off the main thread.
             let scanned = cx
                 .background_executor()
-                .spawn(async move { FileTree::scan_with_options(&scan_root, show_hidden) })
+                .spawn(async move {
+                    FileTree::scan_with_plugin_extensions(
+                        &scan_root,
+                        show_hidden,
+                        plugin_extensions,
+                    )
+                })
                 .await;
             let _ = this.update(cx, |app, cx| {
                 if !scan_result_matches_workspace(&requested_root, &app.workspace_root) {
@@ -2107,9 +2120,13 @@ impl MarkionApp {
         // Filter and probe paths on the background executor first; existence
         // checks can stall on a dead network path recorded in session.toml.
         let session = self.session.clone();
+        self.plugin_ui.ensure_initialized(self.language);
+        let plugin_extensions = self.plugin_ui.file_handler_extensions();
         cx.spawn(async move |this, cx| {
             let (workspace_root, open_files, active_file) = cx
-                .background_spawn(async move { filter_restorable_session(&session) })
+                .background_spawn(
+                    async move { filter_restorable_session(&session, &plugin_extensions) },
+                )
                 .await;
             let _ = this.update(cx, |app, cx| {
                 app.finish_session_restore(open_files, workspace_root, active_file, cx);
@@ -2180,8 +2197,8 @@ impl MarkionApp {
             return Ok(());
         }
 
-        match classify_supported_path(&path) {
-            Some(SupportedPathKind::Image) => {
+        match self.plugin_ui.resolve_file_handler(&path, self.language) {
+            Some(plugins::ResolvedFileHandler::Image) => {
                 if !*replaced_initial && self.active_tab().is_safe_to_replace() {
                     self.replace_active_tab_with_image(path, cx);
                     *replaced_initial = true;
@@ -2190,16 +2207,24 @@ impl MarkionApp {
                 }
                 Ok(())
             }
-            Some(SupportedPathKind::Pdf) => {
+            Some(plugins::ResolvedFileHandler::Plugin(candidate)) => {
+                let Some(plugin_id) = candidate.plugin_id else {
+                    return Err(format!("unsupported session path: {}", path.display()));
+                };
                 if !*replaced_initial && self.active_tab().is_safe_to_replace() {
-                    self.replace_active_tab_with_pdf(path, cx);
+                    self.replace_active_tab_with_plugin_document(
+                        path,
+                        plugin_id,
+                        candidate.capability,
+                        cx,
+                    );
                     *replaced_initial = true;
                 } else {
-                    self.open_pdf_in_new_tab(path, cx);
+                    self.open_plugin_document_in_new_tab(path, plugin_id, candidate.capability, cx);
                 }
                 Ok(())
             }
-            Some(SupportedPathKind::Document) => {
+            Some(plugins::ResolvedFileHandler::Document) => {
                 let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
                 if !*replaced_initial
                     && !self.active_tab().is_dirty()
@@ -2212,7 +2237,9 @@ impl MarkionApp {
                 }
                 Ok(())
             }
-            None => Err(format!("unsupported session path: {}", path.display())),
+            Some(plugins::ResolvedFileHandler::Conflict) | None => {
+                Err(format!("unsupported session path: {}", path.display()))
+            }
         }
     }
 
@@ -2265,10 +2292,16 @@ impl MarkionApp {
             self.active_tab = self.tabs.len() - 1;
         }
 
+        self.plugin_ui.ensure_initialized(self.language);
+        let plugin_extensions = self.plugin_ui.file_handler_extensions();
         let surviving: Vec<PathBuf> = snapshot
             .open_files
             .iter()
-            .filter(|path| path.is_file() && classify_supported_path(path).is_some())
+            .filter(|path| {
+                path.is_file()
+                    && classify_supported_path_with_plugin_extensions(path, &plugin_extensions)
+                        .is_some()
+            })
             .cloned()
             .collect();
         let active_file = snapshot
