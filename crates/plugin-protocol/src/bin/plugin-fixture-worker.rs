@@ -8,8 +8,9 @@ use std::{
 };
 
 use markion_plugin_protocol::{
-    Frame, FrameKind, FrameLimits, HandshakeAccepted, HostMessage, PluginMessage, ProtocolVersion,
-    TargetSpec, read_frame, write_frame,
+    CapabilityDeclaration, Frame, FrameKind, FrameLimits, HandshakeAccepted, HostMessage,
+    PAGED_DOCUMENT_CAPABILITY, PluginMessage, ProtocolVersion, ResourceLimits, TargetSpec,
+    read_frame, write_frame,
 };
 use semver::Version;
 
@@ -68,9 +69,21 @@ fn framed_worker() -> Result<(), Box<dyn std::error::Error>> {
                 if hello.protocol != ProtocolVersion::V1_0
                     || hello.expected_plugin_id != FIXTURE_ID
                     || hello.expected_plugin_version != Version::new(1, 0, 0)
+                    || !hello
+                        .requested_capabilities
+                        .iter()
+                        .all(|capability| capability == PAGED_DOCUMENT_CAPABILITY)
                 {
                     return Err("incompatible fixture handshake".into());
                 }
+                let capabilities = hello
+                    .requested_capabilities
+                    .iter()
+                    .map(|capability| CapabilityDeclaration {
+                        id: capability.clone(),
+                        limits: ResourceLimits::default(),
+                    })
+                    .collect();
                 (
                     FrameKind::Response,
                     PluginMessage::HandshakeAccepted(HandshakeAccepted {
@@ -83,7 +96,7 @@ fn framed_worker() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             hello.package_sha256
                         },
-                        capabilities: Vec::new(),
+                        capabilities,
                     }),
                     false,
                 )
