@@ -15,10 +15,10 @@
 
 ## 3. Plugin catalog and store
 
-- [ ] 3.1 Define per-user plugin paths and persisted store state for staged versions, the active version pointer, one rollback version, disabled state, quarantine metadata, and storage accounting.
-- [ ] 3.2 Implement explicit install, update, atomic activation, rollback, disable, enable, and uninstall transactions with staging cleanup and recovery tests for interrupted or partially written operations.
+- [x] 3.1 Define per-user plugin paths and persisted store state for staged versions, the active version pointer, one rollback version, disabled state, quarantine metadata, and storage accounting.
+- [x] 3.2 Implement explicit install, update, atomic activation, rollback, disable, enable, and uninstall transactions with staging cleanup and recovery tests for interrupted or partially written operations.
 - [ ] 3.3 Ship and verify a signed bootstrap catalog, then add signed remote-catalog refresh, cache, offline fallback, monotonic update handling, and deterministic plugin/capability/file-handler collision rejection.
-- [ ] 3.4 Expose authoritative compressed-download and installed-storage estimates before installation and exact per-plugin storage accounting after installation, including staged and rollback bytes.
+- [x] 3.4 Expose authoritative compressed-download and installed-storage estimates before installation and exact per-plugin storage accounting after installation, including staged and rollback bytes.
 
 ## 4. Worker supervision and resource control
 

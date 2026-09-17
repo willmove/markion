@@ -4152,6 +4152,10 @@ pub fn default_git_sync_data_dir() -> PathBuf {
     crate::paths::default_git_sync_data_dir()
 }
 
+pub fn default_plugin_data_dir() -> PathBuf {
+    crate::paths::default_plugin_data_dir()
+}
+
 pub fn default_themes_dir() -> PathBuf {
     crate::paths::default_themes_dir()
 }

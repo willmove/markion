@@ -53,6 +53,35 @@ pub fn default_git_sync_data_dir() -> PathBuf {
     default_config_dir().join("git-sync-data")
 }
 
+pub fn default_plugin_data_dir() -> PathBuf {
+    if cfg!(windows) {
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir)
+            .join("Markion")
+            .join("Plugins")
+    } else if cfg!(target_os = "macos") {
+        env::var_os("HOME")
+            .map(|home| {
+                PathBuf::from(home)
+                    .join("Library")
+                    .join("Application Support")
+            })
+            .unwrap_or_else(env::temp_dir)
+            .join("Markion")
+            .join("Plugins")
+    } else {
+        env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+            })
+            .unwrap_or_else(env::temp_dir)
+            .join("markion")
+            .join("plugins")
+    }
+}
+
 pub fn default_log_dir() -> PathBuf {
     if cfg!(windows) {
         env::var_os("LOCALAPPDATA")

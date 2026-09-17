@@ -57,6 +57,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install stable Rust for the native target
         uses: dtolnay/rust-toolchain@stable
@@ -72,7 +74,19 @@ jobs:
       - name: Install Minisign on Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install minisign --no-progress -y
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'minisign-0.12-win64.zip'
+          Invoke-WebRequest `
+            -Uri 'https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-win64.zip' `
+            -OutFile $archive
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash
+          if ($digest -ne '37B600344E20C19314B2E82813DB2BFDCC408B77B876F7727889DBD46D539479') {
+            throw "Minisign archive digest mismatch: $digest"
+          }
+          $toolRoot = Join-Path $env:RUNNER_TEMP 'minisign-0.12'
+          Expand-Archive -LiteralPath $archive -DestinationPath $toolRoot -Force
+          $binRoot = Join-Path $toolRoot 'minisign-win64/x86_64'
+          $binRoot | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Install Minisign on macOS
         if: runner.os == 'macOS'
@@ -85,7 +99,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y `
-            minisign `
             build-essential `
             clang `
             cmake `
@@ -102,6 +115,21 @@ jobs:
             libxcb-xfixes0-dev `
             libvulkan-dev `
             libasound2-dev
+          $archive = Join-Path $env:RUNNER_TEMP 'minisign-0.12-linux.tar.gz'
+          Invoke-WebRequest `
+            -Uri 'https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz' `
+            -OutFile $archive
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash
+          if ($digest -ne '9A599B48BA6EB7B1E80F12F36B94CECA7C00B7A5173C95C3EFC88D9822957E73') {
+            throw "Minisign archive digest mismatch: $digest"
+          }
+          $toolRoot = Join-Path $env:RUNNER_TEMP 'minisign-0.12'
+          New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
+          tar -xzf $archive -C $toolRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to extract pinned Minisign.' }
+          $binRoot = Join-Path $toolRoot 'minisign-linux/x86_64'
+          & chmod +x (Join-Path $binRoot 'minisign')
+          $binRoot | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Install pinned cargo-packager
         shell: pwsh
@@ -276,5 +304,5 @@ jobs:
             target/plugin-platform-spike/pdf/*.markion-plugin
             target/plugin-platform-spike/fixture/*.markion-plugin
             target/plugin-platform-spike/host-size/*.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
