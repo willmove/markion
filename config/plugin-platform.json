@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "bytes_per_mib": 1048576,
+  "host_control_revision": "d99624aa560454820fa2443f626cd40cc8217446",
+  "host_package_delta_limit_bytes": 1048576,
+  "host_installed_delta_limit_bytes": 2097152,
+  "pdf_plugin_archive_limit_bytes": 6291456,
+  "pdf_plugin_installed_limit_bytes": 10485760,
+  "targets": [
+    {
+      "triple": "x86_64-pc-windows-msvc",
+      "package_formats": [
+        "nsis"
+      ]
+    },
+    {
+      "triple": "aarch64-apple-darwin",
+      "package_formats": [
+        "dmg"
+      ]
+    },
+    {
+      "triple": "x86_64-unknown-linux-gnu",
+      "package_formats": [
+        "deb",
+        "appimage"
+      ]
+    }
+  ]
+}
