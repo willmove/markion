@@ -132,6 +132,7 @@ try {
     foreach ($relative in @('plugin.json', 'plugin.json.minisig', "bin/$($target.executable)")) {
         $source = Join-Path $stageRoot $relative
         $entry = $archive.CreateEntry($relative, [System.IO.Compression.CompressionLevel]::Optimal)
+        $entry.LastWriteTime = [DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
         $mode = if ($relative -like 'bin/*') { 0x81ED } else { 0x81A4 }
         $entry.ExternalAttributes = [System.BitConverter]::ToInt32(
             [System.BitConverter]::GetBytes(([uint32]$mode) -shl 16), 0

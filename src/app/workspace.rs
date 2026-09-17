@@ -421,6 +421,18 @@ impl MarkionApp {
         let path = comparable_document_path(&path);
         let display_path = path.display().to_string();
         if self.focus_existing_tab_for_path(&path, cx) {
+            if self.active_tab().plugin_document().is_some_and(|document| {
+                matches!(
+                    document.load_state,
+                    PagedDocumentLoadState::Error(
+                        PagedHostError::ProviderMissing | PagedHostError::ProviderUnavailable
+                    )
+                )
+            }) {
+                self.preferences_panel_open = true;
+                self.preferences_tab = PreferencesTab::Plugins;
+                self.ensure_plugin_manager(cx);
+            }
             self.record_recent_path(&path);
             self.active_menu = None;
             self.status = self.trf(Msg::StatusOpened, &[&display_path]);
@@ -428,25 +440,52 @@ impl MarkionApp {
             return Ok(());
         }
 
-        match classify_supported_path(&path) {
-            Some(SupportedPathKind::Image) => match intent {
+        let handler = self.plugin_ui.resolve_file_handler(&path, self.language);
+        match handler {
+            Some(plugins::ResolvedFileHandler::Image) => match intent {
                 OpenPathIntent::ReplaceActive => {
                     self.replace_active_tab_with_image(path.clone(), cx)
                 }
                 OpenPathIntent::OpenInNewTab => self.open_image_in_new_tab(path.clone(), cx),
             },
-            Some(SupportedPathKind::Document) => {
+            Some(plugins::ResolvedFileHandler::Document) => {
                 let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
                 match intent {
                     OpenPathIntent::ReplaceActive => self.replace_active_tab(document, cx),
                     OpenPathIntent::OpenInNewTab => self.open_in_new_tab(document, cx),
                 }
             }
-            Some(SupportedPathKind::Pdf) => match intent {
-                OpenPathIntent::ReplaceActive => self.replace_active_tab_with_pdf(path.clone(), cx),
-                OpenPathIntent::OpenInNewTab => self.open_pdf_in_new_tab(path.clone(), cx),
-            },
-            None => {
+            Some(plugins::ResolvedFileHandler::Plugin(candidate)) => {
+                let plugin_id = candidate.plugin_id.clone().ok_or_else(|| {
+                    self.trf(Msg::StatusUnsupportedFile, &[&display_path])
+                        .to_string()
+                })?;
+                let capability = candidate.capability.clone();
+                match intent {
+                    OpenPathIntent::ReplaceActive => self.replace_active_tab_with_plugin_document(
+                        path.clone(),
+                        plugin_id,
+                        capability,
+                        cx,
+                    ),
+                    OpenPathIntent::OpenInNewTab => self.open_plugin_document_in_new_tab(
+                        path.clone(),
+                        plugin_id,
+                        capability,
+                        cx,
+                    ),
+                }
+                if !matches!(
+                    candidate.availability,
+                    markion::plugin_platform::FileHandlerAvailability::Installed
+                        | markion::plugin_platform::FileHandlerAvailability::UpdateAvailable { .. }
+                ) {
+                    self.preferences_panel_open = true;
+                    self.preferences_tab = PreferencesTab::Plugins;
+                    self.ensure_plugin_manager(cx);
+                }
+            }
+            Some(plugins::ResolvedFileHandler::Conflict) | None => {
                 return Err(self
                     .trf(Msg::StatusUnsupportedFile, &[&display_path])
                     .to_string());
@@ -851,17 +890,25 @@ impl MarkionApp {
             }
         }
 
+        self.plugin_ui.ensure_initialized(self.language);
+        let plugin_extensions = self.plugin_ui.file_handler_extensions();
+
         match pending.kind {
             PendingNameKind::CreateFile => {
                 let result = self
                     .file_tree
                     .get_or_insert_with(|| {
-                        FileTree::scan_with_options(&self.workspace_root, self.show_hidden_files)
-                            .unwrap_or(FileTree {
-                                root: self.workspace_root.clone(),
-                                entries: Vec::new(),
-                                show_hidden: self.show_hidden_files,
-                            })
+                        FileTree::scan_with_plugin_extensions(
+                            &self.workspace_root,
+                            self.show_hidden_files,
+                            Arc::clone(&plugin_extensions),
+                        )
+                        .unwrap_or(FileTree {
+                            root: self.workspace_root.clone(),
+                            entries: Vec::new(),
+                            show_hidden: self.show_hidden_files,
+                            plugin_extensions: Arc::clone(&plugin_extensions),
+                        })
                     })
                     .create_unique_file(&pending.parent, name);
                 match result {
@@ -878,12 +925,17 @@ impl MarkionApp {
                 let result = self
                     .file_tree
                     .get_or_insert_with(|| {
-                        FileTree::scan_with_options(&self.workspace_root, self.show_hidden_files)
-                            .unwrap_or(FileTree {
-                                root: self.workspace_root.clone(),
-                                entries: Vec::new(),
-                                show_hidden: self.show_hidden_files,
-                            })
+                        FileTree::scan_with_plugin_extensions(
+                            &self.workspace_root,
+                            self.show_hidden_files,
+                            Arc::clone(&plugin_extensions),
+                        )
+                        .unwrap_or(FileTree {
+                            root: self.workspace_root.clone(),
+                            entries: Vec::new(),
+                            show_hidden: self.show_hidden_files,
+                            plugin_extensions: Arc::clone(&plugin_extensions),
+                        })
                     })
                     .create_unique_directory(&pending.parent, name);
                 match result {
@@ -1276,7 +1328,7 @@ impl MarkionApp {
                 image.path = new_path.to_path_buf();
                 image.key = PreviewImageKey::from_local_path(new_path);
             }
-            WorkspaceTab::Pdf(pdf) => {
+            WorkspaceTab::PluginDocument(pdf) => {
                 pdf.path = comparable_document_path(new_path);
             }
         }

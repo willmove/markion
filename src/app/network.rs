@@ -1,4 +1,12 @@
-use std::{any::type_name, collections::HashMap, sync::OnceLock, time::Duration};
+use std::{
+    any::type_name,
+    collections::HashMap,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use gpui::{
@@ -159,6 +167,125 @@ pub(super) fn fetch_url_bytes(url: &str) -> Result<Vec<u8>> {
             .await
             .with_context(|| format!("reading body from {url}"))?;
         Ok(bytes.to_vec())
+    })
+}
+
+/// Fetch an artifact whose exact signed-catalog length is already known.
+/// Content-Length is advisory; the streaming counter is authoritative and
+/// aborts before retaining more than the expected bounded payload.
+/// Cancellation is cooperative between chunks.
+/// The signed length remains authoritative; cancellation never leaves a
+/// partially downloaded file because bytes are retained only in memory until
+/// package verification starts.
+pub(super) fn fetch_url_bytes_exact_cancellable(
+    url: &str,
+    expected_bytes: u64,
+    maximum_bytes: u64,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Vec<u8>> {
+    if !url.starts_with("https://") || expected_bytes == 0 || expected_bytes > maximum_bytes {
+        return Err(anyhow!("artifact request is outside its admitted bounds"));
+    }
+    let capacity =
+        usize::try_from(expected_bytes).context("artifact length does not fit this platform")?;
+    runtime_handle().block_on(async {
+        let client = reqwest::Client::builder()
+            .use_rustls_tls()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(FETCH_URL_TIMEOUT)
+            .redirect_policy(reqwest::redirect::Policy::limited(5))
+            .user_agent(format!("Markion/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .context("building plugin artifact HTTP client")?;
+        let mut response = client
+            .get(url)
+            .send()
+            .await
+            .context("requesting plugin artifact")?;
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "plugin artifact server returned HTTP {}",
+                response.status().as_u16()
+            ));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length != expected_bytes)
+        {
+            return Err(anyhow!("plugin artifact length does not match the catalog"));
+        }
+        let mut bytes = Vec::with_capacity(capacity);
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .context("reading plugin artifact body")?
+        {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(anyhow!("plugin artifact download was cancelled"));
+            }
+            let next = bytes
+                .len()
+                .checked_add(chunk.len())
+                .ok_or_else(|| anyhow!("plugin artifact length overflow"))?;
+            if next > capacity {
+                return Err(anyhow!("plugin artifact exceeds its catalog length"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.len() != capacity {
+            return Err(anyhow!("plugin artifact is truncated"));
+        }
+        Ok(bytes)
+    })
+}
+
+/// Fetch a small signed metadata object while enforcing a streaming cap.
+pub(super) fn fetch_url_bytes_bounded(url: &str, maximum_bytes: usize) -> Result<Vec<u8>> {
+    if !url.starts_with("https://") || maximum_bytes == 0 {
+        return Err(anyhow!("metadata request is outside its admitted bounds"));
+    }
+    runtime_handle().block_on(async {
+        let client = reqwest::Client::builder()
+            .use_rustls_tls()
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(FETCH_URL_TIMEOUT)
+            .redirect_policy(reqwest::redirect::Policy::limited(5))
+            .user_agent(format!("Markion/{}", env!("CARGO_PKG_VERSION")))
+            .build()
+            .context("building plugin catalog HTTP client")?;
+        let mut response = client
+            .get(url)
+            .send()
+            .await
+            .context("requesting plugin catalog metadata")?;
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "plugin catalog server returned HTTP {}",
+                response.status().as_u16()
+            ));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > maximum_bytes as u64)
+        {
+            return Err(anyhow!("plugin catalog metadata exceeds its size limit"));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .context("reading plugin catalog metadata")?
+        {
+            let next = bytes
+                .len()
+                .checked_add(chunk.len())
+                .ok_or_else(|| anyhow!("plugin catalog metadata length overflow"))?;
+            if next > maximum_bytes {
+                return Err(anyhow!("plugin catalog metadata exceeds its size limit"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     })
 }
 

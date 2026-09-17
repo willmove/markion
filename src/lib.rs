@@ -236,9 +236,9 @@ pub use block_edit::{
 pub use diagram::{builtin_diagram_registry, diagram_backend_id};
 pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
 pub use i18n::{
-    Language, MarkdownReferenceSection, Msg, P0Msg, P1Msg, ShortcutAction, ShortcutCatalog,
-    ShortcutCategory, ShortcutPlatform, ShortcutSection, markdown_reference, p0_t, p0_tf, p1_t,
-    p1_tf, shortcut_catalog, sidebar_tab_label, t, tf,
+    Language, MarkdownReferenceSection, Msg, P0Msg, P1Msg, PluginMsg, ShortcutAction,
+    ShortcutCatalog, ShortcutCategory, ShortcutPlatform, ShortcutSection, markdown_reference, p0_t,
+    p0_tf, p1_t, p1_tf, plugin_t, plugin_tf, shortcut_catalog, sidebar_tab_label, t, tf,
 };
 pub use math::{render_math, validate_latex};
 pub use parse::{
@@ -252,14 +252,14 @@ pub use storage::{
     FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS, ImportedImage,
     MARKDOWN_EXTENSIONS, OrganizeCandidate, PublishedDocxImport, RecoveryInventoryEntry,
     RecoverySourceState, SupportedPathKind, TEXT_EXTENSIONS, classify_supported_path,
-    delete_recovery_file, document_asset_dir, document_scope_root, image_extension_supported,
-    import_image_bytes, import_image_file, init_logging, inspect_recovery_files, is_markdown_path,
-    is_pdf_path, is_text_path, list_recovery_files, list_theme_definitions, load_app_preferences,
-    load_recovery_file, load_session_state, load_theme_definition, organize_candidates,
-    parse_app_preferences, parse_legacy_app_preferences, parse_session_state,
-    parse_theme_definition, publish_docx_import, render_app_preferences, render_session_state,
-    render_theme_definition, save_app_preferences, save_session_state, save_theme_definition,
-    workspace_relative_path,
+    classify_supported_path_with_plugin_extensions, delete_recovery_file, document_asset_dir,
+    document_scope_root, image_extension_supported, import_image_bytes, import_image_file,
+    init_logging, inspect_recovery_files, is_markdown_path, is_pdf_path, is_text_path,
+    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
+    load_session_state, load_theme_definition, organize_candidates, parse_app_preferences,
+    parse_legacy_app_preferences, parse_session_state, parse_theme_definition, publish_docx_import,
+    render_app_preferences, render_session_state, render_theme_definition, save_app_preferences,
+    save_session_state, save_theme_definition, workspace_relative_path,
 };
 
 pub use table::table_column_flex_weights;

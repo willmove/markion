@@ -18,8 +18,8 @@
 
 ## 3. Supported-Path and Heterogeneous Tab Integration
 
-- [x] 3.1 Introduce one shared `SupportedPathKind::{Document, Image, Pdf}` classifier, add case-insensitive `.pdf` and a PDF icon/file-tree kind, and test every existing document/image extension plus PDF and unsupported binary paths.
-- [x] 3.2 Extend `WorkspaceTab` with `PdfTabState` containing only normalized path, renderer identities, immutable page geometry, virtual-list/scroll state, zoom/current-page state, generation, and loading/error state; preserve `DocumentTabState` and `ImageTabState` internals.
+- [x] 3.1 Introduce one shared registry-backed supported-path classifier, add case-insensitive `.pdf` as a signed plugin handler and PDF icon/file-tree identity, and test every existing document/image extension plus installed and uninstalled PDF states and unsupported binary paths.
+- [x] 3.2 Extend `WorkspaceTab` with generic `PluginDocumentTabState` containing provider/capability identity, normalized path, renderer identities, immutable page geometry, virtual-list/scroll state, zoom/current-page state, generation, and loading/error state; preserve `DocumentTabState` and `ImageTabState` internals.
 - [x] 3.3 Generalize common tab path/title/focus/safe-replacement/navigation/memory helpers and audit exhaustive matches so read-only-content checks include PDF while image-cache lifecycle checks remain image-specific.
 - [x] 3.4 Restrict dirty guards, quit checks, editing/IME/selection/formatting, search, save/autosave/recovery, outline, statistics, view-mode, export, external polling, and Markdown derivation to document tabs; add regression tests proving PDF activation cannot acquire or invalidate document state.
 - [x] 3.5 Extend the central supported-path router for PDF replace/new-tab behavior, duplicate-path focus, normal-form paths, recent files, workspace-root rebasing, and non-destructive open failure; ensure a dirty active document still follows the default open-target policy.
@@ -48,17 +48,17 @@
 - [x] 6.3 Add PDF loading/control/navigation/error/action-unavailable message keys and complete translations in every supported language; extend localization completeness tests and ensure native error text never becomes user-facing copy.
 - [x] 6.4 Add application tests covering all interactive open entry points, mixed-case extensions, duplicate focus, current-tab preference behavior, PDF session restore, recent paths, rename/move/delete, dirty-document coexistence, close/quit, and document cache-identity preservation.
 
-## 7. Native Packaging, Licensing, and Final Size Gates
+## 7. Optional Plugin Packaging, Licensing, and Final Size Gates
 
-- [x] 7.1 Stage exactly one verified PDFium runtime into the installed resource location for each native target and update `packager.toml`/release CI without packaging the acquisition cache, archives, headers, import libraries, fixtures, debug files, other-target runtimes, V8/XFA, JavaScript, or fonts.
-- [x] 7.2 Update `THIRD_PARTY_NOTICES.md` and packaged notices for `pdfium-render`, PDFium, and required transitive notices; add dependency/license checks that reject an incomplete notice set or forbidden runtime feature.
-- [x] 7.3 Extend packaged-resource verification to inspect each NSIS, `.app`/DMG, DEB, and AppImage payload, assert exactly one matching runtime, and load/render a tiny PDF through the exact installed resource-discovery path with no network or external PDF tool.
-- [x] 7.4 Rerun the same-environment control/candidate size matrix after full integration, retain byte-exact reports for every format, and fail unless each compressed delta is at most 6 MiB and each installed/staged delta is at most 10 MiB.
-- [x] 7.5 Review final release dependency/features and largest-file reports; remove unused PDF features/assets and prove no persistent PDF raster cache or runtime download path contributes to installation or user-data storage.
+- [x] 7.1 Build one verified target-specific `dev.markion.pdf` archive for each supported target, containing the official worker, exactly one matching PDFium runtime, signed canonical manifest, and plugin notices while excluding acquisition caches, other-target runtimes, headers, import libraries, fixtures, debug files, V8/XFA, JavaScript, samples, and fonts.
+- [x] 7.2 Move `pdfium-render`, PDFium, and required transitive notices into the optional plugin package; add dependency/license checks that reject incomplete plugin notices, forbidden runtime features, or PDF-only notices in the core package.
+- [x] 7.3 Extend packaged-resource verification to inspect NSIS, `.app`/DMG, DEB, and AppImage payloads, assert that core packages contain the signed bootstrap catalog but no PDF worker/runtime/archive/rollback tree, and separately extract, launch, and render a tiny PDF through the signed plugin package without a network or external PDF tool.
+- [x] 7.4 Rerun same-environment host and plugin size matrices, retain byte-exact reports for every format/target, and fail unless core-host deltas are at most 1 MiB compressed / 2 MiB installed and every PDF plugin is at most 6 MiB compressed / 10 MiB extracted.
+- [x] 7.5 Review final core and plugin dependency/features and largest-file reports; remove the root viewer dependency and packaged PDFium resources, and prove no optional PDF payload, persistent PDF raster cache, or runtime download path contributes to a core installation.
 
 ## 8. Cross-Change Reconciliation and Verification
 
 - [x] 8.1 Re-read and reconcile overlapping path/tab/session requirements from `add-recent-workspace-switcher` and `open-documents-in-current-tab`, preserve the explicit non-goals owned by `add-drag-drop-open` and `support-cli-open-paths`, and validate every affected active change after any rebase.
 - [x] 8.2 Run formatting, `cargo test -p markion-pdf-viewer`, focused root PDF/file-tree/tab/cache/render tests, dependency-tree checks proving the member is GPUI-free, and `cargo test --workspace`; resolve failures without weakening cache or size limits.
-- [x] 8.3 Run `openspec validate add-pdf-document-viewing --strict`, the repository quality gate, and `openspec doctor`; keep all proposal/spec/design/task artifacts consistent with measured behavior and package evidence.
+- [x] 8.3 Validate both `add-pdf-document-viewing` and `add-first-party-plugin-platform`, run the repository quality gate and `openspec doctor`, and keep both changes consistent with measured optional-package behavior and evidence.
 - [ ] 8.4 Manually smoke-test File → Open, Open in New Tab, Open Recent, file-tree/default-target gestures, continuous scrolling, zoom/page navigation, corrupt/encrypted/large files, close during render, offline runtime discovery, and memory stability on Windows x86_64, macOS arm64, Linux X11, and Linux Wayland.

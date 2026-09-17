@@ -745,7 +745,7 @@ impl MarkionApp {
         if self.active_tab().is_read_only() {
             self.status = t(
                 self.language,
-                if self.active_tab().is_pdf() {
+                if self.active_tab().is_plugin_document() {
                     Msg::StatusPdfActionUnavailable
                 } else {
                     Msg::StatusImageActionUnavailable

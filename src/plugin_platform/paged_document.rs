@@ -5,9 +5,11 @@ use std::{
     time::Duration,
 };
 
+#[cfg(test)]
+use markion_plugin_protocol::PAGED_DOCUMENT_CAPABILITY;
 use markion_plugin_protocol::{
-    HostMessage, PAGED_DOCUMENT_CAPABILITY, PageGeometry, PagedDocumentRequest,
-    PagedDocumentResponse, PixelFormat, PluginError, PluginMessage, ProcessResponse,
+    HostMessage, PageGeometry, PagedDocumentRequest, PagedDocumentResponse, PixelFormat,
+    PluginError, PluginMessage, ProcessResponse,
 };
 use thiserror::Error;
 

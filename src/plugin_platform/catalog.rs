@@ -1,7 +1,8 @@
 use std::{fs, sync::Arc};
 
 use markion_plugin_protocol::{
-    PluginCatalog, ProtocolVersion, TargetSpec, canonical_json, verify_minisign,
+    PAGED_DOCUMENT_CAPABILITY, PluginCatalog, ProtocolVersion, TargetSpec, canonical_json,
+    verify_minisign,
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
@@ -12,6 +13,10 @@ use crate::storage::atomic_write;
 use super::PluginStorePaths;
 
 type SignatureVerifier = dyn Fn(&[u8], &[u8]) -> Result<(), PluginCatalogError> + Send + Sync;
+
+const CATALOG_CACHE_MAGIC: &[u8; 8] = b"MKCAT01\0";
+const MAX_CATALOG_BYTES: usize = 1024 * 1024;
+const MAX_CATALOG_SIGNATURE_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CatalogSnapshotSource {
@@ -65,6 +70,7 @@ pub struct CatalogManager {
 }
 
 impl CatalogManager {
+    #[allow(clippy::too_many_arguments)]
     pub fn first_party(
         paths: PluginStorePaths,
         public_key: impl Into<String>,
@@ -93,6 +99,7 @@ impl CatalogManager {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_verifier<F>(
         paths: PluginStorePaths,
         bootstrap_json: impl Into<Arc<[u8]>>,
@@ -128,20 +135,16 @@ impl CatalogManager {
             &self.bootstrap_signature,
             CatalogSnapshotSource::Bootstrap,
         )?;
-        let cached_json = match fs::read(self.paths.catalog_path()) {
+        let cached_bundle = match fs::read(self.paths.catalog_cache_path()) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(bootstrap),
             Err(error) => return Err(error.into()),
         };
-        let cached_signature = match fs::read(self.paths.catalog_signature_path()) {
-            Ok(bytes) => bytes,
+        let (cached_json, cached_signature) = match decode_catalog_cache(&cached_bundle) {
+            Ok(pair) => pair,
             Err(_) => return Ok(bootstrap),
         };
-        match self.verify(
-            &cached_json,
-            &cached_signature,
-            CatalogSnapshotSource::Cached,
-        ) {
+        match self.verify(cached_json, cached_signature, CatalogSnapshotSource::Cached) {
             Ok(cached) if cached.catalog.sequence >= bootstrap.catalog.sequence => Ok(cached),
             _ => Ok(bootstrap),
         }
@@ -173,11 +176,8 @@ impl CatalogManager {
         }
 
         fs::create_dir_all(self.paths.root())?;
-        // Write the signature first and commit the canonical catalog last. A
-        // crash between these writes produces a mismatched pair, which load()
-        // rejects in favor of the signed bootstrap rather than half-activating.
-        atomic_write(self.paths.catalog_signature_path(), signature)?;
-        atomic_write(self.paths.catalog_path(), &candidate.canonical_bytes)?;
+        let cache = encode_catalog_cache(&candidate.canonical_bytes, signature)?;
+        atomic_write(self.paths.catalog_cache_path(), cache)?;
         Ok(CatalogUpdate::Activated {
             sequence: candidate.catalog.sequence,
             sha256: candidate.sha256,
@@ -190,8 +190,14 @@ impl CatalogManager {
         signature: &[u8],
         source: CatalogSnapshotSource,
     ) -> Result<CatalogSnapshot, PluginCatalogError> {
+        if json.len() > MAX_CATALOG_BYTES || signature.len() > MAX_CATALOG_SIGNATURE_BYTES {
+            return Err(PluginCatalogError::CacheFormat);
+        }
         let catalog: PluginCatalog = serde_json::from_slice(json)?;
         let canonical = canonical_json(&catalog)?;
+        if canonical.as_slice() != json {
+            return Err(PluginCatalogError::NonCanonical);
+        }
         (self.verifier)(&canonical, signature)?;
         let locales = self
             .required_locales
@@ -199,6 +205,9 @@ impl CatalogManager {
             .map(String::as_str)
             .collect::<Vec<_>>();
         catalog.validate(&self.host_version, self.protocol, &self.target, &locales)?;
+        if let Some(capability) = unsupported_capability(&catalog) {
+            return Err(PluginCatalogError::UnsupportedCapability(capability));
+        }
         let sha256 = format!("{:x}", Sha256::digest(&canonical));
         Ok(CatalogSnapshot {
             catalog: Arc::new(catalog),
@@ -209,16 +218,82 @@ impl CatalogManager {
     }
 }
 
+pub(super) fn unsupported_capability(catalog: &PluginCatalog) -> Option<String> {
+    catalog
+        .plugins
+        .iter()
+        .flat_map(|plugin| plugin.capabilities.iter())
+        .find(|capability| capability.as_str() != PAGED_DOCUMENT_CAPABILITY)
+        .cloned()
+}
+
+fn encode_catalog_cache(catalog: &[u8], signature: &[u8]) -> Result<Vec<u8>, PluginCatalogError> {
+    if catalog.len() > MAX_CATALOG_BYTES || signature.len() > MAX_CATALOG_SIGNATURE_BYTES {
+        return Err(PluginCatalogError::CacheFormat);
+    }
+    let catalog_len = u32::try_from(catalog.len()).map_err(|_| PluginCatalogError::CacheFormat)?;
+    let signature_len =
+        u32::try_from(signature.len()).map_err(|_| PluginCatalogError::CacheFormat)?;
+    let mut bytes = Vec::with_capacity(
+        CATALOG_CACHE_MAGIC.len() + 8 + catalog.len().saturating_add(signature.len()),
+    );
+    bytes.extend_from_slice(CATALOG_CACHE_MAGIC);
+    bytes.extend_from_slice(&catalog_len.to_le_bytes());
+    bytes.extend_from_slice(&signature_len.to_le_bytes());
+    bytes.extend_from_slice(catalog);
+    bytes.extend_from_slice(signature);
+    Ok(bytes)
+}
+
+fn decode_catalog_cache(bytes: &[u8]) -> Result<(&[u8], &[u8]), PluginCatalogError> {
+    let header_len = CATALOG_CACHE_MAGIC.len() + 8;
+    if bytes.len() < header_len || &bytes[..CATALOG_CACHE_MAGIC.len()] != CATALOG_CACHE_MAGIC {
+        return Err(PluginCatalogError::CacheFormat);
+    }
+    let catalog_len = u32::from_le_bytes(
+        bytes[8..12]
+            .try_into()
+            .map_err(|_| PluginCatalogError::CacheFormat)?,
+    ) as usize;
+    let signature_len = u32::from_le_bytes(
+        bytes[12..16]
+            .try_into()
+            .map_err(|_| PluginCatalogError::CacheFormat)?,
+    ) as usize;
+    if catalog_len > MAX_CATALOG_BYTES || signature_len > MAX_CATALOG_SIGNATURE_BYTES {
+        return Err(PluginCatalogError::CacheFormat);
+    }
+    let catalog_end = header_len
+        .checked_add(catalog_len)
+        .ok_or(PluginCatalogError::CacheFormat)?;
+    let signature_end = catalog_end
+        .checked_add(signature_len)
+        .ok_or(PluginCatalogError::CacheFormat)?;
+    if signature_end != bytes.len() {
+        return Err(PluginCatalogError::CacheFormat);
+    }
+    Ok((
+        &bytes[header_len..catalog_end],
+        &bytes[catalog_end..signature_end],
+    ))
+}
+
 #[derive(Debug, Error)]
 pub enum PluginCatalogError {
     #[error("catalog I/O failure")]
     Io(#[from] std::io::Error),
     #[error("catalog JSON is invalid")]
     Json(#[from] serde_json::Error),
+    #[error("catalog JSON is not canonical")]
+    NonCanonical,
     #[error("catalog validation failed")]
     Validation(#[from] markion_plugin_protocol::ValidationError),
     #[error("catalog signature is invalid")]
     InvalidSignature,
+    #[error("catalog cache has an invalid format")]
+    CacheFormat,
+    #[error("catalog requires unsupported capability {0}")]
+    UnsupportedCapability(String),
     #[error("catalog sequence rolled back from {current} to {candidate}")]
     SequenceRollback { current: u64, candidate: u64 },
     #[error("catalog sequence {0} was reused for different content")]
@@ -266,7 +341,7 @@ mod tests {
                     target: TargetSpec::current(),
                     url: "https://example.invalid/plugin".to_owned(),
                     length: 1,
-                    sha256: "0".repeat(64),
+                    sha256: "1".repeat(64),
                     installed_size_bytes: 1,
                 }],
             }],
@@ -311,19 +386,47 @@ mod tests {
     }
 
     #[test]
-    fn invalid_cached_pair_falls_back_to_bootstrap() {
+    fn invalid_cached_bundle_falls_back_to_bootstrap() {
         let root = tempfile::tempdir().unwrap();
         let manager = manager(root.path(), catalog(1, "dev.markion.pdf"));
         fs::create_dir_all(root.path()).unwrap();
-        fs::write(
-            root.path().join("catalog.json"),
-            catalog(2, "dev.markion.pdf"),
-        )
-        .unwrap();
-        fs::write(root.path().join("catalog.json.minisig"), b"invalid").unwrap();
+        fs::write(root.path().join("catalog.cache"), b"invalid").unwrap();
         let loaded = manager.load().unwrap();
         assert_eq!(loaded.catalog().sequence, 1);
         assert_eq!(loaded.source(), CatalogSnapshotSource::Bootstrap);
+    }
+
+    #[test]
+    fn rejected_refresh_preserves_the_last_verified_cached_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), catalog(1, "dev.markion.pdf"));
+        let next = catalog(2, "dev.markion.pdf");
+        manager.refresh(&next, &signature(&next)).unwrap();
+        let cache_before = fs::read(root.path().join("catalog.cache")).unwrap();
+
+        let invalid = catalog(3, "dev.markion.other");
+        assert!(manager.refresh(&invalid, b"invalid").is_err());
+        assert_eq!(
+            fs::read(root.path().join("catalog.cache")).unwrap(),
+            cache_before
+        );
+        let loaded = manager.load().unwrap();
+        assert_eq!(loaded.catalog().sequence, 2);
+        assert_eq!(loaded.source(), CatalogSnapshotSource::Cached);
+    }
+
+    #[test]
+    fn noncanonical_refresh_is_rejected_before_cache_activation() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), catalog(1, "dev.markion.pdf"));
+        let canonical = catalog(2, "dev.markion.pdf");
+        let value: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
+        let noncanonical = serde_json::to_vec_pretty(&value).unwrap();
+        assert!(matches!(
+            manager.refresh(&noncanonical, &signature(&canonical)),
+            Err(PluginCatalogError::NonCanonical)
+        ));
+        assert!(!root.path().join("catalog.cache").exists());
     }
 
     #[test]
@@ -355,5 +458,24 @@ mod tests {
             manager.load(),
             Err(PluginCatalogError::Validation(_))
         ));
+    }
+
+    #[test]
+    fn unknown_capability_is_rejected_before_cache_activation() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), catalog(1, "dev.markion.pdf"));
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&catalog(2, "dev.markion.publisher")).unwrap();
+        value["plugins"][0]["capabilities"][0] =
+            serde_json::Value::String("publisher-job/v1".to_owned());
+        value["plugins"][0]["file_handlers"] = serde_json::Value::Array(Vec::new());
+        let unsupported = canonical_json(&value).unwrap();
+
+        assert!(matches!(
+            manager.refresh(&unsupported, &signature(&unsupported)),
+            Err(PluginCatalogError::UnsupportedCapability(capability))
+                if capability == "publisher-job/v1"
+        ));
+        assert!(!root.path().join("catalog.cache").exists());
     }
 }

@@ -40,12 +40,12 @@ impl PluginStorePaths {
         self.root.join("staging")
     }
 
-    pub fn catalog_path(&self) -> PathBuf {
-        self.root.join("catalog.json")
-    }
-
-    pub fn catalog_signature_path(&self) -> PathBuf {
-        self.root.join("catalog.json.minisig")
+    /// Atomically replaced cache containing both the canonical catalog and
+    /// its detached signature. Keeping the pair in one file prevents a crash
+    /// between two independent replacements from discarding the last verified
+    /// remote snapshot.
+    pub fn catalog_cache_path(&self) -> PathBuf {
+        self.root.join("catalog.cache")
     }
 
     pub fn plugin_root(&self, plugin_id: &str) -> Result<PathBuf, PluginStoreError> {
@@ -306,6 +306,14 @@ impl PluginStore {
         if enabled && state.active.is_none() {
             return Err(PluginStoreError::NoActiveVersion);
         }
+        if enabled
+            && state
+                .active
+                .as_ref()
+                .is_some_and(|active| state.quarantine.contains_key(&active.version))
+        {
+            return Err(PluginStoreError::VersionQuarantined);
+        }
         state.enabled = enabled;
         self.write_state(&state)?;
         Ok(state)
@@ -317,6 +325,9 @@ impl PluginStore {
             .rollback
             .take()
             .ok_or(PluginStoreError::NoRollbackVersion)?;
+        if state.quarantine.contains_key(&rollback.version) {
+            return Err(PluginStoreError::VersionQuarantined);
+        }
         let active = state.active.replace(rollback);
         state.rollback = active;
         state.enabled = true;
@@ -523,6 +534,8 @@ pub enum PluginStoreError {
     NoActiveVersion,
     #[error("plugin has no rollback version")]
     NoRollbackVersion,
+    #[error("plugin version is quarantined")]
+    VersionQuarantined,
     #[error("plugin store path escaped its root")]
     PathEscape,
     #[error("plugin health check failed")]

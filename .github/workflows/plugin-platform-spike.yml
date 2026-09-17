@@ -222,7 +222,7 @@ jobs:
             ./scripts/build-pdf-plugin-prototype.ps1 `
               -WorkerPath (Join-Path $PWD "target/release/markion-plugin-pdf$suffix") `
               -RuntimePath $stage.runtime_path `
-              -NoticePath (Join-Path $PWD 'THIRD_PARTY_NOTICES.md') `
+              -NoticePath (Join-Path $PWD 'crates/pdf-plugin/THIRD_PARTY_NOTICES.md') `
               -TargetTriple '${{ matrix.target }}' `
               -SecretKeyPath (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.key') `
               -PublicKeyPath (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.pub') `
@@ -230,8 +230,11 @@ jobs:
           )
           $pdfReport = $pdfOutput[-1] | ConvertFrom-Json
           $inspector = Join-Path $PWD "target/release/plugin-package-inspect$suffix"
-          & $inspector $pdfReport.archive_path (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.pub')
-          if ($LASTEXITCODE -ne 0) { throw 'Signed PDF prototype inspection failed.' }
+          $smokePath = Join-Path $PWD 'target/plugin-platform-spike/pdf/one-page-smoke.pdf'
+          $encodedFixture = (Get-Content crates/pdf-viewer/tests/fixtures/one-page-embedded.pdf.b64 -Raw) -replace '\s', ''
+          [IO.File]::WriteAllBytes($smokePath, [Convert]::FromBase64String($encodedFixture))
+          & $inspector $pdfReport.archive_path (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.pub') (Join-Path $PWD 'target/plugin-platform-spike/pdf/verified 插件 extract') $smokePath
+          if ($LASTEXITCODE -ne 0) { throw 'Signed PDF prototype inspection or extracted health check failed.' }
 
       - name: Create the immutable host-size control worktree
         shell: pwsh

@@ -809,6 +809,7 @@ impl MarkionApp {
             | PaneScrollTarget::PreferencesShortcutCategories
             | PaneScrollTarget::PreferencesShortcutActions
             | PaneScrollTarget::PreferencesExport
+            | PaneScrollTarget::PreferencesPlugins
             | PaneScrollTarget::FileTree
             | PaneScrollTarget::Outline
             | PaneScrollTarget::MarkdownReference => return,

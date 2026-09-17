@@ -559,7 +559,7 @@ pub(super) fn compact_history_entry(older: &EditorSnapshot, newer_text: &str) ->
 pub(super) enum WorkspaceTab {
     Document(DocumentTabState),
     Image(ImageTabState),
-    Pdf(PdfTabState),
+    PluginDocument(PluginDocumentTabState),
 }
 
 /// Presentation-only identity for the source editor geometry used by
@@ -718,12 +718,12 @@ impl ImageTabState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum PdfZoomMode {
+pub(super) enum PagedDocumentZoomMode {
     FitWidth,
     Percent(f32),
 }
 
-impl PdfZoomMode {
+impl PagedDocumentZoomMode {
     pub(super) const MIN_PERCENT: f32 = 25.0;
     pub(super) const MAX_PERCENT: f32 = 400.0;
 
@@ -740,41 +740,50 @@ impl PdfZoomMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PdfLoadState {
+pub(super) enum PagedDocumentLoadState {
     Loading,
     Ready,
-    Error(PdfErrorKind),
+    Error(PagedHostError),
 }
 
-/// Read-only, transient PDF presentation state. Native handles and source
-/// bytes remain owned by the GPUI-free renderer service.
-pub(super) struct PdfTabState {
+/// Read-only, transient paged-document presentation state. Native handles and
+/// source bytes remain owned by the selected out-of-process provider.
+pub(super) struct PluginDocumentTabState {
+    pub(super) plugin_id: String,
+    pub(super) capability: String,
     pub(super) path: PathBuf,
-    pub(super) request_id: RequestId,
-    pub(super) document_id: Option<DocumentId>,
-    pub(super) generation: Generation,
-    pub(super) pages: std::sync::Arc<[PageGeometry]>,
+    pub(super) request_id: PagedRequestId,
+    pub(super) document_id: Option<PagedDocumentId>,
+    pub(super) generation: PagedGeneration,
+    pub(super) pages: std::sync::Arc<[PagedPageGeometry]>,
     pub(super) page_scroll: ScrollHandle,
     pub(super) page_layout: std::sync::Arc<[PdfPagePlacement]>,
     pub(super) page_content_height: Pixels,
     pub(super) visible_range: Range<usize>,
-    pub(super) layout_zoom: Option<PdfZoomMode>,
+    pub(super) layout_zoom: Option<PagedDocumentZoomMode>,
     pub(super) layout_viewport_width: Pixels,
-    pub(super) zoom: PdfZoomMode,
+    pub(super) zoom: PagedDocumentZoomMode,
     pub(super) current_page: usize,
     pub(super) viewport_width: Pixels,
     pub(super) display_scale: f32,
-    pub(super) load_state: PdfLoadState,
+    pub(super) load_state: PagedDocumentLoadState,
     pub(super) claimed_pages: HashSet<PdfPageKey>,
 }
 
-impl PdfTabState {
-    pub(super) fn new(path: PathBuf, request_id: RequestId) -> Self {
+impl PluginDocumentTabState {
+    pub(super) fn new(
+        plugin_id: String,
+        capability: String,
+        path: PathBuf,
+        request_id: PagedRequestId,
+    ) -> Self {
         Self {
+            plugin_id,
+            capability,
             path,
             request_id,
             document_id: None,
-            generation: Generation(1),
+            generation: PagedGeneration(1),
             pages: std::sync::Arc::from([]),
             page_scroll: ScrollHandle::new(),
             page_layout: std::sync::Arc::from([]),
@@ -782,18 +791,18 @@ impl PdfTabState {
             visible_range: 0..0,
             layout_zoom: None,
             layout_viewport_width: px(0.),
-            zoom: PdfZoomMode::FitWidth,
+            zoom: PagedDocumentZoomMode::FitWidth,
             current_page: 0,
             viewport_width: px(0.),
             display_scale: 1.0,
-            load_state: PdfLoadState::Loading,
+            load_state: PagedDocumentLoadState::Loading,
             claimed_pages: HashSet::new(),
         }
     }
 
     pub(super) fn presentation_memory_bytes(&self) -> usize {
         self.path.as_os_str().len()
-            + self.pages.len() * std::mem::size_of::<PageGeometry>()
+            + self.pages.len() * std::mem::size_of::<PagedPageGeometry>()
             + self.page_layout.len() * std::mem::size_of::<PdfPagePlacement>()
             + self.claimed_pages.capacity() * std::mem::size_of::<PdfPageKey>()
             + std::mem::size_of::<Self>()
@@ -985,15 +994,25 @@ impl WorkspaceTab {
         })
     }
 
-    pub(super) fn new_pdf(path: PathBuf, request_id: RequestId) -> Self {
-        Self::Pdf(PdfTabState::new(path, request_id))
+    pub(super) fn new_plugin_document(
+        plugin_id: impl Into<String>,
+        capability: impl Into<String>,
+        path: PathBuf,
+        request_id: PagedRequestId,
+    ) -> Self {
+        Self::PluginDocument(PluginDocumentTabState::new(
+            plugin_id.into(),
+            capability.into(),
+            path,
+            request_id,
+        ))
     }
 
     pub(super) fn path(&self) -> Option<&Path> {
         match self {
             Self::Document(tab) => tab.document.path(),
             Self::Image(image) => Some(&image.path),
-            Self::Pdf(pdf) => Some(&pdf.path),
+            Self::PluginDocument(document) => Some(&document.path),
         }
     }
 
@@ -1013,8 +1032,8 @@ impl WorkspaceTab {
         matches!(self, Self::Document(_))
     }
 
-    pub(super) fn is_pdf(&self) -> bool {
-        matches!(self, Self::Pdf(_))
+    pub(super) fn is_plugin_document(&self) -> bool {
+        matches!(self, Self::PluginDocument(_))
     }
 
     pub(super) fn is_read_only(&self) -> bool {
@@ -1045,41 +1064,41 @@ impl WorkspaceTab {
     pub(super) fn document_tab(&self) -> Option<&DocumentTabState> {
         match self {
             Self::Document(tab) => Some(tab),
-            Self::Image(_) | Self::Pdf(_) => None,
+            Self::Image(_) | Self::PluginDocument(_) => None,
         }
     }
 
     pub(super) fn document_tab_mut(&mut self) -> Option<&mut DocumentTabState> {
         match self {
             Self::Document(tab) => Some(tab),
-            Self::Image(_) | Self::Pdf(_) => None,
+            Self::Image(_) | Self::PluginDocument(_) => None,
         }
     }
 
     pub(super) fn image(&self) -> Option<&ImageTabState> {
         match self {
             Self::Image(image) => Some(image),
-            Self::Document(_) | Self::Pdf(_) => None,
+            Self::Document(_) | Self::PluginDocument(_) => None,
         }
     }
 
     pub(super) fn image_mut(&mut self) -> Option<&mut ImageTabState> {
         match self {
             Self::Image(image) => Some(image),
-            Self::Document(_) | Self::Pdf(_) => None,
+            Self::Document(_) | Self::PluginDocument(_) => None,
         }
     }
 
-    pub(super) fn pdf(&self) -> Option<&PdfTabState> {
+    pub(super) fn plugin_document(&self) -> Option<&PluginDocumentTabState> {
         match self {
-            Self::Pdf(pdf) => Some(pdf),
+            Self::PluginDocument(document) => Some(document),
             Self::Document(_) | Self::Image(_) => None,
         }
     }
 
-    pub(super) fn pdf_mut(&mut self) -> Option<&mut PdfTabState> {
+    pub(super) fn plugin_document_mut(&mut self) -> Option<&mut PluginDocumentTabState> {
         match self {
-            Self::Pdf(pdf) => Some(pdf),
+            Self::PluginDocument(document) => Some(document),
             Self::Document(_) | Self::Image(_) => None,
         }
     }
@@ -1094,7 +1113,7 @@ impl WorkspaceTab {
                     HashSet::new()
                 }
             }
-            Self::Pdf(_) => HashSet::new(),
+            Self::PluginDocument(_) => HashSet::new(),
         }
     }
 
@@ -1111,7 +1130,7 @@ impl WorkspaceTab {
                     HashSet::new()
                 }
             }
-            Self::Pdf(_) => HashSet::new(),
+            Self::PluginDocument(_) => HashSet::new(),
         }
     }
 
@@ -2351,6 +2370,7 @@ pub(super) fn should_restore_session(intent: &StartupOpenIntent) -> bool {
 /// Filter a loaded session down to paths that still exist and are usable.
 pub(super) fn filter_restorable_session(
     session: &SessionState,
+    plugin_extensions: &[String],
 ) -> (Option<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
     let current = session.current_workspace();
     let workspace_root = current
@@ -2363,7 +2383,10 @@ pub(super) fn filter_restorable_session(
         .unwrap_or(session.open_files.as_slice());
     let open_files: Vec<PathBuf> = candidate_files
         .iter()
-        .filter(|path| path.is_file() && classify_supported_path(path).is_some())
+        .filter(|path| {
+            path.is_file()
+                && classify_supported_path_with_plugin_extensions(path, plugin_extensions).is_some()
+        })
         .cloned()
         .collect();
     let active_candidate = current

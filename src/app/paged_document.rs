@@ -1,15 +1,11 @@
-//! Root-crate PDF presentation integration.
+//! Host-owned paged-document presentation integration.
 //!
-//! The native renderer and its document handles live in the GPUI-free
-//! `markion-pdf-viewer` member. This module owns only application scheduling,
-//! bounded GPUI image caching, and the PDF surface.
+//! Native renderers and document handles remain in signed provider processes.
+//! This module owns only application scheduling, bounded GPUI image caching,
+//! and the reusable paged surface currently used by the official PDF plugin.
 
 use super::*;
 use image::{Frame, RgbaImage};
-use markion_pdf_viewer::{
-    MAX_RASTER_BYTES, OpenRequest, PdfEvent, PdfService, RenderPriority, RenderRequest,
-    RuntimeDiscoveryError, discover_runtime, target_width_bucket,
-};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) const PDF_CACHE_MAX_BYTES: usize = 64 * 1_048_576;
@@ -29,8 +25,8 @@ pub(super) struct PdfPagePlacement {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(super) struct PdfPageKey {
-    pub(super) document_id: DocumentId,
-    pub(super) generation: Generation,
+    pub(super) document_id: PagedDocumentId,
+    pub(super) generation: PagedGeneration,
     pub(super) page_index: u32,
     pub(super) width_bucket_px: u32,
 }
@@ -47,7 +43,7 @@ pub(super) struct PdfPageReady {
 pub(super) enum PdfPageEntry {
     Pending,
     Ready(PdfPageReady),
-    Error(PdfErrorKind),
+    Error(PagedHostError),
 }
 
 pub(super) struct PdfPageCache {
@@ -132,13 +128,13 @@ impl PdfPageCache {
         if self.completed_bytes > PDF_CACHE_MAX_BYTES + MAX_RASTER_BYTES {
             self.remove_entry(&key, &mut dropped);
             self.entries
-                .insert(key, PdfPageEntry::Error(PdfErrorKind::RasterTooLarge));
+                .insert(key, PdfPageEntry::Error(PagedHostError::RasterTooLarge));
             self.completed_order.push_back(key);
         }
         dropped
     }
 
-    pub(super) fn fail(&mut self, key: PdfPageKey, error: PdfErrorKind) -> Vec<Arc<RenderImage>> {
+    pub(super) fn fail(&mut self, key: PdfPageKey, error: PagedHostError) -> Vec<Arc<RenderImage>> {
         let mut dropped = Vec::new();
         self.remove_completed(&key, &mut dropped);
         self.entries.insert(key, PdfPageEntry::Error(error));
@@ -155,7 +151,10 @@ impl PdfPageCache {
         dropped
     }
 
-    pub(super) fn remove_document(&mut self, document_id: DocumentId) -> Vec<Arc<RenderImage>> {
+    pub(super) fn remove_document(
+        &mut self,
+        document_id: PagedDocumentId,
+    ) -> Vec<Arc<RenderImage>> {
         let keys = self
             .entries
             .keys()
@@ -243,15 +242,15 @@ impl PdfPageCache {
 }
 
 pub(super) fn pdf_page_layout(
-    geometry: PageGeometry,
-    zoom: PdfZoomMode,
+    geometry: PagedPageGeometry,
+    zoom: PagedDocumentZoomMode,
     viewport_width: f32,
     display_scale: f32,
 ) -> (f32, f32, u32) {
     let available_width = (viewport_width - 48.0).max(1.0);
     let logical_width = match zoom {
-        PdfZoomMode::FitWidth => available_width,
-        PdfZoomMode::Percent(percent) => geometry.width_points * percent / 100.0,
+        PagedDocumentZoomMode::FitWidth => available_width,
+        PagedDocumentZoomMode::Percent(percent) => geometry.width_points * percent / 100.0,
     }
     .max(1.0);
     let logical_height = logical_width * geometry.height_points / geometry.width_points;
@@ -260,8 +259,8 @@ pub(super) fn pdf_page_layout(
 }
 
 pub(super) fn pdf_page_placements(
-    pages: &[PageGeometry],
-    zoom: PdfZoomMode,
+    pages: &[PagedPageGeometry],
+    zoom: PagedDocumentZoomMode,
     viewport_width: f32,
     display_scale: f32,
 ) -> (Vec<PdfPagePlacement>, f32) {
@@ -316,60 +315,37 @@ pub(super) fn pdf_prefetch_range(page_count: usize, visible: Range<usize>) -> Ra
     visible_start.saturating_sub(1)..visible_end.saturating_add(1).min(page_count)
 }
 
-fn next_pdf_request_id() -> RequestId {
+fn next_pdf_request_id() -> PagedRequestId {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    RequestId(NEXT.fetch_add(1, Ordering::Relaxed))
+    PagedRequestId(NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
-fn pdf_resource_root() -> PathBuf {
-    if let Some(logo) = bundled_resource_path("assets/markion.png")
-        && let Some(root) = logo.parent().and_then(Path::parent)
-    {
-        return root.to_path_buf();
-    }
-    env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-fn map_runtime_error(error: RuntimeDiscoveryError) -> PdfErrorKind {
+pub(super) fn pdf_error_message(error: PagedHostError) -> Msg {
     match error {
-        RuntimeDiscoveryError::Missing(_) | RuntimeDiscoveryError::NotAFile(_) => {
-            PdfErrorKind::RuntimeMissing
-        }
-        RuntimeDiscoveryError::DeveloperOverrideForbidden | RuntimeDiscoveryError::LoadFailed => {
-            PdfErrorKind::RuntimeUnavailable
-        }
-    }
-}
-
-pub(super) fn pdf_error_message(error: PdfErrorKind) -> Msg {
-    match error {
-        PdfErrorKind::RuntimeMissing => Msg::PdfErrorRuntimeMissing,
-        PdfErrorKind::RuntimeUnavailable | PdfErrorKind::ServiceStopped => {
+        PagedHostError::ProviderMissing => Msg::PdfErrorRuntimeMissing,
+        PagedHostError::ProviderUnavailable | PagedHostError::ServiceStopped => {
             Msg::PdfErrorRuntimeUnavailable
         }
-        PdfErrorKind::FileUnavailable => Msg::PdfErrorFileUnavailable,
-        PdfErrorKind::SourceTooLarge => Msg::PdfErrorSourceTooLarge,
-        PdfErrorKind::PageLimitExceeded => Msg::PdfErrorPageLimit,
-        PdfErrorKind::Encrypted => Msg::PdfErrorEncrypted,
-        PdfErrorKind::CorruptOrUnsupported
-        | PdfErrorKind::InvalidPageGeometry
-        | PdfErrorKind::InvalidPageNumber => Msg::PdfErrorCorrupt,
-        PdfErrorKind::PageUnavailable
-        | PdfErrorKind::RasterTooLarge
-        | PdfErrorKind::InvalidRaster => Msg::PdfErrorPageUnavailable,
-        PdfErrorKind::QueueFull | PdfErrorKind::StaleRequest | PdfErrorKind::Internal => {
+        PagedHostError::FileUnavailable => Msg::PdfErrorFileUnavailable,
+        PagedHostError::SourceTooLarge => Msg::PdfErrorSourceTooLarge,
+        PagedHostError::PageLimitExceeded => Msg::PdfErrorPageLimit,
+        PagedHostError::Encrypted => Msg::PdfErrorEncrypted,
+        PagedHostError::CorruptOrUnsupported
+        | PagedHostError::InvalidPageGeometry
+        | PagedHostError::InvalidPageNumber => Msg::PdfErrorCorrupt,
+        PagedHostError::RasterTooLarge | PagedHostError::InvalidRaster => {
+            Msg::PdfErrorPageUnavailable
+        }
+        PagedHostError::QueueFull | PagedHostError::StaleRequest | PagedHostError::Internal => {
             Msg::PdfErrorGeneric
         }
     }
 }
 
-fn raster_to_ready(raster: markion_pdf_viewer::PageRaster) -> Result<PdfPageReady, PdfErrorKind> {
+fn raster_to_ready(raster: PagedRaster) -> Result<PdfPageReady, PagedHostError> {
     let byte_len = raster.byte_len();
     let buffer = RgbaImage::from_raw(raster.width_px, raster.height_px, raster.rgba)
-        .ok_or(PdfErrorKind::InvalidRaster)?;
+        .ok_or(PagedHostError::InvalidRaster)?;
     Ok(PdfPageReady {
         image: Arc::new(RenderImage::new(vec![Frame::new(buffer)])),
         byte_len,
@@ -379,32 +355,141 @@ fn raster_to_ready(raster: markion_pdf_viewer::PageRaster) -> Result<PdfPageRead
 }
 
 impl MarkionApp {
-    pub(super) fn editor_tab_for_pdf(&self, path: PathBuf) -> EditorTab {
-        EditorTab::new_pdf(comparable_document_path(&path), next_pdf_request_id())
+    pub(super) fn reload_plugin_documents(
+        &mut self,
+        plugin_id: &str,
+        unavailable: Option<PagedHostError>,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .paged_document_provider
+            .as_ref()
+            .is_some_and(|(active, _)| active == plugin_id)
+        {
+            self.paged_document_service.take();
+            self.paged_document_provider = None;
+        }
+        self.paged_document_service_error = unavailable;
+        let indices = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| {
+                tab.plugin_document()
+                    .is_some_and(|document| document.plugin_id == plugin_id)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        for index in &indices {
+            self.release_tab_pdf_claims(*index, cx);
+            let document_id = self.tabs[*index]
+                .plugin_document()
+                .and_then(|document| document.document_id);
+            if let Some(document_id) = document_id {
+                for image in self.pdf_page_cache.remove_document(document_id) {
+                    cx.drop_image(image, None);
+                }
+            }
+            if let Some(document) = self.tabs[*index].plugin_document_mut() {
+                document.document_id = None;
+                document.pages = Arc::from([]);
+                document.page_layout = Arc::from([]);
+                document.page_content_height = px(0.);
+                document.visible_range = 0..0;
+                document.generation = PagedGeneration(document.generation.0.wrapping_add(1).max(1));
+                document.load_state = unavailable.map_or(
+                    PagedDocumentLoadState::Loading,
+                    PagedDocumentLoadState::Error,
+                );
+            }
+        }
+        if unavailable.is_none() {
+            for index in indices {
+                self.begin_pdf_open(index, cx);
+            }
+        }
+        cx.notify();
     }
 
-    pub(super) fn open_pdf_in_new_tab(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let tab = self.editor_tab_for_pdf(path);
+    pub(super) fn editor_tab_for_plugin_document(
+        &self,
+        plugin_id: impl Into<String>,
+        capability: impl Into<String>,
+        path: PathBuf,
+    ) -> EditorTab {
+        EditorTab::new_plugin_document(
+            plugin_id,
+            capability,
+            comparable_document_path(&path),
+            next_pdf_request_id(),
+        )
+    }
+
+    pub(super) fn open_plugin_document_in_new_tab(
+        &mut self,
+        path: PathBuf,
+        plugin_id: impl Into<String>,
+        capability: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = self.editor_tab_for_plugin_document(plugin_id, capability, path);
         self.open_tab_in_new_tab(tab, cx);
         self.begin_pdf_open(self.active_tab, cx);
     }
 
-    pub(super) fn replace_active_tab_with_pdf(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let tab = self.editor_tab_for_pdf(path);
+    pub(super) fn replace_active_tab_with_plugin_document(
+        &mut self,
+        path: PathBuf,
+        plugin_id: impl Into<String>,
+        capability: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = self.editor_tab_for_plugin_document(plugin_id, capability, path);
         self.replace_active_with_tab(tab, cx);
         self.begin_pdf_open(self.active_tab, cx);
     }
 
-    fn ensure_pdf_service(&mut self) -> Result<(), PdfErrorKind> {
-        if self.pdf_service.is_some() {
+    fn ensure_paged_document_service(
+        &mut self,
+        plugin_id: &str,
+        capability: &str,
+    ) -> Result<(), PagedHostError> {
+        if self.paged_document_service.is_some()
+            && self.paged_document_provider.as_ref().is_some_and(
+                |(active_plugin, active_capability)| {
+                    active_plugin == plugin_id && active_capability == capability
+                },
+            )
+        {
             return Ok(());
         }
-        if let Some(error) = self.pdf_service_error {
-            return Err(error);
+        if self.paged_document_service.is_some() {
+            return Err(PagedHostError::ProviderUnavailable);
         }
-        let runtime = discover_runtime(pdf_resource_root()).map_err(map_runtime_error)?;
-        let service = PdfService::start_native(runtime)?;
-        self.pdf_service = Some(service);
+        self.plugin_ui.ensure_initialized(self.language);
+        let installed = self
+            .plugin_ui
+            .entries
+            .iter()
+            .find(|entry| entry.plugin_id == plugin_id)
+            .is_some_and(|entry| entry.active_version.is_some());
+        let manager = self.plugin_ui.manager().ok_or(if installed {
+            PagedHostError::ProviderUnavailable
+        } else {
+            PagedHostError::ProviderMissing
+        })?;
+        let session = manager
+            .start_capability(plugin_id, capability)
+            .map_err(|_| {
+                if installed {
+                    PagedHostError::ProviderUnavailable
+                } else {
+                    PagedHostError::ProviderMissing
+                }
+            })?;
+        self.paged_document_service = Some(PagedDocumentService::start(session));
+        self.paged_document_provider = Some((plugin_id.to_owned(), capability.to_owned()));
+        self.paged_document_service_error = None;
         Ok(())
     }
 
@@ -412,26 +497,39 @@ impl MarkionApp {
         let Some(request) = self
             .tabs
             .get(tab_index)
-            .and_then(|tab| tab.pdf())
-            .map(|pdf| OpenRequest {
-                request_id: pdf.request_id,
-                path: pdf.path.clone(),
+            .and_then(|tab| tab.plugin_document())
+            .map(|document| {
+                (
+                    document.plugin_id.clone(),
+                    document.capability.clone(),
+                    PagedOpenRequest {
+                        request_id: document.request_id,
+                        path: document.path.clone(),
+                    },
+                )
             })
         else {
             return;
         };
-        let result = self.ensure_pdf_service().and_then(|()| {
-            self.pdf_service
-                .as_ref()
-                .unwrap()
-                .open(request.clone())
-                .map(|_| ())
-        });
+        let (plugin_id, capability, request) = request;
+        let result = self
+            .ensure_paged_document_service(&plugin_id, &capability)
+            .and_then(|()| {
+                self.paged_document_service
+                    .as_ref()
+                    .unwrap()
+                    .open(request.clone())
+                    .map(|_| ())
+            });
         if let Err(error) = result {
-            if let Some(pdf) = self.tabs.get_mut(tab_index).and_then(|tab| tab.pdf_mut()) {
-                pdf.load_state = PdfLoadState::Error(error);
+            if let Some(pdf) = self
+                .tabs
+                .get_mut(tab_index)
+                .and_then(|tab| tab.plugin_document_mut())
+            {
+                pdf.load_state = PagedDocumentLoadState::Error(error);
             }
-            self.pdf_service_error = Some(error);
+            self.paged_document_service_error = Some(error);
             cx.notify();
             return;
         }
@@ -439,14 +537,14 @@ impl MarkionApp {
     }
 
     pub(super) fn schedule_pdf_event_poll(&mut self, cx: &mut Context<Self>) {
-        if self.pdf_event_poll_scheduled || self.pdf_service.is_none() {
+        if self.paged_document_event_poll_scheduled || self.paged_document_service.is_none() {
             return;
         }
-        self.pdf_event_poll_scheduled = true;
+        self.paged_document_event_poll_scheduled = true;
         cx.spawn(async move |this, cx| {
             Timer::after(PDF_EVENT_POLL_INTERVAL).await;
             let _ = this.update(cx, |app, cx| {
-                app.pdf_event_poll_scheduled = false;
+                app.paged_document_event_poll_scheduled = false;
                 app.drain_pdf_events(cx);
                 if app.pdf_has_pending_work() {
                     app.schedule_pdf_event_poll(cx);
@@ -458,15 +556,15 @@ impl MarkionApp {
 
     fn pdf_has_pending_work(&self) -> bool {
         self.tabs.iter().any(|tab| {
-            tab.pdf()
-                .is_some_and(|pdf| matches!(pdf.load_state, PdfLoadState::Loading))
+            tab.plugin_document()
+                .is_some_and(|pdf| matches!(pdf.load_state, PagedDocumentLoadState::Loading))
         }) || self.pdf_page_cache.pending_count() > 0
     }
 
     fn drain_pdf_events(&mut self, cx: &mut Context<Self>) {
         loop {
             let event = self
-                .pdf_service
+                .paged_document_service
                 .as_ref()
                 .and_then(|service| service.try_recv().ok());
             let Some(event) = event else {
@@ -476,52 +574,49 @@ impl MarkionApp {
         }
     }
 
-    pub(super) fn apply_pdf_event(&mut self, event: PdfEvent, cx: &mut Context<Self>) {
+    pub(super) fn apply_pdf_event(&mut self, event: PagedHostEvent, cx: &mut Context<Self>) {
         match event {
-            PdfEvent::ServiceReady => {}
-            PdfEvent::ServiceFailed(error) => {
-                self.pdf_service_error = Some(error);
-                for tab in &mut self.tabs {
-                    if let Some(pdf) = tab.pdf_mut()
-                        && matches!(pdf.load_state, PdfLoadState::Loading)
-                    {
-                        pdf.load_state = PdfLoadState::Error(error);
-                    }
-                }
-            }
-            PdfEvent::Opened(opened) => {
-                let opened_path = comparable_document_path(&opened.path);
+            PagedHostEvent::ServiceReady => {}
+            PagedHostEvent::Opened {
+                request,
+                document_id,
+                path,
+                pages,
+            } => {
+                let opened_path = comparable_document_path(&path);
                 let Some(index) = self.tabs.iter().position(|tab| {
-                    tab.pdf().is_some_and(|pdf| {
-                        pdf.path == opened_path && matches!(pdf.load_state, PdfLoadState::Loading)
+                    tab.plugin_document().is_some_and(|pdf| {
+                        pdf.request_id == request.request_id
+                            && pdf.path == opened_path
+                            && matches!(pdf.load_state, PagedDocumentLoadState::Loading)
                     })
                 }) else {
-                    if let Some(service) = &self.pdf_service {
-                        let _ = service.close(opened.document_id);
+                    if let Some(service) = &self.paged_document_service {
+                        let _ = service.close(document_id);
                     }
                     return;
                 };
-                if let Some(pdf) = self.tabs[index].pdf_mut() {
-                    pdf.document_id = Some(opened.document_id);
-                    pdf.pages = Arc::from(opened.pages);
+                if let Some(pdf) = self.tabs[index].plugin_document_mut() {
+                    pdf.document_id = Some(document_id);
+                    pdf.pages = Arc::from(pages);
                     pdf.page_layout = Arc::from([]);
                     pdf.page_content_height = px(0.);
                     pdf.visible_range = 0..0;
                     pdf.page_scroll.set_offset(point(px(0.), px(0.)));
-                    pdf.load_state = PdfLoadState::Ready;
+                    pdf.load_state = PagedDocumentLoadState::Ready;
                     pdf.current_page = 0;
                 }
                 self.schedule_pdf_visible_range(index, 0..1, cx);
             }
-            PdfEvent::OpenFailed { request, error } => {
+            PagedHostEvent::OpenFailed { request, error } => {
                 if let Some(pdf) = self.tabs.iter_mut().find_map(|tab| {
-                    tab.pdf_mut()
+                    tab.plugin_document_mut()
                         .filter(|pdf| pdf.request_id == request.request_id)
                 }) {
-                    pdf.load_state = PdfLoadState::Error(error);
+                    pdf.load_state = PagedDocumentLoadState::Error(error);
                 }
             }
-            PdfEvent::PageReady { request, raster } => {
+            PagedHostEvent::PageReady { request, raster } => {
                 let key = PdfPageKey {
                     document_id: request.document_id,
                     generation: request.generation,
@@ -529,7 +624,7 @@ impl MarkionApp {
                     width_bucket_px: request.target_width_px,
                 };
                 let current = self.tabs.iter().any(|tab| {
-                    tab.pdf().is_some_and(|pdf| {
+                    tab.plugin_document().is_some_and(|pdf| {
                         pdf.document_id == Some(request.document_id)
                             && pdf.generation == request.generation
                             && pdf.claimed_pages.contains(&key)
@@ -550,7 +645,7 @@ impl MarkionApp {
                     }
                 }
             }
-            PdfEvent::PageFailed { request, error } => {
+            PagedHostEvent::PageFailed { request, error } => {
                 let key = PdfPageKey {
                     document_id: request.document_id,
                     generation: request.generation,
@@ -558,7 +653,7 @@ impl MarkionApp {
                     width_bucket_px: request.target_width_px,
                 };
                 if self.tabs.iter().any(|tab| {
-                    tab.pdf().is_some_and(|pdf| {
+                    tab.plugin_document().is_some_and(|pdf| {
                         pdf.document_id == Some(request.document_id)
                             && pdf.generation == request.generation
                             && pdf.claimed_pages.contains(&key)
@@ -569,7 +664,7 @@ impl MarkionApp {
                     }
                 }
             }
-            PdfEvent::Closed(_) => {}
+            PagedHostEvent::Closed(_) => {}
         }
         cx.notify();
     }
@@ -584,22 +679,26 @@ impl MarkionApp {
         let changed = self
             .tabs
             .get(index)
-            .and_then(|tab| tab.pdf())
+            .and_then(|tab| tab.plugin_document())
             .is_some_and(|pdf| {
-                matches!(pdf.zoom, PdfZoomMode::FitWidth)
+                matches!(pdf.zoom, PagedDocumentZoomMode::FitWidth)
                     && (f32::from(pdf.viewport_width) - f32::from(viewport_width)).abs() >= 1.0
             });
         if changed {
             self.invalidate_pdf_generation(index, cx);
         }
-        let Some(pdf) = self.tabs.get_mut(index).and_then(|tab| tab.pdf_mut()) else {
+        let Some(pdf) = self
+            .tabs
+            .get_mut(index)
+            .and_then(|tab| tab.plugin_document_mut())
+        else {
             return;
         };
         pdf.viewport_width = viewport_width;
         pdf.display_scale = display_scale.max(1.0);
         let layout_changed = pdf.page_layout.len() != pdf.pages.len()
             || pdf.layout_zoom != Some(pdf.zoom)
-            || (matches!(pdf.zoom, PdfZoomMode::FitWidth)
+            || (matches!(pdf.zoom, PagedDocumentZoomMode::FitWidth)
                 && (f32::from(pdf.layout_viewport_width) - f32::from(viewport_width)).abs() >= 1.0);
         if layout_changed {
             let anchor = pdf.current_page.min(pdf.pages.len().saturating_sub(1));
@@ -633,10 +732,14 @@ impl MarkionApp {
         visible: Range<usize>,
         cx: &mut Context<Self>,
     ) {
-        let Some(pdf) = self.tabs.get(tab_index).and_then(|tab| tab.pdf()) else {
+        let Some(pdf) = self
+            .tabs
+            .get(tab_index)
+            .and_then(|tab| tab.plugin_document())
+        else {
             return;
         };
-        if !matches!(pdf.load_state, PdfLoadState::Ready) || pdf.pages.is_empty() {
+        if !matches!(pdf.load_state, PagedDocumentLoadState::Ready) || pdf.pages.is_empty() {
             return;
         }
         let page_count = pdf.pages.len();
@@ -669,15 +772,15 @@ impl MarkionApp {
                     width_bucket_px,
                 },
                 if (visible_start..visible_end).contains(&page_index) {
-                    RenderPriority::Visible
+                    PagedRenderPriority::Visible
                 } else {
-                    RenderPriority::Adjacent
+                    PagedRenderPriority::Adjacent
                 },
             ));
         }
         let wanted_keys = wanted.iter().map(|(key, _)| *key).collect::<HashSet<_>>();
         let old_keys = self.tabs[tab_index]
-            .pdf_mut()
+            .plugin_document_mut()
             .map(|pdf| std::mem::take(&mut pdf.claimed_pages))
             .unwrap_or_default();
         for key in old_keys.difference(&wanted_keys) {
@@ -688,15 +791,15 @@ impl MarkionApp {
         for key in wanted_keys.difference(&old_keys) {
             self.pdf_page_cache.claim(*key);
         }
-        if let Some(pdf) = self.tabs[tab_index].pdf_mut() {
+        if let Some(pdf) = self.tabs[tab_index].plugin_document_mut() {
             pdf.claimed_pages = wanted_keys;
             pdf.current_page = visible_start;
         }
         for (key, priority) in wanted {
             if self.pdf_page_cache.reserve_pending(key)
-                && let Some(service) = &self.pdf_service
+                && let Some(service) = &self.paged_document_service
             {
-                if let Err(error) = service.render(RenderRequest {
+                if let Err(error) = service.render(PagedRenderRequest {
                     document_id: key.document_id,
                     generation: key.generation,
                     page_index: key.page_index,
@@ -713,7 +816,7 @@ impl MarkionApp {
     }
 
     pub(super) fn pdf_page_entry(&mut self, page_index: usize) -> Option<PdfPageEntry> {
-        let pdf = self.active_tab().pdf()?;
+        let pdf = self.active_tab().plugin_document()?;
         let document_id = pdf.document_id?;
         let geometry = *pdf.pages.get(page_index)?;
         let (_, _, target_width) = pdf_page_layout(
@@ -739,9 +842,9 @@ impl MarkionApp {
         let old_keys = self
             .tabs
             .get_mut(tab_index)
-            .and_then(|tab| tab.pdf_mut())
+            .and_then(|tab| tab.plugin_document_mut())
             .map(|pdf| {
-                pdf.generation = Generation(pdf.generation.0.wrapping_add(1).max(1));
+                pdf.generation = PagedGeneration(pdf.generation.0.wrapping_add(1).max(1));
                 std::mem::take(&mut pdf.claimed_pages)
             });
         for key in old_keys.unwrap_or_default() {
@@ -755,7 +858,7 @@ impl MarkionApp {
         let keys = self
             .tabs
             .get_mut(tab_index)
-            .and_then(|tab| tab.pdf_mut())
+            .and_then(|tab| tab.plugin_document_mut())
             .map(|pdf| std::mem::take(&mut pdf.claimed_pages));
         for key in keys.unwrap_or_default() {
             for image in self.pdf_page_cache.release(&key) {
@@ -769,10 +872,10 @@ impl MarkionApp {
         let document_id = self
             .tabs
             .get(tab_index)
-            .and_then(|tab| tab.pdf())
+            .and_then(|tab| tab.plugin_document())
             .and_then(|pdf| pdf.document_id);
         if let Some(document_id) = document_id {
-            if let Some(service) = &self.pdf_service {
+            if let Some(service) = &self.paged_document_service {
                 let _ = service.close(document_id);
             }
             for image in self.pdf_page_cache.remove_document(document_id) {
@@ -781,9 +884,13 @@ impl MarkionApp {
         }
     }
 
-    pub(super) fn set_pdf_zoom(&mut self, zoom: PdfZoomMode, cx: &mut Context<Self>) {
+    pub(super) fn set_pdf_zoom(&mut self, zoom: PagedDocumentZoomMode, cx: &mut Context<Self>) {
         let index = self.active_tab;
-        let Some(pdf) = self.tabs.get_mut(index).and_then(|tab| tab.pdf_mut()) else {
+        let Some(pdf) = self
+            .tabs
+            .get_mut(index)
+            .and_then(|tab| tab.plugin_document_mut())
+        else {
             return;
         };
         if pdf.zoom == zoom {
@@ -792,7 +899,7 @@ impl MarkionApp {
         pdf.zoom = zoom;
         self.invalidate_pdf_generation(index, cx);
         let current = self.tabs[index]
-            .pdf()
+            .plugin_document()
             .map(|pdf| pdf.current_page)
             .unwrap_or(0);
         self.schedule_pdf_visible_range(index, current..current.saturating_add(1), cx);
@@ -802,16 +909,20 @@ impl MarkionApp {
     pub(super) fn step_pdf_zoom(&mut self, delta: f32, cx: &mut Context<Self>) {
         let current = self
             .active_tab()
-            .pdf()
+            .plugin_document()
             .and_then(|pdf| pdf.zoom.percent())
             .unwrap_or(100.0);
-        self.set_pdf_zoom(PdfZoomMode::numeric(current + delta), cx);
+        self.set_pdf_zoom(PagedDocumentZoomMode::numeric(current + delta), cx);
     }
 
     pub(super) fn jump_to_pdf_page(&mut self, page_index: usize, cx: &mut Context<Self>) {
         let index = self.active_tab;
         self.pdf_page_input = None;
-        let Some(pdf) = self.tabs.get_mut(index).and_then(|tab| tab.pdf_mut()) else {
+        let Some(pdf) = self
+            .tabs
+            .get_mut(index)
+            .and_then(|tab| tab.plugin_document_mut())
+        else {
             return;
         };
         if page_index >= pdf.pages.len() {
@@ -826,8 +937,8 @@ impl MarkionApp {
     }
 
     pub(super) fn begin_pdf_page_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ready = self.active_tab().pdf().is_some_and(|pdf| {
-            matches!(pdf.load_state, PdfLoadState::Ready) && !pdf.pages.is_empty()
+        let ready = self.active_tab().plugin_document().is_some_and(|pdf| {
+            matches!(pdf.load_state, PagedDocumentLoadState::Ready) && !pdf.pages.is_empty()
         });
         if !ready {
             return;
@@ -845,7 +956,7 @@ impl MarkionApp {
         self.input_marked_len = 0;
         let page_count = self
             .active_tab()
-            .pdf()
+            .plugin_document()
             .map(|pdf| pdf.pages.len())
             .unwrap_or(0);
         let page = input.parse::<usize>().ok();
@@ -876,8 +987,8 @@ mod tests {
 
     fn key(page_index: u32) -> PdfPageKey {
         PdfPageKey {
-            document_id: DocumentId(1),
-            generation: Generation(1),
+            document_id: PagedDocumentId(1),
+            generation: PagedGeneration(1),
             page_index,
             width_bucket_px: 64,
         }
@@ -885,30 +996,31 @@ mod tests {
 
     #[test]
     fn fit_width_and_numeric_layout_preserve_aspect_and_bounds() {
-        let geometry = PageGeometry::new(600.0, 800.0).unwrap();
-        let (width, height, target) = pdf_page_layout(geometry, PdfZoomMode::FitWidth, 448.0, 1.0);
+        let geometry = PagedPageGeometry::new(600.0, 800.0).unwrap();
+        let (width, height, target) =
+            pdf_page_layout(geometry, PagedDocumentZoomMode::FitWidth, 448.0, 1.0);
         assert_eq!((width, target), (400.0, 400));
         assert!((height - 533.3333).abs() < 0.001);
         let (wide_width, wide_height, wide_target) =
-            pdf_page_layout(geometry, PdfZoomMode::FitWidth, 848.0, 1.0);
+            pdf_page_layout(geometry, PagedDocumentZoomMode::FitWidth, 848.0, 1.0);
         assert_eq!((wide_width, wide_target), (800.0, 800));
         assert!((wide_height - 1066.6666).abs() < 0.001);
         assert_eq!(
-            pdf_page_layout(geometry, PdfZoomMode::numeric(10.0), 448.0, 2.0),
+            pdf_page_layout(geometry, PagedDocumentZoomMode::numeric(10.0), 448.0, 2.0,),
             (150.0, 200.0, 300)
         );
-        assert_eq!(PdfZoomMode::numeric(500.0).percent(), Some(400.0));
+        assert_eq!(PagedDocumentZoomMode::numeric(500.0).percent(), Some(400.0));
     }
 
     #[test]
     fn page_placements_expose_full_scroll_height_without_mounting_every_page() {
         let pages = [
-            PageGeometry::new(600.0, 800.0).unwrap(),
-            PageGeometry::new(800.0, 400.0).unwrap(),
-            PageGeometry::new(400.0, 600.0).unwrap(),
+            PagedPageGeometry::new(600.0, 800.0).unwrap(),
+            PagedPageGeometry::new(800.0, 400.0).unwrap(),
+            PagedPageGeometry::new(400.0, 600.0).unwrap(),
         ];
         let (placements, content_height) =
-            pdf_page_placements(&pages, PdfZoomMode::FitWidth, 448.0, 1.0);
+            pdf_page_placements(&pages, PagedDocumentZoomMode::FitWidth, 448.0, 1.0);
         assert_eq!(placements.len(), 3);
         assert!((placements[1].top - placements[0].row_height).abs() < 0.001);
         assert!(
@@ -980,22 +1092,21 @@ mod tests {
     #[test]
     fn safe_error_messages_cover_every_native_category_without_diagnostics() {
         for error in [
-            PdfErrorKind::RuntimeMissing,
-            PdfErrorKind::RuntimeUnavailable,
-            PdfErrorKind::FileUnavailable,
-            PdfErrorKind::SourceTooLarge,
-            PdfErrorKind::PageLimitExceeded,
-            PdfErrorKind::Encrypted,
-            PdfErrorKind::CorruptOrUnsupported,
-            PdfErrorKind::InvalidPageGeometry,
-            PdfErrorKind::InvalidPageNumber,
-            PdfErrorKind::PageUnavailable,
-            PdfErrorKind::RasterTooLarge,
-            PdfErrorKind::InvalidRaster,
-            PdfErrorKind::QueueFull,
-            PdfErrorKind::StaleRequest,
-            PdfErrorKind::ServiceStopped,
-            PdfErrorKind::Internal,
+            PagedHostError::ProviderMissing,
+            PagedHostError::ProviderUnavailable,
+            PagedHostError::FileUnavailable,
+            PagedHostError::SourceTooLarge,
+            PagedHostError::PageLimitExceeded,
+            PagedHostError::Encrypted,
+            PagedHostError::CorruptOrUnsupported,
+            PagedHostError::InvalidPageGeometry,
+            PagedHostError::InvalidPageNumber,
+            PagedHostError::RasterTooLarge,
+            PagedHostError::InvalidRaster,
+            PagedHostError::QueueFull,
+            PagedHostError::StaleRequest,
+            PagedHostError::ServiceStopped,
+            PagedHostError::Internal,
         ] {
             assert!(!t(Language::En, pdf_error_message(error)).is_empty());
         }

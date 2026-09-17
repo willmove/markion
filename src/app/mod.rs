@@ -41,38 +41,38 @@ use markion::{
     MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE,
     MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat,
     MathLayoutStyle, Msg, MutationOrigin, MutationReceipt, OrganizeCandidate, P0Msg, P1Msg,
-    PdfPageSize, PreviewBlock, RecoveryInventoryEntry, RecoverySourceState, RichText,
+    PdfPageSize, PluginMsg, PreviewBlock, RecoveryInventoryEntry, RecoverySourceState, RichText,
     SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions, SearchPattern, SessionLayout,
     SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab, SlashCommand, SlashQuery,
-    SupportedPathKind, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock,
-    VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField,
-    VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget, VisualProjection,
-    VisualQuoteGroupEdge, VisualSourceIslandKind, WorkspaceSnapshot, adjacent_reorder_target,
-    backend_status_msg, block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
+    TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor,
+    VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    VisualHtmlImage, VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge,
+    VisualSourceIslandKind, WorkspaceSnapshot, adjacent_reorder_target, backend_status_msg,
+    block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
     build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
-    builtin_theme_definitions, bundled_resource_path, check_path_state, classify_supported_path,
-    data_uri_payload_ranges, default_git_sync_policy_path, default_preferences_path,
-    default_recovery_dir, default_session_path, default_themes_dir, delete_block,
-    delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
-    highlight_code, html_preview_parts, html_preview_plain_text, html_table_column_weights,
-    html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
-    import_image_bytes, import_image_file, inline_image_at, inline_link_at, inspect_recovery_files,
-    is_markdown_path, is_text_path, layout_rect_is_visible, list_theme_definitions,
-    load_app_preferences, load_recovery_file, load_session_state, markdown_reference,
-    normalize_auto_save_delay_secs, normalize_code_font_size, normalize_editor_font_size,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
-    organize_candidates, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, read_document_source,
-    reorder_block, resolve_font_family, resolve_html_img_display_size, save_app_preferences,
-    save_session_state, save_text_snapshot, save_theme_definition, serialize_inline_image,
-    serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
-    t, table_column_flex_weights, tf, title_from_path, transform_block, validate_block_target,
+    builtin_theme_definitions, bundled_resource_path, check_path_state,
+    classify_supported_path_with_plugin_extensions, data_uri_payload_ranges,
+    default_git_sync_policy_path, default_preferences_path, default_recovery_dir,
+    default_session_path, default_themes_dir, delete_block, delete_recovery_file,
+    diagram_backend_id, duplicate_block, elided_payload_token, highlight_code, html_preview_parts,
+    html_preview_plain_text, html_table_column_weights, html_table_grid_line_end,
+    html_table_row_has_visible_header, image_extension_supported, import_image_bytes,
+    import_image_file, inline_image_at, inline_link_at, inspect_recovery_files, is_markdown_path,
+    is_text_path, layout_rect_is_visible, list_theme_definitions, load_app_preferences,
+    load_recovery_file, load_session_state, markdown_reference, normalize_auto_save_delay_secs,
+    normalize_code_font_size, normalize_editor_font_size, normalize_heading_menu_max_level,
+    normalize_paragraph_spacing, normalize_rendered_font_size, organize_candidates, p0_t, p0_tf,
+    p1_t, p1_tf, pandoc_available, plugin_t, plugin_tf, read_document_source, reorder_block,
+    resolve_font_family, resolve_html_img_display_size, save_app_preferences, save_session_state,
+    save_text_snapshot, save_theme_definition, serialize_inline_image, serialize_inline_link,
+    shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at, t,
+    table_column_flex_weights, tf, title_from_path, transform_block, validate_block_target,
     workspace_relative_path,
 };
 use markion_git_sync::{
     BackgroundFetchScheduler, ExclusiveAdmission, GitOperationRegistry, PolicyStore, ReadEpoch,
     WriteAdmission,
 };
-use markion_pdf_viewer::{DocumentId, Generation, PageGeometry, PdfErrorKind, RequestId};
 use unicode_segmentation::UnicodeSegmentation;
 
 actions!(
@@ -1924,6 +1924,8 @@ enum PaneScrollTarget {
     PreferencesShortcutActions,
     /// Preferences panel Export tab body. Drag identity only.
     PreferencesExport,
+    /// Preferences panel Plugins tab body. Drag identity only.
+    PreferencesPlugins,
     /// Files sidebar tree list. Drag identity only; never a Sync scroll driver.
     FileTree,
     /// Outline sidebar heading list. Drag identity only; never a Sync scroll driver.
@@ -2142,6 +2144,7 @@ enum PreferencesTab {
     Appearance,
     Shortcuts,
     Export,
+    Plugins,
 }
 
 /// A shortcut row waiting for the user to press a new key combination.
@@ -2187,7 +2190,9 @@ pub(super) mod layout;
 mod math_render;
 mod memory;
 mod network;
-mod pdf_viewer;
+mod paged_document;
+mod paged_document_host;
+mod plugins;
 mod preview;
 mod preview_image;
 mod process_memory;
@@ -2222,7 +2227,8 @@ use bootstrap::{bind_app_keys, install_menus};
 use diagram::*;
 use editor_element::EditorElement;
 use math_render::*;
-use pdf_viewer::*;
+use paged_document::*;
+use paged_document_host::*;
 use preview::*;
 use preview_image::*;
 use process_memory::*;
@@ -2308,6 +2314,10 @@ struct MarkionApp {
     preferences_categories_scroll: ScrollHandle,
     preferences_actions_scroll: ScrollHandle,
     preferences_export_scroll: ScrollHandle,
+    preferences_plugins_scroll: ScrollHandle,
+    /// Transient official-plugin manager state. Plugin settings are stored in
+    /// the isolated plugin store, never in document preferences or sessions.
+    plugin_ui: plugins::PluginUiState,
     /// Cached `pandoc --version` probe result for the Export tab's
     /// availability line. `None` = not probed (or probing in flight).
     pandoc_available_cached: Option<bool>,
@@ -2473,11 +2483,12 @@ struct MarkionApp {
     diagram_cache: DiagramCache,
     /// Decoded Markdown preview images owned by Markion (not GPUI loading_assets).
     preview_image_cache: PreviewImageCache,
-    /// Native PDF service is initialized lazily on the first interactive PDF
-    /// open, so ordinary Markdown startup does not load PDFium.
-    pdf_service: Option<markion_pdf_viewer::PdfService>,
-    pdf_service_error: Option<PdfErrorKind>,
-    pdf_event_poll_scheduled: bool,
+    /// A paged-document provider is initialized lazily on first use. Native
+    /// engines remain in verified plugin processes and never enter the core.
+    paged_document_service: Option<PagedDocumentService>,
+    paged_document_provider: Option<(String, String)>,
+    paged_document_service_error: Option<PagedHostError>,
+    paged_document_event_poll_scheduled: bool,
     pdf_page_cache: PdfPageCache,
     /// Transient numeric page-entry buffer for the active PDF toolbar.
     /// It is never persisted and is cleared on tab changes.

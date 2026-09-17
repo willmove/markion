@@ -244,6 +244,18 @@ pub struct CatalogArtifact {
     pub installed_size_bytes: u64,
 }
 
+impl CatalogArtifact {
+    /// Bootstrap catalogs may carry a zeroed, non-installable target slot so
+    /// file types stay discoverable before that target's first artifact is
+    /// published. Install flows must accept only fully published records.
+    pub fn is_published(&self) -> bool {
+        self.length > 0
+            && self.installed_size_bytes > 0
+            && valid_sha256(&self.sha256)
+            && self.sha256.bytes().any(|byte| byte != b'0')
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogPlugin {
@@ -280,17 +292,36 @@ impl PluginCatalog {
                 self.schema_version,
             ));
         }
-        let mut plugin_versions = BTreeSet::new();
+        if self.sequence == 0 {
+            return Err(ValidationError::InvalidCatalogSequence);
+        }
+        let mut plugin_ids = BTreeSet::new();
         let mut extension_claims = BTreeSet::new();
         for plugin in &self.plugins {
             validate_identifier(&plugin.plugin_id, "plugin id")?;
-            if !plugin_versions.insert((plugin.plugin_id.as_str(), &plugin.version)) {
-                return Err(ValidationError::DuplicatePluginVersion(
-                    plugin.plugin_id.clone(),
-                ));
+            if !plugin_ids.insert(plugin.plugin_id.as_str()) {
+                return Err(ValidationError::DuplicatePluginId(plugin.plugin_id.clone()));
             }
             if plugin.publisher.trim().is_empty() {
                 return Err(ValidationError::EmptyField("publisher"));
+            }
+            let mut permissions = BTreeSet::new();
+            for permission in &plugin.permissions {
+                let encoded =
+                    serde_json::to_string(permission).map_err(|_| ValidationError::Json)?;
+                if !permissions.insert(encoded) {
+                    return Err(ValidationError::DuplicatePermission);
+                }
+            }
+            let mut capabilities = BTreeSet::new();
+            for capability in &plugin.capabilities {
+                validate_identifier(capability, "capability")?;
+                if !capabilities.insert(capability.as_str()) {
+                    return Err(ValidationError::DuplicateCapability(capability.clone()));
+                }
+            }
+            if capabilities.is_empty() {
+                return Err(ValidationError::MissingCapability);
             }
             for locale in required_locales {
                 let Some(identity) = plugin.identities.get(*locale) else {
@@ -298,14 +329,39 @@ impl PluginCatalog {
                 };
                 validate_plain_identity(locale, identity)?;
             }
+            let mut plugin_extensions = BTreeSet::new();
             for handler in &plugin.file_handlers {
+                if !capabilities.contains(handler.capability.as_str()) {
+                    return Err(ValidationError::UndeclaredCapability(
+                        handler.capability.clone(),
+                    ));
+                }
+                validate_identifier(&handler.icon, "file handler icon")?;
+                if handler.extensions.is_empty() {
+                    return Err(ValidationError::EmptyFileHandler);
+                }
                 for extension in &handler.extensions {
                     validate_extension(extension)?;
+                    if !plugin_extensions.insert(extension.to_ascii_lowercase()) {
+                        return Err(ValidationError::DuplicateExtension(extension.clone()));
+                    }
                     let claim = (extension.to_ascii_lowercase(), handler.priority);
                     if !extension_claims.insert(claim) {
                         return Err(ValidationError::ConflictingFileHandler(extension.clone()));
                     }
                 }
+            }
+            let mut artifact_targets = BTreeSet::new();
+            for artifact in &plugin.artifacts {
+                validate_target_component(&artifact.target.os, "artifact operating system")?;
+                validate_target_component(&artifact.target.arch, "artifact architecture")?;
+                let target_key = (&artifact.target.os, &artifact.target.arch);
+                if !artifact_targets.insert(target_key) {
+                    return Err(ValidationError::DuplicateTargetArtifact(
+                        plugin.plugin_id.clone(),
+                    ));
+                }
+                validate_catalog_artifact(artifact)?;
             }
             if plugin.host_version.matches(host_version) && plugin.protocol.supports(protocol) {
                 let matches = plugin
@@ -457,6 +513,8 @@ pub enum ValidationError {
     UnsupportedManifestSchema(u16),
     #[error("unsupported catalog schema {0}")]
     UnsupportedCatalogSchema(u16),
+    #[error("catalog sequence must be greater than zero")]
+    InvalidCatalogSequence,
     #[error("{0} is empty")]
     EmptyField(&'static str),
     #[error("invalid {field}: {value}")]
@@ -481,8 +539,10 @@ pub enum ValidationError {
     MissingCapability,
     #[error("duplicate capability {0}")]
     DuplicateCapability(String),
-    #[error("duplicate plugin version for {0}")]
-    DuplicatePluginVersion(String),
+    #[error("duplicate permission")]
+    DuplicatePermission,
+    #[error("duplicate plugin id {0}")]
+    DuplicatePluginId(String),
     #[error("invalid resource limits")]
     InvalidLimits,
     #[error("file handler references undeclared capability {0}")]
@@ -497,6 +557,10 @@ pub enum ValidationError {
     ConflictingFileHandler(String),
     #[error("duplicate target artifact for {0}")]
     DuplicateTargetArtifact(String),
+    #[error("invalid catalog artifact URL {0}")]
+    InvalidArtifactUrl(String),
+    #[error("invalid catalog artifact size declaration")]
+    InvalidArtifactSize,
     #[error("missing locale {0}")]
     MissingLocale(String),
     #[error("unsafe or empty localized identity for {0}")]
@@ -516,7 +580,24 @@ pub fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, ValidationErro
 
 pub fn canonical_json_value(value: &Value) -> Result<Vec<u8>, ValidationError> {
     validate_json_numbers(value)?;
-    serde_json::to_vec(value).map_err(|_| ValidationError::Json)
+    let sorted = sort_json_value(value);
+    serde_json::to_vec(&sorted).map_err(|_| ValidationError::Json)
+}
+
+fn sort_json_value(value: &Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(values.iter().map(sort_json_value).collect()),
+        Value::Object(values) => {
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            let mut sorted = serde_json::Map::new();
+            for key in keys {
+                sorted.insert(key.clone(), sort_json_value(&values[key]));
+            }
+            Value::Object(sorted)
+        }
+        _ => value.clone(),
+    }
 }
 
 pub fn verify_minisign(
@@ -547,6 +628,48 @@ fn validate_identifier(value: &str, field: &'static str) -> Result<(), Validatio
             value: value.to_owned(),
         })
     }
+}
+
+fn validate_catalog_artifact(artifact: &CatalogArtifact) -> Result<(), ValidationError> {
+    let valid_url = artifact.url.starts_with("https://")
+        && artifact.url.len() <= 2_048
+        && !artifact
+            .url
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace());
+    if !valid_url {
+        return Err(ValidationError::InvalidArtifactUrl(artifact.url.clone()));
+    }
+    let unpublished = artifact.length == 0
+        && artifact.installed_size_bytes == 0
+        && artifact.sha256 == "0".repeat(64);
+    if !unpublished && !artifact.is_published() {
+        if !valid_sha256(&artifact.sha256) {
+            return Err(ValidationError::InvalidDigest(artifact.url.clone()));
+        }
+        return Err(ValidationError::InvalidArtifactSize);
+    }
+    Ok(())
+}
+
+fn validate_target_component(value: &str, field: &'static str) -> Result<(), ValidationError> {
+    let valid = !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(ValidationError::InvalidIdentifier {
+            field,
+            value: value.to_owned(),
+        })
+    }
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 pub(crate) fn validate_package_path(path: &str) -> Result<(), ValidationError> {
@@ -662,6 +785,42 @@ mod tests {
         }
     }
 
+    fn valid_catalog() -> PluginCatalog {
+        PluginCatalog {
+            schema_version: CATALOG_SCHEMA_VERSION,
+            sequence: 1,
+            plugins: vec![CatalogPlugin {
+                plugin_id: "dev.markion.pdf".to_owned(),
+                version: Version::new(1, 0, 0),
+                publisher: "Markion".to_owned(),
+                host_version: VersionReq::parse(">=0.3.9, <0.4.0").unwrap(),
+                protocol: ProtocolRange::V1,
+                identities: BTreeMap::from([(
+                    "en".to_owned(),
+                    LocalizedIdentity {
+                        name: "PDF Viewer".to_owned(),
+                        description: "Read PDF documents.".to_owned(),
+                    },
+                )]),
+                permissions: vec![Permission::ReadSelectedFiles],
+                capabilities: vec!["paged-document/v1".to_owned()],
+                file_handlers: vec![FileHandlerDeclaration {
+                    extensions: vec![".pdf".to_owned()],
+                    capability: "paged-document/v1".to_owned(),
+                    priority: 100,
+                    icon: "document-pdf".to_owned(),
+                }],
+                artifacts: vec![CatalogArtifact {
+                    target: TargetSpec::current(),
+                    url: "https://example.invalid/plugin.markion-plugin".to_owned(),
+                    length: 10,
+                    sha256: "1".repeat(64),
+                    installed_size_bytes: 20,
+                }],
+            }],
+        }
+    }
+
     #[test]
     fn canonical_json_is_stable_and_sorted() {
         let value = serde_json::json!({"z": 1, "a": {"y": 2, "b": 3}});
@@ -755,5 +914,72 @@ mod tests {
             canonical_json(&catalog).unwrap(),
             canonical_json(&catalog).unwrap()
         );
+    }
+
+    #[test]
+    fn catalog_rejects_undeclared_handlers_and_partial_artifacts() {
+        let mut catalog = valid_catalog();
+        catalog.plugins[0].file_handlers[0].capability = "publisher-job/v1".to_owned();
+        assert_eq!(
+            catalog.validate(
+                &Version::new(0, 3, 9),
+                ProtocolVersion::V1_0,
+                &TargetSpec::current(),
+                &["en"],
+            ),
+            Err(ValidationError::UndeclaredCapability(
+                "publisher-job/v1".to_owned()
+            ))
+        );
+
+        let mut catalog = valid_catalog();
+        catalog.plugins[0].artifacts[0].length = 0;
+        assert_eq!(
+            catalog.validate(
+                &Version::new(0, 3, 9),
+                ProtocolVersion::V1_0,
+                &TargetSpec::current(),
+                &["en"],
+            ),
+            Err(ValidationError::InvalidArtifactSize)
+        );
+    }
+
+    #[test]
+    fn catalog_rejects_duplicate_plugin_ids_even_across_versions() {
+        let mut catalog = valid_catalog();
+        let mut duplicate = catalog.plugins[0].clone();
+        duplicate.version = Version::new(2, 0, 0);
+        duplicate.file_handlers[0].extensions = vec![".epub".to_owned()];
+        catalog.plugins.push(duplicate);
+        assert_eq!(
+            catalog.validate(
+                &Version::new(0, 3, 9),
+                ProtocolVersion::V1_0,
+                &TargetSpec::current(),
+                &["en"],
+            ),
+            Err(ValidationError::DuplicatePluginId(
+                "dev.markion.pdf".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn catalog_allows_explicit_unpublished_target_slots_but_never_marks_them_published() {
+        let mut catalog = valid_catalog();
+        let artifact = &mut catalog.plugins[0].artifacts[0];
+        artifact.length = 0;
+        artifact.installed_size_bytes = 0;
+        artifact.sha256 = "0".repeat(64);
+        assert!(!artifact.is_published());
+        catalog
+            .validate(
+                &Version::new(0, 3, 9),
+                ProtocolVersion::V1_0,
+                &TargetSpec::current(),
+                &["en"],
+            )
+            .unwrap();
     }
 }
