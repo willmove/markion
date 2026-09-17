@@ -8,6 +8,7 @@ mod adapter;
 mod frame;
 mod model;
 mod package;
+mod process;
 
 pub use frame::{
     FIXED_FRAME_HEADER_BYTES, Frame, FrameError, FrameKind, FrameLimits, read_frame, write_frame,
@@ -15,14 +16,18 @@ pub use frame::{
 pub use model::{
     CapabilityDeclaration, CatalogArtifact, CatalogPlugin, FileHandlerDeclaration,
     HandshakeAccepted, HandshakeHello, HostMessage, LocalizedIdentity, MemberManifest,
-    PagedDocumentRequest, PagedDocumentResponse, Permission, PixelFormat, PluginCatalog,
-    PluginError, PluginErrorCode, PluginManifest, PluginMessage, ProtocolRange, ProtocolVersion,
-    RasterDescriptor, ResourceLimits, TargetSpec, ValidationError, canonical_json,
+    PageGeometry, PagedDocumentRequest, PagedDocumentResponse, Permission, PixelFormat,
+    PluginCatalog, PluginError, PluginErrorCode, PluginManifest, PluginMessage, ProtocolRange,
+    ProtocolVersion, RasterDescriptor, ResourceLimits, TargetSpec, ValidationError, canonical_json,
     canonical_json_value, verify_minisign,
 };
 pub use package::{
     PackageError, PackageLimits, VerifiedMember, VerifiedPackage, inspect_package,
     inspect_package_with,
+};
+pub use process::{
+    DiagnosticSnapshot, PendingProcessRequest, ProcessPeerError, ProcessPluginPeer,
+    ProcessResponse, WorkerFailure, WorkerFailureKind, WorkerLaunch,
 };
 
 pub const PLUGIN_MANIFEST_NAME: &str = "plugin.json";

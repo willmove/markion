@@ -3,6 +3,8 @@ use std::{
     io::{self, BufRead, Read, Write},
     path::Path,
     process::{Command, Stdio},
+    thread,
+    time::Duration,
 };
 
 use markion_plugin_protocol::{
@@ -41,15 +43,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("--lifecycle-child requires an exit marker")?;
         return lifecycle_child(Path::new(marker));
     }
+    if args.first().is_some_and(|arg| arg == "--heartbeat-child") {
+        let marker = args
+            .get(1)
+            .ok_or("--heartbeat-child requires a heartbeat path")?;
+        return heartbeat_child(Path::new(marker));
+    }
     framed_worker()
 }
 
 fn framed_worker() -> Result<(), Box<dyn std::error::Error>> {
+    let mode = env::var("MARKION_PLUGIN_FIXTURE_MODE").unwrap_or_default();
     let limits = FrameLimits::default();
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut reader = stdin.lock();
     let mut writer = stdout.lock();
+    let mut heartbeat = None;
+    let mut ping_count = 0u32;
     while let Some(frame) = read_frame(&mut reader, limits)? {
         let message: HostMessage = frame.decode_header()?;
         let (kind, response, should_exit) = match message {
@@ -67,13 +78,46 @@ fn framed_worker() -> Result<(), Box<dyn std::error::Error>> {
                         plugin_id: FIXTURE_ID.to_owned(),
                         plugin_version: Version::new(1, 0, 0),
                         target: TargetSpec::current(),
-                        package_sha256: hello.package_sha256,
+                        package_sha256: if mode == "bad-handshake" {
+                            "wrong-digest".to_owned()
+                        } else {
+                            hello.package_sha256
+                        },
                         capabilities: Vec::new(),
                     }),
                     false,
                 )
             }
-            HostMessage::Ping => (FrameKind::Response, PluginMessage::Pong, false),
+            HostMessage::Ping => {
+                ping_count = ping_count.saturating_add(1);
+                if mode == "hang-ping" || (mode == "hang-first-ping" && ping_count == 1) {
+                    thread::sleep(Duration::from_secs(2));
+                } else if mode == "crash-ping" {
+                    std::process::exit(23);
+                } else if mode == "malformed-ping" {
+                    eprint!("{}", "diagnostic".repeat(8192));
+                    io::stderr().flush()?;
+                    writer.write_all(b"NOPE")?;
+                    writer.flush()?;
+                    return Ok(());
+                } else if mode == "spawn-child-ping" && heartbeat.is_none() {
+                    let scratch = env::var_os("MARKION_PLUGIN_FIXTURE_SCRATCH")
+                        .ok_or("fixture scratch path is missing")?;
+                    let scratch = Path::new(&scratch);
+                    fs::create_dir_all(scratch)?;
+                    let heartbeat_path = scratch.join("heartbeat");
+                    let child = Command::new(env::current_exe()?)
+                        .arg("--heartbeat-child")
+                        .arg(&heartbeat_path)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()?;
+                    fs::write(scratch.join("child.pid"), child.id().to_string())?;
+                    heartbeat = Some(child);
+                }
+                (FrameKind::Response, PluginMessage::Pong, false)
+            }
             HostMessage::Cancel { request_id } => (
                 FrameKind::Response,
                 PluginMessage::Cancelled { request_id },
@@ -93,6 +137,10 @@ fn framed_worker() -> Result<(), Box<dyn std::error::Error>> {
         if should_exit {
             break;
         }
+    }
+    if let Some(mut child) = heartbeat {
+        let _ = child.kill();
+        let _ = child.wait();
     }
     Ok(())
 }
@@ -127,6 +175,17 @@ fn lifecycle_child(marker: &Path) -> Result<(), Box<dyn std::error::Error>> {
     input.read_to_end(&mut sink)?;
     fs::write(marker, b"exited")?;
     Ok(())
+}
+
+fn heartbeat_child(marker: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs::OpenOptions;
+
+    loop {
+        let mut file = OpenOptions::new().create(true).append(true).open(marker)?;
+        file.write_all(b".")?;
+        file.flush()?;
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[allow(dead_code)]

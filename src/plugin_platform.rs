@@ -13,15 +13,25 @@ use semver::Version;
 use thiserror::Error;
 
 mod catalog;
+mod registry;
 mod store;
+mod supervisor;
 
 pub use catalog::{
     CatalogManager, CatalogSnapshot, CatalogSnapshotSource, CatalogUpdate, PluginCatalogError,
+};
+pub use registry::{
+    CoreFileHandler, CoreHandlerKind, FileHandlerAvailability, FileHandlerCandidate,
+    FileHandlerRegistryError, FileHandlerRegistrySnapshot, FileHandlerResolution,
 };
 pub use store::{
     ActivationRecord, InstallOutcome, PluginPackageEstimate, PluginQuarantine, PluginStorageUsage,
     PluginStore, PluginStoreError, PluginStorePaths, PluginStoreState, QuarantineReason,
     RecoveryReport,
+};
+pub use supervisor::{
+    PluginSession, PluginSupervisor, PluginSupervisorError, PluginSupervisorPolicy,
+    SupervisedRequest,
 };
 
 const BOOTSTRAP_CATALOG: &str = include_str!("../assets/plugins/catalog.json");

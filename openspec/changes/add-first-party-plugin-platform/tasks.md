@@ -1,9 +1,9 @@
 ## 1. Feasibility, baselines, and budgets
 
 - [x] 1.1 Record immutable control revisions and artifact manifests for the current core-only release and the built-in-PDF candidate, including compressed and installed byte counts for NSIS, DMG, DEB, and AppImage.
-- [ ] 1.2 Build a minimal signed fixture worker and verify direct launch, executable permissions, quarantine/Gatekeeper behavior, and child-process cleanup on packaged Windows, macOS, and Linux installations; stop the change if a reliable first-party launch path cannot be demonstrated.
-- [ ] 1.3 Add the smallest end-to-end plugin host skeleton and perform same-environment control/candidate builds for all four package formats, enforcing the 1 MiB compressed and 2 MiB installed host budgets before broader implementation.
-- [ ] 1.4 Compose target-specific PDF plugin prototype archives from the existing worker/runtime payload, produce exact compressed and extracted manifests, and confirm the 6 MiB compressed and 10 MiB installed plugin budgets on every supported target.
+- [x] 1.2 Build a minimal signed fixture worker and verify direct launch, executable permissions, quarantine/Gatekeeper behavior, and child-process cleanup on packaged Windows, macOS, and Linux installations; stop the change if a reliable first-party launch path cannot be demonstrated.
+- [x] 1.3 Add the smallest end-to-end plugin host skeleton and perform same-environment control/candidate builds for all four package formats, enforcing the 1 MiB compressed and 2 MiB installed host budgets before broader implementation.
+- [x] 1.4 Compose target-specific PDF plugin prototype archives from the existing worker/runtime payload, produce exact compressed and extracted manifests, and confirm the 6 MiB compressed and 10 MiB installed plugin budgets on every supported target.
 
 ## 2. Protocol and signed package model
 
@@ -22,10 +22,10 @@
 
 ## 4. Worker supervision and resource control
 
-- [ ] 4.1 Implement direct worker spawning from the verified active plugin directory with a sanitized environment, controlled working directory, inherited-handle restrictions, and bounded diagnostic output capture.
-- [ ] 4.2 Add a bounded request table, backpressure, deadlines, cooperative cancellation, worker-generation tracking, and stale-response rejection.
-- [ ] 4.3 Handle crash, hang, malformed output, protocol violation, startup failure, and forced shutdown with deterministic child/process-tree cleanup, temporary-file cleanup, and per-version quarantine.
-- [ ] 4.4 Add in-memory and real-process supervisor tests for concurrency limits, timeouts, cancellation races, restart boundaries, crash loops, and clean application shutdown.
+- [x] 4.1 Implement direct worker spawning from the verified active plugin directory with a sanitized environment, controlled working directory, inherited-handle restrictions, and bounded diagnostic output capture.
+- [x] 4.2 Add a bounded request table, backpressure, deadlines, cooperative cancellation, worker-generation tracking, and stale-response rejection.
+- [x] 4.3 Handle crash, hang, malformed output, protocol violation, startup failure, and forced shutdown with deterministic child/process-tree cleanup, temporary-file cleanup, and per-version quarantine.
+- [x] 4.4 Add in-memory and real-process supervisor tests for concurrency limits, timeouts, cancellation races, restart boundaries, crash loops, and clean application shutdown.
 
 ## 5. Plugin manager and localization
 
@@ -37,7 +37,7 @@
 
 ## 6. File handlers and host-owned paged-document UI
 
-- [ ] 6.1 Implement an immutable file-handler registry snapshot combining core handlers with verified catalog declarations, including known-but-uninstalled, disabled, incompatible, and collision states.
+- [x] 6.1 Implement an immutable file-handler registry snapshot combining core handlers with verified catalog declarations, including known-but-uninstalled, disabled, incompatible, and collision states.
 - [ ] 6.2 Route file tree visibility, open-file dispatch, recent files, session restore, missing-provider prompts, and save-as/path-remap behavior through the generic registry while preserving path identity and isolation.
 - [ ] 6.3 Replace content-specific workspace tab state with generic plugin-document state, ensuring document-only commands, dirty tracking, backups, autosave, Markdown preview, and outline operations remain unavailable to read-only paged documents.
 - [ ] 6.4 Extract the reusable paged-document viewport, toolbar, scroll/zoom/page navigation, visible-page calculation, render scheduling, and bounded raster cache from the current PDF-specific application module.

@@ -1,0 +1,19 @@
+[package]
+name = "markion-pdf-plugin"
+description = "Official out-of-process PDF provider for Markion."
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+
+[[bin]]
+name = "markion-plugin-pdf"
+path = "src/main.rs"
+
+[dependencies]
+markion-pdf-viewer = { path = "../pdf-viewer" }
+markion-plugin-protocol = { path = "../plugin-protocol" }
+semver.workspace = true
+
+[dev-dependencies]
+base64 = "0.22"
+tempfile = "3.20"

@@ -16,6 +16,7 @@ on:
       - "config/plugin-platform.json"
       - "assets/plugins/**"
       - "src/plugin_platform.rs"
+      - "src/plugin_platform/**"
       - "src/lib.rs"
       - "src/main.rs"
       - "Cargo.toml"
@@ -191,18 +192,21 @@ jobs:
             -ScratchRoot (Join-Path $PWD 'target/plugin-platform-spike/launch') `
             -OutputPath (Join-Path $PWD 'target/plugin-platform-spike/launch-policy.json')
 
-      - name: Build the PDF plugin payload prototype
+      - name: Build the official PDF plugin payload prototype
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $suffix = '${{ matrix.executable_suffix }}'
-          cargo build --release --locked -p markion-pdf-viewer --bin pdf-packaged-smoke
+          cargo build --release --locked -p markion-pdf-plugin --bin markion-plugin-pdf
           if ($LASTEXITCODE -ne 0) { throw 'PDF plugin prototype worker build failed.' }
           $stageOutput = @(./scripts/stage-pdfium.ps1 -TargetTriple '${{ matrix.target }}')
           $stage = $stageOutput[-1] | ConvertFrom-Json
+          $env:MARKION_PDFIUM_RUNTIME = $stage.runtime_path
+          cargo test --release --locked -p markion-pdf-plugin --test native_worker -- --ignored
+          if ($LASTEXITCODE -ne 0) { throw 'Native PDF plugin protocol smoke test failed.' }
           $pdfOutput = @(
             ./scripts/build-pdf-plugin-prototype.ps1 `
-              -WorkerPath (Join-Path $PWD "target/release/pdf-packaged-smoke$suffix") `
+              -WorkerPath (Join-Path $PWD "target/release/markion-plugin-pdf$suffix") `
               -RuntimePath $stage.runtime_path `
               -NoticePath (Join-Path $PWD 'THIRD_PARTY_NOTICES.md') `
               -TargetTriple '${{ matrix.target }}' `
