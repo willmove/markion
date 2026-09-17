@@ -3471,6 +3471,7 @@ dependencies = [
  "markion-html-import",
  "markion-pdf",
  "markion-pdf-viewer",
+ "markion-plugin-protocol",
  "miniz_oxide",
  "percent-encoding",
  "pulldown-cmark",
@@ -3479,12 +3480,14 @@ dependencies = [
  "resvg 0.45.1",
  "rfd",
  "same-file",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
  "syntect",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "toml 0.8.23",
  "tracing",
@@ -3562,6 +3565,20 @@ dependencies = [
  "base64",
  "pdfium-render",
  "tempfile",
+]
+
+[[package]]
+name = "markion-plugin-protocol"
+version = "0.3.9"
+dependencies = [
+ "minisign-verify",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+ "zip",
 ]
 
 [[package]]
@@ -5624,6 +5641,10 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "serde"

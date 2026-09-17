@@ -26,6 +26,7 @@ mod math;
 pub mod model;
 mod parse;
 mod paths;
+pub mod plugin_platform;
 mod publishing;
 mod render;
 mod source_mapped;
