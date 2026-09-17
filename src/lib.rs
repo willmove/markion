@@ -19,9 +19,12 @@ mod editing;
 mod emoji;
 mod escape;
 mod export;
+pub mod external_command;
 mod frontmatter;
 mod highlight;
 pub mod i18n;
+pub mod image_operations;
+pub mod image_transfer;
 mod inline_edit;
 #[cfg(test)]
 mod inline_html_tests;
@@ -152,21 +155,24 @@ Reference-style links work too: [Markion repository][markion-repo].
 "#;
 
 pub use model::{
-    AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, CodeTheme,
-    DATA_URI_IDENTITY_HASH_BYTES, DATA_URI_PAYLOAD_CLONE_BYTES, DEFAULT_CODE_FONT_FAMILY,
-    DEFAULT_EDITOR_FONT_SIZE, DEFAULT_EDITOR_SPLIT_RATIO, DEFAULT_HEADING_MENU_MAX_LEVEL,
-    DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE, DEFAULT_SIDEBAR_WIDTH,
-    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, DocumentBasicStats, DocumentStats,
-    DocxExportOptions, DocxImagePolicy, DocxPageSize, EDITOR_SPLIT_RATIO_MAX,
-    EDITOR_SPLIT_RATIO_MIN, EXTENDED_HEADING_MENU_MAX_LEVEL, EngineFailureCategory, ExportBackend,
-    ExportBackendPreference, ExportFormat, ExportOutcome, ExportPreferences, Footnote,
-    FrontMatterError, GitPreferences, Heading, HighlightKind, HighlightedSpan, HtmlImageDescriptor,
-    HtmlImgLength, ImageSourceIdentity, InlineImage, InlineSpan, InlineStyle,
-    MAX_AUTO_SAVE_DELAY_SECS, MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING,
-    MAX_RECENT_FILES, MAX_RECENT_WORKSPACES, MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS,
-    MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING, MIN_RENDERED_FONT_SIZE,
-    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, MarkdownFormat, MathDelimiter, MathExpression,
-    MathLayoutStyle, MathSource, PdfExportOptions, PdfPageSize, PreviewBlock, RecoveryDocument,
+    AlertKind, AppPreferences, AutoSavePreferences, AutosaveOutcome, ClipboardImagePolicy,
+    CodeTheme, CustomImageCommandPreferences, DATA_URI_IDENTITY_HASH_BYTES,
+    DATA_URI_PAYLOAD_CLONE_BYTES, DEFAULT_CODE_FONT_FAMILY, DEFAULT_EDITOR_FONT_SIZE,
+    DEFAULT_EDITOR_SPLIT_RATIO, DEFAULT_HEADING_MENU_MAX_LEVEL, DEFAULT_PARAGRAPH_SPACING,
+    DEFAULT_RENDERED_FONT_SIZE, DEFAULT_SIDEBAR_WIDTH, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
+    DocumentBasicStats, DocumentStats, DocxExportOptions, DocxImagePolicy, DocxPageSize,
+    EDITOR_SPLIT_RATIO_MAX, EDITOR_SPLIT_RATIO_MIN, EXTENDED_HEADING_MENU_MAX_LEVEL,
+    EngineFailureCategory, ExportBackend, ExportBackendPreference, ExportFormat, ExportOutcome,
+    ExportPreferences, Footnote, FrontMatterError, GitPreferences, Heading, HighlightKind,
+    HighlightedSpan, HtmlImageDescriptor, HtmlImgLength, ImagePreferences, ImageSourceIdentity,
+    ImageUploaderKind, InlineImage, InlineSpan, InlineStyle, LocalImagePolicy,
+    MAX_AUTO_SAVE_DELAY_SECS, MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE,
+    MAX_IMAGE_TRANSFER_TIMEOUT_SECS, MAX_PARAGRAPH_SPACING, MAX_RECENT_FILES,
+    MAX_RECENT_WORKSPACES, MAX_RENDERED_FONT_SIZE, MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE,
+    MIN_EDITOR_FONT_SIZE, MIN_IMAGE_TRANSFER_TIMEOUT_SECS, MIN_PARAGRAPH_SPACING,
+    MIN_RENDERED_FONT_SIZE, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, MarkdownFormat, MathDelimiter,
+    MathExpression, MathLayoutStyle, MathSource, PdfExportOptions, PdfPageSize,
+    PicGoCorePreferences, PicGoHttpPreferences, PreviewBlock, RecoveryDocument, RemoteImagePolicy,
     RenderedMath, ReplaceResult, RichText, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
     SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch, SearchMatchRange, SearchOptions,
     SessionLayout, SessionState, SidebarTab, TableAlignment, TableEdit, TableEditResult,
@@ -179,10 +185,10 @@ pub use model::{
     VisualTableCell, WorkspaceSnapshot, YamlFrontMatter, builtin_theme_definitions,
     filter_paths_in_workspace_root, layout_rect_is_visible, normalize_auto_save_delay_secs,
     normalize_code_font_size, normalize_editor_font_size, normalize_editor_split_ratio,
-    normalize_font_family, normalize_heading_menu_max_level, normalize_paragraph_spacing,
-    normalize_rendered_font_size, normalize_sidebar_width, normalize_window_size,
-    record_data_uri_payload_clone, reset_data_uri_work_counters, resolve_font_family,
-    touch_recent_file, touch_workspace_snapshot, with_image_identity_interner,
+    normalize_font_family, normalize_heading_menu_max_level, normalize_image_transfer_timeout_secs,
+    normalize_paragraph_spacing, normalize_rendered_font_size, normalize_sidebar_width,
+    normalize_window_size, record_data_uri_payload_clone, reset_data_uri_work_counters,
+    resolve_font_family, touch_recent_file, touch_workspace_snapshot, with_image_identity_interner,
 };
 pub use visual::{
     build_visual_projection, build_visual_projection_with_marked_range, data_uri_payload_ranges,
@@ -258,17 +264,32 @@ pub use parse::{
 };
 pub use publishing::build_publishing_snapshot;
 
+pub use image_operations::{
+    CancellationGeneration, ImageApplicationPlan, ImageInput, ImageInputGroup, ImageItemResult,
+    ImageItemState, ImageJobConfig, ImageOccurrence, ImageOccurrenceId, ImageOccurrenceScan,
+    ImageOccurrenceSyntax, ImageOccurrenceTarget, ImageOperationController, ImageOperationId,
+    ImageOperationKind, ImageOperationPlan, ImageOperationProgress, ImageOperationStatus,
+    ImagePlanIssue, ImagePlanSelection, ImageRecoveryAction, ImageRecoveryRecord,
+    ImageRecoveryTransition, ImageReferenceKind, ImageSkipReason, ImageSourceReplacement,
+    PendingImageOperation, SkippedImageOccurrence, TrackedImageAnchor,
+    build_image_application_plan, plan_image_operation, prepare_image_recovery_action,
+};
 pub use storage::{
-    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS, ImportedImage,
-    MARKDOWN_EXTENSIONS, OrganizeCandidate, PublishedDocxImport, RecoveryInventoryEntry,
-    RecoverySourceState, TEXT_EXTENSIONS, delete_recovery_file, document_asset_dir,
-    document_scope_root, image_extension_supported, import_image_bytes, import_image_file,
-    init_logging, inspect_recovery_files, is_markdown_path, is_text_path, list_recovery_files,
-    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
-    load_theme_definition, organize_candidates, parse_app_preferences,
-    parse_legacy_app_preferences, parse_session_state, parse_theme_definition, publish_docx_import,
-    render_app_preferences, render_session_state, render_theme_definition, save_app_preferences,
-    save_session_state, save_theme_definition, workspace_relative_path,
+    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS,
+    ImageRecoveryEntry, ImportedImage, MARKDOWN_EXTENSIONS, OrganizeCandidate, PublishedDocxImport,
+    RecoveryInventoryEntry, RecoverySourceState, ResourceDirectory, StagedImagePublication,
+    TEXT_EXTENSIONS, default_image_recovery_dir, delete_recovery_file,
+    discard_image_recovery_record, document_asset_dir, document_scope_root,
+    image_extension_supported, import_image_bytes, import_image_bytes_to, import_image_file,
+    import_image_file_to, init_logging, inspect_recovery_files, is_markdown_path, is_text_path,
+    list_image_recovery_records, list_recovery_files, list_theme_definitions, load_app_preferences,
+    load_recovery_file, load_session_state, load_theme_definition, organize_candidates,
+    parse_app_preferences, parse_legacy_app_preferences, parse_session_state,
+    parse_theme_definition, publish_docx_import, publish_staged_image, render_app_preferences,
+    render_session_state, render_theme_definition, resolve_local_reference,
+    resolve_resource_directory, save_app_preferences, save_image_recovery_record,
+    save_session_state, save_theme_definition, stage_image_bytes, stage_image_file,
+    workspace_relative_path,
 };
 
 use table::{
@@ -490,6 +511,7 @@ pub enum MutationOrigin {
     TableEdit,
     SearchReplace,
     SearchReplaceAll,
+    ImageOperation,
     Undo,
     Redo,
     ExternalReload,
@@ -1126,6 +1148,21 @@ impl MarkdownDocument {
         self.mutation_journal.iter().cloned().collect()
     }
 
+    /// Lightweight mutation events after `sequence`, retained only within the
+    /// bounded journal. Consumers detect a leading sequence gap and
+    /// invalidate tracked state rather than attempting fuzzy recovery.
+    pub fn mutation_journal_since(&self, sequence: u64) -> Vec<MutationJournalEntry> {
+        self.mutation_journal
+            .iter()
+            .filter(|entry| entry.sequence > sequence)
+            .cloned()
+            .collect()
+    }
+
+    pub fn mutation_sequence(&self) -> u64 {
+        self.mutation_sequence
+    }
+
     pub fn mutation_journal_len(&self) -> usize {
         self.mutation_journal.len()
     }
@@ -1633,6 +1670,14 @@ impl MarkdownDocument {
         urls
     }
 
+    /// Structured source occurrences for explicit image operations. This is a
+    /// command-time scan and is deliberately separate from per-version render
+    /// caches.
+    pub fn image_occurrence_scan(&self) -> ImageOccurrenceScan {
+        let (body, base) = self.body_text_and_offset();
+        image_operations::scan_image_occurrences(body, base)
+    }
+
     /// Byte ranges of every image destination — Markdown inline-image spans
     /// and raw-HTML `<img src>` values — whose parsed destination equals one
     /// of `urls`, paired with the matched URL. Like the publishing export
@@ -1643,39 +1688,12 @@ impl MarkdownDocument {
         urls: &'a std::collections::HashSet<&str>,
     ) -> Vec<(Range<usize>, &'a str)> {
         let mut matches = Vec::new();
-        let (body, base) = self.body_text_and_offset();
-        for (event, range) in Parser::new_ext(body, markdown_options()).into_offset_iter() {
-            match event {
-                Event::Start(Tag::Image { dest_url, .. }) => {
-                    let Some(matched) = urls.get(dest_url.as_ref()) else {
-                        continue;
-                    };
-                    let Some(authored) = body.get(range.clone()) else {
-                        continue;
-                    };
-                    let Some(relative) = inline_edit::authored_image_destination_range(authored)
-                    else {
-                        continue;
-                    };
-                    // Skip authoring forms (escapes, angle brackets) the
-                    // locator cannot attribute unambiguously.
-                    if inline_edit::unescape_markdown(&authored[relative.clone()]) != *matched {
-                        continue;
-                    }
-                    matches.push((
-                        base + range.start + relative.start..base + range.start + relative.end,
-                        *matched,
-                    ));
-                }
-                Event::Html(html) | Event::InlineHtml(html) => {
-                    push_matching_img_src_ranges(
-                        html.as_ref(),
-                        urls,
-                        base + range.start,
-                        &mut matches,
-                    );
-                }
-                _ => {}
+        for occurrence in self.image_occurrence_scan().occurrences {
+            let Some(matched) = urls.get(occurrence.semantic_url.as_str()) else {
+                continue;
+            };
+            if let Some(range) = occurrence.destination_range {
+                matches.push((range, *matched));
             }
         }
         matches.sort_by_key(|(range, _)| range.start);
@@ -3217,7 +3235,11 @@ impl MarkdownDocument {
                     inline.html.clear();
                     if let Some((level, spans, heading_range)) = heading.take() {
                         push_nonempty_block(
-                            &mut blocks,
+                            if quote_depth > 0 {
+                                &mut quote_children
+                            } else {
+                                &mut blocks
+                            },
                             PreviewBlock::Heading {
                                 level,
                                 text: finish_rich_text(spans),
@@ -4387,59 +4409,6 @@ fn line_column_at(text: &str, offset: usize) -> (usize, usize) {
 
 fn line_snippet_at(text: &str, line_number: usize) -> String {
     crate::text_util::line_snippet_at(text, line_number)
-}
-
-/// Appends byte ranges of `<img src>` attribute values in `html` that exactly
-/// equal one of `urls`. Deliberately conservative: only quoted attributes
-/// preceded by whitespace (so `data-src` and friends never match) whose value
-/// equals a requested destination are attributed.
-fn push_matching_img_src_ranges<'a>(
-    html: &str,
-    urls: &'a std::collections::HashSet<&str>,
-    base: usize,
-    out: &mut Vec<(Range<usize>, &'a str)>,
-) {
-    let bytes = html.as_bytes();
-    let lowercase = html.to_ascii_lowercase();
-    let mut search = 0usize;
-    while let Some(found) = lowercase[search..].find("src") {
-        let at = search + found;
-        search = at + 3;
-        if at > 0 && !(bytes[at - 1] as char).is_ascii_whitespace() {
-            continue;
-        }
-        let mut cursor = at + 3;
-        while cursor < bytes.len() && (bytes[cursor] as char).is_ascii_whitespace() {
-            cursor += 1;
-        }
-        if bytes.get(cursor) != Some(&b'=') {
-            continue;
-        }
-        cursor += 1;
-        while cursor < bytes.len() && (bytes[cursor] as char).is_ascii_whitespace() {
-            cursor += 1;
-        }
-        let Some(&quote) = bytes.get(cursor) else {
-            continue;
-        };
-        if quote != b'"' && quote != b'\'' {
-            continue;
-        }
-        let value_start = cursor + 1;
-        let Some(relative_end) = html[value_start..].find(quote as char) else {
-            continue;
-        };
-        let value_end = value_start + relative_end;
-        // Attribute values are compared entity-decoded so the raw authored
-        // bytes match the destinations the parser reported for the same tag
-        // (e.g. src="a&amp;b.png" vs the parsed "a&b.png").
-        if let Some(matched) =
-            urls.get(crate::parse::decode_html_entities(&html[value_start..value_end]).as_str())
-        {
-            out.push((base + value_start..base + value_end, *matched));
-        }
-        search = search.max(value_end);
-    }
 }
 
 fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
@@ -8358,6 +8327,7 @@ Intro.
                 pdf_engine: "tectonic".to_string(),
                 ..ExportPreferences::default()
             },
+            images: ImagePreferences::default(),
             shortcut_overrides: std::collections::BTreeMap::new(),
         };
 

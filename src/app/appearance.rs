@@ -138,6 +138,7 @@ impl MarkionApp {
                     app.sidebar_visible = preferences.sidebar_visible;
                     app.sidebar_tab = preferences.sidebar_tab;
                     app.auto_save_preferences = preferences.auto_save;
+                    app.image_preferences = preferences.images;
                     // Reset also restores the default interface language.
                     app.language = Language::from_code(&preferences.language);
                     app.clear_shortcut_overrides(cx);
@@ -822,6 +823,7 @@ impl MarkionApp {
             PaneScrollTarget::Visual
             | PaneScrollTarget::PreferencesGeneral
             | PaneScrollTarget::PreferencesAppearance
+            | PaneScrollTarget::PreferencesImages
             | PaneScrollTarget::PreferencesShortcutCategories
             | PaneScrollTarget::PreferencesShortcutActions
             | PaneScrollTarget::PreferencesExport

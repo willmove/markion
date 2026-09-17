@@ -223,6 +223,10 @@ impl MarkionApp {
     }
 
     pub(super) fn close_tab_confirmed(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab().is_document() {
+            let document = self.active_tab().document.instance_id();
+            self.image_operations.invalidate_document(document);
+        }
         // Discard the active tab's recovery file before removing it.
         if self.active_tab().is_document()
             && let Some(recovery) = self.active_tab_mut().last_recovery_file.take()
@@ -359,6 +363,8 @@ impl MarkionApp {
             .map(|tab| tab.document.save_as(path));
         match save_result {
             Some(Ok(())) => {
+                self.image_operations
+                    .observe_document(&self.tabs[index].document);
                 if let Some(state) = self.tabs[index].document_tab_mut() {
                     state.external_conflict = None;
                     if let Some(recovery) = state.last_recovery_file.take() {
@@ -598,6 +604,10 @@ impl MarkionApp {
             })
             .collect();
         for index in indexes.into_iter().rev() {
+            if self.tabs[index].is_document() {
+                let document = self.tabs[index].document.instance_id();
+                self.image_operations.invalidate_document(document);
+            }
             self.release_tab_image_claims(index, cx);
             if let Some(state) = self.tabs[index].document_tab_mut()
                 && let Some(recovery) = state.last_recovery_file.take()
@@ -937,6 +947,8 @@ impl MarkionApp {
                         let save_result = app.active_tab_mut().document.save_as(&path);
                         app.status = match save_result {
                             Ok(()) => {
+                                app.image_operations
+                                    .observe_document(&app.tabs[app.active_tab].document);
                                 app.active_tab_mut().external_conflict = None;
                                 app.discard_current_recovery_file();
                                 app.update_workspace_root_from_document(cx);

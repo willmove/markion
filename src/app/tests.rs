@@ -8,6 +8,26 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
 // under `-D warnings`.
 use markion::{FileTreeFileKind, ThemeFonts};
 
+fn tiny_png_bytes() -> Vec<u8> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
+        .unwrap()
+}
+
+fn wait_for_image_operations(app: &Entity<MarkionApp>, cx: &mut TestAppContext) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        cx.run_until_parked();
+        if app.read_with(cx, |app, _| app.image_cancellations.is_empty())
+            || Instant::now() >= deadline
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn assert_visual_typewriter_frames(
     app: &Entity<MarkionApp>,
     window: &mut Window,
@@ -443,6 +463,51 @@ fn organize_local_images_reports_partial_failure_and_keeps_failed_reference(
 }
 
 #[gpui::test]
+fn organize_local_images_does_not_publish_while_git_has_exclusive_admission(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let docs = temp.path().join("docs");
+    let shared = temp.path().join("shared");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    let source = shared.join("logo.png");
+    std::fs::write(&source, b"logo").unwrap();
+    let document_path = docs.join("note.md");
+    let mut document = MarkdownDocument::from_text("![icon](../shared/logo.png)\n");
+    document.save_as(&document_path).unwrap();
+    let repository = markion_git_sync::RepositoryIdentity::new(
+        temp.path().to_path_buf(),
+        temp.path().join(".git"),
+        temp.path().join(".git"),
+    );
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.git_operations.register(repository.clone());
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let exclusive = app
+            .git_operations
+            .begin_exclusive(&repository, "test-sync")
+            .unwrap();
+        let candidates = vec![OrganizeCandidate {
+            authored_url: "../shared/logo.png".to_owned(),
+            source_path: source.clone(),
+        }];
+        app.apply_organize_candidates(&document_path, &candidates, cx);
+        assert!(!docs.join("note.assets").exists());
+        assert_eq!(
+            app.active_tab().document.text(),
+            "![icon](../shared/logo.png)\n"
+        );
+        drop(exclusive);
+    });
+}
+
+#[gpui::test]
 fn organize_local_images_requires_a_saved_document(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
     app.update(cx, |app, _| {
@@ -483,6 +548,71 @@ fn organize_local_images_reports_nothing_to_do_for_in_scope_references(cx: &mut 
                 t(app.language, Msg::StatusOrganizeNothingToDo).to_owned()
             );
         });
+    });
+}
+
+#[gpui::test]
+fn completed_image_operation_applies_to_originating_inactive_tab_in_one_undo_step(
+    cx: &mut TestAppContext,
+) {
+    let first = MarkdownDocument::from_text("![a](one.png) and ![b](two.png)");
+    let second = MarkdownDocument::from_text("active tab");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(first), EditorTab::new(second)];
+        app.active_tab = 1;
+        app.tabs[0].selected_range = 0..0;
+        app.tabs[1].selected_range = 3..3;
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let occurrences = app.tabs[0].document.image_occurrence_scan().occurrences;
+        let config = markion::ImageJobConfig {
+            document: app.tabs[0].document.instance_id(),
+            document_path: None,
+            document_version: app.tabs[0].document.version(),
+            kind: markion::ImageOperationKind::Upload,
+            preferences: app.image_preferences.clone(),
+            targets: occurrences
+                .iter()
+                .map(markion::ImageOccurrence::target)
+                .collect(),
+            occurrences: occurrences.clone(),
+        };
+        let operation = app
+            .image_operations
+            .begin(&app.tabs[0].document, config, vec![]);
+        let before_undo = app.tabs[0].undo_stack.len();
+        let active_selection = app.tabs[1].selected_range.clone();
+        let outputs = HashMap::from([
+            (occurrences[0].id, "https://cdn.test/one.png".to_owned()),
+            (occurrences[1].id, "https://cdn.test/two.png".to_owned()),
+        ]);
+        assert_eq!(
+            app.apply_image_operation_outputs(operation, &outputs, cx),
+            (2, 0)
+        );
+        assert_eq!(app.active_tab, 1);
+        assert_eq!(app.tabs[1].selected_range, active_selection);
+        assert_eq!(app.tabs[0].undo_stack.len(), before_undo + 1);
+        assert!(
+            app.tabs[0]
+                .document
+                .text()
+                .contains("https://cdn.test/one.png")
+        );
+        assert!(
+            app.tabs[0]
+                .document
+                .text()
+                .contains("https://cdn.test/two.png")
+        );
+        assert!(app.tabs[0].apply_undo());
+        assert_eq!(
+            app.tabs[0].document.text(),
+            "![a](one.png) and ![b](two.png)"
+        );
     });
 }
 
@@ -1221,6 +1351,80 @@ fn native_structural_format_menu_actions_share_the_bound_handlers() {
                 && bindings.contains(action),
             "{descriptor} must bind the native menu's {action} handler"
         );
+    }
+}
+
+#[test]
+fn image_format_actions_are_grouped_under_one_images_submenu() {
+    let bootstrap = include_str!("bootstrap.rs").replace("\r\n", "\n");
+    let native_format = bootstrap
+        .split_once("name: t(language, Msg::MenuFormat).into()")
+        .and_then(|(_, rest)| {
+            rest.split_once("name: t(language, Msg::MenuExport).into()")
+                .map(|(format, _)| format)
+        })
+        .expect("native Format menu");
+    assert!(native_format.contains("MenuItem::submenu(Menu"));
+    assert!(native_format.contains("name: image_t(language, ImageMsg::Tab).into()"));
+    for (label, action) in [
+        ("Msg::ItemImage", "InsertImage"),
+        ("ImageMsg::InsertFile", "InsertImageFile"),
+        ("ImageMsg::InsertUrl", "InsertImageUrl"),
+        ("ImageMsg::UploadSelected", "UploadSelectedImage"),
+        ("ImageMsg::SaveSelected", "SaveSelectedImageLocally"),
+        ("ImageMsg::UploadDocument", "UploadDocumentImages"),
+        ("ImageMsg::SaveDocument", "SaveDocumentImagesLocally"),
+    ] {
+        assert_eq!(
+            native_format.matches(label).count(),
+            1,
+            "native Images submenu must contain {label} exactly once"
+        );
+        assert!(
+            native_format.contains(action),
+            "{label} must dispatch {action}"
+        );
+    }
+
+    let root_view = include_str!("root_view.rs").replace("\r\n", "\n");
+    let in_window_format = root_view
+        .split_once("AppMenu::Format =>")
+        .and_then(|(_, rest)| {
+            rest.split_once("AppMenu::Export =>")
+                .map(|(format, _)| format)
+        })
+        .expect("in-window Format menu");
+    assert!(in_window_format.contains("menu_submenu_parent_button"));
+    assert!(in_window_format.contains("ImageMsg::Tab"));
+    for item in [
+        "ImageMsg::InsertFile",
+        "ImageMsg::InsertUrl",
+        "ImageMsg::UploadSelected",
+        "ImageMsg::SaveSelected",
+        "ImageMsg::UploadDocument",
+        "ImageMsg::SaveDocument",
+    ] {
+        assert!(
+            !in_window_format.contains(item),
+            "{item} must not remain at the Format root"
+        );
+    }
+    let flyout = root_view
+        .split_once("pub(super) fn format_images_submenu_panel")
+        .and_then(|(_, rest)| {
+            rest.split_once("pub(super) fn advanced_git_submenu_panel")
+                .map(|(images, _)| images)
+        })
+        .expect("in-window Images flyout");
+    for item in [
+        "ImageMsg::InsertFile",
+        "ImageMsg::InsertUrl",
+        "ImageMsg::UploadSelected",
+        "ImageMsg::SaveSelected",
+        "ImageMsg::UploadDocument",
+        "ImageMsg::SaveDocument",
+    ] {
+        assert!(flyout.contains(item), "Images flyout omitted {item}");
     }
 }
 
@@ -3256,11 +3460,10 @@ fn whitespace_row_height_respects_the_pathological_bound() {
 #[test]
 fn whitespace_caret_line_tracks_newlines_before_the_source_caret() {
     let text = "Hello\n\n\n";
-    let range = 5..8;
+    let range = 6..8;
     let line_height = default_paragraph_line_height();
-    assert_eq!(whitespace_caret_line(range.clone(), 5, text), 0);
-    assert_eq!(whitespace_caret_line(range.clone(), 6, text), 1);
-    assert_eq!(whitespace_caret_line(range.clone(), 7, text), 2);
+    assert_eq!(whitespace_caret_line(range.clone(), 6, text), 0);
+    assert_eq!(whitespace_caret_line(range.clone(), 7, text), 1);
     assert_eq!(whitespace_caret_line(range, 8, text), 2);
     assert_eq!(whitespace_caret_y(0, line_height), 0.);
     assert_eq!(whitespace_caret_y(1, line_height), line_height);
@@ -3270,24 +3473,68 @@ fn whitespace_caret_line_tracks_newlines_before_the_source_caret() {
 #[test]
 fn whitespace_source_at_line_and_y_map_to_newline_bytes() {
     let text = "Hello\n\n\n";
-    let range = 5..8;
+    let range = 6..8;
     let line_height = default_paragraph_line_height();
-    assert_eq!(whitespace_source_at_line(range.clone(), 0, text), 5);
-    assert_eq!(whitespace_source_at_line(range.clone(), 1, text), 6);
-    assert_eq!(whitespace_source_at_line(range.clone(), 2, text), 7);
-    assert_eq!(whitespace_source_at_line(range.clone(), 9, text), 7);
+    assert_eq!(whitespace_source_at_line(range.clone(), 0, text), 6);
+    assert_eq!(whitespace_source_at_line(range.clone(), 1, text), 7);
+    assert_eq!(whitespace_source_at_line(range.clone(), 2, text), 8);
+    assert_eq!(whitespace_source_at_line(range.clone(), 9, text), 8);
     assert_eq!(
         whitespace_source_at_y(range.clone(), px(0.), text, line_height),
-        5
-    );
-    assert_eq!(
-        whitespace_source_at_y(range.clone(), px(line_height), text, line_height),
         6
     );
     assert_eq!(
-        whitespace_source_at_y(range, px(2. * line_height + 4.), text, line_height),
+        whitespace_source_at_y(range.clone(), px(line_height), text, line_height),
         7
     );
+    assert_eq!(
+        whitespace_source_at_y(range, px(2. * line_height + 4.), text, line_height),
+        8
+    );
+}
+
+#[test]
+fn visual_blank_line_mapping_preserves_crlf_and_distinct_eof() {
+    for content in [
+        "#",
+        "###   ",
+        "正文",
+        "**正文**",
+        "[链接](https://example.com)",
+    ] {
+        for eol in ["\n", "\r\n"] {
+            for suffix in ["", "尾行"] {
+                let source = format!("{content}{eol}  {eol}{eol}{suffix}");
+                let doc = MarkdownDocument::from_text(&source);
+                let blocks = doc.visual_blocks_shared();
+                let gap = blocks
+                    .iter()
+                    .find(|block| matches!(block.kind, VisualBlockKind::Whitespace))
+                    .unwrap();
+                assert_eq!(gap.source_range.start, content.len() + eol.len());
+                let count = if suffix.is_empty() { 3 } else { 2 };
+                assert_eq!(
+                    whitespace_painted_line_count(gap.source_range.clone(), &source),
+                    count
+                );
+                assert_eq!(gap.height_signature, Some(count as u32));
+                for row in 0..count {
+                    let target = whitespace_source_at_line(gap.source_range.clone(), row, &source);
+                    assert_eq!(
+                        source[..target].bytes().filter(|b| *b == b'\n').count(),
+                        row + 1,
+                        "{source:?}, row {row}"
+                    );
+                    assert_ne!(source.as_bytes().get(target.wrapping_sub(1)), Some(&b'\r'));
+                    assert_eq!(
+                        whitespace_caret_line(gap.source_range.clone(), target, &source),
+                        row
+                    );
+                }
+                assert!(Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+            }
+        }
+    }
 }
 
 #[test]
@@ -5427,6 +5674,7 @@ fn list_scrollbar_marks_sync_driver_only_for_preview() {
     for target in [
         PaneScrollTarget::PreferencesGeneral,
         PaneScrollTarget::PreferencesAppearance,
+        PaneScrollTarget::PreferencesImages,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
         PaneScrollTarget::FileTree,
@@ -5453,6 +5701,7 @@ fn preferences_scrollbar_targets_are_no_op_for_sync_scroll(cx: &mut TestAppConte
     for target in [
         PaneScrollTarget::PreferencesGeneral,
         PaneScrollTarget::PreferencesAppearance,
+        PaneScrollTarget::PreferencesImages,
         PaneScrollTarget::PreferencesShortcutCategories,
         PaneScrollTarget::PreferencesShortcutActions,
         PaneScrollTarget::FileTree,
@@ -9209,6 +9458,274 @@ fn visual_edit_paragraph_enter_shows_caret_not_source_island(cx: &mut TestAppCon
         assert!(tab.document.is_dirty());
         assert!(!tab.undo_stack.is_empty());
     });
+}
+
+#[gpui::test]
+fn visual_terminal_caret_matches_source_line(cx: &mut TestAppContext) {
+    for line in [
+        "#",
+        "###   ",
+        "正文",
+        "**正文**",
+        "[链接](https://example.com)",
+        "- 条目",
+        "- [ ] 任务",
+        "> 引用",
+        "> #",
+        "> - 条目",
+    ] {
+        for eol in ["\n", "\r\n"] {
+            let source = format!("# 测试{eol}{eol}{line}{eol}");
+            let line_end = source.len() - eol.len();
+            let (app, cx) = cx.add_window_view(|_, cx| {
+                let mut app = MarkionApp::new(cx);
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+                app.active_tab_mut().selected_range = line_end..line_end;
+                app.view_mode = ViewMode::VisualEdit;
+                app.typewriter_mode = false;
+                app
+            });
+            cx.simulate_resize(size(px(1100.), px(800.)));
+            cx.update(|window, cx| {
+                cx.clear_key_bindings();
+                bind_app_keys(cx, &BTreeMap::new());
+                window.focus(&app.read(cx).focus_handle);
+                window.activate_window();
+            });
+            cx.run_until_parked();
+            let before = app.update(cx, |app, _| {
+                app.active_tab()
+                    .visual_caret_bounds
+                    .unwrap_or_else(|| panic!("missing line-end caret for {source:?}"))
+            });
+            let (version, cache) = app.update(cx, |app, _| {
+                (
+                    app.active_tab().document.version(),
+                    app.active_tab().document.visual_blocks_shared(),
+                )
+            });
+            cx.dispatch_action(ToggleSourceSplitMode);
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                assert_eq!(app.view_mode, ViewMode::Edit);
+                assert_eq!(app.active_tab().cursor_offset(), line_end);
+            });
+            cx.dispatch_action(SetVisualEditMode);
+            cx.run_until_parked();
+            app.update(cx, |app, cx| app.move_to(source.len(), cx));
+            cx.run_until_parked();
+            let blank = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+            assert!(
+                blank.top() > before.top() + px(5.),
+                "{source:?}: line end {before:?}, blank {blank:?}"
+            );
+            cx.simulate_click(
+                point(blank.left() + px(1.), blank.center().y),
+                Modifiers::none(),
+            );
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                assert_eq!(app.active_tab().cursor_offset(), source.len(), "{source:?}");
+                assert_eq!(app.active_tab().document.version(), version);
+                assert!(Arc::ptr_eq(
+                    &cache,
+                    &app.active_tab().document.visual_blocks_shared()
+                ));
+            });
+            cx.simulate_keystrokes("up");
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                let offset = app.active_tab().cursor_offset();
+                assert!(
+                    offset <= line_end && offset >= line_end - line.len(),
+                    "up {source:?}: {offset}"
+                );
+            });
+            cx.simulate_keystrokes("down");
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                assert_eq!(
+                    app.active_tab().cursor_offset(),
+                    source.len(),
+                    "down {source:?}"
+                )
+            });
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    EntityInputHandler::replace_and_mark_text_in_range(
+                        app, None, "新🙂", None, window, cx,
+                    );
+                });
+            });
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                assert!(app.active_tab().visual_marked_range_bounds.is_some());
+                assert!(
+                    app.active_tab().visual_caret_bounds.unwrap().top() > before.top() + px(5.)
+                );
+            });
+            cx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    EntityInputHandler::unmark_text(app, window, cx)
+                });
+            });
+            app.update(cx, |app, _| {
+                assert_eq!(app.active_tab().document.text(), format!("{source}新🙂"));
+                assert!(app.active_tab_mut().apply_undo());
+                assert_eq!(app.active_tab().document.text(), source);
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn visual_terminal_blank_rows_keep_pointer_and_arrow_targets(cx: &mut TestAppContext) {
+    for eol in ["\n", "\r\n"] {
+        let source = format!("#{eol}  {eol}{eol}");
+        let targets = [1 + eol.len() + 2, 1 + 2 * eol.len() + 2, source.len()];
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+            app.active_tab_mut().selected_range = targets[0]..targets[0];
+            app.view_mode = ViewMode::VisualEdit;
+            app.typewriter_mode = false;
+            app
+        });
+        cx.update(|window, cx| {
+            window.focus(&app.read(cx).focus_handle);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+        let first = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+        let height = app.update(cx, |app, _| app.typography_metrics().paragraph_line_height);
+        for (row, target) in targets.into_iter().enumerate() {
+            cx.simulate_click(
+                point(
+                    first.left() + px(1.),
+                    first.center().y + px(row as f32 * height),
+                ),
+                Modifiers::none(),
+            );
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                assert_eq!(
+                    app.active_tab().cursor_offset(),
+                    target,
+                    "{eol:?}, row {row}"
+                )
+            });
+            cx.simulate_input("新");
+            cx.run_until_parked();
+            app.update(cx, |app, cx| {
+                assert_eq!(
+                    app.active_tab().document.text(),
+                    format!("{}新{}", &source[..target], &source[target..])
+                );
+                assert!(app.active_tab_mut().apply_undo());
+                assert_eq!(app.active_tab().document.text(), source);
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        for target in targets.into_iter().rev().skip(1) {
+            cx.dispatch_action(Up);
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                assert_eq!(app.active_tab().cursor_offset(), target)
+            });
+        }
+        for target in targets.into_iter().skip(1) {
+            cx.dispatch_action(Down);
+            cx.run_until_parked();
+            app.update(cx, |app, _| {
+                assert_eq!(app.active_tab().cursor_offset(), target)
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn visual_mixed_fragment_boundary_paints_one_caret(cx: &mut TestAppContext) {
+    let source = "alpha beta [链接](https://example.com) and <sup>2</sup> x<sub>3</sub>\nlast line";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 6..6;
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = false;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let before = app.read(cx).active_tab().visual_caret_paint_count;
+        window.refresh();
+        let _ = window.draw(cx);
+        let after = app.read(cx).active_tab().visual_caret_paint_count;
+        assert_eq!(
+            after - before,
+            1,
+            "a shared fragment boundary must have one caret owner"
+        );
+    });
+    app.update(cx, |app, cx| app.move_to(source.len(), cx));
+    cx.run_until_parked();
+    cx.dispatch_action(Up);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().cursor_offset() <= source.find('\n').unwrap());
+    });
+    cx.dispatch_action(Down);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().cursor_offset() > source.find('\n').unwrap());
+    });
+}
+
+#[gpui::test]
+fn visual_bare_structure_keeps_a_visible_caret(cx: &mut TestAppContext) {
+    for source in [
+        "#", "######", "-", "+", "*", "1.", "1)", "- [ ]", ">", "> #",
+    ] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.active_tab_mut().selected_range = source.len()..source.len();
+            app.view_mode = ViewMode::VisualEdit;
+            app.typewriter_mode = false;
+            app
+        });
+        cx.update(|window, cx| {
+            window.focus(&app.read(cx).focus_handle);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+        let before = app.update(cx, |app, _| {
+            app.active_tab()
+                .visual_caret_bounds
+                .unwrap_or_else(|| panic!("{source:?} has no caret"))
+        });
+        cx.simulate_input(" 文");
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert_eq!(app.active_tab().document.text(), format!("{source} 文"));
+            let after = app
+                .active_tab()
+                .visual_caret_bounds
+                .expect("caret after typing");
+            // Typing directly after a bare marker can legitimately turn a
+            // heading/list into a paragraph and change its font metrics.
+            assert!(
+                after.top() < before.bottom() && after.bottom() > before.top(),
+                "{source:?}: {before:?} -> {after:?}"
+            );
+            assert!(app.active_tab_mut().apply_undo());
+            assert_eq!(app.active_tab().document.text(), source);
+        });
+    }
 }
 
 #[gpui::test]
@@ -14480,13 +14997,13 @@ fn visual_link_editor_commits_one_exact_undoable_mutation(cx: &mut TestAppContex
         app
     });
 
-    app.update(cx, |app, cx| {
+    app.update_in(cx, |app, window, cx| {
         let version = app.active_tab().document.version();
         app.open_link_editor(cx);
         let editor = app.link_editor.as_mut().unwrap();
         editor.url = "docs/a b.md".into();
         editor.title = "标题".into();
-        app.confirm_link_editor(cx);
+        app.confirm_link_editor(window, cx);
         assert_eq!(
             app.active_tab().document.text(),
             "open [文档](<docs/a b.md> \"标题\")"
@@ -15109,7 +15626,7 @@ fn flow_neutral_hover_focus_and_menu_leave_wrapped_geometry_and_state_unchanged(
 }
 
 #[gpui::test]
-fn visual_block_context_targeting_preserves_non_caret_selection_and_rejects_unsupported(
+fn visual_block_context_targeting_preserves_non_caret_selection_and_rejects_stale(
     cx: &mut TestAppContext,
 ) {
     const SOURCE: &str = "first\n\nsecond\n\n![image](missing-context-target.png)";
@@ -15174,8 +15691,8 @@ fn visual_block_context_targeting_preserves_non_caret_selection_and_rejects_unsu
 
     cx.dispatch_action(ClearFileTreeSearch);
     let image_row = cx
-        .debug_bounds(test_debug_selector(format!("visual-document-row-{image}")))
-        .expect("unsupported image row");
+        .debug_bounds(test_debug_selector(format!("visual-block-row-{image}")))
+        .expect("image context target");
     cx.simulate_event(MouseUpEvent {
         button: MouseButton::Right,
         position: image_row.center(),
@@ -15183,14 +15700,28 @@ fn visual_block_context_targeting_preserves_non_caret_selection_and_rejects_unsu
         click_count: 1,
     });
     cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-image-upload").is_some(),
+        "image target must expose image actions"
+    );
     app.update(cx, |app, cx| {
-        assert!(app.block_menu.is_none());
+        let menu = app.block_menu.as_ref().expect("image right-click menu");
+        assert_eq!(menu.target.block_id, blocks[image].id);
+        assert_eq!(menu.anchor, image_row.center());
+        assert_eq!(app.active_tab().selected_range, selection);
+        app.block_menu = None;
         let mut stale = BlockTarget::from_block(version, &blocks[second]);
         stale.document_version += 1;
         app.open_visual_block_menu(stale, image_row.center(), cx);
         assert!(app.block_menu.is_none());
         assert_eq!(app.active_tab().selected_range, selection);
+        cx.notify();
     });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-image-upload").is_none(),
+        "the rejected stale target must not leave an image menu open"
+    );
 }
 
 #[gpui::test]
@@ -15815,10 +16346,10 @@ fn link_editor_ime_composition_stays_out_of_canonical_markdown_until_apply(
             EntityInputHandler::replace_text_in_range(app, None, "链接", window, cx);
         });
     });
-    app.update(cx, |app, cx| {
+    app.update_in(cx, |app, window, cx| {
         assert_eq!(app.active_tab().document.text(), "文档");
         assert_eq!(app.link_editor.as_ref().unwrap().url, "链接");
-        app.confirm_link_editor(cx);
+        app.confirm_link_editor(window, cx);
         assert_eq!(app.active_tab().document.text(), "[文档](链接)");
         assert_eq!(app.active_tab().undo_stack.len(), 1);
     });
@@ -15836,15 +16367,17 @@ fn pasted_clipboard_image_uses_managed_asset_and_one_undo(cx: &mut TestAppContex
         app.active_tab_mut().selected_range = 7..7;
         app
     });
+    let png = tiny_png_bytes();
     cx.update(|_, cx| {
         cx.write_to_clipboard(ClipboardItem::new_image(&gpui::Image::from_bytes(
             ImageFormat::Png,
-            b"clipboard-image".to_vec(),
+            png.clone(),
         )));
     });
     cx.update(|window, cx| {
         app.update(cx, |app, cx| app.paste(&Paste, window, cx));
     });
+    wait_for_image_operations(&app, cx);
     app.update(cx, |app, _| {
         let text = app.active_tab().document.text();
         assert!(
@@ -15859,7 +16392,175 @@ fn pasted_clipboard_image_uses_managed_asset_and_one_undo(cx: &mut TestAppContex
             .unwrap()
             .unwrap()
             .path();
-        assert_eq!(fs::read(asset).unwrap(), b"clipboard-image");
+        assert_eq!(fs::read(asset).unwrap(), png);
+    });
+}
+
+#[gpui::test]
+fn remote_url_keep_inserts_into_untitled_document(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("before "))];
+        app.active_tab_mut().selected_range = 7..7;
+        app.image_preferences.remote_policy = markion::RemoteImagePolicy::Keep;
+        app
+    });
+    app.update_in(cx, |app, window, cx| {
+        app.insert_image_url(&InsertImageUrl, window, cx);
+        let editor = app.link_editor.as_mut().unwrap();
+        editor.label = "remote".into();
+        editor.url = "https://cdn.example.test/a.png?sig=keep".into();
+        editor.title = "caption".into();
+        app.confirm_link_editor(window, cx);
+    });
+    wait_for_image_operations(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "before ![remote](https://cdn.example.test/a.png?sig=keep \"caption\")"
+        );
+        assert!(app.active_tab().document.path().is_none());
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn images_preferences_render_without_starting_work_and_persist_controls(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let preferences_path = dir.path().join("config.toml");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.preferences_path = preferences_path.clone();
+        app.preferences_panel_open = true;
+        app.preferences_tab = PreferencesTab::Images;
+        app
+    });
+    cx.simulate_resize(size(px(820.), px(520.)));
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        assert!(app.preferences_panel_open);
+        assert_eq!(app.preferences_tab, PreferencesTab::Images);
+        assert_ne!(app.palette().panel_bg, app.palette().text);
+        assert!(app.image_cancellations.is_empty());
+        app.set_local_image_policy(markion::LocalImagePolicy::Upload, cx);
+        app.set_image_resource_directory("assets/{document}", cx);
+        app.set_image_uploader(markion::ImageUploaderKind::Command, cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let max_scroll = app.update(cx, |app, _| {
+        f32::from(app.preferences_images_scroll.max_offset().height).max(0.)
+    });
+    assert!(
+        max_scroll > 1.,
+        "Images preferences must overflow in the fixture"
+    );
+    assert!(
+        cx.debug_bounds("preferences-images-scrollbar").is_some(),
+        "Images preferences must render its visible scrollbar"
+    );
+    let body = cx
+        .debug_bounds("preferences-images-body")
+        .expect("Images preferences scroll body");
+    cx.simulate_event(ScrollWheelEvent {
+        position: body.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-120.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(app.preferences_images_scroll.offset().y < px(0.));
+    });
+    let loaded = markion::load_app_preferences(&preferences_path).unwrap();
+    assert_eq!(
+        loaded.images.local_policy,
+        markion::LocalImagePolicy::Upload
+    );
+    assert_eq!(loaded.images.directory, "assets/{document}");
+    assert_eq!(loaded.images.uploader, markion::ImageUploaderKind::Command);
+    app.update(cx, |app, _| assert!(app.image_cancellations.is_empty()));
+}
+
+#[gpui::test]
+fn pasted_markdown_local_image_is_rewritten_in_a_separate_undo_step(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    fs::write(dir.path().join("source.png"), tiny_png_bytes()).unwrap();
+    let mut document = MarkdownDocument::from_text("before ");
+    document.save_as(&path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = 7..7;
+        app.image_preferences.local_policy = markion::LocalImagePolicy::Copy;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("![local](source.png)".into()));
+    });
+    cx.update(|window, cx| app.update(cx, |app, cx| app.paste(&Paste, window, cx)));
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "before ![local](source.png)"
+        );
+    });
+    wait_for_image_operations(&app, cx);
+    app.update(cx, |app, _| {
+        let text = app.active_tab().document.text();
+        assert!(
+            text.starts_with("before ![local](note.assets/source-"),
+            "{text}"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 2);
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(
+            app.active_tab().document.text(),
+            "before ![local](source.png)"
+        );
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), "before ");
+    });
+}
+
+#[gpui::test]
+fn image_replacement_preserves_metadata_and_originating_tab(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let first_path = dir.path().join("first.md");
+    let replacement = dir.path().join("new.png");
+    fs::write(&replacement, tiny_png_bytes()).unwrap();
+    let mut first =
+        MarkdownDocument::from_text("![alt](missing.png \"title\"){width=40% align=right}");
+    first.save_as(&first_path).unwrap();
+    let first_id = first.instance_id();
+    let occurrence = first.image_occurrence_scan().occurrences[0].id;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![
+            EditorTab::new(first),
+            EditorTab::new(MarkdownDocument::from_text("second")),
+        ];
+        app.image_preferences.local_policy = markion::LocalImagePolicy::Keep;
+        app
+    });
+    app.update(cx, |app, cx| {
+        app.start_image_replacement(
+            first_id,
+            occurrence,
+            markion::ImageInput::Local(replacement.clone()),
+            cx,
+        );
+        app.active_tab = 1;
+    });
+    wait_for_image_operations(&app, cx);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab, 1);
+        assert_eq!(app.tabs[1].document.text(), "second");
+        let text = app.tabs[0].document.text();
+        assert!(text.contains("![alt](new.png \"title\")"), "{text}");
+        assert!(text.contains("width=40% align=right"), "{text}");
+        assert_eq!(app.tabs[0].undo_stack.len(), 1);
     });
 }
 
@@ -15967,6 +16668,117 @@ fn visual_image_presentation_is_one_exact_undoable_mutation(cx: &mut TestAppCont
         assert_eq!(app.active_tab().undo_stack.len(), 1);
         assert!(app.active_tab_mut().apply_undo());
         assert_eq!(app.active_tab().document.text(), source);
+    });
+}
+
+#[gpui::test]
+fn visual_image_actions_live_in_the_right_click_menu_without_inline_strip(cx: &mut TestAppContext) {
+    let source =
+        "![本地图](old.png \"Local\")\n\n![网络图](https://example.invalid/remote.png \"Remote\")";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 3..3;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("image-width-25").is_none());
+    assert!(cx.debug_bounds("image-align-left").is_none());
+    assert!(cx.debug_bounds("image-upload").is_none());
+
+    let image_indices = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| {
+                matches!(block.kind, VisualBlockKind::Image { .. }).then_some(index)
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(image_indices.len(), 2);
+
+    let local_row = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-block-row-{}",
+            image_indices[0]
+        )))
+        .expect("local image should expose a right-click target");
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: local_row.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    for selector in [
+        "visual-image-width",
+        "visual-image-alignment",
+        "visual-image-edit-source",
+        "visual-image-replace",
+        "visual-image-save-local",
+        "visual-image-upload",
+    ] {
+        assert!(
+            cx.debug_bounds(selector).is_some(),
+            "image context menu omitted {selector}"
+        );
+    }
+    app.update(cx, |app, _| {
+        let items = app.block_menu.as_ref().unwrap().root_items();
+        assert!(items.contains(&BlockMenuItem::Duplicate));
+        assert!(items.contains(&BlockMenuItem::MoveUp));
+        assert!(items.contains(&BlockMenuItem::MoveDown));
+        assert!(items.contains(&BlockMenuItem::Delete));
+    });
+
+    app.update(cx, |app, cx| {
+        app.block_menu = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let remote_row = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-block-row-{}",
+            image_indices[1]
+        )))
+        .expect("remote image should expose a right-click target");
+    cx.simulate_event(MouseUpEvent {
+        button: MouseButton::Right,
+        position: remote_row.center(),
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-image-upload").is_some(),
+        "remote image right-click should open the image context menu"
+    );
+
+    let width = cx.debug_bounds("visual-image-width").unwrap();
+    cx.simulate_event(MouseMoveEvent {
+        position: width.center(),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let width_50 = cx
+        .debug_bounds("visual-image-width-50")
+        .expect("width submenu must expose 50%");
+    cx.simulate_click(width_50.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "![本地图](old.png \"Local\")\n\n![网络图](https://example.invalid/remote.png \"Remote {width=50 align=center}\")"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert!(app.block_menu.is_none());
     });
 }
 
@@ -16079,6 +16891,111 @@ fn visual_image_failed_load_forces_the_source_payload(cx: &mut TestAppContext) {
             app.preview_image_entry("missing.png", &markion::ImageSourceIdentity::FromUrl, None,),
             PreviewImageEntry::Pending | PreviewImageEntry::Error(_)
         ));
+    });
+}
+
+#[gpui::test]
+fn local_file_image_insertion_in_chinese_document_loads_in_preview(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("真实项目-中文文档.md");
+    let image = dir.path().join("本地截图.png");
+    fs::write(&image, tiny_png_bytes()).unwrap();
+    let mut document = MarkdownDocument::from_text("");
+    document.save_as(&path).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    app.update_in(cx, |app, window, cx| {
+        app.request_image_import(
+            vec![PendingImageInput {
+                label: "本地截图".into(),
+                title: None,
+                input: markion::ImageInput::Local(image.clone()),
+                source_kind: PendingImageSourceKind::Local,
+            }],
+            window,
+            cx,
+        );
+    });
+    wait_for_image_operations(&app, cx);
+    app.update(cx, |app, cx| {
+        assert!(app.active_tab().document.text().contains('%'));
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        let preview = app.active_tab().document.preview_blocks_shared();
+        let visual = app.active_tab().document.visual_blocks_shared();
+        app.refresh_tab_image_claims(0, &preview, &visual, Some(dir.path()), cx);
+        app.ensure_preview_images(&preview, &visual, Some(dir.path()), cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.preview_blocks_shared();
+        let (url, identity) = blocks
+            .iter()
+            .find_map(|block| match block {
+                PreviewBlock::Image { url, identity, .. } => Some((url, identity)),
+                _ => None,
+            })
+            .expect("inserted image");
+        assert!(matches!(
+            app.preview_image_entry(url, identity, Some(dir.path())),
+            PreviewImageEntry::Ready(_)
+        ));
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn failed_image_placeholder_stays_inside_a_narrow_document_column(cx: &mut TestAppContext) {
+    let url = format!(
+        "missing/{}/{}.png",
+        "目录".repeat(40),
+        "长文件名".repeat(80)
+    );
+    let source = format!("![截图]({url})");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.sidebar_visible = false;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(600.)));
+    cx.run_until_parked();
+    let version = app.update(cx, |app, cx| {
+        let key = PreviewImageKey::from_url(&url, None);
+        app.preview_image_cache.complete(
+            &key,
+            Err(format!(
+                "failed to read {url}: {}",
+                "system error ".repeat(100)
+            )),
+        );
+        cx.notify();
+        app.active_tab().document.version()
+    });
+    cx.run_until_parked();
+    let row = cx.debug_bounds("visual-block-row-0").expect("image row");
+    let placeholder = cx
+        .debug_bounds("preview-image-error")
+        .expect("error placeholder");
+    let filename = cx
+        .debug_bounds("preview-image-error-filename")
+        .expect("readable filename");
+    assert!(placeholder.size.width <= row.size.width);
+    assert!(row.contains(&placeholder.center()));
+    assert!(filename.left() >= placeholder.left());
+    assert!(filename.right() <= placeholder.right());
+    assert!(
+        placeholder.size.height <= px(90.),
+        "error must not grow with diagnostic length"
+    );
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(app.active_tab().undo_stack.is_empty());
     });
 }
 

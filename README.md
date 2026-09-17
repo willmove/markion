@@ -62,7 +62,7 @@ The **View → Source/Split Preview** command (`Ctrl+/` on Windows/Linux, `Cmd+/
 - Heading commands expose H1–H5 by default, with an H1–H6 option in Preferences.
 - Find and replace supports case sensitivity, regular expressions, next/previous navigation, replace current, and replace all.
 - Source table commands can format tables and add, delete, or move rows and columns. Visual Edit tables additionally provide direct source-backed cell editing, Tab traversal, deterministic width reflow, and the same row/column operations; ordinary preview tables remain read-only.
-- A local image-resource workflow ingests clipboard images and dragged image files: Markion copies or encodes them into a document-relative asset directory with collision-resistant names, inserts portable relative Markdown links, replaces an existing image without losing its alt text or presentation metadata, exposes practical size/alignment controls, and shows an explicit missing-resource state.
+- An image-resource workflow ingests clipboard images, dragged files, explicit file/URL insertion, and existing document images. Policies can keep, copy/download, or upload through PicGo HTTP, PicGo Core, or a literal custom command; see the [image handling and upload guide](docs/image-handling.md). Markion uses collision-resistant document-relative resources, preserves exact image metadata, and keeps transfer recovery outside Markdown.
 - YAML front matter is parsed and hidden from preview; `title`, `author`, and `date` feed export metadata.
 - Document writes are same-directory atomic replacements that preserve the existing path and dirty state when a write fails. Markion tracks the last known on-disk file identity, detects external changes before save and while a document is open, automatically reloads only clean documents, and gives dirty documents an explicit reload, overwrite, or save-copy conflict choice. A recovery manager inventories every recovery snapshot with its original path and disk relationship and supports Restore, Discard, Restore All, and Discard All without deleting unreadable or unselected data.
 - Auto-save defaults to a five-second inactivity delay and writes recovery copies for unsaved documents; restored recovery snapshots stay durable until a successful save, explicit discard, or an atomically written successor supersedes them.
@@ -286,7 +286,7 @@ Markion 提供四种视图模式，默认使用分栏预览。
 - 标题命令默认显示 H1–H5，可在“偏好设置”中扩展为 H1–H6。
 - 查找与替换支持区分大小写、正则表达式、上一个/下一个匹配、替换当前项和全部替换。
 - 源码表格命令可格式化表格并新增、删除或移动行列。可视化编辑中的表格还支持直接编辑单元格、使用 Tab 遍历、确定性宽度重排，以及同样的源码驱动行列操作；普通预览表格保持只读。
-- 本地图片资源工作流支持剪贴板图片和拖入的图片文件：Markion 会以抗冲突的文件名将其复制或编码到文档相对的资源目录中，插入可移植的相对 Markdown 链接，在不丢失 alt 文本或展示元数据的前提下替换已有图片，提供实用的尺寸/对齐控制，并显示明确的缺失资源状态。
+- 图片资源工作流支持剪贴板、拖入文件、显式文件／URL 插入以及已有文档图片。可按来源选择保留、复制／下载，或通过 PicGo HTTP、PicGo Core、字面参数自定义命令上传；详见[图片处理与上传指南](docs/image-handling.md)。Markion 使用抗冲突的文档相对资源，精确保留图片元数据，并将传输恢复数据置于 Markdown 之外。
 - 可解析 YAML 前言并在预览中隐藏；其中的 `title`、`author` 和 `date` 会用于导出元数据。
 - 文档写入采用同目录的原子替换，写入失败时保留文档路径和脏状态。Markion 会跟踪最近已知的磁盘文件标识，在保存前及文档打开期间检测外部更改，仅自动重新加载干净文档，并为脏文档提供重新加载、覆盖或另存为副本的冲突选择。恢复管理器会列出每个恢复快照及其原始路径和磁盘关系，支持还原、丢弃、全部还原与全部丢弃，且不会删除无法读取或未选中的恢复数据。
 - 自动保存默认在停止输入五秒后执行，并为未保存文档写入恢复副本；已还原的恢复快照会保持持久，直到成功保存、显式丢弃或被原子写入的后继恢复所取代。

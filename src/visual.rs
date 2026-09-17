@@ -634,10 +634,7 @@ pub(crate) fn build_visual_blocks(
                     .clone()
                     .unwrap_or_else(|| leaf.block.source_range().clone());
             }
-            let mut range = visual_block_source_range(text, leaf.block);
-            if leaf.quote_group.is_none() {
-                range = split_terminal_blank_row(text, leaf.block, range);
-            }
+            let range = visual_block_source_range(text, leaf.block);
             leaf.quote_group.as_ref().map_or(range.clone(), |group| {
                 quoted_leaf_source_range(text, range, group)
             })
@@ -790,7 +787,18 @@ pub(crate) fn build_visual_blocks(
         blocks.push(block);
     }
 
-    if covered_until < text.len() {
+    // A terminal line ending belongs to the preceding source line. Keep it
+    // there (so a caret before it stays beside the text), and give the empty
+    // line after it its own EOF anchor even when no uncovered bytes remain.
+    let needs_eof_row = text.ends_with('\n')
+        && blocks.last().is_some_and(|block| {
+            matches!(
+                block.kind,
+                VisualBlockKind::Paragraph | VisualBlockKind::Heading { .. }
+            ) || (block.quote_context.is_some()
+                && matches!(block.kind, VisualBlockKind::ListItem { .. }))
+        });
+    if covered_until < text.len() || needs_eof_row {
         blocks.push(gap_block(
             text,
             covered_until..text.len(),
@@ -1053,6 +1061,8 @@ fn gap_block(
             .or_else(|| standalone_quote_gap.then(|| range.clone()));
         let quote_context = quote_group
             .map(|group| quote_context_for_row(text, range.clone(), range.clone(), group));
+        let line_count = slice.bytes().filter(|byte| *byte == b'\n').count()
+            + usize::from(range.end == text.len());
         VisualBlock {
             id: allocate_id(),
             kind: VisualBlockKind::Whitespace,
@@ -1061,7 +1071,7 @@ fn gap_block(
             reveal_groups: Vec::new(),
             marker_ranges: Vec::new(),
             block_prefix: None,
-            height_signature: Some(slice.bytes().filter(|byte| *byte == b'\n').count() as u32),
+            height_signature: Some(line_count as u32),
             quote_context,
             source_island: None,
             editor: None,
@@ -1799,34 +1809,6 @@ fn visual_block_source_range(text: &str, block: &PreviewBlock) -> Range<usize> {
         {
             range.start = line_start;
         }
-    }
-    range
-}
-
-fn split_terminal_blank_row(
-    text: &str,
-    block: &PreviewBlock,
-    mut range: Range<usize>,
-) -> Range<usize> {
-    if !matches!(
-        block,
-        PreviewBlock::Paragraph { .. } | PreviewBlock::Heading { .. }
-    ) || range.end <= range.start
-        || !text[range.end..].trim().is_empty()
-        || text.as_bytes().get(range.end - 1) != Some(&b'\n')
-    {
-        return range;
-    }
-
-    // pulldown-cmark includes the first terminal line ending in a paragraph
-    // or heading range even though no inline run renders it. Leave that line
-    // ending to the coverage gap so Visual Edit creates a real whitespace row
-    // for the source caret after the very first Enter. Further Enters then grow
-    // the same tail row instead of alternating between a hidden marker and a
-    // visible blank row.
-    range.end -= 1;
-    if range.end > range.start && text.as_bytes().get(range.end - 1) == Some(&b'\r') {
-        range.end -= 1;
     }
     range
 }
@@ -3316,7 +3298,7 @@ fn block_prefix(
     let line_end = text[block_range.clone()]
         .find('\n')
         .map_or(block_range.end, |relative| block_range.start + relative);
-    let line = &text[block_range.start..line_end];
+    let line = text[block_range.start..line_end].trim_end_matches('\r');
     let quote_prefix_len = quote_context
         .and_then(|quote| quote.marker_ranges.first())
         .filter(|range| range.start == block_range.start)
@@ -3381,7 +3363,7 @@ fn block_prefix(
                 cursor += 1;
             }
             let after_marker = skip_ascii_spacing(line, cursor);
-            if after_marker == cursor {
+            if after_marker == cursor && cursor != line.len() {
                 return None;
             }
             cursor = after_marker;
@@ -3671,11 +3653,52 @@ mod tests {
         VisualSourceIslandKind, slash_command_edit, slash_query_at, transform_block,
     };
 
+    fn content_before_eof_row<'a>(
+        source: &str,
+        blocks: &'a [crate::VisualBlock],
+    ) -> &'a [crate::VisualBlock] {
+        let (tail, content) = blocks.split_last().expect("visual rows");
+        assert_eq!(tail.source_range, source.len()..source.len());
+        assert!(matches!(tail.kind, VisualBlockKind::Whitespace));
+        assert!(tail.quote_context.is_none());
+        assert_eq!(tail.height_signature, Some(1));
+        content
+    }
+
+    #[test]
+    fn quoted_headings_do_not_create_a_phantom_prefix_row() {
+        for heading in ["#", "## ", "# 标题", "### **加粗**"] {
+            for eol in ["", "\n", "\r\n"] {
+                let source = format!("> {heading}{eol}");
+                let doc = MarkdownDocument::from_text(&source);
+                let preview = doc.preview_blocks();
+                assert!(
+                    matches!(&preview[..], [PreviewBlock::BlockQuote { children, .. }]
+                    if matches!(&children[..], [PreviewBlock::Heading { .. }]))
+                );
+                let all = doc.visual_blocks_shared();
+                let blocks = if eol.is_empty() {
+                    &all[..]
+                } else {
+                    content_before_eof_row(&source, &all)
+                };
+                assert_eq!(blocks.len(), 1, "{source:?}: {all:?}");
+                let block = &blocks[0];
+                assert!(matches!(block.kind, VisualBlockKind::Heading { .. }));
+                assert!(block.quote_context.is_some());
+                assert_eq!(block.source_range, 0..source.len());
+                assert!(block.source_island.is_none());
+                assert!(Arc::ptr_eq(&all, &doc.visual_blocks_shared()));
+            }
+        }
+    }
+
     #[test]
     fn quoted_mixed_chinese_fixture_projects_once_without_overlap_or_islands() {
         let source = "> **写在前面：**\n>\n> 这半年，装机的人都被同一件事按在地上摩擦——**内存疯了**。\n>\n> 这篇文章要回答三个问题：\n> 1. **到底疯到什么程度**——用数字说话；\n> 2. **为什么内存造不快**——从一个电容讲起；\n> 3. **AI 怎么改变产能去向**——HBM 更消耗晶圆。\n>\n> 看完之后，你应该能自己判断。\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
+        let blocks = content_before_eof_row(source, &blocks);
 
         assert_eq!(blocks.first().unwrap().source_range.start, 0);
         assert_eq!(blocks.last().unwrap().source_range.end, source.len());
@@ -3736,6 +3759,7 @@ mod tests {
         let source = "> \"double\" and 'single' -- dash\n> 1. \"item\" --- long\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
+        let blocks = content_before_eof_row(source, &blocks);
         assert!(blocks.iter().all(|block| {
             block.source_island.is_none()
                 && block
@@ -3761,6 +3785,7 @@ mod tests {
         let source = "> [!NOTE]\n> \u{4f7f}\u{7528} GLM Coding Plan \u{65f6}\u{ff0c}\u{9700}\u{8981}\u{914d}\u{7f6e}\u{4e13}\u{5c5e}\u{7684} Coding API \u{7aef}\u{70b9} [https://open.bigmodel.cn/api/coding/paas/v4](https://open.bigmodel.cn/api/coding/paas/v4) \u{800c}\u{4e0d}\u{662f}\u{901a}\u{7528} API \u{7aef}\u{70b9}\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
+        let blocks = content_before_eof_row(source, &blocks);
         assert_eq!(blocks.len(), 2);
         assert!(matches!(
             blocks[0].kind,
@@ -3822,6 +3847,7 @@ mod tests {
         let source = "> [!NOTE]\n>\n> body\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
+        let blocks = content_before_eof_row(source, &blocks);
         assert_eq!(blocks.len(), 3);
         assert!(matches!(
             blocks[0].kind,
@@ -3916,6 +3942,7 @@ mod tests {
         let source = "> first line\n> second line\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
+        let blocks = content_before_eof_row(source, &blocks);
         assert_eq!(blocks.len(), 1);
         let block = &blocks[0];
         let cursor = block.editable_runs[0].content_range.start;
@@ -3938,6 +3965,7 @@ mod tests {
         let source = "> a  \n> b\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
+        let blocks = content_before_eof_row(source, &blocks);
         assert_eq!(blocks.len(), 1);
         let block = &blocks[0];
         let cursor = block.editable_runs[0].content_range.start;
@@ -3950,6 +3978,7 @@ mod tests {
         let source = "> [!CUSTOM]\n> body text\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
+        let blocks = content_before_eof_row(source, &blocks);
         assert!(
             blocks
                 .iter()
@@ -3970,6 +3999,7 @@ mod tests {
         let source = "> [!NOTE] extra\n> body\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
+        let blocks = content_before_eof_row(source, &blocks);
         assert!(
             blocks
                 .iter()
@@ -3991,10 +4021,10 @@ mod tests {
         let cursor = block.editable_runs[0].content_range.start;
         let projection = build_visual_projection(source, block, cursor..cursor, cursor);
         assert_eq!(projection.text, "alpha\nbeta");
-        assert_eq!(block.source_range, 0..source.len() - 1);
-        assert!(block.marker_ranges.is_empty());
+        assert_eq!(block.source_range, 0..source.len());
+        assert_eq!(block.marker_ranges, vec![source.len() - 1..source.len()]);
         assert!(matches!(blocks[1].kind, VisualBlockKind::Whitespace));
-        assert_eq!(blocks[1].source_range, source.len() - 1..source.len());
+        assert_eq!(blocks[1].source_range, source.len()..source.len());
     }
 
     #[test]
@@ -4003,9 +4033,13 @@ mod tests {
             let blocks = MarkdownDocument::from_text(source).visual_blocks();
             assert_eq!(blocks.len(), 2, "{source:?}: {blocks:#?}");
             assert!(matches!(blocks[0].kind, VisualBlockKind::Paragraph));
-            assert_eq!(blocks[0].source_range, 0..4);
+            let after_line = source.find('\n').unwrap() + 1;
+            assert_eq!(blocks[0].source_range, 0..after_line);
             assert!(matches!(blocks[1].kind, VisualBlockKind::Whitespace));
-            assert_eq!(&source[blocks[1].source_range.clone()], &source[4..]);
+            assert_eq!(
+                &source[blocks[1].source_range.clone()],
+                &source[after_line..]
+            );
             assert_eq!(blocks[1].source_range.end, source.len());
         }
     }
@@ -4015,6 +4049,7 @@ mod tests {
         let source = "> - parent\n>   - child\n> - [x] done\n>\n> outro\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
+        let blocks = content_before_eof_row(source, &blocks);
         assert!(
             blocks
                 .windows(2)
@@ -4361,9 +4396,12 @@ mod tests {
 
     #[test]
     fn empty_list_items_stay_list_rows_not_source_islands() {
-        for source in ["- ", "* ", "1. ", "1) ", "- [ ] "] {
+        for source in [
+            "-", "+", "*", "1.", "1)", "- ", "* ", "1. ", "1) ", "- [ ] ",
+        ] {
             assert_empty_list_item(source);
             assert_empty_list_item(&format!("{source}\n"));
+            assert_empty_list_item(&format!("{source}\r\n"));
         }
     }
 
@@ -4595,12 +4633,9 @@ mod tests {
             blocks[0].kind,
             VisualBlockKind::Heading { level: 1 }
         ));
-        assert_eq!(
-            &source[blocks[0].source_range.clone()],
-            &source[..source.len() - 1]
-        );
+        assert_eq!(&source[blocks[0].source_range.clone()], source);
         assert!(matches!(blocks[1].kind, VisualBlockKind::Whitespace));
-        assert_eq!(&source[blocks[1].source_range.clone()], "\n");
+        assert_eq!(blocks[1].source_range, source.len()..source.len());
 
         let bold = blocks[0]
             .editable_runs

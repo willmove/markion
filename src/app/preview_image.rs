@@ -83,7 +83,11 @@ impl PreviewImageKey {
                 identity: format!("remote:{}", remote_image_request_url(url)),
             }
         } else {
-            let path = PathBuf::from(url);
+            // Authored Markdown destinations are URLs, not native paths. Decode
+            // once before both cache identity and I/O; native viewer paths use
+            // from_local_path directly and must retain literal percent signs.
+            let path = markion::resolve_local_reference(Path::new(""), url)
+                .unwrap_or_else(|| PathBuf::from(url));
             let path = if path.is_absolute() {
                 path
             } else if let Some(document_dir) = document_dir {
@@ -1044,11 +1048,18 @@ pub(super) fn preview_image_view(
             .border_1()
             .border_color(rgb(0xcbd5e1))
             .bg(rgb(0xf1f5f9)),
-        PreviewImageEntry::Error(message) => div()
+        PreviewImageEntry::Error(_) => div()
+            .debug_selector(|| "preview-image-error".to_string())
             .w_full()
+            .min_w_0()
+            .max_w_full()
+            .overflow_hidden()
             .min_h(px(64.))
+            .px_3()
+            .py_2()
             .flex()
-            .items_center()
+            .flex_col()
+            .gap_1()
             .justify_center()
             .rounded_md()
             .border_1()
@@ -1056,12 +1067,43 @@ pub(super) fn preview_image_view(
             .bg(rgb(0xf8fafc))
             .text_color(rgb(0xb91c1c))
             .text_size(px(12.))
-            .child(p0_tf(
-                app.language,
-                P0Msg::MissingImage,
-                &[url, message.as_ref()],
-            )),
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .truncate()
+                    .child(p0_t(app.language, P0Msg::MissingImage)),
+            )
+            .children(preview_image_error_filename(url).map(|name| {
+                div()
+                    .debug_selector(|| "preview-image-error-filename".to_string())
+                    .w_full()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(app.palette().muted)
+                    .child(name)
+            })),
     }
+}
+
+/// A bounded human-readable label, without directories, signed queries, or
+/// embedded image bytes. Full load errors remain in the cache for diagnostics.
+fn preview_image_error_filename(url: &str) -> Option<String> {
+    if url
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    {
+        return None;
+    }
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let filename = path.rsplit(['/', '\\']).next().unwrap_or_default();
+    let decoded = percent_encoding::percent_decode_str(filename).decode_utf8_lossy();
+    let mut chars = decoded.chars().filter(|ch| !ch.is_control());
+    let mut label: String = chars.by_ref().take(120).collect();
+    if chars.next().is_some() {
+        label.push('…');
+    }
+    (!label.is_empty()).then_some(label)
 }
 
 /// Compact inline Markdown / HTML image for mixed prose (same line as
@@ -1324,6 +1366,80 @@ mod tests {
             Ok(_) => panic!("missing image must not decode"),
         };
         assert!(err.contains("missing.png"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn imported_image_in_unicode_document_decodes_from_its_markdown_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let document_path = dir.path().join("pr13-真实项目-20260916.md");
+        let source = dir.path().join("截图.png");
+        write_png(&source, 8, 6);
+        for template in ["{document}.assets", "附件 空格/100%/{document}"] {
+            let directory = markion::resolve_resource_directory(&document_path, template).unwrap();
+            let imported =
+                markion::import_image_file_to(&document_path, &directory, &source).unwrap();
+            assert!(imported.relative_url.contains('%'));
+            let document =
+                MarkdownDocument::from_text(format!("![截图]({})", imported.relative_url));
+            let url = document
+                .preview_blocks()
+                .into_iter()
+                .find_map(|block| match block {
+                    PreviewBlock::Image { url, .. } => Some(url),
+                    _ => None,
+                })
+                .expect("parsed image");
+            let key = PreviewImageKey::from_url(&url, Some(dir.path()));
+            assert_eq!(key, PreviewImageKey::from_local_path(&imported.stored_path));
+            let ready = load_preview_image(&key, None).expect("published image should decode");
+            assert_eq!((ready.width, ready.height), (8, 6));
+        }
+    }
+
+    #[test]
+    fn local_image_urls_decode_once_and_native_paths_remain_literal() {
+        let dir = tempfile::tempdir().unwrap();
+        for (filename, url) in [
+            (
+                "图片 #1.png",
+                "%E5%9B%BE%E7%89%87%20%231.png?version=1#preview",
+            ),
+            ("literal%20name.png", "literal%2520name.png"),
+            ("literal%23name.png", "literal%2523name.png"),
+            ("100%.png", "100%25.png"),
+        ] {
+            let path = dir.path().join(filename);
+            write_png(&path, 4, 3);
+            let native = PreviewImageKey::from_local_path(&path);
+            assert_eq!(PreviewImageKey::from_url(url, Some(dir.path())), native);
+            assert!(load_preview_image(&native, None).is_ok());
+        }
+        let remote = "https://example.test/%E5%9B%BE.png?sig=%2520";
+        assert_eq!(
+            PreviewImageKey::from_url(remote, None).remote_url(),
+            Some(remote)
+        );
+    }
+
+    #[test]
+    fn image_error_labels_are_readable_bounded_and_exclude_private_details() {
+        assert_eq!(
+            preview_image_error_filename("private/%E6%88%AA%E5%9B%BE.png?token=secret#anchor"),
+            Some("截图.png".into())
+        );
+        assert_eq!(
+            preview_image_error_filename("C:\\private\\image.png"),
+            Some("image.png".into())
+        );
+        assert_eq!(
+            preview_image_error_filename("assets/literal%2520.png"),
+            Some("literal%20.png".into())
+        );
+        assert!(preview_image_error_filename("data:image/png;base64,secret").is_none());
+        let label = preview_image_error_filename(&format!("{}%0A.png", "图".repeat(500))).unwrap();
+        assert_eq!(label.chars().count(), 121);
+        assert!(label.ends_with('…'));
+        assert!(!label.contains('\n'));
     }
 
     #[test]

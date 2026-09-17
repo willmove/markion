@@ -3418,6 +3418,7 @@ dependencies = [
  "sha2",
  "syntect",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "toml 0.8.23",
  "tracing",

@@ -488,6 +488,10 @@ pub struct AppPreferences {
     /// Export behavior ([export] table). Configurable only via the config
     /// file, not the Preferences panel.
     pub export: ExportPreferences,
+    /// Image insertion, resource-directory, and external uploader settings.
+    /// Cloud-provider credentials remain owned by the configured external
+    /// uploader and are never stored here.
+    pub images: ImagePreferences,
     /// Menu-action shortcut overrides ([shortcuts] table): stable action id
     /// -> GPUI keystroke string. Actions without an entry use their default
     /// binding.
@@ -525,9 +529,181 @@ impl Default for AppPreferences {
             auto_save: AutoSavePreferences::default(),
             git: GitPreferences::default(),
             export: ExportPreferences::default(),
+            images: ImagePreferences::default(),
             shortcut_overrides: std::collections::BTreeMap::new(),
         }
     }
+}
+
+pub const DEFAULT_IMAGE_RESOURCE_DIRECTORY: &str = "{document}.assets";
+pub const DEFAULT_IMAGE_TRANSFER_TIMEOUT_SECS: u64 = 60;
+pub const MIN_IMAGE_TRANSFER_TIMEOUT_SECS: u64 = 5;
+pub const MAX_IMAGE_TRANSFER_TIMEOUT_SECS: u64 = 600;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LocalImagePolicy {
+    Keep,
+    #[default]
+    Copy,
+    Upload,
+}
+
+impl LocalImagePolicy {
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Copy => "copy",
+            Self::Upload => "upload",
+        }
+    }
+
+    pub fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "keep" => Self::Keep,
+            "upload" => Self::Upload,
+            _ => Self::Copy,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClipboardImagePolicy {
+    #[default]
+    Save,
+    Upload,
+}
+
+impl ClipboardImagePolicy {
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Save => "save",
+            Self::Upload => "upload",
+        }
+    }
+
+    pub fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "upload" => Self::Upload,
+            _ => Self::Save,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RemoteImagePolicy {
+    #[default]
+    Keep,
+    Download,
+    Upload,
+}
+
+impl RemoteImagePolicy {
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Download => "download",
+            Self::Upload => "upload",
+        }
+    }
+
+    pub fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "download" => Self::Download,
+            "upload" => Self::Upload,
+            _ => Self::Keep,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ImageUploaderKind {
+    #[default]
+    None,
+    PicGoHttp,
+    PicGoCore,
+    Command,
+}
+
+impl ImageUploaderKind {
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::PicGoHttp => "picgo-http",
+            Self::PicGoCore => "picgo-core",
+            Self::Command => "command",
+        }
+    }
+
+    pub fn from_config(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "picgo-http" => Self::PicGoHttp,
+            "picgo-core" => Self::PicGoCore,
+            "command" => Self::Command,
+            _ => Self::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PicGoHttpPreferences {
+    pub endpoint: String,
+}
+
+impl Default for PicGoHttpPreferences {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://127.0.0.1:36677/upload".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PicGoCorePreferences {
+    pub executable: Option<String>,
+    pub launcher_args: Vec<String>,
+    pub config_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CustomImageCommandPreferences {
+    pub executable: Option<String>,
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImagePreferences {
+    pub local_policy: LocalImagePolicy,
+    pub clipboard_policy: ClipboardImagePolicy,
+    pub remote_policy: RemoteImagePolicy,
+    pub directory: String,
+    pub uploader: ImageUploaderKind,
+    pub timeout_secs: u64,
+    pub picgo_http: PicGoHttpPreferences,
+    pub picgo_core: PicGoCorePreferences,
+    pub command: CustomImageCommandPreferences,
+}
+
+impl Default for ImagePreferences {
+    fn default() -> Self {
+        Self {
+            local_policy: LocalImagePolicy::default(),
+            clipboard_policy: ClipboardImagePolicy::default(),
+            remote_policy: RemoteImagePolicy::default(),
+            directory: DEFAULT_IMAGE_RESOURCE_DIRECTORY.to_string(),
+            uploader: ImageUploaderKind::default(),
+            timeout_secs: DEFAULT_IMAGE_TRANSFER_TIMEOUT_SECS,
+            picgo_http: PicGoHttpPreferences::default(),
+            picgo_core: PicGoCorePreferences::default(),
+            command: CustomImageCommandPreferences::default(),
+        }
+    }
+}
+
+pub fn normalize_image_transfer_timeout_secs(value: i64) -> u64 {
+    value.clamp(
+        MIN_IMAGE_TRANSFER_TIMEOUT_SECS as i64,
+        MAX_IMAGE_TRANSFER_TIMEOUT_SECS as i64,
+    ) as u64
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -26,7 +26,12 @@ use gpui::{
     UnderlineStyle, Window, WindowBounds, WindowOptions, WrappedLine, actions, anchored, canvas,
     div, fill, font, img, list, point, px, rgb, rgba, size,
 };
-use markion::i18n::{GitMsg, git_t, git_tf};
+#[cfg(test)]
+use markion::OrganizeCandidate;
+use markion::i18n::{
+    GitMsg, ImageMsg, ImageRecoveryMsg, ImageStatusMsg, git_t, git_tf, image_recovery_t,
+    image_status_tf, image_t,
+};
 use markion::{
     AlertKind, AppPreferences, AutoPairAction, AutoSavePreferences, BlockEdit, BlockEditError,
     BlockPlacement, BlockTarget, BlockTransform, CheckedMutation, CodeTheme,
@@ -36,38 +41,39 @@ use markion::{
     EXTENDED_HEADING_MENU_MAX_LEVEL, EmojiQuery, ExportBackendPreference, ExportFormat,
     ExportPreferences, ExternalCheckOutcome, FileTree, FileTreeEntry, FileTreeEntryKind,
     GitPreferences, HighlightKind, HighlightedSpan, HtmlAlign, HtmlImageDescriptor, HtmlImgLength,
-    HtmlListMarker, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImagePresentation,
+    HtmlListMarker, HtmlPreviewPart, HtmlTableGrid, ImageAlignment, ImageOccurrenceId,
+    ImageOperationController, ImageOperationId, ImagePreferences, ImagePresentation,
     ImageSourceIdentity, InlineSpan, InlineStyle, Language, MAX_AUTO_SAVE_DELAY_SECS,
     MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
     MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
     MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat, MathLayoutStyle, Msg, MutationOrigin,
-    MutationReceipt, OrganizeCandidate, P0Msg, P1Msg, PdfPageSize, PreviewBlock,
-    RecoveryInventoryEntry, RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange,
-    SearchOptions, SearchPattern, SessionLayout, SessionState, ShortcutCategory, ShortcutPlatform,
-    SidebarTab, SlashCommand, SlashQuery, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts,
-    ViewMode, VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity,
+    MutationReceipt, P0Msg, P1Msg, PdfPageSize, PreviewBlock, RecoveryInventoryEntry,
+    RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions,
+    SearchPattern, SessionLayout, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab,
+    SlashCommand, SlashQuery, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode,
+    VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity,
     VisualEditorField, VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget,
     VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind, WorkspaceSnapshot,
     adjacent_reorder_target, authored_table_column_percents, auto_pair_action, backend_status_msg,
-    block_can_reorder_at, block_can_transform_at, build_publishing_snapshot,
-    build_visual_projection, build_visual_projection_with_marked_range, builtin_diagram_registry,
-    builtin_theme_definitions, bundled_resource_path, check_path_state, clamp_image_width_percent,
-    data_uri_payload_ranges, default_git_sync_policy_path, default_preferences_path,
-    default_recovery_dir, default_session_path, default_themes_dir, delete_block,
-    delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
+    block_can_reorder_at, block_can_transform_at, build_image_application_plan,
+    build_publishing_snapshot, build_visual_projection, build_visual_projection_with_marked_range,
+    builtin_diagram_registry, builtin_theme_definitions, bundled_resource_path, check_path_state,
+    clamp_image_width_percent, data_uri_payload_ranges, default_git_sync_policy_path,
+    default_preferences_path, default_recovery_dir, default_session_path, default_themes_dir,
+    delete_block, delete_recovery_file, diagram_backend_id, duplicate_block, elided_payload_token,
     emoji_confirm_replacement, emoji_query_at, emoji_shortcodes_matching, highlight_code,
     html_preview_parts, html_preview_plain_text, html_table_column_weights,
     html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
-    import_image_bytes, import_image_file, inline_image_at, inline_link_at, inspect_recovery_files,
-    is_auto_pair_restricted_field, is_markdown_path, is_text_path, layout_rect_is_visible,
-    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
-    markdown_reference, normalize_auto_save_delay_secs, normalize_code_font_size,
-    normalize_editor_font_size, normalize_heading_menu_max_level, normalize_paragraph_spacing,
-    normalize_rendered_font_size, organize_candidates, p0_t, p0_tf, p1_t, p1_tf, pandoc_available,
-    percents_from_flex_weights, read_document_source, redistribute_adjacent_column_percents,
-    reorder_block, resolve_font_family, resolve_html_img_display_size, save_app_preferences,
-    save_session_state, save_text_snapshot, save_theme_definition, serialize_inline_image,
-    serialize_inline_link, shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
+    inline_image_at, inline_link_at, inspect_recovery_files, is_auto_pair_restricted_field,
+    is_markdown_path, is_text_path, layout_rect_is_visible, list_theme_definitions,
+    load_app_preferences, load_recovery_file, load_session_state, markdown_reference,
+    normalize_auto_save_delay_secs, normalize_code_font_size, normalize_editor_font_size,
+    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    organize_candidates, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, percents_from_flex_weights,
+    read_document_source, redistribute_adjacent_column_percents, reorder_block,
+    resolve_font_family, resolve_html_img_display_size, save_app_preferences, save_session_state,
+    save_text_snapshot, save_theme_definition, serialize_inline_image, serialize_inline_link,
+    shortcut_catalog, sidebar_tab_label, slash_command_edit, slash_query_at,
     snap_image_width_percent, t, table_column_flex_weights,
     table_column_flex_weights_with_authored, table_column_width_prefix_len, task_checkbox_toggle,
     tf, title_from_path, transform_block, validate_block_target, workspace_relative_path,
@@ -108,6 +114,8 @@ actions!(
         InlineCode,
         InsertLink,
         InsertImage,
+        InsertImageFile,
+        InsertImageUrl,
         Paragraph,
         Heading1,
         Heading2,
@@ -154,6 +162,11 @@ actions!(
         ExportJpeg,
         PublishWechat,
         OrganizeLocalImages,
+        UploadSelectedImage,
+        SaveSelectedImageLocally,
+        UploadDocumentImages,
+        SaveDocumentImagesLocally,
+        CancelImageOperations,
         ToggleViewMode,
         ToggleSourceSplitMode,
         SetVisualEditMode,
@@ -919,9 +932,24 @@ pub(super) enum NameCaretMove {
 
 #[derive(Clone, Debug)]
 struct PendingImageInput {
-    stem: String,
-    extension: String,
-    bytes: Vec<u8>,
+    label: String,
+    title: Option<String>,
+    input: markion::ImageInput,
+    source_kind: PendingImageSourceKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingImageSourceKind {
+    Clipboard,
+    Local,
+    Remote,
+}
+
+#[derive(Clone, Debug)]
+struct PendingImageBatch {
+    document: DocumentInstanceId,
+    selection: Range<usize>,
+    inputs: Vec<PendingImageInput>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1320,8 +1348,19 @@ enum LinkEditorField {
     Title,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinkEditorKind {
+    Link,
+    Image,
+    ImageDirectory,
+    PicGoEndpoint,
+    PicGoCoreArguments,
+    ImageCommandArguments,
+}
+
 #[derive(Clone, Debug)]
 struct LinkEditorState {
+    kind: LinkEditorKind,
     source_range: Range<usize>,
     document_version: u64,
     label: String,
@@ -1353,6 +1392,7 @@ const EMOJI_PALETTE_LIMIT: usize = 12;
 struct BlockMenuState {
     target: BlockTarget,
     selection_format: Option<VisualSelectionFormatTarget>,
+    is_image: bool,
     anchor: Point<Pixels>,
     root_selected: usize,
     submenu: Option<BlockMenuSubmenu>,
@@ -1380,6 +1420,8 @@ enum SelectionFormatAction {
 enum BlockMenuSubmenu {
     TextAndHeadings,
     Lists,
+    ImageWidth,
+    ImageAlignment,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1387,6 +1429,12 @@ enum BlockMenuItem {
     SelectionFormat(SelectionFormatAction),
     Submenu(BlockMenuSubmenu),
     Transform(BlockTransform),
+    ImageWidth(u8),
+    ImageAlignment(ImageAlignment),
+    ImageEditSource,
+    ImageReplace,
+    ImageSaveLocal,
+    ImageUpload,
     Duplicate,
     MoveUp,
     MoveDown,
@@ -1429,6 +1477,32 @@ const BLOCK_MENU_LIST_ITEMS: [BlockMenuItem; 3] = [
     BlockMenuItem::Transform(BlockTransform::TaskList),
 ];
 
+const BLOCK_MENU_IMAGE_WIDTH_ITEMS: [BlockMenuItem; 4] = [
+    BlockMenuItem::ImageWidth(25),
+    BlockMenuItem::ImageWidth(50),
+    BlockMenuItem::ImageWidth(75),
+    BlockMenuItem::ImageWidth(100),
+];
+
+const BLOCK_MENU_IMAGE_ALIGNMENT_ITEMS: [BlockMenuItem; 3] = [
+    BlockMenuItem::ImageAlignment(ImageAlignment::Left),
+    BlockMenuItem::ImageAlignment(ImageAlignment::Center),
+    BlockMenuItem::ImageAlignment(ImageAlignment::Right),
+];
+
+const BLOCK_MENU_IMAGE_ROOT_ITEMS: [BlockMenuItem; 10] = [
+    BlockMenuItem::Submenu(BlockMenuSubmenu::ImageWidth),
+    BlockMenuItem::Submenu(BlockMenuSubmenu::ImageAlignment),
+    BlockMenuItem::ImageEditSource,
+    BlockMenuItem::ImageReplace,
+    BlockMenuItem::ImageSaveLocal,
+    BlockMenuItem::ImageUpload,
+    BlockMenuItem::Duplicate,
+    BlockMenuItem::MoveUp,
+    BlockMenuItem::MoveDown,
+    BlockMenuItem::Delete,
+];
+
 fn block_menu_root_items(has_selection_format: bool) -> Vec<BlockMenuItem> {
     let mut items = Vec::with_capacity(
         BLOCK_MENU_ROOT_ITEMS.len()
@@ -1447,7 +1521,11 @@ fn block_menu_root_items(has_selection_format: bool) -> Vec<BlockMenuItem> {
 
 impl BlockMenuState {
     fn root_items(&self) -> Vec<BlockMenuItem> {
-        block_menu_root_items(self.selection_format.is_some())
+        if self.is_image {
+            BLOCK_MENU_IMAGE_ROOT_ITEMS.to_vec()
+        } else {
+            block_menu_root_items(self.selection_format.is_some())
+        }
     }
 }
 
@@ -1456,13 +1534,17 @@ impl BlockMenuSubmenu {
         match self {
             Self::TextAndHeadings => &BLOCK_MENU_TEXT_ITEMS,
             Self::Lists => &BLOCK_MENU_LIST_ITEMS,
+            Self::ImageWidth => &BLOCK_MENU_IMAGE_WIDTH_ITEMS,
+            Self::ImageAlignment => &BLOCK_MENU_IMAGE_ALIGNMENT_ITEMS,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BlockMenuPresentation {
-    current: BlockTransform,
+    current: Option<BlockTransform>,
+    is_image: bool,
+    image: Option<ImagePresentation>,
     can_duplicate_or_delete: bool,
     can_move_up: bool,
     can_move_down: bool,
@@ -1474,9 +1556,14 @@ impl BlockMenuPresentation {
             BlockMenuItem::MoveUp => self.can_move_up,
             BlockMenuItem::MoveDown => self.can_move_down,
             BlockMenuItem::Duplicate | BlockMenuItem::Delete => self.can_duplicate_or_delete,
+            BlockMenuItem::ImageWidth(_) | BlockMenuItem::ImageAlignment(_) => self.image.is_some(),
+            BlockMenuItem::ImageEditSource
+            | BlockMenuItem::ImageReplace
+            | BlockMenuItem::ImageSaveLocal
+            | BlockMenuItem::ImageUpload => self.is_image,
             BlockMenuItem::SelectionFormat(_)
             | BlockMenuItem::Submenu(_)
-            | BlockMenuItem::Transform(_) => true,
+            | BlockMenuItem::Transform(_) => self.current.is_some() || self.is_image,
         }
     }
 }
@@ -1943,6 +2030,8 @@ enum PaneScrollTarget {
     PreferencesGeneral,
     /// Preferences panel Appearance tab body. Drag identity only.
     PreferencesAppearance,
+    /// Preferences panel Images tab body. Drag identity only.
+    PreferencesImages,
     /// Preferences panel Shortcuts tab category sidebar. Drag identity only.
     PreferencesShortcutCategories,
     /// Preferences panel Shortcuts tab action list. Drag identity only.
@@ -2165,6 +2254,7 @@ enum PreferencesTab {
     #[default]
     General,
     Appearance,
+    Images,
     Shortcuts,
     Export,
 }
@@ -2208,6 +2298,8 @@ mod export_prefs;
 mod git_conflicts;
 mod git_panel;
 mod git_sync;
+mod image_operations;
+mod image_preferences;
 pub(super) mod layout;
 mod math_render;
 mod memory;
@@ -2269,6 +2361,8 @@ struct MarkionApp {
     /// File → Open Recent nested submenu visibility. Cleared whenever
     /// `active_menu` leaves File or the whole menu closes.
     open_recent_submenu_open: bool,
+    /// Format → Images nested submenu visibility.
+    format_images_submenu_open: bool,
     /// Backup and Sync → Advanced Git Tools nested submenu visibility.
     advanced_git_submenu_open: bool,
     /// Files-panel workspace-name recent-folder switcher visibility.
@@ -2292,6 +2386,11 @@ struct MarkionApp {
     publishing_service: Option<wechat_workspace::WorkspaceService>,
     /// Coordinates one bounded worker and rejects canceled/superseded results.
     docx_import: docx_import::DocxImportCoordinator,
+    /// Tracks explicit image jobs by originating document identity. Progress
+    /// stays outside canonical Markdown and its per-version caches.
+    image_operations: ImageOperationController,
+    image_cancellations: HashMap<ImageOperationId, markion::external_command::CommandCancellation>,
+    image_recovery_entries: Vec<markion::ImageRecoveryEntry>,
     browser_launcher: Arc<dyn publishing::BrowserLauncher>,
     /// Filesystem-derived Git context is cached separately from documents so
     /// render/input never perform repository I/O and undo snapshots stay pure.
@@ -2328,6 +2427,7 @@ struct MarkionApp {
     /// region can show a draggable overlay scrollbar and keep its position.
     preferences_general_scroll: ScrollHandle,
     preferences_appearance_scroll: ScrollHandle,
+    preferences_images_scroll: ScrollHandle,
     preferences_categories_scroll: ScrollHandle,
     preferences_actions_scroll: ScrollHandle,
     preferences_export_scroll: ScrollHandle,
@@ -2443,7 +2543,7 @@ struct MarkionApp {
     name_editor_click_away: bool,
     /// Image bytes waiting for a durable Markdown base path. Set when an image
     /// is pasted/dropped into an untitled tab and consumed after Save As.
-    pending_image_import: Option<Vec<PendingImageInput>>,
+    pending_image_import: Option<PendingImageBatch>,
     link_editor: Option<LinkEditorState>,
     /// Startup crash snapshots awaiting an explicit per-entry decision. This
     /// remains open independently of the active editor tab so unreadable or
@@ -2480,6 +2580,7 @@ struct MarkionApp {
     /// Export settings from the config file ([export] table). Not editable
     /// in the Preferences panel; kept to round-trip on save.
     export_preferences: ExportPreferences,
+    image_preferences: ImagePreferences,
     recovery_dir: PathBuf,
     /// One background external-change round at a time: while the disk work of
     /// `check_external_changes` is in flight, further poll ticks are skipped

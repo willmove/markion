@@ -12,11 +12,15 @@ use std::{collections::BTreeMap, fs, io, path::Path};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AppPreferences, AutoSavePreferences, CodeTheme, DEFAULT_EDITOR_FONT_SIZE,
-    DEFAULT_PARAGRAPH_SPACING, DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy,
-    DocxPageSize, ExportBackendPreference, ExportPreferences, GitPreferences, PdfExportOptions,
-    PdfPageSize, SidebarTab, normalize_code_font_size, normalize_editor_font_size,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
+    AppPreferences, AutoSavePreferences, ClipboardImagePolicy, CodeTheme,
+    CustomImageCommandPreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_PARAGRAPH_SPACING,
+    DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy, DocxPageSize,
+    ExportBackendPreference, ExportPreferences, GitPreferences, ImagePreferences,
+    ImageUploaderKind, LocalImagePolicy, PdfExportOptions, PdfPageSize, PicGoCorePreferences,
+    PicGoHttpPreferences, RemoteImagePolicy, SidebarTab, normalize_code_font_size,
+    normalize_editor_font_size, normalize_heading_menu_max_level,
+    normalize_image_transfer_timeout_secs, normalize_paragraph_spacing,
+    normalize_rendered_font_size,
 };
 
 /// File name of the retired `key=value` preferences format, looked for next
@@ -93,9 +97,146 @@ struct PreferencesFile {
     auto_save: AutoSaveFile,
     git: GitFile,
     export: ExportFile,
+    images: ImagesFile,
     /// [shortcuts] table: action id -> GPUI keystroke string.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     shortcuts: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct ImagesFile {
+    #[serde(deserialize_with = "deserialize_string_or_default_local_policy")]
+    local_policy: String,
+    #[serde(deserialize_with = "deserialize_string_or_default_clipboard_policy")]
+    clipboard_policy: String,
+    #[serde(deserialize_with = "deserialize_string_or_default_remote_policy")]
+    remote_policy: String,
+    #[serde(deserialize_with = "deserialize_string_or_default_image_directory")]
+    directory: String,
+    #[serde(deserialize_with = "deserialize_string_or_default_uploader")]
+    uploader: String,
+    #[serde(deserialize_with = "deserialize_image_timeout_secs")]
+    timeout_secs: u64,
+    picgo_http: PicGoHttpFile,
+    picgo_core: PicGoCoreFile,
+    command: ImageCommandFile,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct PicGoHttpFile {
+    #[serde(deserialize_with = "deserialize_string_or_default_picgo_endpoint")]
+    endpoint: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct PicGoCoreFile {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    executable: Option<String>,
+    #[serde(deserialize_with = "deserialize_string_vec")]
+    launcher_args: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    config_path: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct ImageCommandFile {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_string"
+    )]
+    executable: Option<String>,
+    #[serde(deserialize_with = "deserialize_string_vec")]
+    args: Vec<String>,
+}
+
+impl Default for ImagesFile {
+    fn default() -> Self {
+        Self::from(&ImagePreferences::default())
+    }
+}
+
+impl Default for PicGoHttpFile {
+    fn default() -> Self {
+        Self {
+            endpoint: PicGoHttpPreferences::default().endpoint,
+        }
+    }
+}
+
+impl From<&ImagePreferences> for ImagesFile {
+    fn from(preferences: &ImagePreferences) -> Self {
+        Self {
+            local_policy: preferences.local_policy.config_value().to_string(),
+            clipboard_policy: preferences.clipboard_policy.config_value().to_string(),
+            remote_policy: preferences.remote_policy.config_value().to_string(),
+            directory: preferences.directory.clone(),
+            uploader: preferences.uploader.config_value().to_string(),
+            timeout_secs: preferences.timeout_secs,
+            picgo_http: PicGoHttpFile {
+                endpoint: preferences.picgo_http.endpoint.clone(),
+            },
+            picgo_core: PicGoCoreFile {
+                executable: preferences.picgo_core.executable.clone(),
+                launcher_args: preferences.picgo_core.launcher_args.clone(),
+                config_path: preferences.picgo_core.config_path.clone(),
+            },
+            command: ImageCommandFile {
+                executable: preferences.command.executable.clone(),
+                args: preferences.command.args.clone(),
+            },
+        }
+    }
+}
+
+impl From<ImagesFile> for ImagePreferences {
+    fn from(file: ImagesFile) -> Self {
+        let defaults = Self::default();
+        let directory = file.directory.trim();
+        Self {
+            local_policy: LocalImagePolicy::from_config(&file.local_policy),
+            clipboard_policy: ClipboardImagePolicy::from_config(&file.clipboard_policy),
+            remote_policy: RemoteImagePolicy::from_config(&file.remote_policy),
+            directory: if directory.is_empty() {
+                defaults.directory
+            } else {
+                directory.to_string()
+            },
+            uploader: ImageUploaderKind::from_config(&file.uploader),
+            timeout_secs: normalize_image_transfer_timeout_secs(file.timeout_secs as i64),
+            picgo_http: PicGoHttpPreferences {
+                endpoint: {
+                    let endpoint = file.picgo_http.endpoint.trim();
+                    if endpoint.is_empty() {
+                        defaults.picgo_http.endpoint
+                    } else {
+                        endpoint.to_string()
+                    }
+                },
+            },
+            picgo_core: PicGoCorePreferences {
+                executable: file.picgo_core.executable,
+                launcher_args: file.picgo_core.launcher_args,
+                config_path: file.picgo_core.config_path,
+            },
+            command: CustomImageCommandPreferences {
+                executable: file.command.executable,
+                args: file.command.args,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -339,6 +480,7 @@ impl From<&AppPreferences> for PreferencesFile {
                 pdf: PdfExportFile::from(&preferences.export.pdf),
                 docx: DocxExportFile::from(&preferences.export.docx),
             },
+            images: ImagesFile::from(&preferences.images),
             shortcuts: preferences.shortcut_overrides.clone(),
         }
     }
@@ -413,6 +555,7 @@ impl From<PreferencesFile> for AppPreferences {
                 pdf: file.export.pdf.into(),
                 docx: file.export.docx.into(),
             },
+            images: file.images.into(),
             shortcut_overrides: file.shortcuts,
         }
     }
@@ -565,6 +708,70 @@ where
     let parsed =
         deserialize_integer_or(deserializer, i64::from(crate::model::DEFAULT_PDF_MARGIN_MM))?;
     Ok(u32::try_from(parsed).unwrap_or(crate::model::DEFAULT_PDF_MARGIN_MM))
+}
+
+fn deserialize_image_timeout_secs<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let parsed = deserialize_integer_or(
+        deserializer,
+        crate::model::DEFAULT_IMAGE_TRANSFER_TIMEOUT_SECS as i64,
+    )?;
+    Ok(normalize_image_transfer_timeout_secs(parsed))
+}
+
+macro_rules! string_or_default_deserializer {
+    ($name:ident, $default:expr) => {
+        fn $name<'de, D>(deserializer: D) -> Result<String, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = toml::Value::deserialize(deserializer)?;
+            Ok(value
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| $default))
+        }
+    };
+}
+
+string_or_default_deserializer!(
+    deserialize_string_or_default_local_policy,
+    LocalImagePolicy::default().config_value().to_string()
+);
+string_or_default_deserializer!(
+    deserialize_string_or_default_clipboard_policy,
+    ClipboardImagePolicy::default().config_value().to_string()
+);
+string_or_default_deserializer!(
+    deserialize_string_or_default_remote_policy,
+    RemoteImagePolicy::default().config_value().to_string()
+);
+string_or_default_deserializer!(
+    deserialize_string_or_default_image_directory,
+    crate::model::DEFAULT_IMAGE_RESOURCE_DIRECTORY.to_string()
+);
+string_or_default_deserializer!(
+    deserialize_string_or_default_uploader,
+    ImageUploaderKind::default().config_value().to_string()
+);
+string_or_default_deserializer!(
+    deserialize_string_or_default_picgo_endpoint,
+    PicGoHttpPreferences::default().endpoint
+);
+
+fn deserialize_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect())
 }
 
 fn deserialize_editor_font_size<'de, D>(deserializer: D) -> Result<u16, D::Error>
@@ -1263,5 +1470,50 @@ mod tests {
         assert!(rendered.contains("page_numbers = false"));
         let parsed = parse_app_preferences(&rendered).unwrap();
         assert_eq!(parsed.export.pdf, preferences.export.pdf);
+    }
+
+    #[test]
+    fn image_preferences_default_to_compatible_local_behavior() {
+        let parsed = parse_app_preferences("theme = \"Forest\"\n").unwrap();
+        assert_eq!(parsed.images, ImagePreferences::default());
+        assert_eq!(parsed.theme, "Forest");
+    }
+
+    #[test]
+    fn image_preferences_round_trip_provider_configuration() {
+        let mut preferences = AppPreferences::default();
+        preferences.images.local_policy = LocalImagePolicy::Upload;
+        preferences.images.clipboard_policy = ClipboardImagePolicy::Upload;
+        preferences.images.remote_policy = RemoteImagePolicy::Download;
+        preferences.images.directory = "assets/{document}".into();
+        preferences.images.uploader = ImageUploaderKind::Command;
+        preferences.images.timeout_secs = 91;
+        preferences.images.command.executable = Some("pwsh.exe".into());
+        preferences.images.command.args =
+            vec!["-File".into(), "upload.ps1".into(), "{file}".into()];
+
+        let rendered = render_app_preferences(&preferences);
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(parsed.images, preferences.images);
+        assert!(!rendered.contains("access_key"));
+    }
+
+    #[test]
+    fn malformed_image_fields_are_isolated_and_timeout_is_clamped() {
+        let parsed = parse_app_preferences(
+            "theme = \"Ink\"\n[images]\nlocal_policy = 42\ntimeout_secs = 9999\ndirectory = false\n[images.command]\nargs = [\"{file}\", 9]\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.theme, "Ink");
+        assert_eq!(parsed.images.local_policy, LocalImagePolicy::Copy);
+        assert_eq!(
+            parsed.images.directory,
+            crate::model::DEFAULT_IMAGE_RESOURCE_DIRECTORY
+        );
+        assert_eq!(
+            parsed.images.timeout_secs,
+            crate::model::MAX_IMAGE_TRANSFER_TIMEOUT_SECS
+        );
+        assert_eq!(parsed.images.command.args, vec!["{file}"]);
     }
 }

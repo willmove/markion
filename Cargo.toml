@@ -64,6 +64,7 @@ repository = "https://github.com/willmove/markion"
 
 [dependencies]
 anyhow = "1.0"
+thiserror.workspace = true
 gpui = "0.2.2"
 rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 raw-window-handle = "0.6"
@@ -96,6 +97,7 @@ unicode-segmentation = "1.12"
 # Already in the dependency graph transitively (via flate2/image); pinned to the
 # locked 0.8 line so the lockfile does not churn.
 miniz_oxide = "0.8"
+libc = "0.2"
 
 # Workspace members absorbed from Typune (see docs/typune-integration-plan.md),
 # renamed on import: markion already has a crate-root `mod export`, and a direct
@@ -163,9 +165,6 @@ windows = { version = "0.61", features = [
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
 ] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

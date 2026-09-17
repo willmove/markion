@@ -187,12 +187,60 @@ fn escape_label(label: &str) -> String {
         .replace(']', "\\]")
 }
 
-fn escape_destination(url: &str) -> String {
+pub(crate) fn escape_destination(url: &str) -> String {
     if url.chars().any(char::is_whitespace) || url.contains(['(', ')', '<', '>']) {
         format!("<{}>", url.replace('\\', "\\\\").replace('>', "\\>"))
     } else {
         url.replace('\\', "\\\\")
     }
+}
+
+/// Serializes an inline image while retaining the authored Markdown inside
+/// the alt brackets. Used when materializing one resolved reference image so
+/// emphasis and other inline formatting are not flattened or redirected
+/// through a shared definition.
+pub(crate) fn serialize_inline_image_with_authored_alt(
+    authored_alt: &str,
+    url: &str,
+    title: Option<&str>,
+) -> String {
+    let mut rendered = String::from("![");
+    rendered.push_str(authored_alt);
+    rendered.push_str("](");
+    rendered.push_str(&escape_destination(url));
+    if let Some(title) = title.filter(|title| !title.is_empty()) {
+        rendered.push_str(" \"");
+        rendered.push_str(&title.replace('\\', "\\\\").replace('"', "\\\""));
+        rendered.push('"');
+    }
+    rendered.push(')');
+    rendered
+}
+
+pub(crate) fn authored_image_alt_source(authored: &str) -> Option<&str> {
+    if !authored.starts_with("![") {
+        return None;
+    }
+    let bytes = authored.as_bytes();
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for (index, byte) in bytes.iter().copied().enumerate().skip(2) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        match byte {
+            b'[' => depth += 1,
+            b']' if depth == 0 => return authored.get(2..index),
+            b']' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 pub(crate) fn unescape_markdown(value: &str) -> String {

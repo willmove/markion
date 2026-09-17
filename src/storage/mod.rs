@@ -11,6 +11,7 @@
 
 pub mod atomic;
 pub mod file_tree;
+pub mod image_recovery;
 pub mod logging;
 pub mod preferences;
 pub mod recovery;
@@ -24,6 +25,10 @@ pub use file_tree::{
     FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, MARKDOWN_EXTENSIONS,
     TEXT_EXTENSIONS, is_markdown_path, is_text_path, workspace_relative_path,
 };
+pub use image_recovery::{
+    ImageRecoveryEntry, default_image_recovery_dir, discard_image_recovery_record,
+    list_image_recovery_records, save_image_recovery_record,
+};
 pub use logging::init_logging;
 pub use preferences::{
     load_app_preferences, parse_app_preferences, parse_legacy_app_preferences,
@@ -34,9 +39,11 @@ pub use recovery::{
     list_recovery_files, load_recovery_file,
 };
 pub use resources::{
-    IMAGE_EXTENSIONS, ImportedImage, OrganizeCandidate, PublishedDocxImport, document_asset_dir,
-    document_scope_root, image_extension_supported, import_image_bytes, import_image_file,
-    organize_candidates, publish_docx_import,
+    IMAGE_EXTENSIONS, ImportedImage, OrganizeCandidate, PublishedDocxImport, ResourceDirectory,
+    StagedImagePublication, document_asset_dir, document_scope_root, image_extension_supported,
+    import_image_bytes, import_image_bytes_to, import_image_file, import_image_file_to,
+    organize_candidates, publish_docx_import, publish_staged_image, resolve_local_reference,
+    resolve_resource_directory, stage_image_bytes, stage_image_file,
 };
 pub use session::{
     load_session_state, parse_session_state, render_session_state, save_session_state,

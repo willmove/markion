@@ -249,8 +249,6 @@ mod tests {
         thread,
     };
 
-    use gpui::http_client::HttpClient as _;
-
     use super::*;
 
     fn read_http_request(stream: &mut TcpStream) -> String {

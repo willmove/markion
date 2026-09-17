@@ -921,6 +921,9 @@ struct VisualEditableText {
     /// Focused multi-field blocks register geometry only for their active
     /// field, so sibling cells cannot overwrite the navigation snapshot.
     navigation_active: bool,
+    /// Script glyphs move vertically inside their body line; navigation
+    /// groups them with that line instead of inventing an extra arrow stop.
+    navigation_y_offset: Pixels,
     /// Source position clicks resolve to when this row has no segments
     /// (an empty block still needs to place the caret inside itself).
     entity: Entity<MarkionApp>,
@@ -1134,7 +1137,7 @@ impl Element for VisualEditableText {
                         1
                     }
                 };
-                let navigation_snapshot = visual_navigation_snapshot(
+                let mut navigation_snapshot = visual_navigation_snapshot(
                     document_version,
                     self.block_index,
                     self.source_selection.clone(),
@@ -1143,6 +1146,12 @@ impl Element for VisualEditableText {
                     &self.projection,
                     layout,
                 );
+                for line in &mut navigation_snapshot.lines {
+                    line.y -= self.navigation_y_offset;
+                    for window in &mut line.windows {
+                        window.y_offset = self.navigation_y_offset;
+                    }
+                }
                 let deferred_navigation = self.entity.update(cx, |app, _| {
                     #[cfg(test)]
                     {
@@ -1383,6 +1392,7 @@ fn visual_navigation_snapshot(
         lines.push(VisualNavigationLine {
             y: bounds.top() + line_height * index as f32,
             windows: vec![VisualNavigationWindow {
+                y_offset: Pixels::ZERO,
                 projection: projection.clone(),
                 layout: layout.clone(),
                 start_display,
@@ -1834,6 +1844,29 @@ pub(super) fn inline_script_metrics(
     )
 }
 
+fn resolved_script_metrics(
+    style: InlineStyle,
+    metrics: (f32, f32),
+    app: &MarkionApp,
+    cx: &App,
+) -> Option<(f32, f32, f32)> {
+    if !style.superscript && !style.subscript {
+        return None;
+    }
+    let font_id = cx
+        .text_system()
+        .resolve_font(&font(app.resolved_font_families.rendered.clone()));
+    let ascent = f32::from(cx.text_system().ascent(font_id, px(metrics.0)));
+    let descent = f32::from(cx.text_system().descent(font_id, px(metrics.0)));
+    Some(inline_script_metrics(
+        metrics.0,
+        metrics.1,
+        ascent,
+        descent,
+        style.subscript,
+    ))
+}
+
 fn script_fragment(
     child: gpui::AnyElement,
     style: InlineStyle,
@@ -1841,16 +1874,10 @@ fn script_fragment(
     app: &MarkionApp,
     cx: &App,
 ) -> gpui::AnyElement {
-    if !style.superscript && !style.subscript {
+    let Some((font_size, line_height, top)) = resolved_script_metrics(style, metrics, app, cx)
+    else {
         return child;
-    }
-    let font_id = cx
-        .text_system()
-        .resolve_font(&font(app.resolved_font_families.rendered.clone()));
-    let ascent = f32::from(cx.text_system().ascent(font_id, px(metrics.0)));
-    let descent = f32::from(cx.text_system().descent(font_id, px(metrics.0)));
-    let (font_size, line_height, top) =
-        inline_script_metrics(metrics.0, metrics.1, ascent, descent, style.subscript);
+    };
     div()
         .flex_none()
         .h(px(metrics.1))
@@ -2902,6 +2929,7 @@ pub(super) fn visual_text_element(
         marked_range,
         caret_active: visual_block_owns_caret(app, block_index),
         navigation_active: true,
+        navigation_y_offset: Pixels::ZERO,
         entity: cx.entity(),
         whitespace_caret: None,
         #[cfg(test)]
@@ -3120,11 +3148,22 @@ fn visual_projection_fragment(
     visible: String,
     source_range: Range<usize>,
     style: Option<HighlightStyle>,
+    pending_caret: &mut Option<usize>,
+    navigation_active: bool,
+    navigation_y_offset: Pixels,
     app: &MarkionApp,
     cx: &mut Context<MarkionApp>,
     #[cfg(test)] test_projection: Option<(String, Vec<Range<usize>>)>,
     #[cfg(test)] test_projection_styles: Option<Vec<InlineStyle>>,
 ) -> gpui::AnyElement {
+    // Resolve hidden markers through the full projection before choosing a
+    // fragment. Shared endpoints belong to one fragment, including at wraps.
+    let caret_active = visual_block_owns_caret(app, block_index)
+        && pending_caret
+            .is_some_and(|cursor| source_range.contains(&cursor) || cursor == source_range.end);
+    if caret_active {
+        *pending_caret = None;
+    }
     let visible_len = visible.len();
     let highlights = style
         .map(|style| vec![(0..visible_len, style)])
@@ -3150,12 +3189,9 @@ fn visual_projection_fragment(
         source_selection: app.active_tab().selected_range.clone(),
         source_cursor: app.active_tab().cursor_offset(),
         marked_range: app.active_tab().marked_range.clone(),
-        caret_active: visual_block_owns_caret(app, block_index)
-            && (source_range.contains(&app.active_tab().cursor_offset())
-                || app.active_tab().cursor_offset() == source_range.end),
-        navigation_active: !visual_block_owns_caret(app, block_index)
-            || (source_range.contains(&app.active_tab().cursor_offset())
-                || app.active_tab().cursor_offset() == source_range.end),
+        caret_active,
+        navigation_active,
+        navigation_y_offset,
         entity: cx.entity(),
         whitespace_caret: None,
         #[cfg(test)]
@@ -3255,10 +3291,21 @@ pub(super) fn visual_text_with_math_element(
     });
     #[cfg(test)]
     let mut recorded_full_projection = false;
+    let mut pending_caret = projection
+        .display_for_source(app.active_tab().cursor_offset())
+        .map(|display| projection.source_for_display(display));
     let mut lines: Vec<Vec<gpui::AnyElement>> = vec![Vec::new()];
     let mut fragment_index = 0usize;
     let mut remaining_icons = nav_icons;
     for (segment, projected_span) in projection.segments.iter().zip(&projection.spans) {
+        let navigation_y_offset = if projected_span.source {
+            Pixels::ZERO
+        } else {
+            px(
+                resolved_script_metrics(projected_span.style, inline_metrics, app, cx)
+                    .map_or(0., |(_, _, top)| top),
+            )
+        };
         let math = (!projected_span.source).then(|| {
             block
                 .editable_runs
@@ -3377,6 +3424,9 @@ pub(super) fn visual_text_with_math_element(
                                     fragment.to_string(),
                                     source_range.clone(),
                                     style.clone(),
+                                    &mut pending_caret,
+                                    true,
+                                    navigation_y_offset,
                                     app,
                                     cx,
                                     #[cfg(test)]
@@ -3436,6 +3486,9 @@ pub(super) fn visual_text_with_math_element(
                                 content.to_string(),
                                 source_range.clone(),
                                 style.clone(),
+                                &mut pending_caret,
+                                true,
+                                navigation_y_offset,
                                 app,
                                 cx,
                                 #[cfg(test)]
@@ -3497,6 +3550,9 @@ pub(super) fn visual_text_with_math_element(
                     " ".into(),
                     anchor..anchor,
                     None,
+                    &mut pending_caret,
+                    true,
+                    Pixels::ZERO,
                     app,
                     cx,
                     #[cfg(test)]
@@ -3676,6 +3732,7 @@ pub(super) fn visual_source_island_view(
             marked_range: app.active_tab().marked_range.clone(),
             caret_active: visual_block_owns_caret(app, block_index),
             navigation_active: true,
+            navigation_y_offset: Pixels::ZERO,
             entity: cx.entity(),
             whitespace_caret: None,
             #[cfg(test)]
@@ -3725,6 +3782,7 @@ pub(super) fn visual_whitespace_caret_element(
         marked_range: app.active_tab().marked_range.clone(),
         caret_active: visual_block_owns_caret(app, block_index),
         navigation_active: false,
+        navigation_y_offset: Pixels::ZERO,
         entity: cx.entity(),
         whitespace_caret: Some(WhitespaceCaretLayout {
             caret_shift: px(whitespace_caret_y(caret_line, line_height)),
@@ -3800,6 +3858,15 @@ pub(super) fn visual_block_index_for_offset(
     cursor: usize,
     document_len: usize,
 ) -> Option<usize> {
+    // An explicit EOF insertion row takes precedence over the previous
+    // block's inclusive EOF fallback, without changing ordinary boundaries.
+    if cursor == document_len
+        && let Some(index) = blocks
+            .iter()
+            .position(|block| block.source_range.start == cursor && block.source_range.is_empty())
+    {
+        return Some(index);
+    }
     blocks.iter().position(|block| {
         visual_source_range_is_focused(&block.source_range, cursor, document_len)
             || (matches!(block.kind, VisualBlockKind::MathBlock { .. })
@@ -3869,19 +3936,32 @@ pub(super) fn whitespace_painted_line_count(source_range: Range<usize>, text: &s
         text[start..end]
             .bytes()
             .filter(|byte| *byte == b'\n')
-            .count(),
+            .count()
+            + usize::from(end == text.len()),
     )
 }
 
 fn whitespace_newline_offsets(source_range: Range<usize>, text: &str) -> Vec<usize> {
     let end = source_range.end.min(text.len());
     let start = source_range.start.min(end);
-    text[start..end]
+    let mut offsets: Vec<_> = text[start..end]
         .bytes()
         .enumerate()
         .filter(|(_, byte)| *byte == b'\n')
-        .map(|(index, _)| start + index)
-        .collect()
+        .map(|(index, _)| {
+            let offset = start + index;
+            // Insert before the entire CRLF, never between CR and LF.
+            if offset > start && text.as_bytes()[offset - 1] == b'\r' {
+                offset - 1
+            } else {
+                offset
+            }
+        })
+        .collect();
+    if end == text.len() {
+        offsets.push(end);
+    }
+    offsets
 }
 
 /// Line index within a whitespace row for a source caret. Each covered
@@ -3899,13 +3979,7 @@ pub(super) fn whitespace_caret_line(
         .bytes()
         .filter(|byte| *byte == b'\n')
         .count();
-    let max_line = whitespace_clamped_line_count(
-        text[start..end]
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count(),
-    )
-    .saturating_sub(1);
+    let max_line = whitespace_painted_line_count(start..end, text).saturating_sub(1);
     newlines_before.min(max_line)
 }
 
@@ -3916,8 +3990,8 @@ pub(super) fn whitespace_caret_y(line: usize, line_height: f32) -> f32 {
 
 /// Source offset of painted line `line` inside a whitespace range. Line 0 is
 /// the first covered newline byte; later lines walk subsequent newlines. The
-/// result stays inside `[start, end)` so typing does not glue onto the next
-/// block's first content byte.
+/// result stays inside `[start, end)` before another block; at EOF the final
+/// empty line has its own `end` position.
 pub(super) fn whitespace_source_at_line(
     source_range: Range<usize>,
     line: usize,
@@ -4239,7 +4313,7 @@ fn visual_block_content_view(
     if focused_conservative || always_source {
         let row = visual_source_island_view(app, block, block_index, cx);
         let blocks = app.active_tab().document.visual_blocks_shared();
-        return if block_can_transform_at(&blocks, block_index) {
+        return if block_has_context_menu_at(&blocks, block_index) {
             visual_block_chrome(app, block, block_index, owns_caret, row, cx)
         } else {
             row
@@ -4448,9 +4522,6 @@ fn visual_block_content_view(
                                 .text_size(px(11.))
                                 .text_color(rgb(0x64748b))
                                 .child(text.to_string())
-                        }))
-                        .children((owns_caret && exact_image.is_some()).then(|| {
-                            visual_image_controls(offset, image_presentation, app.language, cx)
                         })),
                 );
             if let Some(VisualBlockEditor::Image {
@@ -4458,7 +4529,7 @@ fn visual_block_content_view(
                 data_uri_fingerprint,
             }) = block.editor.as_ref()
             {
-                return div().child(visual_image_source_editor(
+                div().child(visual_image_source_editor(
                     app,
                     block,
                     block_index,
@@ -4468,9 +4539,10 @@ fn visual_block_content_view(
                     presentation.into_any_element(),
                     document_dir,
                     cx,
-                ));
+                ))
+            } else {
+                presentation.mb_3()
             }
-            presentation.mb_3()
         }
         VisualBlockKind::Rule => {
             let offset = block.source_range.start;
@@ -4520,10 +4592,7 @@ fn visual_block_content_view(
         VisualBlockKind::Whitespace => {
             let text = app.active_tab().document.text();
             let source_range = block.source_range.clone();
-            let line_count = text[source_range.clone()]
-                .bytes()
-                .filter(|byte| *byte == b'\n')
-                .count();
+            let line_count = whitespace_painted_line_count(source_range, text);
             let line_height = typography.paragraph_line_height;
             let row_height = whitespace_row_height(line_count, line_height);
 
@@ -4691,7 +4760,7 @@ fn visual_block_content_view(
         }
     };
     let blocks = app.active_tab().document.visual_blocks_shared();
-    let row = if block_can_transform_at(&blocks, block_index) {
+    let row = if block_has_context_menu_at(&blocks, block_index) {
         visual_block_chrome(app, block, block_index, owns_caret, row, cx)
     } else {
         row
@@ -4715,6 +4784,13 @@ fn visual_block_content_view(
     } else {
         row
     }
+}
+
+fn block_has_context_menu_at(blocks: &[VisualBlock], index: usize) -> bool {
+    block_can_transform_at(blocks, index)
+        || blocks
+            .get(index)
+            .is_some_and(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
 }
 
 fn visual_block_chrome(
@@ -4905,9 +4981,22 @@ fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
         }
         BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings) => "visual-block-text-headings",
         BlockMenuItem::Submenu(BlockMenuSubmenu::Lists) => "visual-block-lists",
+        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageWidth) => "visual-image-width",
+        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageAlignment) => "visual-image-alignment",
         BlockMenuItem::Transform(transform) => {
             visual_block_transform_element_id(block_transform_index(transform))
         }
+        BlockMenuItem::ImageWidth(25) => "visual-image-width-25",
+        BlockMenuItem::ImageWidth(50) => "visual-image-width-50",
+        BlockMenuItem::ImageWidth(75) => "visual-image-width-75",
+        BlockMenuItem::ImageWidth(_) => "visual-image-width-100",
+        BlockMenuItem::ImageAlignment(ImageAlignment::Left) => "visual-image-align-left",
+        BlockMenuItem::ImageAlignment(ImageAlignment::Center) => "visual-image-align-center",
+        BlockMenuItem::ImageAlignment(ImageAlignment::Right) => "visual-image-align-right",
+        BlockMenuItem::ImageEditSource => "visual-image-edit-source",
+        BlockMenuItem::ImageReplace => "visual-image-replace",
+        BlockMenuItem::ImageSaveLocal => "visual-image-save-local",
+        BlockMenuItem::ImageUpload => "visual-image-upload",
         BlockMenuItem::Duplicate => "visual-block-duplicate",
         BlockMenuItem::MoveUp => "visual-block-move-up",
         BlockMenuItem::MoveDown => "visual-block-move-down",
@@ -4933,7 +5022,27 @@ fn block_menu_item_label(language: Language, item: BlockMenuItem) -> String {
             p1_t(language, P1Msg::TextAndHeadings).to_string()
         }
         BlockMenuItem::Submenu(BlockMenuSubmenu::Lists) => p1_t(language, P1Msg::Lists).to_string(),
+        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageWidth) => {
+            image_t(language, ImageMsg::Width).to_string()
+        }
+        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageAlignment) => {
+            image_t(language, ImageMsg::Alignment).to_string()
+        }
         BlockMenuItem::Transform(transform) => block_transform_label(language, transform),
+        BlockMenuItem::ImageWidth(width) => format!("{width}%"),
+        BlockMenuItem::ImageAlignment(ImageAlignment::Left) => {
+            p0_t(language, P0Msg::Left).to_string()
+        }
+        BlockMenuItem::ImageAlignment(ImageAlignment::Center) => {
+            p0_t(language, P0Msg::Center).to_string()
+        }
+        BlockMenuItem::ImageAlignment(ImageAlignment::Right) => {
+            p0_t(language, P0Msg::Right).to_string()
+        }
+        BlockMenuItem::ImageEditSource => image_t(language, ImageMsg::EditSource).to_string(),
+        BlockMenuItem::ImageReplace => p0_t(language, P0Msg::Replace).to_string(),
+        BlockMenuItem::ImageSaveLocal => image_t(language, ImageMsg::SaveSelected).to_string(),
+        BlockMenuItem::ImageUpload => image_t(language, ImageMsg::UploadSelected).to_string(),
         BlockMenuItem::Duplicate => p1_t(language, P1Msg::DuplicateBlock).to_string(),
         BlockMenuItem::MoveUp => p1_t(language, P1Msg::MoveUp).to_string(),
         BlockMenuItem::MoveDown => p1_t(language, P1Msg::MoveDown).to_string(),
@@ -4945,14 +5054,30 @@ fn block_menu_item_is_current(item: BlockMenuItem, presentation: BlockMenuPresen
     match item {
         BlockMenuItem::Submenu(BlockMenuSubmenu::TextAndHeadings) => matches!(
             presentation.current,
-            BlockTransform::Text | BlockTransform::Heading(_)
+            Some(BlockTransform::Text | BlockTransform::Heading(_))
         ),
         BlockMenuItem::Submenu(BlockMenuSubmenu::Lists) => matches!(
             presentation.current,
-            BlockTransform::BulletedList | BlockTransform::NumberedList | BlockTransform::TaskList
+            Some(
+                BlockTransform::BulletedList
+                    | BlockTransform::NumberedList
+                    | BlockTransform::TaskList
+            )
         ),
-        BlockMenuItem::Transform(transform) => presentation.current == transform,
+        BlockMenuItem::Submenu(BlockMenuSubmenu::ImageWidth)
+        | BlockMenuItem::Submenu(BlockMenuSubmenu::ImageAlignment) => presentation.image.is_some(),
+        BlockMenuItem::Transform(transform) => presentation.current == Some(transform),
+        BlockMenuItem::ImageWidth(width) => presentation
+            .image
+            .is_some_and(|image| image.width_percent == width),
+        BlockMenuItem::ImageAlignment(alignment) => presentation
+            .image
+            .is_some_and(|image| image.alignment == alignment),
         BlockMenuItem::SelectionFormat(_)
+        | BlockMenuItem::ImageEditSource
+        | BlockMenuItem::ImageReplace
+        | BlockMenuItem::ImageSaveLocal
+        | BlockMenuItem::ImageUpload
         | BlockMenuItem::Duplicate
         | BlockMenuItem::MoveUp
         | BlockMenuItem::MoveDown
@@ -4964,6 +5089,7 @@ fn block_menu_item_is_followed_by_separator(item: BlockMenuItem) -> bool {
     matches!(
         item,
         BlockMenuItem::SelectionFormat(SelectionFormatAction::Link)
+            | BlockMenuItem::ImageUpload
             | BlockMenuItem::Transform(BlockTransform::Table)
             | BlockMenuItem::MoveDown
     )
@@ -5001,17 +5127,13 @@ fn visual_block_submenu(
         .flex()
         .flex_col();
     for (index, item) in submenu.items().iter().copied().enumerate() {
-        let BlockMenuItem::Transform(transform) = item else {
-            continue;
-        };
-        let transform_index = block_transform_index(transform);
         panel = panel.child(block_menu_item_button(
-            visual_block_transform_element_id(transform_index),
-            block_transform_label(language, transform),
+            block_menu_item_element_id(item),
+            block_menu_item_label(language, item),
             item,
             selected == index,
-            presentation.current == transform,
-            true,
+            block_menu_item_is_current(item, presentation),
+            presentation.item_enabled(item),
             Some(BlockMenuPointerTarget::Submenu(submenu, index)),
             false,
             palette,
@@ -5197,6 +5319,7 @@ pub(super) fn visual_reference_definition_view(
             marked_range: app.active_tab().marked_range.clone(),
             caret_active: visual_block_owns_caret(app, block_index),
             navigation_active: true,
+            navigation_y_offset: Pixels::ZERO,
             entity: cx.entity(),
             whitespace_caret: None,
             #[cfg(test)]
@@ -5266,6 +5389,10 @@ fn visual_editor_field_element(
                         fragment.to_string(),
                         field.source_range.clone(),
                         visual_highlight_style(span.style, span.link.is_some()),
+                        &mut None,
+                        !block_owns_caret,
+                        px(resolved_script_metrics(span.style, metrics, app, cx)
+                            .map_or(0., |(_, _, top)| top)),
                         app,
                         cx,
                         #[cfg(test)]
@@ -5361,6 +5488,7 @@ fn visual_editor_field_element(
         marked_range,
         caret_active,
         navigation_active: caret_active || !block_owns_caret,
+        navigation_y_offset: Pixels::ZERO,
         entity: cx.entity(),
         whitespace_caret: None,
         #[cfg(test)]
@@ -5865,127 +5993,6 @@ fn visual_diagram_editor(
 /// Shared Obsidian-style chrome for block math and registered diagrams:
 /// render-only by default, hover `</>` expands the payload editor, click
 /// outside collapses (pending/error force the editor open).
-fn visual_image_controls(
-    offset: usize,
-    presentation: ImagePresentation,
-    language: Language,
-    cx: &mut Context<MarkionApp>,
-) -> Div {
-    let button = |id: &'static str, label: &'static str| {
-        div()
-            .id((id, offset))
-            .px_2()
-            .py_1()
-            .rounded_sm()
-            .border_1()
-            .border_color(rgb(0xcbd5e1))
-            .bg(rgb(0xffffff))
-            .text_size(px(11.))
-            .cursor(CursorStyle::PointingHand)
-            .child(label)
-    };
-    div()
-        .mt_2()
-        .flex()
-        .flex_wrap()
-        .gap_1()
-        .child(
-            button("image-width-25", "25%").on_click(cx.listener(move |app, _, _, cx| {
-                app.set_image_presentation_at(
-                    offset,
-                    ImagePresentation {
-                        width_percent: 25,
-                        ..presentation
-                    },
-                    cx,
-                )
-            })),
-        )
-        .child(
-            button("image-width-50", "50%").on_click(cx.listener(move |app, _, _, cx| {
-                app.set_image_presentation_at(
-                    offset,
-                    ImagePresentation {
-                        width_percent: 50,
-                        ..presentation
-                    },
-                    cx,
-                )
-            })),
-        )
-        .child(
-            button("image-width-75", "75%").on_click(cx.listener(move |app, _, _, cx| {
-                app.set_image_presentation_at(
-                    offset,
-                    ImagePresentation {
-                        width_percent: 75,
-                        ..presentation
-                    },
-                    cx,
-                )
-            })),
-        )
-        .child(
-            button("image-width-100", "100%").on_click(cx.listener(move |app, _, _, cx| {
-                app.set_image_presentation_at(
-                    offset,
-                    ImagePresentation {
-                        width_percent: 100,
-                        ..presentation
-                    },
-                    cx,
-                )
-            })),
-        )
-        .child(
-            button("image-align-left", p0_t(language, P0Msg::Left)).on_click(cx.listener(
-                move |app, _, _, cx| {
-                    app.set_image_presentation_at(
-                        offset,
-                        ImagePresentation {
-                            alignment: ImageAlignment::Left,
-                            ..presentation
-                        },
-                        cx,
-                    )
-                },
-            )),
-        )
-        .child(
-            button("image-align-center", p0_t(language, P0Msg::Center)).on_click(cx.listener(
-                move |app, _, _, cx| {
-                    app.set_image_presentation_at(
-                        offset,
-                        ImagePresentation {
-                            alignment: ImageAlignment::Center,
-                            ..presentation
-                        },
-                        cx,
-                    )
-                },
-            )),
-        )
-        .child(
-            button("image-align-right", p0_t(language, P0Msg::Right)).on_click(cx.listener(
-                move |app, _, _, cx| {
-                    app.set_image_presentation_at(
-                        offset,
-                        ImagePresentation {
-                            alignment: ImageAlignment::Right,
-                            ..presentation
-                        },
-                        cx,
-                    )
-                },
-            )),
-        )
-        .child(
-            button("image-replace", p0_t(language, P0Msg::Replace)).on_click(
-                cx.listener(move |app, _, _, cx| app.replace_image_resource_at(offset, cx)),
-            ),
-        )
-}
-
 /// Renders a standalone Markdown image in Visual Edit by layering the image
 /// presentation on top of an on-demand whole-span source payload editor
 /// (collapsed by default; expand via the hover `</>` control — same chrome

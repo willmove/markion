@@ -40,14 +40,20 @@ pub(super) fn block_menu_root_index_for_transform(transform: BlockTransform) -> 
 
 fn block_menu_submenu_current_index(
     submenu: BlockMenuSubmenu,
-    current: Option<BlockTransform>,
+    presentation: BlockMenuPresentation,
 ) -> usize {
-    current
-        .and_then(|current| {
-            submenu
-                .items()
-                .iter()
-                .position(|item| *item == BlockMenuItem::Transform(current))
+    submenu
+        .items()
+        .iter()
+        .position(|item| match item {
+            BlockMenuItem::Transform(transform) => presentation.current == Some(*transform),
+            BlockMenuItem::ImageWidth(width) => presentation
+                .image
+                .is_some_and(|image| image.width_percent == *width),
+            BlockMenuItem::ImageAlignment(alignment) => presentation
+                .image
+                .is_some_and(|image| image.alignment == *alignment),
+            _ => false,
         })
         .unwrap_or(0)
 }
@@ -364,15 +370,23 @@ impl MarkionApp {
             let blocks = tab.document.visual_blocks_shared();
             visual_selection_format_target_for_block(tab, &blocks, &target)
         };
-        let root_selected = block_menu_root_index_for_transform(presentation.current)
-            + if selection_format.is_some() {
-                BLOCK_MENU_SELECTION_FORMAT_ITEMS.len()
-            } else {
-                0
-            };
+        let root_selected = if presentation.is_image {
+            0
+        } else {
+            presentation
+                .current
+                .map(block_menu_root_index_for_transform)
+                .unwrap_or(0)
+                + if selection_format.is_some() {
+                    BLOCK_MENU_SELECTION_FORMAT_ITEMS.len()
+                } else {
+                    0
+                }
+        };
         self.block_menu = Some(BlockMenuState {
             target,
             selection_format,
+            is_image: presentation.is_image,
             anchor,
             root_selected,
             submenu: None,
@@ -433,13 +447,22 @@ impl MarkionApp {
         let tab = self.active_tab();
         let blocks = tab.document.visual_blocks_shared();
         let (index, block) = validate_block_target(tab.document.version(), &blocks, target).ok()?;
-        if !block_can_transform_at(&blocks, index) {
+        let is_image = matches!(block.kind, VisualBlockKind::Image { .. });
+        if !is_image && !block_can_transform_at(&blocks, index) {
             return None;
         }
-        let current = visual_block_transform(block)?;
+        let current = visual_block_transform(block);
+        let image = if is_image {
+            inline_image_at(tab.document.text(), target.source_range.start)
+                .map(|image| image.presentation.unwrap_or_default())
+        } else {
+            None
+        };
         let can_duplicate_or_delete = block_can_reorder_at(&blocks, index);
         Some(BlockMenuPresentation {
             current,
+            is_image,
+            image,
             can_duplicate_or_delete,
             can_move_up: can_duplicate_or_delete
                 && adjacent_reorder_target(tab.document.version(), &blocks, target, false).is_ok(),
@@ -454,7 +477,7 @@ impl MarkionApp {
         open_submenu: bool,
         cx: &mut Context<Self>,
     ) {
-        let current = self.block_menu_presentation().map(|model| model.current);
+        let presentation = self.block_menu_presentation();
         let Some(state) = &mut self.block_menu else {
             return;
         };
@@ -468,7 +491,10 @@ impl MarkionApp {
             state.submenu = submenu;
             state.submenu_selected = state
                 .submenu
-                .map(|submenu| block_menu_submenu_current_index(submenu, current))
+                .and_then(|submenu| {
+                    presentation
+                        .map(|presentation| block_menu_submenu_current_index(submenu, presentation))
+                })
                 .unwrap_or(0);
         }
         cx.notify();
@@ -550,12 +576,14 @@ impl MarkionApp {
         else {
             return true;
         };
-        let current = self.block_menu_presentation().map(|model| model.current);
+        let presentation = self.block_menu_presentation();
         let Some(state) = &mut self.block_menu else {
             return false;
         };
         state.submenu = Some(submenu);
-        state.submenu_selected = block_menu_submenu_current_index(submenu, current);
+        state.submenu_selected = presentation
+            .map(|presentation| block_menu_submenu_current_index(submenu, presentation))
+            .unwrap_or(0);
         cx.notify();
         true
     }
@@ -638,15 +666,70 @@ impl MarkionApp {
                 }
             }
             BlockMenuItem::Submenu(submenu) => {
-                let current = Some(presentation.current);
                 if let Some(state) = &mut self.block_menu {
                     state.submenu = Some(submenu);
-                    state.submenu_selected = block_menu_submenu_current_index(submenu, current);
+                    state.submenu_selected =
+                        block_menu_submenu_current_index(submenu, presentation);
                 }
                 cx.notify();
             }
             BlockMenuItem::Transform(transform) => {
                 self.transform_visual_block(target, transform, cx)
+            }
+            BlockMenuItem::ImageWidth(width) => {
+                self.dismiss_visual_block_menu();
+                let Some(image) = presentation.image else {
+                    return;
+                };
+                self.set_image_presentation_at(
+                    target.source_range.start,
+                    ImagePresentation {
+                        width_percent: width,
+                        ..image
+                    },
+                    cx,
+                );
+            }
+            BlockMenuItem::ImageAlignment(alignment) => {
+                self.dismiss_visual_block_menu();
+                let Some(image) = presentation.image else {
+                    return;
+                };
+                self.set_image_presentation_at(
+                    target.source_range.start,
+                    ImagePresentation { alignment, ..image },
+                    cx,
+                );
+            }
+            BlockMenuItem::ImageEditSource => {
+                self.dismiss_visual_block_menu();
+                self.move_to(target.source_range.start, cx);
+                let tab = self.active_tab_mut();
+                tab.retain_visual_source_expand = Some(target.block_id);
+                if !tab.is_visual_source_expanded(target.block_id) {
+                    tab.toggle_visual_source_expanded(target.block_id);
+                }
+                cx.notify();
+            }
+            BlockMenuItem::ImageReplace => {
+                self.dismiss_visual_block_menu();
+                self.replace_image_resource_at(target.source_range.start, cx);
+            }
+            BlockMenuItem::ImageSaveLocal => {
+                self.dismiss_visual_block_menu();
+                self.start_image_operation_at_offset(
+                    target.source_range.start,
+                    markion::ImageOperationKind::SaveToResources,
+                    cx,
+                );
+            }
+            BlockMenuItem::ImageUpload => {
+                self.dismiss_visual_block_menu();
+                self.start_image_operation_at_offset(
+                    target.source_range.start,
+                    markion::ImageOperationKind::Upload,
+                    cx,
+                );
             }
             BlockMenuItem::Duplicate => self.duplicate_visual_block(target, cx),
             BlockMenuItem::MoveUp => self.move_visual_block(target, false, cx),
@@ -851,98 +934,65 @@ impl MarkionApp {
         if inputs.is_empty() {
             return;
         }
-        if self.active_tab().document.path().is_none() {
-            self.pending_image_import = Some(inputs);
+        let batch = PendingImageBatch {
+            document: self.active_tab().document.instance_id(),
+            selection: self.active_tab().selected_range.clone(),
+            inputs,
+        };
+        self.request_image_batch(batch, window, cx);
+    }
+
+    fn request_image_batch(
+        &mut self,
+        batch: PendingImageBatch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let requires_document_base = batch.inputs.iter().any(|input| match input.source_kind {
+            PendingImageSourceKind::Clipboard => matches!(
+                self.image_preferences.clipboard_policy,
+                markion::ClipboardImagePolicy::Save
+            ),
+            PendingImageSourceKind::Local => matches!(
+                self.image_preferences.local_policy,
+                markion::LocalImagePolicy::Copy
+            ),
+            PendingImageSourceKind::Remote => matches!(
+                self.image_preferences.remote_policy,
+                markion::RemoteImagePolicy::Download
+            ),
+        });
+        let Some(tab_index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.is_document() && tab.document.instance_id() == batch.document)
+        else {
+            return;
+        };
+        if requires_document_base && self.tabs[tab_index].document.path().is_none() {
+            self.pending_image_import = Some(batch);
             self.status = p0_t(self.language, P0Msg::SaveBeforeImage).into();
-            self.save_document_as(&SaveDocumentAs, window, cx);
+            if tab_index == self.active_tab {
+                self.save_document_as(&SaveDocumentAs, window, cx);
+            } else {
+                cx.notify();
+            }
             return;
         }
-        self.insert_image_inputs(inputs, cx);
+        self.start_image_insertion(batch, cx);
     }
 
     pub(super) fn flush_pending_image_import(&mut self, cx: &mut Context<Self>) {
-        let Some(inputs) = self.pending_image_import.take() else {
+        let Some(batch) = self.pending_image_import.take() else {
             return;
         };
-        if self.active_tab().document.path().is_some() {
-            self.insert_image_inputs(inputs, cx);
+        if self.tabs.iter().any(|tab| {
+            tab.is_document()
+                && tab.document.instance_id() == batch.document
+                && tab.document.path().is_some()
+        }) {
+            self.start_image_insertion(batch, cx);
         }
-    }
-
-    fn insert_image_inputs(&mut self, inputs: Vec<PendingImageInput>, cx: &mut Context<Self>) {
-        let Some(document_path) = self.active_tab().document.path().map(Path::to_path_buf) else {
-            self.pending_image_import = Some(inputs);
-            return;
-        };
-        let _admission = match self.git_operations.try_write(&document_path) {
-            Ok(admission) => admission,
-            Err(_) => {
-                self.pending_image_import = Some(inputs);
-                self.status = self.trf(
-                    Msg::StatusGitSyncFailed,
-                    &["the workspace is being updated"],
-                );
-                cx.notify();
-                return;
-            }
-        };
-        let mut markdown = Vec::with_capacity(inputs.len());
-        let mut failures = Vec::new();
-        for input in inputs {
-            match import_image_bytes(&document_path, &input.stem, &input.extension, &input.bytes) {
-                Ok(imported) => markdown.push(serialize_inline_image(
-                    &input.stem,
-                    &imported.relative_url,
-                    None,
-                    None,
-                )),
-                Err(err) => failures.push(err.to_string()),
-            }
-        }
-        if markdown.is_empty() {
-            self.status = failures.join("; ").into();
-            cx.notify();
-            return;
-        }
-
-        self.active_tab_mut().finish_undo_capture();
-        let snapshot = self.snapshot();
-        let replacement = markdown.join("\n");
-        let selected = self.active_tab().selected_range.clone();
-        let insertion_start = selected.start;
-        let mutation = {
-            let tab = self.active_tab_mut();
-            tab.document.prepare_range_mutation(
-                MutationOrigin::MarkdownFormat,
-                selected,
-                &replacement,
-            )
-        };
-        if self
-            .apply_document_mutation("insert_image_inputs", mutation)
-            .is_none()
-        {
-            cx.notify();
-            return;
-        }
-        self.commit_undo_snapshot(snapshot);
-        let tab = self.active_tab_mut();
-        tab.selected_range =
-            insertion_start + replacement.len()..insertion_start + replacement.len();
-        tab.selection_reversed = false;
-        tab.marked_range = None;
-        self.status = if failures.is_empty() {
-            t(self.language, Msg::StatusFmtImage).into()
-        } else {
-            p0_tf(
-                self.language,
-                P0Msg::ImagePartialFailure,
-                &[&failures.join("; ")],
-            )
-            .into()
-        };
-        self.after_document_changed(cx);
-        cx.notify();
     }
 
     pub(super) fn set_image_presentation_at(
@@ -1211,6 +1261,16 @@ impl MarkionApp {
     }
 
     pub(super) fn replace_image_resource_at(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let scan = self.active_tab().document.image_occurrence_scan();
+        let Some(occurrence) = scan.occurrences.iter().find(|occurrence| {
+            occurrence.full_range.start <= offset && offset <= occurrence.full_range.end
+        }) else {
+            self.status = p0_t(self.language, P0Msg::ImageSourceAmbiguous).into();
+            cx.notify();
+            return;
+        };
+        let document = self.active_tab().document.instance_id();
+        let occurrence = occurrence.id;
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -1230,45 +1290,12 @@ impl MarkionApp {
                     cx.notify();
                     return;
                 }
-                let Some(target) = inline_image_at(app.active_tab().document.text(), offset) else {
-                    app.status = p0_t(app.language, P0Msg::ImageSourceAmbiguous).into();
-                    cx.notify();
-                    return;
-                };
-                let Some(document_path) = app.active_tab().document.path().map(Path::to_path_buf)
-                else {
-                    app.status = p0_t(app.language, P0Msg::SaveBeforeImage).into();
-                    cx.notify();
-                    return;
-                };
-                let _admission = match app.git_operations.try_write(&document_path) {
-                    Ok(admission) => admission,
-                    Err(_) => {
-                        app.status = app.trf(
-                            Msg::StatusGitSyncFailed,
-                            &["the workspace is being updated"],
-                        );
-                        cx.notify();
-                        return;
-                    }
-                };
-                match import_image_file(&document_path, &source_path) {
-                    Ok(imported) => {
-                        let replacement = serialize_inline_image(
-                            &target.label,
-                            &imported.relative_url,
-                            target.title.as_deref(),
-                            target.presentation,
-                        );
-                        app.replace_exact_inline_target(target.source_range, replacement, cx);
-                    }
-                    Err(err) => {
-                        app.status =
-                            p0_tf(app.language, P0Msg::ImageReplaceFailed, &[&err.to_string()])
-                                .into();
-                        cx.notify();
-                    }
-                }
+                app.start_image_replacement(
+                    document,
+                    occurrence,
+                    markion::ImageInput::Local(source_path),
+                    cx,
+                );
             });
         })
         .detach();
@@ -1491,6 +1518,7 @@ impl MarkionApp {
             (selected, "link text".into(), String::new(), String::new())
         };
         self.link_editor = Some(LinkEditorState {
+            kind: LinkEditorKind::Link,
             source_range,
             document_version: self.active_tab().document.version(),
             label,
@@ -1522,7 +1550,7 @@ impl MarkionApp {
         cx.notify();
     }
 
-    pub(super) fn confirm_link_editor(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn confirm_link_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editor) = self.link_editor.take() else {
             return;
         };
@@ -1533,11 +1561,83 @@ impl MarkionApp {
             cx.notify();
             return;
         }
+        match editor.kind {
+            LinkEditorKind::ImageDirectory => {
+                let document = self
+                    .active_tab()
+                    .document
+                    .path()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from("untitled.md"));
+                if let Err(error) =
+                    markion::resolve_resource_directory(&document, editor.url.trim())
+                {
+                    self.link_editor = Some(editor);
+                    self.status = error.to_string().into();
+                    cx.notify();
+                    return;
+                }
+                self.image_preferences.directory = editor.url.trim().to_owned();
+                self.persist_preferences();
+                cx.notify();
+                return;
+            }
+            LinkEditorKind::PicGoEndpoint => {
+                self.image_preferences.picgo_http.endpoint = editor.url.trim().to_owned();
+                self.persist_preferences();
+                cx.notify();
+                return;
+            }
+            LinkEditorKind::PicGoCoreArguments => {
+                self.image_preferences.picgo_core.launcher_args = editor
+                    .url
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                self.persist_preferences();
+                cx.notify();
+                return;
+            }
+            LinkEditorKind::ImageCommandArguments => {
+                self.image_preferences.command.args = editor
+                    .url
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                self.persist_preferences();
+                cx.notify();
+                return;
+            }
+            LinkEditorKind::Link | LinkEditorKind::Image => {}
+        }
         if self.active_tab().document.version() != editor.document_version
             || editor.source_range.end > self.active_tab().document.text().len()
         {
             self.status = p0_t(self.language, P0Msg::LinkStale).into();
             cx.notify();
+            return;
+        }
+        if editor.kind == LinkEditorKind::Image {
+            let document = self.active_tab().document.instance_id();
+            self.request_image_batch(
+                PendingImageBatch {
+                    document,
+                    selection: editor.source_range,
+                    inputs: vec![PendingImageInput {
+                        label: editor.label,
+                        title: (!editor.title.trim().is_empty())
+                            .then(|| editor.title.trim().into()),
+                        input: markion::ImageInput::Remote(editor.url.trim().to_owned()),
+                        source_kind: PendingImageSourceKind::Remote,
+                    }],
+                },
+                window,
+                cx,
+            );
             return;
         }
         let replacement = serialize_inline_link(
@@ -1588,6 +1688,108 @@ impl MarkionApp {
             self.tr(Msg::StatusFmtImage).into(),
             cx,
         );
+    }
+
+    pub(super) fn insert_image_file(
+        &mut self,
+        _: &InsertImageFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let document = self.active_tab().document.instance_id();
+        let selection = self.active_tab().selected_range.clone();
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some(image_t(self.language, ImageMsg::ChooseFile).into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let inputs = paths
+                .into_iter()
+                .filter(|path| image_extension_supported(path))
+                .map(|path| PendingImageInput {
+                    label: path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or("image")
+                        .to_owned(),
+                    title: None,
+                    input: markion::ImageInput::Local(path),
+                    source_kind: PendingImageSourceKind::Local,
+                })
+                .collect::<Vec<_>>();
+            if inputs.is_empty() {
+                return;
+            }
+            let _ = this.update_in(cx, |app, window, cx| {
+                app.request_image_batch(
+                    PendingImageBatch {
+                        document,
+                        selection,
+                        inputs,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn insert_image_url(
+        &mut self,
+        _: &InsertImageUrl,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self.active_tab().safe_selected_range();
+        let label = if selected.is_empty() {
+            "image".to_owned()
+        } else {
+            self.active_tab().document.text()[selected.clone()].to_owned()
+        };
+        self.link_editor = Some(LinkEditorState {
+            kind: LinkEditorKind::Image,
+            source_range: selected,
+            document_version: self.active_tab().document.version(),
+            label,
+            url: String::new(),
+            title: String::new(),
+            field: LinkEditorField::Url,
+        });
+        self.input_marked_len = 0;
+        cx.notify();
+    }
+
+    pub(super) fn open_image_preference_editor(
+        &mut self,
+        kind: LinkEditorKind,
+        cx: &mut Context<Self>,
+    ) {
+        let value = match kind {
+            LinkEditorKind::ImageDirectory => self.image_preferences.directory.clone(),
+            LinkEditorKind::PicGoEndpoint => self.image_preferences.picgo_http.endpoint.clone(),
+            LinkEditorKind::PicGoCoreArguments => {
+                self.image_preferences.picgo_core.launcher_args.join("\n")
+            }
+            LinkEditorKind::ImageCommandArguments => self.image_preferences.command.args.join("\n"),
+            LinkEditorKind::Link | LinkEditorKind::Image => return,
+        };
+        self.link_editor = Some(LinkEditorState {
+            kind,
+            source_range: 0..0,
+            document_version: self.active_tab().document.version(),
+            label: String::new(),
+            url: value,
+            title: String::new(),
+            field: LinkEditorField::Url,
+        });
+        self.input_marked_len = 0;
+        cx.notify();
     }
 
     pub(super) fn apply_heading_level(&mut self, level: u8, cx: &mut Context<Self>) {
@@ -1949,6 +2151,7 @@ impl MarkionApp {
             Some(menu)
         };
         self.open_recent_submenu_open = false;
+        self.format_images_submenu_open = false;
         self.advanced_git_submenu_open = false;
         self.close_workspace_switcher();
         cx.notify();
@@ -1959,6 +2162,7 @@ impl MarkionApp {
         if next_menu != self.active_menu {
             self.active_menu = next_menu;
             self.open_recent_submenu_open = false;
+            self.format_images_submenu_open = false;
             self.advanced_git_submenu_open = false;
             self.close_workspace_switcher();
             cx.notify();
@@ -1984,6 +2188,21 @@ impl MarkionApp {
             return;
         }
         self.open_recent_submenu_open = !self.open_recent_submenu_open;
+        cx.notify();
+    }
+
+    pub(super) fn open_format_images_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.active_menu == Some(AppMenu::Format) && !self.format_images_submenu_open {
+            self.format_images_submenu_open = true;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_format_images_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.active_menu != Some(AppMenu::Format) {
+            return;
+        }
+        self.format_images_submenu_open = !self.format_images_submenu_open;
         cx.notify();
     }
 
@@ -2020,6 +2239,7 @@ impl MarkionApp {
         if had_transient_ui {
             self.active_menu = None;
             self.open_recent_submenu_open = false;
+            self.format_images_submenu_open = false;
             self.advanced_git_submenu_open = false;
             self.file_tree_context_menu = None;
             self.preview_context_menu = None;
@@ -2695,7 +2915,7 @@ impl MarkionApp {
             return;
         }
         if self.link_editor.is_some() {
-            self.confirm_link_editor(cx);
+            self.confirm_link_editor(_window, cx);
             return;
         }
         self.sync_slash_command_state(cx);
@@ -3079,9 +3299,14 @@ impl MarkionApp {
             };
             self.request_image_import(
                 vec![PendingImageInput {
-                    stem: "pasted-image".into(),
-                    extension: extension.into(),
-                    bytes: image.bytes.clone(),
+                    label: "pasted-image".into(),
+                    title: None,
+                    input: markion::ImageInput::Bytes {
+                        stem: "pasted-image".into(),
+                        extension: extension.into(),
+                        bytes: image.bytes.clone(),
+                    },
+                    source_kind: PendingImageSourceKind::Clipboard,
                 }],
                 window,
                 cx,
@@ -3101,17 +3326,23 @@ impl MarkionApp {
                 }
                 None => text,
             };
+            let insertion_start = self.active_tab().safe_selected_range().start;
+            let insertion_end = insertion_start + insertion.len();
             self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
             self.replace_text_in_range(None, &insertion, window, cx);
             self.active_tab_mut().finish_undo_capture();
+            self.start_inserted_fragment_image_policies(insertion_start..insertion_end, cx);
         } else if !self.has_text_input_focus()
             && let Some(markdown) = item.html().map(markion_html_import::html_to_markdown)
             && !markdown.is_empty()
         {
             // The clipboard offered HTML without a plain-text flavor.
+            let insertion_start = self.active_tab().safe_selected_range().start;
+            let insertion_end = insertion_start + markdown.len();
             self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
             self.replace_text_in_range(None, &markdown, window, cx);
             self.active_tab_mut().finish_undo_capture();
+            self.start_inserted_fragment_image_policies(insertion_start..insertion_end, cx);
         } else {
             self.status = t(self.language, Msg::StatusClipboardEmpty).into();
             cx.notify();

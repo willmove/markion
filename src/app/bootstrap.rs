@@ -111,7 +111,32 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemItalic), Italic),
                 MenuItem::action(t(language, Msg::ItemInlineCode), InlineCode),
                 MenuItem::action(t(language, Msg::ItemLink), InsertLink),
-                MenuItem::action(t(language, Msg::ItemImage), InsertImage),
+                MenuItem::submenu(Menu {
+                    name: image_t(language, ImageMsg::Tab).into(),
+                    items: vec![
+                        MenuItem::action(t(language, Msg::ItemImage), InsertImage),
+                        MenuItem::action(image_t(language, ImageMsg::InsertFile), InsertImageFile),
+                        MenuItem::action(image_t(language, ImageMsg::InsertUrl), InsertImageUrl),
+                        MenuItem::separator(),
+                        MenuItem::action(
+                            image_t(language, ImageMsg::UploadSelected),
+                            UploadSelectedImage,
+                        ),
+                        MenuItem::action(
+                            image_t(language, ImageMsg::SaveSelected),
+                            SaveSelectedImageLocally,
+                        ),
+                        MenuItem::separator(),
+                        MenuItem::action(
+                            image_t(language, ImageMsg::UploadDocument),
+                            UploadDocumentImages,
+                        ),
+                        MenuItem::action(
+                            image_t(language, ImageMsg::SaveDocument),
+                            SaveDocumentImagesLocally,
+                        ),
+                    ],
+                }),
                 MenuItem::separator(),
                 MenuItem::action(t(language, Msg::ItemParagraph), Paragraph),
             ]

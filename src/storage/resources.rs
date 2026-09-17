@@ -11,15 +11,41 @@ use std::{
 };
 
 use markion_docx_import::{AssetId, PreparedImport};
-use percent_encoding::percent_decode_str;
-
-use super::atomic_write;
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedImage {
     pub stored_path: PathBuf,
     pub relative_url: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceDirectory {
+    pub path: PathBuf,
+    pub relative_url_prefix: String,
+}
+
+/// Immutable, write-free preparation for publishing one image beside a
+/// document. Staging captures the source bytes before Git write admission;
+/// publication re-resolves the destination after admission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedImagePublication {
+    document_path: PathBuf,
+    directory_template: String,
+    suggested_stem: String,
+    extension: String,
+    bytes: Vec<u8>,
+}
+
+const RESOURCE_URL_ENCODE: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'%')
+    .add(b'#')
+    .add(b'?')
+    .add(b'(')
+    .add(b')')
+    .add(b'<')
+    .add(b'>');
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishedDocxImport {
@@ -111,7 +137,7 @@ pub(crate) fn is_local_reference(reference: &str) -> bool {
 /// Absolute references (a leading separator or a Windows drive prefix)
 /// resolve to themselves; percent-encoding and backslashes are decoded
 /// first.
-pub(crate) fn resolve_local_reference(document_dir: &Path, reference: &str) -> Option<PathBuf> {
+pub fn resolve_local_reference(document_dir: &Path, reference: &str) -> Option<PathBuf> {
     let path = reference.split(['?', '#']).next().unwrap_or_default();
     let decoded = percent_decode_str(path).decode_utf8().ok()?;
     let normalized = decoded.replace('\\', "/");
@@ -157,6 +183,103 @@ pub fn document_asset_dir(document_path: &Path) -> PathBuf {
     parent.join(format!("{document_stem}.assets"))
 }
 
+/// Resolves a validated resource-directory template beneath the Markdown
+/// document directory. Resolution is observational: it does not create the
+/// directory. Existing symlink/junction ancestors are checked against the
+/// canonical document directory.
+pub fn resolve_resource_directory(
+    document_path: &Path,
+    template: &str,
+) -> io::Result<ResourceDirectory> {
+    let document_dir = document_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let document_stem = document_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(sanitize_stem)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "document".into());
+    let mut rendered = template.trim().replace("{document}", &document_stem);
+    while let Some(rest) = rendered.strip_prefix("./") {
+        rendered = rest.to_string();
+    }
+    if rendered.is_empty() || rendered.contains('{') || rendered.contains('}') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resource directory must be non-empty and use only {document}",
+        ));
+    }
+    let rendered_path = Path::new(&rendered);
+    if rendered_path.is_absolute() || has_windows_path_prefix(&rendered) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resource directory must be relative to the document",
+        ));
+    }
+    let mut relative = PathBuf::new();
+    for component in rendered_path.components() {
+        match component {
+            std::path::Component::Normal(value) if !value.is_empty() => relative.push(value),
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "resource directory cannot contain parent traversal or a path prefix",
+                ));
+            }
+        }
+    }
+    if relative.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resource directory cannot be the document directory",
+        ));
+    }
+    validate_existing_resource_ancestors(document_dir, &relative)?;
+    let relative_url_prefix = relative
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .map(|segment| utf8_percent_encode(segment, RESOURCE_URL_ENCODE).to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    Ok(ResourceDirectory {
+        path: document_dir.join(relative),
+        relative_url_prefix,
+    })
+}
+
+fn has_windows_path_prefix(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    value.starts_with('/')
+        || value.starts_with('\\')
+        || value.starts_with("//")
+        || value.starts_with("\\\\")
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
+fn validate_existing_resource_ancestors(document_dir: &Path, relative: &Path) -> io::Result<()> {
+    let canonical_root = fs::canonicalize(document_dir)?;
+    let mut candidate = document_dir.to_path_buf();
+    for component in relative.components() {
+        candidate.push(component);
+        if candidate.exists() {
+            let canonical = fs::canonicalize(&candidate)?;
+            if !canonical.starts_with(&canonical_root) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "resource directory escapes the document directory",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Returns the publishing image scope for a saved document: the parent of
 /// the document's directory, covering the document's own directory tree at
 /// any depth and exactly one directory level above it. A document without a
@@ -175,6 +298,86 @@ pub fn document_scope_root(document_path: &Path) -> PathBuf {
 }
 
 pub fn import_image_file(document_path: &Path, source_path: &Path) -> io::Result<ImportedImage> {
+    let directory = resolve_resource_directory(document_path, "{document}.assets")?;
+    import_image_file_to(document_path, &directory, source_path)
+}
+
+pub fn stage_image_file(
+    document_path: &Path,
+    directory_template: &str,
+    source_path: &Path,
+) -> io::Result<StagedImagePublication> {
+    let extension = source_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(canonical_extension)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsupported image format"))?;
+    let suggested_stem = source_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("image");
+    stage_image_bytes(
+        document_path,
+        directory_template,
+        suggested_stem,
+        extension,
+        &fs::read(source_path)?,
+    )
+}
+
+pub fn stage_image_bytes(
+    document_path: &Path,
+    directory_template: &str,
+    suggested_stem: &str,
+    extension: &str,
+    bytes: &[u8],
+) -> io::Result<StagedImagePublication> {
+    let extension = canonical_extension(extension)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsupported image format"))?;
+    if bytes.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "image is empty",
+        ));
+    }
+    resolve_resource_directory(document_path, directory_template)?;
+    Ok(StagedImagePublication {
+        document_path: document_path.to_path_buf(),
+        directory_template: directory_template.to_owned(),
+        suggested_stem: suggested_stem.to_owned(),
+        extension: extension.to_owned(),
+        bytes: bytes.to_vec(),
+    })
+}
+
+/// Publishes a staged image after the caller has acquired repository write
+/// admission. The explicit current path prevents a Save As/rename race from
+/// redirecting output into a different document base.
+pub fn publish_staged_image(
+    staged: &StagedImagePublication,
+    current_document_path: &Path,
+) -> io::Result<ImportedImage> {
+    if current_document_path != staged.document_path {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "document path changed after image staging",
+        ));
+    }
+    let directory = resolve_resource_directory(current_document_path, &staged.directory_template)?;
+    import_image_bytes_to(
+        current_document_path,
+        &directory,
+        &staged.suggested_stem,
+        &staged.extension,
+        &staged.bytes,
+    )
+}
+
+pub fn import_image_file_to(
+    document_path: &Path,
+    directory: &ResourceDirectory,
+    source_path: &Path,
+) -> io::Result<ImportedImage> {
     let extension = source_path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -185,11 +388,22 @@ pub fn import_image_file(document_path: &Path, source_path: &Path) -> io::Result
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("image");
-    import_image_bytes(document_path, stem, extension, &bytes)
+    import_image_bytes_to(document_path, directory, stem, extension, &bytes)
 }
 
 pub fn import_image_bytes(
     document_path: &Path,
+    suggested_stem: &str,
+    extension: &str,
+    bytes: &[u8],
+) -> io::Result<ImportedImage> {
+    let directory = resolve_resource_directory(document_path, "{document}.assets")?;
+    import_image_bytes_to(document_path, &directory, suggested_stem, extension, bytes)
+}
+
+pub fn import_image_bytes_to(
+    document_path: &Path,
+    directory: &ResourceDirectory,
     suggested_stem: &str,
     extension: &str,
     bytes: &[u8],
@@ -202,13 +416,20 @@ pub fn import_image_bytes(
             "image is empty",
         ));
     }
-    let asset_dir = document_asset_dir(document_path);
-    let asset_name = asset_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("document.assets")
-        .to_owned();
+    let document_dir = document_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let relative = directory.path.strip_prefix(document_dir).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resource directory is not beneath the document directory",
+        )
+    })?;
+    validate_existing_resource_ancestors(document_dir, relative)?;
+    let asset_dir = &directory.path;
     fs::create_dir_all(&asset_dir)?;
+    validate_existing_resource_ancestors(document_dir, relative)?;
 
     let stem = sanitize_stem(suggested_stem);
     let stem = if stem.is_empty() {
@@ -228,13 +449,35 @@ pub fn import_image_bytes(
         let stored_path = asset_dir.join(&file_name);
         if stored_path.exists() {
             if fs::read(&stored_path)? == bytes {
-                return Ok(imported(stored_path, &asset_name, &file_name));
+                return Ok(imported(
+                    stored_path,
+                    &directory.relative_url_prefix,
+                    &file_name,
+                ));
             }
             suffix += 1;
             continue;
         }
-        atomic_write(&stored_path, bytes)?;
-        return Ok(imported(stored_path, &asset_name, &file_name));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&stored_path)
+        {
+            Ok(mut file) => {
+                file.write_all(bytes)?;
+                file.sync_all()?;
+                sync_parent_directory(&stored_path);
+                return Ok(imported(
+                    stored_path,
+                    &directory.relative_url_prefix,
+                    &file_name,
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                suffix += 1;
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -685,6 +928,78 @@ mod tests {
         );
         assert!(!first.relative_url.contains(".."));
         assert_eq!(fs::read(first.stored_path).unwrap(), b"png bytes");
+    }
+
+    #[test]
+    fn resource_directory_templates_resolve_nested_and_encoded_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = dir.path().join("My Note.md");
+        let nested = resolve_resource_directory(&document, "./assets/{document}").unwrap();
+        assert_eq!(nested.path, dir.path().join("assets").join("my-note"));
+        assert_eq!(nested.relative_url_prefix, "assets/my-note");
+
+        let spaced = resolve_resource_directory(&document, "图片 资源").unwrap();
+        assert_eq!(
+            spaced.relative_url_prefix,
+            "%E5%9B%BE%E7%89%87%20%E8%B5%84%E6%BA%90"
+        );
+    }
+
+    #[test]
+    fn resource_directory_templates_reject_escape_absolute_and_unknown_variables() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = dir.path().join("note.md");
+        for template in [
+            "",
+            ".",
+            "..",
+            "../assets",
+            "/assets",
+            "C:/assets",
+            "{title}.assets",
+        ] {
+            assert!(
+                resolve_resource_directory(&document, template).is_err(),
+                "template should be rejected: {template:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn custom_resource_directory_imports_with_full_relative_url_and_no_clobber() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = dir.path().join("note.md");
+        let directory = resolve_resource_directory(&document, "assets/{document}").unwrap();
+        let first = import_image_bytes_to(&document, &directory, "Screen", "png", b"one").unwrap();
+        let reused = import_image_bytes_to(&document, &directory, "Screen", "png", b"one").unwrap();
+        let second = import_image_bytes_to(&document, &directory, "Screen", "png", b"two").unwrap();
+        assert_eq!(first, reused);
+        assert_ne!(first.stored_path, second.stored_path);
+        assert!(first.relative_url.starts_with("assets/note/screen-"));
+        assert_eq!(fs::read(first.stored_path).unwrap(), b"one");
+        assert_eq!(fs::read(second.stored_path).unwrap(), b"two");
+    }
+
+    #[test]
+    fn staged_publication_is_write_free_and_revalidates_document_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = dir.path().join("note.md");
+        let source = dir.path().join("original.png");
+        fs::write(&source, b"original bytes").unwrap();
+
+        let staged = stage_image_file(&document, "assets/{document}", &source).unwrap();
+        assert!(!dir.path().join("assets").exists());
+        assert_eq!(fs::read(&source).unwrap(), b"original bytes");
+
+        let renamed = dir.path().join("renamed.md");
+        let error = publish_staged_image(&staged, &renamed).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(!dir.path().join("assets").exists());
+
+        let published = publish_staged_image(&staged, &document).unwrap();
+        assert!(published.stored_path.is_file());
+        assert!(published.relative_url.starts_with("assets/note/original-"));
+        assert_eq!(fs::read(&source).unwrap(), b"original bytes");
     }
 
     #[test]

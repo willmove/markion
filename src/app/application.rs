@@ -177,6 +177,7 @@ impl MarkionApp {
             focus_handle: cx.focus_handle(),
             active_menu: None,
             open_recent_submenu_open: false,
+            format_images_submenu_open: false,
             advanced_git_submenu_open: false,
             workspace_switcher_open: false,
             workspace_switcher_anchor: None,
@@ -187,6 +188,12 @@ impl MarkionApp {
             applied_window_title: None,
             publishing_service: None,
             docx_import: docx_import::DocxImportCoordinator::default(),
+            image_operations: ImageOperationController::default(),
+            image_cancellations: HashMap::new(),
+            image_recovery_entries: markion::list_image_recovery_records(
+                &markion::default_image_recovery_dir(),
+            )
+            .unwrap_or_default(),
             browser_launcher: Arc::new(publishing::DefaultBrowserLauncher),
             git_branch_state: GitBranchState::default(),
             git_operations,
@@ -208,6 +215,7 @@ impl MarkionApp {
             preferences_panel_focus: cx.focus_handle(),
             preferences_general_scroll: ScrollHandle::new(),
             preferences_appearance_scroll: ScrollHandle::new(),
+            preferences_images_scroll: ScrollHandle::new(),
             preferences_categories_scroll: ScrollHandle::new(),
             preferences_actions_scroll: ScrollHandle::new(),
             preferences_export_scroll: ScrollHandle::new(),
@@ -294,6 +302,7 @@ impl MarkionApp {
             auto_save_preferences: preferences.auto_save,
             git_preferences: preferences.git.clone(),
             export_preferences: preferences.export.clone(),
+            image_preferences: preferences.images.clone(),
             recovery_dir: default_recovery_dir(),
             external_check_in_flight: false,
             preview_probe_results: HashMap::new(),
@@ -769,6 +778,8 @@ impl MarkionApp {
         if let Some(path) = self.active_tab().path() {
             self.git_operations.note_edit(path);
         }
+        self.image_operations
+            .observe_document(&self.tabs[self.active_tab].document);
         self.slash_commands = None;
         self.dismissed_slash_query = None;
         self.emoji_completer = None;
@@ -1939,6 +1950,7 @@ impl MarkionApp {
             auto_save: self.auto_save_preferences,
             git: self.git_preferences.clone(),
             export: self.export_preferences.clone(),
+            images: self.image_preferences.clone(),
             shortcut_overrides: self.shortcut_overrides.clone(),
         }
     }

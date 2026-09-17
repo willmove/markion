@@ -141,7 +141,26 @@ impl MarkionApp {
             let confirmed = matches!(answer.await, Ok(0));
             let _ = this.update(cx, |app, cx| {
                 if confirmed {
-                    app.apply_organize_candidates(&document_path, &candidates, cx);
+                    let candidate_urls: HashSet<_> = candidates
+                        .iter()
+                        .map(|candidate| candidate.authored_url.as_str())
+                        .collect();
+                    let occurrences = app
+                        .active_tab()
+                        .document
+                        .image_occurrence_scan()
+                        .occurrences
+                        .into_iter()
+                        .filter(|occurrence| {
+                            candidate_urls.contains(occurrence.semantic_url.as_str())
+                        })
+                        .map(|occurrence| occurrence.id)
+                        .collect();
+                    app.start_existing_image_operation(
+                        markion::ImagePlanSelection::Occurrences(occurrences),
+                        markion::ImageOperationKind::OrganizeDocumentImages,
+                        cx,
+                    );
                 } else {
                     app.status = app.tr(Msg::StatusOrganizeCanceled).into();
                 }
@@ -156,12 +175,45 @@ impl MarkionApp {
     /// the referencing destinations as one undoable edit, and reports the
     /// outcome. Candidates that fail to copy are left untouched. Separated
     /// from the prompt flow so tests can drive it directly.
+    #[cfg(test)]
     pub(super) fn apply_organize_candidates(
         &mut self,
         document_path: &Path,
         candidates: &[OrganizeCandidate],
         cx: &mut Context<Self>,
     ) {
+        let mut staged = Vec::new();
+        let mut failed = 0usize;
+        for candidate in candidates {
+            match markion::stage_image_file(
+                document_path,
+                &self.image_preferences.directory,
+                &candidate.source_path,
+            ) {
+                Ok(publication) => staged.push((candidate, publication)),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        source = %candidate.source_path.display(),
+                        "organize staging failed"
+                    );
+                    failed += 1;
+                }
+            }
+        }
+        if staged.is_empty() {
+            self.status = self.trf(Msg::StatusOrganizePartial, &["0", &failed.to_string()]);
+            cx.notify();
+            return;
+        }
+        if self.active_tab().document.path() != Some(document_path) {
+            self.status = self.trf(
+                Msg::StatusOrganizePartial,
+                &["0", &(failed + staged.len()).to_string()],
+            );
+            cx.notify();
+            return;
+        }
         let _admission = match self.git_operations.try_write(document_path) {
             Ok(admission) => admission,
             Err(_) => {
@@ -174,9 +226,8 @@ impl MarkionApp {
             }
         };
         let mut replacements = Vec::new();
-        let mut failed = 0usize;
-        for candidate in candidates {
-            match import_image_file(document_path, &candidate.source_path) {
+        for (candidate, publication) in staged {
+            match markion::publish_staged_image(&publication, document_path) {
                 Ok(imported) => {
                     replacements.push((candidate.authored_url.clone(), imported.relative_url));
                 }

@@ -271,6 +271,7 @@ pub(super) struct MeasuredHeightKey {
 /// element's own projection and layout.
 #[derive(Clone)]
 pub(super) struct VisualNavigationWindow {
+    pub(super) y_offset: Pixels,
     pub(super) projection: std::sync::Arc<VisualProjection>,
     pub(super) layout: gpui::TextLayout,
     pub(super) start_display: usize,
@@ -304,24 +305,38 @@ impl VisualNavigationWindow {
     }
 
     fn sample_y(&self, line_y: Pixels) -> Pixels {
-        line_y + self.layout.line_height() * 0.5
+        line_y + self.y_offset + self.layout.line_height() * 0.5
     }
 }
 
 impl VisualNavigationSnapshot {
     /// Line whose display windows contain the display position of `source`.
     pub(super) fn line_index_for_source(&self, source: usize) -> Option<usize> {
-        self.lines.iter().position(|line| {
-            line.windows.iter().any(|window| {
-                window.contains_source(source)
-                    && window
-                        .projection
-                        .display_for_source(source)
-                        .is_some_and(|display| {
-                            display >= window.start_display && display <= window.end_display
-                        })
-            })
-        })
+        let mut best: Option<(usize, Pixels)> = None;
+        for (index, line) in self.lines.iter().enumerate() {
+            for window in &line.windows {
+                if !window.contains_source(source) {
+                    continue;
+                }
+                let Some(display) = window.projection.display_for_source(source) else {
+                    continue;
+                };
+                if display < window.start_display || display > window.end_display {
+                    continue;
+                }
+                let Some(position) = window.layout.position_for_index(display) else {
+                    continue;
+                };
+                // Adjacent windows share an endpoint, but its painted caret
+                // can be on the following wrapped/empty line. Use that same
+                // geometry so Up does not skip back an extra source line.
+                let distance = (position.y - line.y - window.y_offset).abs();
+                if best.is_none_or(|(_, previous)| distance < previous) {
+                    best = Some((index, distance));
+                }
+            }
+        }
+        best.map(|(index, _)| index)
     }
 
     pub(super) fn caret_x_for_source(&self, source: usize) -> Option<Pixels> {
@@ -1531,7 +1546,11 @@ impl DocumentTabState {
             && existing.source_island == snapshot.source_island
         {
             for line in snapshot.lines.drain(..) {
-                if let Some(current) = existing.lines.iter_mut().find(|item| item.y == line.y) {
+                if let Some(current) = existing
+                    .lines
+                    .iter_mut()
+                    .find(|item| (item.y - line.y).abs() < gpui::px(0.5))
+                {
                     current.windows.extend(line.windows);
                 } else {
                     existing.lines.push(line);

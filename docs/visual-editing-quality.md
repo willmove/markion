@@ -29,6 +29,36 @@ Markion's Visual Edit mode is WYSIWYG-first: rendering is the default presentati
 | YAML front matter | Complete source-backed island with lightweight chrome (left accent, faint fill, tight padding — not a padded bordered card) | Complete authored block | Always until the frontmatter gap closes | Exact source preservation |
 | Unsupported or malformed constructs | Transitional source view over the complete containing range, using the same lightweight island chrome | Complete containing source range | Exact mapping cannot be proven | Lossless source-mode round-trip and no guessed mutation |
 
+### Caret source-line boundary regression coverage
+
+Terminal LF/CRLF stays with the preceding heading or paragraph. Visual Edit
+represents the following empty line with an explicit EOF insertion row; trailing
+whitespace rows count the EOF line separately. Pointer placement, caret height,
+Up/Down navigation, and whitespace row height share the same line mapping.
+CRLF targets stay before CR or after LF, never between the two bytes.
+
+The regression `visual_terminal_caret_matches_source_line` checks the reported
+bare-heading case together with empty headings, Unicode prose, emphasis, links,
+lists/tasks and quotes: painted positions, source-mode round trips, clicking,
+Up/Down, IME composition, undo, and per-version cache identity.
+`visual_terminal_blank_rows_keep_pointer_and_arrow_targets` covers consecutive
+blank lines with spaces under both LF and CRLF. Model tests retain exact source
+coverage and verify the EOF row independently of quoted content.
+
+Related audit repairs cover bare list prefixes without trailing spaces, quoted
+headings incorrectly creating a separate blank prefix row, missing carets at
+hidden link boundaries, duplicate carets at mixed-fragment endpoints, and Up
+skipping a list's text from its terminal blank line. Mixed prose resolves one
+caret owner through the full projection while retaining every fragment's
+navigation geometry. Superscript/subscript offsets share the parent body row
+for navigation while hit tests retain the actual glyph coordinates.
+These are automated GPUI layout/input checks; they are not
+an exhaustive manual audit of every Markdown construct or platform IME.
+
+Validated on Windows, 2026-09-17: `cargo test --no-fail-fast` passed 649 library
+tests and 622 application tests (3 pre-existing ignored tests). Formatting,
+diff whitespace checks, and strict OpenSpec validation also passed.
+
 ### Inline HTML and imported TOC regression coverage
 
 `<u>` and `<ins>` now use the existing underline style, including nested Markdown,

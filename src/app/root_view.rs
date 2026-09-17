@@ -252,6 +252,13 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::export_jpeg))
                     .on_action(cx.listener(Self::publish_wechat))
                     .on_action(cx.listener(Self::organize_local_images))
+                    .on_action(cx.listener(Self::insert_image_file))
+                    .on_action(cx.listener(Self::insert_image_url))
+                    .on_action(cx.listener(Self::upload_selected_image))
+                    .on_action(cx.listener(Self::save_selected_image_locally))
+                    .on_action(cx.listener(Self::upload_document_images))
+                    .on_action(cx.listener(Self::save_document_images_locally))
+                    .on_action(cx.listener(Self::cancel_image_operations))
                     .on_action(cx.listener(Self::toggle_view_mode))
                     .on_action(cx.listener(Self::toggle_source_split_mode))
                     .on_action(cx.listener(Self::set_visual_edit_mode))
@@ -772,6 +779,19 @@ impl Render for MarkionApp {
                         self.session.recent_files.clone(),
                         AppMenu::File.dropdown_left(self.language),
                         AppMenu::File.dropdown_width(self.language),
+                        palette,
+                        cx,
+                    ))
+                },
+            )
+            .when(
+                self.active_menu == Some(AppMenu::Format) && self.format_images_submenu_open,
+                |root| {
+                    root.child(format_images_submenu_panel(
+                        self.language,
+                        AppMenu::Format.dropdown_left(self.language),
+                        AppMenu::Format.dropdown_width(self.language),
+                        &self.shortcut_overrides,
                         palette,
                         cx,
                     ))
@@ -1748,6 +1768,21 @@ fn recovery_manager_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div 
 
 fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let editor = app.link_editor.as_ref().expect("link editor visible");
+    let preference_editor = matches!(
+        editor.kind,
+        LinkEditorKind::ImageDirectory
+            | LinkEditorKind::PicGoEndpoint
+            | LinkEditorKind::PicGoCoreArguments
+            | LinkEditorKind::ImageCommandArguments
+    );
+    let value_label = match editor.kind {
+        LinkEditorKind::ImageDirectory => image_t(app.language, ImageMsg::Directory),
+        LinkEditorKind::PicGoEndpoint => image_t(app.language, ImageMsg::Endpoint),
+        LinkEditorKind::PicGoCoreArguments | LinkEditorKind::ImageCommandArguments => {
+            image_t(app.language, ImageMsg::Arguments)
+        }
+        LinkEditorKind::Link | LinkEditorKind::Image => p0_t(app.language, P0Msg::LinkUrl),
+    };
     let field = |id: &'static str,
                  label: &'static str,
                  value: &str,
@@ -1796,32 +1831,44 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
             div()
                 .text_size(px(14.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(p0_t(app.language, P0Msg::EditLink)),
+                .child(match editor.kind {
+                    LinkEditorKind::Image => image_t(app.language, ImageMsg::EditImage),
+                    LinkEditorKind::ImageDirectory => image_t(app.language, ImageMsg::Directory),
+                    LinkEditorKind::PicGoEndpoint => image_t(app.language, ImageMsg::Endpoint),
+                    LinkEditorKind::PicGoCoreArguments | LinkEditorKind::ImageCommandArguments => {
+                        image_t(app.language, ImageMsg::Arguments)
+                    }
+                    LinkEditorKind::Link => p0_t(app.language, P0Msg::EditLink),
+                }),
         )
-        .child(field(
-            "link-editor-label",
-            p0_t(app.language, P0Msg::LinkText),
-            &editor.label,
-            LinkEditorField::Label,
-            editor.field == LinkEditorField::Label,
-            cx,
-        ))
+        .when(!preference_editor, |panel| {
+            panel.child(field(
+                "link-editor-label",
+                p0_t(app.language, P0Msg::LinkText),
+                &editor.label,
+                LinkEditorField::Label,
+                editor.field == LinkEditorField::Label,
+                cx,
+            ))
+        })
         .child(field(
             "link-editor-url",
-            p0_t(app.language, P0Msg::LinkUrl),
+            value_label,
             &editor.url,
             LinkEditorField::Url,
             editor.field == LinkEditorField::Url,
             cx,
         ))
-        .child(field(
-            "link-editor-title",
-            p0_t(app.language, P0Msg::OptionalTitle),
-            &editor.title,
-            LinkEditorField::Title,
-            editor.field == LinkEditorField::Title,
-            cx,
-        ))
+        .when(!preference_editor, |panel| {
+            panel.child(field(
+                "link-editor-title",
+                p0_t(app.language, P0Msg::OptionalTitle),
+                &editor.title,
+                LinkEditorField::Title,
+                editor.field == LinkEditorField::Title,
+                cx,
+            ))
+        })
         .child(
             div()
                 .flex()
@@ -1846,7 +1893,9 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
                         .text_color(rgb(0xffffff))
                         .cursor(CursorStyle::PointingHand)
                         .child(p0_t(app.language, P0Msg::Apply))
-                        .on_click(cx.listener(|app, _, _, cx| app.confirm_link_editor(cx))),
+                        .on_click(
+                            cx.listener(|app, _, window, cx| app.confirm_link_editor(window, cx)),
+                        ),
                 ),
         )
 }
@@ -3442,6 +3491,7 @@ pub(super) fn pane_scrollbar_view(
         PaneScrollTarget::Visual => "visual-pane-scrollbar",
         PaneScrollTarget::PreferencesGeneral => "preferences-general-scrollbar",
         PaneScrollTarget::PreferencesAppearance => "preferences-appearance-scrollbar",
+        PaneScrollTarget::PreferencesImages => "preferences-images-scrollbar",
         PaneScrollTarget::PreferencesShortcutCategories => "preferences-categories-scrollbar",
         PaneScrollTarget::PreferencesShortcutActions => "preferences-actions-scrollbar",
         PaneScrollTarget::PreferencesExport => "preferences-export-scrollbar",
@@ -3473,6 +3523,7 @@ pub(super) fn pane_scrollbar_view(
 
     div()
         .id(id)
+        .debug_selector(move || id.to_string())
         .absolute()
         .top(thumb_top)
         .right(px(2.))
@@ -4571,11 +4622,15 @@ pub(super) fn active_menu_dropdown(
                     InsertLink,
                     menu_shortcuts::INSERT_LINK
                 ))
-                .child(action_item!(
-                    Msg::ItemImage,
-                    insert_image,
-                    InsertImage,
-                    menu_shortcuts::INSERT_IMAGE
+                .child(menu_submenu_parent_button(
+                    image_t(language, ImageMsg::Tab),
+                    palette,
+                    cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                        app.open_format_images_submenu(cx);
+                    }),
+                    cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                        app.toggle_format_images_submenu(cx);
+                    }),
                 ))
                 .child(menu_separator(palette))
                 .child(action_item!(
@@ -4979,6 +5034,112 @@ pub(super) fn workspace_switcher_menu(
             palette,
             cx.listener(|app, _: &MouseUpEvent, window, cx| {
                 app.open_folder(&OpenFolder, window, cx);
+            }),
+        ))
+}
+
+/// Nested Format → Images flyout. It keeps the top-level Format menu compact
+/// while preserving the existing insertion, selected-image, and document-wide
+/// action handlers.
+pub(super) fn format_images_submenu_panel(
+    language: Language,
+    menu_left: Pixels,
+    menu_width: Pixels,
+    shortcut_overrides: &BTreeMap<String, String>,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    const SUBMENU_TOP: f32 = 28. + 4. + 4. * 24.;
+    const OVERLAP: f32 = 4.;
+    let shortcut_platform = ShortcutPlatform::current();
+    let close = |app: &mut MarkionApp| {
+        app.active_menu = None;
+        app.format_images_submenu_open = false;
+    };
+
+    div()
+        .absolute()
+        .top(px(SUBMENU_TOP))
+        .left(menu_left + menu_width - px(OVERLAP))
+        .w(px(304.))
+        .occlude()
+        .py_1()
+        .border_1()
+        .border_color(palette.border)
+        .rounded_md()
+        .bg(palette.panel_bg)
+        .text_color(palette.text)
+        .shadow_md()
+        .flex()
+        .flex_col()
+        .on_mouse_move(cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+            app.open_format_images_submenu(cx);
+        }))
+        .child(menu_action_button(
+            t(language, Msg::ItemImage),
+            Some(
+                menu_shortcuts::INSERT_IMAGE.effective_label(shortcut_overrides, shortcut_platform),
+            ),
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.insert_image(&InsertImage, window, cx);
+            }),
+        ))
+        .child(menu_action_button(
+            image_t(language, ImageMsg::InsertFile),
+            None,
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.insert_image_file(&InsertImageFile, window, cx);
+            }),
+        ))
+        .child(menu_action_button(
+            image_t(language, ImageMsg::InsertUrl),
+            None,
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.insert_image_url(&InsertImageUrl, window, cx);
+            }),
+        ))
+        .child(menu_separator(palette))
+        .child(menu_action_button(
+            image_t(language, ImageMsg::UploadSelected),
+            None,
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.upload_selected_image(&UploadSelectedImage, window, cx);
+            }),
+        ))
+        .child(menu_action_button(
+            image_t(language, ImageMsg::SaveSelected),
+            None,
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.save_selected_image_locally(&SaveSelectedImageLocally, window, cx);
+            }),
+        ))
+        .child(menu_separator(palette))
+        .child(menu_action_button(
+            image_t(language, ImageMsg::UploadDocument),
+            None,
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.upload_document_images(&UploadDocumentImages, window, cx);
+            }),
+        ))
+        .child(menu_action_button(
+            image_t(language, ImageMsg::SaveDocument),
+            None,
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.save_document_images_locally(&SaveDocumentImagesLocally, window, cx);
             }),
         ))
 }
@@ -5436,6 +5597,9 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                 .when(active_tab == PreferencesTab::Appearance, |panel| {
                     panel.child(preferences_appearance_body(app, palette, cx))
                 })
+                .when(active_tab == PreferencesTab::Images, |panel| {
+                    panel.child(preferences_images_body(app, palette, cx))
+                })
                 .when(active_tab == PreferencesTab::Shortcuts, |panel| {
                     panel.child(preferences_shortcuts_body(app, palette, cx))
                 })
@@ -5474,6 +5638,14 @@ fn preferences_tab_strip(
             }),
         ))
         .child(preferences_tab_button(
+            image_t(app.language, ImageMsg::Tab),
+            app.preferences_tab == PreferencesTab::Images,
+            palette,
+            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                app.select_preferences_tab(PreferencesTab::Images, cx);
+            }),
+        ))
+        .child(preferences_tab_button(
             app.tr(Msg::PrefPanelTabShortcuts),
             app.preferences_tab == PreferencesTab::Shortcuts,
             palette,
@@ -5489,6 +5661,511 @@ fn preferences_tab_strip(
                 app.select_preferences_tab(PreferencesTab::Export, cx);
             }),
         ))
+}
+
+fn preferences_images_body(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let language = app.language;
+    let policy_row = |label: &'static str, buttons: Vec<Div>| {
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(palette.muted)
+                    .child(label),
+            )
+            .child(div().flex().items_center().gap_1().children(buttons))
+    };
+    let local = app.image_preferences.local_policy;
+    let clipboard = app.image_preferences.clipboard_policy;
+    let remote = app.image_preferences.remote_policy;
+    let uploader = app.image_preferences.uploader;
+    let document_path = app
+        .active_tab()
+        .document
+        .path()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("untitled.md"));
+    let resolved =
+        markion::resolve_resource_directory(&document_path, &app.image_preferences.directory)
+            .map(|directory| directory.relative_url_prefix)
+            .unwrap_or_else(|error| format!("⚠ {error}"));
+
+    div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .child(
+            div()
+                .id("preferences-images-body")
+                .debug_selector(|| "preferences-images-body".to_string())
+                .size_full()
+                .px_4()
+                .overflow_y_scroll()
+                .scrollbar_width(px(PANE_SCROLLBAR_RESERVED_WIDTH))
+                .track_scroll(&app.preferences_images_scroll)
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(preference_section_header(image_t(
+                            language,
+                            ImageMsg::Policies,
+                        )))
+                        .child(policy_row(
+                            image_t(language, ImageMsg::LocalFiles),
+                            vec![
+                                preference_option_button(
+                                    image_t(language, ImageMsg::Keep).into(),
+                                    local == markion::LocalImagePolicy::Keep,
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.set_local_image_policy(
+                                            markion::LocalImagePolicy::Keep,
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                                preference_option_button(
+                                    image_t(language, ImageMsg::Copy).into(),
+                                    local == markion::LocalImagePolicy::Copy,
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.set_local_image_policy(
+                                            markion::LocalImagePolicy::Copy,
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                                preference_option_button(
+                                    image_t(language, ImageMsg::Upload).into(),
+                                    local == markion::LocalImagePolicy::Upload,
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.set_local_image_policy(
+                                            markion::LocalImagePolicy::Upload,
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                            ],
+                        ))
+                        .child(policy_row(
+                            image_t(language, ImageMsg::Clipboard),
+                            vec![
+                                preference_option_button(
+                                    image_t(language, ImageMsg::Save).into(),
+                                    clipboard == markion::ClipboardImagePolicy::Save,
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.set_clipboard_image_policy(
+                                            markion::ClipboardImagePolicy::Save,
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                                preference_option_button(
+                                    image_t(language, ImageMsg::Upload).into(),
+                                    clipboard == markion::ClipboardImagePolicy::Upload,
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.set_clipboard_image_policy(
+                                            markion::ClipboardImagePolicy::Upload,
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                            ],
+                        ))
+                        .child(policy_row(
+                            image_t(language, ImageMsg::RemoteFiles),
+                            vec![
+                                preference_option_button(
+                                    image_t(language, ImageMsg::Keep).into(),
+                                    remote == markion::RemoteImagePolicy::Keep,
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.set_remote_image_policy(
+                                            markion::RemoteImagePolicy::Keep,
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                                preference_option_button(
+                                    image_t(language, ImageMsg::Download).into(),
+                                    remote == markion::RemoteImagePolicy::Download,
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.set_remote_image_policy(
+                                            markion::RemoteImagePolicy::Download,
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                                preference_option_button(
+                                    image_t(language, ImageMsg::Upload).into(),
+                                    remote == markion::RemoteImagePolicy::Upload,
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.set_remote_image_policy(
+                                            markion::RemoteImagePolicy::Upload,
+                                            cx,
+                                        )
+                                    }),
+                                ),
+                            ],
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(preference_section_header(image_t(
+                            language,
+                            ImageMsg::Resources,
+                        )))
+                        .child(policy_row(
+                            image_t(language, ImageMsg::Directory),
+                            ["{document}.assets", "assets", "assets/{document}"]
+                                .into_iter()
+                                .map(|template| {
+                                    preference_option_button(
+                                        template.into(),
+                                        app.image_preferences.directory == template,
+                                        palette,
+                                        cx.listener(move |app, _, _, cx| {
+                                            app.set_image_resource_directory(template, cx)
+                                        }),
+                                    )
+                                })
+                                .collect(),
+                        ))
+                        .child(image_editable_value_row(
+                            image_t(language, ImageMsg::Directory),
+                            app.image_preferences.directory.clone(),
+                            palette,
+                            cx.listener(|app, _, _, cx| {
+                                app.open_image_preference_editor(LinkEditorKind::ImageDirectory, cx)
+                            }),
+                        ))
+                        .child(image_value_row(
+                            image_t(language, ImageMsg::ResolvedDirectory),
+                            resolved,
+                            palette,
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(preference_section_header(image_t(
+                            language,
+                            ImageMsg::Provider,
+                        )))
+                        .child(
+                            div().flex().flex_wrap().gap_1().children(
+                                [
+                                    (ImageMsg::Disabled, markion::ImageUploaderKind::None),
+                                    (ImageMsg::PicGoHttp, markion::ImageUploaderKind::PicGoHttp),
+                                    (ImageMsg::PicGoCore, markion::ImageUploaderKind::PicGoCore),
+                                    (ImageMsg::CustomCommand, markion::ImageUploaderKind::Command),
+                                ]
+                                .into_iter()
+                                .map(|(label, value)| {
+                                    preference_option_button(
+                                        image_t(language, label).into(),
+                                        uploader == value,
+                                        palette,
+                                        cx.listener(move |app, _, _, cx| {
+                                            app.set_image_uploader(value, cx)
+                                        }),
+                                    )
+                                }),
+                            ),
+                        )
+                        .when(
+                            uploader == markion::ImageUploaderKind::PicGoHttp,
+                            |section| {
+                                section.child(image_editable_value_row(
+                                    image_t(language, ImageMsg::Endpoint),
+                                    app.image_preferences.picgo_http.endpoint.clone(),
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.open_image_preference_editor(
+                                            LinkEditorKind::PicGoEndpoint,
+                                            cx,
+                                        )
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
+                            uploader == markion::ImageUploaderKind::PicGoCore,
+                            |section| {
+                                section
+                                    .child(preference_path_row(
+                                        image_t(language, ImageMsg::Program),
+                                        app.image_preferences
+                                            .picgo_core
+                                            .executable
+                                            .clone()
+                                            .unwrap_or_else(|| "picgo".into()),
+                                        app.image_preferences.picgo_core.executable.is_some(),
+                                        palette,
+                                        language,
+                                        cx.listener(|app, _, window, cx| {
+                                            app.choose_image_provider_program(true, window, cx)
+                                        }),
+                                        cx.listener(|app, _, _, cx| {
+                                            app.image_preferences.picgo_core.executable = None;
+                                            app.persist_preferences();
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(preference_path_row(
+                                        image_t(language, ImageMsg::ConfigFile),
+                                        app.image_preferences
+                                            .picgo_core
+                                            .config_path
+                                            .clone()
+                                            .unwrap_or_default(),
+                                        app.image_preferences.picgo_core.config_path.is_some(),
+                                        palette,
+                                        language,
+                                        cx.listener(|app, _, window, cx| {
+                                            app.choose_picgo_config(window, cx)
+                                        }),
+                                        cx.listener(|app, _, _, cx| {
+                                            app.image_preferences.picgo_core.config_path = None;
+                                            app.persist_preferences();
+                                            cx.notify();
+                                        }),
+                                    ))
+                                    .child(image_editable_value_row(
+                                        image_t(language, ImageMsg::Arguments),
+                                        app.image_preferences.picgo_core.launcher_args.join(" "),
+                                        palette,
+                                        cx.listener(|app, _, _, cx| {
+                                            app.open_image_preference_editor(
+                                                LinkEditorKind::PicGoCoreArguments,
+                                                cx,
+                                            )
+                                        }),
+                                    ))
+                            },
+                        )
+                        .when(uploader == markion::ImageUploaderKind::Command, |section| {
+                            section
+                                .child(preference_path_row(
+                                    image_t(language, ImageMsg::Program),
+                                    app.image_preferences
+                                        .command
+                                        .executable
+                                        .clone()
+                                        .unwrap_or_default(),
+                                    app.image_preferences.command.executable.is_some(),
+                                    palette,
+                                    language,
+                                    cx.listener(|app, _, window, cx| {
+                                        app.choose_image_provider_program(false, window, cx)
+                                    }),
+                                    cx.listener(|app, _, _, cx| {
+                                        app.image_preferences.command.executable = None;
+                                        app.persist_preferences();
+                                        cx.notify();
+                                    }),
+                                ))
+                                .child(image_editable_value_row(
+                                    image_t(language, ImageMsg::Arguments),
+                                    app.image_preferences.command.args.join(" "),
+                                    palette,
+                                    cx.listener(|app, _, _, cx| {
+                                        app.open_image_preference_editor(
+                                            LinkEditorKind::ImageCommandArguments,
+                                            cx,
+                                        )
+                                    }),
+                                ))
+                        })
+                        .child(preference_numeric_row(
+                            image_t(language, ImageMsg::Timeout),
+                            app.image_preferences.timeout_secs as u16,
+                            markion::MIN_IMAGE_TRANSFER_TIMEOUT_SECS as u16,
+                            markion::MAX_IMAGE_TRANSFER_TIMEOUT_SECS as u16,
+                            "s",
+                            palette,
+                            cx.listener(|app, _, _, cx| app.step_image_timeout(-5, cx)),
+                            cx.listener(|app, _, _, cx| app.step_image_timeout(5, cx)),
+                        ))
+                        .child(preference_option_button(
+                            image_t(language, ImageMsg::TestUpload).into(),
+                            false,
+                            palette,
+                            cx.listener(|app, _, window, cx| app.test_image_upload(window, cx)),
+                        )),
+                )
+                .child(image_operation_status_section(app, palette, cx)),
+        )
+        .child(pane_scrollbar_view(
+            PaneScrollTarget::PreferencesImages,
+            &app.preferences_images_scroll,
+            palette,
+            cx,
+        ))
+}
+
+fn image_operation_status_section(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    let operation_rows = app
+        .image_operations
+        .operations()
+        .rev()
+        .take(8)
+        .map(|operation| {
+            let progress = operation.progress();
+            image_value_row(
+                image_recovery_t(app.language, ImageRecoveryMsg::Operations),
+                format!(
+                    "#{} · ✓{}  …{}  !{}  ?{}",
+                    operation.id.0,
+                    progress.succeeded,
+                    progress.queued + progress.running,
+                    progress.failed,
+                    progress.unapplied + progress.uncertain,
+                ),
+                palette,
+            )
+        })
+        .collect::<Vec<_>>();
+    let recovery_rows = app
+        .image_recovery_entries
+        .iter()
+        .map(|entry| {
+            let manifest = entry.manifest_path.clone();
+            let copy_manifest = manifest.clone();
+            let reveal_manifest = manifest.clone();
+            let name = manifest
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("image-operation")
+                .to_owned();
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(div().text_size(px(12.)).truncate().child(name))
+                .child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(preference_option_button(
+                            image_recovery_t(app.language, ImageRecoveryMsg::CopyUrl).into(),
+                            false,
+                            palette,
+                            cx.listener(move |app, _, _, cx| {
+                                app.copy_image_recovery_url(&copy_manifest, cx)
+                            }),
+                        ))
+                        .child(preference_option_button(
+                            image_recovery_t(app.language, ImageRecoveryMsg::RevealFile).into(),
+                            false,
+                            palette,
+                            cx.listener(move |app, _, _, cx| {
+                                app.reveal_image_recovery_file(&reveal_manifest, cx)
+                            }),
+                        ))
+                        .child(preference_option_button(
+                            image_recovery_t(app.language, ImageRecoveryMsg::Discard).into(),
+                            false,
+                            palette,
+                            cx.listener(move |app, _, _, cx| {
+                                app.discard_image_recovery(manifest.clone(), cx)
+                            }),
+                        )),
+                )
+        })
+        .collect::<Vec<_>>();
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(preference_section_header(image_recovery_t(
+            app.language,
+            ImageRecoveryMsg::Operations,
+        )))
+        .children(operation_rows)
+        .when(!app.image_cancellations.is_empty(), |section| {
+            section.child(preference_option_button(
+                image_recovery_t(app.language, ImageRecoveryMsg::Cancel).into(),
+                false,
+                palette,
+                cx.listener(|app, _, window, cx| {
+                    app.cancel_image_operations(&CancelImageOperations, window, cx)
+                }),
+            ))
+        })
+        .when(!recovery_rows.is_empty(), |section| {
+            section
+                .child(preference_section_header(image_recovery_t(
+                    app.language,
+                    ImageRecoveryMsg::Recovery,
+                )))
+                .children(recovery_rows)
+        })
+}
+
+fn image_value_row(label: &'static str, value: String, palette: ThemePalette) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .text_size(px(12.))
+        .child(div().text_color(palette.muted).child(label))
+        .child(
+            div()
+                .max_w(px(360.))
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .border_1()
+                .border_color(palette.border)
+                .bg(palette.surface_bg)
+                .truncate()
+                .child(value),
+        )
+}
+
+fn image_editable_value_row(
+    label: &'static str,
+    value: String,
+    palette: ThemePalette,
+    listener: impl Fn(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    image_value_row(label, value, palette)
+        .cursor_pointer()
+        .hover(move |style| style.border_color(palette.active_bg))
+        .on_mouse_up(MouseButton::Left, listener)
 }
 
 fn preferences_tab_button(

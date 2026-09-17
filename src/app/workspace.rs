@@ -480,29 +480,18 @@ impl MarkionApp {
             }
             match classify_external_drop_path(path) {
                 ExternalDropIntent::OpenDocument => documents.push(path.clone()),
-                ExternalDropIntent::ImportImage => match fs::read(path) {
-                    Ok(bytes) => images.push(PendingImageInput {
-                        stem: path
+                ExternalDropIntent::ImportImage => {
+                    images.push(PendingImageInput {
+                        label: path
                             .file_stem()
                             .and_then(|stem| stem.to_str())
                             .unwrap_or("image")
                             .to_string(),
-                        extension: path
-                            .extension()
-                            .and_then(|extension| extension.to_str())
-                            .unwrap_or("png")
-                            .to_string(),
-                        bytes,
-                    }),
-                    Err(err) => {
-                        self.status = p0_tf(
-                            self.language,
-                            P0Msg::DroppedImageReadFailed,
-                            &[&err.to_string()],
-                        )
-                        .into();
-                    }
-                },
+                        title: None,
+                        input: markion::ImageInput::Local(path.clone()),
+                        source_kind: PendingImageSourceKind::Local,
+                    });
+                }
                 ExternalDropIntent::Ignore => {}
             }
         }
