@@ -21817,6 +21817,116 @@ fn inline_html_empty_break_rows_have_real_height(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn visual_nested_list_whitespace_enter_pointer_and_undo(cx: &mut TestAppContext) {
+    for indent in ["  ", "    "] {
+        for eol in ["\n", "\r\n"] {
+            for blank in ["  ", "\t"] {
+                for following in ["", "after"] {
+                    let head = format!(
+                        "## Test{eol}{eol}- list item 1{eol}- list item 2{eol}- list item 3{eol}{indent}- iner item 1{eol}{indent}- iner item 2"
+                    );
+                    let suffix = format!("{eol}{blank}{eol}{following}");
+                    let source = format!("{head}{suffix}");
+                    let (app, cx) = cx.add_window_view(|_, cx| {
+                        let mut app = MarkionApp::new(cx);
+                        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+                        app.active_tab_mut().selected_range = head.len()..head.len();
+                        app.view_mode = ViewMode::VisualEdit;
+                        app.typewriter_mode = false;
+                        app
+                    });
+                    cx.simulate_resize(size(px(1100.), px(800.)));
+                    cx.update(|window, cx| {
+                        window.focus(&app.read(cx).focus_handle);
+                        window.activate_window();
+                    });
+                    cx.run_until_parked();
+                    let before =
+                        app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+                    let mut expected = source.clone();
+                    let mut cursor = head.len();
+                    let mut previous = before;
+                    for step in 0..5 {
+                        if step == 0 {
+                            let continuation = format!("\n{indent}- ");
+                            expected.insert_str(cursor, &continuation);
+                            cursor += continuation.len();
+                        } else if step == 1 {
+                            let start = head.len() + 1;
+                            expected.replace_range(start..cursor, "");
+                            cursor = start;
+                        } else {
+                            expected.insert(cursor, '\n');
+                            cursor += 1;
+                        }
+                        cx.dispatch_action(InsertNewline);
+                        cx.run_until_parked();
+                        let caret = app.update(cx, |app, _| {
+                            let tab = app.active_tab();
+                            assert_eq!(tab.document.text(), expected);
+                            assert_eq!(tab.cursor_offset(), cursor);
+                            tab.visual_caret_bounds.expect("painted list-tail caret")
+                        });
+                        assert!(
+                            caret.top() > before.top() + px(5.),
+                            "step={step} source={source:?}: {before:?} -> {caret:?}"
+                        );
+                        if step > 1 {
+                            assert!(
+                                caret.top() > previous.top() + px(5.),
+                                "repeated Enter {source:?}: {previous:?} -> {caret:?}"
+                            );
+                        }
+                        previous = caret;
+                    }
+                    let version = app.update(cx, |app, _| app.active_tab().document.version());
+                    cx.simulate_click(
+                        point(previous.left() + px(1.), previous.center().y),
+                        Modifiers::none(),
+                    );
+                    cx.run_until_parked();
+                    app.update(cx, |app, _| {
+                        assert_eq!(app.active_tab().cursor_offset(), cursor);
+                        assert_eq!(app.active_tab().document.version(), version);
+                    });
+                    cx.update(|window, cx| {
+                        app.update(cx, |app, cx| {
+                            EntityInputHandler::replace_text_in_range(
+                                app,
+                                None,
+                                "新行🙂",
+                                window,
+                                cx,
+                            );
+                        })
+                    });
+                    cx.run_until_parked();
+                    app.update(cx, |app, _| {
+                        let mut typed = expected.clone();
+                        typed.insert_str(cursor, "新行🙂");
+                        assert_eq!(app.active_tab().document.text(), typed);
+                    });
+                    cx.dispatch_action(Undo);
+                    cx.run_until_parked();
+                    app.update(cx, |app, _| {
+                        assert_eq!(app.active_tab().document.text(), expected);
+                        assert_eq!(app.active_tab().cursor_offset(), cursor);
+                        assert!(
+                            (app.active_tab().visual_caret_bounds.unwrap().top() - previous.top())
+                                .abs()
+                                < px(1.),
+                            "undo caret {source:?}: {:?} -> {:?}",
+                            previous,
+                            app.active_tab().visual_caret_bounds
+                        )
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[gpui::test]
 fn visual_list_enter_creates_visible_row_and_moves_caret(cx: &mut TestAppContext) {
     for suffix in ["", "\n", "\n\n\n\n"] {
         let source =

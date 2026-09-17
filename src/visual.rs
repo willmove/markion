@@ -1260,18 +1260,25 @@ fn visual_block_from_preview(
     } else {
         inline_runs(text, inline_source_range, reference_definitions)
     };
-    append_trailing_horizontal_whitespace_run(
-        text,
-        &source_range,
-        block_prefix.as_ref(),
-        &reveal_groups,
-        &mut editable_runs,
-    );
+    if matches!(kind, VisualBlockKind::ListItem { .. }) && quote_context.is_none() {
+        append_list_whitespace_runs(
+            text,
+            &source_range,
+            block_prefix.as_ref(),
+            &reveal_groups,
+            &mut editable_runs,
+        );
+    } else {
+        append_trailing_horizontal_whitespace_run(
+            text,
+            &source_range,
+            block_prefix.as_ref(),
+            &reveal_groups,
+            &mut editable_runs,
+        );
+    }
     if quote_context.is_some() {
         synthesize_quote_softbreak_runs(text, &source_range, &mut editable_runs);
-    }
-    if matches!(kind, VisualBlockKind::ListItem { .. }) && quote_context.is_none() {
-        append_list_blank_line_runs(text, &source_range, &mut editable_runs);
     }
     let marker_ranges = marker_ranges(source_range.clone(), &editable_runs);
     let editor = visual_block_editor(text, block, source_range.clone());
@@ -1757,31 +1764,56 @@ fn append_trailing_horizontal_whitespace_run(
 /// List container ranges include blank lines which have no inline events.
 /// Keep them as source-backed line breaks: the final separator before another
 /// block belongs to that block's next row, while EOF needs every trailing row.
-fn append_list_blank_line_runs(text: &str, range: &Range<usize>, runs: &mut Vec<VisualInlineRun>) {
-    let content_end = range.start + text[range.clone()].trim_end_matches(['\r', '\n']).len();
-    let mut endings = Vec::new();
-    let mut start = content_end;
-    for (offset, byte) in text[content_end..range.end].bytes().enumerate() {
-        if byte == b'\n' {
-            let end = content_end + offset + 1;
-            endings.push(start..end);
-            start = end;
-        }
-    }
-    if !text[range.end..].trim().is_empty() {
-        endings.pop();
-    }
-    let represented_end = runs
+fn append_list_whitespace_runs(
+    text: &str,
+    range: &Range<usize>,
+    prefix: Option<&VisualBlockPrefix>,
+    reveal_groups: &[VisualRevealGroup],
+    runs: &mut Vec<VisualInlineRun>,
+) {
+    // Start after both visible content and its hidden closing syntax. Scanning
+    // backwards from the last spaces would skip the newlines before them and
+    // incorrectly append an indented blank line to the preceding text line.
+    let start = runs
         .iter()
         .map(|run| run.content_range.end)
+        .chain(reveal_groups.iter().map(|group| group.source_range.end))
+        .chain(prefix.map(|prefix| prefix.source_range.end))
         .max()
         .unwrap_or(range.start);
-    for source_range in endings {
-        if source_range.start < represented_end {
-            continue;
+    let tail = &text[start..range.end];
+    if !tail
+        .bytes()
+        .all(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+    {
+        return;
+    }
+    let mut end = range.end;
+    if tail.ends_with('\n') && !text[range.end..].trim().is_empty() {
+        end -= 1;
+        if end > start && text.as_bytes()[end - 1] == b'\r' {
+            end -= 1;
         }
+    }
+    let mut cursor = start;
+    while cursor < end {
+        let run_start = cursor;
+        let visible_text = if text.as_bytes()[cursor] == b'\n' {
+            cursor += 1;
+            "\n".to_string()
+        } else if text[cursor..end].starts_with("\r\n") {
+            cursor += 2;
+            "\n".to_string()
+        } else {
+            cursor += 1;
+            while cursor < end && matches!(text.as_bytes()[cursor], b' ' | b'\t') {
+                cursor += 1;
+            }
+            text[run_start..cursor].to_string()
+        };
+        let source_range = run_start..cursor;
         runs.push(VisualInlineRun {
-            visible_text: "\n".into(),
+            visible_text,
             source_range: source_range.clone(),
             content_range: source_range,
             style: InlineStyle::default(),
@@ -4390,6 +4422,77 @@ mod tests {
                     !projection.text.ends_with("\n\n"),
                     "next row owns the final separator"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn list_whitespace_tail_preserves_lines_and_source_positions() {
+        for indent in ["", "  ", "    "] {
+            for marker in ["- ", "1. ", "- [ ] "] {
+                for content in [
+                    "iner item 2",
+                    "**粗体🙂**",
+                    "`code`",
+                    "[link](https://example.com)",
+                ] {
+                    for eol in ["\n", "\r\n"] {
+                        for following in ["", "next paragraph"] {
+                            let tail = format!("{eol}  {eol}\t{eol} \t{eol}");
+                            let head = format!("- parent{eol}{indent}{marker}{content}");
+                            let source = format!("{head}{tail}{following}");
+                            let doc = MarkdownDocument::from_text(&source);
+                            let blocks = doc.visual_blocks_shared();
+                            let item = blocks
+                                .iter()
+                                .find(|block| {
+                                    matches!(block.kind, VisualBlockKind::ListItem { .. })
+                                        && block.source_range.contains(&head.len())
+                                })
+                                .unwrap();
+                            let projection = build_visual_projection(
+                                &source,
+                                item,
+                                source.len()..source.len(),
+                                source.len(),
+                            );
+                            let mut expected_tail = tail.replace("\r\n", "\n");
+                            if !following.is_empty() {
+                                expected_tail.pop();
+                            }
+                            assert!(
+                                projection.text.ends_with(&expected_tail),
+                                "source={source:?}, projection={:?}",
+                                projection.text
+                            );
+                            let display_start = projection.text.len() - expected_tail.len();
+                            // Every blank-line start and horizontal-space boundary
+                            // maps back to its original byte, including CRLF input.
+                            let mut offset = head.len() + eol.len();
+                            for blank in ["  ", "\t", " \t"] {
+                                for delta in 0..=blank.len() {
+                                    let cursor = offset + delta;
+                                    let display = projection.display_for_source(cursor).unwrap();
+                                    assert_eq!(
+                                        display,
+                                        display_start
+                                            + source[head.len()..cursor]
+                                                .replace("\r\n", "\n")
+                                                .len()
+                                    );
+                                    assert_eq!(
+                                        projection.source_for_display(display),
+                                        cursor,
+                                        "{source:?}"
+                                    );
+                                }
+                                offset += blank.len() + eol.len();
+                            }
+                            assert_eq!(doc.text(), source);
+                            assert!(std::sync::Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+                        }
+                    }
+                }
             }
         }
     }

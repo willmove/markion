@@ -59,6 +59,25 @@ Validated on Windows, 2026-09-17: `cargo test --no-fail-fast` passed 649 library
 tests and 622 application tests (3 pre-existing ignored tests). Formatting,
 diff whitespace checks, and strict OpenSpec validation also passed.
 
+### List-tail whitespace regression coverage
+
+Unquoted list tails preserve whitespace in source order, including blank lines
+containing spaces or tabs. The projection keeps each line ending separate from
+horizontal whitespace, preserves CRLF source ranges, and omits only the final
+separator owned by a following block. Rendering does not normalize source text.
+
+`list_whitespace_tail_preserves_lines_and_source_positions` checks top-level and
+nested unordered, ordered and task lists with plain, bold, code and link content,
+LF/CRLF, mixed whitespace-only lines, EOF and following paragraphs. It checks
+exact mappings and cache reuse. `visual_nested_list_whitespace_enter_pointer_and_undo`
+checks continued and exited nested items, repeated Enter, painted caret rows,
+pointer placement, Unicode input and exact undo restoration.
+
+Validated on Windows, 2026-09-17: `cargo test --no-fail-fast` passed 650 library
+tests and 623 application tests (3 pre-existing ignored tests). The new mapping
+matrix covers 144 combinations and the GPUI test covers 16 interaction cases.
+Formatting, diff whitespace checks and strict OpenSpec validation passed.
+
 ### Inline HTML and imported TOC regression coverage
 
 `<u>` and `<ins>` now use the existing underline style, including nested Markdown,
