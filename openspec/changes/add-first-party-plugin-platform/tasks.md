@@ -67,4 +67,4 @@
 - [x] 9.2 Document the user-facing plugin installation/update/rollback/storage model and the internal first-party package/protocol architecture, explicitly stating that version 1 is not a third-party arbitrary-code ecosystem.
 - [x] 9.3 Run formatting, clippy, root-package tests, workspace tests, targeted protocol/store/supervisor/UI tests, OpenSpec validation, and `openspec doctor`, resolving every failure.
 - [ ] 9.4 Complete manual Windows, macOS, and Linux packaged smoke coverage for fresh install, offline restart, update, rollback, crash recovery, disabled/uninstalled providers, and multi-page PDF interaction.
-- [ ] 9.5 Publish final per-format core-host and PDF-plugin compressed/installed byte reports against immutable controls, confirm every budget, and record any variance from the feasibility estimates.
+- [x] 9.5 Publish final per-format core-host and PDF-plugin compressed/installed byte reports against immutable controls, confirm every budget, and record any variance from the feasibility estimates.

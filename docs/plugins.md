@@ -30,21 +30,27 @@ The accepted same-runner host measurements are byte-exact:
 
 | Core format | Installer increase | Installed increase |
 |---|---:|---:|
-| Windows NSIS | 75,681 B | 215,675 B |
-| macOS DMG | 80,141 B | 171,188 B |
-| Linux DEB | 85,336 B | 209,396 B |
-| Linux AppImage | 135,168 B | 211,796 B |
+| Windows NSIS | 274,133 B | 794,099 B |
+| macOS DMG | 312,620 B | 367,422 B |
+| Linux DEB | 319,664 B | 440,942 B |
+| Linux AppImage | 339,968 B | 443,382 B |
 
 These are below the release gates of 1 MiB compressed and 2 MiB installed.
-Users who do not install PDF support therefore pay roughly 0.07–0.13 MiB in
-the installer and 0.16–0.21 MiB on disk for the reusable plugin platform.
+Users who do not install PDF support therefore pay roughly 0.26–0.32 MiB in
+the installer and 0.35–0.76 MiB on disk for the reusable plugin platform.
 
 The optional PDF package is independently limited to 6 MiB to download and
-10 MiB after extraction. The accepted native prototype matrix measured
-3,815,994–3,955,016 B compressed and 8,039,787–8,762,516 B installed. The
-current real Windows worker measures 4,047,124 B compressed and 8,297,772 B
-installed. Native release CI publishes an exact report for every target and
-fails if either budget is exceeded.
+10 MiB after extraction. The accepted real-worker matrix is:
+
+| Plugin target | Download | Extracted installation |
+|---|---:|---:|
+| Windows x86_64 | 4,053,075 B | 8,311,115 B |
+| macOS arm64 | 3,922,436 B | 8,915,860 B |
+| Linux x86_64 | 4,073,003 B | 9,004,776 B |
+
+That is about 3.74–3.88 MiB to download and 7.93–8.59 MiB after extraction,
+paid only by users who install PDF support. Native release CI publishes an
+exact report for every target and fails if either budget is exceeded.
 
 ## Trust and scope
 
