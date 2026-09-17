@@ -20761,7 +20761,6 @@ fn file_tree_drop_remaps_clean_tab_and_refuses_dirty(cx: &mut TestAppContext) {
         app.handle_file_tree_drop(&path_alias, &archive, cx);
     });
     let moved = archive.join("daily.md");
-    let moved_cmp = comparable_document_path(&moved);
     app.update(cx, |app, _| {
         assert!(moved.exists());
         assert!(!path.exists());
