@@ -130,3 +130,17 @@ unchanged WeChat rich-paste evidence carry over to v0.3.10. Before tagging on
 native package extraction and exhaustive bundle verification on Windows,
 macOS Apple Silicon, and Linux. The maintainer-authorized macOS and Linux
 manual-browser deferrals remain recorded as deferrals, not as passes.
+
+## v0.3.12 carry-over
+
+`v0.3.11..v0.3.12` contains no changes under `assets/marknice-workspace` or
+`crates/wechat-workspace`, so the v0.2.7 source-tree browser evidence, the
+v0.3.10 carry-over, and the unchanged WeChat rich-paste evidence carry over to
+v0.3.12. Before tagging on 2026-09-17, the source-tree `verify-bundle` command
+passed on Windows for all 23 files (3,140,387 bytes) at pinned MarkNice
+revision `c009c1ec7e7c92f89afa5a32edcb126b5296bda7` — the same file count, byte
+total, and revision recorded for v0.3.10, so the packages of both releases ship
+a byte-identical workspace bundle. The tag workflow must still rerun native
+package extraction and exhaustive bundle verification on Windows, macOS Apple
+Silicon, and Linux. The maintainer-authorized macOS and Linux manual-browser
+deferrals remain recorded as deferrals, not as passes.
