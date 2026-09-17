@@ -8,9 +8,9 @@ the signed process/package seam defined by `add-first-party-plugin-platform`.
 
 Accepted evidence remains useful: the built-in candidate added
 2.97–3.77 MiB to installers and 8.03–8.55 MiB to installed payloads. The
-measured reusable plugin host adds only 75,681–135,168 compressed bytes and
-171,188–215,675 installed bytes. Native PDF plugin prototypes are
-3.82–3.96 MiB compressed and 8.04–8.76 MiB installed.
+final reusable plugin host adds only 274,133–339,968 compressed bytes and
+367,422–794,099 installed bytes. Final native PDF plugins are
+3,922,436–4,073,003 B compressed and 8,311,115–9,004,776 B installed.
 
 ## Goals / Non-Goals
 

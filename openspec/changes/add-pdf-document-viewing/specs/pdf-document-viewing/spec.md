@@ -76,9 +76,10 @@ A ready PDF tab SHALL display pages in document order as a centered, single-colu
 - **AND** the application does not synchronously rasterize off-screen pages during the resize
 
 ### Requirement: PDF loading and rendering SHALL be finite and off the render path
-PDF file inspection, document loading, page metadata access, and page
-rasterization SHALL execute in the supervised official worker outside GPUI
-frame rendering. Native PDF calls SHALL be serialized in that worker so no two
+PDF loading and rendering SHALL be finite, bounded, and executed outside GPUI
+frame rendering. File inspection, document loading, page metadata access, and
+page rasterization SHALL execute in the supervised official worker. Native PDF
+calls SHALL be serialized in that worker so no two
 calls execute concurrently. The host SHALL exchange only bounded
 `paged-document/v1` messages and owned RGBA bodies, validate dimensions,
 stride, pixel format, body length, request generation, and process generation
@@ -154,7 +155,9 @@ state.
 - **THEN** no unsaved-document confirmation is shown because of the PDFs
 
 ### Requirement: PDF failures SHALL remain contained and recoverable
-If the official provider is missing, disabled, quarantined, incompatible,
+PDF failures SHALL remain contained, localized, recoverable, and scoped to the
+affected content. If the official provider is missing, disabled, quarantined,
+incompatible,
 crashed, or uninstalled, or a supported PDF cannot be read, has invalid
 structure, is encrypted or password-protected, loses its backing file, or
 fails metadata or page rendering, its tab SHALL show a localized unavailable

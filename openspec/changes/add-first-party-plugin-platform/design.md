@@ -11,9 +11,9 @@ The completed PDF size reports provide a useful upper bound for what extraction 
 | Linux DEB | 3,770,748 B (3.60 MiB) | 8,526,496 B (8.13 MiB) |
 | Linux AppImage | 3,391,488 B (3.23 MiB) | 8,546,480 B (8.15 MiB) |
 
-A Windows composition spike reused the existing 805,888-byte release smoke worker, the 7,211,520-byte PDFium runtime, and 2,446-byte notice file. The extracted payload was 8,019,854 bytes (7.65 MiB) and a Deflate ZIP was 3,921,972 bytes (3.74 MiB). This is feasibility evidence, not final acceptance: the real protocol worker, manifest, signatures, every target, and final archive must be measured in native CI.
+A Windows composition spike reused the existing 805,888-byte release smoke worker, the 7,211,520-byte PDFium runtime, and 2,446-byte notice file. The extracted payload was 8,019,854 bytes (7.65 MiB) and a Deflate ZIP was 3,921,972 bytes (3.74 MiB). This feasibility evidence was superseded by the accepted real-worker matrix recorded in `evidence/native-plugin-spike.md`.
 
-The application already links Tokio, Serde/JSON, HTTP, ZIP-producing code, hashing, and updater-related machinery. A plugin host that reuses those facilities should add about 0.25–0.75 MiB compressed and 0.6–1.5 MiB installed; the specification deliberately sets stricter acceptance ceilings of 1 MiB and 2 MiB. Relative to the current PDF-bundled candidate, a no-plugin installation is therefore expected to become roughly 2.1–3.4 MiB smaller compressed and 6.2–7.6 MiB smaller installed, depending on platform. Only same-runner control/candidate reports are authoritative.
+The application already links Tokio, Serde/JSON, HTTP, ZIP-producing code, hashing, and updater-related machinery. The plugin host was planned at 0.25–0.75 MiB compressed and 0.6–1.5 MiB installed, with stricter acceptance ceilings of 1 MiB and 2 MiB. Final same-runner reports measured 0.26–0.32 MiB compressed and 0.35–0.76 MiB installed. Relative to the current PDF-bundled candidate, a no-plugin installation was expected to become roughly 2.1–3.4 MiB smaller compressed and 6.2–7.6 MiB smaller installed, depending on platform. Only same-runner control/candidate reports are authoritative.
 
 The existing `add-pdf-document-viewing` change currently requires PDFium in every core package. It must remain active until this change rewrites that distribution decision; archiving it unchanged would make the stable specs contradict the optional-plugin model.
 
@@ -180,7 +180,7 @@ Expected no-plugin core change relative to the current PDF-bundled candidate is:
 | DEB | 2.85–3.35 MiB | 6.63–7.53 MiB | 2.60 / 6.13 MiB |
 | AppImage | 2.48–2.98 MiB | 6.65–7.55 MiB | 2.23 / 6.15 MiB |
 
-The first range subtracts the expected 0.25–0.75 MiB / 0.6–1.5 MiB host overhead from measured PDF deltas. The final column subtracts the full allowed 1 MiB / 2 MiB and is the guaranteed minimum if all gates pass. Numbers are planning estimates until native reports exist.
+The first range subtracts the expected 0.25–0.75 MiB / 0.6–1.5 MiB host overhead from measured PDF deltas. The final column subtracts the full allowed 1 MiB / 2 MiB and is the guaranteed minimum if all gates pass. These were planning estimates; final native reports measured 274,133–339,968 B of compressed host growth, 367,422–794,099 B of installed host growth, and 3,922,436–4,073,003 B / 8,311,115–9,004,776 B for the separately installed PDF plugin.
 
 ### 9. Publish plugins on the existing release topology without coupling app and plugin versions
 
