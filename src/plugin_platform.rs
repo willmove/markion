@@ -13,12 +13,17 @@ use semver::Version;
 use thiserror::Error;
 
 mod catalog;
+mod paged_document;
 mod registry;
 mod store;
 mod supervisor;
 
 pub use catalog::{
     CatalogManager, CatalogSnapshot, CatalogSnapshotSource, CatalogUpdate, PluginCatalogError,
+};
+pub use paged_document::{
+    DEFAULT_MAX_PAGES, DEFAULT_MAX_RASTER_BYTES, DEFAULT_MAX_SOURCE_BYTES, PagedDocument,
+    PagedDocumentError, PagedDocumentLimits, PagedRender, PagedRenderRequest,
 };
 pub use registry::{
     CoreFileHandler, CoreHandlerKind, FileHandlerAvailability, FileHandlerCandidate,

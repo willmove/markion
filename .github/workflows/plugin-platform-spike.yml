@@ -72,6 +72,20 @@ jobs:
           key: plugin-platform-spike-${{ matrix.target }}
           cache-all-crates: true
 
+      - name: Reset generated feasibility output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $targetRoot = [System.IO.Path]::GetFullPath((Join-Path $PWD 'target'))
+          $outputRoot = [System.IO.Path]::GetFullPath((Join-Path $targetRoot 'plugin-platform-spike'))
+          $expectedPrefix = "$targetRoot$([System.IO.Path]::DirectorySeparatorChar)"
+          if (-not $outputRoot.StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to clean output outside target: $outputRoot"
+          }
+          if (Test-Path -LiteralPath $outputRoot) {
+            Remove-Item -LiteralPath $outputRoot -Recurse -Force
+          }
+
       - name: Install Minisign on Windows
         if: runner.os == 'Windows'
         shell: pwsh

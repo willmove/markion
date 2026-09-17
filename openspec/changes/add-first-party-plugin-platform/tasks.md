@@ -41,7 +41,7 @@
 - [ ] 6.2 Route file tree visibility, open-file dispatch, recent files, session restore, missing-provider prompts, and save-as/path-remap behavior through the generic registry while preserving path identity and isolation.
 - [ ] 6.3 Replace content-specific workspace tab state with generic plugin-document state, ensuring document-only commands, dirty tracking, backups, autosave, Markdown preview, and outline operations remain unavailable to read-only paged documents.
 - [ ] 6.4 Extract the reusable paged-document viewport, toolbar, scroll/zoom/page navigation, visible-page calculation, render scheduling, and bounded raster cache from the current PDF-specific application module.
-- [ ] 6.5 Add the `paged-document/v1` host adapter for open, metadata, page sizing, bounded render, cancellation, and close operations, including admission checks for dimensions, stride, pixel format, body length, and cache generation.
+- [x] 6.5 Add the `paged-document/v1` host adapter for open, metadata, page sizing, bounded render, cancellation, and close operations, including admission checks for dimensions, stride, pixel format, body length, and cache generation.
 - [ ] 6.6 Add regression tests for continuous scrolling, wheel and keyboard navigation, page jumps, zoom anchoring, resize, stale render rejection, worker restart, disable/uninstall during work, and preservation of derived-state/cache identity invariants.
 
 ## 7. Official PDF plugin extraction
