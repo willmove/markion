@@ -7,8 +7,8 @@ use std::{
 };
 
 use markion_plugin_protocol::{
-    HostMessage, PluginMessage, ProcessPeerError, ProcessPluginPeer, WorkerFailureKind,
-    WorkerLaunch,
+    CapabilityDeclaration, HostMessage, PAGED_DOCUMENT_CAPABILITY, PluginMessage, ProcessPeerError,
+    ProcessPluginPeer, ResourceLimits, WorkerFailureKind, WorkerLaunch,
 };
 use tempfile::TempDir;
 
@@ -77,6 +77,20 @@ fn real_worker_handshake_ping_and_clean_shutdown() {
     assert!(peer.diagnostics().bytes.is_empty());
     peer.shutdown().unwrap();
     assert!(!peer.is_running());
+}
+
+#[test]
+fn packaged_fixture_capabilities_are_confirmed_during_handshake() {
+    let staged = StagedWorker::new();
+    let capability = CapabilityDeclaration {
+        id: PAGED_DOCUMENT_CAPABILITY.to_owned(),
+        limits: ResourceLimits::default(),
+    };
+    let mut config = WorkerLaunch::fixture(&staged.executable, &staged.version_root);
+    config.requested_capabilities = vec![capability.id.clone()];
+    config.expected_capabilities = vec![capability];
+    let peer = ProcessPluginPeer::launch(config, 8).unwrap();
+    peer.shutdown().unwrap();
 }
 
 #[test]
