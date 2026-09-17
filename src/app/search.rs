@@ -276,6 +276,7 @@ impl MarkionApp {
             return;
         }
         self.language = language;
+        self.plugin_ui.refresh_entries(self.language);
         self.persist_preferences();
         // Native (OS) menus were installed with English labels at startup;
         // re-translate them so the menu bar matches the new language.
@@ -392,6 +393,8 @@ impl MarkionApp {
         // Entering the Export tab refreshes the pandoc availability line.
         if tab == PreferencesTab::Export {
             self.refresh_pandoc_availability(cx);
+        } else if tab == PreferencesTab::Plugins {
+            self.ensure_plugin_manager(cx);
         }
         cx.notify();
     }

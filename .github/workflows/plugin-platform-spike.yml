@@ -1,0 +1,329 @@
+name: plugin-platform-spike
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/plugin-platform-spike.yml"
+      - "crates/plugin-protocol/**"
+      - "scripts/build-plugin-fixture-package.ps1"
+      - "scripts/build-pdf-plugin-prototype.ps1"
+      - "scripts/test-plugin-launch-policy.ps1"
+      - "scripts/measure-plugin-host-size.ps1"
+      - "scripts/extract-package-payload.ps1"
+      - "scripts/stage-pdfium.ps1"
+      - "config/pdf-viewing.json"
+      - "config/plugin-platform.json"
+      - "assets/plugins/**"
+      - "src/plugin_platform.rs"
+      - "src/plugin_platform/**"
+      - "src/lib.rs"
+      - "src/main.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "packager.toml"
+      - "THIRD_PARTY_NOTICES.md"
+
+concurrency:
+  group: plugin-platform-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  native-plugin-feasibility:
+    name: Plugin feasibility (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            executable_suffix: .exe
+            package_formats: nsis
+            report_formats: nsis
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            executable_suffix: ""
+            package_formats: app,dmg
+            report_formats: dmg
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            executable_suffix: ""
+            package_formats: deb,appimage
+            report_formats: deb,appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install stable Rust for the native target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: plugin-platform-spike-${{ matrix.target }}
+          cache-all-crates: true
+
+      - name: Reset generated feasibility output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $targetRoot = [System.IO.Path]::GetFullPath((Join-Path $PWD 'target'))
+          $outputRoot = [System.IO.Path]::GetFullPath((Join-Path $targetRoot 'plugin-platform-spike'))
+          $expectedPrefix = "$targetRoot$([System.IO.Path]::DirectorySeparatorChar)"
+          if (-not $outputRoot.StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to clean output outside target: $outputRoot"
+          }
+          if (Test-Path -LiteralPath $outputRoot) {
+            Remove-Item -LiteralPath $outputRoot -Recurse -Force
+          }
+
+      - name: Install Minisign on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'minisign-0.12-win64.zip'
+          Invoke-WebRequest `
+            -Uri 'https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-win64.zip' `
+            -OutFile $archive
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash
+          if ($digest -ne '37B600344E20C19314B2E82813DB2BFDCC408B77B876F7727889DBD46D539479') {
+            throw "Minisign archive digest mismatch: $digest"
+          }
+          $toolRoot = Join-Path $env:RUNNER_TEMP 'minisign-0.12'
+          Expand-Archive -LiteralPath $archive -DestinationPath $toolRoot -Force
+          $binRoot = Join-Path $toolRoot 'minisign-win64/x86_64'
+          $binRoot | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install Minisign on macOS
+        if: runner.os == 'macOS'
+        shell: pwsh
+        run: brew install minisign
+
+      - name: Install Minisign on Linux
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y `
+            build-essential `
+            clang `
+            cmake `
+            pkg-config `
+            libglib2.0-dev `
+            libssl-dev `
+            libfontconfig1-dev `
+            libwayland-dev `
+            libxkbcommon-dev `
+            libxkbcommon-x11-dev `
+            libxcb1-dev `
+            libxcb-render0-dev `
+            libxcb-shape0-dev `
+            libxcb-xfixes0-dev `
+            libvulkan-dev `
+            libasound2-dev
+          $archive = Join-Path $env:RUNNER_TEMP 'minisign-0.12-linux.tar.gz'
+          Invoke-WebRequest `
+            -Uri 'https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz' `
+            -OutFile $archive
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash
+          if ($digest -ne '9A599B48BA6EB7B1E80F12F36B94CECA7C00B7A5173C95C3EFC88D9822957E73') {
+            throw "Minisign archive digest mismatch: $digest"
+          }
+          $toolRoot = Join-Path $env:RUNNER_TEMP 'minisign-0.12'
+          New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
+          tar -xzf $archive -C $toolRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to extract pinned Minisign.' }
+          $binRoot = Join-Path $toolRoot 'minisign-linux/x86_64'
+          & chmod +x (Join-Path $binRoot 'minisign')
+          $binRoot | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install pinned cargo-packager
+        shell: pwsh
+        run: cargo install cargo-packager --version 0.11.8 --locked --force
+
+      - name: Build and test the bounded protocol and fixture tools
+        shell: pwsh
+        run: |
+          cargo test --release --locked -p markion-plugin-protocol
+          if ($LASTEXITCODE -ne 0) { throw 'Plugin protocol tests failed.' }
+          cargo build --release --locked -p markion-plugin-protocol --bins
+          if ($LASTEXITCODE -ne 0) { throw 'Plugin fixture build failed.' }
+
+      - name: Generate an ephemeral feasibility signing key
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $keyRoot = Join-Path $env:RUNNER_TEMP 'markion-plugin-fixture-key'
+          New-Item -ItemType Directory -Path $keyRoot -Force | Out-Null
+          minisign -G -p (Join-Path $keyRoot 'plugin.pub') -s (Join-Path $keyRoot 'plugin.key') -W
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to create the feasibility signing key.' }
+          "MARKION_PLUGIN_TEST_KEY_ROOT=$keyRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build, authenticate, and extract the signed fixture plugin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $suffix = '${{ matrix.executable_suffix }}'
+          $worker = Join-Path $PWD "target/release/plugin-fixture-worker$suffix"
+          $inspector = Join-Path $PWD "target/release/plugin-package-inspect$suffix"
+          $packageRoot = Join-Path $PWD 'target/plugin-platform-spike/fixture'
+          $output = @(
+            ./scripts/build-plugin-fixture-package.ps1 `
+              -WorkerPath $worker `
+              -TargetTriple '${{ matrix.target }}' `
+              -SecretKeyPath (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.key') `
+              -PublicKeyPath (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.pub') `
+              -OutputRoot $packageRoot
+          )
+          $package = $output[-1] | ConvertFrom-Json
+          $inspectOutput = @(
+            & $inspector `
+              $package.archive_path `
+              (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.pub') `
+              $package.extraction_path
+          )
+          if ($LASTEXITCODE -ne 0) { throw 'Signed fixture verification/extraction failed.' }
+          $inspection = $inspectOutput[-1] | ConvertFrom-Json
+          if ($inspection.plugin_id -ne 'dev.markion.fixture') { throw 'Fixture package identity mismatch.' }
+          "MARKION_PLUGIN_FIXTURE_ROOT=$($package.extraction_path)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify direct launch, OS policy behavior, and process cleanup
+        shell: pwsh
+        run: |
+          $suffix = '${{ matrix.executable_suffix }}'
+          ./scripts/test-plugin-launch-policy.ps1 `
+            -WorkerPath (Join-Path $env:MARKION_PLUGIN_FIXTURE_ROOT "bin/plugin-fixture-worker$suffix") `
+            -HostPath (Join-Path $PWD "target/release/plugin-fixture-host$suffix") `
+            -ScratchRoot (Join-Path $PWD 'target/plugin-platform-spike/launch') `
+            -OutputPath (Join-Path $PWD 'target/plugin-platform-spike/launch-policy.json')
+
+      - name: Build the official PDF plugin payload prototype
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $suffix = '${{ matrix.executable_suffix }}'
+          cargo build --release --locked -p markion-pdf-plugin --bin markion-plugin-pdf
+          if ($LASTEXITCODE -ne 0) { throw 'PDF plugin prototype worker build failed.' }
+          $stageOutput = @(./scripts/stage-pdfium.ps1 -TargetTriple '${{ matrix.target }}')
+          $stage = $stageOutput[-1] | ConvertFrom-Json
+          $env:MARKION_PDFIUM_RUNTIME = $stage.runtime_path
+          cargo test --release --locked -p markion-pdf-plugin --test native_worker -- --ignored
+          if ($LASTEXITCODE -ne 0) { throw 'Native PDF plugin protocol smoke test failed.' }
+          $pdfOutput = @(
+            ./scripts/build-pdf-plugin-prototype.ps1 `
+              -WorkerPath (Join-Path $PWD "target/release/markion-plugin-pdf$suffix") `
+              -RuntimePath $stage.runtime_path `
+              -NoticePath (Join-Path $PWD 'crates/pdf-plugin/THIRD_PARTY_NOTICES.md') `
+              -TargetTriple '${{ matrix.target }}' `
+              -SecretKeyPath (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.key') `
+              -PublicKeyPath (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.pub') `
+              -OutputRoot (Join-Path $PWD 'target/plugin-platform-spike/pdf')
+          )
+          $pdfReport = $pdfOutput[-1] | ConvertFrom-Json
+          $inspector = Join-Path $PWD "target/release/plugin-package-inspect$suffix"
+          $smokePath = Join-Path $PWD 'target/plugin-platform-spike/pdf/one-page-smoke.pdf'
+          $encodedFixture = (Get-Content crates/pdf-viewer/tests/fixtures/one-page-embedded.pdf.b64 -Raw) -replace '\s', ''
+          [IO.File]::WriteAllBytes($smokePath, [Convert]::FromBase64String($encodedFixture))
+          & $inspector $pdfReport.archive_path (Join-Path $env:MARKION_PLUGIN_TEST_KEY_ROOT 'plugin.pub') (Join-Path $PWD 'target/plugin-platform-spike/pdf/verified 插件 extract') $smokePath
+          if ($LASTEXITCODE -ne 0) { throw 'Signed PDF prototype inspection or extracted health check failed.' }
+
+      - name: Create the immutable host-size control worktree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = Get-Content -Raw config/plugin-platform.json | ConvertFrom-Json
+          $controlRoot = Join-Path $env:RUNNER_TEMP "markion-plugin-host-control-${{ matrix.target }}"
+          git worktree add --detach $controlRoot $manifest.host_control_revision
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to create the plugin-host control worktree.' }
+          Copy-Item -LiteralPath Cargo.lock -Destination (Join-Path $controlRoot 'Cargo.lock') -Force
+          "MARKION_PLUGIN_HOST_CONTROL=$controlRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Stage the identical PDFium runtime for host control and candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stageOutput = @(./scripts/stage-pdfium.ps1 -TargetTriple '${{ matrix.target }}')
+          $stage = $stageOutput[-1] | ConvertFrom-Json
+          foreach ($root in @($PWD.Path, $env:MARKION_PLUGIN_HOST_CONTROL)) {
+            $resourceRoot = Join-Path $root 'assets/pdfium'
+            if (Test-Path -LiteralPath $resourceRoot) { throw "Unexpected pre-existing PDFium resource: $resourceRoot" }
+            New-Item -ItemType Directory -Path $resourceRoot -Force | Out-Null
+            Copy-Item -LiteralPath $stage.runtime_path -Destination $resourceRoot
+          }
+
+      - name: Build and package pre-plugin control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location $env:MARKION_PLUGIN_HOST_CONTROL
+          try {
+            cargo build --release
+            if ($LASTEXITCODE -ne 0) { throw 'Plugin-host control build failed.' }
+            cargo packager --release --config packager.toml --formats '${{ matrix.package_formats }}'
+            if ($LASTEXITCODE -ne 0) { throw 'Plugin-host control packaging failed.' }
+          }
+          finally { Pop-Location }
+
+      - name: Build and package minimal plugin host candidate
+        shell: pwsh
+        run: |
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Plugin-host candidate build failed.' }
+          cargo packager --release --config packager.toml --formats '${{ matrix.package_formats }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Plugin-host candidate packaging failed.' }
+
+      - name: Measure plugin-host package and installed deltas
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reportRoot = Join-Path $PWD 'target/plugin-platform-spike/host-size'
+          New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
+          foreach ($format in '${{ matrix.report_formats }}'.Split(',')) {
+            $controlExtractRoot = Join-Path $env:RUNNER_TEMP "plugin-host-control-${{ matrix.target }}-$format"
+            $candidateExtractRoot = Join-Path $env:RUNNER_TEMP "plugin-host-candidate-${{ matrix.target }}-$format"
+            $controlOutput = @(
+              ./scripts/extract-package-payload.ps1 `
+                -Format $format `
+                -ArtifactsRoot (Join-Path $env:MARKION_PLUGIN_HOST_CONTROL 'dist') `
+                -OutputRoot $controlExtractRoot
+            )
+            $candidateOutput = @(
+              ./scripts/extract-package-payload.ps1 `
+                -Format $format `
+                -ArtifactsRoot dist `
+                -OutputRoot $candidateExtractRoot
+            )
+            $control = $controlOutput[-1] | ConvertFrom-Json
+            $candidate = $candidateOutput[-1] | ConvertFrom-Json
+            ./scripts/measure-plugin-host-size.ps1 `
+              -Format $format `
+              -TargetTriple '${{ matrix.target }}' `
+              -ControlArtifact $control.artifact_path `
+              -CandidateArtifact $candidate.artifact_path `
+              -ControlPayloadRoot $control.payload_root `
+              -CandidatePayloadRoot $candidate.payload_root `
+              -OutputPath (Join-Path $reportRoot "$format.json") | Out-Host
+          }
+
+      - name: Retain native feasibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-platform-spike-${{ matrix.target }}
+          path: |
+            target/plugin-platform-spike/launch-policy.json
+            target/plugin-platform-spike/pdf/size-report.json
+            target/plugin-platform-spike/pdf/*.markion-plugin
+            target/plugin-platform-spike/fixture/*.markion-plugin
+            target/plugin-platform-spike/host-size/*.json
+          if-no-files-found: warn
+          retention-days: 30

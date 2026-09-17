@@ -38,6 +38,7 @@ Switching modes preserves the active document, cursor and selection, undo histor
 - Multi-tab editing with per-tab cursor, selection, scroll, undo/redo, preview, outline, and cached derived Markdown state.
 - Opening an already-open Markdown or plain-text file focuses its existing tab instead of creating a duplicate.
 - **Open Folder** changes the workspace root and populates the Files sidebar with Markdown files, a curated set of plain-text files (`.txt`, `.text`, `.log`, `.csv`, `.tsv`, `.org`, `.rst`, `.adoc`/`.asciidoc`), and supported image files (`.png`, `.jpg`/`.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`/`.tiff`, `.svg`), nested under their folders; empty folders are listed too. Markdown stays visually distinguished, plain-text files open as UTF-8 text, and image files open as read-only image tabs that fit oversized images within the content area.
+- Registered PDF files remain visible in the workspace without increasing the core installer by a bundled renderer. Opening one offers the separately downloaded, signed **Markion PDF Viewer** in **Preferences → Plugins**; installation is always explicit and supplies continuous multi-page scrolling, zoom, and page navigation without restarting the app. See [Optional first-party plugins](docs/plugins.md).
 - Expanding a folder reveals exactly one level of children, so deeply nested workspaces can be drilled into one level at a time.
 - A **Show hidden files/folders** preference (default off) reveals dotfile entries plus the Windows hidden-attribute flag, while always-excluded build, dependency, and VCS noise (`target`, `node_modules`, `.git`, …) stays hidden regardless.
 - Right-click file-tree menus provide open, open in new tab, create file/folder, rename, delete, reveal in the system file manager, filter, and refresh actions where applicable.
@@ -75,7 +76,7 @@ Rendered preview supports:
 - Fourteen built-in themes: Paper, Ink, Solar, Forest, Rose, Graphite, GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, and Tokyo Night/Light.
 - Custom themes use `.toml` files in Markion's local themes directory. On first use a `typewriter.toml` sample — including the optional `[fonts]` table (`editor`, `rendered`, `code`) that supplies font families for the Markdown source editor, rendered body text, and code surfaces whenever the user has no explicit preference — is installed there as a starting point. Legacy `.theme` files migrate automatically when first loaded.
 - Seven interface languages: English, Simplified Chinese, Traditional Chinese, Japanese, French, German, and Spanish.
-- The in-app Preferences panel covers language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, show-hidden-files, and heading-menu depth on **General**; theme, per-plane font families (source, reading, code), font sizes, and paragraph spacing on **Appearance**.
+- The in-app Preferences panel covers language, sidebar visibility, Preview adaptive width, focus/typewriter modes, code line numbers, Sync scroll, show-hidden-files, and heading-menu depth on **General**; theme, per-plane font families (source, reading, code), font sizes, and paragraph spacing on **Appearance**; and signed first-party plugin installation, updates, rollback, storage, and removal on **Plugins**.
 - Preferences persist in `config.toml`; legacy `preferences.conf` files migrate automatically.
 
 All configuration fields are optional. The main defaults and file-only settings are:
@@ -182,16 +183,14 @@ Source-mapped Visual Edit incrementally reuses independently parseable regions a
 Rust stable is required. From the repository root:
 
 ```powershell
-pwsh ./scripts/stage-pdfium.ps1
 cargo run
 cargo build
 pwsh ./scripts/check-quality.ps1
 ```
 
-The staging command checksum-verifies the pinned PDFium runtime beneath
-`target/pdfium-runtime/<host-target>/`; debug builds discover that target-scoped
-file automatically. Release packages remain self-contained and never use this
-development fallback.
+PDFium is not discovered by the core application. The optional PDF worker and
+its pinned runtime are composed and verified as a signed target package by the
+native plugin workflows; see [the plugin architecture](docs/plugin-platform.md).
 
 The quality command checks Rust formatting and lints, the full Cargo workspace
 test suite, the pinned MarkNice bundle, and every OpenSpec artifact in strict

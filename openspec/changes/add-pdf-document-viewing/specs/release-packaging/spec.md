@@ -1,31 +1,51 @@
 ## ADDED Requirements
 
-### Requirement: Bundled PDF viewing SHALL be target-scoped and size-gated
-Every supported release package SHALL contain exactly one runtime PDF rendering library for its own operating system and architecture, pinned by version and cryptographic digest, and SHALL exclude runtime libraries for other targets plus PDF JavaScript, V8, XFA, development headers, import libraries, debug symbols, sample documents, and bundled font packs. The Windows x86_64 NSIS installer, macOS arm64 DMG/app payload, Linux amd64 DEB, and Linux x86_64 AppImage SHALL load that bundled runtime without a separately installed PDF tool or network fetch. Third-party license notices SHALL be shipped with the runtime.
+### Requirement: PDF viewing SHALL be an independently packaged and size-gated official plugin
+Every supported release SHALL build one target-specific `dev.markion.pdf`
+archive containing the official worker, exactly one digest-pinned non-V8/non-XFA
+PDFium runtime for that target, the signed canonical manifest, and PDF-specific
+license notices. The archive SHALL exclude other-target runtimes, JavaScript,
+V8, XFA, headers, import libraries, debug symbols, fixtures, samples, and font
+packs. The worker SHALL open/render the packaged fixture offline through the
+framed capability without an external PDF tool or runtime download.
 
-For this change, package and installed-payload sizes SHALL be compared with a PDF-disabled control built from the pre-change revision on the same native runner, with the same locked Rust toolchain, dependency lockfile, release profile, assets, and cargo-packager version. No compressed installer/package artifact may grow by more than 6 MiB, and no installed or staged application payload may grow by more than 10 MiB (1 MiB = 1,048,576 bytes). CI SHALL emit baseline, candidate, and delta byte counts for every format and fail when a budget is exceeded; increasing a budget requires an explicit later OpenSpec change.
+The Windows x86_64, macOS arm64, and Linux x86_64 plugin archives SHALL each be
+at most 6 MiB compressed and 10 MiB extracted. CI SHALL publish exact archive
+and installed byte counts, SHA-256, signature, notices, and provenance, and
+SHALL fail rather than increase a budget implicitly.
 
-#### Scenario: Native packages contain one matching runtime
-- **WHEN** the release matrix packages Markion for Windows x86_64, macOS arm64, or Linux x86_64
-- **THEN** the installed payload contains exactly the PDF runtime for that target and no runtime for another target
-- **AND** packaged verification launches or probes PDF loading through the path the installed application will use
+#### Scenario: Target plugin contains one matching runtime
+- **WHEN** native CI packages the official PDF plugin
+- **THEN** its verified manifest closes exactly the worker, matching PDFium runtime, and notices for that target
+- **AND** native protocol smoke opens and renders a fixture from the extracted package
 
-#### Scenario: Package-size delta stays within budget
-- **WHEN** a candidate NSIS, DMG, DEB, or AppImage is compared with its same-environment PDF-disabled control
-- **THEN** the candidate artifact is no more than 6 MiB larger
-- **AND** CI records both byte counts and the computed delta in a retained size report
+#### Scenario: Optional PDF package exceeds a budget
+- **WHEN** its archive exceeds 6 MiB or its extracted members exceed 10 MiB
+- **THEN** the native job fails and the catalog is not published
+- **AND** no release references the rejected artifact
 
-#### Scenario: Installed-payload delta stays within budget
-- **WHEN** the candidate installed or staged application tree is compared with its same-environment PDF-disabled control
-- **THEN** the candidate payload is no more than 10 MiB larger
-- **AND** the report identifies the bundled PDF runtime and every other file contributing materially to the delta
+### Requirement: Core installers SHALL exclude optional PDF payloads
+The core NSIS, DMG/app, DEB, and AppImage SHALL contain the reusable plugin host
+and signed bootstrap catalog but SHALL contain no PDF worker, `.markion-plugin`
+archive, installed/rollback plugin tree, PDFium library, or PDF-only notice. The
+root application SHALL not depend on the PDF viewer crate. The reusable host
+SHALL remain within its separately measured 1 MiB compressed and 2 MiB installed
+same-runner budgets.
 
-#### Scenario: Size budget regression blocks packaging
-- **WHEN** either the 6 MiB packaged-artifact budget or 10 MiB installed-payload budget is exceeded
-- **THEN** the native packaging job fails and does not publish that candidate as a completed release
-- **AND** the limit is not automatically raised or bypassed
+#### Scenario: Core package closure is inspected
+- **WHEN** native CI extracts or mounts a core package
+- **THEN** it finds the signed bootstrap catalog and no optional PDF payload
+- **AND** the absence check runs for NSIS, DMG, DEB, and AppImage
 
-#### Scenario: Runtime acquisition is integrity checked
-- **WHEN** a native build stages the pinned PDF runtime
-- **THEN** it verifies the downloaded bytes against the repository-controlled digest before packaging
-- **AND** a missing or mismatched runtime fails the build rather than falling back to a network download at application startup
+### Requirement: Catalog and PDF assets SHALL be signed and published separately
+Tagged CI SHALL populate the catalog only from plugin archives that passed
+signature, digest, target, protocol, launch, native fixture, and size checks.
+It SHALL sign the canonical catalog with the dedicated plugin key, compile the
+core against the matching public key and catalog, publish versioned plugin
+assets plus catalog/checksum/size/notice/provenance artifacts to GitHub Releases,
+and mirror them to OSS. The plugin key SHALL NOT reuse the updater key.
+
+#### Scenario: A native plugin build fails
+- **WHEN** any referenced target archive fails verification or smoke testing
+- **THEN** catalog preparation and core release packaging do not proceed
+- **AND** no dangling catalog URL is published

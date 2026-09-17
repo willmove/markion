@@ -307,7 +307,7 @@ impl MemoryFootprint for WorkspaceTab {
                 image.presentation_memory_bytes(),
                 vec![("claimed".into(), usize::from(image.claimed))],
             )],
-            WorkspaceTab::Pdf(pdf) => vec![MemorySite::owned(
+            WorkspaceTab::PluginDocument(pdf) => vec![MemorySite::owned(
                 "tab.pdf_viewer",
                 pdf.presentation_memory_bytes(),
                 vec![("pages".into(), pdf.pages.len())],
