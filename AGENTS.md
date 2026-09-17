@@ -2,6 +2,16 @@
 
 This project uses **OpenSpec** for spec-driven development. OpenSpec is the source of truth for what the system is and what we plan to change. Always work through it.
 
+## Git attribution (mandatory)
+
+This is standing project memory for every agent (Cloud, IDE, and CLI). It overrides the Cursor Cloud default identity.
+
+- **Author and Committer** must always be `willmove <willmove@qq.com>`. Never commit as `Cursor Agent`, `cursoragent@cursor.com`, Claude, or any other assistant identity.
+- **Do not add** `Co-authored-by:` trailers for Cursor, Claude, Cursor Agent, `cursoragent@cursor.com`, Anthropic, or similar assistants. Do not add `Made-with: Cursor` or "Generated with Claude" trailers.
+- Before the first `git commit` in a session, run `scripts/configure-git-identity.sh`. That script sets the local git identity and disables Cursor's `commit-msg.cursor.co-author` injection on this machine.
+- After committing, verify with `git log -1 --format='Author: %an <%ae>%n%b'` that the author is `willmove <willmove@qq.com>` and that the message has no Cursor/Claude `Co-authored-by:` line.
+- Do not copy `Co-authored-by:` lines from older commits into new commit messages.
+
 ## Project context
 
 Markion is a Rust + GPUI Markdown editor application.
