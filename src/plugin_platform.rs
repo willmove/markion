@@ -12,6 +12,18 @@ use markion_plugin_protocol::{
 use semver::Version;
 use thiserror::Error;
 
+mod catalog;
+mod store;
+
+pub use catalog::{
+    CatalogManager, CatalogSnapshot, CatalogSnapshotSource, CatalogUpdate, PluginCatalogError,
+};
+pub use store::{
+    ActivationRecord, InstallOutcome, PluginPackageEstimate, PluginQuarantine, PluginStorageUsage,
+    PluginStore, PluginStoreError, PluginStorePaths, PluginStoreState, QuarantineReason,
+    RecoveryReport,
+};
+
 const BOOTSTRAP_CATALOG: &str = include_str!("../assets/plugins/catalog.json");
 const REQUIRED_LOCALES: &[&str] = &["en", "zh-Hans", "zh-Hant", "ja", "fr", "de", "es"];
 
