@@ -3560,6 +3560,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "markion-pdf-plugin"
+version = "0.3.9"
+dependencies = [
+ "base64",
+ "markion-pdf-viewer",
+ "markion-plugin-protocol",
+ "semver",
+ "tempfile",
+]
+
+[[package]]
 name = "markion-pdf-viewer"
 version = "0.3.12"
 dependencies = [
@@ -3572,6 +3583,7 @@ dependencies = [
 name = "markion-plugin-protocol"
 version = "0.3.9"
 dependencies = [
+ "libc",
  "minisign-verify",
  "semver",
  "serde",
@@ -3579,6 +3591,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 1.0.69",
+ "windows 0.61.3",
  "zip",
 ]
 

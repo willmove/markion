@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use markion_plugin_protocol::{PluginManifest, VerifiedPackage};
+use markion_plugin_protocol::{CatalogArtifact, PluginManifest, VerifiedPackage};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -170,6 +170,15 @@ impl From<&PluginManifest> for PluginPackageEstimate {
         Self {
             download_bytes: manifest.archive_size_bytes,
             installed_bytes: manifest.installed_size_bytes,
+        }
+    }
+}
+
+impl From<&CatalogArtifact> for PluginPackageEstimate {
+    fn from(artifact: &CatalogArtifact) -> Self {
+        Self {
+            download_bytes: artifact.length,
+            installed_bytes: artifact.installed_size_bytes,
         }
     }
 }
