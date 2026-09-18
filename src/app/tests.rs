@@ -8350,7 +8350,9 @@ fn visual_edit_does_not_duplicate_nested_list_input_in_the_parent(cx: &mut TestA
             .visual_last_projection
             .as_ref()
             .expect("nested child should paint its own projection");
-        assert_eq!(text, "child\n");
+        // The trailing blank line is a whitespace gap row, so the child row's
+        // projection stops at its content.
+        assert_eq!(text, "child");
     });
 
     cx.simulate_input("X");
@@ -8358,7 +8360,7 @@ fn visual_edit_does_not_duplicate_nested_list_input_in_the_parent(cx: &mut TestA
     app.update(cx, |app, _| {
         assert_eq!(app.active_tab().document.text(), "- parent\n  - chXild\n");
         let (text, _) = app.active_tab().visual_last_projection.as_ref().unwrap();
-        assert_eq!(text, "chXild\n");
+        assert_eq!(text, "chXild");
     });
 
     let parent_cursor = source.find("parent").unwrap() + 1;
@@ -22215,4 +22217,85 @@ fn visual_list_link_tail_blank_row_has_caret(cx: &mut TestAppContext) {
         );
         assert!(tab.visual_caret_bounds.unwrap().top() > before.top() + px(5.));
     });
+}
+
+#[gpui::test]
+fn visual_list_blank_tail_caret_paints_at_left_margin(cx: &mut TestAppContext) {
+    let source = "测试\n- 测试列表项1\n- 测试列表项2\n    - 子列表项1\n    - 子列表项2\n    - 子列表项3\n\n\n\n\n";
+    let first_blank = source.find("子列表项3").unwrap() + "子列表项3".len() + 1;
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = false;
+        app
+    });
+    cx.simulate_resize(size(px(1100.), px(800.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    // The first paragraph row defines the document's left margin.
+    app.update(cx, |app, cx| app.move_to(0, cx));
+    cx.run_until_parked();
+    let margin = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+    let mut previous_top = margin.top();
+    for line in 0..=4usize {
+        app.update(cx, |app, cx| app.move_to(first_blank + line, cx));
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let caret = app.active_tab().visual_caret_bounds.unwrap();
+            assert!(
+                (caret.left() - margin.left()).abs() < px(1.),
+                "blank line {line} caret {caret:?} is not at the left margin {margin:?}"
+            );
+            assert!(
+                caret.top() > previous_top,
+                "blank line {line} caret {caret:?} did not move below the previous row"
+            );
+            previous_top = caret.top();
+        });
+    }
+}
+
+#[gpui::test]
+fn visual_list_revealed_marker_aligns_with_unfocused_left_edge(cx: &mut TestAppContext) {
+    let source = "段落\n- 甲\n- 乙\n";
+    let marker = "段落\n".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = false;
+        app
+    });
+    cx.simulate_resize(size(px(1100.), px(800.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| app.move_to(0, cx));
+    cx.run_until_parked();
+    let margin = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+    // Caret on the `-` marker reveals the raw prefix; it must start at the
+    // same left edge the bullet glyph uses while unfocused, without the
+    // reserved marker-column offset.
+    app.update(cx, |app, cx| app.move_to(marker, cx));
+    cx.run_until_parked();
+    let revealed = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+    assert!(
+        (revealed.left() - margin.left()).abs() < px(1.),
+        "revealed marker caret {revealed:?} is offset from the left margin {margin:?}"
+    );
+    // Back on the item text the prefix hides and the marker column returns,
+    // so the content caret sits right of the revealed-marker edge again.
+    app.update(cx, |app, cx| app.move_to(marker + "- ".len(), cx));
+    cx.run_until_parked();
+    let content = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+    assert!(
+        content.left() > margin.left() + px(15.),
+        "unfocused content caret {content:?} lost its marker column"
+    );
 }

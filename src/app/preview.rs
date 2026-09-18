@@ -4389,24 +4389,31 @@ fn visual_block_content_view(
                 .line_height(px(typography.list_line_height))
                 .flex()
                 .items_start()
-                .child(
-                    div()
-                        .id(("visual-task-checkbox", block_index))
-                        .debug_selector(move || format!("visual-task-checkbox-{checkbox_index}"))
-                        .flex_none()
-                        .min_w(px(22.))
-                        .pr_1()
-                        .text_color(rgb(0x64748b))
-                        .when(clickable_checkbox, |marker| {
-                            marker.cursor_pointer().on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                                    app.toggle_visual_task_checkbox(checkbox_index, cx);
-                                }),
-                            )
-                        })
-                        .child(marker),
-                )
+                // While the structural prefix is revealed the marker glyph is
+                // hidden; reserving its column would shift the raw `- ` right
+                // of where the bullet sits unfocused, so the column unmounts.
+                .when(!prefix_revealed, |row| {
+                    row.child(
+                        div()
+                            .id(("visual-task-checkbox", block_index))
+                            .debug_selector(move || {
+                                format!("visual-task-checkbox-{checkbox_index}")
+                            })
+                            .flex_none()
+                            .min_w(px(22.))
+                            .pr_1()
+                            .text_color(rgb(0x64748b))
+                            .when(clickable_checkbox, |marker| {
+                                marker.cursor_pointer().on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                        app.toggle_visual_task_checkbox(checkbox_index, cx);
+                                    }),
+                                )
+                            })
+                            .child(marker),
+                    )
+                })
                 .child(
                     div()
                         .flex_1()

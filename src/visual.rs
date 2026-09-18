@@ -667,6 +667,18 @@ pub(crate) fn build_visual_blocks(
         }
     }
 
+    // An unquoted item's parser range also swallows the blank lines trailing
+    // its list container; painting them inside the indented item row would put
+    // their carets at the list indent instead of the row start. Cut each row
+    // back to its last non-whitespace line (keeping that line's separator,
+    // like paragraphs) so the coverage loop renders the tail as ordinary
+    // full-width whitespace rows.
+    for (leaf, range) in expanded.iter().zip(source_ranges.iter_mut()) {
+        if leaf.quote_group.is_none() && matches!(leaf.block, PreviewBlock::ListItem { .. }) {
+            trim_list_item_blank_tail(text, range);
+        }
+    }
+
     // A paragraph/heading that still swallows nested Markdown images would
     // overlap those Image leaves. Split the parent into disjoint prose
     // slices around each contained image before the coverage loop, so the
@@ -790,13 +802,17 @@ pub(crate) fn build_visual_blocks(
     // A terminal line ending belongs to the preceding source line. Keep it
     // there (so a caret before it stays beside the text), and give the empty
     // line after it its own EOF anchor even when no uncovered bytes remain.
+    // Unquoted list items qualify too: since their blank tails became gap
+    // rows, the item stops at its own line separator and the trailing empty
+    // insertion row must not disappear.
     let needs_eof_row = text.ends_with('\n')
         && blocks.last().is_some_and(|block| {
             matches!(
                 block.kind,
-                VisualBlockKind::Paragraph | VisualBlockKind::Heading { .. }
-            ) || (block.quote_context.is_some()
-                && matches!(block.kind, VisualBlockKind::ListItem { .. }))
+                VisualBlockKind::Paragraph
+                    | VisualBlockKind::Heading { .. }
+                    | VisualBlockKind::ListItem { .. }
+            )
         });
     if covered_until < text.len() || needs_eof_row {
         blocks.push(gap_block(
@@ -808,6 +824,20 @@ pub(crate) fn build_visual_blocks(
     }
     assign_quote_group_edges(&mut blocks);
     blocks
+}
+
+/// Cut an unquoted list item row's end back to the end of its last
+/// non-whitespace line, keeping that line's separator. Bytes after it are
+/// blank lines that must become whitespace gap rows, not part of the item.
+fn trim_list_item_blank_tail(text: &str, range: &mut Range<usize>) {
+    let last_content = text[range.clone()]
+        .char_indices()
+        .rev()
+        .find(|(_, character)| !matches!(character, ' ' | '\t' | '\r' | '\n'))
+        .map_or(range.end, |(relative, _)| range.start + relative);
+    range.end = text[last_content..range.end]
+        .find('\n')
+        .map_or(range.end, |relative| last_content + relative + 1);
 }
 
 fn is_image_partition_parent(leaf: &VisualLeaf<'_>) -> bool {
@@ -1262,23 +1292,16 @@ fn visual_block_from_preview(
     } else {
         inline_runs(text, inline_source_range, reference_definitions)
     };
-    if matches!(kind, VisualBlockKind::ListItem { .. }) && quote_context.is_none() {
-        append_list_whitespace_runs(
-            text,
-            &source_range,
-            block_prefix.as_ref(),
-            &reveal_groups,
-            &mut editable_runs,
-        );
-    } else {
-        append_trailing_horizontal_whitespace_run(
-            text,
-            &source_range,
-            block_prefix.as_ref(),
-            &reveal_groups,
-            &mut editable_runs,
-        );
-    }
+    // Unquoted list item rows end at their own line separator (see
+    // `trim_list_item_blank_tail`), so their tail is at most horizontal
+    // whitespace on the content line — the same run every other block takes.
+    append_trailing_horizontal_whitespace_run(
+        text,
+        &source_range,
+        block_prefix.as_ref(),
+        &reveal_groups,
+        &mut editable_runs,
+    );
     if quote_context.is_some() {
         synthesize_quote_softbreak_runs(text, &source_range, &mut editable_runs);
     }
@@ -1761,71 +1784,6 @@ fn append_trailing_horizontal_whitespace_run(
         conservative_fallback: false,
     });
     runs.sort_by_key(|run| (run.content_range.start, run.content_range.end));
-}
-
-/// List container ranges include blank lines which have no inline events.
-/// Keep them as source-backed line breaks: the final separator before another
-/// block belongs to that block's next row, while EOF needs every trailing row.
-fn append_list_whitespace_runs(
-    text: &str,
-    range: &Range<usize>,
-    prefix: Option<&VisualBlockPrefix>,
-    reveal_groups: &[VisualRevealGroup],
-    runs: &mut Vec<VisualInlineRun>,
-) {
-    // Start after both visible content and its hidden closing syntax. Scanning
-    // backwards from the last spaces would skip the newlines before them and
-    // incorrectly append an indented blank line to the preceding text line.
-    let start = runs
-        .iter()
-        .map(|run| run.content_range.end)
-        .chain(reveal_groups.iter().map(|group| group.source_range.end))
-        .chain(prefix.map(|prefix| prefix.source_range.end))
-        .max()
-        .unwrap_or(range.start);
-    let tail = &text[start..range.end];
-    if !tail
-        .bytes()
-        .all(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
-    {
-        return;
-    }
-    let mut end = range.end;
-    if tail.ends_with('\n') && !text[range.end..].trim().is_empty() {
-        end -= 1;
-        if end > start && text.as_bytes()[end - 1] == b'\r' {
-            end -= 1;
-        }
-    }
-    let mut cursor = start;
-    while cursor < end {
-        let run_start = cursor;
-        let visible_text = if text.as_bytes()[cursor] == b'\n' {
-            cursor += 1;
-            "\n".to_string()
-        } else if text[cursor..end].starts_with("\r\n") {
-            cursor += 2;
-            "\n".to_string()
-        } else {
-            cursor += 1;
-            while cursor < end && matches!(text.as_bytes()[cursor], b' ' | b'\t') {
-                cursor += 1;
-            }
-            text[run_start..cursor].to_string()
-        };
-        let source_range = run_start..cursor;
-        runs.push(VisualInlineRun {
-            visible_text,
-            source_range: source_range.clone(),
-            content_range: source_range,
-            style: InlineStyle::default(),
-            link_target_range: None,
-            navigation: None,
-            math: None,
-            html_image: None,
-            conservative_fallback: false,
-        });
-    }
 }
 
 fn visual_block_source_range(text: &str, block: &PreviewBlock) -> Range<usize> {
@@ -4385,22 +4343,32 @@ mod tests {
                     let source = format!("{prefix}第三{}", eol.repeat(count));
                     let doc = MarkdownDocument::from_text(&source);
                     let blocks = doc.visual_blocks_shared();
-                    let item = &blocks[0];
+                    let [item, gap] = &blocks[..] else {
+                        panic!("{source:?}: {blocks:?}")
+                    };
+                    assert!(matches!(item.kind, VisualBlockKind::ListItem { .. }));
+                    // The item row keeps only its own content line (separator
+                    // included); every authored blank line plus the EOF
+                    // insertion row belongs to the trailing whitespace row.
+                    assert_eq!(
+                        item.source_range,
+                        0..prefix.len() + "第三".len() + eol.len()
+                    );
+                    assert!(matches!(gap.kind, VisualBlockKind::Whitespace));
+                    assert_eq!(gap.source_range, item.source_range.end..source.len());
+                    assert_eq!(
+                        gap.height_signature,
+                        Some(
+                            (count - 1 + usize::from(gap.source_range.end == source.len())) as u32
+                        )
+                    );
                     let projection = build_visual_projection(
                         &source,
                         item,
                         source.len()..source.len(),
                         source.len(),
                     );
-                    assert!(
-                        projection.text.ends_with(&"\n".repeat(count)),
-                        "{source:?}: {:?}",
-                        projection.text
-                    );
-                    assert_eq!(
-                        projection.source_for_display(projection.text.len()),
-                        source.len()
-                    );
+                    assert_eq!(projection.text, "第三", "{source:?}");
                     for segment in &projection.segments {
                         assert!(source.is_char_boundary(segment.source_range.start));
                         assert!(source.is_char_boundary(segment.source_range.end));
@@ -4410,20 +4378,20 @@ mod tests {
                 let source = format!("{prefix}第一{eol}{eol}{prefix}第二");
                 let doc = MarkdownDocument::from_text(&source);
                 let blocks = doc.visual_blocks_shared();
-                let projection = build_visual_projection(
-                    &source,
-                    &blocks[0],
-                    source.len()..source.len(),
-                    source.len(),
+                let [first, gap, second] = &blocks[..] else {
+                    panic!("{source:?}: {blocks:?}")
+                };
+                assert!(matches!(first.kind, VisualBlockKind::ListItem { .. }));
+                assert!(matches!(gap.kind, VisualBlockKind::Whitespace));
+                assert!(matches!(second.kind, VisualBlockKind::ListItem { .. }));
+                // The single authored blank line is exactly one gap row: the
+                // following item's first byte owns no duplicate separator row.
+                assert_eq!(
+                    gap.source_range,
+                    first.source_range.end..second.source_range.start
                 );
-                assert!(
-                    projection.text.ends_with('\n'),
-                    "list separator must render: {source:?}"
-                );
-                assert!(
-                    !projection.text.ends_with("\n\n"),
-                    "next row owns the final separator"
-                );
+                assert_eq!(&source[gap.source_range.clone()], eol);
+                assert_eq!(gap.height_signature, Some(1));
             }
         }
     }
@@ -4452,50 +4420,122 @@ mod tests {
                                         && block.source_range.contains(&head.len())
                                 })
                                 .unwrap();
-                            let projection = build_visual_projection(
-                                &source,
-                                item,
-                                source.len()..source.len(),
-                                source.len(),
-                            );
-                            let mut expected_tail = tail.replace("\r\n", "\n");
-                            if !following.is_empty() {
-                                expected_tail.pop();
-                            }
+                            // The item keeps its content line with separator;
+                            // the whitespace-only tail becomes gap rows.
+                            assert_eq!(item.source_range.end, head.len() + eol.len());
+                            let gap = blocks
+                                .iter()
+                                .find(|block| {
+                                    matches!(block.kind, VisualBlockKind::Whitespace)
+                                        && block.source_range.start == item.source_range.end
+                                })
+                                .unwrap();
+                            let expected_gap_end = if following.is_empty() {
+                                source.len()
+                            } else {
+                                source.len() - following.len()
+                            };
+                            assert_eq!(gap.source_range, item.source_range.end..expected_gap_end);
                             assert!(
-                                projection.text.ends_with(&expected_tail),
-                                "source={source:?}, projection={:?}",
-                                projection.text
+                                source[gap.source_range.clone()]
+                                    .bytes()
+                                    .all(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
                             );
-                            let display_start = projection.text.len() - expected_tail.len();
-                            // Every blank-line start and horizontal-space boundary
-                            // maps back to its original byte, including CRLF input.
-                            let mut offset = head.len() + eol.len();
-                            for blank in ["  ", "\t", " \t"] {
-                                for delta in 0..=blank.len() {
-                                    let cursor = offset + delta;
-                                    let display = projection.display_for_source(cursor).unwrap();
-                                    assert_eq!(
-                                        display,
-                                        display_start
-                                            + source[head.len()..cursor]
-                                                .replace("\r\n", "\n")
-                                                .len()
-                                    );
-                                    assert_eq!(
-                                        projection.source_for_display(display),
-                                        cursor,
-                                        "{source:?}"
-                                    );
-                                }
-                                offset += blank.len() + eol.len();
-                            }
+                            // Three authored blank lines stay three painted
+                            // rows, plus the EOF insertion row at document end.
+                            let newlines = source[gap.source_range.clone()]
+                                .bytes()
+                                .filter(|byte| *byte == b'\n')
+                                .count();
+                            assert_eq!(
+                                gap.height_signature,
+                                Some(
+                                    (newlines + usize::from(gap.source_range.end == source.len()))
+                                        as u32
+                                )
+                            );
+                            // Formatted content keeps its own reveal mapping
+                            // and never swallows a tail line break.
+                            let cursor = item
+                                .editable_runs
+                                .first()
+                                .map_or(item.source_range.end, |run| run.content_range.start);
+                            let projection =
+                                build_visual_projection(&source, item, cursor..cursor, cursor);
+                            assert!(!projection.text.contains('\n'), "{source:?}");
+                            assert!(!projection.text.is_empty(), "{source:?}");
+                            // Blocks cover the canonical source contiguously.
+                            assert_eq!(blocks.first().unwrap().source_range.start, 0);
+                            assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+                            assert!(
+                                blocks
+                                    .windows(2)
+                                    .all(|pair| pair[0].source_range.end
+                                        == pair[1].source_range.start)
+                            );
                             assert_eq!(doc.text(), source);
                             assert!(std::sync::Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
                         }
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn unquoted_list_blank_tails_render_as_whitespace_rows() {
+        // User fixture: a nested list whose innermost item is followed by
+        // blank lines. The blank rows must leave the indented item row and
+        // become full-width whitespace rows instead of painting their carets
+        // at the nested-list indent.
+        let fixture = "测试\n- 测试列表项1\n- 测试列表项2\n    - 子列表项1\n    - 子列表项2\n    - 子列表项3\n\n\n\n\n";
+        let doc = MarkdownDocument::from_text(fixture);
+        let blocks = doc.visual_blocks_shared();
+        let last_item = blocks
+            .iter()
+            .rev()
+            .find(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .unwrap();
+        assert_eq!(
+            &fixture[last_item.source_range.clone()],
+            "    - 子列表项3\n"
+        );
+        let gap = blocks
+            .iter()
+            .find(|block| {
+                matches!(block.kind, VisualBlockKind::Whitespace)
+                    && block.source_range.start == last_item.source_range.end
+            })
+            .unwrap();
+        assert_eq!(gap.source_range, last_item.source_range.end..fixture.len());
+        // Four authored blank lines plus the EOF insertion row.
+        assert_eq!(gap.height_signature, Some(5));
+        assert!(gap.quote_context.is_none() && gap.source_island.is_none());
+
+        // Loose-list separator, mid-document tail, and plain EOF keep the
+        // same ownership: item rows end at their own line separator.
+        for (source, gap_ranges) in [
+            ("- a\n\n- b\n", vec![4..5, 9..9]),
+            ("- a\n\n\n\n段落\n", vec![4..7, 14..14]),
+            ("- a\n", vec![4..4]),
+            ("- a", Vec::new()),
+            ("> - a\n\n\n", vec![6..8]),
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let gaps = blocks
+                .iter()
+                .filter(|block| matches!(block.kind, VisualBlockKind::Whitespace))
+                .map(|block| block.source_range.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(gaps, gap_ranges, "{source:?}: {blocks:?}");
+            assert_eq!(blocks.first().unwrap().source_range.start, 0);
+            assert_eq!(blocks.last().unwrap().source_range.end, source.len());
+            assert!(
+                blocks
+                    .windows(2)
+                    .all(|pair| pair[0].source_range.end == pair[1].source_range.start)
+            );
         }
     }
 
@@ -5542,8 +5582,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             projected,
-            ["parent", "child", "grandchild", "ordered", "nested\n"]
+            ["parent", "child", "grandchild", "ordered", "nested"]
         );
+        // The final item's line separator no longer pads its projection: the
+        // trailing blank line is an unindented whitespace row, so the blocks
+        // after the list cover the rest of the source.
+        let tail = blocks.last().expect("EOF whitespace row");
+        assert!(matches!(tail.kind, VisualBlockKind::Whitespace));
+        assert_eq!(tail.source_range, source.len()..source.len());
     }
 
     #[test]
