@@ -8,6 +8,7 @@ use crate::escape::{
     escape_html_attr, escape_html_text, escape_line_start_marker, escape_markdown_label,
     escape_markdown_text, escape_markdown_url,
 };
+use crate::table::emit_gfm_table;
 
 /// Elements whose entire subtree is noise for document content. Checkbox
 /// inputs are read by the list renderer before this drop applies.
@@ -35,8 +36,27 @@ struct Renderer {
 }
 
 fn render_children(r: &mut Renderer, children: &[Node]) {
-    for child in children {
-        render_node(r, child);
+    let mut index = 0;
+    while index < children.len() {
+        if is_word_list_paragraph(&children[index]) {
+            let start = index;
+            index += 1;
+            while index < children.len() {
+                if is_word_list_paragraph(&children[index]) {
+                    index += 1;
+                    continue;
+                }
+                if is_whitespace_text(&children[index]) {
+                    index += 1;
+                    continue;
+                }
+                break;
+            }
+            render_word_list(r, &children[start..index]);
+            continue;
+        }
+        render_node(r, &children[index]);
+        index += 1;
     }
 }
 
@@ -550,6 +570,149 @@ fn render_li(r: &mut Renderer, children: &[Node], marker: &str) -> bool {
     true
 }
 
+fn is_whitespace_text(node: &Node) -> bool {
+    matches!(node, Node::Text(text) if text.chars().all(char::is_whitespace))
+}
+
+fn is_word_list_paragraph(node: &Node) -> bool {
+    matches!(node, Node::Element(element) if is_word_list_element(element))
+}
+
+fn is_word_list_element(element: &Element) -> bool {
+    if element.tag != "p" {
+        return false;
+    }
+    let class = element.attr("class").unwrap_or("").to_ascii_lowercase();
+    if class.contains("msolistparagraph") {
+        return true;
+    }
+    element
+        .attr("style")
+        .is_some_and(|style| style.to_ascii_lowercase().contains("mso-list:"))
+}
+
+fn is_mso_ignore_span(node: &Node) -> bool {
+    match node {
+        Node::Element(element) if element.tag == "span" => element
+            .attr("style")
+            .is_some_and(|style| style.to_ascii_lowercase().contains("mso-list:ignore")),
+        _ => false,
+    }
+}
+
+fn word_list_level(element: &Element) -> usize {
+    let Some(style) = element.attr("style") else {
+        return 1;
+    };
+    let lower = style.to_ascii_lowercase();
+    if let Some(after) = lower.split("level").nth(1) {
+        let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if let Ok(level) = digits.parse::<usize>() {
+            return level.max(1);
+        }
+    }
+    if let Some(margin) = margin_left_pt(&lower) {
+        return ((margin / 36.0).round() as usize).max(1);
+    }
+    1
+}
+
+fn margin_left_pt(style: &str) -> Option<f32> {
+    let after = style.split("margin-left").nth(1)?;
+    let after = after.trim_start_matches([':', ' ', '\t']);
+    let number: String = after
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+        .collect();
+    number.parse().ok()
+}
+
+fn word_list_is_ordered(element: &Element) -> bool {
+    element
+        .children
+        .iter()
+        .find_map(mso_ignore_marker_text)
+        .is_some_and(|marker| {
+            let trimmed = marker.trim();
+            trimmed.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+                || (trimmed.starts_with('(')
+                    && trimmed.chars().nth(1).is_some_and(|ch| ch.is_ascii_digit()))
+        })
+}
+
+fn mso_ignore_marker_text(node: &Node) -> Option<String> {
+    if !is_mso_ignore_span(node) {
+        return None;
+    }
+    let Node::Element(element) = node else {
+        return None;
+    };
+    let mut text = String::new();
+    collect_raw_text(&element.children, &mut text);
+    Some(text)
+}
+
+fn render_word_list(r: &mut Renderer, nodes: &[Node]) {
+    ensure_block_start(r);
+    let mut produced = false;
+    let mut counters: Vec<i64> = Vec::new();
+    for node in nodes {
+        let Node::Element(element) = node else {
+            continue;
+        };
+        if !is_word_list_element(element) {
+            continue;
+        }
+        let level = word_list_level(element).max(1);
+        let ordered = word_list_is_ordered(element);
+        while counters.len() < level {
+            counters.push(0);
+        }
+        counters.truncate(level);
+        let marker = if ordered {
+            counters[level - 1] += 1;
+            format!("{}. ", counters[level - 1])
+        } else {
+            counters[level - 1] = 0;
+            "- ".to_owned()
+        };
+        let extra_indent = "  ".repeat(level.saturating_sub(1));
+        let children: Vec<Node> = element
+            .children
+            .iter()
+            .filter(|child| !is_mso_ignore_span(child))
+            .cloned()
+            .collect();
+        let start = r.out.len();
+        let saved = r.line_start;
+        r.line_start = true;
+        render_children(r, &children);
+        let body = r.out[start..].trim().to_owned();
+        r.out.truncate(start);
+        r.line_start = saved;
+        if body.is_empty() {
+            continue;
+        }
+        let continuation = format!("{extra_indent}{}", " ".repeat(marker.len()));
+        for (line_index, line) in body.split('\n').enumerate() {
+            if line_index == 0 {
+                r.out.push_str(&extra_indent);
+                r.out.push_str(&marker);
+                r.out.push_str(line);
+            } else if !line.trim().is_empty() {
+                r.out.push_str(&continuation);
+                r.out.push_str(line);
+            }
+            r.out.push('\n');
+        }
+        produced = true;
+        r.line_start = true;
+    }
+    if produced {
+        r.out.push('\n');
+    }
+}
+
 fn render_pre(r: &mut Renderer, element: &Element) {
     let mut content = raw_text_of(element);
     // Strip one leading and one trailing newline (browsers emit a newline
@@ -658,48 +821,94 @@ fn render_table(r: &mut Renderer, element: &Element) {
     if rows.is_empty() {
         return;
     }
-    let merged = rows
-        .iter()
-        .flatten()
-        .any(|cell| span_of(cell, "colspan") > 1 || span_of(cell, "rowspan") > 1);
-    // A table nested inside a cell cannot survive pipe-table rendering; the
-    // whole table degrades to raw HTML like merged cells do.
-    let nested = rows.iter().flatten().any(|cell| contains_table(cell));
-    if merged || nested {
+    // A table nested inside a cell cannot survive pipe-table rendering.
+    if rows.iter().flatten().any(|cell| contains_table(cell)) {
         let mut raw = String::new();
         serialize_raw(element, &mut raw);
         r.out.push_str(&raw);
         finish_block(r);
         return;
     }
-    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let grid = flatten_table_grid(r, &rows);
+    if grid.is_empty() {
+        return;
+    }
+    let width = grid[0].len();
     if width == 0 {
+        return;
+    }
+    if grid.len() == 1 && width == 1 {
+        if !grid[0][0].is_empty() {
+            r.out.push_str(&grid[0][0]);
+            finish_block(r);
+        }
         return;
     }
     let header = rows
         .iter()
-        .position(|row| row.iter().any(|cell| cell.tag == "th"));
-    let header_cells = match header {
-        Some(index) => render_row_cells(r, &rows[index]),
-        None => vec![String::new(); width],
-    };
-    r.out.push_str(&gfm_row(&header_cells, width));
-    r.out.push('\n');
-    r.out.push('|');
-    for _ in 0..width {
-        r.out.push_str(" --- |");
-    }
-    r.out.push('\n');
-    for (index, row) in rows.iter().enumerate() {
-        if Some(index) == header {
-            continue;
+        .position(|row| row.iter().any(|cell| cell.tag == "th"))
+        .unwrap_or(0)
+        .min(grid.len() - 1);
+    let mut ordered = Vec::with_capacity(grid.len());
+    ordered.push(grid[header].clone());
+    for (index, row) in grid.iter().enumerate() {
+        if index != header {
+            ordered.push(row.clone());
         }
-        let cells = render_row_cells(r, row);
-        r.out.push_str(&gfm_row(&cells, width));
-        r.out.push('\n');
     }
-    r.out.push('\n');
-    r.line_start = true;
+    r.out.push_str(&emit_gfm_table(&ordered));
+    finish_block(r);
+}
+
+/// Expands `colspan`/`rowspan` into a rectangular grid: the origin cell keeps
+/// its rendered text and the remaining covered slots are empty strings.
+fn flatten_table_grid(r: &mut Renderer, rows: &[Vec<&Element>]) -> Vec<Vec<String>> {
+    let mut occupancy: Vec<Vec<Option<String>>> = Vec::new();
+    for (row_index, row) in rows.iter().enumerate() {
+        if occupancy.len() <= row_index {
+            occupancy.push(Vec::new());
+        }
+        let mut column = 0usize;
+        for cell in row {
+            while occupancy[row_index]
+                .get(column)
+                .is_some_and(Option::is_some)
+            {
+                column += 1;
+            }
+            let colspan = span_of(cell, "colspan");
+            let rowspan = span_of(cell, "rowspan");
+            let text = render_cell_text(r, cell);
+            for row_delta in 0..rowspan {
+                let target_row = row_index + row_delta;
+                while occupancy.len() <= target_row {
+                    occupancy.push(Vec::new());
+                }
+                while occupancy[target_row].len() < column + colspan {
+                    occupancy[target_row].push(None);
+                }
+                for col_delta in 0..colspan {
+                    occupancy[target_row][column + col_delta] =
+                        Some(if row_delta == 0 && col_delta == 0 {
+                            text.clone()
+                        } else {
+                            String::new()
+                        });
+                }
+            }
+            column += colspan;
+        }
+    }
+    let width = occupancy.iter().map(Vec::len).max().unwrap_or(0);
+    occupancy
+        .into_iter()
+        .map(|mut row| {
+            row.resize(width, None);
+            row.into_iter()
+                .map(|cell| cell.unwrap_or_default())
+                .collect()
+        })
+        .collect()
 }
 
 fn collect_rows(table: &Element) -> Vec<Vec<&Element>> {
@@ -749,32 +958,18 @@ fn contains_table(element: &Element) -> bool {
     })
 }
 
-/// Cells are inline-rendered Markdown; the `normalize_cell_text` policy then
-/// protects pipes and folds newlines into `<br>`. Markdown-special
-/// characters are already escaped at text-emission time.
-fn render_row_cells(r: &mut Renderer, row: &[&Element]) -> Vec<String> {
-    row.iter()
-        .map(|cell| {
-            let start = r.out.len();
-            let saved = r.line_start;
-            r.line_start = true;
-            render_children(r, &cell.children);
-            let body = r.out[start..].trim().to_owned();
-            r.out.truncate(start);
-            r.line_start = saved;
-            body.replace('|', "\\|").replace('\n', "<br>")
-        })
-        .collect()
-}
-
-fn gfm_row(cells: &[String], width: usize) -> String {
-    let mut row = String::from("|");
-    for index in 0..width {
-        row.push(' ');
-        row.push_str(cells.get(index).map(String::as_str).unwrap_or(""));
-        row.push_str(" |");
-    }
-    row
+/// Cells are inline-rendered Markdown; pipes become `\|` and newlines fold
+/// into `<br>`. Markdown-special characters are already escaped at
+/// text-emission time.
+fn render_cell_text(r: &mut Renderer, cell: &Element) -> String {
+    let start = r.out.len();
+    let saved = r.line_start;
+    r.line_start = true;
+    render_children(r, &cell.children);
+    let body = r.out[start..].trim().to_owned();
+    r.out.truncate(start);
+    r.line_start = saved;
+    body.replace('|', "\\|").replace('\n', "<br>")
 }
 
 /// Re-serializes an element subtree back to single-line raw HTML (used for

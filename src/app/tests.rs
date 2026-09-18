@@ -16644,6 +16644,108 @@ fn pasted_clipboard_html_with_empty_conversion_falls_back_to_plain_text(cx: &mut
 }
 
 #[gpui::test]
+fn pasted_tsv_clipboard_becomes_gfm_table_with_one_undo(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("before "))];
+        app.active_tab_mut().selected_range = 7..7;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("姓名\t年龄\n张三\t18".into()));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "before | 姓名 | 年龄 |\n| --- | --- |\n| 张三 | 18 |"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert!(app.active_tab_mut().apply_undo());
+        assert_eq!(app.active_tab().document.text(), "before ");
+    });
+}
+
+#[gpui::test]
+fn pasted_single_cell_clipboard_stays_plain_text(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("before "))];
+        app.active_tab_mut().selected_range = 7..7;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("solo".into()));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "before solo");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn pasted_spreadsheet_html_uses_first_row_as_gfm_header(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("before "))];
+        app.active_tab_mut().selected_range = 7..7;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_html(
+            "姓名\t年龄\n张三\t18".into(),
+            "<table><tr><td>姓名</td><td>年龄</td></tr><tr><td>张三</td><td>18</td></tr></table>"
+                .into(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "before | 姓名 | 年龄 |\n| --- | --- |\n| 张三 | 18 |"
+        );
+        assert!(!app.active_tab().document.text().contains("<table"));
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn pasted_plain_text_keeps_tsv_and_skips_html(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("before "))];
+        app.active_tab_mut().selected_range = 7..7;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_html(
+            "姓名\t年龄\n张三\t18".into(),
+            "<table><tr><td>姓名</td><td>年龄</td></tr><tr><td>张三</td><td>18</td></tr></table>"
+                .into(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.paste_plain_text(&PastePlainText, window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "before 姓名\t年龄\n张三\t18"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
 fn visual_image_presentation_is_one_exact_undoable_mutation(cx: &mut TestAppContext) {
     let source = "![图](old.png \"Caption\")";
     let (app, cx) = cx.add_window_view(|_, cx| {

@@ -352,7 +352,8 @@ fn read_html_from_clipboard() -> Option<String> {
 /// CF_HTML payloads are UTF-8 and start with an ASCII header carrying byte
 /// offsets (`StartHTML`/`EndHTML`/`StartFragment`/`EndFragment`); the fragment
 /// is the meaningful slice. Fall back to the whole payload when the header is
-/// missing or invalid.
+/// missing or invalid. Invalid UTF-8 returns `None` so paste can use Unicode
+/// text (including TSV→GFM) instead of a replacement-character HTML string.
 fn extract_cf_html_fragment(bytes: &[u8]) -> Option<String> {
     let text = String::from_utf8(bytes.to_vec()).ok()?;
     let (mut start, mut end) = (None, None);

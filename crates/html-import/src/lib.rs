@@ -10,6 +10,9 @@
 mod dom;
 mod escape;
 mod render;
+mod table;
+
+pub use table::tsv_to_markdown;
 
 /// Converts clipboard HTML into Markion-compatible Markdown.
 /// Returns an empty string when the HTML carries no convertible content.

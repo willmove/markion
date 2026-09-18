@@ -74,6 +74,7 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemCopy), Copy),
                 MenuItem::action(t(language, Msg::ItemCut), Cut),
                 MenuItem::action(t(language, Msg::ItemPaste), Paste),
+                MenuItem::action(t(language, Msg::ItemPastePlain), PastePlainText),
                 MenuItem::separator(),
                 MenuItem::action(t(language, Msg::ItemSelectAll), SelectAll),
             ],
@@ -250,6 +251,7 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         // so shortcuts match each platform's convention.
         KeyBinding::new(eff(&menu_shortcuts::SELECT_ALL), SelectAll, None),
         KeyBinding::new(eff(&menu_shortcuts::PASTE), Paste, None),
+        KeyBinding::new(eff(&menu_shortcuts::PASTE_PLAIN), PastePlainText, None),
         KeyBinding::new(eff(&menu_shortcuts::COPY), Copy, None),
         KeyBinding::new(eff(&menu_shortcuts::CUT), Cut, None),
         KeyBinding::new(eff(&menu_shortcuts::UNDO), Undo, None),

@@ -103,6 +103,16 @@ pub(super) fn visual_selection_format_target_for_block(
     })
 }
 
+fn converted_clipboard_markdown(html: Option<&str>, text: &str) -> String {
+    if let Some(html) = html {
+        let markdown = markion_html_import::html_to_markdown(html);
+        if !markdown.is_empty() {
+            return markdown;
+        }
+    }
+    markion_html_import::tsv_to_markdown(text).unwrap_or_else(|| text.to_owned())
+}
+
 impl MarkionApp {
     pub(super) fn sync_slash_command_state(&mut self, cx: &mut Context<Self>) {
         let query = if self.block_menu.is_none()
@@ -3277,6 +3287,19 @@ impl MarkionApp {
     }
 
     pub(super) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        self.paste_from_clipboard(false, window, cx);
+    }
+
+    pub(super) fn paste_plain_text(
+        &mut self,
+        _: &PastePlainText,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.paste_from_clipboard(true, window, cx);
+    }
+
+    fn paste_from_clipboard(&mut self, plain: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else {
             self.status = t(self.language, Msg::StatusClipboardEmpty).into();
             cx.notify();
@@ -3316,37 +3339,37 @@ impl MarkionApp {
                 self.push_text_input(&text, cx);
                 return;
             }
-            // Rich-text clipboards (Word, browsers, ...) carry an HTML flavor
-            // next to the plain text; paste it as formatted Markdown. Plain
-            // text remains the fallback when conversion yields nothing.
-            let insertion = match item.html() {
-                Some(html) => {
-                    let markdown = markion_html_import::html_to_markdown(html);
-                    if markdown.is_empty() { text } else { markdown }
-                }
-                None => text,
+            let insertion = if plain {
+                text
+            } else {
+                converted_clipboard_markdown(item.html(), &text)
             };
-            let insertion_start = self.active_tab().safe_selected_range().start;
-            let insertion_end = insertion_start + insertion.len();
-            self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
-            self.replace_text_in_range(None, &insertion, window, cx);
-            self.active_tab_mut().finish_undo_capture();
-            self.start_inserted_fragment_image_policies(insertion_start..insertion_end, cx);
-        } else if !self.has_text_input_focus()
+            self.insert_pasted_document_text(&insertion, window, cx);
+        } else if !plain
+            && !self.has_text_input_focus()
             && let Some(markdown) = item.html().map(markion_html_import::html_to_markdown)
             && !markdown.is_empty()
         {
             // The clipboard offered HTML without a plain-text flavor.
-            let insertion_start = self.active_tab().safe_selected_range().start;
-            let insertion_end = insertion_start + markdown.len();
-            self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
-            self.replace_text_in_range(None, &markdown, window, cx);
-            self.active_tab_mut().finish_undo_capture();
-            self.start_inserted_fragment_image_policies(insertion_start..insertion_end, cx);
+            self.insert_pasted_document_text(&markdown, window, cx);
         } else {
             self.status = t(self.language, Msg::StatusClipboardEmpty).into();
             cx.notify();
         }
+    }
+
+    fn insert_pasted_document_text(
+        &mut self,
+        insertion: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let insertion_start = self.active_tab().safe_selected_range().start;
+        let insertion_end = insertion_start + insertion.len();
+        self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Atomic);
+        self.replace_text_in_range(None, insertion, window, cx);
+        self.active_tab_mut().finish_undo_capture();
+        self.start_inserted_fragment_image_policies(insertion_start..insertion_end, cx);
     }
 
     pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {

@@ -293,6 +293,7 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::indent))
                     .on_action(cx.listener(Self::outdent))
                     .on_action(cx.listener(Self::paste))
+                    .on_action(cx.listener(Self::paste_plain_text))
                     .on_action(cx.listener(Self::cut))
                     .on_action(cx.listener(Self::copy))
                     .on_action(cx.listener(Self::undo))
@@ -4469,6 +4470,12 @@ pub(super) fn active_menu_dropdown(
                 paste,
                 Paste,
                 menu_shortcuts::PASTE
+            ))
+            .child(action_item!(
+                Msg::ItemPastePlain,
+                paste_plain_text,
+                PastePlainText,
+                menu_shortcuts::PASTE_PLAIN
             ))
             .child(menu_separator(palette))
             .child(action_item!(

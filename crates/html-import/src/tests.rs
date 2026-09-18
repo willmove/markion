@@ -1,4 +1,4 @@
-use crate::html_to_markdown;
+use crate::{html_to_markdown, tsv_to_markdown};
 
 fn md(html: &str) -> String {
     html_to_markdown(html)
@@ -168,6 +168,24 @@ fn unordered_and_nested_lists() {
 }
 
 #[test]
+fn word_numbered_list_from_msolistparagraph() {
+    let html = "<p class=MsoListParagraph style='mso-list:l0 level1 lfo1'>\
+        <span style='mso-list:Ignore'>1.<span>&nbsp;&nbsp;</span></span>First</p>\
+        <p class=MsoListParagraph style='mso-list:l0 level1 lfo1'>\
+        <span style='mso-list:Ignore'>2.<span>&nbsp;&nbsp;</span></span>Second</p>";
+    assert_eq!(md(html), "1. First\n2. Second");
+}
+
+#[test]
+fn word_nested_bullet_list() {
+    let html = "<p class=MsoListParagraph style='margin-left:36.0pt;mso-list:l0 level1 lfo1'>\
+        <span style='mso-list:Ignore'>•<span>&nbsp;</span></span>Outer</p>\
+        <p class=MsoListParagraphCxSpMiddle style='margin-left:72.0pt;mso-list:l0 level2 lfo1'>\
+        <span style='mso-list:Ignore'>o<span>&nbsp;</span></span>Inner</p>";
+    assert_eq!(md(html), "- Outer\n  - Inner");
+}
+
+#[test]
 fn ordered_list_honors_start_and_nests() {
     assert_eq!(
         md("<ol start=\"3\"><li>x</li><li>y</li></ol>"),
@@ -262,11 +280,16 @@ fn table_with_sections_and_inline_formatting() {
 }
 
 #[test]
-fn headerless_table_gets_empty_header() {
+fn headerless_table_uses_first_row_as_header() {
     assert_eq!(
         md("<table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>"),
-        "|  |  |\n| --- | --- |\n| a | b |\n| c | d |"
+        "| a | b |\n| --- | --- |\n| c | d |"
     );
+}
+
+#[test]
+fn one_by_one_table_is_plain_text() {
+    assert_eq!(md("<table><tr><td>solo</td></tr></table>"), "solo");
 }
 
 #[test]
@@ -278,14 +301,14 @@ fn table_cells_protect_pipes_and_newlines() {
 }
 
 #[test]
-fn merged_cells_fall_back_to_raw_html() {
+fn merged_cells_flatten_to_gfm() {
     assert_eq!(
         md("<table><tr><td colspan=\"2\">a</td></tr><tr><td>b</td><td>c</td></tr></table>"),
-        "<table><tr><td colspan=\"2\">a</td></tr><tr><td>b</td><td>c</td></tr></table>"
+        "| a |  |\n| --- | --- |\n| b | c |"
     );
     assert_eq!(
-        md("<table><tr><td rowspan=\"2\">a</td><td>b</td></tr></table>"),
-        "<table><tr><td rowspan=\"2\">a</td><td>b</td></tr></table>"
+        md("<table><tr><td rowspan=\"2\">a</td><td>b</td></tr><tr><td>c</td></tr></table>"),
+        "| a | b |\n| --- | --- |\n|  | c |"
     );
 }
 
@@ -372,7 +395,7 @@ fn mismatched_and_stray_tags_are_tolerated() {
     assert_eq!(md("<p>one<div>two</div>"), "one\n\ntwo");
     assert_eq!(
         md("<table><tr><td>x<td>y</table>"),
-        "|  |  |\n| --- | --- |\n| x | y |"
+        "| x | y |\n| --- | --- |"
     );
 }
 
@@ -447,4 +470,68 @@ fn full_document_shell() {
 #[test]
 fn horizontal_rule() {
     assert_eq!(md("<p>a</p><hr><p>b</p>"), "a\n\n---\n\nb");
+}
+
+#[test]
+fn tsv_becomes_gfm_table() {
+    assert_eq!(
+        tsv_to_markdown("姓名\t年龄\n张三\t18"),
+        Some("| 姓名 | 年龄 |\n| --- | --- |\n| 张三 | 18 |".into())
+    );
+    assert_eq!(
+        tsv_to_markdown("Name\tAge\r\nAnn\t3\r\n"),
+        Some("| Name | Age |\n| --- | --- |\n| Ann | 3 |".into())
+    );
+}
+
+#[test]
+fn tsv_rejects_non_rectangular_and_single_cell() {
+    assert_eq!(tsv_to_markdown("solo"), None);
+    assert_eq!(tsv_to_markdown("a\tb"), None);
+    assert_eq!(tsv_to_markdown("a\tb\nc"), None);
+    assert_eq!(tsv_to_markdown("hello\nworld"), None);
+    assert_eq!(tsv_to_markdown("a\tb\nc\td\te"), None);
+}
+
+#[test]
+fn tsv_escapes_pipes_and_markdown_specials() {
+    assert_eq!(
+        tsv_to_markdown("a|b\tx\n*\t#"),
+        Some("| a\\|b | x |\n| --- | --- |\n| \\* | \\# |".into())
+    );
+}
+
+#[test]
+fn excel_shaped_html_table() {
+    let html = "<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\">\n\
+        <head><meta name=ProgId content=Excel.Sheet>\n\
+        <style>.xl65{font-weight:bold}</style></head>\n\
+        <body><!--StartFragment-->\n\
+        <table border=0 cellpadding=0 cellspacing=0>\n\
+         <col width=64 span=2>\n\
+         <tr><td class=xl65>姓名</td><td>年龄</td></tr>\n\
+         <tr><td>张三</td><td>18</td></tr>\n\
+        </table>\n\
+        <!--EndFragment--></body></html>";
+    assert_eq!(md(html), "| 姓名 | 年龄 |\n| --- | --- |\n| 张三 | 18 |");
+}
+
+#[test]
+fn google_sheets_shaped_html_table() {
+    let html = "<meta charset=\"utf-8\"><google-sheets-html-origin>\
+        <table><tr><td>Name</td><td>Age</td></tr>\
+        <tr><td>Ann</td><td>3</td></tr></table>";
+    assert_eq!(md(html), "| Name | Age |\n| --- | --- |\n| Ann | 3 |");
+}
+
+#[test]
+fn wps_shaped_html_table() {
+    let html = "<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\">\n\
+        <head><meta name=Generator content=\"WPS Office\">\
+        <style>.xl65{mso-number-format:General}</style></head>\n\
+        <body><table><col><col>\n\
+        <tr><td class=xl65>项目</td><td>数量</td></tr>\n\
+        <tr><td>A</td><td>2</td></tr>\n\
+        </table></body></html>";
+    assert_eq!(md(html), "| 项目 | 数量 |\n| --- | --- |\n| A | 2 |");
 }

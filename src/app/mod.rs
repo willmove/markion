@@ -105,6 +105,7 @@ actions!(
         Indent,
         Outdent,
         Paste,
+        PastePlainText,
         Cut,
         Copy,
         Undo,
@@ -429,6 +430,12 @@ mod menu_shortcuts {
     pub const COPY: MenuShortcut = MenuShortcut::new("copy", "secondary-c", "Ctrl+C", "Cmd+C");
     pub const CUT: MenuShortcut = MenuShortcut::new("cut", "secondary-x", "Ctrl+X", "Cmd+X");
     pub const PASTE: MenuShortcut = MenuShortcut::new("paste", "secondary-v", "Ctrl+V", "Cmd+V");
+    pub const PASTE_PLAIN: MenuShortcut = MenuShortcut::new(
+        "paste-plain",
+        "secondary-alt-v",
+        "Ctrl+Alt+V",
+        "Cmd+Option+V",
+    );
     pub const SELECT_ALL: MenuShortcut =
         MenuShortcut::new("select-all", "secondary-a", "Ctrl+A", "Cmd+A");
 
@@ -668,6 +675,7 @@ mod menu_shortcuts {
         COPY,
         CUT,
         PASTE,
+        PASTE_PLAIN,
         SELECT_ALL,
         TOGGLE_VIEW_MODE,
         SOURCE_SPLIT_MODE,
