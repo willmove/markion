@@ -4466,8 +4466,10 @@ fn visual_block_content_view(
                 .or_else(|| (!image_alt.is_empty()).then_some(image_alt.as_str()));
             let can_resize = owns_caret && exact_image.is_some();
             let image = div()
+                .debug_selector(move || format!("visual-markdown-image-content-{offset}"))
                 .relative()
                 .w(gpui::relative(display_percent as f32 / 100.))
+                .max_w_full()
                 .on_drag_move::<DraggedImageResizeHandle>(
                     cx.listener(MarkionApp::on_visual_image_resize_drag_move),
                 )
@@ -4499,9 +4501,24 @@ fn visual_block_content_view(
                     )
                 });
             let image = match image_presentation.alignment {
-                ImageAlignment::Left => div().w_full().flex().items_start().child(image),
-                ImageAlignment::Center => div().w_full().flex().items_center().child(image),
-                ImageAlignment::Right => div().w_full().flex().items_end().child(image),
+                ImageAlignment::Left => div()
+                    .debug_selector(move || format!("visual-markdown-image-row-{offset}"))
+                    .w_full()
+                    .flex()
+                    .justify_start()
+                    .child(image),
+                ImageAlignment::Center => div()
+                    .debug_selector(move || format!("visual-markdown-image-row-{offset}"))
+                    .w_full()
+                    .flex()
+                    .justify_center()
+                    .child(image),
+                ImageAlignment::Right => div()
+                    .debug_selector(move || format!("visual-markdown-image-row-{offset}"))
+                    .w_full()
+                    .flex()
+                    .justify_end()
+                    .child(image),
             };
             let presentation = div()
                 .cursor(CursorStyle::PointingHand)
@@ -7093,6 +7110,50 @@ fn code_block_view(
     }
 }
 
+fn markdown_image_presentation_view(
+    app: &MarkionApp,
+    url: &str,
+    identity: &ImageSourceIdentity,
+    document_dir: Option<&Path>,
+    presentation: Option<ImagePresentation>,
+    source_offset: usize,
+) -> Div {
+    let presentation = presentation.unwrap_or_default();
+    let image = div()
+        .debug_selector(move || format!("preview-markdown-image-content-{source_offset}"))
+        .relative()
+        .w(gpui::relative(presentation.width_percent as f32 / 100.))
+        .max_w_full()
+        .child(preview_image_view(
+            app,
+            url,
+            identity,
+            document_dir,
+            None,
+            None,
+        ));
+    match presentation.alignment {
+        ImageAlignment::Left => div()
+            .debug_selector(move || format!("preview-markdown-image-row-{source_offset}"))
+            .w_full()
+            .flex()
+            .justify_start()
+            .child(image),
+        ImageAlignment::Center => div()
+            .debug_selector(move || format!("preview-markdown-image-row-{source_offset}"))
+            .w_full()
+            .flex()
+            .justify_center()
+            .child(image),
+        ImageAlignment::Right => div()
+            .debug_selector(move || format!("preview-markdown-image-row-{source_offset}"))
+            .w_full()
+            .flex()
+            .justify_end()
+            .child(image),
+    }
+}
+
 pub(super) fn preview_block_view(
     app: &MarkionApp,
     block: &PreviewBlock,
@@ -7462,13 +7523,19 @@ pub(super) fn preview_block_view(
         PreviewBlock::Html { html, images, .. } => {
             html_preview_block_view(app, html, images, block_index, document_dir, cx)
         }
-        PreviewBlock::Image { url, identity, .. } => div().mb_3().child(preview_image_view(
+        PreviewBlock::Image {
+            url,
+            identity,
+            presentation,
+            source_range,
+            ..
+        } => div().mb_3().child(markdown_image_presentation_view(
             app,
             url,
             identity,
             document_dir,
-            None,
-            None,
+            *presentation,
+            source_range.start,
         )),
         PreviewBlock::Rule { .. } => div().my_3().h(px(1.)).bg(rgb(0xcbd5e1)),
         PreviewBlock::TableOfContents { .. } => document_toc_view(app, "preview-toc", cx),

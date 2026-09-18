@@ -1205,6 +1205,7 @@ fn visual_block_from_preview(
             alt,
             url,
             title,
+            presentation,
             identity,
             ..
         } => (
@@ -1212,6 +1213,7 @@ fn visual_block_from_preview(
                 alt: alt.clone(),
                 url: url.clone(),
                 title: title.clone(),
+                presentation: *presentation,
                 identity: identity.clone(),
             },
             Some(VisualSourceIslandKind::Image),

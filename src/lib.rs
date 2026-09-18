@@ -42,6 +42,7 @@ mod text_util;
 mod visual;
 
 pub use document_memory::{DocumentMemoryBreakdown, DocumentMemorySite};
+use inline_edit::image_presentation_from_title;
 pub use inline_edit::{
     ImageAlignment, ImagePresentation, InlineMarkdownTarget, clamp_image_width_percent,
     inline_image_at, inline_link_at, serialize_inline_image, serialize_inline_link,
@@ -3423,10 +3424,12 @@ impl MarkdownDocument {
                 Event::Start(Tag::Image {
                     dest_url, title, ..
                 }) => {
+                    let title = (!title.is_empty()).then(|| title.to_string());
                     image = Some(ImageDraft {
                         alt: String::new(),
                         url: dest_url.to_string(),
-                        title: (!title.is_empty()).then(|| title.to_string()),
+                        title: title.clone(),
+                        presentation: image_presentation_from_title(title.as_deref()),
                         source_range,
                         identity: ImageSourceIdentity::for_url(dest_url.as_ref()),
                     });
@@ -3448,6 +3451,7 @@ impl MarkdownDocument {
                                 alt: clean_preview_text(&image.alt),
                                 url: image.url,
                                 title: image.title,
+                                presentation: image.presentation,
                                 source_range: image.source_range,
                                 identity: image.identity,
                             });
@@ -3659,6 +3663,7 @@ impl MarkdownDocument {
                         let draft = ImageDraft {
                             alt: html_image.alt,
                             title: html_image.title,
+                            presentation: None,
                             identity: ImageSourceIdentity::for_url(&html_image.url),
                             url: html_image.url,
                             source_range,
@@ -4445,6 +4450,7 @@ fn emit_finished_paragraph(
                     alt: image.alt,
                     url: image.url,
                     title: image.title,
+                    presentation: image.presentation,
                     source_range: image.source_range,
                     identity: image.identity,
                 },
@@ -6853,6 +6859,36 @@ mod tests {
                 && url == "images/arch.png"
                 && title == "System overview"
         ));
+    }
+
+    #[test]
+    fn preview_preserves_markdown_image_presentation_metadata() {
+        let source = "![image](image.png \"Caption {width=50 align=center}\")";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+
+        let PreviewBlock::Image {
+            presentation: Some(presentation),
+            ..
+        } = &blocks[0]
+        else {
+            panic!("expected a standalone Markdown image with presentation metadata");
+        };
+        assert_eq!(presentation.width_percent, 50);
+        assert_eq!(presentation.alignment, ImageAlignment::Center);
+
+        let mixed = MarkdownDocument::from_text(
+            "before ![image](image.png \"{width=50 align=right}\") after",
+        );
+        let PreviewBlock::Paragraph { text, .. } = &mixed.preview_blocks()[0] else {
+            panic!("expected a mixed image paragraph");
+        };
+        let image = text
+            .spans
+            .iter()
+            .find_map(|span| span.image.as_ref())
+            .expect("mixed image metadata should stay attached to its inline atom");
+        assert_eq!(image.presentation.unwrap().alignment, ImageAlignment::Right);
     }
 
     #[test]

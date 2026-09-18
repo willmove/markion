@@ -2226,6 +2226,7 @@ fn preview_images_do_not_expose_redundant_metadata_runs() {
         alt: "diagram".to_string(),
         url: url.clone(),
         title: Some("architecture".to_string()),
+        presentation: None,
         source_range: 0..42,
         identity: markion::ImageSourceIdentity::for_url(&url),
     };
@@ -21812,6 +21813,61 @@ fn centered_html_image_uses_the_full_preview_row_in_all_rendered_modes(cx: &mut 
         assert!(
             f32::from(row.size.width) > 128.,
             "centered HTML image row must expose free horizontal space in {mode:?}: {row:?}"
+        );
+    }
+}
+
+#[gpui::test]
+fn markdown_image_presentation_is_centered_and_scaled_in_all_rendered_modes(
+    cx: &mut TestAppContext,
+) {
+    let image = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join("markion.png")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let source = format!("![image]({image} \"{{width=50 align=center}}\")");
+
+    for mode in [ViewMode::Read, ViewMode::Split, ViewMode::VisualEdit] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+            app.view_mode = mode;
+            app.sidebar_visible = false;
+            app
+        });
+        cx.simulate_resize(size(px(1100.), px(800.)));
+        cx.run_until_parked();
+        wait_for_image_operations(&app, cx);
+        cx.run_until_parked();
+
+        let (row_selector, content_selector) = match mode {
+            ViewMode::VisualEdit => (
+                "visual-markdown-image-row-0",
+                "visual-markdown-image-content-0",
+            ),
+            ViewMode::Read | ViewMode::Split => (
+                "preview-markdown-image-row-0",
+                "preview-markdown-image-content-0",
+            ),
+            ViewMode::Edit => unreachable!(),
+        };
+        let row = cx
+            .debug_bounds(row_selector)
+            .unwrap_or_else(|| panic!("Markdown image row is missing in {mode:?}"));
+        let content = cx
+            .debug_bounds(content_selector)
+            .unwrap_or_else(|| panic!("Markdown image content is missing in {mode:?}"));
+        let row_center = f32::from(row.left()) + f32::from(row.size.width) / 2.;
+        let content_center = f32::from(content.left()) + f32::from(content.size.width) / 2.;
+        assert!(
+            (row_center - content_center).abs() <= 1.5,
+            "Markdown image should be centered in {mode:?}: row={row:?}, content={content:?}"
+        );
+        let width_ratio = f32::from(content.size.width) / f32::from(row.size.width);
+        assert!(
+            (0.45..=0.55).contains(&width_ratio),
+            "Markdown image should use 50% width in {mode:?}: row={row:?}, content={content:?}"
         );
     }
 }

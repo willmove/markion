@@ -10,6 +10,7 @@ use std::{collections::HashMap, ops::Range};
 
 use pulldown_cmark::{BlockQuoteKind, Event, HeadingLevel, Options, Parser};
 
+use crate::ImagePresentation;
 use crate::escape::escape_html_attribute;
 use crate::model::{
     Heading, HtmlImageDescriptor, HtmlImgLength, ImageSourceIdentity, InlineImage, InlineSpan,
@@ -283,6 +284,7 @@ pub(crate) struct ImageDraft {
     pub alt: String,
     pub url: String,
     pub title: Option<String>,
+    pub presentation: Option<ImagePresentation>,
     pub source_range: Range<usize>,
     pub identity: ImageSourceIdentity,
 }
@@ -592,6 +594,7 @@ pub(crate) fn append_preview_image(
             alt: clean_preview_text(&image.alt),
             url: image.url,
             title: image.title,
+            presentation: image.presentation,
             source_range: image.source_range,
             identity: image.identity,
         }),

@@ -353,6 +353,10 @@ fn split_presentation_title(title: &str) -> (Option<String>, Option<ImagePresent
     )
 }
 
+pub(crate) fn image_presentation_from_title(title: Option<&str>) -> Option<ImagePresentation> {
+    title.and_then(|title| split_presentation_title(title).1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

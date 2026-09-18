@@ -1,0 +1,5 @@
+schema: spec-driven
+skip_specs: true
+created: 2026-09-18
+goal: Ensure authored image presentation metadata is preserved from Markdown
+  parsing through every rendered mode

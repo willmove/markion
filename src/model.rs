@@ -4,6 +4,7 @@
 //! impls). Behavior on [`MarkdownDocument`](crate::MarkdownDocument) lives in
 //! the crate root and the `document` module group.
 
+use crate::inline_edit::ImagePresentation;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1458,6 +1459,7 @@ pub struct InlineImage {
     pub alt: String,
     pub url: String,
     pub title: Option<String>,
+    pub presentation: Option<ImagePresentation>,
     pub source_range: Range<usize>,
     pub identity: ImageSourceIdentity,
 }
@@ -1571,6 +1573,7 @@ pub enum VisualBlockKind {
         alt: String,
         url: String,
         title: Option<String>,
+        presentation: Option<ImagePresentation>,
         identity: ImageSourceIdentity,
     },
     /// Raw HTML block rendered read-only through the shared HTML-parts pipeline
@@ -2026,6 +2029,7 @@ pub enum PreviewBlock {
         alt: String,
         url: String,
         title: Option<String>,
+        presentation: Option<ImagePresentation>,
         source_range: Range<usize>,
         identity: ImageSourceIdentity,
     },
