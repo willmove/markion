@@ -257,6 +257,8 @@ pub struct X11WindowState {
     pub(crate) last_sync_counter: Option<sync::Int64>,
     bounds: Bounds<Pixels>,
     scale_factor: f32,
+    visual_id: u32,
+    x_screen_index: usize,
     renderer: BladeRenderer,
     display: Rc<dyn PlatformDisplay>,
     input_handler: Option<PlatformInputHandler>,
@@ -313,12 +315,28 @@ impl rwh::HasDisplayHandle for RawWindow {
 
 impl rwh::HasWindowHandle for X11Window {
     fn window_handle(&self) -> Result<rwh::WindowHandle<'_>, rwh::HandleError> {
-        unimplemented!()
+        let visual_id = self.0.state.borrow().visual_id;
+        let Some(non_zero) = NonZeroU32::new(self.0.x_window) else {
+            log::error!("X11Window.x_window zero when getting window handle.");
+            return Err(rwh::HandleError::Unavailable);
+        };
+        let mut handle = rwh::XcbWindowHandle::new(non_zero);
+        handle.visual_id = NonZeroU32::new(visual_id);
+        Ok(unsafe { rwh::WindowHandle::borrow_raw(handle.into()) })
     }
 }
 impl rwh::HasDisplayHandle for X11Window {
     fn display_handle(&self) -> Result<rwh::DisplayHandle<'_>, rwh::HandleError> {
-        unimplemented!()
+        let screen_id = self.0.state.borrow().x_screen_index;
+        let Some(non_null) = NonNull::new(
+            as_raw_xcb_connection::AsRawXcbConnection::as_raw_xcb_connection(&*self.0.xcb)
+                as *mut c_void,
+        ) else {
+            log::error!("Null X11Window xcb connection when getting display handle.");
+            return Err(rwh::HandleError::Unavailable);
+        };
+        let handle = rwh::XcbDisplayHandle::new(Some(non_null), screen_id as i32);
+        Ok(unsafe { rwh::DisplayHandle::borrow_raw(handle.into()) })
     }
 }
 
@@ -673,6 +691,8 @@ impl X11WindowState {
                 x_root_window: visual_set.root,
                 bounds: bounds.to_pixels(scale_factor),
                 scale_factor,
+                visual_id: visual.id,
+                x_screen_index,
                 renderer,
                 atoms: *atoms,
                 input_handler: None,
