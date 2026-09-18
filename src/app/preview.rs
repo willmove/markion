@@ -4309,11 +4309,12 @@ fn visual_block_content_view(
     if focused_conservative || always_source {
         let row = visual_source_island_view(app, block, block_index, cx);
         let blocks = app.active_tab().document.visual_blocks_shared();
-        return if block_has_context_menu_at(&blocks, block_index) {
+        let row = if block_has_context_menu_at(&blocks, block_index) {
             visual_block_chrome(app, block, block_index, owns_caret, row, cx)
         } else {
             row
         };
+        return indent_list_nested_row(block, row);
     }
 
     let row = match &block.kind {
@@ -4756,6 +4757,9 @@ fn visual_block_content_view(
     } else {
         row
     };
+    // Blocks nested inside list item(s) indent to the owning item's content
+    // column; see `indent_list_nested_row`.
+    let row = indent_list_nested_row(block, row);
     if let Some(quote) = &block.quote_context {
         let (padding_top, padding_bottom) = match quote.edge {
             VisualQuoteGroupEdge::Only => (4., 4.),
@@ -7282,7 +7286,7 @@ pub(super) fn preview_block_view(
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
-    match block {
+    let view = match block {
         PreviewBlock::Heading { level, text, .. } => {
             let heading_size = typography.heading_font_size((*level).into());
             let size = px(heading_size);
@@ -7752,6 +7756,34 @@ pub(super) fn preview_block_view(
                         }))
                 }))
         }
+    };
+    // A block nested inside list item(s) inlines under its owning item's
+    // content column instead of escaping the list at document indent.
+    let list_depth = block.list_depth();
+    if list_depth > 0 {
+        view.ml(px(nested_list_block_indent_px(list_depth)))
+    } else {
+        view
+    }
+}
+
+/// Left inset that aligns a list-nested block row with the content column of
+/// its owning item: the list indent steps plus the marker column that list
+/// rows reserve before their content.
+pub(super) fn nested_list_block_indent_px(depth: usize) -> f32 {
+    depth.saturating_sub(1).max(0) as f32 * 18. + 22.
+}
+
+/// Wraps a Visual Edit row whose block nests inside list item(s), shifting it
+/// to the owning item's content column. The wrapper div carries the margin so
+/// `w_full` rows (block chrome, source islands) narrow instead of overflowing.
+fn indent_list_nested_row(block: &VisualBlock, row: Div) -> Div {
+    if block.list_depth > 0 {
+        div()
+            .ml(px(nested_list_block_indent_px(block.list_depth)))
+            .child(row)
+    } else {
+        row
     }
 }
 

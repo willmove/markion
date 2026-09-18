@@ -1099,6 +1099,7 @@ fn gap_block(
             block_prefix: None,
             height_signature: Some(line_count as u32),
             quote_context,
+            list_depth: 0,
             source_island: None,
             editor: None,
         }
@@ -1113,6 +1114,7 @@ fn gap_block(
             block_prefix: None,
             height_signature: None,
             quote_context: None,
+            list_depth: 0,
             source_island: None,
             editor: None,
         }
@@ -1149,6 +1151,7 @@ fn callout_title_block(
         block_prefix: None,
         height_signature: None,
         quote_context: Some(quote_context),
+        list_depth: 0,
         source_island: None,
         editor: None,
     }
@@ -1171,6 +1174,7 @@ fn front_matter_visual_block(
         block_prefix: None,
         height_signature: None,
         quote_context: None,
+        list_depth: 0,
         source_island: None,
         editor: Some(VisualBlockEditor::FrontMatter {
             payload: VisualEditorField {
@@ -1196,6 +1200,7 @@ fn source_island(
         block_prefix: None,
         height_signature: None,
         quote_context: None,
+        list_depth: 0,
         source_island: Some(kind),
         editor: None,
     }
@@ -1353,6 +1358,7 @@ fn visual_block_from_preview(
         block_prefix,
         height_signature: None,
         quote_context,
+        list_depth: block.list_depth(),
         source_island,
         editor,
     }
@@ -5760,6 +5766,42 @@ mod tests {
         // Same guard for a column-zero unclosed fence.
         let source = "```\n    ```\n";
         assert!(fenced_payload_ranges(source, 0..source.len(), '`', '~').is_none());
+    }
+
+    #[test]
+    fn indented_code_nested_in_ordered_list_carries_list_depth() {
+        // The reported defect: the nested marker's extra spaces make its
+        // content an indented code block. The visual row keeps a Code payload
+        // editor (no raw-source fallback) and records the enclosing list
+        // depth so the view layer indents it under the nested item.
+        let source = "1.  Item 1\n2. Item 2\n    1.     Sub item 1\n    2. sub item 2\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let code = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("code row");
+        assert_eq!(code.list_depth, 2);
+        // No fences to split, so the row keeps the conservative Code source
+        // island (verbatim source, still editable through the island).
+        assert_eq!(code.source_island, Some(VisualSourceIslandKind::Code));
+        assert!(
+            blocks
+                .iter()
+                .filter(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+                .all(|block| block.list_depth == 0),
+            "list rows keep their own level-based indent"
+        );
+
+        // Single-level nesting from the existing fenced fixture family.
+        let source = "- first item\n    \n    ```\n    export A=1\n    ```\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let code = blocks
+            .iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("code row");
+        assert_eq!(code.list_depth, 1);
     }
 
     #[test]

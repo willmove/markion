@@ -1536,6 +1536,10 @@ pub struct VisualBlock {
     /// Quote decoration and exact source markers inherited from an enclosing
     /// blockquote. The visual row remains a paragraph/list leaf.
     pub quote_context: Option<VisualQuoteContext>,
+    /// Number of list containers enclosing the preview block this row
+    /// projects; rows for nested code/math/table/HTML blocks indent to their
+    /// owning item's content column. Synthesized structural rows keep 0.
+    pub list_depth: usize,
     pub source_island: Option<VisualSourceIslandKind>,
     /// Exact editable fields for a dedicated complex-block editor. Absent
     /// when the authored syntax cannot be mapped losslessly.
@@ -2023,6 +2027,9 @@ pub enum PreviewBlock {
         language: Option<String>,
         code: String,
         source_range: Range<usize>,
+        /// Number of list containers enclosing this block when it nests
+        /// inside a list item; 0 for a top-level block.
+        list_depth: usize,
     },
     MathBlock {
         latex: String,
@@ -2031,11 +2038,17 @@ pub enum PreviewBlock {
         delimiter: MathDelimiter,
         error: Option<String>,
         source_range: Range<usize>,
+        /// Number of list containers enclosing this block when it nests
+        /// inside a list item; 0 for a top-level block.
+        list_depth: usize,
     },
     Html {
         html: String,
         source_range: Range<usize>,
         images: Vec<HtmlImageDescriptor>,
+        /// Number of list containers enclosing this block when it nests
+        /// inside a list item; 0 for a top-level block.
+        list_depth: usize,
     },
     Image {
         alt: String,
@@ -2053,6 +2066,9 @@ pub enum PreviewBlock {
         /// Per-column alignment from the separator row, as parsed upstream.
         alignments: Vec<TableAlignment>,
         source_range: Range<usize>,
+        /// Number of list containers enclosing this block when it nests
+        /// inside a list item; 0 for a top-level block.
+        list_depth: usize,
     },
     FootnoteDefinition {
         label: String,
@@ -2081,6 +2097,19 @@ impl PreviewBlock {
             | Self::Table { source_range, .. }
             | Self::FootnoteDefinition { source_range, .. }
             | Self::TableOfContents { source_range } => source_range,
+        }
+    }
+
+    /// Number of list containers enclosing this block. Only the block kinds
+    /// that can nest inside a list item (code, math, table, HTML) carry a
+    /// depth; everything else reports 0.
+    pub fn list_depth(&self) -> usize {
+        match self {
+            Self::CodeBlock { list_depth, .. }
+            | Self::MathBlock { list_depth, .. }
+            | Self::Html { list_depth, .. }
+            | Self::Table { list_depth, .. } => *list_depth,
+            _ => 0,
         }
     }
 

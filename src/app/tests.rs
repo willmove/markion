@@ -2160,6 +2160,7 @@ fn preview_table_cells_remain_selectable_without_editing_toolbar() {
         ],
         alignments: vec![],
         source_range: 0..0,
+        list_depth: 0,
     };
 
     assert_eq!(
@@ -2514,6 +2515,7 @@ fn blk(tag: &str) -> PreviewBlock {
         language: None,
         code: tag.to_string(),
         source_range: 0..0,
+        list_depth: 0,
     }
 }
 

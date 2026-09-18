@@ -3474,6 +3474,7 @@ impl MarkdownDocument {
                         if let Some(item) = list_item.as_mut() {
                             item.record_nested_block_start(code_range.start);
                         }
+                        let list_depth = list_stack.len();
                         let code = code.trim_end_matches('\n').to_string();
                         if language
                             .as_deref()
@@ -3488,12 +3489,14 @@ impl MarkdownDocument {
                                 authored,
                                 delimiter: MathDelimiter::Fenced,
                                 source_range: code_range,
+                                list_depth,
                             });
                         } else {
                             blocks.push(PreviewBlock::CodeBlock {
                                 language,
                                 code,
                                 source_range: code_range,
+                                list_depth,
                             });
                         }
                     }
@@ -3529,6 +3532,7 @@ impl MarkdownDocument {
                             rows: table.rows,
                             alignments: table.alignments,
                             source_range: table_range,
+                            list_depth: list_stack.len(),
                         });
                     }
                 }
@@ -3624,7 +3628,7 @@ impl MarkdownDocument {
                         && code.is_none()
                         && table.is_none();
                     if standalone_html {
-                        push_html_block(&mut blocks, text, source_range);
+                        push_html_block(&mut blocks, text, source_range, 0);
                     } else if nested_container {
                         if let Some(item) = list_item.as_mut() {
                             item.record_nested_block_start(source_range.start);
@@ -3634,7 +3638,7 @@ impl MarkdownDocument {
                         } else {
                             &mut blocks
                         };
-                        push_html_block(target, text, source_range);
+                        push_html_block(target, text, source_range, list_stack.len());
                     } else {
                         let text = html_preview_plain_text(&html_string);
                         if !text.is_empty() {
@@ -3709,7 +3713,7 @@ impl MarkdownDocument {
                         && code.is_none()
                         && table.is_none();
                     if standalone_html {
-                        push_html_block(&mut blocks, text, source_range);
+                        push_html_block(&mut blocks, text, source_range, 0);
                     } else {
                         let text = html_preview_plain_text(&html);
                         if !text.is_empty() {
@@ -3789,6 +3793,7 @@ impl MarkdownDocument {
                             delimiter: MathDelimiter::DisplayDollar,
                             error: validate_latex(&latex).err(),
                             source_range,
+                            list_depth: 0,
                         });
                     } else {
                         let authored = text
@@ -4439,7 +4444,7 @@ fn emit_finished_paragraph(
     paragraph_range: Range<usize>,
 ) {
     if html_only_paragraph_source(&text[paragraph_range.clone()]) {
-        push_html_block(blocks, text, paragraph_range);
+        push_html_block(blocks, text, paragraph_range, 0);
         return;
     }
     let rich = finish_rich_text(spans);
@@ -4516,7 +4521,12 @@ fn html_preview_gap_should_merge(gap: &str) -> bool {
     !gap.contains('\n')
 }
 
-fn push_html_block(blocks: &mut Vec<PreviewBlock>, text: &str, source_range: Range<usize>) {
+fn push_html_block(
+    blocks: &mut Vec<PreviewBlock>,
+    text: &str,
+    source_range: Range<usize>,
+    list_depth: usize,
+) {
     if source_range.start >= source_range.end || source_range.end > text.len() {
         return;
     }
@@ -4524,6 +4534,7 @@ fn push_html_block(blocks: &mut Vec<PreviewBlock>, text: &str, source_range: Ran
         html: existing_html,
         source_range: existing_range,
         images,
+        ..
     }) = blocks.last_mut()
         && source_range.start >= existing_range.end
         && html_preview_gap_should_merge(&text[existing_range.end..source_range.start])
@@ -4540,6 +4551,7 @@ fn push_html_block(blocks: &mut Vec<PreviewBlock>, text: &str, source_range: Ran
         html,
         source_range,
         images,
+        list_depth,
     });
 }
 
@@ -6119,6 +6131,7 @@ mod tests {
                 rows: vec![vec!["A".into(), "B".into()], vec!["1".into(), "2".into()]],
                 alignments: vec![TableAlignment::Default, TableAlignment::Default],
                 source_range: table_range,
+                list_depth: 0,
             }
         );
     }
@@ -7914,6 +7927,72 @@ Intro.
         }
         assert_eq!(blocks[0].plain_text(), "first item with link");
         assert_eq!(blocks[2].plain_text(), "second item");
+    }
+
+    #[test]
+    fn list_nested_blocks_record_list_depth() {
+        // The reported defect fixture: five spaces after the nested marker make
+        // CommonMark parse the content as an indented code block inside the
+        // nested item. The block stream keeps document order and the code
+        // block records the two enclosing list levels so renderers indent it.
+        let source = "1.  Item 1\n2. Item 2\n    1.     Sub item 1\n    2. sub item 2\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.preview_blocks();
+        let rendered = blocks
+            .iter()
+            .map(|block| match block {
+                PreviewBlock::ListItem { level, index, .. } => {
+                    format!("item L{level} #{}", index.unwrap_or(1))
+                }
+                PreviewBlock::CodeBlock { code, list_depth, .. } => {
+                    format!("code d{list_depth}: {code}")
+                }
+                _ => "other".to_string(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rendered,
+            [
+                "item L1 #1",
+                "item L1 #2",
+                "item L2 #1",
+                "code d2: Sub item 1",
+                "item L2 #2",
+            ],
+            "got {rendered:?}"
+        );
+
+        // A fence nested in a single-level list records depth 1; a top-level
+        // fence records depth 0; a table nested in a list records depth 1.
+        let source = "- item\n\n  ```sh\n  export A=1\n  ```\n";
+        let doc = MarkdownDocument::from_text(source);
+        let depth = doc
+            .preview_blocks()
+            .iter()
+            .find_map(|block| match block {
+                PreviewBlock::CodeBlock { list_depth, .. } => Some(*list_depth),
+                _ => None,
+            })
+            .expect("nested fence");
+        assert_eq!(depth, 1);
+
+        let doc = MarkdownDocument::from_text("```\ntop\n```\n");
+        let PreviewBlock::CodeBlock { list_depth, .. } = &doc.preview_blocks()[0] else {
+            panic!("expected top-level code block");
+        };
+        assert_eq!(*list_depth, 0);
+
+        let source = "- item\n\n  | A | B |\n  | - | - |\n  | 1 | 2 |\n";
+        let doc = MarkdownDocument::from_text(source);
+        let depth = doc
+            .preview_blocks()
+            .iter()
+            .find_map(|block| match block {
+                PreviewBlock::Table { list_depth, .. } => Some(*list_depth),
+                _ => None,
+            })
+            .expect("nested table");
+        assert_eq!(depth, 1);
     }
 
     #[test]
@@ -9881,6 +9960,7 @@ Intro.
             language,
             code,
             source_range,
+            ..
         } = block
         else {
             unreachable!()
