@@ -21780,6 +21780,43 @@ fn inline_html_script_geometry_in_read_visual_and_tables(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn centered_html_image_uses_the_full_preview_row_in_all_rendered_modes(cx: &mut TestAppContext) {
+    let image = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join("markion.png")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let source = format!(
+        "intro\n\n<p align=\"center\">\n  <img src=\"{image}\" width=\"128\" height=\"128\" alt=\"Termior logo\">\n</p>"
+    );
+
+    for mode in [ViewMode::Read, ViewMode::Split, ViewMode::VisualEdit] {
+        let (app, cx) = cx.add_window_view(|_, cx| {
+            let mut app = MarkionApp::new(cx);
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+            app.view_mode = mode;
+            app.sidebar_visible = false;
+            app
+        });
+        cx.simulate_resize(size(px(1100.), px(800.)));
+        cx.run_until_parked();
+        wait_for_image_operations(&app, cx);
+        cx.run_until_parked();
+
+        let row = (0..8).find_map(|block_index| {
+            cx.debug_bounds(test_debug_selector(format!(
+                "preview-html-image-{block_index}-0"
+            )))
+        });
+        let row = row.unwrap_or_else(|| panic!("centered HTML image row is missing in {mode:?}"));
+        assert!(
+            f32::from(row.size.width) > 128.,
+            "centered HTML image row must expose free horizontal space in {mode:?}: {row:?}"
+        );
+    }
+}
+
+#[gpui::test]
 fn inline_html_empty_break_rows_have_real_height(cx: &mut TestAppContext) {
     for mode in [ViewMode::Read, ViewMode::VisualEdit] {
         let source = "<br>AA<br><br>BB<br>";

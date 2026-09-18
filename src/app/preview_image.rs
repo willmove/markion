@@ -1016,6 +1016,22 @@ pub(super) fn preview_image_view(
     width: Option<HtmlImgLength>,
     height: Option<HtmlImgLength>,
 ) -> Div {
+    preview_image_view_with_alignment(app, url, identity, document_dir, width, height, None)
+}
+
+/// Present a preview image with an optional HTML alignment applied to the
+/// intrinsic image inside its full-width presentation row. The regular
+/// Markdown image path keeps the historical left-aligned behavior by passing
+/// `None`.
+pub(super) fn preview_image_view_with_alignment(
+    app: &MarkionApp,
+    url: &str,
+    identity: &ImageSourceIdentity,
+    document_dir: Option<&Path>,
+    width: Option<HtmlImgLength>,
+    height: Option<HtmlImgLength>,
+    alignment: Option<HtmlAlign>,
+) -> Div {
     match app.preview_image_entry(url, identity, document_dir) {
         PreviewImageEntry::Ready(ready) => {
             // Supersampled entries (SVG) present at their intrinsic size via an
@@ -1036,7 +1052,13 @@ pub(super) fn preview_image_view(
             } else {
                 image
             };
-            div().w_full().child(image)
+            let mut view = div().w_full();
+            match alignment {
+                Some(HtmlAlign::Center) => view = view.flex().justify_center(),
+                Some(HtmlAlign::End) => view = view.flex().justify_end(),
+                Some(HtmlAlign::Start) | None => {}
+            }
+            view.child(image)
         }
         PreviewImageEntry::Pending => div()
             .w_full()

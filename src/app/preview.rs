@@ -6635,7 +6635,6 @@ fn html_preview_block_view(
                 HtmlPreviewPart::Image {
                     url,
                     link,
-                    centered,
                     width,
                     height,
                     align,
@@ -6648,13 +6647,21 @@ fn html_preview_block_view(
                         .map(|image| (image.url.as_ref(), &image.identity))
                         .unwrap_or((url.as_str(), &ImageSourceIdentity::FromUrl));
                     div()
-                        .mb_2()
-                        .when(centered || align == HtmlAlign::Center, |style| {
-                            style.flex().justify_center()
+                        .debug_selector(move || {
+                            format!("preview-html-image-{block_index}-{part_index}")
                         })
-                        .when(align == HtmlAlign::End, |style| style.flex().justify_end())
+                        .w_full()
+                        .mb_2()
                         .child(linked_preview_image(
-                            preview_image_view(app, src, identity, document_dir, width, height),
+                            preview_image_view_with_alignment(
+                                app,
+                                src,
+                                identity,
+                                document_dir,
+                                width,
+                                height,
+                                Some(align),
+                            ),
                             link.as_deref(),
                             cx,
                         ))
