@@ -22299,3 +22299,85 @@ fn visual_list_revealed_marker_aligns_with_unfocused_left_edge(cx: &mut TestAppC
         "unfocused content caret {content:?} lost its marker column"
     );
 }
+
+/// Caret bounds on a document's first block row and on the following heading,
+/// for measuring how much vertical space a block-level HTML row occupies.
+fn visual_html_row_span_carets(
+    source: &str,
+    heading_offset: usize,
+    cx: &mut TestAppContext,
+) -> (Bounds<Pixels>, Bounds<Pixels>) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = false;
+        app
+    });
+    cx.simulate_resize(size(px(1100.), px(800.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| app.move_to(0, cx));
+    cx.run_until_parked();
+    let first = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+    app.update(cx, |app, cx| app.move_to(heading_offset, cx));
+    cx.run_until_parked();
+    let heading = app.update(cx, |app, _| app.active_tab().visual_caret_bounds.unwrap());
+    (first, heading)
+}
+
+#[gpui::test]
+fn visual_empty_anchor_marker_row_is_compact_and_editable(cx: &mut TestAppContext) {
+    let anchor_source = "<a id=\"english\"></a>\n\n## English\n";
+    let paragraph_source = "字\n\n## English\n";
+    let (anchor_marker, anchor_heading) =
+        visual_html_row_span_carets(anchor_source, anchor_source.find("##").unwrap(), cx);
+    let (paragraph_marker, paragraph_heading) =
+        visual_html_row_span_carets(paragraph_source, paragraph_source.find("##").unwrap(), cx);
+    let anchor_span = anchor_heading.top() - anchor_marker.top();
+    let paragraph_span = paragraph_heading.top() - paragraph_marker.top();
+    // The compact marker row must occupy about the same vertical space as an
+    // ordinary one-line paragraph row, instead of stacking island chrome.
+    assert!(
+        (anchor_span - paragraph_span).abs() < px(10.),
+        "empty anchor row adds chrome: anchor span {anchor_span:?} vs paragraph span {paragraph_span:?}"
+    );
+
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(anchor_source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app.typewriter_mode = false;
+        app
+    });
+    cx.simulate_resize(size(px(1100.), px(800.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    let id_end = anchor_source.find("english").unwrap() + "english".len();
+    app.update(cx, |app, cx| app.move_to(id_end, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_text_in_range(app, None, "2", window, cx);
+        });
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(
+            tab.document.text(),
+            "<a id=\"english2\"></a>\n\n## English\n"
+        );
+        assert_eq!(tab.cursor_offset(), id_end + 1);
+        assert!(
+            tab.visual_caret_bounds.is_some(),
+            "compact marker row must keep painting its caret after input"
+        );
+    });
+}

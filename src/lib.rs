@@ -4547,6 +4547,7 @@ fn html_only_paragraph_source(source: &str) -> bool {
     let mut depth = 0usize;
     let mut saw_tag = false;
     let mut needs_block_renderer = false;
+    let mut has_visible_text = false;
 
     while index < source.len() {
         if source[index..].starts_with('<') {
@@ -4558,7 +4559,13 @@ fn html_only_paragraph_source(source: &str) -> bool {
                 return false;
             };
             saw_tag = true;
-            needs_block_renderer |= parse::parse_inline_html_style_tag(tag).is_none();
+            match parse::parse_inline_html_style_tag(tag) {
+                // Authored `<br>` breaks paint their own lines; a run of only
+                // breaks must keep the paragraph path that renders them.
+                Some(parse::InlineHtmlStyleTag::LineBreak) => has_visible_text = true,
+                None => needs_block_renderer = true,
+                Some(_) => {}
+            }
             if parsed.closing {
                 depth = depth.saturating_sub(1);
             } else if !parsed.self_closing {
@@ -4571,13 +4578,20 @@ fn html_only_paragraph_source(source: &str) -> bool {
         let next_tag = source[index..]
             .find('<')
             .map_or(source.len(), |relative| index + relative);
-        if depth == 0 && !source[index..next_tag].trim().is_empty() {
-            return false;
+        if !source[index..next_tag].trim().is_empty() {
+            if depth == 0 {
+                return false;
+            }
+            has_visible_text = true;
         }
         index = next_tag;
     }
 
-    saw_tag && needs_block_renderer
+    // Content-free tag runs (`<a id="…"></a>`, `<b></b>`) carry nothing the
+    // inline-styling path can render; without the block renderer their bytes
+    // would drop into an unsupported source island. Text inside style tags
+    // keeps the ordinary styled-paragraph path.
+    saw_tag && (needs_block_renderer || !has_visible_text)
 }
 
 fn html_tag_end(source: &str, start: usize) -> Option<usize> {
@@ -4661,6 +4675,43 @@ pub fn title_from_path(path: Option<&Path>) -> CowStr<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn html_only_paragraph_source_covers_content_free_tag_runs() {
+        for source in [
+            "<a id=\"english\"></a>\n",
+            "<a name='x'></a>",
+            "<b></b>",
+            "<span class=\"x\"> </span>",
+            "<em><strong></strong></em>",
+        ] {
+            assert!(
+                html_only_paragraph_source(source),
+                "{source:?} should route to the HTML block renderer"
+            );
+        }
+        // Visible text keeps the ordinary styled-paragraph path, whether the
+        // tags are style elements or block containers.
+        for source in [
+            "<b>bold</b>\n",
+            "<a href=\"https://example.com\">label</a>",
+            "plain text <b></b>",
+        ] {
+            assert!(
+                !html_only_paragraph_source(source),
+                "{source:?} must stay an inline-styled paragraph"
+            );
+        }
+
+        let doc = MarkdownDocument::from_text("<a id=\"english\"></a>\n\n## English\n");
+        assert!(matches!(
+            &doc.preview_blocks()[..],
+            [
+                crate::PreviewBlock::Html { .. },
+                crate::PreviewBlock::Heading { .. }
+            ]
+        ));
+    }
 
     #[test]
     fn rewrite_image_destinations_splices_once_and_preserves_plain_links() {

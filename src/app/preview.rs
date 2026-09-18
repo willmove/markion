@@ -5868,8 +5868,47 @@ fn visual_html_editor(
     cx: &mut Context<MarkionApp>,
 ) -> Div {
     let typography = app.typography_metrics();
-    let presentation = html_preview_block_view(app, html, images, block_index, document_dir, cx);
-    let bordered = !html_preview_parts(html)
+    let parts = html_preview_parts(html);
+    if !html_parts_have_visible_content(&parts) {
+        // Content-free HTML — bookmark anchors like `<a id="…"></a>` and empty
+        // containers — has no rendered presentation, so the collapsible
+        // island chrome (border, padding, block margins) would only stack
+        // vertical whitespace around an invisible marker. Render one slim
+        // muted source line; the payload field keeps the row editable. The
+        // block's trailing line separator stays out of the field so the row
+        // paints exactly one line.
+        let document_text = app.active_tab().document.text();
+        let mut field_end = payload.source_range.end;
+        if document_text[payload.source_range.clone()].ends_with('\n') {
+            field_end -= 1;
+            if field_end > payload.source_range.start
+                && document_text.as_bytes()[field_end - 1] == b'\r'
+            {
+                field_end -= 1;
+            }
+        }
+        let field = VisualEditorField {
+            kind: payload.kind,
+            source_range: payload.source_range.start..field_end,
+        };
+        return div()
+            .text_color(app.palette().muted)
+            .font(code_slot_font(&app.resolved_font_families.code))
+            .text_size(px(typography.source_island_font_size))
+            .line_height(px(typography.source_island_line_height))
+            .child(visual_editor_field_element(
+                app,
+                block_index,
+                &field,
+                ElementId::from(("visual-html-marker", block.id.as_u64())),
+                None,
+                None,
+                cx,
+            ));
+    }
+    let presentation =
+        html_preview_block_view_with_parts(app, &parts, images, block_index, document_dir, cx);
+    let bordered = !parts
         .iter()
         .any(|part| matches!(part, HtmlPreviewPart::Table { .. }));
     let payload_editor = move |cx: &mut Context<MarkionApp>| {
@@ -6572,8 +6611,39 @@ fn html_preview_block_view(
     document_dir: Option<&Path>,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
+    html_preview_block_view_with_parts(
+        app,
+        &html_preview_parts(html),
+        images,
+        block_index,
+        document_dir,
+        cx,
+    )
+}
+
+/// True when the flattened parts carry anything a reader can see: an image, a
+/// table, non-whitespace text, or an authored `<br>` line break. Bookmark
+/// anchors (`<a id="…"></a>`) and empty containers flatten to nothing and
+/// render as compact marker rows.
+fn html_parts_have_visible_content(parts: &[HtmlPreviewPart]) -> bool {
+    parts.iter().any(|part| match part {
+        HtmlPreviewPart::Text { text, .. } => text
+            .text
+            .chars()
+            .any(|ch| ch == '\n' || !ch.is_whitespace()),
+        HtmlPreviewPart::Image { .. } | HtmlPreviewPart::Table { .. } => true,
+    })
+}
+
+fn html_preview_block_view_with_parts(
+    app: &MarkionApp,
+    parts: &[HtmlPreviewPart],
+    images: &[HtmlImageDescriptor],
+    block_index: usize,
+    document_dir: Option<&Path>,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
     let typography = app.typography_metrics();
-    let parts = html_preview_parts(html);
     if parts.is_empty() {
         return div();
     }
@@ -6581,7 +6651,7 @@ fn html_preview_block_view(
 
     div().mb_3().children(
         parts
-            .into_iter()
+            .iter()
             .enumerate()
             .map(|(part_index, part)| match part {
                 HtmlPreviewPart::Text {
@@ -6594,14 +6664,14 @@ fn html_preview_block_view(
                 } => {
                     let font_size = heading_level
                         .map(|level| typography.heading_font_size(u32::from(level)))
-                        .unwrap_or(if pre {
+                        .unwrap_or(if *pre {
                             typography.code_font_size
                         } else {
                             typography.rendered_font_size
                         });
                     let line_height = if heading_level.is_some() {
                         font_size * 1.25
-                    } else if pre {
+                    } else if *pre {
                         typography.code_line_height
                     } else {
                         typography.paragraph_line_height
@@ -6618,7 +6688,7 @@ fn html_preview_block_view(
                             "preview-html-text",
                             ((block_index as u64) << 32) | part_index as u64,
                         )),
-                        &text,
+                        text,
                         block_index,
                         PreviewTextRunId::HtmlText,
                         (font_size, line_height),
@@ -6650,10 +6720,10 @@ fn html_preview_block_view(
                         .when(heading_level.is_some(), |style| {
                             style.font_weight(FontWeight::SEMIBOLD)
                         })
-                        .when(pre, |style| {
+                        .when(*pre, |style| {
                             style.font(code_slot_font(&app.resolved_font_families.code))
                         })
-                        .when(centered && !has_marker, |style| style.text_center())
+                        .when(*centered && !has_marker, |style| style.text_center())
                         .child(content)
                 }
                 HtmlPreviewPart::Image {
@@ -6682,9 +6752,9 @@ fn html_preview_block_view(
                                 src,
                                 identity,
                                 document_dir,
-                                width,
-                                height,
-                                Some(align),
+                                *width,
+                                *height,
+                                Some(*align),
                             ),
                             link.as_deref(),
                             cx,
@@ -6692,7 +6762,7 @@ fn html_preview_block_view(
                 }
                 HtmlPreviewPart::Table { grid } => div().mb_2().child(html_table_grid_view(
                     app,
-                    &grid,
+                    grid,
                     images,
                     &image_index,
                     block_index,

@@ -3566,6 +3566,32 @@ mod html_table_tests {
     }
 
     #[test]
+    fn html_preview_parts_empty_anchor_and_containers_flatten_to_nothing() {
+        for html in [
+            "<a id=\"english\"></a>",
+            "<a name='x'></a>",
+            "<a id=\"english\"></a>\n",
+            "<div></div>",
+            "<span>   </span>",
+        ] {
+            let parts = html_preview_parts(html);
+            assert!(
+                parts.is_empty()
+                    || parts.iter().all(|part| match part {
+                        HtmlPreviewPart::Text { text, .. } => text.text.trim().is_empty(),
+                        _ => false,
+                    }),
+                "{html:?} should carry no visible parts, got {parts:?}"
+            );
+        }
+        let parts = html_preview_parts("<div>内容</div>");
+        assert!(
+            matches!(&parts[..], [HtmlPreviewPart::Text { text, .. }] if text.text == "内容"),
+            "text-bearing container keeps its visible part, got {parts:?}"
+        );
+    }
+
+    #[test]
     fn html_preview_parts_routes_table_to_table_part() {
         let html = "<table><tr><th>X</th></tr><tr><td>1</td></tr></table>";
         let parts = html_preview_parts(html);
