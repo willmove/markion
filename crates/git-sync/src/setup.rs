@@ -8,7 +8,7 @@ use std::{
 use crate::{
     AskpassBridge, Authentication, CancellationToken, CommandLimits, GitCommand, GitCommandError,
     GitCommandRunner, GitObjectId, GitRepository, RemoteUrl, RemoteUrlError, RepositoryError,
-    RepositoryState, SyncTarget,
+    RepositoryIdentity, RepositoryState, SyncTarget, tracked_path_is_notes_like,
 };
 
 static NEXT_CLONE_ID: AtomicU64 = AtomicU64::new(1);
@@ -500,10 +500,33 @@ fn cleanup_owned_clone(parent: &Path, temporary: &Path) {
     }
 }
 
+/// Decides whether an existing repository discovered at the workspace can be
+/// adopted for sync without manual setup. All five safety criteria must hold:
+/// the workspace is the worktree root (not a subdirectory of a larger
+/// worktree), the repository has at least one commit, it supports write
+/// synchronization, the origin resolves to exactly one fetch/push target for
+/// the current branch, and the tracked content is notes-like — hidden
+/// configuration files and standard repository furniture do not count as
+/// unrelated content, visible non-notes files do.
+pub fn repository_adoptable(
+    workspace_root: &Path,
+    identity: &RepositoryIdentity,
+    state: &RepositoryState,
+    tracked_paths: &[PathBuf],
+    target: Option<&SyncTarget>,
+) -> bool {
+    identity.worktree_root == workspace_root
+        && state.head.is_some()
+        && state.capabilities.supports_write_sync()
+        && target.is_some()
+        && tracked_paths.iter().all(|path| tracked_path_is_notes_like(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::RepositoryAuthor;
+    use crate::RepositoryCapabilities;
 
     #[test]
     fn clones_empty_remote_to_explicit_unborn_branch() {
@@ -724,6 +747,119 @@ mod tests {
                 .to_string_lossy()
                 .contains(".markion-clone-")
         }));
+    }
+
+    #[test]
+    fn repository_adoptable_accepts_a_fully_eligible_workspace() {
+        let root = Path::new("/notes");
+        let state = adoptable_state();
+        let target = adoptable_target();
+        assert!(repository_adoptable(
+            root,
+            &RepositoryIdentity::new(root.to_path_buf(), root.join(".git"), root.join(".git")),
+            &state,
+            &[PathBuf::from("a.md"), PathBuf::from("img/pic.png")],
+            Some(&target),
+        ));
+    }
+
+    #[test]
+    fn repository_adoptable_tolerates_hidden_and_furniture_files() {
+        let root = Path::new("/notes");
+        let state = adoptable_state();
+        let target = adoptable_target();
+        assert!(repository_adoptable(
+            root,
+            &RepositoryIdentity::new(root.to_path_buf(), root.join(".git"), root.join(".git")),
+            &state,
+            &[
+                PathBuf::from("a.md"),
+                PathBuf::from(".gitignore"),
+                PathBuf::from("LICENSE"),
+                PathBuf::from(".obsidian/app.json"),
+            ],
+            Some(&target),
+        ));
+    }
+
+    #[test]
+    fn repository_adoptable_rejects_each_failing_criterion() {
+        let root = Path::new("/notes");
+        let identity =
+            RepositoryIdentity::new(root.to_path_buf(), root.join(".git"), root.join(".git"));
+        let state = adoptable_state();
+        let target = adoptable_target();
+        let tracked = [PathBuf::from("a.md")];
+
+        // Workspace is a subdirectory of the discovered worktree.
+        assert!(!repository_adoptable(
+            root,
+            &RepositoryIdentity::new(
+                root.parent().unwrap().to_path_buf(),
+                root.parent().unwrap().join(".git"),
+                root.parent().unwrap().join(".git"),
+            ),
+            &state,
+            &tracked,
+            Some(&target),
+        ));
+        // Repository has no commit yet.
+        assert!(!repository_adoptable(
+            root,
+            &identity,
+            &RepositoryState {
+                head: None,
+                ..state.clone()
+            },
+            &tracked,
+            Some(&target),
+        ));
+        // Repository cannot be written safely (e.g. bare).
+        let mut unsupported = state.clone();
+        unsupported.capabilities.bare = true;
+        assert!(!repository_adoptable(
+            root,
+            &identity,
+            &unsupported,
+            &tracked,
+            Some(&target),
+        ));
+        // Origin does not resolve to one fetch/push destination.
+        assert!(!repository_adoptable(root, &identity, &state, &tracked, None));
+        // Tracked content includes files outside the notes-like classes.
+        assert!(!repository_adoptable(
+            root,
+            &identity,
+            &state,
+            &[PathBuf::from("a.md"), PathBuf::from("src/main.rs")],
+            Some(&target),
+        ));
+    }
+
+    fn adoptable_state() -> RepositoryState {
+        RepositoryState {
+            head: Some(GitObjectId::parse("0123456789abcdef0123456789abcdef01234567").unwrap()),
+            branch: Some("main".into()),
+            upstream: Some("origin/main".into()),
+            worktree: Default::default(),
+            capabilities: RepositoryCapabilities {
+                ordinary_worktree: true,
+                ..Default::default()
+            },
+            history: Default::default(),
+            checked_at: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn adoptable_target() -> SyncTarget {
+        SyncTarget {
+            local_branch: "main".into(),
+            remote: "origin".into(),
+            remote_branch: "main".into(),
+            destination_ref: "refs/heads/main".into(),
+            fetch_url: "https://example.invalid/notes.git".into(),
+            push_url: "https://example.invalid/notes.git".into(),
+        }
     }
 
     fn run_git<const N: usize>(directory: &Path, arguments: [&str; N]) {

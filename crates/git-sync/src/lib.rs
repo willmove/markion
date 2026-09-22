@@ -46,7 +46,7 @@ pub use model::{
 };
 pub use policy::{
     NewFileClass, NewFileRule, PathDecision, PolicyError, PolicyStore, RepositoryPolicy,
-    ReviewPlan, ScopeException, SyncPolicies, default_commit_message,
+    ReviewPlan, ScopeException, SyncPolicies, default_commit_message, tracked_path_is_notes_like,
 };
 pub use process::{
     CancellationToken, CommandLimits, GitCommand, GitCommandError, GitCommandOutput,
@@ -62,6 +62,7 @@ pub use resources::{
 };
 pub use setup::{
     CloneResult, ConnectReview, OnboardingError, OnboardingService, PublicationResult,
+    repository_adoptable,
 };
 pub use status::{BranchStatus, StatusParseError, parse_porcelain_v2};
 pub use system::{GitAvailability, GitVersion, detect_git};

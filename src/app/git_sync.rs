@@ -5,7 +5,7 @@ use markion_git_sync::{
     JournalStore, NewFileClass, NewFileRule, OnboardingService, OperationKind, RecoveryAssessment,
     RecoveryManager, RemoteTransport, RemoteUrl, RepositoryCapabilities, RepositoryPolicy,
     RepositoryState, SyncOptions, SyncOutcome, SyncPlan, SyncPolicies, SyncTarget,
-    inspect_note_attachments,
+    inspect_note_attachments, repository_adoptable,
 };
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -106,7 +106,37 @@ fn onboarding_route(
 fn has_unrelated_tracked_content(paths: &[PathBuf]) -> bool {
     paths
         .iter()
-        .any(|path| NewFileClass::classify(path).is_none())
+        .any(|path| !markion_git_sync::tracked_path_is_notes_like(path))
+}
+
+/// Outcome of probing an unconfigured workspace for automatic adoption of
+/// the repository it lives in.
+#[derive(Debug, PartialEq, Eq)]
+enum RepositoryAdoption {
+    Adopted {
+        identity: markion_git_sync::RepositoryIdentity,
+        target: SyncTarget,
+    },
+    NeedsSetup,
+}
+
+fn adoption_decision(
+    workspace_root: &Path,
+    identity: &markion_git_sync::RepositoryIdentity,
+    state: &RepositoryState,
+    tracked_paths: &[PathBuf],
+    target: Option<&SyncTarget>,
+) -> RepositoryAdoption {
+    if let Some(target) = target
+        && repository_adoptable(workspace_root, identity, state, tracked_paths, Some(target))
+    {
+        RepositoryAdoption::Adopted {
+            identity: identity.clone(),
+            target: target.clone(),
+        }
+    } else {
+        RepositoryAdoption::NeedsSetup
+    }
 }
 
 fn repository_onboarding_requires_advanced(
@@ -396,7 +426,97 @@ impl MarkionApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_git_onboarding(false, window, cx);
+        self.begin_repository_adoption_or_onboarding(false, window, cx);
+    }
+
+    /// Probes the unconfigured workspace for an existing healthy notes
+    /// repository. When one is adoptable, records the default notes policy
+    /// without a setup dialog and runs the requested sync directly;
+    /// otherwise falls back to the contextual onboarding surface.
+    fn begin_repository_adoption_or_onboarding(
+        &mut self,
+        sync_after_setup: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.git_ui.running.is_some() || self.git_ui.settings.is_some() {
+            self.status = self.git_label(GitMsg::Busy).into();
+            cx.notify();
+            return;
+        }
+        if self.git_ui.onboarding.is_some() {
+            return;
+        }
+        let workspace = self.workspace_root.clone();
+        let executable = self
+            .git_preferences
+            .executable
+            .clone()
+            .unwrap_or_else(|| "git".to_string());
+        let background_fetch = self.git_preferences.background_check;
+        self.git_ui.onboarding_probe_generation =
+            self.git_ui.onboarding_probe_generation.wrapping_add(1);
+        let probe_generation = self.git_ui.onboarding_probe_generation;
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let probed_workspace = workspace.clone();
+            let result = cx
+                .background_spawn(async move {
+                    let canonical_workspace = dunce::canonicalize(&probed_workspace)
+                        .map_err(|error| error.to_string())?;
+                    let service = OnboardingService::new(GitCommandRunner::new(executable));
+                    let review = service
+                        .connect_existing(&canonical_workspace)
+                        .map_err(|error| error.to_string())?;
+                    let tracked_paths = review
+                        .repository
+                        .tracked_paths()
+                        .map_err(|error| error.to_string())?;
+                    let identity = review.repository.identity().clone();
+                    Ok::<_, String>(adoption_decision(
+                        &canonical_workspace,
+                        &identity,
+                        &review.state,
+                        &tracked_paths,
+                        review.target.as_ref(),
+                    ))
+                })
+                .await;
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |app, cx| {
+                    if app.workspace_root != workspace
+                        || app.git_ui.onboarding_probe_generation != probe_generation
+                    {
+                        return;
+                    }
+                    match result {
+                        Ok(RepositoryAdoption::Adopted { identity, target }) => {
+                            let policy =
+                                default_notes_policy(identity.clone(), target, background_fetch);
+                            let store = PolicyStore::new(default_git_sync_policy_path());
+                            if let Err(error) =
+                                store.update(|policies| policies.upsert(policy.clone()))
+                            {
+                                app.status = app.trf(Msg::StatusGitSyncFailed, &[&error.to_string()]);
+                                cx.notify();
+                                return;
+                            }
+                            app.start_git_sync(policy, store, cx);
+                            let name = identity
+                                .worktree_root
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| identity.worktree_root.display().to_string());
+                            app.status =
+                                git_tf(app.language, GitMsg::AdoptedRepository, &[&name]).into();
+                            cx.notify();
+                        }
+                        _ => app.open_git_onboarding(sync_after_setup, window, cx),
+                    }
+                });
+            });
+        })
+        .detach();
     }
 
     fn open_git_onboarding(
@@ -833,7 +953,7 @@ impl MarkionApp {
             match sync_now_route(policies, &self.workspace_root, active_tab_path.as_deref()) {
                 SyncNowRoute::Configured(policy) => policy,
                 SyncNowRoute::SetupExistingRepository => {
-                    self.open_git_onboarding(true, window, cx);
+                    self.begin_repository_adoption_or_onboarding(true, window, cx);
                     return;
                 }
             };
@@ -2074,7 +2194,9 @@ fn run_git_operation(
         message: version_request
             .as_ref()
             .map(|request| request.message.clone())
-            .unwrap_or_else(|| policy.render_message(paths.len(), None)),
+            .unwrap_or_else(|| {
+                policy.render_message(&paths, None, std::time::SystemTime::now())
+            }),
         paths,
     };
     let data = markion::default_git_sync_data_dir();
@@ -2268,6 +2390,114 @@ mod tests {
     }
 
     #[test]
+    fn adoption_decision_adopts_an_eligible_workspace_repository() {
+        let workspace = Path::new("notes");
+        let identity = markion_git_sync::RepositoryIdentity::new(
+            workspace.to_path_buf(),
+            workspace.join(".git"),
+            workspace.join(".git"),
+        );
+        let target = adoptable_sync_target();
+        assert_eq!(
+            adoption_decision(
+                workspace,
+                &identity,
+                &adoptable_repository_state(),
+                &[PathBuf::from("a.md"), PathBuf::from("img/pic.png")],
+                Some(&target),
+            ),
+            RepositoryAdoption::Adopted {
+                identity,
+                target
+            }
+        );
+    }
+
+    #[test]
+    fn adoption_decision_falls_back_to_setup_for_ineligible_repositories() {
+        let workspace = Path::new("notes");
+        let identity = markion_git_sync::RepositoryIdentity::new(
+            workspace.to_path_buf(),
+            workspace.join(".git"),
+            workspace.join(".git"),
+        );
+        let state = adoptable_repository_state();
+        let target = adoptable_sync_target();
+        let tracked = [PathBuf::from("a.md")];
+
+        // Workspace is a subdirectory of the discovered worktree.
+        let parent = Path::new(".");
+        let parent_identity = markion_git_sync::RepositoryIdentity::new(
+            parent.to_path_buf(),
+            parent.join(".git"),
+            parent.join(".git"),
+        );
+        assert_eq!(
+            adoption_decision(workspace, &parent_identity, &state, &tracked, Some(&target)),
+            RepositoryAdoption::NeedsSetup
+        );
+        // Repository has no commit yet.
+        assert_eq!(
+            adoption_decision(
+                workspace,
+                &identity,
+                &markion_git_sync::RepositoryState {
+                    head: None,
+                    ..state.clone()
+                },
+                &tracked,
+                Some(&target),
+            ),
+            RepositoryAdoption::NeedsSetup
+        );
+        // Origin does not resolve to one fetch/push destination.
+        assert_eq!(
+            adoption_decision(workspace, &identity, &state, &tracked, None),
+            RepositoryAdoption::NeedsSetup
+        );
+        // Tracked content includes files outside the notes-like classes.
+        assert_eq!(
+            adoption_decision(
+                workspace,
+                &identity,
+                &state,
+                &[PathBuf::from("a.md"), PathBuf::from("src/main.rs")],
+                Some(&target),
+            ),
+            RepositoryAdoption::NeedsSetup
+        );
+    }
+
+    fn adoptable_repository_state() -> RepositoryState {
+        RepositoryState {
+            head: Some(
+                markion_git_sync::GitObjectId::parse("0123456789abcdef0123456789abcdef01234567")
+                    .unwrap(),
+            ),
+            branch: Some("main".into()),
+            upstream: Some("origin/main".into()),
+            worktree: Default::default(),
+            capabilities: RepositoryCapabilities {
+                ordinary_worktree: true,
+                ..RepositoryCapabilities::default()
+            },
+            history: Default::default(),
+            checked_at: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn adoptable_sync_target() -> SyncTarget {
+        SyncTarget {
+            local_branch: "main".into(),
+            remote: "origin".into(),
+            remote_branch: "main".into(),
+            destination_ref: "refs/heads/main".into(),
+            fetch_url: "https://example.invalid/notes.git".into(),
+            push_url: "https://example.invalid/notes.git".into(),
+        }
+    }
+
+    #[test]
     fn sync_now_uses_workspace_policy_when_active_tab_is_foreign() {
         let repository_root = PathBuf::from("repository");
         let policy = RepositoryPolicy {
@@ -2336,6 +2566,12 @@ mod tests {
             PathBuf::from("notes.md"),
             PathBuf::from("draft.txt"),
             PathBuf::from("images/diagram.png"),
+        ]));
+        assert!(!has_unrelated_tracked_content(&[
+            PathBuf::from("notes.md"),
+            PathBuf::from(".gitignore"),
+            PathBuf::from(".obsidian/app.json"),
+            PathBuf::from("LICENSE"),
         ]));
         assert!(has_unrelated_tracked_content(&[
             PathBuf::from("notes.md"),

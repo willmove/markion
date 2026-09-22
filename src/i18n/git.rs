@@ -146,6 +146,7 @@ pub enum GitMsg {
     CloneDestinationOutside,
     CloneDestinationExists,
     PublicationRetryHint,
+    AdoptedRepository,
 }
 
 pub fn git_t(language: Language, message: GitMsg) -> &'static str {
@@ -799,13 +800,13 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Raíces de notas/imágenes nuevas (; separadas)",
         ],
         GitMsg::Message => [
-            "Commit message template ({count})",
-            "提交说明模板（{count}）",
-            "提交說明範本（{count}）",
-            "コミットメッセージ（{count}）",
-            "Modèle du message ({count})",
-            "Commit-Vorlage ({count})",
-            "Plantilla del mensaje ({count})",
+            "Commit message template ({date}, {time}, {files}, {count})",
+            "提交说明模板（{date}、{time}、{files}、{count}）",
+            "提交說明範本（{date}、{time}、{files}、{count}）",
+            "コミットメッセージ（{date}、{time}、{files}、{count}）",
+            "Modèle du message ({date}, {time}, {files}, {count})",
+            "Commit-Vorlage ({date}, {time}, {files}, {count})",
+            "Plantilla del mensaje ({date}, {time}, {files}, {count})",
         ],
         GitMsg::Name => [
             "Author name",
@@ -1427,6 +1428,15 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Les notes et la version locales sont conservées. Vérifiez la connexion, puis réessayez.",
             "Lokale Notizen und Version bleiben erhalten. Anmeldung prüfen und erneut versuchen.",
             "Las notas y la versión locales se conservaron. Revise el acceso y vuelva a intentarlo.",
+        ],
+        GitMsg::AdoptedRepository => [
+            "Connected to the existing repository {0}; syncing",
+            "已连接现有仓库 {0}，正在同步",
+            "已連接現有儲存庫 {0}，正在同步",
+            "既存のリポジトリ {0} に接続して同期しています",
+            "Connecté au dépôt existant {0} ; synchronisation",
+            "Mit dem bestehenden Repository {0} verbunden; Synchronisierung läuft",
+            "Conectado al repositorio existente {0}; sincronizando",
         ],
     };
     values[match language {

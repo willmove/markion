@@ -11,6 +11,7 @@ pulldown-cmark.workspace = true
 percent-encoding.workspace = true
 sha2.workspace = true
 dunce.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
