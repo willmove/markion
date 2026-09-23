@@ -23,7 +23,8 @@ None.
 
 ### Modified Capabilities
 
-- `chrome-platform`: Add a requirement placing the Backup and Sync and Advanced Git Tools submenus inside the File menu on both menu surfaces, with no top-level synchronization category remaining.
+- `chrome-platform`: Add a requirement placing the Backup and Sync and Advanced Git Tools submenus inside the File menu on both menu surfaces, with no top-level synchronization category remaining; retire the superseded consolidated-menus requirement's top-level "Sync" title wording while restating the surviving Source/Split Preview consolidation.
+- `ui-i18n`: Retire the view-mode chrome localization requirement's dedicated top-level "Sync" title obligation and restate the unchanged localization duty without it.
 
 ## Impact
 

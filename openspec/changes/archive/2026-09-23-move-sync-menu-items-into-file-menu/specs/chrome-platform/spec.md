@@ -35,3 +35,27 @@ The File menu on both menu surfaces the application renders — the native OS me
 - **WHEN** the active interface language changes
 - **THEN** the two submenu titles and all their entry labels re-render in the new language on both surfaces
 - **AND** the "Backup and Sync" submenu title and the feature wording inside setup, status, and the sync center remain the same existing localized strings, with no duplicate top-level title left behind
+
+## REMOVED Requirements
+
+### Requirement: Synchronization and source-layout menus are consolidated
+**Reason**: The top-level "Sync" menu category this requirement mandated was removed; its entries now live in the File menu's Backup and Sync and Advanced Git Tools submenus (see the added "Backup and Sync and Advanced Git Tools submenus live in the File menu" requirement). The surviving source-layout consolidation is restated below without the retired top-level scenario.
+**Migration**: Readers looking for the synchronization menu entries should consult the File menu requirement; the Source/Split Preview consolidation moved to "Source and Split Preview are one View-menu command".
+
+## ADDED Requirements
+
+### Requirement: Source and Split Preview are one View-menu command
+The application SHALL expose Source and Split Preview as one "Source/Split Preview" command in both the native View menu and the in-window View menu. The combined command SHALL replace the separate Source and Split Preview rows without removing the distinct Visual Edit, Read, or all-mode cycle controls.
+
+#### Scenario: View menus show one source-layout command
+- **WHEN** the user opens the native or in-window View menu
+- **THEN** exactly one "Source/Split Preview" command is shown in place of the separate Source and Split Preview commands
+- **AND** the Visual Edit and Read commands remain available
+
+#### Scenario: Combined menu command follows the source-layout toggle
+- **WHEN** the user invokes "Source/Split Preview" from either View menu
+- **THEN** Source changes to Split Preview, Split Preview changes to Source, and Visual Edit or Read changes to Source
+
+#### Scenario: Existing all-mode cycle remains available
+- **WHEN** the user invokes the existing all-mode cycle control
+- **THEN** it continues to cycle through the complete existing view-mode order
