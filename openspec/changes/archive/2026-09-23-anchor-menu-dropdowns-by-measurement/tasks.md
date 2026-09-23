@@ -16,4 +16,4 @@
 ## 4. Verification
 
 - [x] 4.1 Run `cargo fmt`, `cargo test`, and `cargo test --workspace`; all green with no new warnings.
-- [ ] 4.2 GUI smoke across languages: open every top-level dropdown in English, Simplified Chinese, and Japanese (the three previously miscalibrated scripts) and confirm each panel's left edge aligns with its title button; switch language at runtime and confirm realignment on the next open.
+- [x] 4.2 GUI smoke across languages: open every top-level dropdown in English, Simplified Chinese, and Japanese (the three previously miscalibrated scripts) and confirm each panel's left edge aligns with its title button; switch language at runtime and confirm realignment on the next open.
