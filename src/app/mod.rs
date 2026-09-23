@@ -1958,6 +1958,15 @@ const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(80);
 /// parse is older than this, the next render parses even though the debounce
 /// window has not elapsed, so the preview never freezes mid-typing-burst.
 const PREVIEW_MAX_STALE: Duration = Duration::from_millis(400);
+/// How long the pointer must stay continuously over a Visual Edit table's
+/// chrome before its editing header appears. The header is an in-flow row, so
+/// showing it on pass-through hover makes the document shake while the pointer
+/// travels across tables.
+const TABLE_TOOLBAR_HOVER_DWELL: Duration = Duration::from_millis(250);
+/// How long the pointer must stay continuously off a Visual Edit table's
+/// chrome before its hover-shown editing header hides, so a brief excursion
+/// does not flicker the header away and back.
+const TABLE_TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(120);
 /// Clamp range for the editor/preview split ratio so neither pane can collapse.
 const EDITOR_SPLIT_RATIO_MIN: f32 = markion::EDITOR_SPLIT_RATIO_MIN;
 const EDITOR_SPLIT_RATIO_MAX: f32 = markion::EDITOR_SPLIT_RATIO_MAX;

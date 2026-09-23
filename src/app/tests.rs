@@ -7617,6 +7617,7 @@ fn visual_table_toolbar_disables_unowned_and_invalid_actions_without_side_effect
     app.update(cx, |app, cx| {
         let id = visual_table_block_id(&app.active_tab().document, 0);
         app.active_tab_mut().hovered_visual_table_block = Some(id);
+        app.active_tab_mut().visual_table_toolbar_hover_ready = Some(id);
         cx.notify();
     });
     cx.run_until_parked();
@@ -7722,6 +7723,7 @@ fn visual_table_toolbar_isolates_tables_and_roundtrips_one_history_entry(cx: &mu
     app.update(cx, |app, cx| {
         let id = visual_table_block_id(&app.active_tab().document, 0);
         app.active_tab_mut().hovered_visual_table_block = Some(id);
+        app.active_tab_mut().visual_table_toolbar_hover_ready = Some(id);
         cx.notify();
     });
     cx.run_until_parked();
@@ -7793,6 +7795,7 @@ fn visual_table_toolbar_shows_on_hover_or_caret_without_mutating(cx: &mut TestAp
     app.update(cx, |app, cx| {
         let id = visual_table_block_id(&app.active_tab().document, 0);
         app.active_tab_mut().hovered_visual_table_block = Some(id);
+        app.active_tab_mut().visual_table_toolbar_hover_ready = Some(id);
         cx.notify();
     });
     cx.run_until_parked();
@@ -7816,6 +7819,7 @@ fn visual_table_toolbar_shows_on_hover_or_caret_without_mutating(cx: &mut TestAp
     });
     app.update(cx, |app, cx| {
         app.active_tab_mut().hovered_visual_table_block = None;
+        app.active_tab_mut().visual_table_toolbar_hover_ready = None;
         app.move_to(cell.start, cx);
     });
     cx.run_until_parked();
@@ -7824,6 +7828,219 @@ fn visual_table_toolbar_shows_on_hover_or_caret_without_mutating(cx: &mut TestAp
         "caret ownership keeps the header visible after the pointer leaves"
     );
     assert!(cx.debug_bounds("visual-table-delete-table").is_some());
+}
+
+#[gpui::test]
+fn visual_table_toolbar_shows_only_after_dwell_fire(cx: &mut TestAppContext) {
+    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
+    let document = MarkdownDocument::from_text(source);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    // Raw hover alone (what the listener sets before the dwell elapses) must
+    // not show the header.
+    let (id, generation) = app.update(cx, |app, cx| {
+        let id = visual_table_block_id(&app.active_tab().document, 0);
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = Some(id);
+        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
+        cx.notify();
+        (id, app.active_tab().visual_table_hover_generation)
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-add-row-disabled").is_none(),
+        "hover without the elapsed dwell keeps the header hidden"
+    );
+
+    // A timer armed by an older transition fires into a no-op.
+    app.update(cx, |app, cx| {
+        app.fire_visual_table_hover_dwell(0, id, generation.wrapping_sub(1), cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-add-row-disabled").is_none(),
+        "a stale-generation dwell fire shows nothing"
+    );
+
+    // The current-generation dwell fire with the pointer still over the table
+    // shows the header.
+    app.update(cx, |app, cx| {
+        app.fire_visual_table_hover_dwell(0, id, generation, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-add-row-disabled").is_some(),
+        "the dwell fire shows the header while the pointer stays"
+    );
+}
+
+#[gpui::test]
+fn visual_table_toolbar_dwell_fire_after_pointer_leave_shows_nothing(cx: &mut TestAppContext) {
+    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
+    let document = MarkdownDocument::from_text(source);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let (id, armed_generation) = app.update(cx, |app, _| {
+        let id = visual_table_block_id(&app.active_tab().document, 0);
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = Some(id);
+        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
+        (id, tab.visual_table_hover_generation)
+    });
+    // Pointer leaves before the dwell elapses: raw hover clears and the
+    // generation bumps, invalidating the armed dwell.
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = None;
+        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
+        cx.notify();
+    });
+    app.update(cx, |app, cx| {
+        app.fire_visual_table_hover_dwell(0, id, armed_generation, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-add-row-disabled").is_none(),
+        "a pointer passing through within the dwell shows no header"
+    );
+}
+
+#[gpui::test]
+fn visual_table_toolbar_hide_delay_respects_reentry(cx: &mut TestAppContext) {
+    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
+    let document = MarkdownDocument::from_text(source);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let id = app.update(cx, |app, _| visual_table_block_id(&app.active_tab().document, 0));
+    // Shown-from-hover state: raw hover + hover-ready both set.
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = Some(id);
+        tab.visual_table_toolbar_hover_ready = Some(id);
+        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-table-add-row-disabled").is_some());
+
+    // Pointer leaves: the hide delay is armed with the new generation, and
+    // hover-readiness is kept until it fires.
+    let hide_generation = app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = None;
+        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
+        cx.notify();
+        app.active_tab().visual_table_hover_generation
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-add-row-disabled").is_some(),
+        "the header stays up during the hide-delay window"
+    );
+
+    // Re-entering within the window bumps the generation, so the pending hide
+    // fires into a no-op and the header never flickers away.
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = Some(id);
+        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
+        cx.notify();
+    });
+    app.update(cx, |app, cx| {
+        app.fire_visual_table_hide_delay(0, id, hide_generation, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-add-row-disabled").is_some(),
+        "re-entry within the hide window keeps the header"
+    );
+
+    // Leaving for good lets the due hide clear hover-readiness.
+    let final_generation = app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = None;
+        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
+        cx.notify();
+        app.active_tab().visual_table_hover_generation
+    });
+    app.update(cx, |app, cx| {
+        app.fire_visual_table_hide_delay(0, id, final_generation, cx);
+    });
+    app.update(cx, |app, _| {
+        // Assert the state the fire actually controls rather than a painted
+        // selector: the test harness can replay a cached list-item paint into
+        // `debug_bounds` for a frame or more, while `hover_ready == None`
+        // is what removes the header on the next real paint (pinned by the
+        // `visual_table_toolbar_is_visible` unit test).
+        assert_eq!(
+            app.active_tab().visual_table_toolbar_hover_ready,
+            None,
+            "the due hide delay hides the header once the pointer stays away"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_table_toolbar_caret_shows_immediately_without_dwell(cx: &mut TestAppContext) {
+    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
+    let document = MarkdownDocument::from_text(source);
+    let selected = visual_table_cell_range(&document, 0, 0, 0);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = selected;
+        app.active_tab_mut().visual_cursor_reveal_pending = true;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.hovered_visual_table_block, None);
+        assert_eq!(tab.visual_table_toolbar_hover_ready, None);
+    });
+    assert!(
+        cx.debug_bounds("visual-table-add-row").is_some(),
+        "caret ownership shows the header immediately, with no dwell"
+    );
 }
 
 #[gpui::test]
@@ -7906,6 +8123,7 @@ fn visual_table_toolbar_delete_is_isolated_and_disabled_when_unsupported(cx: &mu
         app.tabs = vec![EditorTab::new(quoted_document)];
         let id = visual_table_block_id(&app.active_tab().document, 0);
         app.active_tab_mut().hovered_visual_table_block = Some(id);
+        app.active_tab_mut().visual_table_toolbar_hover_ready = Some(id);
         app.active_tab_mut().selected_range = 0..0;
         app.view_mode = ViewMode::VisualEdit;
         cx.notify();

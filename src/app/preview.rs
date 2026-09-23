@@ -6387,11 +6387,11 @@ pub(super) fn revalidate_visual_table_toolbar_target(
 }
 
 pub(super) fn visual_table_toolbar_is_visible(
-    hovered: Option<VisualBlockId>,
+    hover_ready: Option<VisualBlockId>,
     block_id: VisualBlockId,
     has_caret_target: bool,
 ) -> bool {
-    hovered == Some(block_id) || has_caret_target
+    hover_ready == Some(block_id) || has_caret_target
 }
 
 pub(super) fn visual_table_delete_available(
@@ -6466,7 +6466,7 @@ pub(super) fn visual_table_view(
     let toolbar_target =
         visual_table_toolbar_target(document_version, block, app.active_tab().cursor_offset());
     let show_toolbar = visual_table_toolbar_is_visible(
-        app.active_tab().hovered_visual_table_block,
+        app.active_tab().visual_table_toolbar_hover_ready,
         block_id,
         toolbar_target.is_some(),
     );
@@ -6486,17 +6486,35 @@ pub(super) fn visual_table_view(
         .rounded_md()
         .overflow_hidden()
         .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
-            let tab = app.active_tab_mut();
-            let next = hovered.then_some(block_id);
-            let changed = if *hovered {
-                tab.hovered_visual_table_block != Some(block_id)
-            } else {
-                tab.hovered_visual_table_block == Some(block_id)
+            let changed = {
+                let tab = app.active_tab();
+                if *hovered {
+                    tab.hovered_visual_table_block != Some(block_id)
+                } else {
+                    tab.hovered_visual_table_block == Some(block_id)
+                }
             };
             if !changed {
                 return;
             }
-            tab.hovered_visual_table_block = next;
+            {
+                let tab = app.active_tab_mut();
+                tab.hovered_visual_table_block = hovered.then_some(block_id);
+                // Invalidate any dwell/hide-delay timer armed by an older
+                // transition before arming the new one below.
+                tab.visual_table_hover_generation =
+                    tab.visual_table_hover_generation.wrapping_add(1);
+            }
+            if *hovered {
+                // Re-entry while the header is still hover-ready needs no
+                // dwell: bumping the generation above already cancelled the
+                // pending hide timer.
+                if app.active_tab().visual_table_toolbar_hover_ready != Some(block_id) {
+                    app.arm_visual_table_hover_dwell(block_id, cx);
+                }
+            } else if app.active_tab().visual_table_toolbar_hover_ready == Some(block_id) {
+                app.arm_visual_table_hide_delay(block_id, cx);
+            }
             cx.notify();
         }))
         .on_drag_move::<DraggedTableColumnHandle>(

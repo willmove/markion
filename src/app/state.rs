@@ -794,6 +794,15 @@ pub(super) struct DocumentTabState {
     pub(super) hovered_visual_source_block: Option<VisualBlockId>,
     /// Table currently under the pointer for showing the Visual Edit table header.
     pub(super) hovered_visual_table_block: Option<VisualBlockId>,
+    /// Table whose hover dwell has elapsed: its Visual Edit editing header may
+    /// be shown while the pointer stays over it (caret-owned headers ignore
+    /// this and show immediately). Lags `hovered_visual_table_block` by the
+    /// dwell on entry and by the hide delay on exit.
+    pub(super) visual_table_toolbar_hover_ready: Option<VisualBlockId>,
+    /// Generation token incremented whenever the table hover state changes, so
+    /// a pending dwell/hide-delay timer armed by an older transition fires into
+    /// a no-op. Same pattern as `preview_debounce_generation`.
+    pub(super) visual_table_hover_generation: u64,
     /// Presentation-only overlay while a Visual Edit column handle is dragged.
     pub(super) visual_table_column_drag: Option<VisualTableColumnDrag>,
     /// Presentation-only overlay while a focused inline image is resized.
@@ -1089,6 +1098,8 @@ impl DocumentTabState {
             expanded_visual_source_blocks: HashSet::new(),
             hovered_visual_source_block: None,
             hovered_visual_table_block: None,
+            visual_table_toolbar_hover_ready: None,
+            visual_table_hover_generation: 0,
             visual_table_column_drag: None,
             visual_image_resize_drag: None,
             hovered_visual_code_block: None,
@@ -1219,6 +1230,14 @@ impl DocumentTabState {
             .is_some_and(|id| !live_ids.contains(&id))
         {
             self.hovered_visual_table_block = None;
+            self.visual_table_hover_generation =
+                self.visual_table_hover_generation.wrapping_add(1);
+        }
+        if self
+            .visual_table_toolbar_hover_ready
+            .is_some_and(|id| !live_ids.contains(&id))
+        {
+            self.visual_table_toolbar_hover_ready = None;
         }
         if self.visual_table_column_drag.as_ref().is_some_and(|drag| {
             drag.document_version != self.document.version() || !live_ids.contains(&drag.block_id)
@@ -1349,6 +1368,8 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.hovered_visual_table_block = None;
+        self.visual_table_toolbar_hover_ready = None;
+        self.visual_table_hover_generation = self.visual_table_hover_generation.wrapping_add(1);
         self.visual_table_column_drag = None;
         self.visual_image_resize_drag = None;
         self.hovered_visual_code_block = None;
@@ -1406,6 +1427,8 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.hovered_visual_table_block = None;
+        self.visual_table_toolbar_hover_ready = None;
+        self.visual_table_hover_generation = self.visual_table_hover_generation.wrapping_add(1);
         self.visual_table_column_drag = None;
         self.visual_image_resize_drag = None;
         self.hovered_visual_code_block = None;

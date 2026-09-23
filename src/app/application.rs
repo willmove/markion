@@ -1468,6 +1468,91 @@ impl MarkionApp {
         .detach();
     }
 
+    /// Arms the hover dwell for a Visual Edit table's editing header: when the
+    /// timer fires, `fire_visual_table_hover_dwell` marks the header
+    /// hover-ready only if the pointer is still over the same table. Every
+    /// hover transition bumps the tab's generation, so of the timers in flight
+    /// only the one armed by the latest transition survives its check.
+    pub(super) fn arm_visual_table_hover_dwell(
+        &mut self,
+        block_id: VisualBlockId,
+        cx: &mut Context<Self>,
+    ) {
+        let active_index = self.active_tab;
+        let generation = self.active_tab().visual_table_hover_generation;
+        cx.spawn(async move |this, cx| {
+            Timer::after(TABLE_TOOLBAR_HOVER_DWELL).await;
+            let _ = this.update(cx, |app, cx| {
+                app.fire_visual_table_hover_dwell(active_index, block_id, generation, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Fires one due hover dwell. Split from the timer so tests can drive it
+    /// directly — `gpui::Timer` is real-time and outside the test executor's
+    /// clock.
+    pub(super) fn fire_visual_table_hover_dwell(
+        &mut self,
+        tab_index: usize,
+        block_id: VisualBlockId,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        if tab.visual_table_hover_generation != generation
+            || tab.hovered_visual_table_block != Some(block_id)
+            || tab.visual_table_toolbar_hover_ready == Some(block_id)
+        {
+            return;
+        }
+        self.tabs[tab_index].visual_table_toolbar_hover_ready = Some(block_id);
+        cx.notify();
+    }
+
+    /// Arms the hide delay for a hover-shown Visual Edit table editing header:
+    /// when the timer fires, `fire_visual_table_hide_delay` hides the header
+    /// only if the pointer has stayed off the table.
+    pub(super) fn arm_visual_table_hide_delay(
+        &mut self,
+        block_id: VisualBlockId,
+        cx: &mut Context<Self>,
+    ) {
+        let active_index = self.active_tab;
+        let generation = self.active_tab().visual_table_hover_generation;
+        cx.spawn(async move |this, cx| {
+            Timer::after(TABLE_TOOLBAR_HIDE_DELAY).await;
+            let _ = this.update(cx, |app, cx| {
+                app.fire_visual_table_hide_delay(active_index, block_id, generation, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Fires one due hide delay. A pointer re-entry within the window bumps
+    /// the generation, so the header stays up without hiding and re-showing.
+    pub(super) fn fire_visual_table_hide_delay(
+        &mut self,
+        tab_index: usize,
+        block_id: VisualBlockId,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        if tab.visual_table_hover_generation != generation
+            || tab.hovered_visual_table_block == Some(block_id)
+            || tab.visual_table_toolbar_hover_ready != Some(block_id)
+        {
+            return;
+        }
+        self.tabs[tab_index].visual_table_toolbar_hover_ready = None;
+        cx.notify();
+    }
+
     pub(super) fn schedule_autosave(&mut self, cx: &mut Context<Self>) {
         if self.active_tab().is_image() {
             return;
