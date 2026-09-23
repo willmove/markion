@@ -222,6 +222,197 @@ fn repository_without_history_is_not_adopted() {
 }
 
 #[test]
+fn wrong_origin_is_detectable_and_replaceable_after_confirmation() {
+    // Reproduces the setup dead end: the repository's origin points at a
+    // wrong address, no sync target resolves, and correcting the address
+    // must work through probe + explicit confirmation + replacement.
+    let fixture = TwoCloneFixture::new();
+    let root = fixture.first.parent().unwrap();
+    let wrong = root.join("wrong.git");
+    git(
+        &fixture.first,
+        ["remote", "set-url", "origin", wrong.to_string_lossy().as_ref()],
+    );
+    // Break the upstream binding the way a locally-created repository with a
+    // hand-set (wrong) remote looks: branch config exists, merge ref does not.
+    git(&fixture.first, ["config", "--unset", "branch.main.merge"]);
+
+    let service = OnboardingService::new(GitCommandRunner::new("git"));
+    let review = service.connect_existing(&fixture.first).unwrap();
+    // The broken origin cannot resolve a sync target.
+    assert!(review.target.is_none());
+
+    // The probe rejects the broken address while the correct one answers.
+    let cancellation = markion_git_sync::CancellationToken::new();
+    assert!(
+        service
+            .probe_remote(wrong.to_str().unwrap(), root, &cancellation)
+            .is_err()
+    );
+    let correct = fixture.remote.to_string_lossy().into_owned();
+    service.probe_remote(&correct, root, &cancellation).unwrap();
+
+    // Without confirmation a differing address is still refused...
+    assert!(matches!(
+        service.attach_origin(&review.repository, &correct, false, &cancellation),
+        Err(markion_git_sync::OnboardingError::RemoteExists(_))
+    ));
+    // ...and the explicitly confirmed replacement rebinds the origin.
+    service
+        .attach_origin(&review.repository, &correct, true, &cancellation)
+        .unwrap();
+    service
+        .publish_first_branch(&review.repository, "origin", "main", None, &cancellation)
+        .unwrap();
+    assert_eq!(
+        git_output(&fixture.first, &["remote", "get-url", "origin"]).trim(),
+        correct
+    );
+    let repository = GitRepository::discover(GitCommandRunner::new("git"), &fixture.first).unwrap();
+    assert!(repository.resolve_sync_target().is_ok());
+}
+
+#[test]
+fn replacement_to_diverged_remote_binds_and_first_sync_merges() {
+    // The screenshot scenario's full resolution: after the confirmed
+    // replacement onto a remote that already contains related diverged
+    // work, publication binds upstream without a rejected push, and the
+    // first sync integrates both sides and pushes.
+    let fixture = TwoCloneFixture::new();
+    let root = fixture.first.parent().unwrap();
+    let cancellation = markion_git_sync::CancellationToken::new();
+
+    // Diverge: the second clone advances the remote, the first adds a local
+    // commit of its own.
+    std::fs::write(fixture.second.join("remote-side.md"), "remote\n").unwrap();
+    git(&fixture.second, ["add", "--", "remote-side.md"]);
+    git(&fixture.second, ["commit", "-q", "-m", "remote side"]);
+    git(&fixture.second, ["push", "-q", "origin", "main"]);
+    std::fs::write(fixture.first.join("local-side.md"), "local\n").unwrap();
+    git(&fixture.first, ["add", "--", "local-side.md"]);
+    git(&fixture.first, ["commit", "-q", "-m", "local side"]);
+    let local_head = git_output(&fixture.first, &["rev-parse", "HEAD"]).trim().to_string();
+
+    // Break the origin the way a wrong address leaves the repository.
+    let wrong = root.join("wrong.git");
+    git(
+        &fixture.first,
+        ["remote", "set-url", "origin", wrong.to_string_lossy().as_ref()],
+    );
+    git(&fixture.first, ["config", "--unset", "branch.main.merge"]);
+
+    let service = OnboardingService::new(GitCommandRunner::new("git"));
+    let review = service.connect_existing(&fixture.first).unwrap();
+    assert!(review.target.is_none());
+    let correct = fixture.remote.to_string_lossy().into_owned();
+    service
+        .attach_origin(&review.repository, &correct, true, &cancellation)
+        .unwrap();
+    // Publication must not dead-end on the diverged remote: it binds
+    // upstream without pushing.
+    service
+        .publish_first_branch(&review.repository, "origin", "main", None, &cancellation)
+        .unwrap();
+    assert!(
+        repository_publish_did_not_push(&fixture, &wrong)
+    );
+
+    // The first sync fetches, merges both sides, and pushes.
+    let repository = GitRepository::discover(GitCommandRunner::new("git"), &fixture.first).unwrap();
+    let target = repository.resolve_sync_target().unwrap();
+    let mut policy = default_notes_policy(repository.identity().clone(), target);
+    let state = repository.status().unwrap();
+    let plan = SyncPlan {
+        operation_id: "replacement-smoke".into(),
+        identity: repository.identity().clone(),
+        target: repository.resolve_sync_target().unwrap(),
+        expected_head: state.head,
+        content_fingerprints: Vec::new(),
+        message: "Sync notes 2026-09-22 10:00: local-side.md".into(),
+        paths: Vec::new(),
+    };
+    let data = tempfile::tempdir().unwrap();
+    let journal = JournalStore::new(data.path().join("journal.toml"), data.path().join("recovery"));
+    let engine = GitSyncEngine::new(repository, journal, SyncOptions::default())
+        .with_foreground_credentials();
+    let outcome = engine
+        .sync_now(&plan, &mut policy, None, None, &cancellation)
+        .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            markion_git_sync::SyncOutcome::Synchronized { .. }
+                | markion_git_sync::SyncOutcome::UpToDate
+        ),
+        "{outcome:?}"
+    );
+    // The remote's main now contains both the local and the remote commit.
+    let remote_side = git_output(&fixture.second, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    for sha in [local_head.as_str(), remote_side.as_str()] {
+        let output = std::process::Command::new("git")
+            .current_dir(&fixture.remote)
+            .args(["merge-base", "--is-ancestor", sha, "main"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "remote main lacks {sha}");
+    }
+}
+
+fn repository_publish_did_not_push(fixture: &TwoCloneFixture, wrong: &Path) -> bool {
+    // Pushing would have failed against the wrong remote and succeeded
+    // against the right one; the binding-only path leaves both untouched,
+    // with upstream config present.
+    let merge = git_output(
+        &fixture.first,
+        &["config", "--get", "branch.main.merge"],
+    )
+    .trim()
+    .to_string();
+    let remote_config = git_output(
+        &fixture.first,
+        &["config", "--get", "branch.main.remote"],
+    )
+    .trim()
+    .to_string();
+    !wrong.exists() && merge == "refs/heads/main" && remote_config == "origin"
+}
+
+#[test]
+fn unrelated_remote_history_is_refused_with_guidance_error() {
+    let fixture = TwoCloneFixture::new();
+    let cancellation = markion_git_sync::CancellationToken::new();
+    // Point the clone at an unrelated repository with its own history.
+    let unrelated_root = tempfile::tempdir().unwrap();
+    let unrelated = unrelated_root.path().join("unrelated.git");
+    let seed = unrelated_root.path().join("seed");
+    git(
+        unrelated_root.path(),
+        ["init", "--bare", "-q", &unrelated.to_string_lossy()],
+    );
+    git(&unrelated, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(unrelated_root.path(), ["init", "-q", "-b", "main", &seed.to_string_lossy()]);
+    support::configure_identity(&seed);
+    std::fs::write(seed.join("other.md"), "unrelated\n").unwrap();
+    git(&seed, ["add", "--", "other.md"]);
+    git(&seed, ["commit", "-q", "-m", "unrelated"]);
+    git(&seed, ["remote", "add", "origin", &unrelated.to_string_lossy()]);
+    git(&seed, ["push", "-q", "-u", "origin", "main"]);
+
+    let service = OnboardingService::new(GitCommandRunner::new("git"));
+    let correct = unrelated.to_string_lossy().into_owned();
+    let repository = GitRepository::discover(GitCommandRunner::new("git"), &fixture.first).unwrap();
+    service
+        .attach_origin(&repository, &correct, true, &cancellation)
+        .unwrap();
+    assert!(matches!(
+        service.publish_first_branch(&repository, "origin", "main", None, &cancellation),
+        Err(markion_git_sync::OnboardingError::UnrelatedRemoteHistory { .. })
+    ));
+}
+
+#[test]
 fn adoption_head_and_target_come_from_the_reviewed_repository() {
     // Guards the smoke expectation that adopted policies point at the real
     // upstream branch of the cloned workspace.

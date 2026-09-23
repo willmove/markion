@@ -139,6 +139,65 @@ fn adoption_decision(
     }
 }
 
+/// What submit should do with the entered sync address. Syntax is rejected
+/// outright; a new address is probed for reachability and warned about with
+/// confirmation; replacing an existing origin always needs explicit consent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteSubmissionAction {
+    Proceed { replace_remote: bool },
+    RejectSyntax,
+    NeedsProbe,
+    NeedsUnreachableConfirm,
+    NeedsResetConfirm,
+}
+
+fn remote_submission_decision(
+    requires_remote: bool,
+    existing_origin: Option<&str>,
+    entered: &str,
+    probe_failed: Option<bool>,
+    confirmed_unreachable: bool,
+    confirmed_reset: bool,
+) -> RemoteSubmissionAction {
+    let entered = entered.trim();
+    if entered.is_empty() {
+        return if requires_remote {
+            RemoteSubmissionAction::RejectSyntax
+        } else {
+            RemoteSubmissionAction::Proceed {
+                replace_remote: false,
+            }
+        };
+    }
+    if validate_user_remote(entered, Language::En).is_err() {
+        return RemoteSubmissionAction::RejectSyntax;
+    }
+    if existing_origin.is_some_and(|existing| existing.trim() == entered) {
+        return RemoteSubmissionAction::Proceed {
+            replace_remote: false,
+        };
+    }
+    let Some(probe_failed) = probe_failed else {
+        return RemoteSubmissionAction::NeedsProbe;
+    };
+    if probe_failed && !confirmed_unreachable {
+        return RemoteSubmissionAction::NeedsUnreachableConfirm;
+    }
+    if existing_origin.is_some() {
+        if confirmed_reset {
+            RemoteSubmissionAction::Proceed {
+                replace_remote: true,
+            }
+        } else {
+            RemoteSubmissionAction::NeedsResetConfirm
+        }
+    } else {
+        RemoteSubmissionAction::Proceed {
+            replace_remote: false,
+        }
+    }
+}
+
 fn repository_onboarding_requires_advanced(
     workspace_root: &Path,
     repository_root: &Path,
@@ -576,12 +635,17 @@ impl MarkionApp {
             repository_root: current_repository_root.clone(),
             advanced: advanced_required,
             advanced_required,
-            alternatives_open: false,
             destination_edited: false,
             sync_after_setup,
             busy: repository_probe_required,
             cancellation: None,
             error: None,
+            existing_origin: None,
+            remote_probe_failed: None,
+            confirm_unreachable: None,
+            confirmed_unreachable: false,
+            confirm_remote_reset: None,
+            confirmed_reset: false,
         });
         self.search_visible = false;
         self.search_control_focus = None;
@@ -607,16 +671,18 @@ impl MarkionApp {
                 .background_spawn(async move {
                     let canonical_workspace = dunce::canonicalize(&probed_workspace)
                         .map_err(|error| error.to_string())?;
-                    let repository = GitRepository::discover(
-                        GitCommandRunner::new(executable),
-                        &canonical_workspace,
-                    )
-                    .map_err(|error| error.to_string())?;
+                    let runner = GitCommandRunner::new(executable);
+                    let repository =
+                        GitRepository::discover(runner.clone(), &canonical_workspace)
+                            .map_err(|error| error.to_string())?;
                     let capabilities = repository
                         .capabilities()
                         .map_err(|error| error.to_string())?;
                     let tracked_paths = repository
                         .tracked_paths()
+                        .map_err(|error| error.to_string())?;
+                    let existing_origin = OnboardingService::new(runner)
+                        .origin_url(&repository, &CancellationToken::new())
                         .map_err(|error| error.to_string())?;
                     let repository_root = repository.identity().worktree_root.clone();
                     Ok::<_, String>((
@@ -627,6 +693,7 @@ impl MarkionApp {
                             capabilities,
                             &tracked_paths,
                         ),
+                        existing_origin,
                     ))
                 })
                 .await;
@@ -641,11 +708,12 @@ impl MarkionApp {
                 };
                 setup.busy = false;
                 match result {
-                    Ok((repository_root, advanced_required)) => {
+                    Ok((repository_root, advanced_required, existing_origin)) => {
                         setup.mode = git_panel::GitOnboardingMode::UseCurrentFolder;
                         setup.repository_root = Some(repository_root);
                         setup.advanced_required = advanced_required;
                         setup.advanced = advanced_required;
+                        setup.existing_origin = existing_origin;
                         setup.error = None;
                     }
                     Err(error) => {
@@ -692,6 +760,17 @@ impl MarkionApp {
     }
 
     pub(super) fn update_git_onboarding_defaults(&mut self, changed_field: usize) {
+        if changed_field == 0 {
+            // Editing the sync address invalidates any pending probe result
+            // and confirmation for the previously entered address.
+            if let Some(setup) = &mut self.git_ui.onboarding {
+                setup.remote_probe_failed = None;
+                setup.confirmed_unreachable = false;
+                setup.confirmed_reset = false;
+                setup.confirm_unreachable = None;
+                setup.confirm_remote_reset = None;
+            }
+        }
         if changed_field == 1 {
             if let Some(setup) = &mut self.git_ui.onboarding {
                 setup.destination_edited = true;
@@ -722,15 +801,6 @@ impl MarkionApp {
             && !setup.advanced_required
         {
             setup.advanced = !setup.advanced;
-            cx.notify();
-        }
-    }
-
-    pub(super) fn toggle_git_onboarding_alternatives(&mut self, cx: &mut Context<Self>) {
-        if let Some(setup) = &mut self.git_ui.onboarding
-            && !setup.busy
-        {
-            setup.alternatives_open = !setup.alternatives_open;
             cx.notify();
         }
     }
@@ -775,8 +845,6 @@ impl MarkionApp {
         }
         let mode = setup.mode;
         let remote = setup.fields[0].buffer.trim().to_string();
-        let destination = setup.fields[1].buffer.trim().to_string();
-        let branch = setup.fields[2].buffer.trim().to_string();
         let author_name = setup.fields[3].buffer.trim().to_string();
         let author_email = setup.fields[4].buffer.trim().to_string();
         if author_name.is_empty() != author_email.is_empty() {
@@ -788,19 +856,136 @@ impl MarkionApp {
             cx.notify();
             return;
         }
-        if matches!(
+        let requires_remote = matches!(
             mode,
             git_panel::GitOnboardingMode::CloneRepository
                 | git_panel::GitOnboardingMode::InitializeFolder
-        ) && validate_user_remote(&remote, self.language).is_err()
-        {
-            let error = self.git_label(GitMsg::SetupRemoteHelp).to_string();
-            if let Some(setup) = &mut self.git_ui.onboarding {
-                setup.error = Some(error);
+        );
+        let existing_origin = setup.existing_origin.clone();
+        let decision = remote_submission_decision(
+            requires_remote,
+            existing_origin.as_deref(),
+            &remote,
+            setup.remote_probe_failed,
+            setup.confirmed_unreachable,
+            setup.confirmed_reset,
+        );
+        match decision {
+            RemoteSubmissionAction::RejectSyntax => {
+                let error = self.git_label(GitMsg::SetupRemoteHelp).to_string();
+                if let Some(setup) = &mut self.git_ui.onboarding {
+                    setup.error = Some(error);
+                }
+                cx.notify();
             }
-            cx.notify();
-            return;
+            RemoteSubmissionAction::NeedsProbe => {
+                let executable = self
+                    .git_preferences
+                    .executable
+                    .clone()
+                    .unwrap_or_else(|| "git".to_string());
+                let workspace_root = self.workspace_root.clone();
+                let probed_remote = remote;
+                let cancellation = CancellationToken::new();
+                if let Some(setup) = &mut self.git_ui.onboarding {
+                    setup.busy = true;
+                    setup.error = None;
+                    setup.cancellation = Some(cancellation.clone());
+                }
+                cx.notify();
+                cx.spawn(async move |this, cx| {
+                    let probed_address = probed_remote.clone();
+                    let failed = cx
+                        .background_spawn(async move {
+                            OnboardingService::new(GitCommandRunner::new(executable))
+                                .with_foreground_credentials()
+                                .probe_remote(&probed_address, &workspace_root, &cancellation)
+                                .is_err()
+                        })
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        let Some(setup) = &mut app.git_ui.onboarding else {
+                            return;
+                        };
+                        setup.busy = false;
+                        setup.cancellation = None;
+                        // A result for an address the user already edited
+                        // away is discarded; the new address probes on
+                        // resubmit.
+                        if setup.fields[0].buffer.trim() == probed_remote {
+                            setup.remote_probe_failed = Some(failed);
+                            app.submit_git_onboarding(cx);
+                        } else {
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+            RemoteSubmissionAction::NeedsUnreachableConfirm => {
+                if let Some(setup) = &mut self.git_ui.onboarding {
+                    setup.error = None;
+                    setup.confirm_unreachable = Some(remote);
+                }
+                cx.notify();
+            }
+            RemoteSubmissionAction::NeedsResetConfirm => {
+                if let Some(setup) = &mut self.git_ui.onboarding {
+                    setup.error = None;
+                    setup.confirm_remote_reset =
+                        Some((existing_origin.unwrap_or_default(), remote));
+                }
+                cx.notify();
+            }
+            RemoteSubmissionAction::Proceed { replace_remote } => {
+                self.launch_git_onboarding(replace_remote, cx);
+            }
         }
+    }
+
+    /// Resolves an inline remote prompt (unreachable address or address
+    /// reset): acceptance sets the corresponding confirmation flag and
+    /// resubmits; rejection dismisses the prompt without changes.
+    pub(super) fn resolve_git_onboarding_remote_prompt(
+        &mut self,
+        prompt: git_panel::GitRemotePrompt,
+        accepted: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(setup) = &mut self.git_ui.onboarding else {
+            return;
+        };
+        match prompt {
+            git_panel::GitRemotePrompt::Unreachable => {
+                setup.confirm_unreachable = None;
+                if accepted {
+                    setup.confirmed_unreachable = true;
+                }
+            }
+            git_panel::GitRemotePrompt::Reset => {
+                setup.confirm_remote_reset = None;
+                if accepted {
+                    setup.confirmed_reset = true;
+                }
+            }
+        }
+        cx.notify();
+        if accepted {
+            self.submit_git_onboarding(cx);
+        }
+    }
+
+    fn launch_git_onboarding(&mut self, replace_remote: bool, cx: &mut Context<Self>) {
+        let Some(setup) = &self.git_ui.onboarding else {
+            return;
+        };
+        let mode = setup.mode;
+        let remote = setup.fields[0].buffer.trim().to_string();
+        let destination = setup.fields[1].buffer.trim().to_string();
+        let branch = setup.fields[2].buffer.trim().to_string();
+        let author_name = setup.fields[3].buffer.trim().to_string();
+        let author_email = setup.fields[4].buffer.trim().to_string();
+        let sync_after_setup = setup.sync_after_setup;
         let workspace_root = self.workspace_root.clone();
         let clone_destination = if mode == git_panel::GitOnboardingMode::CloneRepository {
             resolve_clone_destination(&workspace_root, &remote, &destination, self.language)
@@ -824,7 +1009,6 @@ impl MarkionApp {
             .unwrap_or_else(|| "git".to_string());
         let background_fetch = self.git_preferences.background_check;
         let language = self.language;
-        let sync_after_setup = setup.sync_after_setup;
         let cancellation = CancellationToken::new();
         if let Some(setup) = &mut self.git_ui.onboarding {
             setup.busy = true;
@@ -848,6 +1032,7 @@ impl MarkionApp {
                         author_name,
                         author_email,
                         background_fetch,
+                        replace_remote,
                         cancellation,
                     )
                 })
@@ -1670,6 +1855,7 @@ fn run_git_onboarding(
     author_name: String,
     author_email: String,
     background_fetch: bool,
+    replace_remote: bool,
     cancellation: CancellationToken,
 ) -> Result<GitOnboardingSuccess, String> {
     let runner = GitCommandRunner::new(executable);
@@ -1722,7 +1908,10 @@ fn run_git_onboarding(
     }
 
     let pending_files = review.state.worktree.changes.len();
-    let target = if let Some(target) = review.target {
+    // A confirmed address replacement must take the attach-and-publish path
+    // even when the existing origin already resolves a sync target;
+    // otherwise the entered address would be silently ignored.
+    let target = if !replace_remote && let Some(target) = review.target {
         target
     } else {
         let origin = service
@@ -1744,7 +1933,7 @@ fn run_git_onboarding(
         }
         if !remote.is_empty() {
             service
-                .attach_origin(&review.repository, &remote, &cancellation)
+                .attach_origin(&review.repository, &remote, replace_remote, &cancellation)
                 .map_err(|error| error.to_string())?;
         }
         let publication_branch = if branch.is_empty() {
@@ -1779,7 +1968,12 @@ fn run_git_onboarding(
                 None,
                 &cancellation,
             )
-            .map_err(|error| format!("{error}. {}", git_t(language, GitMsg::PublicationRetryHint)))?
+            .map_err(|error| match error {
+                markion_git_sync::OnboardingError::UnrelatedRemoteHistory { .. } => {
+                    git_t(language, GitMsg::SetupUnrelatedRemote).into()
+                }
+                error => format!("{error}. {}", git_t(language, GitMsg::PublicationRetryHint)),
+            })?
             .target
     };
     let policy = default_notes_policy(
@@ -2465,6 +2659,82 @@ mod tests {
                 Some(&target),
             ),
             RepositoryAdoption::NeedsSetup
+        );
+    }
+
+    #[test]
+    fn remote_submission_rejects_invalid_and_required_empty_addresses() {
+        use RemoteSubmissionAction::RejectSyntax;
+        // Clone/initialize routes require an address; connecting the current
+        // folder may leave it empty to keep the existing binding.
+        assert_eq!(
+            remote_submission_decision(true, None, "", None, false, false),
+            RejectSyntax
+        );
+        assert_eq!(
+            remote_submission_decision(false, None, "", None, false, false),
+            RemoteSubmissionAction::Proceed {
+                replace_remote: false
+            }
+        );
+        assert_eq!(
+            remote_submission_decision(false, None, "../remote.git", None, false, false),
+            RejectSyntax
+        );
+    }
+
+    #[test]
+    fn remote_submission_probes_new_addresses_and_confirms_unreachable() {
+        let address = "https://example.invalid/notes.git";
+        // A new address starts with a probe; the identical existing origin
+        // skips it entirely.
+        assert_eq!(
+            remote_submission_decision(false, None, address, None, false, false),
+            RemoteSubmissionAction::NeedsProbe
+        );
+        assert_eq!(
+            remote_submission_decision(false, Some(address), address, None, false, false),
+            RemoteSubmissionAction::Proceed {
+                replace_remote: false
+            }
+        );
+        // Reachable: proceed without attaching to any existing origin.
+        assert_eq!(
+            remote_submission_decision(false, None, address, Some(false), false, false),
+            RemoteSubmissionAction::Proceed {
+                replace_remote: false
+            }
+        );
+        // Unreachable: warn first, proceed only after explicit confirmation.
+        assert_eq!(
+            remote_submission_decision(false, None, address, Some(true), false, false),
+            RemoteSubmissionAction::NeedsUnreachableConfirm
+        );
+        assert_eq!(
+            remote_submission_decision(false, None, address, Some(true), true, false),
+            RemoteSubmissionAction::Proceed {
+                replace_remote: false
+            }
+        );
+    }
+
+    #[test]
+    fn remote_submission_requires_explicit_reset_for_differing_origin() {
+        let address = "https://example.invalid/notes.git";
+        let existing = "https://old.example/notes.git";
+        assert_eq!(
+            remote_submission_decision(false, Some(existing), address, Some(false), false, false),
+            RemoteSubmissionAction::NeedsResetConfirm
+        );
+        assert_eq!(
+            remote_submission_decision(false, Some(existing), address, Some(true), true, false),
+            RemoteSubmissionAction::NeedsResetConfirm
+        );
+        assert_eq!(
+            remote_submission_decision(false, Some(existing), address, Some(true), true, true),
+            RemoteSubmissionAction::Proceed {
+                replace_remote: true
+            }
         );
     }
 

@@ -21748,12 +21748,17 @@ fn git_quick_setup_derives_clone_folder_and_keeps_input_out_of_document(cx: &mut
             repository_root: None,
             advanced: false,
             advanced_required: false,
-            alternatives_open: false,
             destination_edited: false,
             sync_after_setup: false,
             busy: false,
             cancellation: None,
             error: None,
+            existing_origin: None,
+            remote_probe_failed: None,
+            confirm_unreachable: None,
+            confirmed_unreachable: false,
+            confirm_remote_reset: None,
+            confirmed_reset: false,
         });
         app.search_focus = Some(SearchField::GitSetup(0));
         app

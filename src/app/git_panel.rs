@@ -39,6 +39,13 @@ pub(super) enum GitOnboardingMode {
     InitializeFolder,
 }
 
+/// Which inline sync-address prompt is being resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GitRemotePrompt {
+    Unreachable,
+    Reset,
+}
+
 pub(super) struct GitOnboarding {
     pub mode: GitOnboardingMode,
     /// Sync address, local destination, branch, author name, author email.
@@ -46,12 +53,23 @@ pub(super) struct GitOnboarding {
     pub repository_root: Option<PathBuf>,
     pub advanced: bool,
     pub advanced_required: bool,
-    pub alternatives_open: bool,
     pub destination_edited: bool,
     pub sync_after_setup: bool,
     pub busy: bool,
     pub cancellation: Option<CancellationToken>,
     pub error: Option<String>,
+    /// The repository's current origin URL, captured by the onboarding probe.
+    pub existing_origin: Option<String>,
+    /// Result of the ls-remote reachability probe for the entered address.
+    pub remote_probe_failed: Option<bool>,
+    /// Inline confirmation that an unreachable address will be used anyway.
+    pub confirm_unreachable: Option<String>,
+    /// Set once the user accepted the unreachable-address warning.
+    pub confirmed_unreachable: bool,
+    /// Inline confirmation comparing the current and entered sync addresses.
+    pub confirm_remote_reset: Option<(String, String)>,
+    /// Set once the user accepted the sync-address reset.
+    pub confirmed_reset: bool,
 }
 
 #[derive(Default)]
@@ -2693,17 +2711,7 @@ pub(super) fn onboarding_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
             app.git_label(label).to_string()
         }
     };
-    let primary = if setup.error.is_some() {
-        app.git_label(GitMsg::Retry)
-    } else if setup.advanced_required {
-        app.git_label(GitMsg::AdvancedRepositorySetup)
-    } else {
-        app.git_label(match setup.mode {
-            GitOnboardingMode::UseCurrentFolder => GitMsg::UseThisFolder,
-            GitOnboardingMode::CloneRepository => GitMsg::CloneNotesRepository,
-            GitOnboardingMode::InitializeFolder => GitMsg::StartSyncingFolder,
-        })
-    };
+    let primary = app.git_label(GitMsg::Confirm);
     let labels = [
         if setup.mode == GitOnboardingMode::UseCurrentFolder {
             GitMsg::SyncAddressOptional
@@ -2779,88 +2787,61 @@ pub(super) fn onboarding_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
                 )
                 .child(
                     div()
-                        .text_size(px(15.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(selected_label(
-                            setup.mode,
-                            match setup.mode {
-                                GitOnboardingMode::UseCurrentFolder => GitMsg::UseThisFolder,
-                                GitOnboardingMode::CloneRepository => GitMsg::CloneNotesRepository,
-                                GitOnboardingMode::InitializeFolder => GitMsg::StartSyncingFolder,
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .child(button(
+                            "git-setup-current",
+                            selected_label(
+                                GitOnboardingMode::UseCurrentFolder,
+                                GitMsg::UseThisFolder,
+                            ),
+                            !setup.busy,
+                            palette,
+                            cx,
+                            |app, window, cx| {
+                                app.set_git_onboarding_mode(
+                                    GitOnboardingMode::UseCurrentFolder,
+                                    window,
+                                    cx,
+                                )
+                            },
+                        ))
+                        .child(button(
+                            "git-setup-clone",
+                            selected_label(
+                                GitOnboardingMode::CloneRepository,
+                                GitMsg::CloneNotesRepository,
+                            ),
+                            !setup.busy,
+                            palette,
+                            cx,
+                            |app, window, cx| {
+                                app.set_git_onboarding_mode(
+                                    GitOnboardingMode::CloneRepository,
+                                    window,
+                                    cx,
+                                )
+                            },
+                        ))
+                        .child(button(
+                            "git-setup-initialize",
+                            selected_label(
+                                GitOnboardingMode::InitializeFolder,
+                                GitMsg::StartSyncingFolder,
+                            ),
+                            !setup.busy,
+                            palette,
+                            cx,
+                            |app, window, cx| {
+                                app.set_git_onboarding_mode(
+                                    GitOnboardingMode::InitializeFolder,
+                                    window,
+                                    cx,
+                                )
                             },
                         )),
                 )
-                .child(button(
-                    "git-setup-alternatives",
-                    app.git_label(if setup.alternatives_open {
-                        GitMsg::HideSetupOptions
-                    } else {
-                        GitMsg::OtherSetupOptions
-                    }),
-                    !setup.busy,
-                    palette,
-                    cx,
-                    |app, _, cx| app.toggle_git_onboarding_alternatives(cx),
-                ))
-                .when(setup.alternatives_open, |view| {
-                    view.child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap_1()
-                            .child(button(
-                                "git-setup-current",
-                                selected_label(
-                                    GitOnboardingMode::UseCurrentFolder,
-                                    GitMsg::UseThisFolder,
-                                ),
-                                !setup.busy,
-                                palette,
-                                cx,
-                                |app, window, cx| {
-                                    app.set_git_onboarding_mode(
-                                        GitOnboardingMode::UseCurrentFolder,
-                                        window,
-                                        cx,
-                                    )
-                                },
-                            ))
-                            .child(button(
-                                "git-setup-clone",
-                                selected_label(
-                                    GitOnboardingMode::CloneRepository,
-                                    GitMsg::CloneNotesRepository,
-                                ),
-                                !setup.busy,
-                                palette,
-                                cx,
-                                |app, window, cx| {
-                                    app.set_git_onboarding_mode(
-                                        GitOnboardingMode::CloneRepository,
-                                        window,
-                                        cx,
-                                    )
-                                },
-                            ))
-                            .child(button(
-                                "git-setup-initialize",
-                                selected_label(
-                                    GitOnboardingMode::InitializeFolder,
-                                    GitMsg::StartSyncingFolder,
-                                ),
-                                !setup.busy,
-                                palette,
-                                cx,
-                                |app, window, cx| {
-                                    app.set_git_onboarding_mode(
-                                        GitOnboardingMode::InitializeFolder,
-                                        window,
-                                        cx,
-                                    )
-                                },
-                            )),
-                    )
-                })
                 .child(fields)
                 .child(
                     div()
@@ -2868,6 +2849,101 @@ pub(super) fn onboarding_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
                         .text_color(palette.muted)
                         .child(app.git_label(GitMsg::SyncAddressHelp)),
                 )
+                .when_some(setup.confirm_unreachable.clone(), |view, address| {
+                    view.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .text_size(px(12.))
+                            .child(git_tf(
+                                app.language,
+                                GitMsg::RemoteUnreachableWarning,
+                                &[&address],
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .child(button(
+                                        "git-setup-remote-anyway",
+                                        app.git_label(GitMsg::UseAddressAnyway),
+                                        !setup.busy,
+                                        palette,
+                                        cx,
+                                        |app, _, cx| {
+                                            app.resolve_git_onboarding_remote_prompt(
+                                                GitRemotePrompt::Unreachable,
+                                                true,
+                                                cx,
+                                            )
+                                        },
+                                    ))
+                                    .child(button(
+                                        "git-setup-remote-cancel",
+                                        app.git_label(GitMsg::Cancel),
+                                        !setup.busy,
+                                        palette,
+                                        cx,
+                                        |app, _, cx| {
+                                            app.resolve_git_onboarding_remote_prompt(
+                                                GitRemotePrompt::Unreachable,
+                                                false,
+                                                cx,
+                                            )
+                                        },
+                                    )),
+                            ),
+                    )
+                })
+                .when_some(setup.confirm_remote_reset.clone(), |view, addresses| {
+                    let (current, entered) = (&addresses.0, &addresses.1);
+                    view.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .text_size(px(12.))
+                            .child(git_tf(
+                                app.language,
+                                GitMsg::RemoteResetCompare,
+                                &[current, entered],
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .child(button(
+                                        "git-setup-remote-reset",
+                                        app.git_label(GitMsg::ResetSyncAddress),
+                                        !setup.busy,
+                                        palette,
+                                        cx,
+                                        |app, _, cx| {
+                                            app.resolve_git_onboarding_remote_prompt(
+                                                GitRemotePrompt::Reset,
+                                                true,
+                                                cx,
+                                            )
+                                        },
+                                    ))
+                                    .child(button(
+                                        "git-setup-remote-keep",
+                                        app.git_label(GitMsg::Cancel),
+                                        !setup.busy,
+                                        palette,
+                                        cx,
+                                        |app, _, cx| {
+                                            app.resolve_git_onboarding_remote_prompt(
+                                                GitRemotePrompt::Reset,
+                                                false,
+                                                cx,
+                                            )
+                                        },
+                                    )),
+                            ),
+                    )
+                })
                 .when(setup.advanced_required, |view| {
                     view.child(
                         div()
@@ -2878,7 +2954,11 @@ pub(super) fn onboarding_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
                 .when(!setup.advanced_required, |view| {
                     view.child(button(
                         "git-setup-advanced",
-                        app.git_label(GitMsg::Advanced),
+                        app.git_label(if setup.advanced {
+                            GitMsg::HideAdvancedSetup
+                        } else {
+                            GitMsg::Advanced
+                        }),
                         !setup.busy,
                         palette,
                         cx,

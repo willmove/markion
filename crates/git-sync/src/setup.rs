@@ -27,6 +27,11 @@ pub enum OnboardingError {
     DestinationExists,
     #[error("repository already has a remote named {0}; it was not replaced")]
     RemoteExists(String),
+    #[error("remote {remote} branch {branch} has no common history with this repository; clone it to a separate folder or integrate it manually")]
+    UnrelatedRemoteHistory {
+        remote: String,
+        branch: String,
+    },
     #[error("requested branch is invalid or unavailable")]
     InvalidBranch,
     #[error("repository has no commit to publish")]
@@ -243,6 +248,7 @@ impl OnboardingService {
         &self,
         repository: &GitRepository,
         remote: &str,
+        allow_replace: bool,
         cancellation: &CancellationToken,
     ) -> Result<(), OnboardingError> {
         let remote = RemoteUrl::parse(remote)?;
@@ -251,7 +257,19 @@ impl OnboardingService {
             if existing.trim() == remote.as_str() {
                 return Ok(());
             }
-            return Err(OnboardingError::RemoteExists("origin".into()));
+            if !allow_replace {
+                return Err(OnboardingError::RemoteExists("origin".into()));
+            }
+            self.run(
+                GitCommand::new(&repository.identity().worktree_root).args([
+                    "remote",
+                    "set-url",
+                    "origin",
+                    remote.as_str(),
+                ]),
+                cancellation,
+            )?;
+            return Ok(());
         }
         self.run(
             GitCommand::new(&repository.identity().worktree_root).args([
@@ -265,12 +283,31 @@ impl OnboardingService {
         Ok(())
     }
 
+    /// Checks that a sync address can be contacted before setup applies it.
+    /// Every failure — bad address, missing repository, denied access,
+    /// timeout — maps to the same error so callers can offer one
+    /// warn-and-confirm action. Runs outside any repository; an empty but
+    /// reachable remote succeeds because ls-remote without --exit-code
+    /// exits zero when no refs are listed.
+    pub fn probe_remote(
+        &self,
+        remote: &str,
+        directory: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<(), OnboardingError> {
+        let remote = RemoteUrl::parse(remote)?;
+        let request = GitCommand::new(directory)
+            .args(["ls-remote", remote.as_str()])
+            .read_only(true);
+        self.run(self.network_request(request, None), cancellation)?;
+        Ok(())
+    }
+
     pub fn origin_url(
         &self,
         repository: &GitRepository,
         cancellation: &CancellationToken,
-    ) -> Result<Option<String>, OnboardingError> {
-        Ok(self.run_optional(
+    ) -> Result<Option<String>, OnboardingError> {        Ok(self.run_optional(
             GitCommand::new(&repository.identity().worktree_root)
                 .args(["remote", "get-url", "origin"])
                 .read_only(true),
@@ -386,18 +423,72 @@ impl OnboardingService {
                     .map_err(|_| OnboardingError::NothingToPublish)
             })?;
         let destination_ref = format!("refs/heads/{remote_branch}");
-        let refspec = format!("{}:{destination_ref}", commit.as_str());
-        let request = GitCommand::new(&repository.identity().worktree_root).args([
-            "push",
-            "--porcelain",
-            remote_name,
-            &refspec,
-        ]);
-        let request = self.network_request(request, askpass);
-        self.run(request, cancellation)?;
 
-        // Bind upstream only after the exact publication succeeded. A failed
-        // network operation is therefore safe to resume.
+        // Learn the remote's state before pushing so that connecting to a
+        // remote which already has work does not dead-end on a rejected
+        // non-fast-forward push: absent or strictly-behind remotes take the
+        // exact publication push; a remote already at, ahead of, or diverged
+        // from the local commit only binds upstream and lets the first sync
+        // integrate; unrelated histories are refused outright.
+        let remote_tracking_ref = format!("refs/remotes/{remote_name}/{remote_branch}");
+        let fetch = GitCommand::new(&repository.identity().worktree_root)
+            .args(["fetch", "--no-tags", remote_name]);
+        self.run(self.network_request(fetch, askpass), cancellation)?;
+        let remote_commit = self
+            .run_optional(
+                GitCommand::new(&repository.identity().worktree_root)
+                    .args(["rev-parse", "--verify", remote_tracking_ref.as_str()])
+                    .read_only(true),
+                cancellation,
+            )?
+            .map(|text| GitObjectId::parse(text.trim().to_string()))
+            .transpose()
+            .map_err(|_| OnboardingError::NothingToPublish)?;
+        let needs_push = match remote_commit {
+            None => true,
+            Some(remote_commit) if remote_commit == commit => false,
+            Some(remote_commit) => {
+                let merge_base = self
+                    .run_optional(
+                        GitCommand::new(&repository.identity().worktree_root)
+                            .args([
+                                "merge-base",
+                                commit.as_str(),
+                                remote_commit.as_str(),
+                            ])
+                            .read_only(true),
+                        cancellation,
+                    )?
+                    .map(|text| GitObjectId::parse(text.trim().to_string()))
+                    .transpose()
+                    .map_err(|_| OnboardingError::NothingToPublish)?;
+                match merge_base {
+                    None => {
+                        return Err(OnboardingError::UnrelatedRemoteHistory {
+                            remote: remote_name.to_string(),
+                            branch: remote_branch.to_string(),
+                        })
+                    }
+                    // The remote is strictly behind: the exact push
+                    // fast-forwards it. Anything else integrates later.
+                    Some(base) => base == remote_commit,
+                }
+            }
+        };
+        if needs_push {
+            let refspec = format!("{}:{destination_ref}", commit.as_str());
+            let request = GitCommand::new(&repository.identity().worktree_root).args([
+                "push",
+                "--porcelain",
+                remote_name,
+                &refspec,
+            ]);
+            let request = self.network_request(request, askpass);
+            self.run(request, cancellation)?;
+        }
+
+        // Bind upstream only after the exact publication succeeded (or was
+        // not needed). A failed network operation is therefore safe to resume.
         self.run(
             GitCommand::new(&repository.identity().worktree_root).args([
                 "config",
@@ -681,6 +772,7 @@ mod tests {
             .attach_origin(
                 &review.repository,
                 remote_a.to_str().unwrap(),
+                false,
                 &CancellationToken::new(),
             )
             .unwrap();
@@ -688,6 +780,7 @@ mod tests {
             .attach_origin(
                 &review.repository,
                 remote_a.to_str().unwrap(),
+                false,
                 &CancellationToken::new(),
             )
             .unwrap();
@@ -695,6 +788,7 @@ mod tests {
             service.attach_origin(
                 &review.repository,
                 remote_b.to_str().unwrap(),
+                false,
                 &CancellationToken::new(),
             ),
             Err(OnboardingError::RemoteExists(name)) if name == "origin"
@@ -703,11 +797,63 @@ mod tests {
             run_git_output(&notes, ["remote", "get-url", "origin"]).trim(),
             remote_a.to_str().unwrap()
         );
+        // The explicitly confirmed replacement switches the origin URL.
+        service
+            .attach_origin(
+                &review.repository,
+                remote_b.to_str().unwrap(),
+                true,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            run_git_output(&notes, ["remote", "get-url", "origin"]).trim(),
+            remote_b.to_str().unwrap()
+        );
     }
 
     #[test]
-    fn foreground_credentials_are_opt_in_for_explicit_onboarding() {
-        let request = GitCommand::new(".").args(["fetch", "origin"]);
+    fn probe_remote_contacts_existing_remote_and_fails_for_missing_or_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let remote = dir.path().join("remote.git");
+        run_git(
+            dir.path(),
+            ["init", "--bare", "-q", remote.to_str().unwrap()],
+        );
+        let service = OnboardingService::new(GitCommandRunner::new("git"));
+        service
+            .probe_remote(
+                remote.to_str().unwrap(),
+                dir.path(),
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        // An empty remote is still reachable and must succeed.
+        service
+            .probe_remote(
+                remote.to_str().unwrap(),
+                dir.path(),
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        assert!(
+            service
+                .probe_remote(
+                    dir.path().join("missing.git").to_str().unwrap(),
+                    dir.path(),
+                    &CancellationToken::new(),
+                )
+                .is_err()
+        );
+        assert!(
+            service
+                .probe_remote("bad\u{1}address", dir.path(), &CancellationToken::new())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn foreground_credentials_are_opt_in_for_explicit_onboarding() {        let request = GitCommand::new(".").args(["fetch", "origin"]);
         let background = OnboardingService::new(GitCommandRunner::new("git"))
             .network_request(request.clone(), None);
         let foreground = OnboardingService::new(GitCommandRunner::new("git"))

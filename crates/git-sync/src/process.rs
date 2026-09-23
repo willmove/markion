@@ -72,6 +72,31 @@ pub struct GitCommandOutput {
     pub elapsed: Duration,
 }
 
+/// Cap on how much stream text the error Display renders, keeping failed
+/// command messages readable in dialogs and logs.
+const OUTPUT_DISPLAY_LIMIT: usize = 400;
+
+impl std::fmt::Display for GitCommandOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "exit {:?}", self.status_code)?;
+        let mut text = self.stderr_text();
+        if text.trim().is_empty() {
+            text = self.stdout_text();
+        }
+        let text = text.trim();
+        if !text.is_empty() {
+            let bounded: String = if text.chars().count() > OUTPUT_DISPLAY_LIMIT {
+                let truncated: String = text.chars().take(OUTPUT_DISPLAY_LIMIT).collect();
+                format!("{truncated}...")
+            } else {
+                text.to_string()
+            };
+            write!(f, ": {bounded}")?;
+        }
+        Ok(())
+    }
+}
+
 impl GitCommandOutput {
     pub fn success(&self) -> bool {
         self.termination == ProcessTermination::Exited && self.status_code == Some(0)
@@ -94,7 +119,7 @@ pub enum GitCommandError {
     Wait(#[source] io::Error),
     #[error("failed to read Git output: {0}")]
     Output(#[source] io::Error),
-    #[error("Git exited unsuccessfully: {output:?}")]
+    #[error("Git exited unsuccessfully: {output}")]
     Failed { output: GitCommandOutput },
 }
 
