@@ -131,6 +131,19 @@ native package extraction and exhaustive bundle verification on Windows,
 macOS Apple Silicon, and Linux. The maintainer-authorized macOS and Linux
 manual-browser deferrals remain recorded as deferrals, not as passes.
 
+## v0.4.2 carry-over
+
+`v0.4.1..v0.4.2` (and `v0.3.12..v0.4.2`) contains no changes under
+`assets/marknice-workspace` or `crates/wechat-workspace`, so the v0.2.7
+source-tree browser evidence, the prior carry-overs, and the unchanged WeChat
+rich-paste evidence carry over to v0.4.2. Before tagging on 2026-09-23, the
+source-tree `verify-bundle` command passed on Windows at pinned MarkNice
+revision `c009c1ec7e7c92f89afa5a32edcb126b5296bda7`. v0.4.2 additionally ships
+a Windows portable `.zip` and a Linux `.rpm`; both package the same workspace
+payload as the existing formats and are covered by the tag-workflow extraction
+and exhaustive bundle verification. The maintainer-authorized macOS and Linux
+manual-browser deferrals remain recorded as deferrals, not as passes.
+
 ## v0.3.12 carry-over
 
 `v0.3.11..v0.3.12` contains no changes under `assets/marknice-workspace` or

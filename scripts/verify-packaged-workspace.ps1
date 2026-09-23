@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("nsis", "app", "dmg", "deb", "appimage")]
+    [ValidateSet("nsis", "app", "dmg", "deb", "appimage", "zip", "rpm")]
     [string]$Format,
     [string]$ArtifactsRoot = "dist"
 )
@@ -87,6 +87,18 @@ try {
             Push-Location $cleanupRoot
             try { Invoke-Native "AppImage extraction" { & $package.FullName --appimage-extract } }
             finally { Pop-Location }
+        }
+        "zip" {
+            $package = Get-ChildItem -LiteralPath $artifacts -Filter "*-portable.zip" -File | Select-Object -First 1
+            if (-not $package) { throw "Portable zip not found" }
+            Expand-Archive -LiteralPath $package.FullName -DestinationPath $cleanupRoot -Force
+        }
+        "rpm" {
+            $package = Get-ChildItem -LiteralPath $artifacts -Filter "*.rpm" -File | Select-Object -First 1
+            if (-not $package) { throw "RPM package not found" }
+            Invoke-Native "RPM extraction" {
+                bash -lc "cd '$($cleanupRoot -replace '\\','/')' && rpm2cpio '$($package.FullName -replace '\\','/')' | cpio -idmu --quiet"
+            }
         }
     }
 

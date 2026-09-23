@@ -21,6 +21,11 @@
 #   - Linux:   .deb + .AppImage   (--formats deb,appimage)
 #   - Windows: NSIS .exe installer (--formats nsis)
 #
+# cargo-packager 0.11.x has no zip or rpm PackageFormat. CI additionally emits:
+#   - Windows: markion_<version>_x64-portable.zip  (scripts/build-windows-portable.ps1)
+#   - Linux:   markion_<version>_x86_64.rpm        (scripts/build-linux-rpm.sh, from the DEB payload)
+# Those two artifacts still go through scripts/verify-packaged-workspace.ps1.
+#
 # NOTE on signing: builds have no paid platform code-signing certificate, so
 # users can still see Gatekeeper (macOS) / SmartScreen (Windows) warnings. The
 # Windows NSIS installer is separately signed with minisign for the in-app
@@ -28,8 +33,9 @@
 #
 # Aliyun OSS mirror (release.yml `mirror-oss` job):
 #   After a successful `v*` tag build, the release workflow also uploads the
-#   four installers, updater `update.json` + `.sig`, this `packager.toml`, a
-#   generated `manifest.json`, and `sha256sums.txt` to an Aliyun OSS Bucket at:
+#   six packages (NSIS, portable zip, DMG, DEB, RPM, AppImage), updater
+#   `update.json` + `.sig`, this `packager.toml`, a generated `manifest.json`,
+#   and `sha256sums.txt` to an Aliyun OSS Bucket at:
 #       ${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/<filename>
 #   The in-app "Check for Updates…" action discovers releases from GitHub's
 #   latest-release API. Signed Windows builds then use the stable `update.json`

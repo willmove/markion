@@ -34,14 +34,17 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             formats: deb,appimage
+            verify_formats: deb,appimage,rpm
             artifact_name: markion-linux-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
             formats: app,dmg
+            verify_formats: app,dmg
             artifact_name: markion-macos-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             formats: nsis
+            verify_formats: nsis,zip
             artifact_name: markion-windows-x86_64
     runs-on: ${{ matrix.os }}
     steps:
@@ -78,7 +81,10 @@ jobs:
             libxcb-shape0-dev \
             libxcb-xfixes0-dev \
             libvulkan-dev \
-            libasound2-dev
+            libasound2-dev \
+            rpm \
+            rpm-build \
+            cpio
 
       # The public key is intentionally embedded only in the tagged Windows
       # binary. Untagged and local builds keep the browser-download path.
@@ -110,10 +116,20 @@ jobs:
       - name: Package (${{ matrix.formats }})
         run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }}
 
-      - name: Verify packaged MarkNice workspace (${{ matrix.formats }})
+      # cargo-packager has no zip/rpm formats; assemble those after NSIS/DEB.
+      - name: Package Windows portable zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-windows-portable.ps1 -ArtifactsRoot dist
+
+      - name: Package Linux RPM from DEB payload
+        if: runner.os == 'Linux'
+        run: bash scripts/build-linux-rpm.sh
+
+      - name: Verify packaged MarkNice workspace (${{ matrix.verify_formats }})
         shell: pwsh
         run: |
-          '${{ matrix.formats }}'.Split(',') | ForEach-Object {
+          '${{ matrix.verify_formats }}'.Split(',') | ForEach-Object {
             ./scripts/verify-packaged-workspace.ps1 -Format $_ -ArtifactsRoot dist
           }
 
@@ -269,6 +285,7 @@ jobs:
   # Mirrors the tagged release's installers and packaging config to a domestic
   # Aliyun OSS Bucket at a stable `${OSS_PREFIX}/latest/` path, alongside a
   # generated `manifest.json` for mirror metadata and future clients.
+  # Packages: Windows NSIS + portable zip, macOS DMG, Linux DEB + RPM + AppImage.
   # The mirrored `update.json` is the Release's manifest with its installer
   # URL rewritten to the OSS host, so each distribution channel serves a
   # self-consistent manifest/installer pair with identical signatures.
@@ -333,8 +350,10 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --dir dist \
             --pattern "markion_${VERSION}_x64-setup.exe" \
+            --pattern "markion_${VERSION}_x64-portable.zip" \
             --pattern "Markion_${VERSION}_aarch64.dmg" \
             --pattern "markion_${VERSION}_amd64.deb" \
+            --pattern "markion_${VERSION}_x86_64.rpm" \
             --pattern "markion_${VERSION}_x86_64.AppImage" \
             --pattern "markion_${VERSION}_x64-setup.exe.sig" \
             --pattern "update.json"
@@ -345,7 +364,7 @@ jobs:
       - name: Compute SHA-256 digests for each installer
         run: |
           cd dist
-          sha256sum *.exe *.dmg *.deb *.AppImage > sha256sums.txt
+          sha256sum *.exe *.dmg *.deb *.rpm *.AppImage *.zip > sha256sums.txt
           cat sha256sums.txt
 
       - name: Rewrite update.json installer URL to the OSS host
@@ -393,8 +412,10 @@ jobs:
           version = release_tag.lstrip("v")
           assets = {
               "windows-x86_64": f"markion_{version}_x64-setup.exe",
+              "windows-x86_64-portable": f"markion_{version}_x64-portable.zip",
               "macos-aarch64":  f"Markion_{version}_aarch64.dmg",
               "linux-amd64":    f"markion_{version}_amd64.deb",
+              "linux-rpm":      f"markion_{version}_x86_64.rpm",
               "linux-appimage": f"markion_{version}_x86_64.AppImage",
           }
           out = {
@@ -473,8 +494,10 @@ jobs:
           }
 
           upload "dist/markion_${VERSION}_x64-setup.exe" "${prefix_dir}/markion_${VERSION}_x64-setup.exe"
+          upload "dist/markion_${VERSION}_x64-portable.zip" "${prefix_dir}/markion_${VERSION}_x64-portable.zip"
           upload "dist/Markion_${VERSION}_aarch64.dmg" "${prefix_dir}/Markion_${VERSION}_aarch64.dmg"
           upload "dist/markion_${VERSION}_amd64.deb" "${prefix_dir}/markion_${VERSION}_amd64.deb"
+          upload "dist/markion_${VERSION}_x86_64.rpm" "${prefix_dir}/markion_${VERSION}_x86_64.rpm"
           upload "dist/markion_${VERSION}_x86_64.AppImage" "${prefix_dir}/markion_${VERSION}_x86_64.AppImage"
           upload "dist/markion_${VERSION}_x64-setup.exe.sig" "${prefix_dir}/markion_${VERSION}_x64-setup.exe.sig"
           upload "dist/update.json" "${prefix_dir}/update.json"
@@ -492,8 +515,10 @@ jobs:
           base="${OSS_PUBLIC_BASE%/}/${OSS_PREFIX#/}/latest"
           for f in \
             "markion_${VERSION}_x64-setup.exe" \
+            "markion_${VERSION}_x64-portable.zip" \
             "Markion_${VERSION}_aarch64.dmg" \
             "markion_${VERSION}_amd64.deb" \
+            "markion_${VERSION}_x86_64.rpm" \
             "markion_${VERSION}_x86_64.AppImage" \
             "markion_${VERSION}_x64-setup.exe.sig" \
             "update.json" \
