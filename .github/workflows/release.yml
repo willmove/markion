@@ -83,7 +83,7 @@ jobs:
             libvulkan-dev \
             libasound2-dev \
             rpm \
-            rpm-build \
+            rpm2cpio \
             cpio
 
       # The public key is intentionally embedded only in the tagged Windows
