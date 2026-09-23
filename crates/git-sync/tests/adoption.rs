@@ -99,10 +99,18 @@ fn eligible_repository_is_adopted_and_commits_compact_message() {
         paths,
     };
     let data = tempfile::tempdir().unwrap();
-    let journal = JournalStore::new(data.path().join("journal.toml"), data.path().join("recovery"));
+    let journal = JournalStore::new(
+        data.path().join("journal.toml"),
+        data.path().join("recovery"),
+    );
     let engine = GitSyncEngine::new(repository, journal, SyncOptions::default());
     engine
-        .commit_locally(&plan, &policy, None, &markion_git_sync::CancellationToken::new())
+        .commit_locally(
+            &plan,
+            &policy,
+            None,
+            &markion_git_sync::CancellationToken::new(),
+        )
         .unwrap();
 
     let subject = git_output(&fixture.first, &["log", "-1", "--pretty=%s"]);
@@ -150,7 +158,10 @@ fn repository_with_hidden_and_furniture_files_is_adopted() {
     std::fs::create_dir_all(fixture.first.join(".obsidian")).unwrap();
     std::fs::write(fixture.first.join(".obsidian/app.json"), "{}\n").unwrap();
     std::fs::write(fixture.first.join("LICENSE"), "MIT\n").unwrap();
-    git(&fixture.first, ["add", "--", ".gitignore", ".obsidian", "LICENSE"]);
+    git(
+        &fixture.first,
+        ["add", "--", ".gitignore", ".obsidian", "LICENSE"],
+    );
     git(&fixture.first, ["commit", "-q", "-m", "add repo furniture"]);
 
     let service = OnboardingService::new(GitCommandRunner::new("git"));
@@ -204,7 +215,16 @@ fn workspace_below_repository_root_is_not_adopted() {
 fn repository_without_history_is_not_adopted() {
     let root = tempfile::tempdir().unwrap();
     let repository_path = root.path().join("fresh");
-    git(root.path(), ["init", "-q", "-b", "main", &repository_path.to_string_lossy()]);
+    git(
+        root.path(),
+        [
+            "init",
+            "-q",
+            "-b",
+            "main",
+            &repository_path.to_string_lossy(),
+        ],
+    );
     std::fs::write(repository_path.join("note.md"), "note\n").unwrap();
 
     let service = OnboardingService::new(GitCommandRunner::new("git"));
@@ -231,7 +251,12 @@ fn wrong_origin_is_detectable_and_replaceable_after_confirmation() {
     let wrong = root.join("wrong.git");
     git(
         &fixture.first,
-        ["remote", "set-url", "origin", wrong.to_string_lossy().as_ref()],
+        [
+            "remote",
+            "set-url",
+            "origin",
+            wrong.to_string_lossy().as_ref(),
+        ],
     );
     // Break the upstream binding the way a locally-created repository with a
     // hand-set (wrong) remote looks: branch config exists, merge ref does not.
@@ -291,13 +316,20 @@ fn replacement_to_diverged_remote_binds_and_first_sync_merges() {
     std::fs::write(fixture.first.join("local-side.md"), "local\n").unwrap();
     git(&fixture.first, ["add", "--", "local-side.md"]);
     git(&fixture.first, ["commit", "-q", "-m", "local side"]);
-    let local_head = git_output(&fixture.first, &["rev-parse", "HEAD"]).trim().to_string();
+    let local_head = git_output(&fixture.first, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
 
     // Break the origin the way a wrong address leaves the repository.
     let wrong = root.join("wrong.git");
     git(
         &fixture.first,
-        ["remote", "set-url", "origin", wrong.to_string_lossy().as_ref()],
+        [
+            "remote",
+            "set-url",
+            "origin",
+            wrong.to_string_lossy().as_ref(),
+        ],
     );
     git(&fixture.first, ["config", "--unset", "branch.main.merge"]);
 
@@ -313,9 +345,7 @@ fn replacement_to_diverged_remote_binds_and_first_sync_merges() {
     service
         .publish_first_branch(&review.repository, "origin", "main", None, &cancellation)
         .unwrap();
-    assert!(
-        repository_publish_did_not_push(&fixture, &wrong)
-    );
+    assert!(repository_publish_did_not_push(&fixture, &wrong));
 
     // The first sync fetches, merges both sides, and pushes.
     let repository = GitRepository::discover(GitCommandRunner::new("git"), &fixture.first).unwrap();
@@ -332,7 +362,10 @@ fn replacement_to_diverged_remote_binds_and_first_sync_merges() {
         paths: Vec::new(),
     };
     let data = tempfile::tempdir().unwrap();
-    let journal = JournalStore::new(data.path().join("journal.toml"), data.path().join("recovery"));
+    let journal = JournalStore::new(
+        data.path().join("journal.toml"),
+        data.path().join("recovery"),
+    );
     let engine = GitSyncEngine::new(repository, journal, SyncOptions::default())
         .with_foreground_credentials();
     let outcome = engine
@@ -364,18 +397,12 @@ fn repository_publish_did_not_push(fixture: &TwoCloneFixture, wrong: &Path) -> b
     // Pushing would have failed against the wrong remote and succeeded
     // against the right one; the binding-only path leaves both untouched,
     // with upstream config present.
-    let merge = git_output(
-        &fixture.first,
-        &["config", "--get", "branch.main.merge"],
-    )
-    .trim()
-    .to_string();
-    let remote_config = git_output(
-        &fixture.first,
-        &["config", "--get", "branch.main.remote"],
-    )
-    .trim()
-    .to_string();
+    let merge = git_output(&fixture.first, &["config", "--get", "branch.main.merge"])
+        .trim()
+        .to_string();
+    let remote_config = git_output(&fixture.first, &["config", "--get", "branch.main.remote"])
+        .trim()
+        .to_string();
     !wrong.exists() && merge == "refs/heads/main" && remote_config == "origin"
 }
 
@@ -392,12 +419,18 @@ fn unrelated_remote_history_is_refused_with_guidance_error() {
         ["init", "--bare", "-q", &unrelated.to_string_lossy()],
     );
     git(&unrelated, ["symbolic-ref", "HEAD", "refs/heads/main"]);
-    git(unrelated_root.path(), ["init", "-q", "-b", "main", &seed.to_string_lossy()]);
+    git(
+        unrelated_root.path(),
+        ["init", "-q", "-b", "main", &seed.to_string_lossy()],
+    );
     support::configure_identity(&seed);
     std::fs::write(seed.join("other.md"), "unrelated\n").unwrap();
     git(&seed, ["add", "--", "other.md"]);
     git(&seed, ["commit", "-q", "-m", "unrelated"]);
-    git(&seed, ["remote", "add", "origin", &unrelated.to_string_lossy()]);
+    git(
+        &seed,
+        ["remote", "add", "origin", &unrelated.to_string_lossy()],
+    );
     git(&seed, ["push", "-q", "-u", "origin", "main"]);
 
     let service = OnboardingService::new(GitCommandRunner::new("git"));
@@ -422,7 +455,10 @@ fn adoption_head_and_target_come_from_the_reviewed_repository() {
     let target = review.target.as_ref().unwrap();
     assert_eq!(target.local_branch, "main");
     assert_eq!(target.remote, "origin");
-    assert!(review.state.head.is_some_and(|head: GitObjectId| {
-        !head.as_str().is_empty()
-    }));
+    assert!(
+        review
+            .state
+            .head
+            .is_some_and(|head: GitObjectId| { !head.as_str().is_empty() })
+    );
 }

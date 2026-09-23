@@ -27,11 +27,10 @@ pub enum OnboardingError {
     DestinationExists,
     #[error("repository already has a remote named {0}; it was not replaced")]
     RemoteExists(String),
-    #[error("remote {remote} branch {branch} has no common history with this repository; clone it to a separate folder or integrate it manually")]
-    UnrelatedRemoteHistory {
-        remote: String,
-        branch: String,
-    },
+    #[error(
+        "remote {remote} branch {branch} has no common history with this repository; clone it to a separate folder or integrate it manually"
+    )]
+    UnrelatedRemoteHistory { remote: String, branch: String },
     #[error("requested branch is invalid or unavailable")]
     InvalidBranch,
     #[error("repository has no commit to publish")]
@@ -307,7 +306,8 @@ impl OnboardingService {
         &self,
         repository: &GitRepository,
         cancellation: &CancellationToken,
-    ) -> Result<Option<String>, OnboardingError> {        Ok(self.run_optional(
+    ) -> Result<Option<String>, OnboardingError> {
+        Ok(self.run_optional(
             GitCommand::new(&repository.identity().worktree_root)
                 .args(["remote", "get-url", "origin"])
                 .read_only(true),
@@ -431,8 +431,11 @@ impl OnboardingService {
         // from the local commit only binds upstream and lets the first sync
         // integrate; unrelated histories are refused outright.
         let remote_tracking_ref = format!("refs/remotes/{remote_name}/{remote_branch}");
-        let fetch = GitCommand::new(&repository.identity().worktree_root)
-            .args(["fetch", "--no-tags", remote_name]);
+        let fetch = GitCommand::new(&repository.identity().worktree_root).args([
+            "fetch",
+            "--no-tags",
+            remote_name,
+        ]);
         self.run(self.network_request(fetch, askpass), cancellation)?;
         let remote_commit = self
             .run_optional(
@@ -451,11 +454,7 @@ impl OnboardingService {
                 let merge_base = self
                     .run_optional(
                         GitCommand::new(&repository.identity().worktree_root)
-                            .args([
-                                "merge-base",
-                                commit.as_str(),
-                                remote_commit.as_str(),
-                            ])
+                            .args(["merge-base", commit.as_str(), remote_commit.as_str()])
                             .read_only(true),
                         cancellation,
                     )?
@@ -467,7 +466,7 @@ impl OnboardingService {
                         return Err(OnboardingError::UnrelatedRemoteHistory {
                             remote: remote_name.to_string(),
                             branch: remote_branch.to_string(),
-                        })
+                        });
                     }
                     // The remote is strictly behind: the exact push
                     // fast-forwards it. Anything else integrates later.
@@ -610,7 +609,9 @@ pub fn repository_adoptable(
         && state.head.is_some()
         && state.capabilities.supports_write_sync()
         && target.is_some()
-        && tracked_paths.iter().all(|path| tracked_path_is_notes_like(path))
+        && tracked_paths
+            .iter()
+            .all(|path| tracked_path_is_notes_like(path))
 }
 
 #[cfg(test)]
@@ -853,7 +854,8 @@ mod tests {
     }
 
     #[test]
-    fn foreground_credentials_are_opt_in_for_explicit_onboarding() {        let request = GitCommand::new(".").args(["fetch", "origin"]);
+    fn foreground_credentials_are_opt_in_for_explicit_onboarding() {
+        let request = GitCommand::new(".").args(["fetch", "origin"]);
         let background = OnboardingService::new(GitCommandRunner::new("git"))
             .network_request(request.clone(), None);
         let foreground = OnboardingService::new(GitCommandRunner::new("git"))
@@ -971,7 +973,9 @@ mod tests {
             Some(&target),
         ));
         // Origin does not resolve to one fetch/push destination.
-        assert!(!repository_adoptable(root, &identity, &state, &tracked, None));
+        assert!(!repository_adoptable(
+            root, &identity, &state, &tracked, None
+        ));
         // Tracked content includes files outside the notes-like classes.
         assert!(!repository_adoptable(
             root,

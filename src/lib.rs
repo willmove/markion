@@ -7944,7 +7944,9 @@ Intro.
                 PreviewBlock::ListItem { level, index, .. } => {
                     format!("item L{level} #{}", index.unwrap_or(1))
                 }
-                PreviewBlock::CodeBlock { code, list_depth, .. } => {
+                PreviewBlock::CodeBlock {
+                    code, list_depth, ..
+                } => {
                     format!("code d{list_depth}: {code}")
                 }
                 _ => "other".to_string(),

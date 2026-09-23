@@ -584,7 +584,10 @@ mod tests {
             &paths(&["a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md"]),
             SystemTime::UNIX_EPOCH,
         );
-        assert!(message.ends_with(": a.md, b.md, c.md, +4 more"), "{message}");
+        assert!(
+            message.ends_with(": a.md, b.md, c.md, +4 more"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -614,7 +617,11 @@ mod tests {
         let message = default_commit_message(&[], SystemTime::UNIX_EPOCH);
         assert!(message.starts_with("Sync notes "), "{message}");
         // "Sync notes " + "YYYY-MM-DD HH:MM" and nothing after the timestamp.
-        assert_eq!(message.chars().count(), "Sync notes ".len() + 16, "{message}");
+        assert_eq!(
+            message.chars().count(),
+            "Sync notes ".len() + 16,
+            "{message}"
+        );
     }
 
     #[test]

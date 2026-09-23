@@ -556,7 +556,8 @@ impl MarkionApp {
                             if let Err(error) =
                                 store.update(|policies| policies.upsert(policy.clone()))
                             {
-                                app.status = app.trf(Msg::StatusGitSyncFailed, &[&error.to_string()]);
+                                app.status =
+                                    app.trf(Msg::StatusGitSyncFailed, &[&error.to_string()]);
                                 cx.notify();
                                 return;
                             }
@@ -672,9 +673,8 @@ impl MarkionApp {
                     let canonical_workspace = dunce::canonicalize(&probed_workspace)
                         .map_err(|error| error.to_string())?;
                     let runner = GitCommandRunner::new(executable);
-                    let repository =
-                        GitRepository::discover(runner.clone(), &canonical_workspace)
-                            .map_err(|error| error.to_string())?;
+                    let repository = GitRepository::discover(runner.clone(), &canonical_workspace)
+                        .map_err(|error| error.to_string())?;
                     let capabilities = repository
                         .capabilities()
                         .map_err(|error| error.to_string())?;
@@ -2388,9 +2388,7 @@ fn run_git_operation(
         message: version_request
             .as_ref()
             .map(|request| request.message.clone())
-            .unwrap_or_else(|| {
-                policy.render_message(&paths, None, std::time::SystemTime::now())
-            }),
+            .unwrap_or_else(|| policy.render_message(&paths, None, std::time::SystemTime::now())),
         paths,
     };
     let data = markion::default_git_sync_data_dir();
@@ -2600,10 +2598,7 @@ mod tests {
                 &[PathBuf::from("a.md"), PathBuf::from("img/pic.png")],
                 Some(&target),
             ),
-            RepositoryAdoption::Adopted {
-                identity,
-                target
-            }
+            RepositoryAdoption::Adopted { identity, target }
         );
     }
 
