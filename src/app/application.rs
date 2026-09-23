@@ -171,11 +171,15 @@ impl MarkionApp {
                 (!name.is_empty()).then(|| name.to_string())
             })
             .unwrap_or_else(|| "Paper".to_string());
+        let language = Language::from_code(&preferences.language);
         let app = Self {
             tabs: vec![initial_tab],
             active_tab: 0,
             focus_handle: cx.focus_handle(),
             active_menu: None,
+            // Measured at the first render, where a window text system exists.
+            menu_dropdown_offsets: [8.; 6],
+            menu_dropdown_offsets_language: None,
             open_recent_submenu_open: false,
             format_images_submenu_open: false,
             backup_sync_submenu_open: false,
@@ -246,7 +250,7 @@ impl MarkionApp {
             show_hidden_files: preferences.show_hidden_files,
             open_in_current_tab: preferences.open_in_current_tab,
             markdown_auto_pair: preferences.markdown_auto_pair,
-            language: Language::from_code(&preferences.language),
+            language,
             check_for_updates_on_startup: preferences.check_for_updates_on_startup,
             last_update_check: preferences.last_update_check,
             view_mode: ViewMode::default_mode(),

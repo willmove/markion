@@ -2181,6 +2181,17 @@ impl MarkionApp {
         }
     }
 
+    /// Re-measure the dropdown offset table when the interface language has
+    /// changed since it was last computed. Called at render entry so every
+    /// dropdown and flyout anchor follows the freshly rendered labels without
+    /// any language-mutation site needing to know about it.
+    pub(super) fn ensure_menu_dropdown_offsets(&mut self, window: &Window) {
+        if self.menu_dropdown_offsets_language != Some(self.language) {
+            self.menu_dropdown_offsets = measure_menu_dropdown_offsets(self.language, window);
+            self.menu_dropdown_offsets_language = Some(self.language);
+        }
+    }
+
     pub(super) fn open_open_recent_submenu(&mut self, cx: &mut Context<Self>) {
         if self.active_menu == Some(AppMenu::File) && !self.open_recent_submenu_open {
             self.open_recent_submenu_open = true;

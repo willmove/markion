@@ -18,7 +18,7 @@ use gpui::{
     CursorStyle, DefiniteLength, DispatchPhase, Div, DragMoveEvent, Element, ElementId,
     ElementInputHandler, Empty, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable,
     Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GlobalElementId, HighlightStyle,
-    Hitbox, HitboxBehavior, ImageFormat, ImageSource, KeyBinding, KeyDownEvent, LayoutId,
+    Hitbox, HitboxBehavior, Hsla, ImageFormat, ImageSource, KeyBinding, KeyDownEvent, LayoutId,
     ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, PaintQuad, PathPromptOptions, Pixels, Point, PromptButton, PromptLevel,
     RenderImage, Rgba, ScrollHandle, SharedString, Size, Stateful, StrikethroughStyle, Style,
@@ -736,37 +736,21 @@ mod menu_shortcuts {
 }
 
 impl AppMenu {
-    /// Left offset of a top-level menu's dropdown panel.
-    ///
-    /// The in-window menu bar lays buttons out with fixed paddings/gaps
-    /// (menu-bar left padding 8, per-button label width + 2×8 padding + 4
-    /// gap) rather than exposing measured positions, so the dropdown anchor
-    /// is recorded per language. The values are pixel-measured from the
-    /// rendered menu bar where available (English, Chinese) and computed
-    /// from system-UI-font metrics calibrated against those measurements
-    /// for the rest. They assume the machine's UI font (on Chinese Windows
-    /// this is Microsoft YaHei UI); a machine with a different system font
-    /// will drift slightly.
-    fn dropdown_left(self, language: Language) -> Pixels {
-        let offsets: [f32; 6] = match language {
-            Language::En => [8., 51., 93., 145., 210., 270.],
-            // Both Simplified and Traditional use two-character labels, so
-            // one column serves both.
-            Language::ZhHans | Language::ZhHant => [8., 54., 100., 146., 192., 238.],
-            Language::Ja => [8., 80., 126., 172., 218., 316.],
-            Language::Fr => [8., 66., 128., 203., 265., 337.],
-            Language::De => [8., 59., 143., 205., 267., 356.],
-            Language::Es => [8., 72., 136., 177., 247., 319.],
-        };
-        let index = match self {
+    /// Left offset of this menu's dropdown panel, read from the measured
+    /// per-language offset table (see `measure_menu_dropdown_offsets`).
+    fn dropdown_left(self, offsets: &[f32; 6]) -> Pixels {
+        px(offsets[self.index()])
+    }
+
+    fn index(self) -> usize {
+        match self {
             AppMenu::File => 0,
             AppMenu::Edit => 1,
             AppMenu::View => 2,
             AppMenu::Format => 3,
             AppMenu::Export => 4,
             AppMenu::Help => 5,
-        };
-        px(offsets[index])
+        }
     }
 
     fn dropdown_width(self, _language: Language) -> Pixels {
@@ -782,6 +766,61 @@ impl AppMenu {
             AppMenu::Help => px(280.),
         }
     }
+}
+
+/// The six menu-bar labels in bar order; their measured widths drive the
+/// dropdown offset table below.
+const MENU_BAR_LABELS: [Msg; 6] = [
+    Msg::MenuFile,
+    Msg::MenuEdit,
+    Msg::MenuView,
+    Msg::MenuFormat,
+    Msg::MenuExport,
+    Msg::MenuHelp,
+];
+
+/// Cumulative left offsets of the six menu-bar buttons from their label
+/// widths: the bar starts with 8px padding, and each button adds its label
+/// width plus 2×8px button padding and the 4px gap to the next button.
+fn menu_dropdown_offsets_from_label_widths(widths: &[f32; 6]) -> [f32; 6] {
+    let mut offsets = [8.; 6];
+    for index in 1..offsets.len() {
+        offsets[index] = offsets[index - 1] + widths[index - 1] + 20.;
+    }
+    offsets
+}
+
+/// Measure the menu-bar labels with the same system UI font and text system
+/// that render the menu bar, so the dropdown anchors match the real button
+/// positions on every machine and in every language. Measuring with gpui's
+/// own `layout_line` (rather than external font metrics) keeps button layout
+/// and dropdown anchors in agreement by construction.
+fn measure_menu_dropdown_offsets(language: Language, window: &Window) -> [f32; 6] {
+    let font = Font {
+        family: ".SystemUIFont".into(),
+        features: FontFeatures::default(),
+        fallbacks: None,
+        weight: FontWeight::default(),
+        style: FontStyle::default(),
+    };
+    let widths = MENU_BAR_LABELS.map(|msg| {
+        let text = t(language, msg);
+        let run = TextRun {
+            len: text.len(),
+            font: font.clone(),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        f32::from(
+            window
+                .text_system()
+                .layout_line(text, px(13.), &[run], None)
+                .width,
+        )
+    });
+    menu_dropdown_offsets_from_label_widths(&widths)
 }
 
 #[derive(Clone, Debug)]
@@ -2350,6 +2389,12 @@ struct MarkionApp {
     active_tab: usize,
     focus_handle: FocusHandle,
     active_menu: Option<AppMenu>,
+    /// Measured dropdown left offsets for the six top-level menus, valid for
+    /// `menu_dropdown_offsets_language`. Re-measured lazily at render entry
+    /// (the window text system is not available before the first render) so
+    /// dropdowns always align with the rendered buttons.
+    menu_dropdown_offsets: [f32; 6],
+    menu_dropdown_offsets_language: Option<Language>,
     /// File → Open Recent nested submenu visibility. Cleared whenever
     /// `active_menu` leaves File or the whole menu closes.
     open_recent_submenu_open: bool,

@@ -1444,6 +1444,21 @@ fn menu_hover_switches_only_during_an_open_menu_session() {
 }
 
 #[test]
+fn menu_dropdown_offsets_accumulate_measured_label_widths() {
+    // Equal widths step uniformly (8px start + label width + 20px button
+    // chrome per button); the expected table is the verified Chinese column.
+    assert_eq!(
+        menu_dropdown_offsets_from_label_widths(&[26., 26., 26., 26., 26., 26.]),
+        [8., 54., 100., 146., 192., 238.],
+    );
+    // Unequal widths accumulate only the preceding labels' widths.
+    assert_eq!(
+        menu_dropdown_offsets_from_label_widths(&[20., 30., 10., 0., 40., 26.]),
+        [8., 48., 98., 128., 148., 208.],
+    );
+}
+
+#[test]
 fn every_menu_title_wires_click_and_hover_behavior() {
     let source = include_str!("root_view.rs");
     for menu in ["File", "Edit", "View", "Format", "Export", "Help"] {
@@ -1508,7 +1523,9 @@ fn backup_sync_actions_are_grouped_while_file_history_stays_contextual() {
     }
     assert!(in_window_file.contains("open_backup_sync_submenu"));
     assert!(in_window_file.contains("open_advanced_git_submenu"));
-    assert!(root_view.contains("AppMenu::File.dropdown_left(self.language)"));
+    assert!(root_view.contains("AppMenu::File.dropdown_left(&self.menu_dropdown_offsets)"));
+    assert!(root_view.contains("menu.dropdown_left(menu_offsets)"));
+    assert!(root_view.contains("self.ensure_menu_dropdown_offsets(window)"));
 
     // In-window Backup and Sync flyout: plain-language sync entries plus
     // per-document version history, gated on an active text document.

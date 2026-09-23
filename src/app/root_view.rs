@@ -9,6 +9,9 @@ impl Focusable for MarkionApp {
 
 impl Render for MarkionApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Dropdown anchors follow the rendered labels; re-measure only when
+        // the interface language changed since the cached table was built.
+        self.ensure_menu_dropdown_offsets(window);
         #[cfg(test)]
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && let Some(tab) = self.active_tab_mut().document_tab_mut()
@@ -756,6 +759,7 @@ impl Render for MarkionApp {
             .child(active_menu_dropdown(
                 self.active_menu,
                 self.language,
+                &self.menu_dropdown_offsets,
                 self.heading_menu_max_level,
                 &self.shortcut_overrides,
                 !active_is_image,
@@ -769,7 +773,7 @@ impl Render for MarkionApp {
                     root.child(open_recent_submenu_panel(
                         self.language,
                         self.session.recent_files.clone(),
-                        AppMenu::File.dropdown_left(self.language),
+                        AppMenu::File.dropdown_left(&self.menu_dropdown_offsets),
                         AppMenu::File.dropdown_width(self.language),
                         palette,
                         cx,
@@ -781,7 +785,7 @@ impl Render for MarkionApp {
                 |root| {
                     root.child(format_images_submenu_panel(
                         self.language,
-                        AppMenu::Format.dropdown_left(self.language),
+                        AppMenu::Format.dropdown_left(&self.menu_dropdown_offsets),
                         AppMenu::Format.dropdown_width(self.language),
                         &self.shortcut_overrides,
                         palette,
@@ -794,7 +798,7 @@ impl Render for MarkionApp {
                 |root| {
                     root.child(backup_sync_submenu_panel(
                         self.language,
-                        AppMenu::File.dropdown_left(self.language),
+                        AppMenu::File.dropdown_left(&self.menu_dropdown_offsets),
                         AppMenu::File.dropdown_width(self.language),
                         !active_is_image,
                         &self.shortcut_overrides,
@@ -808,7 +812,7 @@ impl Render for MarkionApp {
                 |root| {
                     root.child(advanced_git_submenu_panel(
                         self.language,
-                        AppMenu::File.dropdown_left(self.language),
+                        AppMenu::File.dropdown_left(&self.menu_dropdown_offsets),
                         AppMenu::File.dropdown_width(self.language),
                         &self.shortcut_overrides,
                         palette,
@@ -4206,6 +4210,7 @@ pub(super) fn heading_native_menu_items(language: Language, max_level: u8) -> Ve
 pub(super) fn active_menu_dropdown(
     menu: Option<AppMenu>,
     language: Language,
+    menu_offsets: &[f32; 6],
     heading_menu_max_level: u8,
     shortcut_overrides: &BTreeMap<String, String>,
     document_actions_enabled: bool,
@@ -4225,7 +4230,7 @@ pub(super) fn active_menu_dropdown(
     let panel = div()
         .absolute()
         .top(px(28.))
-        .left(menu.dropdown_left(language))
+        .left(menu.dropdown_left(menu_offsets))
         .w(menu.dropdown_width(language))
         // Without occlude the dropdown does not capture mouse hits, so clicks
         // fall through to the content underneath (which closes the menu) and
