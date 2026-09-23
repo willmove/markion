@@ -761,11 +761,11 @@ impl AppMenu {
             (
                 Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
                 AppMenu::Export,
-            ) => px(238.),
+            ) => px(210.),
             (
                 Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
                 AppMenu::Help,
-            ) => px(304.),
+            ) => px(270.),
             // Chinese labels (文件/編輯/檢視/格式/匯出/說明) — narrower. Both
             // Simplified and Traditional share this column: the glyph widths
             // are nearly identical, so the hand-tuned offsets apply to both.
@@ -773,8 +773,8 @@ impl AppMenu {
             (Language::ZhHans | Language::ZhHant, AppMenu::Edit) => px(50.),
             (Language::ZhHans | Language::ZhHant, AppMenu::View) => px(92.),
             (Language::ZhHans | Language::ZhHant, AppMenu::Format) => px(134.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Export) => px(178.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(222.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Export) => px(191.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(238.),
         }
     }
 
