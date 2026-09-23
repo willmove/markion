@@ -1155,7 +1155,6 @@ fn every_application_dropdown_uses_shortcut_aware_rows() {
         "AppMenu::View =>",
         "AppMenu::Format =>",
         "AppMenu::Export =>",
-        "AppMenu::Repository =>",
     ];
     for (index, boundary) in menu_boundaries.iter().enumerate() {
         let body = menu_source
@@ -1447,15 +1446,7 @@ fn menu_hover_switches_only_during_an_open_menu_session() {
 #[test]
 fn every_menu_title_wires_click_and_hover_behavior() {
     let source = include_str!("root_view.rs");
-    for menu in [
-        "File",
-        "Edit",
-        "View",
-        "Format",
-        "Export",
-        "Repository",
-        "Help",
-    ] {
+    for menu in ["File", "Edit", "View", "Format", "Export", "Help"] {
         assert!(
             source.contains(&format!("app.hover_menu(AppMenu::{menu}, cx);")),
             "{menu} title must switch an open menu session on hover"
@@ -1488,10 +1479,6 @@ fn backup_sync_actions_are_grouped_while_file_history_stays_contextual() {
         .split_once("AppMenu::File => panel")
         .and_then(|(_, rest)| rest.split_once("AppMenu::Edit =>").map(|(file, _)| file))
         .expect("in-window File menu");
-    let in_window_repository = root_view
-        .split_once("AppMenu::Repository => panel")
-        .and_then(|(_, rest)| rest.split_once("AppMenu::Help =>").map(|(repo, _)| repo))
-        .expect("in-window Repository menu");
 
     let bootstrap = include_str!("bootstrap.rs").replace("\r\n", "\n");
     let native_file = bootstrap
@@ -1501,46 +1488,51 @@ fn backup_sync_actions_are_grouped_while_file_history_stays_contextual() {
                 .map(|(file, _)| file)
         })
         .expect("native File menu");
-    let native_repository = bootstrap
-        .split_once("name: git_t(language, GitMsg::SyncMenu)")
-        .and_then(|(_, rest)| {
-            rest.split_once("name: t(language, Msg::MenuHelp)")
-                .map(|(repo, _)| repo)
-        })
-        .expect("native Repository menu");
 
+    // No top-level synchronization category remains on either surface.
+    assert!(!root_view.contains("AppMenu::Repository"));
+    assert!(!root_view.contains("GitMsg::SyncMenu"));
+    assert!(!bootstrap.contains("GitMsg::SyncMenu"));
+
+    // Both surfaces host the two submenus from the File menu, and the
+    // flyouts are anchored to the File dropdown.
+    for token in ["GitMsg::BackupAndSync", "GitMsg::AdvancedGitTools"] {
+        assert!(
+            in_window_file.contains(token),
+            "in-window File menu omitted {token}"
+        );
+        assert!(
+            native_file.contains(token),
+            "native File menu omitted {token}"
+        );
+    }
+    assert!(in_window_file.contains("open_backup_sync_submenu"));
+    assert!(in_window_file.contains("open_advanced_git_submenu"));
+    assert!(root_view.contains("AppMenu::File.dropdown_left(self.language)"));
+
+    // In-window Backup and Sync flyout: plain-language sync entries plus
+    // per-document version history, gated on an active text document.
+    let backup_flyout = root_view
+        .split_once("pub(super) fn backup_sync_submenu_panel")
+        .expect("in-window Backup and Sync flyout")
+        .1;
     for token in [
+        "GitMsg::ViewStatus",
+        "GitMsg::VersionHistory",
         "Msg::ItemGitSyncNow",
         "Msg::ItemGitResolveConflict",
         "Msg::ItemGitSyncSetup",
     ] {
         assert!(
-            in_window_repository.contains(token),
-            "in-window Repository menu omitted {token}"
-        );
-        assert!(
-            native_repository.contains(token),
-            "native Repository menu omitted {token}"
-        );
-        assert!(
-            !in_window_file.contains(token),
-            "in-window File menu retained {token}"
-        );
-        assert!(
-            !native_file.contains(token),
-            "native File menu retained {token}"
+            backup_flyout.contains(token),
+            "Backup and Sync flyout omitted {token}"
         );
     }
-    assert!(in_window_repository.contains("GitMsg::BackupAndSync"));
-    assert!(root_view.contains("self.git_label(GitMsg::SyncMenu)"));
-    assert!(!root_view.contains("self.git_label(GitMsg::BackupAndSync)"));
-    assert!(native_repository.contains("GitMsg::ViewStatus"));
-    assert!(in_window_repository.contains("GitMsg::AdvancedGitTools"));
-    assert!(native_repository.contains("GitMsg::AdvancedGitTools"));
+    assert!(backup_flyout.contains("document_actions_enabled"));
 
     let advanced_window = root_view
         .split_once("pub(super) fn advanced_git_submenu_panel")
-        .expect("in-window Advanced Git Tools submenu")
+        .expect("in-window Advanced Git Tools flyout")
         .1;
     for token in [
         "GitMsg::Commit",
@@ -1548,20 +1540,44 @@ fn backup_sync_actions_are_grouped_while_file_history_stays_contextual() {
         "GitMsg::Pull",
         "GitMsg::Push",
     ] {
-        assert!(advanced_window.contains(token));
-        assert!(native_repository.contains(token));
+        assert!(
+            advanced_window.contains(token),
+            "Advanced Git Tools flyout omitted {token}"
+        );
     }
-    assert!(in_window_file.contains("GitMsg::VersionHistory"));
-    assert!(native_file.contains("GitMsg::VersionHistory"));
 
-    let native_export = bootstrap
-        .find("Msg::MenuExport")
-        .expect("native Export menu");
-    let native_repository = bootstrap
-        .find("GitMsg::SyncMenu")
-        .expect("native Sync menu");
-    let native_help = bootstrap.find("Msg::MenuHelp").expect("native Help menu");
-    assert!(native_export < native_repository && native_repository < native_help);
+    // Native File menu: Backup and Sync submenu (with Version History)
+    // followed by the Advanced Git Tools submenu.
+    let native_backup = native_file
+        .find("name: git_t(language, GitMsg::BackupAndSync)")
+        .expect("native Backup and Sync submenu");
+    let native_advanced = native_file
+        .find("name: git_t(language, GitMsg::AdvancedGitTools)")
+        .expect("native Advanced Git Tools submenu");
+    assert!(native_backup < native_advanced);
+    for token in [
+        "GitMsg::ViewStatus",
+        "GitMsg::VersionHistory",
+        "Msg::ItemGitSyncNow",
+        "Msg::ItemGitResolveConflict",
+        "Msg::ItemGitSyncSetup",
+    ] {
+        assert!(
+            native_file[native_backup..native_advanced].contains(token),
+            "native Backup and Sync submenu omitted {token}"
+        );
+    }
+    for token in [
+        "GitMsg::Commit",
+        "GitMsg::Fetch",
+        "GitMsg::Pull",
+        "GitMsg::Push",
+    ] {
+        assert!(
+            native_file[native_advanced..].contains(token),
+            "native Advanced Git Tools submenu omitted {token}"
+        );
+    }
 }
 
 #[test]
@@ -1846,6 +1862,7 @@ fn backup_sync_menus_group_technical_operations_and_expose_version_history() {
 
     assert!(root.contains("GitMsg::AdvancedGitTools"));
     assert!(root.contains("advanced_git_submenu_panel"));
+    assert!(root.contains("backup_sync_submenu_panel"));
     assert!(bootstrap.contains("MenuItem::submenu(Menu"));
     let native_advanced = bootstrap
         .find("name: git_t(language, GitMsg::AdvancedGitTools)")
@@ -1853,6 +1870,16 @@ fn backup_sync_menus_group_technical_operations_and_expose_version_history() {
     for action in ["CommitLocally", "CheckRemote", "PullUpdates", "PushCommits"] {
         assert!(bootstrap[native_advanced..].contains(action));
     }
+    // Both submenus live inside the File menu; no top-level Sync menu exists.
+    let native_file = bootstrap
+        .split_once("name: t(language, Msg::MenuFile)")
+        .and_then(|(_, rest)| {
+            rest.split_once("name: t(language, Msg::MenuEdit)")
+                .map(|(file, _)| file)
+        })
+        .expect("native File menu");
+    assert!(native_file.contains("name: git_t(language, GitMsg::AdvancedGitTools)"));
+    assert!(!bootstrap.contains("GitMsg::SyncMenu"));
 
     assert!(module.contains("ShowFileVersionHistory"));
     assert!(root.contains("GitMsg::VersionHistory"));

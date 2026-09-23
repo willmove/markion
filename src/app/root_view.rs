@@ -383,15 +383,6 @@ impl Render for MarkionApp {
                             }),
                         ))
                         .child(menu_title_button(
-                            self.git_label(GitMsg::SyncMenu),
-                            self.active_menu == Some(AppMenu::Repository),
-                            palette,
-                            cx.listener(Self::toggle_repository_menu),
-                            cx.listener(|app, _: &MouseMoveEvent, _, cx| {
-                                app.hover_menu(AppMenu::Repository, cx);
-                            }),
-                        ))
-                        .child(menu_title_button(
                             self.tr(Msg::MenuHelp),
                             self.active_menu == Some(AppMenu::Help),
                             palette,
@@ -799,12 +790,26 @@ impl Render for MarkionApp {
                 },
             )
             .when(
-                self.active_menu == Some(AppMenu::Repository) && self.advanced_git_submenu_open,
+                self.active_menu == Some(AppMenu::File) && self.backup_sync_submenu_open,
+                |root| {
+                    root.child(backup_sync_submenu_panel(
+                        self.language,
+                        AppMenu::File.dropdown_left(self.language),
+                        AppMenu::File.dropdown_width(self.language),
+                        !active_is_image,
+                        &self.shortcut_overrides,
+                        palette,
+                        cx,
+                    ))
+                },
+            )
+            .when(
+                self.active_menu == Some(AppMenu::File) && self.advanced_git_submenu_open,
                 |root| {
                     root.child(advanced_git_submenu_panel(
                         self.language,
-                        AppMenu::Repository.dropdown_left(self.language),
-                        AppMenu::Repository.dropdown_width(self.language),
+                        AppMenu::File.dropdown_left(self.language),
+                        AppMenu::File.dropdown_width(self.language),
                         &self.shortcut_overrides,
                         palette,
                         cx,
@@ -4267,60 +4272,12 @@ pub(super) fn active_menu_dropdown(
             action_item!(@build $msg, $method, $action, None)
         };
     }
-    macro_rules! git_action_item {
-        ($msg:expr, $method:ident, $action:expr, $shortcut:expr) => {
-            menu_action_button(
-                git_t(language, $msg),
-                Some($shortcut.effective_label(shortcut_overrides, shortcut_platform)),
-                palette,
-                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
-                    app.active_menu = None;
-                    app.$method(&$action, window, cx);
-                }),
-            )
-        };
-        ($msg:expr, $method:ident, $action:expr) => {
-            menu_action_button(
-                git_t(language, $msg),
-                None,
-                palette,
-                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
-                    app.active_menu = None;
-                    app.$method(&$action, window, cx);
-                }),
-            )
-        };
-    }
-    macro_rules! repository_action_item {
-        ($msg:expr, $method:ident, $action:expr, $shortcut:expr) => {
-            menu_action_button(
-                t(language, $msg),
-                Some($shortcut.effective_label(shortcut_overrides, shortcut_platform)),
-                palette,
-                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
-                    app.active_menu = None;
-                    app.$method(&$action, window, cx);
-                }),
-            )
-        };
-        ($msg:expr, $method:ident, $action:expr) => {
-            menu_action_button(
-                t(language, $msg),
-                None,
-                palette,
-                cx.listener(move |app, _: &MouseUpEvent, window, cx| {
-                    app.active_menu = None;
-                    app.$method(&$action, window, cx);
-                }),
-            )
-        };
-    }
-    // File-menu rows close the Open Recent flyout when hovered so only one
-    // nested surface stays open (the parent row opens it separately).
+    // File-menu rows close the nested flyouts when hovered so only one nested
+    // surface stays open (each parent row opens its own).
     macro_rules! file_action_item {
         ($($tt:tt)*) => {
             action_item!($($tt)*).on_mouse_move(cx.listener(|app, _: &MouseMoveEvent, _, cx| {
-                app.close_open_recent_submenu(cx);
+                app.close_file_submenus(cx);
             }))
         };
     }
@@ -4382,15 +4339,31 @@ pub(super) fn active_menu_dropdown(
                         SaveDocumentAs,
                         menu_shortcuts::SAVE_DOCUMENT_AS
                     ))
-                    .child(git_action_item!(
-                        GitMsg::VersionHistory,
-                        show_file_version_history,
-                        ShowFileVersionHistory
-                    ))
             })
             .when(!document_actions_enabled, |panel| {
                 panel.child(image_action_unavailable_menu_row(language, palette))
             })
+            .child(menu_separator(palette))
+            .child(menu_submenu_parent_button(
+                git_t(language, GitMsg::BackupAndSync),
+                palette,
+                cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                    app.open_backup_sync_submenu(cx);
+                }),
+                cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                    app.toggle_backup_sync_submenu(cx);
+                }),
+            ))
+            .child(menu_submenu_parent_button(
+                git_t(language, GitMsg::AdvancedGitTools),
+                palette,
+                cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+                    app.open_advanced_git_submenu(cx);
+                }),
+                cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                    app.toggle_advanced_git_submenu(cx);
+                }),
+            ))
             .child(menu_separator(palette))
             .child(file_action_item!(
                 Msg::ItemNewTab,
@@ -4820,42 +4793,6 @@ pub(super) fn active_menu_dropdown(
                 organize_local_images,
                 OrganizeLocalImages
             )),
-        AppMenu::Repository => panel
-            .child(git_action_item!(
-                GitMsg::BackupAndSync,
-                show_git_sync,
-                ShowGitSync,
-                menu_shortcuts::SHOW_GIT_SYNC
-            ))
-            .child(menu_separator(palette))
-            .child(repository_action_item!(
-                Msg::ItemGitSyncNow,
-                sync_now,
-                SyncNow,
-                menu_shortcuts::SYNC_NOW
-            ))
-            .child(repository_action_item!(
-                Msg::ItemGitResolveConflict,
-                resolve_git_conflict,
-                ResolveGitConflict,
-                menu_shortcuts::RESOLVE_GIT_CONFLICT
-            ))
-            .child(repository_action_item!(
-                Msg::ItemGitSyncSetup,
-                setup_git_sync,
-                SetupGitSync
-            ))
-            .child(menu_separator(palette))
-            .child(menu_submenu_parent_button(
-                git_t(language, GitMsg::AdvancedGitTools),
-                palette,
-                cx.listener(|app, _: &MouseMoveEvent, _, cx| {
-                    app.open_advanced_git_submenu(cx);
-                }),
-                cx.listener(|app, _: &MouseUpEvent, _, cx| {
-                    app.toggle_advanced_git_submenu(cx);
-                }),
-            )),
         AppMenu::Help => panel
             .child(action_item!(
                 Msg::ItemCheckForUpdates,
@@ -5154,6 +5091,110 @@ pub(super) fn format_images_submenu_panel(
 /// Nested Backup and Sync → Advanced Git Tools flyout. The ordinary menu keeps
 /// one-step backup actions visible while preserving the existing Git controls
 /// for experienced users and automation.
+/// Nested File → Backup and Sync flyout: sync-center entry, per-document
+/// version history (only with an active text document), and the plain-language
+/// sync actions. Positioned to the right of the File dropdown with a small
+/// overlap so the pointer can travel from the parent row without a gap.
+pub(super) fn backup_sync_submenu_panel(
+    language: Language,
+    menu_left: Pixels,
+    menu_width: Pixels,
+    document_actions_enabled: bool,
+    shortcut_overrides: &BTreeMap<String, String>,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    // Align with the Backup and Sync parent row: menu-bar offset + panel
+    // padding + New/Open/Open Folder/Import DOCX + separator + Open Recent +
+    // Save/Save As + separator.
+    const SUBMENU_TOP: f32 = 28. + 4. + 7. * 24. + 2. * 9.;
+    const OVERLAP: f32 = 4.;
+    let shortcut_platform = ShortcutPlatform::current();
+    let close = |app: &mut MarkionApp| {
+        app.active_menu = None;
+        app.backup_sync_submenu_open = false;
+    };
+
+    let panel = div()
+        .absolute()
+        .top(px(SUBMENU_TOP))
+        .left(menu_left + menu_width - px(OVERLAP))
+        .w(px(280.))
+        .occlude()
+        .py_1()
+        .border_1()
+        .border_color(palette.border)
+        .rounded_md()
+        .bg(palette.panel_bg)
+        .text_color(palette.text)
+        .shadow_md()
+        .flex()
+        .flex_col()
+        .on_mouse_move(cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+            app.open_backup_sync_submenu(cx);
+        }))
+        .child(menu_action_button(
+            git_t(language, GitMsg::ViewStatus),
+            Some(
+                menu_shortcuts::SHOW_GIT_SYNC
+                    .effective_label(shortcut_overrides, shortcut_platform),
+            ),
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.show_git_sync(&ShowGitSync, window, cx);
+            }),
+        ));
+
+    // Version History follows the active document, so it is offered only
+    // where the save group is (a text document is active).
+    let panel = if document_actions_enabled {
+        panel.child(menu_action_button(
+            git_t(language, GitMsg::VersionHistory),
+            None,
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.show_file_version_history(&ShowFileVersionHistory, window, cx);
+            }),
+        ))
+    } else {
+        panel
+    };
+
+    panel
+        .child(menu_action_button(
+            t(language, Msg::ItemGitSyncNow),
+            Some(menu_shortcuts::SYNC_NOW.effective_label(shortcut_overrides, shortcut_platform)),
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.sync_now(&SyncNow, window, cx);
+            }),
+        ))
+        .child(menu_action_button(
+            t(language, Msg::ItemGitResolveConflict),
+            Some(
+                menu_shortcuts::RESOLVE_GIT_CONFLICT
+                    .effective_label(shortcut_overrides, shortcut_platform),
+            ),
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.resolve_git_conflict(&ResolveGitConflict, window, cx);
+            }),
+        ))
+        .child(menu_action_button(
+            t(language, Msg::ItemGitSyncSetup),
+            None,
+            palette,
+            cx.listener(move |app, _: &MouseUpEvent, window, cx| {
+                close(app);
+                app.setup_git_sync(&SetupGitSync, window, cx);
+            }),
+        ))
+}
+
 pub(super) fn advanced_git_submenu_panel(
     language: Language,
     menu_left: Pixels,
@@ -5162,7 +5203,9 @@ pub(super) fn advanced_git_submenu_panel(
     palette: ThemePalette,
     cx: &mut Context<MarkionApp>,
 ) -> Div {
-    const SUBMENU_TOP: f32 = 28. + 4. + 4. * 24. + 2. * 9.;
+    // Align with the Advanced Git Tools parent row: one row below the
+    // Backup and Sync parent (see backup_sync_submenu_panel).
+    const SUBMENU_TOP: f32 = 28. + 4. + 7. * 24. + 2. * 9. + 24.;
     const OVERLAP: f32 = 4.;
     let shortcut_platform = ShortcutPlatform::current();
     let close = |app: &mut MarkionApp| {

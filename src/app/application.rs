@@ -178,6 +178,7 @@ impl MarkionApp {
             active_menu: None,
             open_recent_submenu_open: false,
             format_images_submenu_open: false,
+            backup_sync_submenu_open: false,
             advanced_git_submenu_open: false,
             workspace_switcher_open: false,
             workspace_switcher_anchor: None,

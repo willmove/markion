@@ -4,7 +4,6 @@ use super::Language;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitMsg {
     BackupAndSync,
-    SyncMenu,
     StateOff,
     StateRunning,
     StatePending,
@@ -164,15 +163,6 @@ pub fn git_t(language: Language, message: GitMsg) -> &'static str {
             "Sauvegarde et synchronisation",
             "Sicherung und Synchronisierung",
             "Copia y sincronización",
-        ],
-        GitMsg::SyncMenu => [
-            "Sync",
-            "同步",
-            "同步",
-            "同期",
-            "Synchronisation",
-            "Synchronisierung",
-            "Sincronización",
         ],
         GitMsg::StateOff => [
             "Backup and sync is off",
@@ -1513,25 +1503,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sync_menu_title_is_distinct_from_backup_and_sync_content() {
-        for (language, expected_menu, expected_feature) in [
-            (Language::En, "Sync", "Backup and Sync"),
-            (Language::ZhHans, "同步", "备份与同步"),
-            (Language::ZhHant, "同步", "備份與同步"),
-            (Language::Ja, "同期", "バックアップと同期"),
-            (
-                Language::Fr,
-                "Synchronisation",
-                "Sauvegarde et synchronisation",
-            ),
-            (
-                Language::De,
-                "Synchronisierung",
-                "Sicherung und Synchronisierung",
-            ),
-            (Language::Es, "Sincronización", "Copia y sincronización"),
+    fn backup_and_sync_menu_title_keeps_feature_wording() {
+        for (language, expected_feature) in [
+            (Language::En, "Backup and Sync"),
+            (Language::ZhHans, "备份与同步"),
+            (Language::ZhHant, "備份與同步"),
+            (Language::Ja, "バックアップと同期"),
+            (Language::Fr, "Sauvegarde et synchronisation"),
+            (Language::De, "Sicherung und Synchronisierung"),
+            (Language::Es, "Copia y sincronización"),
         ] {
-            assert_eq!(git_t(language, GitMsg::SyncMenu), expected_menu);
             assert_eq!(git_t(language, GitMsg::BackupAndSync), expected_feature);
         }
     }
@@ -1540,7 +1521,6 @@ mod tests {
     fn every_git_label_has_all_translations_and_matching_placeholders() {
         for message in [
             GitMsg::BackupAndSync,
-            GitMsg::SyncMenu,
             GitMsg::StateOff,
             GitMsg::StateRunning,
             GitMsg::StatePending,

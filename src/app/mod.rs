@@ -282,7 +282,6 @@ enum AppMenu {
     View,
     Format,
     Export,
-    Repository,
     Help,
 }
 
@@ -765,12 +764,8 @@ impl AppMenu {
             ) => px(238.),
             (
                 Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
-                AppMenu::Repository,
-            ) => px(304.),
-            (
-                Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
                 AppMenu::Help,
-            ) => px(454.),
+            ) => px(304.),
             // Chinese labels (文件/編輯/檢視/格式/匯出/說明) — narrower. Both
             // Simplified and Traditional share this column: the glyph widths
             // are nearly identical, so the hand-tuned offsets apply to both.
@@ -779,8 +774,7 @@ impl AppMenu {
             (Language::ZhHans | Language::ZhHant, AppMenu::View) => px(92.),
             (Language::ZhHans | Language::ZhHant, AppMenu::Format) => px(134.),
             (Language::ZhHans | Language::ZhHant, AppMenu::Export) => px(178.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Repository) => px(222.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(312.),
+            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(222.),
         }
     }
 
@@ -794,7 +788,6 @@ impl AppMenu {
             AppMenu::View => px(304.),
             AppMenu::Format => px(344.),
             AppMenu::Export => px(288.),
-            AppMenu::Repository => px(328.),
             AppMenu::Help => px(280.),
         }
     }
@@ -2371,7 +2364,9 @@ struct MarkionApp {
     open_recent_submenu_open: bool,
     /// Format → Images nested submenu visibility.
     format_images_submenu_open: bool,
-    /// Backup and Sync → Advanced Git Tools nested submenu visibility.
+    /// File → Backup and Sync nested submenu visibility.
+    backup_sync_submenu_open: bool,
+    /// File → Advanced Git Tools nested submenu visibility.
     advanced_git_submenu_open: bool,
     /// Files-panel workspace-name recent-folder switcher visibility.
     workspace_switcher_open: bool,

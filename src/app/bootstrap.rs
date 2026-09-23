@@ -48,10 +48,32 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemCancelDocxImport), CancelDocxImport),
                 MenuItem::action(t(language, Msg::ItemSave), SaveDocument),
                 MenuItem::action(t(language, Msg::ItemSaveAs), SaveDocumentAs),
-                MenuItem::action(
-                    git_t(language, GitMsg::VersionHistory),
-                    ShowFileVersionHistory,
-                ),
+                MenuItem::separator(),
+                MenuItem::submenu(Menu {
+                    name: git_t(language, GitMsg::BackupAndSync).into(),
+                    items: vec![
+                        MenuItem::action(git_t(language, GitMsg::ViewStatus), ShowGitSync),
+                        MenuItem::action(
+                            git_t(language, GitMsg::VersionHistory),
+                            ShowFileVersionHistory,
+                        ),
+                        MenuItem::action(t(language, Msg::ItemGitSyncNow), SyncNow),
+                        MenuItem::action(
+                            t(language, Msg::ItemGitResolveConflict),
+                            ResolveGitConflict,
+                        ),
+                        MenuItem::action(t(language, Msg::ItemGitSyncSetup), SetupGitSync),
+                    ],
+                }),
+                MenuItem::submenu(Menu {
+                    name: git_t(language, GitMsg::AdvancedGitTools).into(),
+                    items: vec![
+                        MenuItem::action(git_t(language, GitMsg::Commit), CommitLocally),
+                        MenuItem::action(git_t(language, GitMsg::Fetch), CheckRemote),
+                        MenuItem::action(git_t(language, GitMsg::Pull), PullUpdates),
+                        MenuItem::action(git_t(language, GitMsg::Push), PushCommits),
+                    ],
+                }),
                 MenuItem::separator(),
                 MenuItem::action(t(language, Msg::ItemNewTab), NewTab),
                 MenuItem::action(t(language, Msg::ItemOpenInNewTab), OpenInNewTab),
@@ -177,26 +199,6 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                     OrganizeLocalImages,
                 ),
                 MenuItem::action(t(language, Msg::ItemPublishWechat), PublishWechat),
-            ],
-        },
-        Menu {
-            name: git_t(language, GitMsg::SyncMenu).into(),
-            items: vec![
-                MenuItem::action(git_t(language, GitMsg::ViewStatus), ShowGitSync),
-                MenuItem::separator(),
-                MenuItem::action(t(language, Msg::ItemGitSyncNow), SyncNow),
-                MenuItem::action(t(language, Msg::ItemGitResolveConflict), ResolveGitConflict),
-                MenuItem::action(t(language, Msg::ItemGitSyncSetup), SetupGitSync),
-                MenuItem::separator(),
-                MenuItem::submenu(Menu {
-                    name: git_t(language, GitMsg::AdvancedGitTools).into(),
-                    items: vec![
-                        MenuItem::action(git_t(language, GitMsg::Commit), CommitLocally),
-                        MenuItem::action(git_t(language, GitMsg::Fetch), CheckRemote),
-                        MenuItem::action(git_t(language, GitMsg::Pull), PullUpdates),
-                        MenuItem::action(git_t(language, GitMsg::Push), PushCommits),
-                    ],
-                }),
             ],
         },
         Menu {

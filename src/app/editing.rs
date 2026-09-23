@@ -2162,6 +2162,7 @@ impl MarkionApp {
         };
         self.open_recent_submenu_open = false;
         self.format_images_submenu_open = false;
+        self.backup_sync_submenu_open = false;
         self.advanced_git_submenu_open = false;
         self.close_workspace_switcher();
         cx.notify();
@@ -2173,6 +2174,7 @@ impl MarkionApp {
             self.active_menu = next_menu;
             self.open_recent_submenu_open = false;
             self.format_images_submenu_open = false;
+            self.backup_sync_submenu_open = false;
             self.advanced_git_submenu_open = false;
             self.close_workspace_switcher();
             cx.notify();
@@ -2182,13 +2184,8 @@ impl MarkionApp {
     pub(super) fn open_open_recent_submenu(&mut self, cx: &mut Context<Self>) {
         if self.active_menu == Some(AppMenu::File) && !self.open_recent_submenu_open {
             self.open_recent_submenu_open = true;
-            cx.notify();
-        }
-    }
-
-    pub(super) fn close_open_recent_submenu(&mut self, cx: &mut Context<Self>) {
-        if self.open_recent_submenu_open {
-            self.open_recent_submenu_open = false;
+            self.backup_sync_submenu_open = false;
+            self.advanced_git_submenu_open = false;
             cx.notify();
         }
     }
@@ -2198,6 +2195,10 @@ impl MarkionApp {
             return;
         }
         self.open_recent_submenu_open = !self.open_recent_submenu_open;
+        if self.open_recent_submenu_open {
+            self.backup_sync_submenu_open = false;
+            self.advanced_git_submenu_open = false;
+        }
         cx.notify();
     }
 
@@ -2217,18 +2218,59 @@ impl MarkionApp {
     }
 
     pub(super) fn open_advanced_git_submenu(&mut self, cx: &mut Context<Self>) {
-        if self.active_menu == Some(AppMenu::Repository) && !self.advanced_git_submenu_open {
+        if self.active_menu == Some(AppMenu::File) && !self.advanced_git_submenu_open {
             self.advanced_git_submenu_open = true;
+            self.open_recent_submenu_open = false;
+            self.backup_sync_submenu_open = false;
             cx.notify();
         }
     }
 
     pub(super) fn toggle_advanced_git_submenu(&mut self, cx: &mut Context<Self>) {
-        if self.active_menu != Some(AppMenu::Repository) {
+        if self.active_menu != Some(AppMenu::File) {
             return;
         }
         self.advanced_git_submenu_open = !self.advanced_git_submenu_open;
+        if self.advanced_git_submenu_open {
+            self.open_recent_submenu_open = false;
+            self.backup_sync_submenu_open = false;
+        }
         cx.notify();
+    }
+
+    pub(super) fn open_backup_sync_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.active_menu == Some(AppMenu::File) && !self.backup_sync_submenu_open {
+            self.backup_sync_submenu_open = true;
+            self.open_recent_submenu_open = false;
+            self.advanced_git_submenu_open = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_backup_sync_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.active_menu != Some(AppMenu::File) {
+            return;
+        }
+        self.backup_sync_submenu_open = !self.backup_sync_submenu_open;
+        if self.backup_sync_submenu_open {
+            self.open_recent_submenu_open = false;
+            self.advanced_git_submenu_open = false;
+        }
+        cx.notify();
+    }
+
+    /// Hovering a plain File-menu row closes every nested flyout so only the
+    /// parent row reopens its own.
+    pub(super) fn close_file_submenus(&mut self, cx: &mut Context<Self>) {
+        if self.open_recent_submenu_open
+            || self.backup_sync_submenu_open
+            || self.advanced_git_submenu_open
+        {
+            self.open_recent_submenu_open = false;
+            self.backup_sync_submenu_open = false;
+            self.advanced_git_submenu_open = false;
+            cx.notify();
+        }
     }
 
     pub(super) fn close_menu(
@@ -2250,6 +2292,7 @@ impl MarkionApp {
             self.active_menu = None;
             self.open_recent_submenu_open = false;
             self.format_images_submenu_open = false;
+            self.backup_sync_submenu_open = false;
             self.advanced_git_submenu_open = false;
             self.file_tree_context_menu = None;
             self.preview_context_menu = None;
@@ -2571,15 +2614,6 @@ impl MarkionApp {
         cx: &mut Context<Self>,
     ) {
         self.toggle_menu(AppMenu::Export, cx);
-    }
-
-    pub(super) fn toggle_repository_menu(
-        &mut self,
-        _: &MouseUpEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.toggle_menu(AppMenu::Repository, cx);
     }
 
     pub(super) fn toggle_help_menu(
