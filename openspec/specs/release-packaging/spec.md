@@ -2,7 +2,9 @@
 
 ## Purpose
 Define how installable Markion releases are produced and distributed: a per-platform native build matrix (Windows/macOS/Linux) driven by GitHub Actions — required because `gpui`'s per-OS GPU backends cannot be cross-compiled — plus the `cargo-packager` installer formats (NSIS, `.app`/`.dmg`, `.deb`/`.AppImage`) and their unsigned-build limitations.
+
 ## Requirements
+
 ### Requirement: Per-platform native release builds via CI matrix
 The project SHALL provide a GitHub Actions workflow that builds a release binary for each supported desktop platform by compiling natively on that platform's runner, because the `gpui` UI dependency uses a distinct native GPU backend per OS (DirectX on Windows, Vulkan/Wayland/X11 on Linux, Metal on macOS) that cannot be cross-compiled from a single host. The matrix SHALL cover Windows x86_64, Linux x86_64, and macOS arm64; each job SHALL produce the binary with `cargo build --release --target <triple>`.
 
@@ -19,11 +21,12 @@ The project SHALL provide a GitHub Actions workflow that builds a release binary
 - **THEN** the cargo registry, git dependencies, and `target/` are restored from cache so the build skips already-compiled crates
 
 ### Requirement: Each release build SHALL be packaged into a native installer
-After a successful per-platform build, the workflow SHALL run `cargo-packager` (driven by `Packager.toml`) to wrap the release binary into the platform-appropriate distributable format(s): a Windows NSIS `.exe` installer (current-user install mode), a macOS `.app` bundle plus `.dmg` disk image, and a Linux `.deb` package plus `.AppImage`. The packager config SHALL specify the product name (`Markion`), bundle identifier (`dev.markion.app`), version, category, and generated platform icon files (`assets/markion.ico`, `assets/markion.icns`, and `assets/markion.png`).
+After a successful per-platform build, the workflow SHALL run `cargo-packager` (driven by `Packager.toml`) to wrap the release binary into the platform-appropriate distributable format(s): a Windows NSIS `.exe` installer (current-user install mode) plus a portable `.zip` archive, a macOS `.app` bundle plus `.dmg` disk image, and a Linux `.deb` package, `.rpm` package, plus `.AppImage`. The packager config SHALL specify the product name (`Markion`), bundle identifier (`dev.markion.app`), version, category, and generated platform icon files (`assets/markion.ico`, `assets/markion.icns`, and `assets/markion.png`). The Windows portable archive SHALL contain the application binary and the same bundled resource payload as the NSIS install layout under a single top-level folder so extraction does not scatter files.
 
 #### Scenario: Windows job produces an NSIS installer
 - **WHEN** the Windows build job packages its binary
 - **THEN** it emits a single NSIS `.exe` setup file that installs for the current user (no admin elevation required), creates Start Menu / Desktop shortcuts, and registers an Add/Remove-Programs entry
+- **AND** it emits `markion_<version>_x64-portable.zip` containing a top-level portable folder with the application executable and the same resources the installer would place beside it
 
 #### Scenario: macOS job produces an app bundle and disk image
 - **WHEN** the macOS build job packages its binary
@@ -31,7 +34,7 @@ After a successful per-platform build, the workflow SHALL run `cargo-packager` (
 
 #### Scenario: Linux job produces a deb and an AppImage
 - **WHEN** the Linux build job packages its binary
-- **THEN** it emits a `.deb` package (amd64) and a portable `.AppImage`, both using the generated `assets/markion.png` icon and the `dev.markion.app` desktop entry identifier
+- **THEN** it emits a `.deb` package (amd64), an `.rpm` package (x86_64), and a portable `.AppImage`, all using the generated `assets/markion.png` icon and the `dev.markion.app` desktop entry identifier where the format supports a desktop entry
 
 ### Requirement: Version tags SHALL publish a GitHub Release with all installers
 The workflow SHALL include a release job that runs only when a `v*` tag is pushed, downloads all per-platform packaging artifacts, and attaches them to a GitHub Release with auto-generated release notes. Builds on non-tag refs (branch pushes, pull requests) SHALL produce downloadable CI artifacts but SHALL NOT publish a release.
@@ -96,15 +99,15 @@ The final GitHub Release description SHALL expand or replace auto-generated note
 #### Scenario: Final release information is verified
 - **WHEN** the tag workflow succeeds
 - **THEN** the operator confirms that the Release is neither a draft nor an unintended prerelease
-- **AND** confirms that the Windows NSIS installer, macOS Apple Silicon DMG, Linux amd64 DEB, and Linux x86_64 AppImage are attached
+- **AND** confirms that the Windows NSIS installer, Windows portable `.zip`, macOS Apple Silicon DMG, Linux amd64 DEB, Linux x86_64 RPM, and Linux x86_64 AppImage are attached
 - **AND** confirms that the curated notes and comparison link are present
 
 ### Requirement: Tagged releases SHALL be mirrored to Aliyun OSS
-Upon successful completion of the per-platform `build` jobs for a `v*` tag, the release workflow SHALL run a `mirror-oss` job that downloads the per-platform packaging artifacts, computes a SHA-256 digest for each installer, generates a `manifest.json` describing the release, and uploads the Windows NSIS installer, macOS DMG, Linux DEB, Linux AppImage, `packager.toml`, `manifest.json`, and `sha256sums.txt` to a stable `${OSS_PREFIX}/latest/` path on the configured Aliyun OSS Bucket. The OSS endpoint, Bucket name, AccessKey ID, and AccessKey Secret SHALL be supplied from repository secrets and SHALL NOT appear in the repository, the workflow file, or any OpenSpec artifact. The `mirror-oss` job SHALL depend on the `build` jobs and SHALL NOT depend on the `Publish GitHub Release` job; a failure of either job SHALL NOT prevent the other from running. A failure of the `mirror-oss` job SHALL be treated as an incomplete release requiring correction, even if the GitHub Release has already been published. The mirror SHALL overwrite any previous `${OSS_PREFIX}/latest/` objects so that the URL is a stable pointer to the newest release; per-tag history is retained only on GitHub Releases, not on OSS. The mirrored installers SHALL be byte-for-byte copies of the GitHub Release assets and SHALL NOT be code-signed or otherwise modified by the mirror step.
+Upon successful completion of the per-platform `build` jobs for a `v*` tag, the release workflow SHALL run a `mirror-oss` job that downloads the per-platform packaging artifacts, computes a SHA-256 digest for each installer package, generates a `manifest.json` describing the release, and uploads the Windows NSIS installer, Windows portable `.zip`, macOS DMG, Linux DEB, Linux RPM, Linux AppImage, `packager.toml`, `manifest.json`, and `sha256sums.txt` to a stable `${OSS_PREFIX}/latest/` path on the configured Aliyun OSS Bucket. The OSS endpoint, Bucket name, AccessKey ID, and AccessKey Secret SHALL come from repository secrets and SHALL NOT appear in the repository, the workflow file, or any OpenSpec artifact. The `mirror-oss` job SHALL depend on the `build` jobs and SHALL NOT depend on the `Publish GitHub Release` job; a failure of either job SHALL NOT prevent the other from running. A failure of the `mirror-oss` job SHALL be treated as an incomplete release requiring correction, even if the GitHub Release has already been published. The mirror SHALL overwrite any previous `${OSS_PREFIX}/latest/` objects so that the URL is a stable pointer to the newest release; per-tag history is retained only on GitHub Releases, not on OSS. The mirrored installers SHALL be byte-for-byte copies of the GitHub Release assets and SHALL NOT be code-signed or otherwise modified by the mirror step.
 
 #### Scenario: Tagged release mirrors installers, config, and manifest to OSS
 - **WHEN** a `v*` tag is pushed and all three native `build` jobs succeed
-- **THEN** the `mirror-oss` job runs, downloads the per-platform packaging artifacts, and uploads the Windows NSIS installer, macOS DMG, Linux DEB, Linux AppImage, `packager.toml`, `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/` on the configured OSS Bucket
+- **THEN** the `mirror-oss` job runs, downloads the per-platform packaging artifacts, and uploads the Windows NSIS installer, Windows portable `.zip`, macOS DMG, Linux DEB, Linux RPM, Linux AppImage, `packager.toml`, `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/` on the configured OSS Bucket
 - **AND** each file's OSS object key preserves its original filename under the `latest/` prefix
 
 #### Scenario: OSS credentials come from secrets, not the repository
@@ -129,7 +132,7 @@ Upon successful completion of the per-platform `build` jobs for a `v*` tag, the 
 
 #### Scenario: Manifest describes the mirrored release
 - **WHEN** the `mirror-oss` job generates `manifest.json`
-- **THEN** the manifest contains the release version (without the leading `v`), the tag name, an ISO-8601 publication timestamp, and a map from platform identifier (`windows-x86_64`, `macos-aarch64`, `linux-amd64`, `linux-appimage`) to the installer filename
+- **THEN** the manifest contains the release version (without the leading `v`), the tag name, an ISO-8601 publication timestamp, and a map from platform identifier (`windows-x86_64`, `windows-x86_64-portable`, `macos-aarch64`, `linux-amd64`, `linux-rpm`, `linux-appimage`) to the installer package filename
 - **AND** the manifest remains available as mirror metadata without being required for the initial in-app update-check verification
 
 ### Requirement: The app SHALL check GitHub's latest published Release for updates
@@ -203,7 +206,7 @@ For every stable `v*` release, the publication pipeline SHALL create a cargo-pac
 Every supported Markion native package SHALL include the complete pinned MarkNice publishing workspace, its locally hosted third-party runtime assets and fonts, a machine-readable provenance manifest, and applicable license notices. Release construction and verification SHALL require neither a sibling MarkNice checkout nor Node.js, SHALL verify that the bundled application shell has no remote runtime dependency, and SHALL fail before publication when required workspace assets are absent, unlisted, or inconsistent with their manifest.
 
 #### Scenario: Native packages contain the workspace
-- **WHEN** the Windows NSIS, macOS Apple Silicon application/DMG, Linux amd64 DEB, or Linux x86_64 AppImage is assembled
+- **WHEN** the Windows NSIS installer, Windows portable `.zip`, macOS Apple Silicon application/DMG, Linux amd64 DEB, Linux x86_64 RPM, or Linux x86_64 AppImage is assembled
 - **THEN** the package contains the same required publishing workspace files at the runtime resource location expected by Markion
 
 #### Scenario: Package build is self-contained
@@ -219,4 +222,3 @@ Every supported Markion native package SHALL include the complete pinned MarkNic
 #### Scenario: Incomplete bundle blocks publication
 - **WHEN** a required workspace file, provenance entry, or applicable third-party notice is missing or inconsistent
 - **THEN** packaging or release verification fails before the release is published
-
