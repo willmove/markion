@@ -812,12 +812,74 @@ When a paragraph, heading, quoted paragraph, or list item contains a Markdown im
 - **THEN** the image still renders as a block-level image row
 - **AND** the prose paragraph (when present) remains a separate row whose source range does not overlap the image
 
+### Requirement: YAML front matter is a collapsible Visual Edit header
+Visual Edit SHALL present a leading YAML `---` / `...` front-matter region as a rendered document-header row, not as a FrontMatter source island. The row SHALL carry a payload editor whose exact range is the complete authored header including opening and closing delimiters. While collapsed, the header SHALL show a localized YAML label and the parsed `title` when one exists. Focusing the row, expanding the source toggle, or placing the caret in the header SHALL reveal the YAML source through the collapsible payload editor. Invalid YAML SHALL remain editable in that editor and SHALL NOT demote the row to source-island chrome. Showing, collapsing, or hovering the header SHALL NOT increment document version or invalidate per-version derived caches. TOML and JSON front matter remain undetected.
+
+#### Scenario: Valid YAML header stays rendered
+- **WHEN** the document starts with `---\ntitle: Demo\n---\n\nBody`
+- **THEN** Visual Edit derives a FrontMatter block covering the YAML region
+- **AND** the block has a FrontMatter payload editor and no FrontMatter source island
+- **AND** the collapsed chrome includes the parsed title `Demo`
+
+#### Scenario: Invalid YAML still edits as header source
+- **WHEN** the document starts with `---\n: not mapping\n---\n`
+- **THEN** Visual Edit still presents a FrontMatter payload editor over the authored header
+- **AND** the row is not a source island
+
+#### Scenario: Header interaction is version-stable
+- **WHEN** the user expands, collapses, or hovers the YAML header without editing text
+- **THEN** the document version and per-version derived caches stay unchanged
+
+### Requirement: Reference-style block images stay rendered when focused
+Visual Edit SHALL treat a single-line reference-style Markdown image that the parser classifies as a block image (`![alt][label]`, collapsed `![alt][]`, or shortcut `![alt]`) as rendered WYSIWYG: the image remains visible while focused and SHALL carry the same collapsible whole-span source payload used for inline `![alt](url)` images. The payload range SHALL be the complete authored image span. Width and alignment field controls SHALL NOT appear for reference-style images, and confirming those controls SHALL NOT rewrite the span into inline-destination form. Multiline, angle-bracket-only, or otherwise unprovable image spans MAY keep the Image source-island fallback.
+
+#### Scenario: Focused reference image keeps the picture
+- **WHEN** Visual Edit shows a document whose only image is `![alt][asset]` with a later `[asset]: pic.png` definition
+- **THEN** the image block has an Image payload editor covering `![alt][asset]`
+- **AND** focusing the image does not replace it with a source island
+
+#### Scenario: Shortcut and collapsed reference forms are proven
+- **WHEN** the parser emits a block image for `![alt]` or `![alt][]` on one line
+- **THEN** Visual Edit attaches an Image payload editor over that authored span
+- **AND** `source_island` is none
+
+#### Scenario: Presentation controls stay inline-only
+- **WHEN** the focused image is reference-style
+- **THEN** width and alignment controls are not shown
+- **AND** the source remains `![…][…]` (or shortcut `![…]`) rather than `![…](…)`
+
+### Requirement: Ragged GFM tables keep cell editors
+When a GFM table’s body or header rows have fewer or more cells than the separator, Visual Edit SHALL still attach a Table cell editor and SHALL keep the best-effort grid while focused. Missing cells SHALL map to empty UTF-8-safe insertion ranges at the end of that row’s authored content (before the newline). Extra cells SHALL remain editable. Visual Edit SHALL NOT demote a parseable ragged table to a Table source island solely because cell counts differ. Structural toolbar edits continue to replace the complete table source as one undoable mutation.
+
+#### Scenario: Short body row stays a focused grid
+- **WHEN** the document contains `| A | B | C |\n| --- | --- | --- |\n| 1 | 2 |`
+- **THEN** Visual Edit derives a Table editor whose cell count matches the logical grid (including an empty third body cell)
+- **AND** focusing the table does not paint source-island chrome
+
+#### Scenario: Extra cells remain editable
+- **WHEN** a body row has more pipe cells than the separator
+- **THEN** those extra cells still have source ranges
+- **AND** the table is not an island
+
+### Requirement: Math Pending and Error keep the payload editor
+Visual Edit SHALL present display and fenced math whose KaTeX (or equivalent) cache entry is Pending or Error through the math payload editor, with the payload forced visible until the render is Ready. Visual Edit SHALL NOT replace that block with source-island chrome because the formula has not rendered or has failed to render. If delimiter/payload bounds cannot be split, the payload editor SHALL cover the complete authored math span. Caret, hover, and expand/collapse of the payload SHALL NOT increment document version.
+
+#### Scenario: Failed display math stays an editor
+- **WHEN** a `$$…$$` or fenced math block’s render entry is Error
+- **THEN** Visual Edit shows the error message and the LaTeX payload editor
+- **AND** the block is not a source island
+
+#### Scenario: Pending display math stays an editor
+- **WHEN** a display math block’s render entry is Pending
+- **THEN** Visual Edit shows the pending status and the payload editor
+- **AND** the block is not a source island
+
 ### Requirement: Maintained Visual Edit support classification
-The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that classifies every user-visible Markdown construct into exactly one of three classes: **rendered WYSIWYG** (the construct is shown in its rendered form, including dedicated field/payload editors for code, math, diagrams, images, and tables whose editors ARE the rendered form), **progressive-reveal WYSIWYG** (the construct is rendered by default and reveals its smallest complete source syntax group when the caret enters it — inline formatting, links, inline math, structural prefixes), or **WYSIWYG coverage gap** (the construct currently shows raw source and is tracked under the `WYSIWYG coverage roadmap` for closure by a future change). The matrix SHALL name the canonical editable range and the verification evidence for each rendered/reveal class, and SHALL name the roadmap priority and implementation seam for each gap. The matrix SHALL agree with the stable requirements and the implemented `VisualBlock`/`VisualBlockEditor` behavior.
+The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that classifies every user-visible Markdown construct into exactly one of three classes: **rendered WYSIWYG** (the construct is shown in its rendered form, including dedicated field/payload editors for code, math, diagrams, images, YAML front matter, and tables whose editors ARE the rendered form), **progressive-reveal WYSIWYG** (the construct is rendered by default and reveals its smallest complete source syntax group when the caret enters it — inline formatting, links, inline math, structural prefixes), or **WYSIWYG coverage gap** (the construct currently shows raw source and is tracked under the `WYSIWYG coverage roadmap` for closure by a future change). The matrix SHALL name the canonical editable range and the verification evidence for each rendered/reveal class, and SHALL name the roadmap priority and implementation seam for each gap. The matrix SHALL agree with the stable requirements and the implemented `VisualBlock`/`VisualBlockEditor` behavior.
 
 #### Scenario: Contributor evaluates current WYSIWYG coverage
 - **WHEN** a contributor reads the Visual Edit WYSIWYG coverage matrix
-- **THEN** it distinguishes rendered WYSIWYG constructs (prose, code, math, diagrams, images, tables, task lists, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (decoded entities, front matter, indented code, unclosed fences, reference-style images, malformed tables, unsupported inline-HTML forms, autolinks, task-list checkbox interaction, definition lists, empty list items)
+- **THEN** it distinguishes rendered WYSIWYG constructs (prose, code, math including Pending/Error payload editors, diagrams, images including reference-style block images, tables including ragged grids, YAML front matter, task lists, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (indented code, unclosed fences, multiline or otherwise unprovable images, definition lists, residual unsupported gaps)
 - **AND** it explains that canonical Markdown remains the single persisted representation and that no construct is edited through a parallel rendered tree
 
 #### Scenario: A new visual block behavior is proposed
@@ -855,15 +917,20 @@ In Split Preview, Read, and Visual Edit, rendered inline math SHALL participate 
 - **AND** typing, cut, paste, or pointer interaction cannot mutate the document
 
 ### Requirement: Visual Edit SHALL provide selection-contextual formatting controls
-When Visual Edit owns a non-empty, exactly source-mapped text selection, Markion SHALL present contextual controls for strong emphasis, emphasis, inline code, and link editing. Invoking a control SHALL use the existing canonical Markdown mutation, semantic undo, selection, autosave, and exact UTF-8 source paths. Merely showing, moving, or dismissing the controls SHALL NOT change document state or invalidate derived caches.
+When Visual Edit owns a non-empty, exactly source-mapped text selection, Markion SHALL present contextual controls for strong emphasis, emphasis, inline code, and link editing. A selection that lies entirely inside one Visual Edit table cell’s exact source range SHALL be treated as exactly source-mapped for those controls, even though the table block’s `editable_runs` are empty. Invoking a control SHALL use the existing canonical Markdown mutation, semantic undo, selection, autosave, and exact UTF-8 source paths. Merely showing, moving, or dismissing the controls SHALL NOT change document state or invalidate derived caches. A selection that crosses a table cell boundary or a `|` delimiter SHALL NOT present an unsafe contextual mutation.
 
 #### Scenario: Selection toolbar formats visual text
 - **WHEN** the user selects exactly mapped prose in Visual Edit and invokes Bold, Italic, or Inline Code from the contextual controls
 - **THEN** the corresponding canonical Markdown markers are changed through one semantic command
 - **AND** one Undo restores the prior source and selection
 
+#### Scenario: Table cell selection is format-safe
+- **WHEN** the user selects a non-empty range fully inside one Visual Edit table cell and invokes Bold from the contextual controls
+- **THEN** only that cell’s selected bytes are wrapped
+- **AND** one Undo restores the prior source and selection
+
 #### Scenario: Ambiguous selection stays conservative
-- **WHEN** a selection crosses an ambiguous or source-island boundary
+- **WHEN** a selection crosses an ambiguous or source-island boundary, or crosses a GFM table cell boundary
 - **THEN** Markion does not present an unsafe contextual mutation for that range
 - **AND** raw source editing remains available
 
@@ -1075,12 +1142,12 @@ When Visual Edit lays out a prose row as mixed fragments (because the row contai
 - **AND** navigation icons and inline atoms stay on that same flow
 
 ### Requirement: WYSIWYG coverage roadmap
-The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. The initial roadmap SHALL include at minimum the following primary gaps in priority order: (1) decoded HTML entities in prose blocks (for example `&amp;`), (2) front matter (an editing form for YAML `---` regions, and detection of TOML/JSON forms), and (3) indented code blocks. The roadmap SHALL also track secondary gaps including unclosed or malformed fenced code, reference-style and malformed inline images, malformed tables, unsupported inline-HTML forms and angle-bracket autolinks in prose, task-list checkbox click interaction, GFM definition lists, empty list items, and math render-failure states.
+The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. After this change the remaining primary gap SHALL be indented code blocks. The roadmap SHALL also track secondary gaps including unclosed or malformed fenced code, multiline or otherwise unprovable images, GFM definition lists, and residual unsupported gap bytes. YAML front matter, reference-style block images, ragged tables, and math Pending/Error states SHALL NOT remain on the roadmap.
 
 #### Scenario: Primary gaps are tracked with priority and effort
 - **WHEN** a contributor reads the WYSIWYG coverage roadmap
-- **THEN** the current primary gaps (decoded HTML entities, front matter, indented code blocks) are listed with priority, effort, target class, and implementation seam
-- **AND** each primary gap points at the source location of the current transitional source-view rendering
+- **THEN** the current primary gap (indented code blocks) is listed with priority, effort, target class, and implementation seam
+- **AND** YAML front matter, reference-style block images, ragged tables, and math render-failure states are absent from the open-gap list
 
 #### Scenario: Closing a gap updates the roadmap
 - **WHEN** a future change implements WYSIWYG rendering for a construct that the roadmap tracks as a gap
@@ -1088,11 +1155,11 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 - **AND** the change's proposal cites this roadmap requirement as its motivation
 
 #### Scenario: Closed gaps do not regress
-- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, or GFM alerts)
+- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example YAML front matter, reference-style block images, ragged tables, math Pending/Error payload editors, escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, GFM alerts, or Visual Edit task-list checkbox click)
 - **THEN** the coverage matrix classifies the construct in its implemented class and the construct does not reappear on the roadmap
 
 #### Scenario: Secondary gaps are visible but lower priority
-- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example task-list checkbox interaction or angle-bracket autolinks)
+- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example unclosed fenced code or GFM definition lists)
 - **THEN** the roadmap lists the secondary gap with its effort and implementation seam
 - **AND** the contributor can open a change that closes it without re-litigating whether it is a gap
 
@@ -1104,6 +1171,8 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 ### Requirement: GFM table preview blocks carry parser event source ranges
 
 The parser SHALL assign each `PreviewBlock::Table` the source range of the pulldown-cmark table event that produced that block’s rows. The range SHALL be non-empty and SHALL cover the authored GFM table bytes. The parser SHALL NOT assign an empty `0..0` placeholder range, and SHALL NOT zip table cell content to source ranges produced by a separate document scan that can skip tables the CommonMark+GFM parser emits. After derivation, GFM tables SHALL appear in the preview block stream in document (source) order. Nested-in-list table ordering MAY still be restored by sorting blocks on those event source-range starts; that sort SHALL NOT be used to repair invented placeholder ranges. Table cell-editing lookup MAY continue to use a dedicated scan of two-or-more-column tables and is not required to be 1:1 with preview table blocks.
+
+When an HTML comment whose payload is exactly a Markion column-width comment (`<!-- markion-cols:… -->`) immediately precedes a GFM table at the same block nesting, derivation SHALL extend that table’s source range to include the comment and SHALL NOT emit the comment as a separate Html preview block. Cell-editing lookup SHALL continue to use the pipe-table slice inside that range.
 
 #### Scenario: One-column GFM tables keep their event ranges
 
@@ -1122,13 +1191,19 @@ The parser SHALL assign each `PreviewBlock::Table` the source range of the pulld
 
 - **WHEN** the parser emits a GFM table with at least one row
 - **THEN** that table’s preview `source_range` is non-empty
-- **AND** `source_range.start` equals the start of the pulldown-cmark table event for that table (adjusted for any front-matter body offset)
+- **AND** `source_range.start` equals the start of the pulldown-cmark table event for that table (adjusted for any front-matter body offset), or the start of an absorbed immediately-preceding column-width comment
 
 #### Scenario: Nested list tables still follow document order
 
 - **WHEN** a list item contains a nested GFM table
 - **THEN** the preview stream places the list item block before that table
 - **AND** the list item’s source range ends no later than the nested table’s source range start
+
+#### Scenario: Column-width comments are absorbed into the following table
+
+- **WHEN** the document contains `<!-- markion-cols:30,70 -->` immediately followed by a two-column GFM table
+- **THEN** preview derivation emits one Table block whose source range includes the comment and the table
+- **AND** no Html preview block is emitted for that comment
 
 ### Requirement: CRLF HTML events coalesce into one preview block
 
@@ -1243,4 +1318,93 @@ A content-free HTML marker — an HTML-only paragraph or block whose tags carry 
 #### Scenario: Content-bearing HTML keeps its presentation
 - **WHEN** the same position holds HTML with visible content — text inside style tags (`<b>bold</b>`), a labeled link anchor, or a block that flattens to text, an image, or a table
 - **THEN** it keeps its existing presentation: inline-styled prose for HTML with text, and the bordered HTML block layout otherwise
+
+### Requirement: In-document table of contents from a TOC token
+The editor SHALL treat a standalone paragraph whose trimmed plaintext is exactly `[TOC]` (ASCII, case-insensitive) as an in-document table of contents. The canonical source SHALL remain that token. Read mode, Split Preview, and unfocused Visual Edit SHALL render the current document outline as a nested, clickable heading list. Activating a TOC entry SHALL navigate to that heading the same way the outline panel does, without mutating document text, dirty state, undo history, or document version. When the Visual Edit caret belongs to the TOC block, the editor SHALL reveal the authored `[TOC]` token so the user can edit or delete it. A `[TOC]` token inside a list item, fenced code, or other non-paragraph construct SHALL remain ordinary text. Missing headings SHALL render an empty TOC without inventing source.
+
+#### Scenario: TOC token renders a live outline
+- **WHEN** the document contains a paragraph that is only `[TOC]` or `[toc]` and the document has headings
+- **THEN** Read, Split Preview, and unfocused Visual Edit show those headings as a nested clickable list
+- **AND** the canonical source still contains the `[TOC]` token rather than an expanded Markdown list
+
+#### Scenario: Clicking a TOC entry jumps without mutating
+- **WHEN** the user activates a TOC heading entry
+- **THEN** the editor navigates to that heading’s source position and brings it into view for the active mode
+- **AND** document text, version, dirty state, and undo history are unchanged
+
+#### Scenario: Focused Visual Edit TOC reveals the token
+- **WHEN** the Visual Edit caret belongs to the TOC block
+- **THEN** the authored `[TOC]` token is visible for editing
+- **AND** deleting that block removes the token through the existing exact block-delete path
+
+#### Scenario: List-item TOC text is not a widget
+- **WHEN** a list item’s text is `[TOC]`
+- **THEN** Visual Edit and preview keep it as list-item text
+- **AND** they do not replace the item with a generated outline
+
+### Requirement: Footnote reference hover preview
+The editor SHALL show a presentation-only tooltip with the matching footnote definition text when the pointer hovers a resolved footnote reference in Read, Split Preview, or Visual Edit. Hovering SHALL NOT mutate document text, dirty state, undo history, or document version. Unresolved footnote labels SHALL omit the tooltip. Clicking an existing Visual Edit footnote navigation icon SHALL continue to jump to the definition.
+
+#### Scenario: Hovering a resolved footnote shows its definition
+- **WHEN** the document defines `[^note]` and the pointer hovers a `[^note]` reference in Read, Split Preview, or Visual Edit
+- **THEN** a tooltip shows that definition’s text
+- **AND** document version and derived caches are unchanged
+
+#### Scenario: Unresolved footnote markers have no tooltip
+- **WHEN** the pointer hovers a footnote-like marker whose label has no definition
+- **THEN** the editor does not show a footnote tooltip
+
+### Requirement: In-document heading anchor navigation
+The editor SHALL resolve bare Markdown link destinations of the form `#fragment` to a document heading. A successful match SHALL jump to that heading the same way the outline panel does, without calling the platform URL opener and without mutating source. Visual Edit SHALL attach a heading navigation target (and icon) to such links when the heading exists. Links that are not a bare `#fragment`, or whose fragment matches no heading, SHALL keep existing URL-open behavior. Heading ids SHALL prefer an authored heading attribute `{#id}` when present; otherwise they SHALL slugify the heading title keeping Unicode letters and digits, and duplicate ids SHALL uniquify with a numeric suffix (`hello`, then `hello-1`).
+
+#### Scenario: Hash link jumps to the heading
+- **WHEN** the document contains `## Hello` and a link `[go](#hello)`
+- **THEN** activating that link in Read, Split Preview, or Visual Edit navigates to the Hello heading
+- **AND** the platform URL opener is not invoked
+- **AND** document text and version are unchanged
+
+#### Scenario: Authored heading id wins
+- **WHEN** the document contains `## Hello {#custom}` and a link `[go](#custom)`
+- **THEN** activating that link jumps to that heading
+
+#### Scenario: Duplicate titles uniquify
+- **WHEN** the document contains two headings titled `Hello`
+- **THEN** the first heading’s id is `hello` and the second is `hello-1`
+- **AND** `[go](#hello-1)` jumps to the second heading
+
+#### Scenario: CJK titles remain jumpable
+- **WHEN** the document contains `## 中文标题` and a link `[go](#中文标题)`
+- **THEN** activating that link jumps to that heading
+
+### Requirement: Shared inline HTML semantics across rendered contexts
+
+Read, Split Preview and Visual Edit SHALL consistently render supported inline HTML in Markdown paragraphs, headings, lists, blockquotes and GFM cells, and in standalone HTML content. Supported elements SHALL include strong/b, em/i, s/del/strike, u/ins, code/kbd/samp, mark, sub/sup, neutral span, colored span/font, and a anchors. Supported inert attributes SHALL not expose tags or discard the element's styling. Nested styles and links SHALL restore their enclosing state when closed. Escaped or entity-decoded tag text SHALL remain literal.
+
+#### Scenario: Mixed prose retains colored linked formatting
+
+- **WHEN** prose contains a colored span with bold content and an HTML anchor
+- **THEN** all rendered modes retain the color, bold style and decoded destination with hidden tag syntax
+- **AND** following text restores its previous style and link
+
+#### Scenario: Visual HTML remains exactly editable
+
+- **WHEN** the caret enters supported HTML, including an anchor wrapping an image
+- **THEN** Visual Edit reveals its exact safe containing source group and preserves UTF-8 mapping
+- **AND** edits use the existing mutation and undo paths without rewriting unrelated markup
+
+#### Scenario: Harmless wrappers and aliases stay rendered
+
+- **WHEN** text uses span wrappers, title/class/id metadata or kbd/samp tags
+- **THEN** neutral wrappers preserve content and code-like aliases use the code style
+- **AND** malformed or unsupported forms retain source-backed fallback
+
+### Requirement: Explicit inline HTML breaks are preserved
+
+Every authored br element SHALL contribute one rendered line break in mixed Markdown and shared HTML rendering, including consecutive, leading and trailing breaks. Structural HTML boundaries SHALL not accidentally merge or multiply explicit breaks.
+
+#### Scenario: Repeated and edge breaks survive
+
+- **WHEN** content contains br elements at its beginning, end or consecutively in the middle
+- **THEN** each explicit break occupies its corresponding line transition in every rendered mode
+- **AND** Visual Edit retains the exact tag source mapping
 

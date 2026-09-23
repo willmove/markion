@@ -158,6 +158,17 @@ The outline SHALL render compact rows with no extra inter-row margin and no more
 - **THEN** mouse-wheel or trackpad input over the outline scrolls its visible heading rows vertically
 - **AND** every currently visible heading can be brought into view and activated
 
+### Requirement: Outline heading anchors match in-document hash links
+Each outline heading SHALL expose a stable `anchor` string that in-document `#fragment` links resolve against. The id SHALL be the authored heading attribute `{#id}` when pulldown-cmark reports one; otherwise a Unicode-preserving slug of the visible title. Empty titles SHALL use `section`. Duplicate ids in document order SHALL uniquify with a numeric suffix (`hello`, `hello-1`). Changing folding, hovering, or clicking the outline SHALL still not mutate Markdown.
+
+#### Scenario: Outline anchors follow authored ids
+- **WHEN** a heading is authored as `## Title {#custom}`
+- **THEN** that outline item’s `anchor` is `custom`
+
+#### Scenario: Duplicate outline titles uniquify
+- **WHEN** two headings share the visible title `Hello` and neither has an authored id
+- **THEN** their outline anchors are `hello` and `hello-1` in document order
+
 ### Requirement: GFM tables render at their authored source position
 
 The editor SHALL render every GFM pipe table that the CommonMark+GFM parser emits as a visual table at the table’s authored source position in Split Preview, Read mode, and Visual Edit. This includes one-column tables (a single header cell and delimiter row, with or without body rows) mixed in the same document with later multi-column tables. A table SHALL NOT appear earlier in the rendered stream than its source offset, and later tables SHALL NOT inherit source ranges that belong to earlier tables. Two-or-more-column tables SHALL keep their cell-editing and interaction-gated toolbar behavior, including whole-table delete when exact block delete is supported; one-column tables MAY remain non-editable at the cell/toolbar layer when exact cell bounds cannot be proven.
@@ -179,4 +190,66 @@ The editor SHALL render every GFM pipe table that the CommonMark+GFM parser emit
 - **WHEN** the user edits a cell or uses the Visual Edit table toolbar on a two-or-more-column GFM table after preview table ranges are taken from parser events
 - **THEN** the mutation still replaces that table’s source bytes
 - **AND** it does not edit a different table in the document
+
+### Requirement: GFM tables support draggable persisted column widths
+
+Visual Edit SHALL expose a column-resize handle on the boundary between adjacent cells of a GFM table that has a table cell editor and at least two columns. Pointer-move while dragging SHALL update that table’s on-screen column shares without mutating document text, dirty state, undo history, document version, or per-version derived Markdown caches. Releasing the drag SHALL write or replace one HTML comment immediately before the pipe table as a single undoable source mutation:
+
+`<!-- markion-cols:P1,P2,… -->`
+
+where each `Pi` is an integer percent, there is one value per column, values sum to 100, and each value is at least the per-column floor (5, or 1 when `n * 5 > 100`). Dragging a handle SHALL change only the two columns sharing that boundary; other columns keep their percents. Split Preview and Read mode SHALL apply the same authored percents as Visual Edit. When the comment is missing, malformed, or its value count does not match the table’s column count, surfaces SHALL use the existing content-heuristic column weights.
+
+The comment SHALL NOT appear as a separate Html preview or Visual Edit block when it immediately precedes a GFM table at the same nesting. The table block’s source range SHALL include the comment so whole-table delete and duplicate keep comment and table together. Cell editing and the row/column toolbar SHALL continue to target pipe-table bytes, not the comment.
+
+#### Scenario: Drag overlay does not bump document version
+
+- **WHEN** the user drags a Visual Edit table column handle without releasing
+- **THEN** on-screen column shares follow the pointer
+- **AND** document text, dirty state, undo history, and document version remain unchanged
+
+#### Scenario: Mouse-up writes one column-width comment
+
+- **WHEN** the user releases a column-resize drag on a two-or-more-column GFM table
+- **THEN** the source contains `<!-- markion-cols:… -->` immediately before that table
+- **AND** the edit is one undoable mutation that restores the prior source including the absence or previous comment
+
+#### Scenario: Authored percents apply on Read and Visual Edit
+
+- **WHEN** the document contains `<!-- markion-cols:30,70 -->` immediately before a two-column GFM table
+- **THEN** Visual Edit, Split Preview, and Read mode give the first column 30% and the second 70% of the table
+- **AND** the comment is not rendered as an Html island or raw comment row
+
+#### Scenario: Missing or mismatched comment keeps the heuristic
+
+- **WHEN** a GFM table has no column-width comment, or the comment lists a different number of values than the table has columns
+- **THEN** column shares fall back to the content-heuristic weights
+- **AND** the table remains editable
+
+#### Scenario: Structural column edits keep an existing comment in sync
+
+- **WHEN** a table already has a matching column-width comment and the user adds or deletes a column through the Visual Edit toolbar
+- **THEN** that same source mutation rewrites the percent list to the new column count
+- **AND** no second undo step is introduced solely for the comment
+
+### Requirement: Visual Edit table cells expose in-cell inline format controls
+
+When Visual Edit owns a non-empty selection that lies entirely inside one table cell’s exact source range, the block context menu for that table SHALL expose the existing Bold, Italic, Inline Code, and Link formatting group. Invoking a control SHALL wrap or unwrap that cell’s selected bytes through the existing Markdown format path as one undoable mutation. A selection that crosses a cell boundary, a `|` delimiter, or more than one cell SHALL NOT expose those actions and SHALL NOT apply inline wrapping that would break the table. Focused cells continue to reveal authored source markup; unfocused cells continue to render inline formatting.
+
+#### Scenario: Cell selection shows Bold in the context menu
+
+- **WHEN** the user selects a non-empty range fully inside one Visual Edit table cell and opens that table’s context menu
+- **THEN** the menu includes Bold, Italic, Inline Code, and Link
+- **AND** opening the menu does not change document version
+
+#### Scenario: Bold wraps only the cell selection
+
+- **WHEN** the user invokes Bold for a selection fully inside one table cell
+- **THEN** that cell’s selected source is wrapped with `**` as one undoable mutation
+- **AND** neighboring cells and table structure are unchanged
+
+#### Scenario: Cross-cell selection stays conservative
+
+- **WHEN** the selection starts in one table cell and ends in another cell or includes a `|` delimiter
+- **THEN** the context menu does not expose selection formatting actions for that range
+- **AND** applying Bold through the keyboard format command does not mutate the document
 
