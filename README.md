@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="#simplified-chinese">简体中文</a>
+  <strong>English</strong> · <a href="#simplified-chinese">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a> · <a href="README.es.md">Español</a>
 </p>
 
 # Markion
@@ -229,7 +229,7 @@ Markion is available under the [MIT License](LICENSE).
 </p>
 
 <p align="center">
-  <a href="README.md#english">English</a> · <strong>简体中文</strong> · <a href="README.md#simplified-chinese">合并版</a>
+  <a href="#english">English</a> · <strong>简体中文</strong> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.fr.md">Français</a> · <a href="README.de.md">Deutsch</a> · <a href="README.es.md">Español</a>
 </p>
 
 # Markion
@@ -293,7 +293,8 @@ Markion 提供四种视图模式，默认使用分栏预览。
 
 渲染预览支持：
 
-- 粗体、斜体、删除线、行内代码、链接、高亮、上标、下标、脚注、任务列表、常用 emoji 短代码和自动链接。
+- 粗体、斜体、删除线、行内代码、链接、高亮、上标、下标、脚注（悬停引用即可阅读定义）、任务列表、常用 emoji 短代码和自动链接。
+- 文内 `[TOC]` / `[toc]` 标记会渲染为可点击的实时目录，`[text](#heading)` / `{#id}` 标题锚点会在文档内跳转。
 - 正确的有序列表起始编号、嵌套列表、分层项目符号、悬挂缩进、图片和嵌入式 HTML。
 - 受支持的行内 HTML 在混合 Markdown、独立 HTML 块、表格单元格和可视化编辑中保持一致语义，包括安全的颜色 span、链接与链接图片、`kbd`/`samp`、原样换行以及正确定位的上下标；畸形或不支持的标记会安全回退，不会执行脚本。
 - 可选择预览文本，并通过右键菜单复制为纯文本、Markdown 或 HTML；在适用位置还可复制链接地址。
@@ -377,7 +378,7 @@ PDF 和 DOCX 会优先尝试已整合的 Typune/pandoc 导出引擎。如果 pan
 
 - 可视化编辑以所见即所得为默认呈现契约，同时保留标准 Markdown；暂无字节精确渲染证明的结构会以源码作为过渡编辑通道（登记在 [WYSIWYG 覆盖路线图](docs/visual-editing-quality.md)中），而不会猜测富文本树变更；仅当可证明存在不重叠的源码边界时才提供块级重排。目前的主要缺口包括已解码 HTML 实体、前言与缩进代码块；其他畸形或尚未支持的结构列在矩阵的次级缺口中。
 - 屏幕渲染（分栏/阅读预览与可视化编辑）使用内嵌的 RaTeX 引擎排版数学公式；LaTeX 导出保留原生 `$...$`/`$$...$$` 源码交给读者自己的工具链处理，内置 DOCX 导出后备通道（仅在 pandoc 不可用时使用）仍会将公式降级为可读的纯文本近似显示，而非嵌入排版好的字形。
-- 可视化表格单元格支持直接纯文本编辑，但尚未提供单元格内的富行内格式控件。引用式/多行图片和畸形表格仍是 WYSIWYG 覆盖路线图上的已知缺口，暂时保留源码驱动编辑路径。
+- 可视化表格单元格支持直接编辑，且选区完全落在一个单元格内时可使用加粗/斜体/行内代码/链接。GFM 表列宽可拖拽，并以紧挨表格前的 HTML 注释（`<!-- markion-cols:… -->`）写入源码。行内图片宽度为 10–100% 的整数，且支持拖拽缩放。引用式/多行图片和畸形表格仍是 WYSIWYG 覆盖路线图上的已知缺口，暂时保留源码驱动编辑路径。
 - 一键更新在完成 Minisign 验证后会安装 Windows NSIS 版本；macOS 包替换与 Linux `.deb`/AppImage 自替换仍是后续工作，且更新身份验证并非 Windows Authenticode 或 Apple 公证。
 - 尚未实现文件树拖放移动和完整的自定义主题安装界面。
 - 图片导出是基础文本快照，超大文档尚未在所有派生子系统中使用 rope 或完全增量解析。
