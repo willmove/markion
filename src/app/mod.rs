@@ -736,46 +736,37 @@ mod menu_shortcuts {
 }
 
 impl AppMenu {
-    /// Left offset of a top-level menu's dropdown panel. The values are
-    /// hand-tuned per language because the in-window menu bar lays buttons
-    /// out with fixed paddings/gaps rather than measuring text widths.
+    /// Left offset of a top-level menu's dropdown panel.
+    ///
+    /// The in-window menu bar lays buttons out with fixed paddings/gaps
+    /// (menu-bar left padding 8, per-button label width + 2×8 padding + 4
+    /// gap) rather than exposing measured positions, so the dropdown anchor
+    /// is recorded per language. The values are pixel-measured from the
+    /// rendered menu bar where available (English, Chinese) and computed
+    /// from system-UI-font metrics calibrated against those measurements
+    /// for the rest. They assume the machine's UI font (on Chinese Windows
+    /// this is Microsoft YaHei UI); a machine with a different system font
+    /// will drift slightly.
     fn dropdown_left(self, language: Language) -> Pixels {
-        match (language, self) {
-            // Latin-script labels use the wider English menu spacing.
-            (
-                Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
-                AppMenu::File,
-            ) => px(8.),
-            (
-                Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
-                AppMenu::Edit,
-            ) => px(58.),
-            (
-                Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
-                AppMenu::View,
-            ) => px(108.),
-            (
-                Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
-                AppMenu::Format,
-            ) => px(162.),
-            (
-                Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
-                AppMenu::Export,
-            ) => px(210.),
-            (
-                Language::En | Language::Ja | Language::Fr | Language::De | Language::Es,
-                AppMenu::Help,
-            ) => px(270.),
-            // Chinese labels (文件/編輯/檢視/格式/匯出/說明) — narrower. Both
-            // Simplified and Traditional share this column: the glyph widths
-            // are nearly identical, so the hand-tuned offsets apply to both.
-            (Language::ZhHans | Language::ZhHant, AppMenu::File) => px(8.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Edit) => px(50.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::View) => px(92.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Format) => px(134.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Export) => px(191.),
-            (Language::ZhHans | Language::ZhHant, AppMenu::Help) => px(238.),
-        }
+        let offsets: [f32; 6] = match language {
+            Language::En => [8., 51., 93., 145., 210., 270.],
+            // Both Simplified and Traditional use two-character labels, so
+            // one column serves both.
+            Language::ZhHans | Language::ZhHant => [8., 54., 100., 146., 192., 238.],
+            Language::Ja => [8., 80., 126., 172., 218., 316.],
+            Language::Fr => [8., 66., 128., 203., 265., 337.],
+            Language::De => [8., 59., 143., 205., 267., 356.],
+            Language::Es => [8., 72., 136., 177., 247., 319.],
+        };
+        let index = match self {
+            AppMenu::File => 0,
+            AppMenu::Edit => 1,
+            AppMenu::View => 2,
+            AppMenu::Format => 3,
+            AppMenu::Export => 4,
+            AppMenu::Help => 5,
+        };
+        px(offsets[index])
     }
 
     fn dropdown_width(self, _language: Language) -> Pixels {
