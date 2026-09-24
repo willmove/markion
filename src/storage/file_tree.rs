@@ -215,6 +215,30 @@ impl FileTree {
         Ok(new_path)
     }
 
+    /// Copy `source` beside itself. `marker` is the localized copy word
+    /// (`copy`, `副本`, …). The destination is `{stem} - {marker}{ext}`, then
+    /// `{stem} - {marker} ({n}){ext}` starting at 2. Symlinks are copied as
+    /// links and are not followed. On failure the destination this call
+    /// created is removed. Does not refresh a [`FileTree`] or touch documents.
+    pub fn duplicate_entry(source: impl AsRef<Path>, marker: &str) -> io::Result<PathBuf> {
+        let source = source.as_ref();
+        fs::symlink_metadata(source)?;
+        let parent = source.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "path has no parent")
+        })?;
+        let marker = if marker.trim().is_empty() {
+            "copy".to_string()
+        } else {
+            sanitize_file_name(marker)
+        };
+        let destination = duplicate_destination(parent, source, &marker)?;
+        if let Err(error) = copy_entry_without_following(source, &destination) {
+            let _ = remove_created_entry(&destination);
+            return Err(error);
+        }
+        Ok(destination)
+    }
+
     pub fn delete(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref();
         ensure_existing_path_within_root(&self.root, path)?;
@@ -508,6 +532,94 @@ fn unique_child_path(parent: &Path, preferred_name: &str) -> PathBuf {
     }
 
     unreachable!("unbounded loop returns a free child path")
+}
+
+fn duplicate_destination(parent: &Path, source: &Path, marker: &str) -> io::Result<PathBuf> {
+    let file_name = source.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
+    let parsed = Path::new(file_name);
+    let stem = parsed
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(file_name);
+    let extension = parsed.extension().and_then(|extension| extension.to_str());
+    for index in 1..10_000 {
+        let marked = if index == 1 {
+            format!("{stem} - {marker}")
+        } else {
+            format!("{stem} - {marker} ({index})")
+        };
+        let name = match extension {
+            Some(extension) => format!("{marked}.{extension}"),
+            None => marked,
+        };
+        let path = parent.join(name);
+        if !path.exists() {
+            return Ok(path);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "no free duplicate name",
+    ))
+}
+
+fn copy_entry_without_following(source: &Path, destination: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(source)?;
+    if metadata.file_type().is_symlink() {
+        let target = fs::read_link(source)?;
+        return copy_symlink(&target, destination);
+    }
+    if metadata.is_dir() {
+        fs::create_dir(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            copy_entry_without_following(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else if metadata.is_file() {
+        fs::copy(source, destination).map(|_| ())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsupported file type",
+        ))
+    }
+}
+
+fn copy_symlink(target: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, destination)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+        symlink_file(target, destination).or_else(|_| symlink_dir(target, destination))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, destination);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "symlink copy is unsupported on this platform",
+        ))
+    }
+}
+
+fn remove_created_entry(path: &Path) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        fs::remove_file(path)
+    } else {
+        fs::remove_dir_all(path)
+    }
 }
 
 fn sanitize_file_name(name: &str) -> String {
@@ -1098,5 +1210,83 @@ mod tests {
         assert!(source_err.is_err());
         assert!(dest_err.is_err());
         assert!(root.join("keep.md").exists());
+    }
+
+    #[test]
+    fn duplicate_entry_copies_a_file_beside_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("notes.md");
+        fs::write(&source, "# Notes").unwrap();
+
+        let copy = FileTree::duplicate_entry(&source, "copy").unwrap();
+        assert_eq!(copy, dir.path().join("notes - copy.md"));
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "# Notes");
+        assert_eq!(fs::read_to_string(&source).unwrap(), "# Notes");
+    }
+
+    #[test]
+    fn duplicate_entry_copies_folder_contents_including_unlisted_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("docs");
+        write(&folder, "guide.md", "# Guide");
+        write(&folder, "nested/main.rs", "fn main() {}");
+
+        let copy = FileTree::duplicate_entry(&folder, "副本").unwrap();
+        assert_eq!(copy, dir.path().join("docs - 副本"));
+        assert_eq!(
+            fs::read_to_string(copy.join("guide.md")).unwrap(),
+            "# Guide"
+        );
+        assert_eq!(
+            fs::read_to_string(copy.join("nested").join("main.rs")).unwrap(),
+            "fn main() {}"
+        );
+    }
+
+    #[test]
+    fn duplicate_entry_picks_the_next_free_numbered_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("notes.md");
+        fs::write(&source, "one").unwrap();
+        fs::write(dir.path().join("notes - copy.md"), "taken").unwrap();
+
+        let copy = FileTree::duplicate_entry(&source, "copy").unwrap();
+        assert_eq!(copy, dir.path().join("notes - copy (2).md"));
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "one");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("notes - copy.md")).unwrap(),
+            "taken"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicate_entry_copies_symlink_without_following() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("notes.md");
+        fs::write(&source, "# Notes").unwrap();
+        let link = dir.path().join("alias.md");
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+
+        let copy = FileTree::duplicate_entry(&link, "copy").unwrap();
+        assert!(fs::symlink_metadata(&copy).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_link(&copy).unwrap(), source);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicate_entry_removes_partial_destination_when_copy_fails() {
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("docs");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("guide.md"), "# Guide").unwrap();
+        UnixListener::bind(folder.join("sock")).unwrap();
+
+        let error = FileTree::duplicate_entry(&folder, "copy").unwrap_err();
+        assert_ne!(error.kind(), io::ErrorKind::NotFound);
+        assert!(!dir.path().join("docs - copy").exists());
+        assert!(folder.join("guide.md").exists());
     }
 }

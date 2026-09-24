@@ -2177,6 +2177,58 @@ pub(super) fn scan_result_matches_workspace(requested_root: &Path, current_root:
     comparable_document_path(requested_root) == comparable_document_path(current_root)
 }
 
+/// Coalesces file-tree scans: one in flight, plus at most one follow-up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct FileTreeScanGate {
+    generation: u64,
+    in_flight: bool,
+    pending: bool,
+}
+
+impl FileTreeScanGate {
+    /// Bumps the generation. Returns the generation to spawn, or `None` when a
+    /// scan is already running (a single follow-up is queued instead).
+    pub(super) fn request(&mut self) -> Option<u64> {
+        self.generation = self.generation.saturating_add(1);
+        if self.in_flight {
+            self.pending = true;
+            None
+        } else {
+            self.in_flight = true;
+            Some(self.generation)
+        }
+    }
+
+    /// Ends the in-flight scan. The bool is whether `generation` is still the
+    /// latest request. The option is the follow-up generation to spawn.
+    pub(super) fn finish(&mut self, generation: u64) -> (bool, Option<u64>) {
+        self.in_flight = false;
+        let apply = generation == self.generation;
+        let follow_up = if self.pending {
+            self.pending = false;
+            self.generation = self.generation.saturating_add(1);
+            self.in_flight = true;
+            Some(self.generation)
+        } else {
+            None
+        };
+        (apply, follow_up)
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+pub(super) fn file_tree_scan_should_apply(
+    generation: u64,
+    latest_generation: u64,
+    requested_root: &Path,
+    current_root: &Path,
+) -> bool {
+    generation == latest_generation && scan_result_matches_workspace(requested_root, current_root)
+}
+
 pub(super) fn workspace_root_needs_reset(
     current_root: &Path,
     has_file_tree: bool,

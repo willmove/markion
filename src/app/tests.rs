@@ -2888,6 +2888,89 @@ fn file_tree_visibility_hides_collapsed_descendants() {
 }
 
 #[test]
+fn file_tree_scan_gate_drops_stale_generation_and_queues_one_follow_up() {
+    let mut gate = FileTreeScanGate::default();
+    let first = gate.request().expect("first scan starts");
+    assert!(gate.request().is_none(), "second request queues");
+    assert!(gate.request().is_none(), "further requests still queue once");
+    let (apply, follow_up) = gate.finish(first);
+    assert!(!apply, "an older generation must not replace a newer scan");
+    let follow_up = follow_up.expect("one follow-up");
+    assert!(!file_tree_scan_should_apply(
+        first,
+        gate.generation(),
+        Path::new("/ws"),
+        Path::new("/ws"),
+    ));
+    assert!(file_tree_scan_should_apply(
+        follow_up,
+        gate.generation(),
+        Path::new("/ws"),
+        Path::new("/ws"),
+    ));
+    assert!(!file_tree_scan_should_apply(
+        follow_up,
+        gate.generation(),
+        Path::new("/old"),
+        Path::new("/new"),
+    ));
+    let (apply_follow_up, none) = gate.finish(follow_up);
+    assert!(apply_follow_up);
+    assert!(none.is_none());
+
+    let mut lone = FileTreeScanGate::default();
+    let only = lone.request().expect("scan starts");
+    let (apply_only, no_follow_up) = lone.finish(only);
+    assert!(apply_only);
+    assert!(no_follow_up.is_none());
+    assert!(file_tree_scan_should_apply(
+        only,
+        lone.generation(),
+        Path::new("/ws"),
+        Path::new("/ws"),
+    ));
+}
+
+#[test]
+fn file_tree_auto_refresh_stays_silent() {
+    let application = include_str!("application.rs");
+    let refresh = application
+        .split_once("pub(super) fn refresh_file_tree(")
+        .expect("refresh_file_tree")
+        .1
+        .split_once("pub(super) fn schedule_file_tree_scan")
+        .expect("schedule_file_tree_scan")
+        .0;
+    assert!(!refresh.contains("StatusFileTreeRefreshed"));
+    assert!(refresh.contains("schedule_file_tree_scan"));
+    let schedule = application
+        .split_once("pub(super) fn schedule_file_tree_scan")
+        .expect("schedule")
+        .1
+        .split_once("pub(super) fn arm_file_tree_watch")
+        .expect("arm_file_tree_watch")
+        .0;
+    assert!(schedule.contains("background_executor()"));
+    assert!(!schedule.contains("undo"));
+    assert!(!schedule.contains("dirty"));
+    let watch = application
+        .split_once("pub(super) fn arm_file_tree_watch")
+        .expect("watch")
+        .1
+        .split_once("pub(super) fn discard_current_recovery_file")
+        .expect("discard")
+        .0;
+    assert!(watch.contains("refresh_file_tree(cx)"));
+    assert!(!watch.contains("StatusFileTreeRefreshed"));
+    let workspace = include_str!("workspace.rs");
+    assert!(workspace.contains("StatusFileTreeRefreshed"));
+    assert!(workspace.contains("refresh_file_tree_action"));
+    let cargo = include_str!("../../Cargo.toml");
+    assert!(cargo.contains("notify"));
+    assert!(!cargo.contains("[dependencies]\nnotify") || cargo.contains("notify = \"6.1\""));
+}
+
+#[test]
 fn file_tree_context_actions_are_scoped_by_target_kind() {
     assert_eq!(
         file_tree_context_actions(FileTreeContextTargetKind::File),
@@ -2896,6 +2979,7 @@ fn file_tree_context_actions_are_scoped_by_target_kind() {
             FileTreeContextAction::OpenInNewTab,
             FileTreeContextAction::VersionHistory,
             FileTreeContextAction::Rename,
+            FileTreeContextAction::Duplicate,
             FileTreeContextAction::Delete,
             FileTreeContextAction::ShowInFileManager,
             FileTreeContextAction::CopyPath,
@@ -2909,6 +2993,7 @@ fn file_tree_context_actions_are_scoped_by_target_kind() {
             FileTreeContextAction::CreateFile,
             FileTreeContextAction::CreateFolder,
             FileTreeContextAction::Rename,
+            FileTreeContextAction::Duplicate,
             FileTreeContextAction::Delete,
             FileTreeContextAction::ShowInFileManager,
             FileTreeContextAction::CopyPath,

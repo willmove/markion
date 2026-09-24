@@ -1022,6 +1022,7 @@ enum FileTreeContextAction {
     CreateFile,
     CreateFolder,
     Rename,
+    Duplicate,
     Delete,
     ShowInFileManager,
     CopyPath,
@@ -1035,6 +1036,7 @@ const FILE_TREE_FILE_CONTEXT_ACTIONS: &[FileTreeContextAction] = &[
     FileTreeContextAction::OpenInNewTab,
     FileTreeContextAction::VersionHistory,
     FileTreeContextAction::Rename,
+    FileTreeContextAction::Duplicate,
     FileTreeContextAction::Delete,
     FileTreeContextAction::ShowInFileManager,
     FileTreeContextAction::CopyPath,
@@ -1046,6 +1048,7 @@ const FILE_TREE_DIRECTORY_CONTEXT_ACTIONS: &[FileTreeContextAction] = &[
     FileTreeContextAction::CreateFile,
     FileTreeContextAction::CreateFolder,
     FileTreeContextAction::Rename,
+    FileTreeContextAction::Duplicate,
     FileTreeContextAction::Delete,
     FileTreeContextAction::ShowInFileManager,
     FileTreeContextAction::CopyPath,
@@ -1080,6 +1083,7 @@ fn file_tree_context_action_label(
         FileTreeContextAction::CreateFile => t(language, Msg::FileTreeContextCreateFile),
         FileTreeContextAction::CreateFolder => t(language, Msg::FileTreeContextCreateFolder),
         FileTreeContextAction::Rename => t(language, Msg::FileTreeContextRename),
+        FileTreeContextAction::Duplicate => t(language, Msg::FileTreeContextDuplicate),
         FileTreeContextAction::Delete => t(language, Msg::FileTreeContextDelete),
         FileTreeContextAction::ShowInFileManager => {
             t(language, Msg::FileTreeContextShowInFileManager)
@@ -2576,6 +2580,10 @@ struct MarkionApp {
     /// Set when a replacement workspace root still needs its first successful
     /// scan to seed the one-level default tree view.
     file_tree_needs_initial_collapse: bool,
+    file_tree_scan_gate: FileTreeScanGate,
+    /// Bumped when the watched workspace root changes so the previous watch
+    /// or poll loop exits.
+    file_tree_watch_generation: u64,
     file_tree_context_menu: Option<FileTreeContextMenu>,
     /// Right-click menu for the rendered preview pane.
     preview_context_menu: Option<PreviewContextMenu>,

@@ -1,4 +1,8 @@
 use super::*;
+use notify::Watcher;
+
+const FILE_TREE_WATCH_DEBOUNCE: Duration = Duration::from_millis(400);
+const FILE_TREE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Per-tab snapshot captured on the UI thread for one background round of
 /// external-change detection. `recovery_id` re-locates the tab afterwards
@@ -276,6 +280,8 @@ impl MarkionApp {
             collapsed_tree_paths: HashSet::new(),
             file_tree_drag_active: false,
             file_tree_needs_initial_collapse: false,
+            file_tree_scan_gate: FileTreeScanGate::default(),
+            file_tree_watch_generation: 0,
             file_tree_context_menu: None,
             preview_context_menu: None,
             tab_context_menu: None,
@@ -1116,6 +1122,9 @@ impl MarkionApp {
         self.workspace_root = root;
         self.sync_and_persist_session();
         self.sync_git_branch_context(cx);
+        if root_changed {
+            self.arm_file_tree_watch(cx);
+        }
     }
 
     pub(super) fn update_workspace_root_from_document(&mut self, cx: &mut Context<Self>) {
@@ -1154,6 +1163,18 @@ impl MarkionApp {
         opened_folder_display: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        let Some(generation) = self.file_tree_scan_gate.request() else {
+            return;
+        };
+        self.spawn_file_tree_scan(generation, opened_folder_display, cx);
+    }
+
+    fn spawn_file_tree_scan(
+        &mut self,
+        generation: u64,
+        opened_folder_display: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let requested_root = self.workspace_root.clone();
         let scan_root = requested_root.clone();
         let show_hidden = self.show_hidden_files;
@@ -1164,35 +1185,110 @@ impl MarkionApp {
                 .spawn(async move { FileTree::scan_with_options(&scan_root, show_hidden) })
                 .await;
             let _ = this.update(cx, |app, cx| {
-                if !scan_result_matches_workspace(&requested_root, &app.workspace_root) {
+                let (generation_current, follow_up) = app.file_tree_scan_gate.finish(generation);
+                let apply = generation_current
+                    && file_tree_scan_should_apply(
+                        generation,
+                        app.file_tree_scan_gate.generation(),
+                        &requested_root,
+                        &app.workspace_root,
+                    );
+                if apply {
+                    update_file_tree_collapse_state_from_scan(
+                        &scanned,
+                        &mut app.collapsed_tree_paths,
+                        &mut app.file_tree_needs_initial_collapse,
+                    );
+                    match scanned {
+                        Ok(tree) => {
+                            app.file_tree = Some(tree);
+                            if let Some(path) = opened_folder_display.as_deref() {
+                                app.status = app.trf(Msg::StatusOpenedFolder, &[path]);
+                            }
+                            if app
+                                .selected_tree_path
+                                .as_ref()
+                                .is_some_and(|path| !path.exists())
+                            {
+                                app.selected_tree_path = None;
+                            }
+                        }
+                        Err(err) => {
+                            app.status = app.trf(Msg::StatusOpenFolderFailed, &[&err.to_string()]);
+                        }
+                    }
+                    cx.notify();
+                }
+                if let Some(next) = follow_up {
+                    app.spawn_file_tree_scan(next, None, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Watch the open workspace. A failed watch falls back to a timed silent
+    /// refresh. Neither path sets the manual-refresh status.
+    pub(super) fn arm_file_tree_watch(&mut self, cx: &mut Context<Self>) {
+        self.file_tree_watch_generation = self.file_tree_watch_generation.saturating_add(1);
+        let generation = self.file_tree_watch_generation;
+        if self.file_tree.is_none() {
+            return;
+        }
+        let root = self.workspace_root.clone();
+        cx.spawn(async move |this, cx| {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let watch_root = root.clone();
+            let watched = cx
+                .background_executor()
+                .spawn(async move {
+                    let tx_notify = tx.clone();
+                    let mut watcher = notify::recommended_watcher(move |_| {
+                        let _ = tx_notify.try_send(());
+                    })?;
+                    watcher.watch(&watch_root, notify::RecursiveMode::Recursive)?;
+                    Ok::<_, notify::Error>(watcher)
+                })
+                .await;
+            let _watcher = match watched {
+                Ok(watcher) => watcher,
+                Err(_) => {
+                    loop {
+                        Timer::after(FILE_TREE_POLL_INTERVAL).await;
+                        let still_current = this
+                            .update(cx, |app, cx| {
+                                if app.file_tree_watch_generation != generation {
+                                    return false;
+                                }
+                                app.refresh_file_tree(cx);
+                                true
+                            })
+                            .unwrap_or(false);
+                        if !still_current {
+                            break;
+                        }
+                    }
                     return;
                 }
-
-                update_file_tree_collapse_state_from_scan(
-                    &scanned,
-                    &mut app.collapsed_tree_paths,
-                    &mut app.file_tree_needs_initial_collapse,
-                );
-                match scanned {
-                    Ok(tree) => {
-                        app.file_tree = Some(tree);
-                        if let Some(path) = opened_folder_display.as_deref() {
-                            app.status = app.trf(Msg::StatusOpenedFolder, &[path]);
-                        }
-                        if app
-                            .selected_tree_path
-                            .as_ref()
-                            .is_some_and(|path| !path.exists())
-                        {
-                            app.selected_tree_path = None;
-                        }
-                    }
-                    Err(err) => {
-                        app.status = app.trf(Msg::StatusOpenFolderFailed, &[&err.to_string()]);
-                    }
+            };
+            loop {
+                Timer::after(FILE_TREE_WATCH_DEBOUNCE).await;
+                let still_current = this
+                    .update(cx, |app, _| app.file_tree_watch_generation == generation)
+                    .unwrap_or(false);
+                if !still_current {
+                    break;
                 }
-                cx.notify();
-            });
+                if rx.try_recv().is_err() {
+                    continue;
+                }
+                while rx.try_recv().is_ok() {}
+                let _ = this.update(cx, |app, cx| {
+                    if app.file_tree_watch_generation == generation {
+                        app.refresh_file_tree(cx);
+                    }
+                });
+            }
         })
         .detach();
     }

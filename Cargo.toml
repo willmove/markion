@@ -98,6 +98,8 @@ unicode-segmentation = "1.12"
 # locked 0.8 line so the lockfile does not churn.
 miniz_oxide = "0.8"
 libc = "0.2"
+# Recursive workspace watch for the file tree. Root app package only.
+notify = "6.1"
 
 # Workspace members absorbed from Typune (see docs/typune-integration-plan.md),
 # renamed on import: markion already has a crate-root `mod export`, and a direct

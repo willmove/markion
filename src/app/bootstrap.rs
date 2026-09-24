@@ -474,6 +474,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 app.restore_session_on_startup(&startup_intent, cx);
                 app.check_recovery_on_startup(window, cx);
                 app.arm_external_file_poll(cx);
+                app.arm_file_tree_watch(cx);
                 app.arm_git_branch_poll(cx);
                 app.arm_git_recovery(cx);
                 app.arm_git_background_checks(cx);

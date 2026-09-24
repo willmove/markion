@@ -632,6 +632,39 @@ impl MarkionApp {
                     cx,
                 );
             }
+            FileTreeContextAction::Duplicate => {
+                let path = match target {
+                    FileTreeContextTarget::Directory(path) | FileTreeContextTarget::File(path) => {
+                        path
+                    }
+                    FileTreeContextTarget::Workspace => return,
+                };
+                let marker = t(self.language, Msg::FileTreeDuplicateMarker).to_string();
+                cx.spawn(async move |this, cx| {
+                    let copied = cx
+                        .background_executor()
+                        .spawn(async move { FileTree::duplicate_entry(&path, &marker) })
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        match copied {
+                            Ok(new_path) => {
+                                let display = new_path.display().to_string();
+                                app.selected_tree_path = Some(new_path);
+                                app.refresh_file_tree(cx);
+                                app.status = app.trf(Msg::StatusFileTreeDuplicated, &[&display]);
+                            }
+                            Err(error) => {
+                                app.status = app.trf(
+                                    Msg::StatusFileTreeDuplicateFailed,
+                                    &[&error.to_string()],
+                                );
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
             FileTreeContextAction::Rename => {
                 let Some(path) = (match target {
                     FileTreeContextTarget::Directory(path) | FileTreeContextTarget::File(path) => {
