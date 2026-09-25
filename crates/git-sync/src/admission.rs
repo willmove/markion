@@ -28,6 +28,10 @@ struct GateState {
     exclusive_operation: Option<String>,
     epoch: u64,
     content_generation: u64,
+    /// Paths owned by a conflict waiting for the user, keyed by operation.
+    /// Unlike `exclusive_operation`, these block only writes to the listed
+    /// paths (and folders containing them).
+    conflict_claims: Vec<(String, Vec<PathBuf>)>,
 }
 
 impl Default for GateState {
@@ -37,7 +41,18 @@ impl Default for GateState {
             exclusive_operation: None,
             epoch: 1,
             content_generation: 0,
+            conflict_claims: Vec::new(),
         }
+    }
+}
+
+impl GateState {
+    fn claims_path(&self, path: &Path) -> bool {
+        self.conflict_claims.iter().any(|(_, paths)| {
+            paths
+                .iter()
+                .any(|claimed| claimed == path || claimed.starts_with(path))
+        })
     }
 }
 
@@ -51,6 +66,8 @@ pub struct ReadEpoch {
 pub enum AdmissionError {
     #[error("repository write is temporarily blocked by Git synchronization")]
     Deferred,
+    #[error("this path belongs to an unfinished synchronization conflict")]
+    ConflictOwned,
     #[error("another Git operation already owns this repository")]
     Busy,
     #[error("repository is not registered")]
@@ -125,6 +142,39 @@ impl Drop for ExclusiveAdmission {
     }
 }
 
+#[derive(Debug)]
+pub struct ConflictClaim {
+    inner: Arc<RegistryInner>,
+    identity: RepositoryIdentity,
+    operation_id: String,
+    paths: Vec<PathBuf>,
+}
+
+impl ConflictClaim {
+    pub fn identity(&self) -> &RepositoryIdentity {
+        &self.identity
+    }
+
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+
+    pub fn paths(&self) -> &[PathBuf] {
+        &self.paths
+    }
+}
+
+impl Drop for ConflictClaim {
+    fn drop(&mut self) {
+        let mut state = lock_state(&self.inner);
+        if let Some(gate) = state.repositories.get_mut(&self.identity) {
+            gate.conflict_claims
+                .retain(|(operation_id, _)| operation_id != &self.operation_id);
+        }
+        self.inner.changed.notify_all();
+    }
+}
+
 impl GitOperationRegistry {
     pub fn register(&self, identity: RepositoryIdentity) {
         lock_state(&self.inner)
@@ -139,11 +189,53 @@ impl GitOperationRegistry {
             .repositories
             .get(identity)
             .ok_or(AdmissionError::UnknownRepository)?;
-        if gate.active_writers > 0 || gate.exclusive_operation.is_some() {
+        if gate.active_writers > 0
+            || gate.exclusive_operation.is_some()
+            || !gate.conflict_claims.is_empty()
+        {
             return Err(AdmissionError::Busy);
         }
         state.repositories.remove(identity);
         Ok(())
+    }
+
+    /// Guards `paths` for a conflict waiting on the user. Other paths in the
+    /// repository stay writable; the claim is released when dropped.
+    pub fn claim_conflict_paths(
+        &self,
+        identity: &RepositoryIdentity,
+        operation_id: &str,
+        paths: Vec<PathBuf>,
+    ) -> Result<ConflictClaim, AdmissionError> {
+        let mut state = lock_state(&self.inner);
+        let gate = state
+            .repositories
+            .get_mut(identity)
+            .ok_or(AdmissionError::UnknownRepository)?;
+        if gate
+            .conflict_claims
+            .iter()
+            .any(|(claimed, _)| claimed == operation_id)
+        {
+            return Err(AdmissionError::Busy);
+        }
+        gate.conflict_claims
+            .push((operation_id.to_string(), paths.clone()));
+        Ok(ConflictClaim {
+            inner: self.inner.clone(),
+            identity: identity.clone(),
+            operation_id: operation_id.to_string(),
+            paths,
+        })
+    }
+
+    pub fn is_conflict_owned(&self, path: &Path) -> bool {
+        lock_state(&self.inner)
+            .repositories
+            .iter()
+            .any(|(identity, gate)| {
+                path.starts_with(&identity.worktree_root) && gate.claims_path(path)
+            })
     }
 
     pub fn repository_for_path(&self, path: &Path) -> Option<RepositoryIdentity> {
@@ -208,6 +300,9 @@ impl GitOperationRegistry {
             .expect("key selected above");
         if gate.exclusive_operation.is_some() {
             return Err(AdmissionError::Deferred);
+        }
+        if gate.claims_path(path) {
+            return Err(AdmissionError::ConflictOwned);
         }
         gate.active_writers += 1;
         gate.content_generation = gate.content_generation.wrapping_add(1);
@@ -365,6 +460,46 @@ mod tests {
         );
         drop(duplicate);
         drop(owner);
+    }
+
+    #[test]
+    fn conflict_claim_blocks_only_its_paths_and_releases_on_drop() {
+        let root = PathBuf::from("repo");
+        let identity = identity(&root);
+        let registry = GitOperationRegistry::default();
+        registry.register(identity.clone());
+        let claim = registry
+            .claim_conflict_paths(&identity, "sync-1", vec![root.join("notes").join("a.md")])
+            .unwrap();
+
+        assert_eq!(
+            registry
+                .try_write(&root.join("notes").join("a.md"))
+                .unwrap_err(),
+            AdmissionError::ConflictOwned
+        );
+        assert_eq!(
+            registry.try_write(&root.join("notes")).unwrap_err(),
+            AdmissionError::ConflictOwned,
+            "a folder containing the conflicted note is guarded too"
+        );
+        assert!(registry.try_write(&root.join("notes").join("b.md")).is_ok());
+        assert!(!registry.is_mutating(&root.join("notes").join("b.md")));
+        assert!(registry.is_conflict_owned(&root.join("notes").join("a.md")));
+        assert_eq!(
+            registry
+                .claim_conflict_paths(&identity, "sync-1", Vec::new())
+                .unwrap_err(),
+            AdmissionError::Busy
+        );
+        assert_eq!(
+            registry.unregister(&identity).unwrap_err(),
+            AdmissionError::Busy
+        );
+
+        drop(claim);
+        assert!(registry.try_write(&root.join("notes").join("a.md")).is_ok());
+        assert!(!registry.is_conflict_owned(&root.join("notes").join("a.md")));
     }
 
     #[test]

@@ -21,7 +21,8 @@ mod status;
 mod system;
 
 pub use admission::{
-    AdmissionError, ExclusiveAdmission, GitOperationRegistry, ReadEpoch, WriteAdmission,
+    AdmissionError, ConflictClaim, ExclusiveAdmission, GitOperationRegistry, ReadEpoch,
+    WriteAdmission,
 };
 pub use auth::{
     AskpassBridge, AuthFailure, Authentication, CredentialHelper, CredentialPlatform,
@@ -30,8 +31,8 @@ pub use auth::{
 };
 pub use background::{BackgroundFetchResult, BackgroundFetchScheduler, BackgroundNotification};
 pub use conflict::{
-    ConflictFile, ConflictManager, ConflictResolution, ConflictSession, ConflictSide,
-    ConflictSource, RecoveryAssessment, RecoveryManager,
+    ConflictError, ConflictFile, ConflictManager, ConflictResolution, ConflictSession,
+    ConflictSide, ConflictSource, ReconcileReport, RecoveryAssessment, RecoveryManager,
 };
 pub use engine::{GitSyncEngine, SyncEngineError, SyncOptions};
 pub use journal::{

@@ -813,18 +813,64 @@ impl MarkionApp {
         self.schedule_autosave(cx);
     }
 
-    pub(super) fn active_git_path_locked(&self) -> bool {
-        self.git_ui.settings.is_some()
-            || self.git_ui.inspection.is_some()
-            || self.active_tab().path().is_some_and(|path| {
-                self.git_operations.is_mutating(path)
-                    || (self.git_ui.conflict_busy
-                        && self
-                            .git_ui
-                            .conflict
-                            .as_ref()
-                            .is_some_and(|view| view.draft_path.as_deref() == Some(path)))
-            })
+    /// Why edits to the active document are refused, or `None` when allowed.
+    pub(super) fn active_git_lock_message(&self) -> Option<&'static str> {
+        if self.git_ui.settings.is_some() || self.git_ui.inspection.is_some() {
+            return Some(self.git_label(GitMsg::Busy));
+        }
+        let path = self.active_tab().path()?;
+        self.git_path_lock_message(path)
+    }
+
+    /// "Busy" only while Git is actually working; an unfinished conflict or
+    /// recovery item gets a message that points at resolving it instead.
+    pub(super) fn git_path_lock_message(&self, path: &Path) -> Option<&'static str> {
+        if self.git_operations.is_mutating(path) {
+            let running = self
+                .git_ui
+                .running
+                .as_ref()
+                .is_some_and(|(identity, _, _)| path.starts_with(&identity.worktree_root));
+            let recovery = self
+                .git_ui
+                .recovery_guards
+                .keys()
+                .any(|identity| path.starts_with(&identity.worktree_root));
+            return Some(self.git_label(if recovery && !running {
+                GitMsg::ConflictNeedsAttention
+            } else {
+                GitMsg::Busy
+            }));
+        }
+        if self.git_ui.conflict_busy
+            && self
+                .git_ui
+                .conflict
+                .as_ref()
+                .is_some_and(|view| view.draft_path.as_deref() == Some(path))
+        {
+            return Some(self.git_label(GitMsg::Busy));
+        }
+        self.git_operations
+            .is_conflict_owned(path)
+            .then(|| self.git_label(GitMsg::ConflictNeedsAttention))
+    }
+
+    /// Status text for a refused repository write admission on `path`.
+    pub(super) fn git_admission_message(
+        &self,
+        path: &Path,
+        error: &markion_git_sync::AdmissionError,
+    ) -> SharedString {
+        match error {
+            markion_git_sync::AdmissionError::ConflictOwned => {
+                self.git_label(GitMsg::ConflictNeedsAttention).into()
+            }
+            _ => self
+                .git_path_lock_message(path)
+                .unwrap_or_else(|| self.git_label(GitMsg::Busy))
+                .into(),
+        }
     }
 
     /// Identity/version pair of the active document. Operations derived from
@@ -855,8 +901,8 @@ impl MarkionApp {
         op: &'static str,
         mutation: CheckedMutation,
     ) -> Option<MutationReceipt> {
-        if self.active_git_path_locked() {
-            self.status = self.git_label(GitMsg::Busy).into();
+        if let Some(message) = self.active_git_lock_message() {
+            self.status = message.into();
             return None;
         }
         let origin = mutation.origin();

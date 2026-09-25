@@ -216,11 +216,8 @@ impl MarkionApp {
         }
         let _admission = match self.git_operations.try_write(document_path) {
             Ok(admission) => admission,
-            Err(_) => {
-                self.status = self.trf(
-                    Msg::StatusGitSyncFailed,
-                    &["the workspace is being updated"],
-                );
+            Err(error) => {
+                self.status = self.git_admission_message(document_path, &error);
                 cx.notify();
                 return;
             }

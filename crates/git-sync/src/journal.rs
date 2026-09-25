@@ -177,6 +177,21 @@ impl JournalStore {
         Ok(())
     }
 
+    /// Explicit user discard: removes the checkpoint with its drafts and the
+    /// operation-owned recovery files. Callers confirm with the user first.
+    pub fn discard(&self, operation_id: &str) -> Result<(), JournalError> {
+        let mut journal = self.load()?;
+        let index = journal
+            .active
+            .iter()
+            .position(|active| active.operation_id == operation_id)
+            .ok_or(JournalError::OwnershipMismatch)?;
+        let checkpoint = journal.active.remove(index);
+        self.save(&journal)?;
+        self.cleanup_owned_recovery(&checkpoint)?;
+        Ok(())
+    }
+
     pub fn prepare_preimages(
         &self,
         operation_id: &str,
@@ -406,6 +421,48 @@ mod tests {
         let journal = store.load().unwrap();
         assert_eq!(journal.successful.len(), MAX_SUCCESSFUL_SUMMARIES);
         assert_eq!(journal.successful[0].operation_id, "operation-104");
+    }
+
+    #[test]
+    fn discard_removes_checkpoint_drafts_and_recovery_files_only_for_that_operation() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("notes.md"), "before").unwrap();
+        let recovery = dir.path().join("recovery");
+        let store = JournalStore::new(dir.path().join("journal.toml"), &recovery);
+        let mut stale = checkpoint(dir.path(), "stale");
+        stale.drafts.push(ConflictDraft {
+            relative_path: PathBuf::from("notes.md"),
+            content: b"draft".to_vec(),
+            content_fingerprint: "fingerprint".into(),
+        });
+        stale.preimages = Some(
+            store
+                .prepare_preimages(
+                    "stale",
+                    dir.path(),
+                    &[(PathBuf::from("notes.md"), "hash".into())],
+                    1024,
+                )
+                .unwrap(),
+        );
+        store.begin(stale).unwrap();
+        store.begin(checkpoint(dir.path(), "other")).unwrap();
+
+        store.discard("stale").unwrap();
+
+        let journal = store.load().unwrap();
+        assert_eq!(journal.active.len(), 1);
+        assert_eq!(journal.active[0].operation_id, "other");
+        assert!(journal.successful.is_empty());
+        assert!(!recovery.join("stale").exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("notes.md")).unwrap(),
+            "before"
+        );
+        assert!(matches!(
+            store.discard("stale"),
+            Err(JournalError::OwnershipMismatch)
+        ));
     }
 
     #[test]

@@ -841,15 +841,18 @@ impl MarkionApp {
             .transpose()
         {
             Ok(admission) => admission,
-            Err(_) => {
+            Err(error) => {
                 self.persist_unapplied_insertion(
                     operation_id,
                     document_path.as_deref(),
                     &result,
                     "workspace write is busy",
                 );
-                self.status =
-                    image_status_tf(self.language, ImageStatusMsg::WorkspaceBusy, &[]).into();
+                self.status = if error == markion_git_sync::AdmissionError::ConflictOwned {
+                    self.git_label(GitMsg::ConflictNeedsAttention).into()
+                } else {
+                    image_status_tf(self.language, ImageStatusMsg::WorkspaceBusy, &[]).into()
+                };
                 cx.notify();
                 return;
             }

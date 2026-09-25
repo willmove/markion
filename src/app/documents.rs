@@ -353,6 +353,10 @@ impl MarkionApp {
         let display_path = path.display().to_string();
         let _admission = match self.git_operations.try_write(path) {
             Ok(admission) => admission,
+            Err(markion_git_sync::AdmissionError::ConflictOwned) => {
+                self.status = self.git_label(GitMsg::ConflictNeedsAttention).into();
+                return false;
+            }
             Err(_) => {
                 self.status = t(self.language, Msg::StatusGitWorkspaceUpdating).into();
                 return false;
@@ -773,6 +777,11 @@ impl MarkionApp {
             .transpose()
         {
             Ok(admission) => admission,
+            Err(markion_git_sync::AdmissionError::ConflictOwned) => {
+                self.status = self.git_label(GitMsg::ConflictNeedsAttention).into();
+                cx.notify();
+                return;
+            }
             Err(_) => {
                 self.status = t(self.language, Msg::StatusGitWorkspaceUpdating).into();
                 cx.notify();
@@ -841,6 +850,11 @@ impl MarkionApp {
                         .transpose()
                     {
                         Ok(admission) => admission,
+                        Err(markion_git_sync::AdmissionError::ConflictOwned) => {
+                            app.status = app.git_label(GitMsg::ConflictNeedsAttention).into();
+                            cx.notify();
+                            return;
+                        }
                         Err(_) => {
                             app.status = t(app.language, Msg::StatusGitWorkspaceUpdating).into();
                             cx.notify();
@@ -937,6 +951,11 @@ impl MarkionApp {
                     let _ = this.update(cx, |app, cx| {
                         let _admission = match app.git_operations.try_write(&path) {
                             Ok(admission) => admission,
+                            Err(markion_git_sync::AdmissionError::ConflictOwned) => {
+                                app.status = app.git_label(GitMsg::ConflictNeedsAttention).into();
+                                cx.notify();
+                                return;
+                            }
                             Err(_) => {
                                 app.status =
                                     t(app.language, Msg::StatusGitWorkspaceUpdating).into();

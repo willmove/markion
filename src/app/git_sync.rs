@@ -52,6 +52,39 @@ pub(super) struct GitSyncCompletion {
     pub(super) outcome: SyncOutcome,
     pub(super) buffers: Vec<GitBufferResult>,
     pub(super) images: Vec<GitImageResult>,
+    /// Absolute paths owned by the conflict when `outcome` stops in
+    /// resolution; empty otherwise.
+    pub(super) conflict_paths: Vec<PathBuf>,
+}
+
+enum RecoveryGuard {
+    Conflict(markion_git_sync::ConflictClaim),
+    Exclusive(ExclusiveAdmission),
+}
+
+/// Retires journal checkpoints whose work is already in HEAD. Holds the
+/// repository exclusively so a sync cannot be mid-flight while its own
+/// checkpoint is assessed; skips quietly when the repository is busy.
+pub(super) fn reconcile_repository(
+    registry: &GitOperationRegistry,
+    repository: &GitRepository,
+    journal: &JournalStore,
+) -> Result<markion_git_sync::ReconcileReport, String> {
+    let identity = repository.identity().clone();
+    let operation_id = format!(
+        "reconcile-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let _exclusive = registry
+        .begin_exclusive(&identity, &operation_id)
+        .map_err(|error| error.to_string())?;
+    RecoveryManager::new(repository.clone(), journal.clone())
+        .reconcile()
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Copy)]
@@ -390,6 +423,50 @@ impl MarkionApp {
         .detach();
     }
 
+    /// Background reconciliation for one repository, then a details refresh.
+    pub(super) fn reconcile_git_repository(
+        &mut self,
+        identity: markion_git_sync::RepositoryIdentity,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .git_ui
+            .running
+            .as_ref()
+            .is_some_and(|(running, _, _)| running == &identity)
+        {
+            return;
+        }
+        let executable = self
+            .git_preferences
+            .executable
+            .clone()
+            .unwrap_or_else(|| "git".into());
+        let registry = self.git_operations.clone();
+        let journal = self.git_journal();
+        cx.spawn(async move |this, cx| {
+            let _ = cx
+                .background_spawn(async move {
+                    let repository = GitRepository::discover(
+                        GitCommandRunner::new(executable),
+                        &identity.worktree_root,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    if repository.identity() != &identity {
+                        return Err("repository identity changed".to_string());
+                    }
+                    registry.register(identity);
+                    reconcile_repository(&registry, &repository, &journal)
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.refresh_git_details(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn arm_git_recovery(&mut self, cx: &mut Context<Self>) {
         let executable = self
             .git_preferences
@@ -397,10 +474,10 @@ impl MarkionApp {
             .clone()
             .unwrap_or_else(|| "git".into());
         let registry = self.git_operations.clone();
+        let journal = self.git_journal();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    let journal = git_panel::journal();
                     let mut guards = Vec::new();
                     let mut seen = HashSet::new();
                     for checkpoint in journal.load().map_err(|e| e.to_string())?.active {
@@ -416,7 +493,11 @@ impl MarkionApp {
                             }
                             _ => continue,
                         };
-                        let assessments = RecoveryManager::new(repository, journal.clone())
+                        registry.register(checkpoint.identity.clone());
+                        // Settle completed work before deciding what to guard,
+                        // so a record already in HEAD never locks the repository.
+                        let _ = reconcile_repository(&registry, &repository, &journal);
+                        let assessments = RecoveryManager::new(repository.clone(), journal.clone())
                             .assess()
                             .map_err(|e| e.to_string())?;
                         let pending =
@@ -442,12 +523,25 @@ impl MarkionApp {
                                     }
                                     _ => None,
                                 });
-                        registry.register(checkpoint.identity.clone());
-                        if let Some((id, conflict)) = pending
-                            && let Ok(guard) = registry.begin_exclusive(&checkpoint.identity, &id)
-                            && !guard.coalesced()
-                        {
-                            guards.push((guard, conflict));
+                        match pending {
+                            Some((id, true)) => {
+                                let paths =
+                                    git_conflicts::conflict_claim_paths(&repository, &journal, &id);
+                                if let Ok(claim) =
+                                    registry.claim_conflict_paths(&checkpoint.identity, &id, paths)
+                                {
+                                    guards.push(RecoveryGuard::Conflict(claim));
+                                }
+                            }
+                            Some((id, false)) => {
+                                if let Ok(guard) =
+                                    registry.begin_exclusive(&checkpoint.identity, &id)
+                                    && !guard.coalesced()
+                                {
+                                    guards.push(RecoveryGuard::Exclusive(guard));
+                                }
+                            }
+                            None => {}
                         }
                     }
                     Ok::<_, String>(guards)
@@ -456,17 +550,23 @@ impl MarkionApp {
             let _ = this.update(cx, |app, cx| {
                 match result {
                     Ok(guards) => {
-                        for (guard, conflict) in guards {
-                            let Some(identity) = guard.identity().cloned() else {
-                                continue;
-                            };
-                            if conflict
-                                && app.workspace_root.starts_with(&identity.worktree_root)
-                                && app.git_conflict_admission.is_none()
-                            {
-                                app.git_conflict_admission = Some(guard);
-                            } else {
-                                app.git_ui.recovery_guards.insert(identity, guard);
+                        for guard in guards {
+                            match guard {
+                                RecoveryGuard::Conflict(claim) => {
+                                    let identity = claim.identity().clone();
+                                    if app.workspace_root.starts_with(&identity.worktree_root)
+                                        && app.git_conflict_admission.is_none()
+                                    {
+                                        app.git_conflict_admission = Some(claim);
+                                    } else {
+                                        app.git_ui.conflict_claims.insert(identity, claim);
+                                    }
+                                }
+                                RecoveryGuard::Exclusive(guard) => {
+                                    if let Some(identity) = guard.identity().cloned() {
+                                        app.git_ui.recovery_guards.insert(identity, guard);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1417,15 +1517,9 @@ impl MarkionApp {
             cx.notify();
             return;
         };
-        let Some(identity) = admission.identity().cloned() else {
-            self.status = self.trf(
-                Msg::StatusGitSyncFailed,
-                &["the conflict repository is no longer registered"],
-            );
-            cx.notify();
-            return;
-        };
+        let identity = admission.identity().clone();
         let operation_id = admission.operation_id().to_string();
+        let registry = self.git_operations.clone();
         let store = PolicyStore::new(default_git_sync_policy_path());
         let policy = store
             .load()
@@ -1503,9 +1597,11 @@ impl MarkionApp {
                             GitCommandRunner::new(executable),
                             &identity.worktree_root,
                         )
-                        .map_err(|error| error.to_string())?;
+                        .map_err(|error| {
+                            git_conflicts::ConflictOpenError::Failed(error.to_string())
+                        })?;
                         if repository.identity() != &identity {
-                            return Err("repository identity changed".to_string());
+                            return Err("repository identity changed".into());
                         }
                         let data = markion::default_git_sync_data_dir();
                         let manager = ConflictManager::new(
@@ -1514,14 +1610,28 @@ impl MarkionApp {
                         );
                         let session = manager
                             .restore_session(&operation_id, &CancellationToken::new())
-                            .map_err(|error| error.to_string())?;
-                        Ok::<_, String>((manager, session))
+                            .map_err(|error| match error {
+                                markion_git_sync::ConflictError::StaleSession => {
+                                    git_conflicts::ConflictOpenError::Stale
+                                }
+                                error => {
+                                    git_conflicts::ConflictOpenError::Failed(error.to_string())
+                                }
+                            })?;
+                        Ok::<_, git_conflicts::ConflictOpenError>((manager, session))
                     }
                 })
                 .await;
             let (manager, session) = match prepared {
                 Ok(prepared) => prepared,
-                Err(error) => {
+                Err(git_conflicts::ConflictOpenError::Stale) => {
+                    drop(admission.take());
+                    let _ = this.update(cx, |app, cx| {
+                        app.release_stale_git_conflict(&identity, cx);
+                    });
+                    return;
+                }
+                Err(git_conflicts::ConflictOpenError::Failed(error)) => {
                     let _ = this.update(cx, |app, cx| {
                         app.git_conflict_admission = admission.take();
                         app.status = app.trf(Msg::StatusGitSyncFailed, &[&error]);
@@ -1579,33 +1689,45 @@ impl MarkionApp {
                     let target = policy.target.clone();
                     let identity = identity.clone();
                     let store = store.clone();
+                    let registry = registry.clone();
+                    let finish_id = format!("{operation_id}-finish");
                     async move {
-                        let result = match action {
-                            GitConflictFinalAction::FinishAndPush => manager
-                                .finish_and_push(&session, &target, &cancellation)
-                                .map(|commit| {
-                                    store
-                                        .update(|policies| {
-                                            if let Some(policy) = policies
-                                                .repositories
-                                                .iter_mut()
-                                                .find(|policy| policy.identity == identity)
-                                            {
-                                                policy.last_confirmed_remote = Some(commit.clone());
-                                            }
-                                        })
-                                        .map_err(|error| error.to_string())?;
-                                    Ok::<_, String>(())
-                                })
-                                .map_err(|error| error.to_string())
-                                .and_then(|result| result),
-                            GitConflictFinalAction::FinishMerge => manager
-                                .finish_merge(&session, &cancellation)
-                                .map(|_| ())
-                                .map_err(|error| error.to_string()),
-                            GitConflictFinalAction::Abort => manager
-                                .abort(&session, &cancellation)
-                                .map_err(|error| error.to_string()),
+                        // Only the Git mutation itself needs the whole
+                        // repository; the conflict claim covers the rest.
+                        let exclusive = registry.begin_exclusive(&identity, &finish_id).ok();
+                        let stale = |error: &markion_git_sync::ConflictError| {
+                            matches!(error, markion_git_sync::ConflictError::StaleSession)
+                        };
+                        let result: Result<(), (bool, String)> = if exclusive.is_none() {
+                            Err((false, "another Git operation owns this repository".into()))
+                        } else {
+                            match action {
+                                GitConflictFinalAction::FinishAndPush => manager
+                                    .finish_and_push(&session, &target, &cancellation)
+                                    .map_err(|error| (stale(&error), error.to_string()))
+                                    .and_then(|commit| {
+                                        store
+                                            .update(|policies| {
+                                                if let Some(policy) = policies
+                                                    .repositories
+                                                    .iter_mut()
+                                                    .find(|policy| policy.identity == identity)
+                                                {
+                                                    policy.last_confirmed_remote =
+                                                        Some(commit.clone());
+                                                }
+                                            })
+                                            .map(|_| ())
+                                            .map_err(|error| (false, error.to_string()))
+                                    }),
+                                GitConflictFinalAction::FinishMerge => manager
+                                    .finish_merge(&session, &cancellation)
+                                    .map(|_| ())
+                                    .map_err(|error| (stale(&error), error.to_string())),
+                                GitConflictFinalAction::Abort => manager
+                                    .abort(&session, &cancellation)
+                                    .map_err(|error| (stale(&error), error.to_string())),
+                            }
                         };
                         let merge_active = identity.git_dir.join("MERGE_HEAD").is_file();
                         let buffers = buffers
@@ -1626,34 +1748,51 @@ impl MarkionApp {
                                 path: image.path,
                             })
                             .collect::<Vec<_>>();
-                        (result, merge_active, buffers, images)
+                        (result, merge_active, buffers, images, exclusive)
                     }
                 })
                 .await;
-            let (result, merge_active, buffers, images) = finalization;
+            let (result, merge_active, buffers, images, exclusive) = finalization;
             let _ = this.update(cx, |app, cx| {
                 app.git_ui.running = None;
                 app.resume_pending_git_exit(cx);
-                if result.is_err() && merge_active {
-                    app.git_conflict_admission = admission.take();
-                    app.status = app.trf(Msg::StatusGitSyncFailed, &[result.as_ref().unwrap_err()]);
-                    cx.notify();
+                if let Err((true, _)) = &result {
+                    drop(exclusive);
+                    drop(admission.take());
+                    app.release_stale_git_conflict(&identity, cx);
                     return;
                 }
+                let exclusive = match (exclusive, &result) {
+                    (Some(exclusive), Ok(())) => exclusive,
+                    (Some(exclusive), Err(_)) if !merge_active => exclusive,
+                    (_, result) => {
+                        app.git_conflict_admission = admission.take();
+                        let reason = result
+                            .as_ref()
+                            .err()
+                            .map(|(_, reason)| reason.clone())
+                            .unwrap_or_default();
+                        app.status = app.trf(Msg::StatusGitSyncFailed, &[&reason]);
+                        cx.notify();
+                        return;
+                    }
+                };
+                drop(admission.take());
                 let outcome = match result {
                     Ok(()) => SyncOutcome::UpToDate,
-                    Err(reason) => SyncOutcome::NeedsAttention {
+                    Err((_, reason)) => SyncOutcome::NeedsAttention {
                         phase: markion_git_sync::OperationPhase::Pushing,
                         reason,
                     },
                 };
                 app.apply_git_sync_completion(
                     GitSyncCompletion {
-                        _exclusive: admission.take().expect("conflict admission is owned"),
+                        _exclusive: exclusive,
                         operation: OperationKind::ResolveConflict,
                         outcome,
                         buffers,
                         images,
+                        conflict_paths: Vec::new(),
                     },
                     cx,
                 );
@@ -1677,6 +1816,7 @@ impl MarkionApp {
             outcome,
             buffers,
             images,
+            conflict_paths,
         } = completion;
         let conflict_active = matches!(
             &outcome,
@@ -1831,12 +1971,30 @@ impl MarkionApp {
             }
             SyncOutcome::CommittedLocally { .. } => self.git_label(GitMsg::Committed).into(),
         };
-        if conflict_active {
-            self.git_conflict_admission = Some(exclusive);
+        if conflict_active && let Some(identity) = exclusive.identity().cloned() {
+            let operation_id = exclusive.operation_id().to_string();
+            // Claim before releasing the exclusive admission so no write can
+            // slip into the conflicted paths in between. A claim for the same
+            // operation already held from startup stays in place.
+            if let Ok(claim) =
+                self.git_operations
+                    .claim_conflict_paths(&identity, &operation_id, conflict_paths)
+                && let Some(previous) = self.git_conflict_admission.replace(claim)
+                && previous.identity() != &identity
+            {
+                self.git_ui
+                    .conflict_claims
+                    .insert(previous.identity().clone(), previous);
+            }
+            drop(exclusive);
         } else if local_recovery && let Some(identity) = exclusive.identity().cloned() {
             self.git_ui.recovery_guards.insert(identity, exclusive);
         } else {
+            let identity = exclusive.identity().cloned();
             drop(exclusive);
+            if let Some(identity) = identity {
+                self.reconcile_git_repository(identity, cx);
+            }
         }
         self.refresh_file_tree(cx);
         cx.notify();
@@ -2549,12 +2707,28 @@ fn run_git_operation(
             }
         })
         .collect();
+    let conflict_paths = if matches!(
+        outcome,
+        SyncOutcome::NeedsAttention {
+            phase: markion_git_sync::OperationPhase::Resolving,
+            ..
+        }
+    ) {
+        git_conflicts::conflict_claim_paths(
+            engine.repository(),
+            &git_panel::journal(),
+            &operation_id,
+        )
+    } else {
+        Vec::new()
+    };
     Ok(GitSyncCompletion {
         _exclusive: exclusive,
         operation,
         outcome,
         buffers,
         images,
+        conflict_paths,
     })
 }
 

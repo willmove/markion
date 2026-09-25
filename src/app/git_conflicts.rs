@@ -3,9 +3,64 @@
 use super::*;
 use git_panel::button;
 use markion_git_sync::{
-    CancellationToken, ConflictManager, ConflictResolution, ConflictSession, ConflictSide,
-    ConflictSource, GitCommandRunner, GitRepository, RepositoryIdentity,
+    CancellationToken, ConflictError, ConflictManager, ConflictResolution, ConflictSession,
+    ConflictSide, ConflictSource, GitCommandRunner, GitRepository, JournalStore,
+    RepositoryIdentity,
 };
+
+pub(super) enum ConflictOpenError {
+    /// The repository no longer matches the recorded session.
+    Stale,
+    Failed(String),
+}
+
+impl From<String> for ConflictOpenError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+impl From<&str> for ConflictOpenError {
+    fn from(message: &str) -> Self {
+        Self::Failed(message.to_string())
+    }
+}
+
+/// Absolute paths a conflict session owns: its conflicted index entries plus
+/// any saved drafts. Empty when the session cannot be restored.
+pub(super) fn conflict_claim_paths(
+    repository: &GitRepository,
+    journal: &JournalStore,
+    operation_id: &str,
+) -> Vec<PathBuf> {
+    let root = repository.identity().worktree_root.clone();
+    let mut paths = ConflictManager::new(repository.clone(), journal.clone())
+        .restore_session(operation_id, &CancellationToken::new())
+        .map(|session| {
+            session
+                .files
+                .into_iter()
+                .map(|file| root.join(file.path))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Ok(loaded) = journal.load()
+        && let Some(checkpoint) = loaded
+            .active
+            .iter()
+            .find(|checkpoint| checkpoint.operation_id == operation_id)
+    {
+        paths.extend(
+            checkpoint
+                .drafts
+                .iter()
+                .map(|draft| root.join(&draft.relative_path)),
+        );
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
 
 pub(super) struct ConflictView {
     pub identity: RepositoryIdentity,
@@ -177,28 +232,26 @@ impl MarkionApp {
         let matching = self
             .git_conflict_admission
             .as_ref()
-            .and_then(|guard| guard.identity())
-            == Some(&identity);
-        if !matching {
-            if let Some(previous) = self.git_conflict_admission.take()
-                && let Some(previous_identity) = previous.identity().cloned()
-            {
+            .is_some_and(|claim| claim.identity() == &identity);
+        if !matching && let Some(claim) = self.git_ui.conflict_claims.remove(&identity) {
+            if let Some(previous) = self.git_conflict_admission.replace(claim) {
                 self.git_ui
-                    .recovery_guards
-                    .insert(previous_identity, previous);
+                    .conflict_claims
+                    .insert(previous.identity().clone(), previous);
             }
-            self.git_conflict_admission = self.git_ui.recovery_guards.remove(&identity);
         }
-        let Some(admission) = self.git_conflict_admission.as_ref() else {
+        let Some(admission) = self
+            .git_conflict_admission
+            .as_ref()
+            .filter(|claim| claim.identity() == &identity)
+        else {
             self.arm_git_recovery(cx);
             self.status = self.git_label(GitMsg::Recovery).into();
             self.git_ui.center_open = true;
             return;
         };
-        let Some(identity) = admission.identity().cloned() else {
-            return;
-        };
         let operation_id = admission.operation_id().to_string();
+        let stale_identity = identity.clone();
         let executable = self
             .git_preferences
             .executable
@@ -219,12 +272,46 @@ impl MarkionApp {
                         app.git_ui.conflict = Some(view);
                         app.git_ui.conflict_surface_open = true;
                     }
-                    Err(error) => app.status = app.trf(Msg::StatusGitSyncFailed, &[&error]),
+                    Err(ConflictOpenError::Stale) => {
+                        app.release_stale_git_conflict(&stale_identity, cx)
+                    }
+                    Err(ConflictOpenError::Failed(error)) => {
+                        app.status = app.trf(Msg::StatusGitSyncFailed, &[&error])
+                    }
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// The repository moved on from a recorded conflict: stop guarding its
+    /// paths and let reconciliation settle the checkpoint.
+    pub(super) fn release_stale_git_conflict(
+        &mut self,
+        identity: &RepositoryIdentity,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .git_conflict_admission
+            .as_ref()
+            .is_some_and(|claim| claim.identity() == identity)
+        {
+            self.git_conflict_admission = None;
+        }
+        self.git_ui.conflict_claims.remove(identity);
+        if self
+            .git_ui
+            .conflict
+            .as_ref()
+            .is_some_and(|view| &view.identity == identity)
+        {
+            self.git_ui.conflict = None;
+            self.git_ui.conflict_surface_open = false;
+        }
+        self.status = self.git_label(GitMsg::ConflictStale).into();
+        self.reconcile_git_repository(identity.clone(), cx);
+        cx.notify();
     }
 
     pub(super) fn open_git_draft(&mut self, cx: &mut Context<Self>) {
@@ -488,6 +575,7 @@ impl MarkionApp {
             .clone()
             .unwrap_or_else(|| "git".into());
         self.git_ui.conflict_busy = true;
+        let stale_identity = identity.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -501,7 +589,12 @@ impl MarkionApp {
                         app.git_ui.conflict = Some(view);
                         app.git_ui.conflict_surface_open = true;
                     }
-                    Err(error) => app.status = app.trf(Msg::StatusGitSyncFailed, &[&error]),
+                    Err(ConflictOpenError::Stale) => {
+                        app.release_stale_git_conflict(&stale_identity, cx)
+                    }
+                    Err(ConflictOpenError::Failed(error)) => {
+                        app.status = app.trf(Msg::StatusGitSyncFailed, &[&error])
+                    }
                 }
                 app.refresh_git_details(cx);
                 cx.notify();
@@ -515,17 +608,22 @@ fn prepare_conflict_view(
     identity: RepositoryIdentity,
     operation_id: String,
     executable: String,
-) -> Result<ConflictView, String> {
+) -> Result<ConflictView, ConflictOpenError> {
     let repository =
         GitRepository::discover(GitCommandRunner::new(executable), &identity.worktree_root)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| ConflictOpenError::Failed(error.to_string()))?;
     if repository.identity() != &identity {
-        return Err("repository identity changed".into());
+        return Err(ConflictOpenError::Failed(
+            "repository identity changed".into(),
+        ));
     }
     let manager = ConflictManager::new(repository, git_panel::journal());
     let session = manager
         .restore_session(&operation_id, &CancellationToken::new())
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| match error {
+            ConflictError::StaleSession => ConflictOpenError::Stale,
+            error => ConflictOpenError::Failed(error.to_string()),
+        })?;
     let mut view = ConflictView {
         identity,
         manager,

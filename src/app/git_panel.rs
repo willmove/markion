@@ -93,7 +93,13 @@ pub(super) struct GitUi {
     )>,
     pub running: Option<(RepositoryIdentity, OperationKind, CancellationToken)>,
     pub reports: HashMap<PathBuf, String>,
-    pub recovery_guards: HashMap<RepositoryIdentity, ExclusiveAdmission>,
+    pub recovery_guards: HashMap<RepositoryIdentity, markion_git_sync::ExclusiveAdmission>,
+    /// Conflict claims for repositories other than the one whose conflict is
+    /// currently selected in `git_conflict_admission`.
+    pub conflict_claims: HashMap<RepositoryIdentity, markion_git_sync::ConflictClaim>,
+    /// Test-only journal location so tests never touch the user's journal.
+    #[cfg(test)]
+    pub journal_override: Option<JournalStore>,
     pub phase: Arc<std::sync::Mutex<Option<markion_git_sync::OperationPhase>>>,
     pub pending_exit: Option<(gpui::AnyWindowHandle, UnsavedExitKind)>,
     pub remote_checks: HashMap<PathBuf, SystemTime>,
@@ -156,6 +162,14 @@ pub(super) fn journal() -> JournalStore {
 }
 
 impl MarkionApp {
+    pub(super) fn git_journal(&self) -> JournalStore {
+        #[cfg(test)]
+        if let Some(journal) = &self.git_ui.journal_override {
+            return journal.clone();
+        }
+        journal()
+    }
+
     pub(super) fn resume_pending_git_exit(&mut self, cx: &mut Context<Self>) {
         if let Some((handle, kind)) = self.git_ui.pending_exit.take() {
             cx.spawn(async move |this, cx| {
@@ -1954,6 +1968,21 @@ fn advanced_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl I
                     markion_git_sync::RecoveryAssessment::ExternalState { .. }
                 )
         });
+        // A record that no longer owns live Git state can be discarded; its
+        // draft, if any, can first be handed over as an unsaved document.
+        let discardable = details.assessments.iter().any(|a| {
+            assessment_id(a) == checkpoint.operation_id
+                && matches!(
+                    a,
+                    markion_git_sync::RecoveryAssessment::ExternalState { .. }
+                        | markion_git_sync::RecoveryAssessment::CommitCompleted { .. }
+                        | markion_git_sync::RecoveryAssessment::IntegrationCompleted { .. }
+                        | markion_git_sync::RecoveryAssessment::Superseded { .. }
+                )
+        });
+        let has_draft = !checkpoint.drafts.is_empty();
+        let draft_checkpoint = checkpoint.clone();
+        let discard_checkpoint = checkpoint.clone();
         let label = details
             .assessments
             .iter()
@@ -1995,7 +2024,35 @@ fn advanced_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl I
                     palette,
                     cx,
                     move |_, _, cx| cx.reveal_path(&root),
-                )),
+                ))
+                .when(discardable && has_draft, |row| {
+                    row.child(button(
+                        ("git-recovery-open-draft", index),
+                        app.git_label(GitMsg::OpenDraft),
+                        !app.git_ui.conflict_busy,
+                        palette,
+                        cx,
+                        move |app, _, cx| {
+                            app.open_git_checkpoint_draft(draft_checkpoint.clone(), cx)
+                        },
+                    ))
+                })
+                .when(discardable, |row| {
+                    row.child(button(
+                        ("git-recovery-discard", index),
+                        app.git_label(GitMsg::DiscardRecord),
+                        !app.git_ui.conflict_busy,
+                        palette,
+                        cx,
+                        move |app, window, cx| {
+                            app.confirm_discard_git_checkpoint(
+                                discard_checkpoint.clone(),
+                                window,
+                                cx,
+                            )
+                        },
+                    ))
+                }),
         );
     }
     body = body.child(
@@ -2449,6 +2506,123 @@ impl MarkionApp {
         .detach();
     }
 
+    /// Hands the stale record's drafts over as unsaved documents, then
+    /// discards the record so it no longer counts as pending recovery.
+    pub(super) fn open_git_checkpoint_draft(
+        &mut self,
+        checkpoint: OperationCheckpoint,
+        cx: &mut Context<Self>,
+    ) {
+        if checkpoint.drafts.is_empty() || self.git_ui.conflict_busy {
+            return;
+        }
+        for draft in &checkpoint.drafts {
+            let text = String::from_utf8_lossy(&draft.content).into_owned();
+            self.open_in_new_tab(MarkdownDocument::recovered(text, None), cx);
+        }
+        self.discard_git_checkpoint_record(checkpoint, GitMsg::DraftOpened, cx);
+    }
+
+    pub(super) fn confirm_discard_git_checkpoint(
+        &mut self,
+        checkpoint: OperationCheckpoint,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            self.git_label(GitMsg::DiscardRecordConfirm),
+            Some(self.git_label(GitMsg::DiscardRecordDetail)),
+            &[
+                PromptButton::ok(self.git_label(GitMsg::DiscardRecord)),
+                PromptButton::cancel(self.tr(Msg::DialogButtonCancel)),
+            ],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |app, cx| {
+                    app.discard_git_checkpoint_record(checkpoint, GitMsg::RecordDiscarded, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn discard_git_checkpoint_record(
+        &mut self,
+        checkpoint: OperationCheckpoint,
+        done: GitMsg,
+        cx: &mut Context<Self>,
+    ) {
+        if self.git_ui.running.is_some() || self.git_ui.conflict_busy {
+            return;
+        }
+        self.git_ui.conflict_busy = true;
+        let identity = checkpoint.identity.clone();
+        let operation_id = checkpoint.operation_id.clone();
+        let executable = self
+            .git_preferences
+            .executable
+            .clone()
+            .unwrap_or_else(|| "git".into());
+        let journal = self.git_journal();
+        cx.spawn(async move |this, cx| {
+            let root = identity.clone();
+            let id = operation_id.clone();
+            let result = cx
+                .background_spawn(async move {
+                    let repository = GitRepository::discover(
+                        GitCommandRunner::new(executable),
+                        &root.worktree_root,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    if repository.identity() != &root {
+                        return Err("repository identity changed".to_string());
+                    }
+                    markion_git_sync::RecoveryManager::new(repository, journal)
+                        .discard_stale(&id)
+                        .map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.git_ui.conflict_busy = false;
+                match result {
+                    Ok(()) => {
+                        if app
+                            .git_ui
+                            .recovery_guards
+                            .get(&identity)
+                            .is_some_and(|guard| guard.operation_id() == operation_id)
+                        {
+                            app.git_ui.recovery_guards.remove(&identity);
+                        }
+                        if app
+                            .git_ui
+                            .conflict_claims
+                            .get(&identity)
+                            .is_some_and(|claim| claim.operation_id() == operation_id)
+                        {
+                            app.git_ui.conflict_claims.remove(&identity);
+                        }
+                        if app
+                            .git_conflict_admission
+                            .as_ref()
+                            .is_some_and(|claim| claim.operation_id() == operation_id)
+                        {
+                            app.git_conflict_admission = None;
+                        }
+                        app.status = app.git_label(done).into();
+                    }
+                    Err(error) => app.status = app.trf(Msg::StatusGitSyncFailed, &[&error]),
+                }
+                app.refresh_git_details(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn recover_git_checkpoint(&mut self, checkpoint: OperationCheckpoint, cx: &mut Context<Self>) {
         if self.git_ui.running.is_some() || self.git_ui.conflict_busy {
             return;
@@ -2470,7 +2644,7 @@ impl MarkionApp {
                 use markion_git_sync::RecoveryAssessment;
                 match assessment {
                     RecoveryAssessment::OwnedStaging { operation_id } => manager.recover_staging(&operation_id).map_err(|e| e.to_string()),
-                    RecoveryAssessment::CommitCompleted { operation_id, .. } | RecoveryAssessment::IntegrationCompleted { operation_id, .. } => manager.adopt_completed(&operation_id).map(|_| ()).map_err(|e| e.to_string()),
+                    RecoveryAssessment::CommitCompleted { operation_id, .. } | RecoveryAssessment::IntegrationCompleted { operation_id, .. } | RecoveryAssessment::Superseded { operation_id, .. } => manager.adopt_completed(&operation_id).map(|_| ()).map_err(|e| e.to_string()),
                     RecoveryAssessment::UnknownPushResult { .. } => {
                         let mut policy = recovery_policy(checkpoint.clone()).ok_or("missing recovery target")?;
                         let engine = markion_git_sync::GitSyncEngine::new(repository, journal(), markion_git_sync::SyncOptions::default())
@@ -2488,7 +2662,8 @@ impl MarkionApp {
                 match result {
                     Ok(()) => {
                         app.git_ui.recovery_guards.remove(&identity);
-                        if app.git_conflict_admission.as_ref().and_then(|guard| guard.identity()) == Some(&identity) { app.git_conflict_admission = None; app.git_ui.conflict = None; app.git_ui.conflict_surface_open = false; }
+                        app.git_ui.conflict_claims.remove(&identity);
+                        if app.git_conflict_admission.as_ref().map(|claim| claim.identity()) == Some(&identity) { app.git_conflict_admission = None; app.git_ui.conflict = None; app.git_ui.conflict_surface_open = false; }
                         app.status = app.tr(Msg::StatusGitSyncComplete).into();
                     }
                     Err(error) => app.status = app.trf(Msg::StatusGitSyncFailed, &[&error]),
@@ -2507,6 +2682,7 @@ fn assessment_id(assessment: &markion_git_sync::RecoveryAssessment) -> &str {
         | ConflictSession { operation_id }
         | IntegrationCompleted { operation_id, .. }
         | UnknownPushResult { operation_id, .. }
+        | Superseded { operation_id, .. }
         | ExternalState { operation_id } => operation_id,
     }
 }

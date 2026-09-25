@@ -12232,6 +12232,7 @@ fn git_image_only_reconciliation_releases_image_bytes_without_rebuilding_markdow
                     path: image_path.clone(),
                     changed: true,
                 }],
+                conflict_paths: Vec::new(),
             },
             cx,
         );
@@ -23057,5 +23058,395 @@ fn visual_empty_anchor_marker_row_is_compact_and_editable(cx: &mut TestAppContex
             tab.visual_caret_bounds.is_some(),
             "compact marker row must keep painting its caret after input"
         );
+    });
+}
+
+fn run_git(directory: &Path, arguments: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(directory)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            directory.join(".markion-test-no-global"),
+        )
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {arguments:?} ({:?}): {} {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// A repository with two commits plus an isolated journal. Returns the
+/// repository identity, the first (now superseded) commit and HEAD.
+fn recovery_fixture() -> (
+    tempfile::TempDir,
+    markion_git_sync::JournalStore,
+    markion_git_sync::RepositoryIdentity,
+    markion_git_sync::GitObjectId,
+    markion_git_sync::GitObjectId,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = comparable_document_path(dir.path()).join("repo");
+    fs::create_dir_all(&root).unwrap();
+    run_git(&root, &["init", "-q", "-b", "main"]);
+    run_git(&root, &["config", "user.name", "Markion Test"]);
+    run_git(&root, &["config", "user.email", "test@markion.invalid"]);
+    run_git(&root, &["config", "commit.gpgsign", "false"]);
+    let mut commits = Vec::new();
+    for name in ["a.md", "b.md"] {
+        fs::write(root.join(name), format!("{name}\n")).unwrap();
+        run_git(&root, &["add", "--", name]);
+        run_git(&root, &["commit", "-q", "-m", name]);
+        commits.push(
+            markion_git_sync::GitObjectId::parse(run_git(&root, &["rev-parse", "HEAD"])).unwrap(),
+        );
+    }
+    let identity = markion_git_sync::GitRepository::discover(
+        markion_git_sync::GitCommandRunner::new("git"),
+        &root,
+    )
+    .unwrap()
+    .identity()
+    .clone();
+    let journal = markion_git_sync::JournalStore::new(
+        dir.path().join("data").join("journal.toml"),
+        dir.path().join("data").join("recovery"),
+    );
+    let head = commits.pop().unwrap();
+    let behind = commits.pop().unwrap();
+    (dir, journal, identity, behind, head)
+}
+
+fn recovery_checkpoint(
+    identity: &markion_git_sync::RepositoryIdentity,
+    id: &str,
+    commit: markion_git_sync::GitObjectId,
+    draft: Option<&str>,
+) -> markion_git_sync::OperationCheckpoint {
+    markion_git_sync::OperationCheckpoint {
+        operation_id: id.into(),
+        kind: markion_git_sync::OperationKind::SyncNow,
+        phase: markion_git_sync::OperationPhase::Fetching,
+        identity: identity.clone(),
+        target: None,
+        expected_head: None,
+        resulting_commit: Some(commit),
+        fetched_tip: None,
+        expected_index_fingerprint: None,
+        owned_paths: Vec::new(),
+        recovery_refs: Vec::new(),
+        preimages: None,
+        drafts: draft
+            .map(|text| {
+                vec![markion_git_sync::ConflictDraft {
+                    relative_path: "a.md".into(),
+                    content: text.as_bytes().to_vec(),
+                    content_fingerprint: "0".repeat(40),
+                }]
+            })
+            .unwrap_or_default(),
+        updated_unix_seconds: 1,
+        confirmed: false,
+    }
+}
+
+#[gpui::test]
+fn startup_recovery_retires_completed_checkpoints_without_holding_a_lock(cx: &mut TestAppContext) {
+    let (_dir, journal, identity, behind, head) = recovery_fixture();
+    journal
+        .begin(recovery_checkpoint(&identity, "at-head", head, None))
+        .unwrap();
+    journal
+        .begin(recovery_checkpoint(&identity, "behind", behind, None))
+        .unwrap();
+    let root = identity.worktree_root.clone();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.workspace_root = root.clone();
+        app.git_ui.journal_override = Some(journal.clone());
+        app
+    });
+
+    app.update(cx, |app, cx| app.arm_git_recovery(cx));
+    cx.run_until_parked();
+
+    assert!(journal.load().unwrap().active.is_empty());
+    assert_eq!(journal.load().unwrap().successful.len(), 2);
+    app.update(cx, |app, _| {
+        assert!(app.git_ui.recovery_guards.is_empty());
+        assert!(app.git_conflict_admission.is_none());
+        assert!(!app.git_operations.is_mutating(&root.join("a.md")));
+        assert!(app.git_operations.try_write(&root.join("a.md")).is_ok());
+    });
+}
+
+#[gpui::test]
+fn stale_record_with_draft_can_be_opened_or_discarded(cx: &mut TestAppContext) {
+    let (_dir, journal, identity, behind, _) = recovery_fixture();
+    let opened = recovery_checkpoint(&identity, "open-me", behind.clone(), Some("draft text\n"));
+    let discarded = recovery_checkpoint(&identity, "discard-me", behind, Some("other\n"));
+    journal.begin(opened.clone()).unwrap();
+    journal.begin(discarded.clone()).unwrap();
+    let root = identity.worktree_root.clone();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = root.clone();
+        app.git_ui.journal_override = Some(journal.clone());
+        app
+    });
+
+    // Reconciliation keeps records whose draft differs from HEAD.
+    app.update(cx, |app, cx| app.arm_git_recovery(cx));
+    cx.run_until_parked();
+    assert_eq!(journal.load().unwrap().active.len(), 2);
+
+    app.update(cx, |app, cx| app.open_git_checkpoint_draft(opened, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "draft text\n");
+        assert!(tab.document.path().is_none());
+        assert!(
+            tab.is_dirty(),
+            "the handed-over draft must not close silently"
+        );
+        assert_eq!(
+            app.status.as_ref(),
+            git_t(Language::En, GitMsg::DraftOpened)
+        );
+    });
+    let remaining = journal.load().unwrap().active;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].operation_id, "discard-me");
+
+    let (cancel, discard) = app.read_with(cx, |app, _| {
+        (
+            app.tr(Msg::DialogButtonCancel).to_string(),
+            app.git_label(GitMsg::DiscardRecord).to_string(),
+        )
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.confirm_discard_git_checkpoint(discarded.clone(), window, cx)
+        });
+    });
+    cx.simulate_prompt_answer(&cancel);
+    cx.run_until_parked();
+    assert_eq!(journal.load().unwrap().active.len(), 1);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.confirm_discard_git_checkpoint(discarded.clone(), window, cx)
+        });
+    });
+    cx.simulate_prompt_answer(&discard);
+    cx.run_until_parked();
+    assert!(journal.load().unwrap().active.is_empty());
+    assert_eq!(fs::read_to_string(root.join("a.md")).unwrap(), "a.md\n");
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.status.as_ref(),
+            git_t(Language::En, GitMsg::RecordDiscarded)
+        );
+    });
+}
+
+fn conflict_fixture() -> (
+    tempfile::TempDir,
+    markion_git_sync::RepositoryIdentity,
+    PathBuf,
+    PathBuf,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = comparable_document_path(dir.path());
+    let conflicted = root.join("a.md");
+    let unrelated = root.join("b.md");
+    fs::write(&conflicted, "a\n").unwrap();
+    fs::write(&unrelated, "b\n").unwrap();
+    let identity = markion_git_sync::RepositoryIdentity::new(
+        root.clone(),
+        root.join(".git"),
+        root.join(".git"),
+    );
+    (dir, identity, conflicted, unrelated)
+}
+
+#[gpui::test]
+fn conflict_claim_guards_only_conflicted_note_and_stale_session_releases_it(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, identity, conflicted, unrelated) = conflict_fixture();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&conflicted).unwrap()),
+            EditorTab::new(MarkdownDocument::open(&unrelated).unwrap()),
+        ];
+        app.git_operations.register(identity.clone());
+        app.git_conflict_admission = Some(
+            app.git_operations
+                .claim_conflict_paths(&identity, "sync-conflict", vec![conflicted.clone()])
+                .unwrap(),
+        );
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        app.active_tab = 0;
+        assert_eq!(
+            app.active_git_lock_message(),
+            Some(git_t(Language::En, GitMsg::ConflictNeedsAttention))
+        );
+        app.active_tab = 1;
+        assert_eq!(app.active_git_lock_message(), None);
+        app.active_tab_mut().document.set_text("b edited\n");
+        assert_eq!(app.try_save_named_tab(1), NamedSave::Saved);
+        assert_eq!(fs::read_to_string(&unrelated).unwrap(), "b edited\n");
+
+        app.release_stale_git_conflict(&identity, cx);
+        assert!(app.git_conflict_admission.is_none());
+        assert_eq!(
+            app.status.as_ref(),
+            git_t(Language::En, GitMsg::ConflictStale)
+        );
+        app.active_tab = 0;
+        assert_eq!(app.active_git_lock_message(), None);
+        app.active_tab_mut().document.set_text("a edited\n");
+        assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
+        assert_eq!(fs::read_to_string(&conflicted).unwrap(), "a edited\n");
+    });
+}
+
+#[gpui::test]
+fn running_sync_reports_busy_but_recovery_guard_reports_conflict_attention(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, identity, conflicted, _) = conflict_fixture();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&conflicted).unwrap())];
+        app.git_operations.register(identity.clone());
+        app
+    });
+
+    app.update(cx, |app, _| {
+        let exclusive = app
+            .git_operations
+            .begin_exclusive(&identity, "sync-running")
+            .unwrap();
+        app.git_ui.running = Some((
+            identity.clone(),
+            markion_git_sync::OperationKind::SyncNow,
+            markion_git_sync::CancellationToken::new(),
+        ));
+        assert_eq!(
+            app.active_git_lock_message(),
+            Some(git_t(Language::En, GitMsg::Busy))
+        );
+        app.git_ui.running = None;
+        app.git_ui
+            .recovery_guards
+            .insert(identity.clone(), exclusive);
+        assert_eq!(
+            app.active_git_lock_message(),
+            Some(git_t(Language::En, GitMsg::ConflictNeedsAttention))
+        );
+        app.git_ui.recovery_guards.clear();
+        assert_eq!(app.active_git_lock_message(), None);
+    });
+}
+
+#[gpui::test]
+fn file_tree_delete_during_conflict_spares_unrelated_files_only(cx: &mut TestAppContext) {
+    let (_dir, identity, conflicted, unrelated) = conflict_fixture();
+    let root = identity.worktree_root.clone();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app.git_operations.register(identity.clone());
+        app.git_conflict_admission = Some(
+            app.git_operations
+                .claim_conflict_paths(&identity, "sync-conflict", vec![conflicted.clone()])
+                .unwrap(),
+        );
+        app
+    });
+    let delete_label = app.read_with(cx, |app, _| app.tr(Msg::DialogButtonDelete).to_string());
+
+    for (target, expect_deleted) in [(unrelated.clone(), true), (conflicted.clone(), false)] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.selected_tree_path = Some(target.clone());
+                app.delete_tree_entry(&DeleteTreeEntry, window, cx);
+            });
+        });
+        cx.simulate_prompt_answer(&delete_label);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            assert_eq!(!target.exists(), expect_deleted, "{}", target.display());
+            if !expect_deleted {
+                assert_eq!(
+                    app.status.as_ref(),
+                    git_t(Language::En, GitMsg::ConflictNeedsAttention)
+                );
+            }
+        });
+    }
+}
+
+#[gpui::test]
+fn sync_ending_in_conflict_keeps_a_path_claim_instead_of_the_repository_lock(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, identity, conflicted, unrelated) = conflict_fixture();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.tabs = vec![EditorTab::new(MarkdownDocument::open(&unrelated).unwrap())];
+        app.git_operations.register(identity.clone());
+        app
+    });
+
+    app.update(cx, |app, cx| {
+        let exclusive = app
+            .git_operations
+            .begin_exclusive(&identity, "sync-conflict")
+            .unwrap();
+        app.apply_git_sync_completion(
+            super::git_sync::GitSyncCompletion {
+                _exclusive: exclusive,
+                operation: markion_git_sync::OperationKind::SyncNow,
+                outcome: markion_git_sync::SyncOutcome::NeedsAttention {
+                    phase: markion_git_sync::OperationPhase::Resolving,
+                    reason: "conflict".into(),
+                },
+                buffers: Vec::new(),
+                images: Vec::new(),
+                conflict_paths: vec![conflicted.clone()],
+            },
+            cx,
+        );
+        assert!(!app.git_operations.is_mutating(&unrelated));
+        assert!(app.git_operations.is_conflict_owned(&conflicted));
+        assert_eq!(
+            app.git_conflict_admission
+                .as_ref()
+                .map(|claim| claim.operation_id().to_string()),
+            Some("sync-conflict".to_string())
+        );
+        assert_eq!(app.active_git_lock_message(), None);
+        app.active_tab_mut().document.set_text("b edited\n");
+        assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
     });
 }

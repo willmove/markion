@@ -852,11 +852,8 @@ impl MarkionApp {
         for path in admission_paths {
             match self.git_operations.try_write(&path) {
                 Ok(admission) => _admissions.push(admission),
-                Err(_) => {
-                    self.status = self.trf(
-                        Msg::StatusGitSyncFailed,
-                        &["the workspace is being updated"],
-                    );
+                Err(error) => {
+                    self.status = self.git_admission_message(&path, &error);
                     cx.notify();
                     return;
                 }
@@ -1031,11 +1028,8 @@ impl MarkionApp {
                 let was_active = app.active_tab().path() == Some(path.as_path());
                 let _admission = match app.git_operations.try_write(&path) {
                     Ok(admission) => admission,
-                    Err(_) => {
-                        app.status = app.trf(
-                            Msg::StatusGitSyncFailed,
-                            &["the workspace is being updated"],
-                        );
+                    Err(error) => {
+                        app.status = app.git_admission_message(&path, &error);
                         cx.notify();
                         return;
                     }
@@ -1187,11 +1181,8 @@ impl MarkionApp {
         for path in [source, destination.as_path()] {
             match self.git_operations.try_write(path) {
                 Ok(admission) => _admissions.push(admission),
-                Err(_) => {
-                    self.status = self.trf(
-                        Msg::StatusGitSyncFailed,
-                        &["the source or destination workspace is being updated"],
-                    );
+                Err(error) => {
+                    self.status = self.git_admission_message(path, &error);
                     cx.notify();
                     return;
                 }

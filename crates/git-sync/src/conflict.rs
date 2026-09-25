@@ -590,9 +590,24 @@ pub enum RecoveryAssessment {
         operation_id: String,
         commit: GitObjectId,
     },
+    /// The recorded commit (and fetched tip, when present) are already in
+    /// HEAD's history, but later commits moved HEAD past them.
+    Superseded {
+        operation_id: String,
+        commit: GitObjectId,
+    },
     ExternalState {
         operation_id: String,
     },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReconcileReport {
+    /// Checkpoints retired because their work is in HEAD.
+    pub retired: Vec<String>,
+    /// Completed or superseded checkpoints kept because a draft differs from
+    /// HEAD; the user chooses to open the draft or discard the record.
+    pub needs_choice: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -691,6 +706,10 @@ impl RecoveryManager {
                     operation_id: id,
                     head,
                 } if id == operation_id => Some(head),
+                RecoveryAssessment::Superseded {
+                    operation_id: id,
+                    commit,
+                } if id == operation_id => Some(commit),
                 _ => None,
             })
             .ok_or(ConflictError::StaleSession)?;
@@ -706,6 +725,80 @@ impl RecoveryManager {
         }
         self.complete_checkpoint(checkpoint, Some(commit.clone()))?;
         Ok(commit)
+    }
+
+    /// Retires checkpoints whose work is already in HEAD. A draft that
+    /// differs from HEAD keeps its checkpoint for an explicit user choice.
+    /// Never touches notes, the index or refs.
+    pub fn reconcile(&self) -> Result<ReconcileReport, ConflictError> {
+        let journal = self.journal.load()?;
+        let mut report = ReconcileReport::default();
+        for assessment in self.assess()? {
+            let (operation_id, commit) = match assessment {
+                RecoveryAssessment::CommitCompleted {
+                    operation_id,
+                    commit,
+                }
+                | RecoveryAssessment::Superseded {
+                    operation_id,
+                    commit,
+                } => (operation_id, commit),
+                RecoveryAssessment::IntegrationCompleted { operation_id, head } => {
+                    (operation_id, head)
+                }
+                _ => continue,
+            };
+            let Some(mut checkpoint) = journal
+                .active
+                .iter()
+                .find(|entry| entry.operation_id == operation_id)
+                .cloned()
+            else {
+                continue;
+            };
+            if !self.drafts_match_head(&checkpoint) {
+                report.needs_choice.push(operation_id);
+                continue;
+            }
+            checkpoint.drafts.clear();
+            self.complete_checkpoint(checkpoint, Some(commit))?;
+            report.retired.push(operation_id);
+        }
+        Ok(report)
+    }
+
+    /// Explicit discard for a checkpoint that no longer owns live Git state.
+    /// Refuses conflicts and staging that are still recoverable in place.
+    pub fn discard_stale(&self, operation_id: &str) -> Result<(), ConflictError> {
+        let discardable = self
+            .assess()?
+            .into_iter()
+            .any(|assessment| match assessment {
+                RecoveryAssessment::CommitCompleted {
+                    operation_id: id, ..
+                }
+                | RecoveryAssessment::IntegrationCompleted {
+                    operation_id: id, ..
+                }
+                | RecoveryAssessment::Superseded {
+                    operation_id: id, ..
+                }
+                | RecoveryAssessment::ExternalState { operation_id: id } => id == operation_id,
+                _ => false,
+            });
+        if !discardable {
+            return Err(ConflictError::StaleSession);
+        }
+        self.journal.discard(operation_id)?;
+        Ok(())
+    }
+
+    fn drafts_match_head(&self, checkpoint: &OperationCheckpoint) -> bool {
+        checkpoint.drafts.iter().all(|draft| {
+            let relative = draft.relative_path.to_string_lossy().replace('\\', "/");
+            self.oid(&format!("HEAD:{relative}"))
+                .is_some_and(|blob| blob.as_str() == draft.content_fingerprint)
+        })
     }
 
     fn complete_checkpoint(
@@ -791,6 +884,19 @@ impl RecoveryManager {
                         RecoveryAssessment::CommitCompleted {
                             operation_id,
                             commit: head,
+                        }
+                    } else if let Some(commit) = checkpoint
+                        .resulting_commit
+                        .clone()
+                        .filter(|commit| self.ancestor(commit, &head))
+                        && checkpoint
+                            .fetched_tip
+                            .as_ref()
+                            .is_none_or(|tip| self.ancestor(tip, &head))
+                    {
+                        RecoveryAssessment::Superseded {
+                            operation_id,
+                            commit,
                         }
                     } else {
                         RecoveryAssessment::ExternalState { operation_id }

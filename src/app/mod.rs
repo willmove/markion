@@ -79,7 +79,7 @@ use markion::{
     tf, title_from_path, transform_block, validate_block_target, workspace_relative_path,
 };
 use markion_git_sync::{
-    BackgroundFetchScheduler, ExclusiveAdmission, GitOperationRegistry, PolicyStore, ReadEpoch,
+    BackgroundFetchScheduler, ConflictClaim, GitOperationRegistry, PolicyStore, ReadEpoch,
     WriteAdmission,
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -2450,8 +2450,9 @@ struct MarkionApp {
     /// Repository-wide admission and reload epochs shared by app writes and
     /// local Git mutations.
     git_operations: GitOperationRegistry,
-    /// Held while a Git conflict session owns repository paths.
-    git_conflict_admission: Option<ExclusiveAdmission>,
+    /// Guards the conflicted paths of the active conflict session. Other
+    /// paths in that repository stay writable.
+    git_conflict_admission: Option<ConflictClaim>,
     git_background_scheduler: BackgroundFetchScheduler,
     git_ui: git_panel::GitUi,
     confirming_close: bool,

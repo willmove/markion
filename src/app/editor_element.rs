@@ -131,8 +131,8 @@ impl EntityInputHandler for MarkionApp {
             return;
         }
 
-        if self.active_git_path_locked() {
-            self.status = self.git_label(GitMsg::Busy).into();
+        if let Some(message) = self.active_git_lock_message() {
+            self.status = message.into();
             cx.notify();
             return;
         }
@@ -380,8 +380,8 @@ impl EntityInputHandler for MarkionApp {
             return;
         }
 
-        if self.active_git_path_locked() {
-            self.status = self.git_label(GitMsg::Busy).into();
+        if let Some(message) = self.active_git_lock_message() {
+            self.status = message.into();
             cx.notify();
             return;
         }
