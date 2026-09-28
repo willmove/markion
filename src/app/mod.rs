@@ -499,7 +499,11 @@ mod menu_shortcuts {
     pub const ITALIC: MenuShortcut = MenuShortcut::new("italic", "secondary-i", "Ctrl+I", "Cmd+I");
     pub const INLINE_CODE: MenuShortcut = MenuShortcut::new(
         "inline-code",
-        "secondary-shift-`",
+        // GPUI folds Shift into the shifted character for symbol keys on
+        // every platform (Ctrl+Shift+` dispatches as `ctrl-~`), so the
+        // binding must be written in that dispatched form; the curated
+        // labels keep showing Ctrl+Shift+` on the menu rows.
+        "secondary-~",
         "Ctrl+Shift+`",
         "Cmd+Shift+`",
     );
@@ -525,18 +529,18 @@ mod menu_shortcuts {
         MenuShortcut::new("heading-5", "secondary-5", "Ctrl+5", "Cmd+5");
     pub const HEADING_6: MenuShortcut =
         MenuShortcut::new("heading-6", "secondary-6", "Ctrl+6", "Cmd+6");
+    // Ctrl+Shift+] dispatches as `ctrl-}` (and Cmd+Shift+] as `cmd-}`):
+    // GPUI folds Shift into the shifted symbol and clears the modifier, so
+    // the binding is written in that dispatched form while the labels keep
+    // showing the conventional Ctrl+Shift+].
     pub const UNORDERED_LIST: MenuShortcut = MenuShortcut::new(
         "unordered-list",
-        "secondary-shift-]",
+        "secondary-}",
         "Ctrl+Shift+]",
         "Cmd+Shift+]",
     );
-    pub const ORDERED_LIST: MenuShortcut = MenuShortcut::new(
-        "ordered-list",
-        "secondary-shift-[",
-        "Ctrl+Shift+[",
-        "Cmd+Shift+[",
-    );
+    pub const ORDERED_LIST: MenuShortcut =
+        MenuShortcut::new("ordered-list", "secondary-{", "Ctrl+Shift+[", "Cmd+Shift+[");
     pub const TASK_LIST: MenuShortcut = MenuShortcut::new(
         "task-list",
         "secondary-shift-x",

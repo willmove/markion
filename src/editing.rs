@@ -205,6 +205,72 @@ pub(crate) fn ordered_list_marker(rest: &str) -> Option<String> {
     Some(format!("{}{delimiter} ", number + 1))
 }
 
+/// The family of a list marker found at the start of a line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListMarkerKind {
+    Unordered,
+    Ordered,
+}
+
+/// A list marker at the start of a line (after any leading indentation):
+/// `- `/`* `/`+ ` with an optional `[ ]`/`[x]` task box, or digits followed
+/// by `.`/`)` and a space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ListMarker {
+    pub kind: ListMarkerKind,
+    /// Indentation (spaces/tabs) before the marker, in bytes.
+    pub indent: usize,
+    /// Byte length of the marker itself, including any task box.
+    pub len: usize,
+    /// Byte length of the `[ ] `/`[x] ` task box within `len`; zero when the
+    /// item is not a task.
+    pub task_box_len: usize,
+}
+
+/// Detect the list marker at the start of `line`, if any. Mirrors the marker
+/// shapes `markdown_continuation` reproduces, so a line this accepts is a
+/// line the editor itself would continue.
+pub(crate) fn list_marker_at(line: &str) -> Option<ListMarker> {
+    let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let rest = &line[indent..];
+    let mut chars = rest.chars();
+    if let Some(marker @ ('-' | '*' | '+')) = chars.next()
+        && chars.next() == Some(' ')
+    {
+        let marker_len = marker.len_utf8() + 1;
+        let mut item = ListMarker {
+            kind: ListMarkerKind::Unordered,
+            indent,
+            len: marker_len,
+            task_box_len: 0,
+        };
+        let after = &rest[marker_len..];
+        let lowered = after.to_ascii_lowercase();
+        if lowered.starts_with("[ ] ") || lowered.starts_with("[x] ") {
+            item.task_box_len = 4;
+            item.len += item.task_box_len;
+        }
+        return Some(item);
+    }
+
+    let digits = rest
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digits > 0
+        && matches!(rest.as_bytes().get(digits), Some(b'.' | b')'))
+        && rest.as_bytes().get(digits + 1) == Some(&b' ')
+    {
+        return Some(ListMarker {
+            kind: ListMarkerKind::Ordered,
+            indent,
+            len: digits + 2,
+            task_box_len: 0,
+        });
+    }
+    None
+}
+
 fn is_empty_task_marker(rest: &str) -> bool {
     matches!(
         rest.to_ascii_lowercase().as_str(),

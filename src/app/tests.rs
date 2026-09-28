@@ -763,14 +763,17 @@ fn structural_format_shortcut_registry_matches_reference() {
         (
             &menu_shortcuts::ORDERED_LIST,
             "ordered-list",
-            "secondary-shift-[",
+            // Bindings are written in the form platforms dispatch: GPUI folds
+            // Shift into the shifted symbol, so Ctrl+Shift+[ arrives as
+            // `ctrl-{`. The curated labels still show Ctrl+Shift+[.
+            "secondary-{",
             "Ctrl+Shift+[",
             "Cmd+Shift+[",
         ),
         (
             &menu_shortcuts::UNORDERED_LIST,
             "unordered-list",
-            "secondary-shift-]",
+            "secondary-}",
             "Ctrl+Shift+]",
             "Cmd+Shift+]",
         ),
@@ -813,19 +816,21 @@ fn structural_format_shortcut_registry_matches_reference() {
     assert_eq!(sanitized_shortcut_overrides(&stored), stored);
 
     for (binding, key, windows_linux, macos) in [
-        ("secondary-shift-[", "[", "Ctrl+Shift+[", "Cmd+Shift+["),
-        ("secondary-shift-]", "]", "Ctrl+Shift+]", "Cmd+Shift+]"),
+        ("secondary-{", "{", "Ctrl+Shift+[", "Cmd+Shift+["),
+        ("secondary-}", "}", "Ctrl+Shift+]", "Cmd+Shift+]"),
     ] {
         for (platform, label) in [
             (ShortcutPlatform::WindowsLinux, windows_linux),
             (ShortcutPlatform::MacOS, macos),
         ] {
             let parts = markion::keystroke::KeystrokeParts::parse(binding, platform)
-                .expect("literal bracket shortcut parses");
+                .expect("dispatched bracket shortcut parses");
             assert_eq!(parts.key.0, key);
+            assert!(parts.is_assignable());
             assert_eq!(
                 markion::keystroke::format_keystroke_label(binding, platform),
-                label
+                label,
+                "dispatched-form bracket bindings must label as the pressed combination"
             );
         }
     }
@@ -1080,7 +1085,7 @@ fn menu_shortcut_metadata_has_one_redo_binding() {
     let bootstrap = include_str!("bootstrap.rs");
     assert_eq!(
         bootstrap
-            .matches("KeyBinding::new(eff(&menu_shortcuts::REDO), Redo, None)")
+            .matches("registry_binding(cx, eff(&menu_shortcuts::REDO), Redo)")
             .count(),
         1,
         "Redo must be installed exactly once"
@@ -1993,7 +1998,7 @@ fn open_folder_action_is_wired_after_open_with_shortcut() {
     assert!(native_open < native_folder && native_folder < native_save);
     assert!(
         bootstrap_source
-            .contains("KeyBinding::new(eff(&menu_shortcuts::OPEN_FOLDER), OpenFolder, None)"),
+            .contains("registry_binding(cx, eff(&menu_shortcuts::OPEN_FOLDER), OpenFolder)"),
         "Open Folder must be bound in the keymap"
     );
 }
@@ -5287,13 +5292,13 @@ fn show_shortcuts_opens_preferences_on_shortcuts_tab() {
             && bootstrap_source.contains("ShowMarkdownReference"),
         "F1 must bind ShowMarkdownReference"
     );
-    assert!(bootstrap_source.contains("KeyBinding::new(eff(&menu_shortcuts::BOLD), Bold, None)"));
+    assert!(bootstrap_source.contains("registry_binding(cx, eff(&menu_shortcuts::BOLD), Bold)"));
     assert!(
-        bootstrap_source.contains("KeyBinding::new(eff(&menu_shortcuts::NEW_TAB), NewTab, None)")
+        bootstrap_source.contains("registry_binding(cx, eff(&menu_shortcuts::NEW_TAB), NewTab)")
     );
     assert!(
         bootstrap_source
-            .contains("KeyBinding::new(eff(&menu_shortcuts::TOGGLE_SIDEBAR), ToggleSidebar, None)")
+            .contains("registry_binding(cx, eff(&menu_shortcuts::TOGGLE_SIDEBAR), ToggleSidebar)")
     );
 }
 
@@ -5331,7 +5336,8 @@ fn updated_default_shortcuts_and_markdown_reference_are_registered() {
         (
             &menu_shortcuts::INLINE_CODE,
             "inline-code",
-            "secondary-shift-`",
+            // Dispatched form of Ctrl+Shift+` (GPUI reports it as `ctrl-~`).
+            "secondary-~",
             "Ctrl+Shift+`",
             "Cmd+Shift+`",
         ),
@@ -5404,17 +5410,12 @@ fn updated_default_shortcuts_and_markdown_reference_are_registered() {
         markion::keystroke::format_keystroke_label("secondary-/", ShortcutPlatform::WindowsLinux),
         "Ctrl+/"
     );
-    let backtick = markion::keystroke::KeystrokeParts::parse(
-        "secondary-shift-`",
-        ShortcutPlatform::WindowsLinux,
-    )
-    .expect("Ctrl+Shift+` parses");
-    assert_eq!(backtick.key.0, "`");
+    let backtick =
+        markion::keystroke::KeystrokeParts::parse("secondary-~", ShortcutPlatform::WindowsLinux)
+            .expect("dispatched Ctrl+Shift+` binding parses");
+    assert_eq!(backtick.key.0, "~");
     assert_eq!(
-        markion::keystroke::format_keystroke_label(
-            "secondary-shift-`",
-            ShortcutPlatform::WindowsLinux
-        ),
+        markion::keystroke::format_keystroke_label("secondary-~", ShortcutPlatform::WindowsLinux),
         "Ctrl+Shift+`"
     );
 
@@ -8029,7 +8030,9 @@ fn visual_table_toolbar_hide_delay_respects_reentry(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
-    let id = app.update(cx, |app, _| visual_table_block_id(&app.active_tab().document, 0));
+    let id = app.update(cx, |app, _| {
+        visual_table_block_id(&app.active_tab().document, 0)
+    });
     // Shown-from-hover state: raw hover + hover-ready both set.
     app.update(cx, |app, cx| {
         let tab = app.active_tab_mut();

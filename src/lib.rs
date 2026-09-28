@@ -328,8 +328,9 @@ use export::{write_docx, write_image_export};
 use frontmatter::{parse_front_matter, split_front_matter};
 
 use editing::{
-    adjust_offset_for_line_insert, adjust_offset_for_line_marker_removal, heading_level_at,
-    heading_marker_len_at, is_empty_list_marker, line_outdent_len, markdown_continuation,
+    ListMarker, ListMarkerKind, adjust_offset_for_line_insert,
+    adjust_offset_for_line_marker_removal, heading_level_at, heading_marker_len_at,
+    is_empty_list_marker, line_outdent_len, list_marker_at, markdown_continuation,
     paragraph_range_at, selected_line_starts,
 };
 
@@ -337,6 +338,26 @@ use storage::{
     atomic_write,
     recovery::{recovery_file_path, stable_recovery_file_path},
 };
+
+/// The list shapes [`MarkdownDocument::apply_list`] produces, with toggle
+/// semantics per kind: `Task` toggles the `[ ]` box against a plain bullet,
+/// while `Unordered`/`Ordered` toggle their whole marker against plain text.
+#[derive(Clone, Copy)]
+enum ListFormat {
+    Unordered,
+    Ordered,
+    Task,
+}
+
+impl ListFormat {
+    fn prefix(self, number: usize) -> String {
+        match self {
+            Self::Unordered => "- ".to_string(),
+            Self::Ordered => format!("{number}. "),
+            Self::Task => "- [ ] ".to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskIdentity {
@@ -1872,11 +1893,9 @@ impl MarkdownDocument {
             MarkdownFormat::Image => self.wrap_link(range, true),
             MarkdownFormat::Paragraph => self.apply_paragraph(range),
             MarkdownFormat::Heading(level) => self.apply_heading(range, level.clamp(1, 6)),
-            MarkdownFormat::UnorderedList => self.prefix_lines(range, |_, _| "- ".to_string()),
-            MarkdownFormat::OrderedList => {
-                self.prefix_lines(range, |line_index, _| format!("{}. ", line_index + 1))
-            }
-            MarkdownFormat::TaskList => self.prefix_lines(range, |_, _| "- [ ] ".to_string()),
+            MarkdownFormat::UnorderedList => self.apply_list(range, ListFormat::Unordered),
+            MarkdownFormat::OrderedList => self.apply_list(range, ListFormat::Ordered),
+            MarkdownFormat::TaskList => self.apply_list(range, ListFormat::Task),
             MarkdownFormat::BlockQuote => self.prefix_lines(range, |_, _| "> ".to_string()),
             MarkdownFormat::CodeFence => self.wrap_code_fence(range),
         }
@@ -2266,6 +2285,145 @@ impl MarkdownDocument {
                 &mut end_delta,
             );
             delta -= marker_len as isize;
+        }
+
+        self.apply_transformed_text(MutationOrigin::MarkdownFormat, transformed);
+        let start = offset_with_delta(range.start, start_delta);
+        let end = offset_with_delta(range.end, end_delta).max(start);
+        start..end
+    }
+
+    /// Apply a list format to the selected lines with toggle semantics: when
+    /// every selected non-empty line already carries the requested list kind,
+    /// the markers are removed instead of added, and applying one list kind to
+    /// lines carrying another replaces the marker instead of nesting a new
+    /// list inside the old one.
+    fn apply_list(
+        &mut self,
+        range: std::ops::Range<usize>,
+        format: ListFormat,
+    ) -> std::ops::Range<usize> {
+        let line_starts = selected_line_starts(&self.text, range.clone());
+        if line_starts.is_empty() {
+            let prefix = format.prefix(1);
+            self.apply_current_range(
+                MutationOrigin::MarkdownFormat,
+                range.start..range.start,
+                &prefix,
+            );
+            return range.start + prefix.len()..range.start + prefix.len();
+        }
+
+        let lines: Vec<(bool, Option<ListMarker>)> = line_starts
+            .iter()
+            .copied()
+            .map(|line_start| {
+                let line_end = self.line_end_at(line_start);
+                let line = &self.text[line_start..line_end];
+                (line.trim().is_empty(), list_marker_at(line))
+            })
+            .collect();
+
+        // A lone caret on an empty line still starts a list, like the other
+        // structural formats.
+        if line_starts.len() == 1 && lines[0].0 {
+            let line_start = line_starts[0];
+            let prefix = format.prefix(1);
+            self.apply_current_range(
+                MutationOrigin::MarkdownFormat,
+                line_start..line_start,
+                &prefix,
+            );
+            return line_start + prefix.len()..line_start + prefix.len();
+        }
+
+        let toggle_off = lines.iter().all(|(empty, marker)| {
+            *empty
+                || marker.is_some_and(|marker| match format {
+                    ListFormat::Unordered => marker.kind == ListMarkerKind::Unordered,
+                    ListFormat::Ordered => marker.kind == ListMarkerKind::Ordered,
+                    ListFormat::Task => {
+                        marker.kind == ListMarkerKind::Unordered && marker.task_box_len > 0
+                    }
+                })
+        }) && lines.iter().any(|(empty, _)| !*empty);
+
+        let mut transformed = self.text.clone();
+        let mut delta: isize = 0;
+        let mut start_delta: isize = 0;
+        let mut end_delta: isize = 0;
+        let mut touched = 0usize;
+        let mut number = 0usize;
+
+        for (line_start, (empty, marker)) in line_starts.iter().copied().zip(&lines) {
+            if *empty {
+                continue;
+            }
+            number += 1;
+            let adjusted_line_start = (line_start as isize + delta) as usize;
+
+            // Toggle-off strips the requested marker (the task toggle removes
+            // only the `[ ]` box, leaving the bullet); conversion strips
+            // whatever marker the line carries so kinds never nest.
+            let removal = if toggle_off {
+                let marker = marker.expect("toggle-off line must carry a marker");
+                Some(match format {
+                    ListFormat::Task => (
+                        marker.indent + marker.len - marker.task_box_len,
+                        marker.task_box_len,
+                    ),
+                    ListFormat::Unordered | ListFormat::Ordered => (marker.indent, marker.len),
+                })
+            } else {
+                marker.map(|marker| (marker.indent, marker.len))
+            };
+            if let Some((at, len)) = removal
+                && len > 0
+            {
+                transformed
+                    .replace_range(adjusted_line_start + at..adjusted_line_start + at + len, "");
+                adjust_offset_for_line_marker_removal(
+                    range.start,
+                    line_start + at,
+                    len,
+                    &mut start_delta,
+                );
+                adjust_offset_for_line_marker_removal(
+                    range.end,
+                    line_start + at,
+                    len,
+                    &mut end_delta,
+                );
+                delta -= len as isize;
+            }
+
+            if !toggle_off {
+                let prefix = format.prefix(number);
+                // Replace an existing marker in place after its indentation;
+                // prefix a plain line at the line start like `prefix_lines`.
+                let insert_indent = marker.map_or(0, |marker| marker.indent);
+                transformed.insert_str(adjusted_line_start + insert_indent, &prefix);
+                adjust_offset_for_line_insert(
+                    range.start,
+                    line_start + insert_indent,
+                    prefix.len(),
+                    range.is_empty(),
+                    &mut start_delta,
+                );
+                adjust_offset_for_line_insert(
+                    range.end,
+                    line_start + insert_indent,
+                    prefix.len(),
+                    range.is_empty(),
+                    &mut end_delta,
+                );
+                delta += prefix.len() as isize;
+            }
+            touched += 1;
+        }
+
+        if touched == 0 {
+            return range;
         }
 
         self.apply_transformed_text(MutationOrigin::MarkdownFormat, transformed);
@@ -7335,6 +7493,99 @@ mod tests {
 
         assert_eq!(doc.text(), "- [ ] one\n- [ ] two");
         assert_eq!(range, 0..doc.text().len());
+    }
+
+    #[test]
+    fn markdown_format_converts_unordered_list_to_ordered_and_back() {
+        let mut doc = MarkdownDocument::from_text("- 列表项1\n- 列表项2\n- 列表项3");
+        let range = doc.apply_markdown_format(0..doc.text().len(), MarkdownFormat::OrderedList);
+
+        assert_eq!(doc.text(), "1. 列表项1\n2. 列表项2\n3. 列表项3");
+        assert_eq!(range, 0..doc.text().len());
+
+        let range = doc.apply_markdown_format(range, MarkdownFormat::UnorderedList);
+        assert_eq!(doc.text(), "- 列表项1\n- 列表项2\n- 列表项3");
+        assert_eq!(range, 0..doc.text().len());
+    }
+
+    #[test]
+    fn markdown_format_toggles_each_list_kind_off_in_place() {
+        let mut bullets = MarkdownDocument::from_text("- one\n* two\n+ three");
+        let range =
+            bullets.apply_markdown_format(0..bullets.text().len(), MarkdownFormat::UnorderedList);
+        assert_eq!(bullets.text(), "one\ntwo\nthree");
+        assert_eq!(range, 0..bullets.text().len());
+
+        let mut numbers = MarkdownDocument::from_text("1) one\n2. two");
+        numbers.apply_markdown_format(0..numbers.text().len(), MarkdownFormat::OrderedList);
+        assert_eq!(numbers.text(), "one\ntwo");
+
+        let mut tasks = MarkdownDocument::from_text("- [ ] one\n- [x] two");
+        tasks.apply_markdown_format(0..tasks.text().len(), MarkdownFormat::TaskList);
+        assert_eq!(tasks.text(), "- one\n- two");
+    }
+
+    #[test]
+    fn markdown_format_converts_markers_in_place_without_nesting() {
+        let mut from_ordered = MarkdownDocument::from_text("1. one\n2. two");
+        from_ordered
+            .apply_markdown_format(0..from_ordered.text().len(), MarkdownFormat::UnorderedList);
+        assert_eq!(from_ordered.text(), "- one\n- two");
+
+        let mut from_tasks = MarkdownDocument::from_text("- [ ] one\n- [x] two");
+        from_tasks.apply_markdown_format(0..from_tasks.text().len(), MarkdownFormat::OrderedList);
+        assert_eq!(from_tasks.text(), "1. one\n2. two");
+
+        let mut from_bullets = MarkdownDocument::from_text("- one\n- two");
+        from_bullets.apply_markdown_format(0..from_bullets.text().len(), MarkdownFormat::TaskList);
+        assert_eq!(from_bullets.text(), "- [ ] one\n- [ ] two");
+    }
+
+    #[test]
+    fn markdown_format_list_toggle_ignores_blank_lines_and_renumbers_content() {
+        let mut doc = MarkdownDocument::from_text("- one\n\n- two");
+        doc.apply_markdown_format(0..doc.text().len(), MarkdownFormat::UnorderedList);
+        assert_eq!(doc.text(), "one\n\ntwo");
+
+        let mut plain = MarkdownDocument::from_text("one\n\ntwo");
+        let range = plain.apply_markdown_format(0..plain.text().len(), MarkdownFormat::OrderedList);
+        assert_eq!(plain.text(), "1. one\n\n2. two");
+        assert_eq!(range, 0..plain.text().len());
+
+        // Applying the same kind to a mixed selection normalizes every
+        // non-empty line instead of toggling anything off.
+        let mut mixed = MarkdownDocument::from_text("- one\nplain");
+        mixed.apply_markdown_format(0..mixed.text().len(), MarkdownFormat::UnorderedList);
+        assert_eq!(mixed.text(), "- one\n- plain");
+    }
+
+    #[test]
+    fn markdown_format_caret_on_empty_line_still_starts_a_list() {
+        let mut doc = MarkdownDocument::from_text("intro\n");
+        let caret = doc.text().len();
+        let range = doc.apply_markdown_format(caret..caret, MarkdownFormat::UnorderedList);
+        assert_eq!(doc.text(), "intro\n- ");
+        assert_eq!(range, caret + 2..caret + 2);
+    }
+
+    #[test]
+    fn markdown_format_list_markers_replace_with_caret_and_indent_tracking() {
+        let mut doc = MarkdownDocument::from_text("- item\nnext");
+        let caret = 3;
+        let range = doc.apply_markdown_format(caret..caret, MarkdownFormat::OrderedList);
+        assert_eq!(doc.text(), "1. item\nnext");
+        assert_eq!(range, 4..4, "caret follows the marker swap");
+
+        let mut toggled = MarkdownDocument::from_text("1. item\nnext");
+        let caret = 4;
+        let range = toggled.apply_markdown_format(caret..caret, MarkdownFormat::OrderedList);
+        assert_eq!(toggled.text(), "item\nnext");
+        assert_eq!(range, 1..1, "caret keeps its offset inside the word");
+
+        let mut indented = MarkdownDocument::from_text("  - nested");
+        let range = indented.apply_markdown_format(4..4, MarkdownFormat::OrderedList);
+        assert_eq!(indented.text(), "  1. nested");
+        assert_eq!(range, 5..5, "caret lands after the replacement marker");
     }
 
     #[test]

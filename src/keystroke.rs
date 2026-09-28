@@ -104,19 +104,66 @@ pub fn format_keystroke_label(binding: &str, platform: ShortcutPlatform) -> Stri
     if parts.alt {
         segments.push(if macos { "Option" } else { "Alt" });
     }
-    if parts.shift {
+    // Platforms fold Shift into the shifted symbol (`ctrl-}` is what
+    // pressing Ctrl+Shift+] produces), so render a lone shifted symbol back
+    // as Shift plus its unshifted key.
+    let mut shift = parts.shift;
+    let key = match (!parts.shift).then(|| shifted_symbol_base(&parts.key.0)) {
+        Some(Some(base)) => {
+            shift = true;
+            base.to_string()
+        }
+        _ => display_key(&parts.key.0),
+    };
+    if shift {
         segments.push("Shift");
     }
     if parts.function {
         segments.push("Fn");
     }
-    let key = display_key(&parts.key.0);
     let mut label = segments.join("+");
     if !label.is_empty() {
         label.push('+');
     }
     label.push_str(&key);
     label
+}
+
+/// US-layout shifted symbols mapped to the unshifted key they sit on; used to
+/// label bindings written in dispatched form (`ctrl-}` → `Shift+]`).
+fn shifted_symbol_base(key: &str) -> Option<char> {
+    const SHIFTED_SYMBOLS: &[(char, char)] = &[
+        ('~', '`'),
+        ('!', '1'),
+        ('@', '2'),
+        ('#', '3'),
+        ('$', '4'),
+        ('%', '5'),
+        ('^', '6'),
+        ('&', '7'),
+        ('*', '8'),
+        ('(', '9'),
+        (')', '0'),
+        ('_', '-'),
+        ('+', '='),
+        ('{', '['),
+        ('}', ']'),
+        ('|', '\\'),
+        (':', ';'),
+        ('"', '\''),
+        ('<', ','),
+        ('>', '.'),
+        ('?', '/'),
+    ];
+    let mut chars = key.chars();
+    let only = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    SHIFTED_SYMBOLS
+        .iter()
+        .find(|(shifted, _)| *shifted == only)
+        .map(|(_, base)| *base)
 }
 
 /// User-facing rendering for named keys; single characters are uppercased.
@@ -232,6 +279,43 @@ mod tests {
         assert_eq!(
             format_keystroke_label("bogus-x", ShortcutPlatform::WindowsLinux),
             "bogus-x"
+        );
+    }
+
+    #[test]
+    fn dispatched_shifted_symbols_render_with_shift() {
+        // Bindings are stored in the form platforms dispatch (`ctrl-}` is
+        // what pressing Ctrl+Shift+] produces), but they must still be
+        // labeled the way they are pressed.
+        assert_eq!(
+            format_keystroke_label("secondary-}", ShortcutPlatform::WindowsLinux),
+            "Ctrl+Shift+]"
+        );
+        assert_eq!(
+            format_keystroke_label("cmd-}", ShortcutPlatform::MacOS),
+            "Cmd+Shift+]"
+        );
+        assert_eq!(
+            format_keystroke_label("secondary-{", ShortcutPlatform::WindowsLinux),
+            "Ctrl+Shift+["
+        );
+        assert_eq!(
+            format_keystroke_label("secondary-~", ShortcutPlatform::WindowsLinux),
+            "Ctrl+Shift+`"
+        );
+        assert_eq!(
+            format_keystroke_label("ctrl-alt-}", ShortcutPlatform::WindowsLinux),
+            "Ctrl+Alt+Shift+]"
+        );
+        // An explicit shift modifier with an unshifted key is unchanged.
+        assert_eq!(
+            format_keystroke_label("ctrl-shift-x", ShortcutPlatform::WindowsLinux),
+            "Ctrl+Shift+X"
+        );
+        // Letters that merely look like symbols are not rewritten.
+        assert_eq!(
+            format_keystroke_label("secondary-b", ShortcutPlatform::WindowsLinux),
+            "Ctrl+B"
         );
     }
 }

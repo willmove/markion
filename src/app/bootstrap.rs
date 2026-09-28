@@ -227,6 +227,25 @@ fn startup_shortcut_overrides() -> BTreeMap<String, String> {
     sanitized_shortcut_overrides(&preferences.shortcut_overrides)
 }
 
+/// Build one registry/override keybinding through the platform keyboard
+/// mapper. `KeyBinding::new` uses a dummy mapper, which leaves symbol
+/// shortcuts written in the conventional form (`ctrl-shift-]`) unmatchable:
+/// GPUI folds Shift into the shifted character on every platform, so
+/// Ctrl+Shift+] actually arrives as `ctrl-}`. The mapper normalizes the
+/// binding to that dispatched form while keeping letters, digits, and named
+/// keys untouched.
+fn registry_binding<A: gpui::Action>(cx: &App, keystroke: &str, action: A) -> KeyBinding {
+    KeyBinding::load(
+        keystroke,
+        Box::new(action),
+        None,
+        false,
+        None,
+        cx.keyboard_mapper().as_ref(),
+    )
+    .expect("registered shortcut must parse")
+}
+
 /// Bind the complete application keymap: fixed core-editing keys, fixed
 /// file-tree keys, and every registry action at its effective binding
 /// (override when present and valid, else default). Callers that rebind at
@@ -238,7 +257,7 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
             .effective_binding(overrides)
             .expect("factory-bound shortcut must resolve to a keystroke")
     };
-    cx.bind_keys([
+    let bindings = vec![
         KeyBinding::new("backspace", Backspace, None),
         KeyBinding::new("delete", Delete, None),
         KeyBinding::new("left", Left, None),
@@ -251,30 +270,30 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new("shift-down", SelectDown, None),
         // `secondary-` maps to `cmd` on macOS and `ctrl` on Windows/Linux,
         // so shortcuts match each platform's convention.
-        KeyBinding::new(eff(&menu_shortcuts::SELECT_ALL), SelectAll, None),
-        KeyBinding::new(eff(&menu_shortcuts::PASTE), Paste, None),
-        KeyBinding::new(eff(&menu_shortcuts::PASTE_PLAIN), PastePlainText, None),
-        KeyBinding::new(eff(&menu_shortcuts::COPY), Copy, None),
-        KeyBinding::new(eff(&menu_shortcuts::CUT), Cut, None),
-        KeyBinding::new(eff(&menu_shortcuts::UNDO), Undo, None),
-        KeyBinding::new(eff(&menu_shortcuts::REDO), Redo, None),
-        KeyBinding::new(eff(&menu_shortcuts::BOLD), Bold, None),
-        KeyBinding::new(eff(&menu_shortcuts::ITALIC), Italic, None),
-        KeyBinding::new(eff(&menu_shortcuts::INLINE_CODE), InlineCode, None),
-        KeyBinding::new(eff(&menu_shortcuts::INSERT_LINK), InsertLink, None),
-        KeyBinding::new(eff(&menu_shortcuts::INSERT_IMAGE), InsertImage, None),
-        KeyBinding::new(eff(&menu_shortcuts::PARAGRAPH), Paragraph, None),
-        KeyBinding::new(eff(&menu_shortcuts::HEADING_1), Heading1, None),
-        KeyBinding::new(eff(&menu_shortcuts::HEADING_2), Heading2, None),
-        KeyBinding::new(eff(&menu_shortcuts::HEADING_3), Heading3, None),
-        KeyBinding::new(eff(&menu_shortcuts::HEADING_4), Heading4, None),
-        KeyBinding::new(eff(&menu_shortcuts::HEADING_5), Heading5, None),
-        KeyBinding::new(eff(&menu_shortcuts::HEADING_6), Heading6, None),
-        KeyBinding::new(eff(&menu_shortcuts::UNORDERED_LIST), UnorderedList, None),
-        KeyBinding::new(eff(&menu_shortcuts::ORDERED_LIST), OrderedList, None),
-        KeyBinding::new(eff(&menu_shortcuts::TASK_LIST), TaskList, None),
-        KeyBinding::new(eff(&menu_shortcuts::BLOCK_QUOTE), BlockQuote, None),
-        KeyBinding::new(eff(&menu_shortcuts::CODE_FENCE), CodeFence, None),
+        registry_binding(cx, eff(&menu_shortcuts::SELECT_ALL), SelectAll),
+        registry_binding(cx, eff(&menu_shortcuts::PASTE), Paste),
+        registry_binding(cx, eff(&menu_shortcuts::PASTE_PLAIN), PastePlainText),
+        registry_binding(cx, eff(&menu_shortcuts::COPY), Copy),
+        registry_binding(cx, eff(&menu_shortcuts::CUT), Cut),
+        registry_binding(cx, eff(&menu_shortcuts::UNDO), Undo),
+        registry_binding(cx, eff(&menu_shortcuts::REDO), Redo),
+        registry_binding(cx, eff(&menu_shortcuts::BOLD), Bold),
+        registry_binding(cx, eff(&menu_shortcuts::ITALIC), Italic),
+        registry_binding(cx, eff(&menu_shortcuts::INLINE_CODE), InlineCode),
+        registry_binding(cx, eff(&menu_shortcuts::INSERT_LINK), InsertLink),
+        registry_binding(cx, eff(&menu_shortcuts::INSERT_IMAGE), InsertImage),
+        registry_binding(cx, eff(&menu_shortcuts::PARAGRAPH), Paragraph),
+        registry_binding(cx, eff(&menu_shortcuts::HEADING_1), Heading1),
+        registry_binding(cx, eff(&menu_shortcuts::HEADING_2), Heading2),
+        registry_binding(cx, eff(&menu_shortcuts::HEADING_3), Heading3),
+        registry_binding(cx, eff(&menu_shortcuts::HEADING_4), Heading4),
+        registry_binding(cx, eff(&menu_shortcuts::HEADING_5), Heading5),
+        registry_binding(cx, eff(&menu_shortcuts::HEADING_6), Heading6),
+        registry_binding(cx, eff(&menu_shortcuts::UNORDERED_LIST), UnorderedList),
+        registry_binding(cx, eff(&menu_shortcuts::ORDERED_LIST), OrderedList),
+        registry_binding(cx, eff(&menu_shortcuts::TASK_LIST), TaskList),
+        registry_binding(cx, eff(&menu_shortcuts::BLOCK_QUOTE), BlockQuote),
+        registry_binding(cx, eff(&menu_shortcuts::CODE_FENCE), CodeFence),
         KeyBinding::new("home", Home, None),
         KeyBinding::new("end", End, None),
         KeyBinding::new("enter", InsertNewline, None),
@@ -282,42 +301,38 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new("shift-f10", ShowVisualBlockContextMenu, None),
         KeyBinding::new("tab", Indent, None),
         KeyBinding::new("shift-tab", Outdent, None),
-        KeyBinding::new(eff(&menu_shortcuts::NEW_DOCUMENT), NewDocument, None),
-        KeyBinding::new(eff(&menu_shortcuts::OPEN_DOCUMENT), OpenDocument, None),
-        KeyBinding::new(eff(&menu_shortcuts::OPEN_FOLDER), OpenFolder, None),
-        KeyBinding::new(eff(&menu_shortcuts::SAVE_DOCUMENT), SaveDocument, None),
-        KeyBinding::new(eff(&menu_shortcuts::SAVE_DOCUMENT_AS), SaveDocumentAs, None),
-        KeyBinding::new(eff(&menu_shortcuts::EXPORT_HTML), ExportHtml, None),
-        KeyBinding::new(
-            eff(&menu_shortcuts::EXPORT_PLAIN_HTML),
-            ExportPlainHtml,
-            None,
-        ),
-        KeyBinding::new(eff(&menu_shortcuts::EXPORT_PDF), ExportPdf, None),
-        KeyBinding::new(eff(&menu_shortcuts::EXPORT_LATEX), ExportLatex, None),
-        KeyBinding::new(eff(&menu_shortcuts::EXPORT_DOCX), ExportDocx, None),
-        KeyBinding::new(eff(&menu_shortcuts::EXPORT_PNG), ExportPng, None),
-        KeyBinding::new(eff(&menu_shortcuts::EXPORT_JPEG), ExportJpeg, None),
-        KeyBinding::new(eff(&menu_shortcuts::TOGGLE_VIEW_MODE), ToggleViewMode, None),
-        KeyBinding::new(
+        registry_binding(cx, eff(&menu_shortcuts::NEW_DOCUMENT), NewDocument),
+        registry_binding(cx, eff(&menu_shortcuts::OPEN_DOCUMENT), OpenDocument),
+        registry_binding(cx, eff(&menu_shortcuts::OPEN_FOLDER), OpenFolder),
+        registry_binding(cx, eff(&menu_shortcuts::SAVE_DOCUMENT), SaveDocument),
+        registry_binding(cx, eff(&menu_shortcuts::SAVE_DOCUMENT_AS), SaveDocumentAs),
+        registry_binding(cx, eff(&menu_shortcuts::EXPORT_HTML), ExportHtml),
+        registry_binding(cx, eff(&menu_shortcuts::EXPORT_PLAIN_HTML), ExportPlainHtml),
+        registry_binding(cx, eff(&menu_shortcuts::EXPORT_PDF), ExportPdf),
+        registry_binding(cx, eff(&menu_shortcuts::EXPORT_LATEX), ExportLatex),
+        registry_binding(cx, eff(&menu_shortcuts::EXPORT_DOCX), ExportDocx),
+        registry_binding(cx, eff(&menu_shortcuts::EXPORT_PNG), ExportPng),
+        registry_binding(cx, eff(&menu_shortcuts::EXPORT_JPEG), ExportJpeg),
+        registry_binding(cx, eff(&menu_shortcuts::TOGGLE_VIEW_MODE), ToggleViewMode),
+        registry_binding(
+            cx,
             eff(&menu_shortcuts::SOURCE_SPLIT_MODE),
             ToggleSourceSplitMode,
-            None,
         ),
-        KeyBinding::new(
+        registry_binding(
+            cx,
             eff(&menu_shortcuts::SET_VISUAL_EDIT_MODE),
             SetVisualEditMode,
-            None,
         ),
-        KeyBinding::new(eff(&menu_shortcuts::SET_READ_MODE), SetReadMode, None),
+        registry_binding(cx, eff(&menu_shortcuts::SET_READ_MODE), SetReadMode),
         // NB: no `secondary-b` for the sidebar — that collides with Bold.
         // Use Ctrl/Cmd+Shift+B instead.
-        KeyBinding::new(eff(&menu_shortcuts::TOGGLE_SIDEBAR), ToggleSidebar, None),
-        KeyBinding::new(eff(&menu_shortcuts::TOGGLE_FILE_TREE), ToggleFileTree, None),
-        KeyBinding::new(
+        registry_binding(cx, eff(&menu_shortcuts::TOGGLE_SIDEBAR), ToggleSidebar),
+        registry_binding(cx, eff(&menu_shortcuts::TOGGLE_FILE_TREE), ToggleFileTree),
+        registry_binding(
+            cx,
             eff(&menu_shortcuts::FOCUS_FILE_TREE_SEARCH),
             FocusFileTreeSearch,
-            None,
         ),
         KeyBinding::new("escape", ClearFileTreeSearch, None),
         KeyBinding::new("f5", RefreshFileTree, None),
@@ -325,89 +340,78 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new("secondary-alt-shift-n", CreateTreeFolder, None),
         KeyBinding::new("f2", RenameTreeEntry, None),
         KeyBinding::new("secondary-delete", DeleteTreeEntry, None),
-        KeyBinding::new(eff(&menu_shortcuts::TOGGLE_OUTLINE), ToggleOutline, None),
-        KeyBinding::new(eff(&menu_shortcuts::CYCLE_THEME), CycleTheme, None),
-        KeyBinding::new(
-            eff(&menu_shortcuts::TOGGLE_FOCUS_MODE),
-            ToggleFocusMode,
-            None,
-        ),
-        KeyBinding::new(
+        registry_binding(cx, eff(&menu_shortcuts::TOGGLE_OUTLINE), ToggleOutline),
+        registry_binding(cx, eff(&menu_shortcuts::CYCLE_THEME), CycleTheme),
+        registry_binding(cx, eff(&menu_shortcuts::TOGGLE_FOCUS_MODE), ToggleFocusMode),
+        registry_binding(
+            cx,
             eff(&menu_shortcuts::TOGGLE_TYPEWRITER_MODE),
             ToggleTypewriterMode,
-            None,
         ),
-        KeyBinding::new(
+        registry_binding(
+            cx,
             eff(&menu_shortcuts::TOGGLE_CODE_LINE_NUMBERS),
             ToggleCodeLineNumbers,
-            None,
         ),
-        KeyBinding::new(eff(&menu_shortcuts::FORMAT_TABLE), FormatTable, None),
-        KeyBinding::new(eff(&menu_shortcuts::TABLE_ADD_ROW), TableAddRow, None),
-        KeyBinding::new(eff(&menu_shortcuts::TABLE_DELETE_ROW), TableDeleteRow, None),
-        KeyBinding::new(
-            eff(&menu_shortcuts::TABLE_MOVE_ROW_UP),
-            TableMoveRowUp,
-            None,
-        ),
-        KeyBinding::new(
+        registry_binding(cx, eff(&menu_shortcuts::FORMAT_TABLE), FormatTable),
+        registry_binding(cx, eff(&menu_shortcuts::TABLE_ADD_ROW), TableAddRow),
+        registry_binding(cx, eff(&menu_shortcuts::TABLE_DELETE_ROW), TableDeleteRow),
+        registry_binding(cx, eff(&menu_shortcuts::TABLE_MOVE_ROW_UP), TableMoveRowUp),
+        registry_binding(
+            cx,
             eff(&menu_shortcuts::TABLE_MOVE_ROW_DOWN),
             TableMoveRowDown,
-            None,
         ),
-        KeyBinding::new(eff(&menu_shortcuts::TABLE_ADD_COLUMN), TableAddColumn, None),
-        KeyBinding::new(
+        registry_binding(cx, eff(&menu_shortcuts::TABLE_ADD_COLUMN), TableAddColumn),
+        registry_binding(
+            cx,
             eff(&menu_shortcuts::TABLE_DELETE_COLUMN),
             TableDeleteColumn,
-            None,
         ),
-        KeyBinding::new(eff(&menu_shortcuts::SHOW_FIND), ShowFind, None),
-        KeyBinding::new(eff(&menu_shortcuts::SHOW_REPLACE), ShowReplace, None),
-        KeyBinding::new(eff(&menu_shortcuts::FIND_NEXT), FindNext, None),
-        KeyBinding::new(eff(&menu_shortcuts::FIND_PREVIOUS), FindPrevious, None),
-        KeyBinding::new(
-            eff(&menu_shortcuts::SHOW_PREFERENCES),
-            ShowPreferences,
-            None,
-        ),
-        KeyBinding::new(
+        registry_binding(cx, eff(&menu_shortcuts::SHOW_FIND), ShowFind),
+        registry_binding(cx, eff(&menu_shortcuts::SHOW_REPLACE), ShowReplace),
+        registry_binding(cx, eff(&menu_shortcuts::FIND_NEXT), FindNext),
+        registry_binding(cx, eff(&menu_shortcuts::FIND_PREVIOUS), FindPrevious),
+        registry_binding(cx, eff(&menu_shortcuts::SHOW_PREFERENCES), ShowPreferences),
+        registry_binding(
+            cx,
             eff(&menu_shortcuts::SHOW_MARKDOWN_REFERENCE),
             ShowMarkdownReference,
-            None,
         ),
-        KeyBinding::new(eff(&menu_shortcuts::QUIT), Quit, None),
-        KeyBinding::new(eff(&menu_shortcuts::NEXT_TAB), NextTab, None),
-        KeyBinding::new(eff(&menu_shortcuts::PREV_TAB), PrevTab, None),
-        KeyBinding::new(eff(&menu_shortcuts::NEW_TAB), NewTab, None),
-        KeyBinding::new(eff(&menu_shortcuts::OPEN_IN_NEW_TAB), OpenInNewTab, None),
-        KeyBinding::new(eff(&menu_shortcuts::CLOSE_TAB), CloseTab, None),
+        registry_binding(cx, eff(&menu_shortcuts::QUIT), Quit),
+        registry_binding(cx, eff(&menu_shortcuts::NEXT_TAB), NextTab),
+        registry_binding(cx, eff(&menu_shortcuts::PREV_TAB), PrevTab),
+        registry_binding(cx, eff(&menu_shortcuts::NEW_TAB), NewTab),
+        registry_binding(cx, eff(&menu_shortcuts::OPEN_IN_NEW_TAB), OpenInNewTab),
+        registry_binding(cx, eff(&menu_shortcuts::CLOSE_TAB), CloseTab),
         // Developer diagnostic — not listed in menus or the shortcut reference.
         KeyBinding::new("ctrl-shift-alt-m", ReportMemory, None),
-    ]);
+    ];
+    cx.bind_keys(bindings);
     // Factory-unbound: install only when the user has assigned an override.
     if let Some(binding) = menu_shortcuts::SHOW_GIT_SYNC.effective_binding(overrides) {
-        cx.bind_keys([KeyBinding::new(binding, ShowGitSync, None)]);
+        cx.bind_keys([registry_binding(cx, binding, ShowGitSync)]);
     }
     if let Some(binding) = menu_shortcuts::SYNC_NOW.effective_binding(overrides) {
-        cx.bind_keys([KeyBinding::new(binding, SyncNow, None)]);
+        cx.bind_keys([registry_binding(cx, binding, SyncNow)]);
     }
     if let Some(binding) = menu_shortcuts::COMMIT_LOCALLY.effective_binding(overrides) {
-        cx.bind_keys([KeyBinding::new(binding, CommitLocally, None)]);
+        cx.bind_keys([registry_binding(cx, binding, CommitLocally)]);
     }
     if let Some(binding) = menu_shortcuts::CHECK_REMOTE.effective_binding(overrides) {
-        cx.bind_keys([KeyBinding::new(binding, CheckRemote, None)]);
+        cx.bind_keys([registry_binding(cx, binding, CheckRemote)]);
     }
     if let Some(binding) = menu_shortcuts::PULL_UPDATES.effective_binding(overrides) {
-        cx.bind_keys([KeyBinding::new(binding, PullUpdates, None)]);
+        cx.bind_keys([registry_binding(cx, binding, PullUpdates)]);
     }
     if let Some(binding) = menu_shortcuts::PUSH_COMMITS.effective_binding(overrides) {
-        cx.bind_keys([KeyBinding::new(binding, PushCommits, None)]);
+        cx.bind_keys([registry_binding(cx, binding, PushCommits)]);
     }
     if let Some(binding) = menu_shortcuts::RESOLVE_GIT_CONFLICT.effective_binding(overrides) {
-        cx.bind_keys([KeyBinding::new(binding, ResolveGitConflict, None)]);
+        cx.bind_keys([registry_binding(cx, binding, ResolveGitConflict)]);
     }
     if let Some(binding) = menu_shortcuts::SHOW_SHORTCUTS.effective_binding(overrides) {
-        cx.bind_keys([KeyBinding::new(binding, ShowShortcuts, None)]);
+        cx.bind_keys([registry_binding(cx, binding, ShowShortcuts)]);
     }
 }
 
