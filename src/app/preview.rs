@@ -6285,47 +6285,28 @@ fn visual_collapsible_source_block(
         })
 }
 
-type TableToolbarAction = (&'static str, TableEdit, Msg);
-
-const VISUAL_TABLE_TOOLBAR_ACTIONS: [TableToolbarAction; 6] = [
-    ("+Row", TableEdit::AddRow, Msg::StatusFmtAddRow),
-    ("-Row", TableEdit::DeleteRow, Msg::StatusFmtDeleteRow),
-    ("Up", TableEdit::MoveRowUp, Msg::StatusFmtMoveRowUp),
-    ("Down", TableEdit::MoveRowDown, Msg::StatusFmtMoveRowDown),
-    ("+Col", TableEdit::AddColumn, Msg::StatusFmtAddColumn),
-    ("-Col", TableEdit::DeleteColumn, Msg::StatusFmtDeleteColumn),
-];
-
-pub(super) fn table_toolbar_actions_for_view_mode(
-    view_mode: ViewMode,
-) -> &'static [TableToolbarAction] {
-    if matches!(view_mode, ViewMode::VisualEdit) {
-        &VISUAL_TABLE_TOOLBAR_ACTIONS
-    } else {
-        &[]
-    }
+/// Row or column of a Visual Edit table addressed by an overlay handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VisualTableAxis {
+    Row(usize),
+    Column(usize),
 }
 
-pub(super) const VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_X_PX: f32 = 6.;
-pub(super) const VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_Y_PX: f32 = 2.;
-pub(super) const VISUAL_TABLE_TOOLBAR_BUTTON_FONT_SIZE_PX: f32 = 10.;
-
+/// A row/column captured when its handle, menu, or edge strip was rendered.
+/// Actions revalidate it against the live document before mutating, so a
+/// target from an older version, another table, or a reshaped table is inert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct VisualTableToolbarTarget {
+pub(super) struct VisualTableAxisTarget {
     pub(super) document_version: u64,
     pub(super) block_id: VisualBlockId,
-    pub(super) row: usize,
-    pub(super) column: usize,
-    pub(super) source_offset: usize,
+    pub(super) axis: VisualTableAxis,
     pub(super) row_count: usize,
     pub(super) column_count: usize,
 }
 
-pub(super) fn visual_table_toolbar_target(
-    document_version: u64,
-    block: &VisualBlock,
-    cursor_offset: usize,
-) -> Option<VisualTableToolbarTarget> {
+/// Row count, column count, and a byte offset inside the pipe table of an
+/// editable Visual Edit table block.
+fn visual_table_shape(block: &VisualBlock) -> Option<(usize, usize, usize)> {
     let VisualBlockKind::Table { rows, .. } = &block.kind else {
         return None;
     };
@@ -6334,84 +6315,193 @@ pub(super) fn visual_table_toolbar_target(
     };
     let row_count = rows.len();
     let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
-    if row_count == 0 || column_count == 0 {
-        return None;
-    }
-
-    let cell = cells.iter().find(|cell| {
-        let range = &cell.field.source_range;
-        cursor_offset >= range.start && cursor_offset <= range.end
-    })?;
-    if cell.row >= row_count || cell.column >= column_count {
-        return None;
-    }
-
-    Some(VisualTableToolbarTarget {
-        document_version,
-        block_id: block.id,
-        row: cell.row,
-        column: cell.column,
-        source_offset: cell.field.source_range.start,
-        row_count,
-        column_count,
-    })
+    let offset = cells.first()?.field.source_range.start;
+    (row_count > 0 && column_count > 0).then_some((row_count, column_count, offset))
 }
 
-pub(super) fn table_toolbar_action_available(
-    target: VisualTableToolbarTarget,
-    edit: TableEdit,
-) -> bool {
-    match edit {
-        TableEdit::Format | TableEdit::AddRow | TableEdit::AddColumn => true,
-        TableEdit::DeleteRow => target.row > 0,
-        TableEdit::MoveRowUp => target.row > 1,
-        TableEdit::MoveRowDown => target.row > 0 && target.row + 1 < target.row_count,
-        TableEdit::DeleteColumn => target.column_count > 1,
+impl VisualTableAxisTarget {
+    pub(super) fn for_block(
+        document_version: u64,
+        block: &VisualBlock,
+        axis: VisualTableAxis,
+    ) -> Option<Self> {
+        let (row_count, column_count, _) = visual_table_shape(block)?;
+        let in_range = match axis {
+            VisualTableAxis::Row(row) => row < row_count,
+            VisualTableAxis::Column(column) => column < column_count,
+        };
+        in_range.then_some(Self {
+            document_version,
+            block_id: block.id,
+            axis,
+            row_count,
+            column_count,
+        })
     }
 }
 
-pub(super) fn revalidate_visual_table_toolbar_target(
-    target: VisualTableToolbarTarget,
-    edit: TableEdit,
+/// Returns a byte offset inside the target's pipe table when the target still
+/// names the same table, at the same version, with the same shape.
+pub(super) fn revalidate_visual_table_axis_target(
+    target: VisualTableAxisTarget,
     document_version: u64,
-    cursor_offset: usize,
     blocks: &[VisualBlock],
 ) -> Option<usize> {
     if target.document_version != document_version {
         return None;
     }
     let block = blocks.iter().find(|block| block.id == target.block_id)?;
-    let current = visual_table_toolbar_target(document_version, block, cursor_offset)?;
-    (current == target && table_toolbar_action_available(current, edit))
-        .then_some(current.source_offset)
+    let (row_count, column_count, offset) = visual_table_shape(block)?;
+    (row_count == target.row_count && column_count == target.column_count).then_some(offset)
 }
 
-pub(super) fn visual_table_toolbar_is_visible(
-    hover_ready: Option<VisualBlockId>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VisualTableMenuItem {
+    InsertBefore,
+    InsertAfter,
+    MoveBefore,
+    MoveAfter,
+    Align(TableAlignment),
+    Duplicate,
+    Clear,
+    Delete,
+}
+
+const VISUAL_TABLE_ROW_MENU_ITEMS: [VisualTableMenuItem; 7] = [
+    VisualTableMenuItem::InsertBefore,
+    VisualTableMenuItem::InsertAfter,
+    VisualTableMenuItem::MoveBefore,
+    VisualTableMenuItem::MoveAfter,
+    VisualTableMenuItem::Duplicate,
+    VisualTableMenuItem::Clear,
+    VisualTableMenuItem::Delete,
+];
+
+const VISUAL_TABLE_COLUMN_MENU_ITEMS: [VisualTableMenuItem; 10] = [
+    VisualTableMenuItem::InsertBefore,
+    VisualTableMenuItem::InsertAfter,
+    VisualTableMenuItem::MoveBefore,
+    VisualTableMenuItem::MoveAfter,
+    VisualTableMenuItem::Align(TableAlignment::Left),
+    VisualTableMenuItem::Align(TableAlignment::Center),
+    VisualTableMenuItem::Align(TableAlignment::Right),
+    VisualTableMenuItem::Duplicate,
+    VisualTableMenuItem::Clear,
+    VisualTableMenuItem::Delete,
+];
+
+pub(super) fn visual_table_menu_items(axis: VisualTableAxis) -> &'static [VisualTableMenuItem] {
+    match axis {
+        VisualTableAxis::Row(_) => &VISUAL_TABLE_ROW_MENU_ITEMS,
+        VisualTableAxis::Column(_) => &VISUAL_TABLE_COLUMN_MENU_ITEMS,
+    }
+}
+
+/// The structural edit a menu item performs on `target`, or `None` when the
+/// item is disabled there (header-row guards, table edges, a lone column).
+/// `alignment` is the targeted column's current alignment; choosing it again
+/// resets the column to the default alignment.
+pub(super) fn visual_table_menu_item_edit(
+    target: VisualTableAxisTarget,
+    item: VisualTableMenuItem,
+    alignment: TableAlignment,
+) -> Option<TableStructureEdit> {
+    use VisualTableMenuItem as Item;
+    match target.axis {
+        VisualTableAxis::Row(row) => {
+            let body = row >= 1;
+            match item {
+                Item::InsertBefore => body.then_some(TableStructureEdit::InsertRow { at: row }),
+                Item::InsertAfter => Some(TableStructureEdit::InsertRow { at: row + 1 }),
+                Item::MoveBefore => (row >= 2).then(|| TableStructureEdit::MoveRow {
+                    from: row,
+                    to: row - 1,
+                }),
+                Item::MoveAfter => {
+                    (body && row + 1 < target.row_count).then(|| TableStructureEdit::MoveRow {
+                        from: row,
+                        to: row + 1,
+                    })
+                }
+                Item::Duplicate => body.then_some(TableStructureEdit::DuplicateRow(row)),
+                Item::Clear => Some(TableStructureEdit::ClearRow(row)),
+                Item::Delete => body.then_some(TableStructureEdit::DeleteRow(row)),
+                Item::Align(_) => None,
+            }
+        }
+        VisualTableAxis::Column(column) => match item {
+            Item::InsertBefore => Some(TableStructureEdit::InsertColumn { at: column }),
+            Item::InsertAfter => Some(TableStructureEdit::InsertColumn { at: column + 1 }),
+            Item::MoveBefore => (column >= 1).then(|| TableStructureEdit::MoveColumn {
+                from: column,
+                to: column - 1,
+            }),
+            Item::MoveAfter => {
+                (column + 1 < target.column_count).then(|| TableStructureEdit::MoveColumn {
+                    from: column,
+                    to: column + 1,
+                })
+            }
+            Item::Align(requested) => Some(TableStructureEdit::AlignColumn {
+                column,
+                alignment: if requested == alignment {
+                    TableAlignment::Default
+                } else {
+                    requested
+                },
+            }),
+            Item::Duplicate => Some(TableStructureEdit::DuplicateColumn(column)),
+            Item::Clear => Some(TableStructureEdit::ClearColumn(column)),
+            Item::Delete => {
+                (target.column_count > 1).then_some(TableStructureEdit::DeleteColumn(column))
+            }
+        },
+    }
+}
+
+/// Drag payload of a Visual Edit table body-row handle.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DraggedTableRow {
+    pub(super) target: VisualTableAxisTarget,
+}
+
+/// Drag payload of a Visual Edit table column handle.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DraggedTableColumn {
+    pub(super) target: VisualTableAxisTarget,
+}
+
+/// The move a drop performs, or `None` for self-drops, header rows, drags
+/// from another table, and mismatched axes.
+pub(super) fn visual_table_drop_edit(
+    dragged: VisualTableAxisTarget,
     block_id: VisualBlockId,
-    has_caret_target: bool,
-) -> bool {
-    hover_ready == Some(block_id) || has_caret_target
+    drop_axis: VisualTableAxis,
+) -> Option<TableStructureEdit> {
+    if dragged.block_id != block_id {
+        return None;
+    }
+    match (dragged.axis, drop_axis) {
+        (VisualTableAxis::Row(from), VisualTableAxis::Row(to))
+            if from >= 1 && to >= 1 && from != to =>
+        {
+            Some(TableStructureEdit::MoveRow { from, to })
+        }
+        (VisualTableAxis::Column(from), VisualTableAxis::Column(to)) if from != to => {
+            Some(TableStructureEdit::MoveColumn { from, to })
+        }
+        _ => None,
+    }
 }
 
-pub(super) fn visual_table_delete_available(
-    blocks: &[VisualBlock],
-    block_id: VisualBlockId,
-) -> bool {
-    blocks
-        .iter()
-        .position(|block| block.id == block_id)
-        .is_some_and(|index| block_can_reorder_at(blocks, index))
-}
-
-pub(super) fn revalidate_visual_table_delete_target(
-    target: BlockTarget,
-    document_version: u64,
-    blocks: &[VisualBlock],
-) -> Option<BlockTarget> {
-    let (index, _) = validate_block_target(document_version, blocks, &target).ok()?;
-    block_can_reorder_at(blocks, index).then_some(target)
-}
+/// Side of the padding-embedded row grip / top-padding column grip.
+const VISUAL_TABLE_GRIP_THICKNESS_PX: f32 = 8.;
+const VISUAL_TABLE_GRIP_LENGTH_PX: f32 = 18.;
+/// Reserved gutter below / right of a Visual Edit table holding the edge add
+/// strips. Reserved permanently so hovering never changes layout.
+const VISUAL_TABLE_EDGE_GUTTER_PX: f32 = 12.;
+const VISUAL_TABLE_EDGE_STRIP_PX: f32 = 10.;
+const VISUAL_TABLE_DROP_TARGET_BG: u32 = 0xdbeafe;
 
 /// Flex recipe matching `.flex_1().min_w_0()` with a content-based grow weight.
 /// GPUI's public `flex_grow()` helper only sets `1.0`, so the weight is applied
@@ -6463,97 +6553,33 @@ pub(super) fn visual_table_view(
     let column_weights = preview_table_column_weights(rows, &typography, authored.as_deref());
     let block_id = block.id;
     let document_version = app.active_tab().document.version();
-    let toolbar_target =
-        visual_table_toolbar_target(document_version, block, app.active_tab().cursor_offset());
-    let show_toolbar = visual_table_toolbar_is_visible(
-        app.active_tab().visual_table_toolbar_hover_ready,
-        block_id,
-        toolbar_target.is_some(),
-    );
-    let delete_target = BlockTarget::from_block(document_version, block);
-    let delete_enabled =
-        visual_table_delete_available(&app.active_tab().document.visual_blocks_shared(), block_id);
     let cells = match block.editor.as_ref() {
         Some(VisualBlockEditor::Table { cells }) => Some(cells),
         _ => None,
     };
-    div()
-        .id(ElementId::from(("visual-table", block_id.as_u64())))
+    let row_count = rows.len();
+    let axis_target =
+        |axis| VisualTableAxisTarget::for_block(document_version, block, axis).filter(|_| cells.is_some());
+    let hovered_cell = app
+        .active_tab()
+        .hovered_visual_table_cell
+        .filter(|(id, _, _)| *id == block_id)
+        .map(|(_, row, column)| (row, column));
+    let menu_axis = app
+        .visual_table_menu
+        .as_ref()
+        .filter(|menu| menu.target.block_id == block_id)
+        .map(|menu| menu.target.axis);
+    let table_hovered = app.active_tab().hovered_visual_table_block == Some(block_id);
+    let append_row = axis_target(VisualTableAxis::Row(row_count.saturating_sub(1)));
+    let append_column = axis_target(VisualTableAxis::Column(column_count.saturating_sub(1)));
+
+    let grid = div()
         .debug_selector(move || format!("visual-table-chrome-{block_index}"))
-        .mb_3()
         .border_1()
         .border_color(rgb(0xcbd5e1))
         .rounded_md()
         .overflow_hidden()
-        .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
-            let changed = {
-                let tab = app.active_tab();
-                if *hovered {
-                    tab.hovered_visual_table_block != Some(block_id)
-                } else {
-                    tab.hovered_visual_table_block == Some(block_id)
-                }
-            };
-            if !changed {
-                return;
-            }
-            {
-                let tab = app.active_tab_mut();
-                tab.hovered_visual_table_block = hovered.then_some(block_id);
-                // Invalidate any dwell/hide-delay timer armed by an older
-                // transition before arming the new one below.
-                tab.visual_table_hover_generation =
-                    tab.visual_table_hover_generation.wrapping_add(1);
-            }
-            if *hovered {
-                // Re-entry while the header is still hover-ready needs no
-                // dwell: bumping the generation above already cancelled the
-                // pending hide timer.
-                if app.active_tab().visual_table_toolbar_hover_ready != Some(block_id) {
-                    app.arm_visual_table_hover_dwell(block_id, cx);
-                }
-            } else if app.active_tab().visual_table_toolbar_hover_ready == Some(block_id) {
-                app.arm_visual_table_hide_delay(block_id, cx);
-            }
-            cx.notify();
-        }))
-        .on_drag_move::<DraggedTableColumnHandle>(
-            cx.listener(MarkionApp::on_visual_table_column_drag_move),
-        )
-        .when(show_toolbar, |table| {
-            table.child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .flex()
-                    .gap_1()
-                    .items_center()
-                    .bg(rgb(0xf8fafc))
-                    .border_b_1()
-                    .border_color(rgb(0xe2e8f0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(11.))
-                            .text_color(rgb(0x64748b))
-                            .child(app.tr(Msg::LabelTable)),
-                    )
-                    .children(
-                        table_toolbar_actions_for_view_mode(ViewMode::VisualEdit)
-                            .iter()
-                            .map(|&(label, edit, status)| {
-                                let target = toolbar_target
-                                    .filter(|target| table_toolbar_action_available(*target, edit));
-                                preview_table_button(label, edit, status, target, cx)
-                            }),
-                    )
-                    .child(preview_table_delete_button(
-                        app.tr(Msg::VisualTableDeleteTable),
-                        delete_enabled.then(|| delete_target.clone()),
-                        cx,
-                    )),
-            )
-        })
         .children(rows.iter().enumerate().map(|(row_index, row)| {
             let background = if row_index == 0 {
                 rgb(0xf1f5f9)
@@ -6561,15 +6587,42 @@ pub(super) fn visual_table_view(
                 rgb(0xffffff)
             };
             let is_last_row = row_index + 1 == rows.len();
+            let row_drop = VisualTableAxis::Row(row_index);
+            let row_grip = axis_target(row_drop).filter(|_| {
+                hovered_cell.is_some_and(|(row, _)| row == row_index) || menu_axis == Some(row_drop)
+            });
             div()
                 .flex()
                 .bg(background)
                 .when(!is_last_row, |style| {
                     style.border_b_1().border_color(rgb(0xe2e8f0))
                 })
+                .when(cells.is_some() && row_index >= 1, |row| {
+                    row.drag_over::<DraggedTableRow>(move |style, dragged, _, _| {
+                        if visual_table_drop_edit(dragged.target, block_id, row_drop).is_some() {
+                            style.bg(rgb(VISUAL_TABLE_DROP_TARGET_BG))
+                        } else {
+                            style
+                        }
+                    })
+                    .on_drop::<DraggedTableRow>(cx.listener(
+                        move |app, dragged: &DraggedTableRow, _, cx| {
+                            app.drop_visual_table_axis(dragged.target, block_id, row_drop, cx);
+                        },
+                    ))
+                })
                 .children(row.iter().enumerate().map(|(cell_index, cell)| {
                     let is_last_cell = cell_index + 1 == row.len();
                     let offset = table_offset;
+                    let cell_key = (block.id.as_u64() << 24)
+                        | ((row_index as u64) << 12)
+                        | cell_index as u64;
+                    let column_drop = VisualTableAxis::Column(cell_index);
+                    let column_grip = axis_target(column_drop).filter(|_| {
+                        row_index == 0
+                            && (hovered_cell.is_some_and(|(_, column)| column == cell_index)
+                                || menu_axis == Some(column_drop))
+                    });
                     let field = cells.and_then(|cells| {
                         cells
                             .iter()
@@ -6577,6 +6630,7 @@ pub(super) fn visual_table_view(
                             .map(|cell| &cell.field)
                     });
                     preview_table_cell_flex(column_weights.get(cell_index).copied().unwrap_or(1.0))
+                        .id(ElementId::from(("visual-table-cell-chrome", cell_key)))
                         .relative()
                         .p_2()
                         .when(!is_last_cell, |style| {
@@ -6590,17 +6644,41 @@ pub(super) fn visual_table_view(
                                 cx.listener(move |app, _, _, cx| app.move_to(offset, cx)),
                             )
                         })
+                        .when(cells.is_some(), |view| {
+                            view.on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+                                let key = (block_id, row_index, cell_index);
+                                let tab = app.active_tab_mut();
+                                if *hovered {
+                                    if tab.hovered_visual_table_cell != Some(key) {
+                                        tab.hovered_visual_table_cell = Some(key);
+                                        cx.notify();
+                                    }
+                                } else if tab.hovered_visual_table_cell == Some(key) {
+                                    tab.hovered_visual_table_cell = None;
+                                    cx.notify();
+                                }
+                            }))
+                            .drag_over::<DraggedTableColumn>(move |style, dragged, _, _| {
+                                if visual_table_drop_edit(dragged.target, block_id, column_drop)
+                                    .is_some()
+                                {
+                                    style.bg(rgb(VISUAL_TABLE_DROP_TARGET_BG))
+                                } else {
+                                    style
+                                }
+                            })
+                            .on_drop::<DraggedTableColumn>(cx.listener(
+                                move |app, dragged: &DraggedTableColumn, _, cx| {
+                                    app.drop_visual_table_axis(dragged.target, block_id, column_drop, cx);
+                                },
+                            ))
+                        })
                         .child(if let Some(field) = field {
                             visual_editor_field_element(
                                 app,
                                 block_index,
                                 field,
-                                ElementId::from((
-                                    "visual-table-cell",
-                                    (block.id.as_u64() << 24)
-                                        | ((row_index as u64) << 12)
-                                        | cell_index as u64,
-                                )),
+                                ElementId::from(("visual-table-cell", cell_key)),
                                 None,
                                 Some(cell),
                                 cx,
@@ -6608,12 +6686,7 @@ pub(super) fn visual_table_view(
                         } else {
                             rich_text_element(
                                 app,
-                                ElementId::from((
-                                    "visual-table-cell-readonly",
-                                    (block.id.as_u64() << 24)
-                                        | ((row_index as u64) << 12)
-                                        | cell_index as u64,
-                                )),
+                                ElementId::from(("visual-table-cell-readonly", cell_key)),
                                 cell,
                                 block_index,
                                 PreviewTextRunId::TableCell {
@@ -6627,6 +6700,22 @@ pub(super) fn visual_table_view(
                                 cx,
                             )
                         })
+                        .when_some(row_grip.filter(|_| cell_index == 0), |cell_view, target| {
+                            cell_view.child(visual_table_grip(
+                                target,
+                                menu_axis == Some(target.axis),
+                                format!("visual-table-row-grip-{block_index}-{row_index}"),
+                                cx,
+                            ))
+                        })
+                        .when_some(column_grip, |cell_view, target| {
+                            cell_view.child(visual_table_grip(
+                                target,
+                                menu_axis == Some(target.axis),
+                                format!("visual-table-column-grip-{block_index}-{cell_index}"),
+                                cx,
+                            ))
+                        })
                         .when(
                             cells.is_some() && !is_last_cell && column_count >= 2,
                             |cell_view| {
@@ -6638,12 +6727,7 @@ pub(super) fn visual_table_view(
                                 };
                                 cell_view.child(
                                     div()
-                                        .id(ElementId::from((
-                                            "visual-table-col-handle",
-                                            (block_id.as_u64() << 24)
-                                                | ((row_index as u64) << 12)
-                                                | cell_index as u64,
-                                        )))
+                                        .id(ElementId::from(("visual-table-col-handle", cell_key)))
                                         .debug_selector(move || {
                                             format!(
                                                 "visual-table-col-handle-{block_index}-{cell_index}"
@@ -6661,6 +6745,202 @@ pub(super) fn visual_table_view(
                             },
                         )
                 }))
+        }));
+
+    // The gutter below and to the right is always reserved (the right one is
+    // pulled back into the pane padding by an equal negative margin), so the
+    // edge strips appear inside the table's own hover area without moving
+    // anything.
+    div()
+        .id(ElementId::from(("visual-table", block_id.as_u64())))
+        .relative()
+        .pb(px(VISUAL_TABLE_EDGE_GUTTER_PX))
+        .pr(px(VISUAL_TABLE_EDGE_GUTTER_PX))
+        .mr(px(-VISUAL_TABLE_EDGE_GUTTER_PX))
+        .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+            let tab = app.active_tab_mut();
+            let mut changed = false;
+            if *hovered {
+                changed |= tab.hovered_visual_table_block != Some(block_id);
+                tab.hovered_visual_table_block = Some(block_id);
+            } else {
+                if tab.hovered_visual_table_block == Some(block_id) {
+                    tab.hovered_visual_table_block = None;
+                    changed = true;
+                }
+                if tab
+                    .hovered_visual_table_cell
+                    .is_some_and(|(id, _, _)| id == block_id)
+                {
+                    tab.hovered_visual_table_cell = None;
+                    changed = true;
+                }
+            }
+            if changed {
+                cx.notify();
+            }
+        }))
+        .on_drag_move::<DraggedTableColumnHandle>(
+            cx.listener(MarkionApp::on_visual_table_column_drag_move),
+        )
+        .child(grid)
+        .when(table_hovered, |table| {
+            table
+                .when_some(append_row, |table, target| {
+                    table.child(
+                        visual_table_edge_strip(
+                            ElementId::from(("visual-table-add-row", block_id.as_u64())),
+                            format!("visual-table-add-row-{block_index}"),
+                            target,
+                            TableStructureEdit::InsertRow {
+                                at: target.row_count,
+                            },
+                            cx,
+                        )
+                        .left_0()
+                        .right(px(VISUAL_TABLE_EDGE_GUTTER_PX))
+                        .bottom(px(
+                            VISUAL_TABLE_EDGE_GUTTER_PX - VISUAL_TABLE_EDGE_STRIP_PX - 1.
+                        ))
+                        .h(px(VISUAL_TABLE_EDGE_STRIP_PX)),
+                    )
+                })
+                .when_some(append_column, |table, target| {
+                    table.child(
+                        visual_table_edge_strip(
+                            ElementId::from(("visual-table-add-column", block_id.as_u64())),
+                            format!("visual-table-add-column-{block_index}"),
+                            target,
+                            TableStructureEdit::InsertColumn {
+                                at: target.column_count,
+                            },
+                            cx,
+                        )
+                        .top_0()
+                        .bottom(px(VISUAL_TABLE_EDGE_GUTTER_PX))
+                        .right(px(
+                            VISUAL_TABLE_EDGE_GUTTER_PX - VISUAL_TABLE_EDGE_STRIP_PX - 1.
+                        ))
+                        .w(px(VISUAL_TABLE_EDGE_STRIP_PX)),
+                    )
+                })
+        })
+}
+
+/// Row grip (in the first cell's left padding) or column grip (in the header
+/// cell's top padding). Click opens the row/column menu; dragging a body-row
+/// or column grip reorders it.
+fn visual_table_grip(
+    target: VisualTableAxisTarget,
+    menu_open: bool,
+    selector: String,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    let is_row = matches!(target.axis, VisualTableAxis::Row(_));
+    let (axis_kind, axis_index) = match target.axis {
+        VisualTableAxis::Row(row) => (0u64, row as u64),
+        VisualTableAxis::Column(column) => (1u64, column as u64),
+    };
+    let draggable = !matches!(target.axis, VisualTableAxis::Row(0));
+    let pill_color = if menu_open {
+        rgb(0x3b82f6)
+    } else {
+        rgb(0x94a3b8)
+    };
+    let grip = div()
+        .id(ElementId::from((
+            "visual-table-grip",
+            (target.block_id.as_u64() << 24) | (axis_kind << 20) | axis_index,
+        )))
+        .debug_selector(move || selector.clone())
+        .absolute()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_sm()
+        .cursor(if draggable {
+            CursorStyle::OpenHand
+        } else {
+            CursorStyle::PointingHand
+        })
+        .hover(|style| style.bg(rgb(0xe2e8f0)))
+        .child(
+            div()
+                .rounded_full()
+                .bg(pill_color)
+                .when(is_row, |pill| {
+                    pill.w(px(3.)).h(px(VISUAL_TABLE_GRIP_LENGTH_PX))
+                })
+                .when(!is_row, |pill| {
+                    pill.w(px(VISUAL_TABLE_GRIP_LENGTH_PX)).h(px(3.))
+                }),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|app, _: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                window.focus(&app.focus_handle);
+            }),
+        )
+        .on_click(cx.listener(move |app, event: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            app.open_visual_table_menu(target, event.position(), cx);
+        }));
+    let grip = if is_row {
+        grip.left_0()
+            .top_0()
+            .bottom_0()
+            .w(px(VISUAL_TABLE_GRIP_THICKNESS_PX))
+    } else {
+        grip.top_0()
+            .left_0()
+            .right(px(6.))
+            .h(px(VISUAL_TABLE_GRIP_THICKNESS_PX))
+    };
+    match (draggable, target.axis) {
+        (false, _) => grip,
+        (true, VisualTableAxis::Row(_)) => {
+            grip.on_drag(DraggedTableRow { target }, |_, _, _, cx| cx.new(|_| Empty))
+        }
+        (true, VisualTableAxis::Column(_)) => {
+            grip.on_drag(DraggedTableColumn { target }, |_, _, _, cx| cx.new(|_| Empty))
+        }
+    }
+}
+
+/// Thin "+" strip below (append row) or right of (append column) a table.
+fn visual_table_edge_strip(
+    id: ElementId,
+    selector: String,
+    target: VisualTableAxisTarget,
+    edit: TableStructureEdit,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || selector.clone())
+        .absolute()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_sm()
+        .bg(rgb(0xf1f5f9))
+        .hover(|style| style.bg(rgb(0xe2e8f0)))
+        .text_size(px(10.))
+        .line_height(px(10.))
+        .text_color(rgb(0x64748b))
+        .cursor_pointer()
+        .child("+")
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|app, _: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                window.focus(&app.focus_handle);
+            }),
+        )
+        .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            app.apply_visual_table_structure_edit(target, edit, cx);
         }))
 }
 
@@ -7805,146 +8085,149 @@ fn indent_list_nested_row(block: &VisualBlock, row: Div) -> Div {
     }
 }
 
-pub(super) fn preview_table_button(
-    label: &'static str,
-    edit: TableEdit,
-    status: Msg,
-    target: Option<VisualTableToolbarTarget>,
-    cx: &mut Context<MarkionApp>,
-) -> Div {
-    let button = div()
-        .flex_none()
-        .px(px(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_X_PX))
-        .py(px(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_Y_PX))
-        .rounded_sm()
-        .border_1()
-        .text_size(px(VISUAL_TABLE_TOOLBAR_BUTTON_FONT_SIZE_PX))
-        .child(label)
-        .debug_selector(|| table_toolbar_action_debug_selector(edit, target.is_some()).to_string());
-
-    let Some(target) = target else {
-        return button
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xf8fafc))
-            .text_color(rgb(0x94a3b8));
+fn visual_table_menu_item_label(
+    language: Language,
+    axis: VisualTableAxis,
+    item: VisualTableMenuItem,
+) -> &'static str {
+    use VisualTableMenuItem as Item;
+    let is_row = matches!(axis, VisualTableAxis::Row(_));
+    let message = match item {
+        Item::InsertBefore if is_row => TableMsg::InsertAbove,
+        Item::InsertBefore => TableMsg::InsertLeft,
+        Item::InsertAfter if is_row => TableMsg::InsertBelow,
+        Item::InsertAfter => TableMsg::InsertRight,
+        Item::MoveBefore if is_row => TableMsg::MoveUp,
+        Item::MoveBefore => TableMsg::MoveLeft,
+        Item::MoveAfter if is_row => TableMsg::MoveDown,
+        Item::MoveAfter => TableMsg::MoveRight,
+        Item::Align(TableAlignment::Center) => TableMsg::AlignCenter,
+        Item::Align(TableAlignment::Right) => TableMsg::AlignRight,
+        Item::Align(_) => TableMsg::AlignLeft,
+        Item::Duplicate => TableMsg::Duplicate,
+        Item::Clear => TableMsg::ClearContents,
+        Item::Delete if is_row => TableMsg::DeleteRow,
+        Item::Delete => TableMsg::DeleteColumn,
     };
-
-    button
-        .border_color(rgb(0xcbd5e1))
-        .bg(rgb(0xffffff))
-        .text_color(rgb(0x334155))
-        .cursor_pointer()
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |app, _: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                window.focus(&app.focus_handle);
-            }),
-        )
-        .on_mouse_up(
-            MouseButton::Left,
-            cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
-                cx.stop_propagation();
-                let offset = {
-                    let tab = app.active_tab();
-                    revalidate_visual_table_toolbar_target(
-                        target,
-                        edit,
-                        tab.document.version(),
-                        tab.cursor_offset(),
-                        &tab.visual_list_blocks,
-                    )
-                };
-                if let Some(offset) = offset {
-                    app.apply_table_edit_at(offset, edit, t(app.language, status).into(), cx);
-                } else {
-                    cx.notify();
-                }
-            }),
-        )
+    table_t(language, message)
 }
 
-pub(super) fn preview_table_delete_button(
-    label: &'static str,
-    target: Option<BlockTarget>,
-    cx: &mut Context<MarkionApp>,
-) -> Div {
-    let enabled = target.is_some();
-    let button = div()
-        .flex_none()
-        .px(px(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_X_PX))
-        .py(px(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_Y_PX))
-        .rounded_sm()
-        .border_1()
-        .text_size(px(VISUAL_TABLE_TOOLBAR_BUTTON_FONT_SIZE_PX))
-        .child(label)
-        .debug_selector(move || {
-            if enabled {
-                "visual-table-delete-table".to_string()
-            } else {
-                "visual-table-delete-table-disabled".to_string()
-            }
-        });
-
-    let Some(target) = target else {
-        return button
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xf8fafc))
-            .text_color(rgb(0x94a3b8));
-    };
-
-    button
-        .border_color(rgb(0xcbd5e1))
-        .bg(rgb(0xffffff))
-        .text_color(rgb(0x334155))
-        .cursor_pointer()
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |app, _: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                window.focus(&app.focus_handle);
-            }),
-        )
-        .on_mouse_up(
-            MouseButton::Left,
-            cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
-                cx.stop_propagation();
-                let confirmed = {
-                    let tab = app.active_tab();
-                    revalidate_visual_table_delete_target(
-                        target.clone(),
-                        tab.document.version(),
-                        &tab.document.visual_blocks_shared(),
-                    )
-                };
-                if let Some(target) = confirmed {
-                    app.delete_visual_block(target, cx);
-                } else {
-                    cx.notify();
-                }
-            }),
-        )
-}
-
-fn table_toolbar_action_debug_selector(edit: TableEdit, enabled: bool) -> &'static str {
-    match (edit, enabled) {
-        (TableEdit::Format, true) => "visual-table-format",
-        (TableEdit::Format, false) => "visual-table-format-disabled",
-        (TableEdit::AddRow, true) => "visual-table-add-row",
-        (TableEdit::AddRow, false) => "visual-table-add-row-disabled",
-        (TableEdit::DeleteRow, true) => "visual-table-delete-row",
-        (TableEdit::DeleteRow, false) => "visual-table-delete-row-disabled",
-        (TableEdit::MoveRowUp, true) => "visual-table-move-row-up",
-        (TableEdit::MoveRowUp, false) => "visual-table-move-row-up-disabled",
-        (TableEdit::MoveRowDown, true) => "visual-table-move-row-down",
-        (TableEdit::MoveRowDown, false) => "visual-table-move-row-down-disabled",
-        (TableEdit::AddColumn, true) => "visual-table-add-column",
-        (TableEdit::AddColumn, false) => "visual-table-add-column-disabled",
-        (TableEdit::DeleteColumn, true) => "visual-table-delete-column",
-        (TableEdit::DeleteColumn, false) => "visual-table-delete-column-disabled",
+fn visual_table_menu_item_selector(item: VisualTableMenuItem) -> &'static str {
+    match item {
+        VisualTableMenuItem::InsertBefore => "visual-table-menu-insert-before",
+        VisualTableMenuItem::InsertAfter => "visual-table-menu-insert-after",
+        VisualTableMenuItem::MoveBefore => "visual-table-menu-move-before",
+        VisualTableMenuItem::MoveAfter => "visual-table-menu-move-after",
+        VisualTableMenuItem::Align(TableAlignment::Center) => "visual-table-menu-align-center",
+        VisualTableMenuItem::Align(TableAlignment::Right) => "visual-table-menu-align-right",
+        VisualTableMenuItem::Align(_) => "visual-table-menu-align-left",
+        VisualTableMenuItem::Duplicate => "visual-table-menu-duplicate",
+        VisualTableMenuItem::Clear => "visual-table-menu-clear",
+        VisualTableMenuItem::Delete => "visual-table-menu-delete",
     }
 }
 
+fn visual_table_menu_item_is_followed_by_separator(item: VisualTableMenuItem) -> bool {
+    matches!(
+        item,
+        VisualTableMenuItem::InsertAfter
+            | VisualTableMenuItem::MoveAfter
+            | VisualTableMenuItem::Align(TableAlignment::Right)
+            | VisualTableMenuItem::Clear
+    )
+}
+
+/// Row/column menu opened from a Visual Edit table grip.
+pub(super) fn visual_table_menu_view(
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let menu = app
+        .visual_table_menu
+        .expect("table menu overlay is rendered only while its state is present");
+    let palette = app.palette();
+    let language = app.language;
+    let target = menu.target;
+    let mut panel = div()
+        .id("visual-table-menu")
+        .debug_selector(|| "visual-table-menu".to_string())
+        .w(px(190.))
+        .occlude()
+        .p(px(4.))
+        .bg(palette.panel_bg)
+        .border_1()
+        .border_color(palette.border)
+        .rounded_lg()
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .on_mouse_down_out(cx.listener(|app, _: &MouseDownEvent, _, cx| {
+            if app.visual_table_menu.take().is_some() {
+                cx.notify();
+            }
+        }));
+    for (index, item) in visual_table_menu_items(target.axis).iter().copied().enumerate() {
+        let enabled = visual_table_menu_item_edit(target, item, menu.alignment).is_some();
+        let current = matches!(item, VisualTableMenuItem::Align(alignment) if alignment == menu.alignment);
+        let destructive = matches!(item, VisualTableMenuItem::Delete);
+        let selector = visual_table_menu_item_selector(item);
+        panel = panel.child(
+            div()
+                .id(ElementId::from(("visual-table-menu-item", index)))
+                .debug_selector(move || {
+                    if enabled {
+                        selector.to_string()
+                    } else {
+                        format!("{selector}-disabled")
+                    }
+                })
+                .h(px(26.))
+                .px_2()
+                .rounded_sm()
+                .text_size(px(12.))
+                .text_color(if destructive && enabled {
+                    rgb(0xdc2626)
+                } else {
+                    palette.text
+                })
+                .opacity(if enabled { 1. } else { 0.42 })
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .min_w_0()
+                        .when(current, |label| label.font_weight(FontWeight::SEMIBOLD))
+                        .child(visual_table_menu_item_label(language, target.axis, item)),
+                )
+                .child(
+                    div()
+                        .ml_2()
+                        .flex_none()
+                        .text_color(palette.muted)
+                        .child(if current { "✓" } else { "" }),
+                )
+                .when(enabled, |row| {
+                    row.cursor_pointer()
+                        .hover(move |style| style.bg(palette.surface_bg))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                cx.stop_propagation();
+                                app.apply_visual_table_menu_item(item, cx);
+                            }),
+                        )
+                }),
+        );
+        if visual_table_menu_item_is_followed_by_separator(item) {
+            panel = panel.child(block_menu_separator(palette));
+        }
+    }
+    anchored()
+        .position(menu.anchor)
+        .offset(point(px(4.), px(4.)))
+        .child(panel)
+}
 pub(super) fn is_remote_resource(url: &str) -> bool {
     url.contains("://") || url.starts_with("data:")
 }

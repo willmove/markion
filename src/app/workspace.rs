@@ -340,7 +340,7 @@ impl MarkionApp {
             self.close_markdown_reference(cx);
             return;
         }
-        if self.block_menu.is_some() {
+        if self.block_menu.is_some() || self.visual_table_menu.is_some() {
             self.close_visual_block_menu(cx);
             return;
         }

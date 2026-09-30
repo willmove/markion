@@ -793,17 +793,11 @@ pub(super) struct DocumentTabState {
     pub(super) expanded_visual_source_blocks: HashSet<VisualBlockId>,
     /// Block currently under the pointer for showing the source-toggle control.
     pub(super) hovered_visual_source_block: Option<VisualBlockId>,
-    /// Table currently under the pointer for showing the Visual Edit table header.
+    /// Table currently under the pointer; shows its Visual Edit edge add strips.
     pub(super) hovered_visual_table_block: Option<VisualBlockId>,
-    /// Table whose hover dwell has elapsed: its Visual Edit editing header may
-    /// be shown while the pointer stays over it (caret-owned headers ignore
-    /// this and show immediately). Lags `hovered_visual_table_block` by the
-    /// dwell on entry and by the hide delay on exit.
-    pub(super) visual_table_toolbar_hover_ready: Option<VisualBlockId>,
-    /// Generation token incremented whenever the table hover state changes, so
-    /// a pending dwell/hide-delay timer armed by an older transition fires into
-    /// a no-op. Same pattern as `preview_debounce_generation`.
-    pub(super) visual_table_hover_generation: u64,
+    /// `(table, row, column)` of the Visual Edit table cell under the pointer;
+    /// shows that row's and that column's overlay handles.
+    pub(super) hovered_visual_table_cell: Option<(VisualBlockId, usize, usize)>,
     /// Presentation-only overlay while a Visual Edit column handle is dragged.
     pub(super) visual_table_column_drag: Option<VisualTableColumnDrag>,
     /// Presentation-only overlay while a focused inline image is resized.
@@ -1113,8 +1107,7 @@ impl DocumentTabState {
             expanded_visual_source_blocks: HashSet::new(),
             hovered_visual_source_block: None,
             hovered_visual_table_block: None,
-            visual_table_toolbar_hover_ready: None,
-            visual_table_hover_generation: 0,
+            hovered_visual_table_cell: None,
             visual_table_column_drag: None,
             visual_image_resize_drag: None,
             hovered_visual_code_block: None,
@@ -1246,14 +1239,12 @@ impl DocumentTabState {
             .is_some_and(|id| !live_ids.contains(&id))
         {
             self.hovered_visual_table_block = None;
-            self.visual_table_hover_generation =
-                self.visual_table_hover_generation.wrapping_add(1);
         }
         if self
-            .visual_table_toolbar_hover_ready
-            .is_some_and(|id| !live_ids.contains(&id))
+            .hovered_visual_table_cell
+            .is_some_and(|(id, _, _)| !live_ids.contains(&id))
         {
-            self.visual_table_toolbar_hover_ready = None;
+            self.hovered_visual_table_cell = None;
         }
         if self.visual_table_column_drag.as_ref().is_some_and(|drag| {
             drag.document_version != self.document.version() || !live_ids.contains(&drag.block_id)
@@ -1384,8 +1375,7 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.hovered_visual_table_block = None;
-        self.visual_table_toolbar_hover_ready = None;
-        self.visual_table_hover_generation = self.visual_table_hover_generation.wrapping_add(1);
+        self.hovered_visual_table_cell = None;
         self.visual_table_column_drag = None;
         self.visual_image_resize_drag = None;
         self.hovered_visual_code_block = None;
@@ -1443,8 +1433,7 @@ impl DocumentTabState {
         self.expanded_visual_source_blocks.clear();
         self.hovered_visual_source_block = None;
         self.hovered_visual_table_block = None;
-        self.visual_table_toolbar_hover_ready = None;
-        self.visual_table_hover_generation = self.visual_table_hover_generation.wrapping_add(1);
+        self.hovered_visual_table_cell = None;
         self.visual_table_column_drag = None;
         self.visual_image_resize_drag = None;
         self.hovered_visual_code_block = None;

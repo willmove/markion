@@ -29,8 +29,8 @@ use gpui::{
 #[cfg(test)]
 use markion::OrganizeCandidate;
 use markion::i18n::{
-    GitMsg, ImageMsg, ImageRecoveryMsg, ImageStatusMsg, git_t, git_tf, image_recovery_t,
-    image_status_tf, image_t,
+    GitMsg, ImageMsg, ImageRecoveryMsg, ImageStatusMsg, TableMsg, git_t, git_tf, image_recovery_t,
+    image_status_tf, image_t, table_t,
 };
 use markion::{
     AlertKind, AppPreferences, AutoPairAction, AutoSavePreferences, BlockEdit, BlockEditError,
@@ -50,7 +50,7 @@ use markion::{
     MutationReceipt, P0Msg, P1Msg, PdfPageSize, PreviewBlock, RecoveryInventoryEntry,
     RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions,
     SearchPattern, SessionLayout, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab,
-    SlashCommand, SlashQuery, TableEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode,
+    SlashCommand, SlashQuery, TableAlignment, TableEdit, TableStructureEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode,
     VisualBlock, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualCaretAffinity,
     VisualEditorField, VisualEditorFieldKind, VisualHtmlImage, VisualNavigationTarget,
     VisualProjection, VisualQuoteGroupEdge, VisualSourceIslandKind, WorkspaceSnapshot,
@@ -1438,6 +1438,15 @@ struct BlockMenuState {
     submenu_selected: usize,
 }
 
+/// Row/column menu opened from a Visual Edit table grip. `alignment` is the
+/// targeted column's alignment when the menu opened (Default for rows).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct VisualTableMenuState {
+    target: VisualTableAxisTarget,
+    anchor: Point<Pixels>,
+    alignment: TableAlignment,
+}
+
 /// An exact non-empty text selection that can safely receive one of the
 /// Visual Edit inline-format commands from a contextual menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1966,15 +1975,6 @@ const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(80);
 /// parse is older than this, the next render parses even though the debounce
 /// window has not elapsed, so the preview never freezes mid-typing-burst.
 const PREVIEW_MAX_STALE: Duration = Duration::from_millis(400);
-/// How long the pointer must stay continuously over a Visual Edit table's
-/// chrome before its editing header appears. The header is an in-flow row, so
-/// showing it on pass-through hover makes the document shake while the pointer
-/// travels across tables.
-const TABLE_TOOLBAR_HOVER_DWELL: Duration = Duration::from_millis(250);
-/// How long the pointer must stay continuously off a Visual Edit table's
-/// chrome before its hover-shown editing header hides, so a brief excursion
-/// does not flicker the header away and back.
-const TABLE_TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(120);
 /// Clamp range for the editor/preview split ratio so neither pane can collapse.
 const EDITOR_SPLIT_RATIO_MIN: f32 = markion::EDITOR_SPLIT_RATIO_MIN;
 const EDITOR_SPLIT_RATIO_MAX: f32 = markion::EDITOR_SPLIT_RATIO_MAX;
@@ -2615,6 +2615,7 @@ struct MarkionApp {
     emoji_completer: Option<EmojiCompleterState>,
     dismissed_emoji_query: Option<EmojiQuery>,
     block_menu: Option<BlockMenuState>,
+    visual_table_menu: Option<VisualTableMenuState>,
     search_visible: bool,
     /// Whether replacement controls are currently available. The requested
     /// form is retained separately so Read mode can temporarily present Find.

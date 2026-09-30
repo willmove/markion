@@ -176,7 +176,7 @@ pub use model::{
     PicGoCorePreferences, PicGoHttpPreferences, PreviewBlock, RecoveryDocument, RemoteImagePolicy,
     RenderedMath, ReplaceResult, RichText, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
     SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch, SearchMatchRange, SearchOptions,
-    SessionLayout, SessionState, SidebarTab, TableAlignment, TableEdit, TableEditResult,
+    SessionLayout, SessionState, SidebarTab, TableAlignment, TableEdit, TableEditResult, TableStructureEdit,
     ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEdit,
     VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
     VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
@@ -297,7 +297,7 @@ use table::{
     TableDraft, adjust_column_percents_for_delete, adjust_column_percents_for_insert,
     format_markdown_table, format_table_column_width_comment, formatted_table_cell_range,
     leading_table_column_width_comment_range, normalize_column_percents, parse_markdown_table,
-    parse_table_column_width_comment, selection_is_within_one_table_cell, table_cell_source_ranges,
+    parse_table_column_width_comment, permute_column_percents, selection_is_within_one_table_cell, table_cell_source_ranges,
     table_position_at, table_preview_source_range, table_range_at as table_range_at_fn,
     table_ranges as table_ranges_fn,
 };
@@ -522,6 +522,14 @@ impl DocumentInstanceId {
 }
 
 /// Attributable source of a canonical text mutation.
+/// How a structural table edit reshapes the leading column-width comment.
+#[derive(Clone, Copy, Debug)]
+enum ColumnPercentEdit {
+    Insert(usize),
+    Delete(usize),
+    Move { from: usize, to: usize },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MutationOrigin {
     Trusted,
@@ -1920,12 +1928,6 @@ impl MarkdownDocument {
             .column
             .min(table.column_count().saturating_sub(1));
         let old_column_count = table.column_count();
-        let leading_comment =
-            leading_table_column_width_comment_range(&self.text, table_range.start);
-        let old_percents = leading_comment.as_ref().and_then(|range| {
-            parse_table_column_width_comment(&self.text[range.clone()])
-                .filter(|percents| percents.len() == old_column_count)
-        });
         let mut column_edit: Option<(bool, usize)> = None;
 
         match edit {
@@ -1982,17 +1984,176 @@ impl MarkdownDocument {
             }
         }
 
+        let column_edit = column_edit.map(|(inserted, index)| {
+            if inserted {
+                ColumnPercentEdit::Insert(index)
+            } else {
+                ColumnPercentEdit::Delete(index)
+            }
+        });
+        self.replace_markdown_table(
+            table_range,
+            table,
+            old_column_count,
+            (selected_row, selected_column),
+            column_edit,
+        )
+    }
+
+    /// Applies one index-addressed structural edit to the table containing
+    /// `byte_index`. Unlike [`Self::edit_table_at`], the target row/column is
+    /// explicit rather than derived from the byte position, so callers such
+    /// as Visual Edit row/column handles never have to move the caret first.
+    /// Returns `None` (without mutating) for out-of-range indices and for
+    /// edits that would break the GFM header row.
+    pub fn edit_table_structure_at(
+        &mut self,
+        byte_index: usize,
+        edit: TableStructureEdit,
+    ) -> Option<TableEditResult> {
+        let byte_index = clamp_to_char_boundary(&self.text, byte_index);
+        let table_range = self.table_range_at(byte_index)?;
+        let mut table = parse_markdown_table(&self.text[table_range.clone()])?;
+        table.normalize();
+        let rows = table.rows.len();
+        let columns = table.column_count();
+        let body_row = |row: usize| row >= 1 && row < rows;
+        let (selection, column_edit) = match edit {
+            TableStructureEdit::InsertRow { at } => {
+                if at == 0 || at > rows {
+                    return None;
+                }
+                table.rows.insert(at, vec![String::new(); columns]);
+                ((at, 0), None)
+            }
+            TableStructureEdit::DuplicateRow(row) => {
+                if !body_row(row) {
+                    return None;
+                }
+                let copy = table.rows[row].clone();
+                table.rows.insert(row + 1, copy);
+                ((row + 1, 0), None)
+            }
+            TableStructureEdit::ClearRow(row) => {
+                if row >= rows {
+                    return None;
+                }
+                table.rows[row].iter_mut().for_each(String::clear);
+                ((row, 0), None)
+            }
+            TableStructureEdit::DeleteRow(row) => {
+                if !body_row(row) {
+                    return None;
+                }
+                table.rows.remove(row);
+                ((row.min(table.rows.len() - 1), 0), None)
+            }
+            TableStructureEdit::MoveRow { from, to } => {
+                if !body_row(from) || !body_row(to) || from == to {
+                    return None;
+                }
+                let moved = table.rows.remove(from);
+                table.rows.insert(to, moved);
+                ((to, 0), None)
+            }
+            TableStructureEdit::InsertColumn { at } => {
+                if at > columns {
+                    return None;
+                }
+                for row in &mut table.rows {
+                    row.insert(at, String::new());
+                }
+                table.alignments.insert(at, TableAlignment::Default);
+                ((0, at), Some(ColumnPercentEdit::Insert(at)))
+            }
+            TableStructureEdit::DuplicateColumn(column) => {
+                if column >= columns {
+                    return None;
+                }
+                for row in &mut table.rows {
+                    let copy = row[column].clone();
+                    row.insert(column + 1, copy);
+                }
+                let alignment = table.alignments[column];
+                table.alignments.insert(column + 1, alignment);
+                ((0, column + 1), Some(ColumnPercentEdit::Insert(column + 1)))
+            }
+            TableStructureEdit::ClearColumn(column) => {
+                if column >= columns {
+                    return None;
+                }
+                for row in &mut table.rows {
+                    row[column].clear();
+                }
+                ((0, column), None)
+            }
+            TableStructureEdit::DeleteColumn(column) => {
+                if column >= columns || columns <= 1 {
+                    return None;
+                }
+                for row in &mut table.rows {
+                    row.remove(column);
+                }
+                table.alignments.remove(column);
+                (
+                    (0, column.min(columns - 2)),
+                    Some(ColumnPercentEdit::Delete(column)),
+                )
+            }
+            TableStructureEdit::MoveColumn { from, to } => {
+                if from >= columns || to >= columns || from == to {
+                    return None;
+                }
+                for row in &mut table.rows {
+                    let moved = row.remove(from);
+                    row.insert(to, moved);
+                }
+                let alignment = table.alignments.remove(from);
+                table.alignments.insert(to, alignment);
+                ((0, to), Some(ColumnPercentEdit::Move { from, to }))
+            }
+            TableStructureEdit::AlignColumn { column, alignment } => {
+                if column >= columns {
+                    return None;
+                }
+                table.alignments[column] = alignment;
+                ((0, column), None)
+            }
+        };
+        self.replace_markdown_table(table_range, table, columns, selection, column_edit)
+    }
+
+    /// Formats `table` back into the source at `table_range`, keeping a
+    /// matching leading column-width comment in sync with `column_edit` in the
+    /// same mutation, and returns the exact selection of the requested cell.
+    fn replace_markdown_table(
+        &mut self,
+        table_range: Range<usize>,
+        mut table: table::MarkdownTable,
+        old_column_count: usize,
+        (selected_row, selected_column): (usize, usize),
+        column_edit: Option<ColumnPercentEdit>,
+    ) -> Option<TableEditResult> {
+        let leading_comment =
+            leading_table_column_width_comment_range(&self.text, table_range.start);
+        let old_percents = leading_comment.as_ref().and_then(|range| {
+            parse_table_column_width_comment(&self.text[range.clone()])
+                .filter(|percents| percents.len() == old_column_count)
+        });
         table.normalize();
         let table_replacement = format_markdown_table(&table);
         let selection_in_table =
             formatted_table_cell_range(&table, selected_row, selected_column).unwrap_or(0..0);
 
         let rewritten_percents = match (column_edit, old_percents) {
-            (Some((true, insert_at)), Some(percents)) => {
+            (Some(ColumnPercentEdit::Insert(insert_at)), Some(percents)) => {
                 adjust_column_percents_for_insert(&percents, insert_at)
             }
-            (Some((false, deleted)), Some(percents)) => {
+            (Some(ColumnPercentEdit::Delete(deleted)), Some(percents)) => {
                 adjust_column_percents_for_delete(&percents, deleted)
+            }
+            (Some(ColumnPercentEdit::Move { from, to }), Some(percents)) => {
+                permute_column_percents(&percents, from, to)
             }
             _ => None,
         };
@@ -7888,6 +8049,197 @@ mod tests {
             })
             .collect();
         assert_eq!(preview_headers, ["A", "only-one", "C"]);
+    }
+
+    fn structure_rows(doc: &MarkdownDocument, table_index: usize) -> Vec<Vec<String>> {
+        let range = doc.table_ranges()[table_index].clone();
+        parse_markdown_table(&doc.text()[range]).unwrap().rows
+    }
+
+    fn structure_alignments(doc: &MarkdownDocument) -> Vec<TableAlignment> {
+        let range = doc.table_ranges()[0].clone();
+        parse_markdown_table(&doc.text()[range]).unwrap().alignments
+    }
+
+    const STRUCTURE_TABLE: &str =
+        "Intro\n\n| H1 | H2 | H3 |\n| :--- | :---: | ---: |\n| a1 | a2 | a3 |\n| b1 | b2 | b3 |\n| c1 | c2 | c3 |\n\nAfter";
+
+    fn structure_edit(edit: TableStructureEdit) -> (MarkdownDocument, Option<TableEditResult>) {
+        let mut doc = MarkdownDocument::from_text(STRUCTURE_TABLE);
+        let offset = doc.text().find("| H1").unwrap();
+        let result = doc.edit_table_structure_at(offset, edit);
+        (doc, result)
+    }
+
+    fn row(cells: &[&str]) -> Vec<String> {
+        cells.iter().map(|cell| cell.to_string()).collect()
+    }
+
+    #[test]
+    fn table_structure_row_edits_target_explicit_indices() {
+        let (doc, result) = structure_edit(TableStructureEdit::InsertRow { at: 2 });
+        let rows = structure_rows(&doc, 0);
+        assert_eq!(rows[2], row(&["", "", ""]));
+        assert_eq!(rows[3], row(&["b1", "b2", "b3"]));
+        let result = result.unwrap();
+        assert_eq!((result.row, result.column), (2, 0));
+        assert_eq!(doc.table_range_at(result.selected_range.start), Some(result.table_range.clone()));
+
+        let (doc, _) = structure_edit(TableStructureEdit::InsertRow { at: 4 });
+        assert_eq!(structure_rows(&doc, 0)[4], row(&["", "", ""]));
+
+        let (doc, _) = structure_edit(TableStructureEdit::DuplicateRow(1));
+        let rows = structure_rows(&doc, 0);
+        assert_eq!(rows[1], rows[2]);
+        assert_eq!(rows.len(), 5);
+
+        let (doc, _) = structure_edit(TableStructureEdit::ClearRow(2));
+        assert_eq!(structure_rows(&doc, 0)[2], row(&["", "", ""]));
+
+        let (doc, _) = structure_edit(TableStructureEdit::ClearRow(0));
+        assert_eq!(structure_rows(&doc, 0)[0], row(&["", "", ""]));
+
+        let (doc, result) = structure_edit(TableStructureEdit::DeleteRow(3));
+        let rows = structure_rows(&doc, 0);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2], row(&["b1", "b2", "b3"]));
+        assert_eq!(result.unwrap().row, 2);
+
+        let (doc, result) = structure_edit(TableStructureEdit::MoveRow { from: 3, to: 1 });
+        let rows = structure_rows(&doc, 0);
+        assert_eq!(rows[1], row(&["c1", "c2", "c3"]));
+        assert_eq!(rows[2], row(&["a1", "a2", "a3"]));
+        assert_eq!(rows[3], row(&["b1", "b2", "b3"]));
+        assert_eq!(result.unwrap().row, 1);
+
+        let (doc, _) = structure_edit(TableStructureEdit::MoveRow { from: 1, to: 3 });
+        let rows = structure_rows(&doc, 0);
+        assert_eq!(rows[1], row(&["b1", "b2", "b3"]));
+        assert_eq!(rows[3], row(&["a1", "a2", "a3"]));
+        assert!(doc.text().starts_with("Intro\n\n") && doc.text().ends_with("\n\nAfter"));
+    }
+
+    #[test]
+    fn table_structure_edits_protect_the_header_and_reject_out_of_range() {
+        for edit in [
+            TableStructureEdit::InsertRow { at: 0 },
+            TableStructureEdit::InsertRow { at: 5 },
+            TableStructureEdit::DuplicateRow(0),
+            TableStructureEdit::DeleteRow(0),
+            TableStructureEdit::DeleteRow(4),
+            TableStructureEdit::MoveRow { from: 0, to: 1 },
+            TableStructureEdit::MoveRow { from: 1, to: 0 },
+            TableStructureEdit::MoveRow { from: 2, to: 2 },
+            TableStructureEdit::ClearRow(4),
+            TableStructureEdit::InsertColumn { at: 4 },
+            TableStructureEdit::DuplicateColumn(3),
+            TableStructureEdit::ClearColumn(3),
+            TableStructureEdit::DeleteColumn(3),
+            TableStructureEdit::MoveColumn { from: 0, to: 3 },
+            TableStructureEdit::MoveColumn { from: 1, to: 1 },
+            TableStructureEdit::AlignColumn {
+                column: 3,
+                alignment: TableAlignment::Left,
+            },
+        ] {
+            let mut doc = MarkdownDocument::from_text(STRUCTURE_TABLE);
+            let before = doc.version();
+            let offset = doc.text().find("| H1").unwrap();
+            assert!(
+                doc.edit_table_structure_at(offset, edit).is_none(),
+                "{edit:?} must be rejected"
+            );
+            assert_eq!(doc.text(), STRUCTURE_TABLE, "{edit:?} must not mutate");
+            assert_eq!(doc.version(), before);
+        }
+
+        let mut single = MarkdownDocument::from_text("| A |\n| --- |\n| 1 |");
+        assert!(
+            single
+                .edit_table_structure_at(0, TableStructureEdit::DeleteColumn(0))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn table_structure_column_edits_keep_alignments_with_their_columns() {
+        use TableAlignment::{Center, Default, Left, Right};
+
+        let (doc, result) = structure_edit(TableStructureEdit::InsertColumn { at: 1 });
+        let rows = structure_rows(&doc, 0);
+        assert_eq!(rows[0], row(&["H1", "", "H2", "H3"]));
+        assert_eq!(structure_alignments(&doc), [Left, Default, Center, Right]);
+        assert_eq!(result.unwrap().column, 1);
+
+        let (doc, _) = structure_edit(TableStructureEdit::InsertColumn { at: 3 });
+        assert_eq!(structure_rows(&doc, 0)[1], row(&["a1", "a2", "a3", ""]));
+
+        let (doc, _) = structure_edit(TableStructureEdit::DuplicateColumn(1));
+        assert_eq!(structure_rows(&doc, 0)[2], row(&["b1", "b2", "b2", "b3"]));
+        assert_eq!(structure_alignments(&doc), [Left, Center, Center, Right]);
+
+        let (doc, _) = structure_edit(TableStructureEdit::ClearColumn(2));
+        assert_eq!(structure_rows(&doc, 0)[0], row(&["H1", "H2", ""]));
+        assert_eq!(structure_alignments(&doc), [Left, Center, Right]);
+
+        let (doc, result) = structure_edit(TableStructureEdit::DeleteColumn(2));
+        assert_eq!(structure_rows(&doc, 0)[3], row(&["c1", "c2"]));
+        assert_eq!(structure_alignments(&doc), [Left, Center]);
+        assert_eq!(result.unwrap().column, 1);
+
+        let (doc, _) = structure_edit(TableStructureEdit::MoveColumn { from: 0, to: 2 });
+        assert_eq!(structure_rows(&doc, 0)[0], row(&["H2", "H3", "H1"]));
+        assert_eq!(structure_alignments(&doc), [Center, Right, Left]);
+
+        let (doc, _) = structure_edit(TableStructureEdit::AlignColumn {
+            column: 1,
+            alignment: Default,
+        });
+        assert_eq!(structure_alignments(&doc), [Left, Default, Right]);
+    }
+
+    #[test]
+    fn table_structure_column_edits_rewrite_the_width_comment_in_one_mutation() {
+        let source = "<!-- markion-cols:20,30,50 -->\n| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
+        let edit = |edit| {
+            let mut doc = MarkdownDocument::from_text(source);
+            let offset = doc.text().find("| A").unwrap();
+            let before = doc.version();
+            doc.edit_table_structure_at(offset, edit).unwrap();
+            assert_eq!(doc.version(), before + 1, "{edit:?} is one mutation");
+            doc.text().lines().next().unwrap().to_string()
+        };
+        assert_eq!(
+            edit(TableStructureEdit::MoveColumn { from: 0, to: 2 }),
+            "<!-- markion-cols:30,50,20 -->"
+        );
+        assert_eq!(
+            edit(TableStructureEdit::InsertColumn { at: 3 }).matches(',').count(),
+            3
+        );
+        assert_eq!(
+            edit(TableStructureEdit::DuplicateColumn(0)).matches(',').count(),
+            3
+        );
+        assert_eq!(
+            edit(TableStructureEdit::DeleteColumn(0)).matches(',').count(),
+            1
+        );
+        assert_eq!(
+            edit(TableStructureEdit::ClearColumn(0)),
+            "<!-- markion-cols:20,30,50 -->"
+        );
+    }
+
+    #[test]
+    fn table_structure_edits_are_isolated_to_the_addressed_table() {
+        let source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\n| X | Y |\n| --- | --- |\n| 7 | 8 |";
+        let mut doc = MarkdownDocument::from_text(source);
+        let second = doc.text().find("| X").unwrap();
+        doc.edit_table_structure_at(second, TableStructureEdit::InsertRow { at: 2 })
+            .unwrap();
+        assert!(doc.text().starts_with("| A | B |\n| --- | --- |\n| 1 | 2 |\n\n"));
+        assert_eq!(structure_rows(&doc, 1).len(), 3);
     }
 
     #[test]

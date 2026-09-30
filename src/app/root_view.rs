@@ -858,6 +858,9 @@ impl Render for MarkionApp {
                     cx,
                 ))
             })
+            .when(self.visual_table_menu.is_some(), |root| {
+                root.child(visual_table_menu_view(self, cx))
+            })
             .when(self.preferences_panel_open, |root| {
                 root.child(preferences_panel_view(self, cx))
             })

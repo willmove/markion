@@ -393,6 +393,7 @@ impl MarkionApp {
                     0
                 }
         };
+        self.visual_table_menu = None;
         self.block_menu = Some(BlockMenuState {
             target,
             selection_format,
@@ -748,8 +749,127 @@ impl MarkionApp {
         }
     }
 
+    /// Dismisses the block menu and the table row/column menu; every
+    /// block-menu dismissal site (caret moves, mode switches, scrolling)
+    /// therefore also covers the table menu.
     pub(super) fn dismiss_visual_block_menu(&mut self) -> bool {
-        self.block_menu.take().is_some()
+        let block_menu = self.block_menu.take().is_some();
+        let table_menu = self.visual_table_menu.take().is_some();
+        block_menu || table_menu
+    }
+
+    pub(super) fn open_visual_table_menu(
+        &mut self,
+        target: VisualTableAxisTarget,
+        anchor: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_visual_block_menu();
+        let alignment = {
+            let tab = self.active_tab();
+            let blocks = tab.document.visual_blocks_shared();
+            if revalidate_visual_table_axis_target(target, tab.document.version(), &blocks)
+                .is_none()
+            {
+                cx.notify();
+                return;
+            }
+            match (target.axis, blocks.iter().find(|block| block.id == target.block_id)) {
+                (
+                    VisualTableAxis::Column(column),
+                    Some(VisualBlock {
+                        kind: VisualBlockKind::Table { alignments, .. },
+                        ..
+                    }),
+                ) => alignments
+                    .get(column)
+                    .copied()
+                    .unwrap_or(TableAlignment::Default),
+                _ => TableAlignment::Default,
+            }
+        };
+        self.preview_context_menu = None;
+        self.active_menu = None;
+        self.visual_table_menu = Some(VisualTableMenuState {
+            target,
+            anchor,
+            alignment,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn apply_visual_table_menu_item(
+        &mut self,
+        item: VisualTableMenuItem,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = self.visual_table_menu.take() else {
+            return;
+        };
+        match visual_table_menu_item_edit(menu.target, item, menu.alignment) {
+            Some(edit) => self.apply_visual_table_structure_edit(menu.target, edit, cx),
+            None => cx.notify(),
+        }
+    }
+
+    pub(super) fn drop_visual_table_axis(
+        &mut self,
+        dragged: VisualTableAxisTarget,
+        block_id: VisualBlockId,
+        drop_axis: VisualTableAxis,
+        cx: &mut Context<Self>,
+    ) {
+        match visual_table_drop_edit(dragged, block_id, drop_axis) {
+            Some(edit) => self.apply_visual_table_structure_edit(dragged, edit, cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// Applies one index-addressed structural edit from a Visual Edit table
+    /// grip, menu, drop, or edge strip as a single undoable mutation, after
+    /// revalidating that `target` still names the same table and shape.
+    pub(super) fn apply_visual_table_structure_edit(
+        &mut self,
+        target: VisualTableAxisTarget,
+        edit: TableStructureEdit,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_visual_block_menu();
+        let offset = {
+            let tab = self.active_tab();
+            revalidate_visual_table_axis_target(
+                target,
+                tab.document.version(),
+                &tab.document.visual_blocks_shared(),
+            )
+        };
+        let Some(offset) = offset else {
+            cx.notify();
+            return;
+        };
+        tracing::debug!(
+            target: "markion::editing",
+            op = "table_structure_edit",
+            offset,
+            ?edit,
+            "table handle, menu, drop, or edge strip"
+        );
+        self.active_tab_mut().finish_undo_capture();
+        let snapshot = self.snapshot();
+        let tab = self.active_tab_mut();
+        let result = tab.document.edit_table_structure_at(offset, edit);
+        if let Some(result) = result
+            && tab.document.text() != snapshot.document.text()
+        {
+            self.commit_undo_snapshot(snapshot);
+            let tab = self.active_tab_mut();
+            tab.selected_range = result.selected_range;
+            tab.selection_reversed = false;
+            tab.marked_range = None;
+            self.status = table_t(self.language, TableMsg::TableUpdated).into();
+            self.after_document_changed(cx);
+        }
+        cx.notify();
     }
 
     pub(super) fn close_visual_block_menu(&mut self, cx: &mut Context<Self>) {

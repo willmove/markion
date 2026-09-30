@@ -833,6 +833,17 @@ pub fn adjust_column_percents_for_insert(percents: &[u8], insert_at: usize) -> O
     normalize_column_percents(&out)
 }
 
+/// Moves the share at `from` to index `to`, keeping every column's percent.
+pub fn permute_column_percents(percents: &[u8], from: usize, to: usize) -> Option<Vec<u8>> {
+    if from >= percents.len() || to >= percents.len() {
+        return None;
+    }
+    let mut out = percents.to_vec();
+    let moved = out.remove(from);
+    out.insert(to, moved);
+    Some(out)
+}
+
 pub fn adjust_column_percents_for_delete(percents: &[u8], index: usize) -> Option<Vec<u8>> {
     if index >= percents.len() || percents.len() < 3 {
         return None;

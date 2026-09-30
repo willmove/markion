@@ -2,7 +2,7 @@ use super::application::{AutosaveCompletion, AutosaveOutcome, ExternalCheckReque
 use super::editing::visual_selection_format_target_for_block;
 use super::memory::{MemoryProfile, MemoryWarmup};
 use super::*;
-use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext};
+use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext, VisualTestContext};
 // Only test code in this module classifies file-tree entries by kind; import it
 // here (rather than in `mod.rs`) so non-test release builds stay warning-free
 // under `-D warnings`.
@@ -5899,28 +5899,6 @@ fn view_modes_have_distinct_status_and_expected_pane_layouts() {
     assert_eq!(view_mode_pane_widths(ViewMode::Read, 0.4), (0.0, 1.0));
 }
 
-#[test]
-fn table_edit_toolbar_is_available_only_in_visual_edit() {
-    assert!(table_toolbar_actions_for_view_mode(ViewMode::Edit).is_empty());
-    assert!(table_toolbar_actions_for_view_mode(ViewMode::Split).is_empty());
-    assert!(table_toolbar_actions_for_view_mode(ViewMode::Read).is_empty());
-
-    let edits = table_toolbar_actions_for_view_mode(ViewMode::VisualEdit)
-        .iter()
-        .map(|(_, edit, _)| *edit)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        edits,
-        vec![
-            TableEdit::AddRow,
-            TableEdit::DeleteRow,
-            TableEdit::MoveRowUp,
-            TableEdit::MoveRowDown,
-            TableEdit::AddColumn,
-            TableEdit::DeleteColumn,
-        ]
-    );
-}
 
 #[test]
 fn visual_and_preview_tables_share_content_column_weights() {
@@ -6000,135 +5978,7 @@ fn visual_table_cell_range(
         .expect("visual table cell range")
 }
 
-#[test]
-fn visual_table_toolbar_target_tracks_caret_empty_utf8_staleness_and_table_ownership() {
-    let source = "| A | 名称 |\n| --- | --- |\n|   | 值 |\n\n| C | D |\n| --- | --- |\n| x | y |";
-    let document = MarkdownDocument::from_text(source);
-    let blocks = document.visual_blocks();
-    let tables = blocks
-        .iter()
-        .filter(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
-        .collect::<Vec<_>>();
-    assert_eq!(tables.len(), 2);
-    let version = document.version();
 
-    let utf8_range = visual_table_cell_range(&document, 0, 0, 1);
-    let mut tab = EditorTab::new(document);
-    tab.selected_range = utf8_range.clone();
-    tab.selection_reversed = false;
-    let forward = visual_table_toolbar_target(version, tables[0], tab.cursor_offset())
-        .expect("forward selection endpoint owns the UTF-8 cell");
-    assert_eq!((forward.row, forward.column), (0, 1));
-    assert!(source.is_char_boundary(forward.source_offset));
-
-    tab.selection_reversed = true;
-    let reversed = visual_table_toolbar_target(version, tables[0], tab.cursor_offset())
-        .expect("reversed selection endpoint owns the same UTF-8 cell");
-    assert_eq!(forward, reversed);
-
-    let empty_range = visual_table_cell_range(&tab.document, 0, 1, 0);
-    assert!(empty_range.is_empty());
-    let empty = visual_table_toolbar_target(version, tables[0], empty_range.start)
-        .expect("an empty cell owns its exact zero-width caret position");
-    assert_eq!((empty.row, empty.column), (1, 0));
-    assert!(source.is_char_boundary(empty.source_offset));
-
-    let second_range = visual_table_cell_range(&tab.document, 1, 1, 1);
-    assert!(visual_table_toolbar_target(version, tables[0], second_range.end).is_none());
-    let second = visual_table_toolbar_target(version, tables[1], second_range.end)
-        .expect("only the second table owns its cell caret");
-    assert_eq!((second.row, second.column), (1, 1));
-    assert_eq!(
-        revalidate_visual_table_toolbar_target(
-            second,
-            TableEdit::AddRow,
-            version,
-            second_range.end,
-            &blocks,
-        ),
-        Some(second.source_offset)
-    );
-    assert_eq!(
-        revalidate_visual_table_toolbar_target(
-            second,
-            TableEdit::AddRow,
-            version + 1,
-            second_range.end,
-            &blocks,
-        ),
-        None,
-        "a target from another document version must be rejected"
-    );
-    assert_eq!(
-        revalidate_visual_table_toolbar_target(
-            second,
-            TableEdit::AddRow,
-            version,
-            utf8_range.end,
-            &blocks,
-        ),
-        None,
-        "moving the canonical caret out of the target cell invalidates activation"
-    );
-}
-
-#[test]
-fn visual_table_toolbar_availability_matches_structural_boundaries() {
-    let document = MarkdownDocument::from_text(
-        "| H1 | H2 | H3 |\n| --- | --- | --- |\n| a1 | a2 | a3 |\n| b1 | b2 | b3 |",
-    );
-    let cursor = visual_table_cell_range(&document, 0, 0, 1).end;
-    let block = document
-        .visual_blocks()
-        .into_iter()
-        .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
-        .expect("visual table block");
-    let base = visual_table_toolbar_target(document.version(), &block, cursor)
-        .expect("header cell toolbar target");
-
-    assert!(table_toolbar_action_available(base, TableEdit::AddRow));
-    assert!(table_toolbar_action_available(base, TableEdit::AddColumn));
-    assert!(!table_toolbar_action_available(base, TableEdit::DeleteRow));
-    assert!(!table_toolbar_action_available(base, TableEdit::MoveRowUp));
-    assert!(!table_toolbar_action_available(
-        base,
-        TableEdit::MoveRowDown
-    ));
-
-    let first_body = VisualTableToolbarTarget { row: 1, ..base };
-    assert!(table_toolbar_action_available(
-        first_body,
-        TableEdit::DeleteRow
-    ));
-    assert!(!table_toolbar_action_available(
-        first_body,
-        TableEdit::MoveRowUp
-    ));
-    assert!(table_toolbar_action_available(
-        first_body,
-        TableEdit::MoveRowDown
-    ));
-
-    let last_body = VisualTableToolbarTarget { row: 2, ..base };
-    assert!(table_toolbar_action_available(
-        last_body,
-        TableEdit::MoveRowUp
-    ));
-    assert!(!table_toolbar_action_available(
-        last_body,
-        TableEdit::MoveRowDown
-    ));
-
-    let final_column = VisualTableToolbarTarget {
-        column: 0,
-        column_count: 1,
-        ..base
-    };
-    assert!(!table_toolbar_action_available(
-        final_column,
-        TableEdit::DeleteColumn
-    ));
-}
 
 fn visual_table_block_id(document: &MarkdownDocument, table_index: usize) -> VisualBlockId {
     document
@@ -6140,55 +5990,528 @@ fn visual_table_block_id(document: &MarkdownDocument, table_index: usize) -> Vis
         .expect("visual table block")
 }
 
-#[test]
-fn visual_table_toolbar_visibility_is_hover_or_caret() {
-    let document = MarkdownDocument::from_text(
-        "| A | B |\n| --- | --- |\n| 1 | 2 |\n\n| C | D |\n| --- | --- |\n| 3 | 4 |",
-    );
-    let first = visual_table_block_id(&document, 0);
-    let second = visual_table_block_id(&document, 1);
-    assert!(!visual_table_toolbar_is_visible(None, first, false));
-    assert!(visual_table_toolbar_is_visible(Some(first), first, false));
-    assert!(!visual_table_toolbar_is_visible(Some(second), first, false));
-    assert!(visual_table_toolbar_is_visible(None, first, true));
-    assert!(visual_table_toolbar_is_visible(Some(first), first, true));
-}
-
-#[test]
-fn visual_table_delete_is_disabled_for_quoted_tables() {
-    let top_level = MarkdownDocument::from_text("| A | B |\n| --- | --- |\n| 1 | 2 |");
-    let top_id = visual_table_block_id(&top_level, 0);
-    assert!(visual_table_delete_available(
-        &top_level.visual_blocks_shared(),
-        top_id
-    ));
-
-    let quoted = MarkdownDocument::from_text("> | A | B |\n> | --- | --- |\n> | 1 | 2 |");
-    let quoted_blocks = quoted.visual_blocks_shared();
-    let quoted_table = quoted_blocks
+fn visual_table_block<'a>(blocks: &'a [VisualBlock], table_index: usize) -> &'a VisualBlock {
+    blocks
         .iter()
-        .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
-        .expect("quoted visual table");
-    assert!(
-        quoted_table.quote_context.is_some() || quoted_table.source_island.is_some(),
-        "quoted tables are not a free-standing reorderable source unit"
+        .filter(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+        .nth(table_index)
+        .expect("visual table block")
+}
+
+const HANDLE_TABLE: &str =
+    "| H1 | H2 | H3 |\n| --- | :---: | --- |\n| a1 | a2 | a3 |\n| b1 | b2 | b3 |\n| c1 | c2 | c3 |";
+
+#[test]
+fn visual_table_menu_items_respect_header_and_table_edges() {
+    use VisualTableMenuItem as Item;
+    let document = MarkdownDocument::from_text(HANDLE_TABLE);
+    let blocks = document.visual_blocks();
+    let block = visual_table_block(&blocks, 0);
+    let target = |axis| {
+        VisualTableAxisTarget::for_block(document.version(), block, axis).expect("in-range target")
+    };
+    let edit = |axis, item| visual_table_menu_item_edit(target(axis), item, TableAlignment::Default);
+
+    let header = VisualTableAxis::Row(0);
+    assert_eq!(
+        edit(header, Item::InsertAfter),
+        Some(TableStructureEdit::InsertRow { at: 1 })
     );
-    assert!(!visual_table_delete_available(
-        &quoted_blocks,
-        quoted_table.id
-    ));
+    assert_eq!(edit(header, Item::Clear), Some(TableStructureEdit::ClearRow(0)));
+    for item in [
+        Item::InsertBefore,
+        Item::MoveBefore,
+        Item::MoveAfter,
+        Item::Duplicate,
+        Item::Delete,
+        Item::Align(TableAlignment::Left),
+    ] {
+        assert_eq!(edit(header, item), None, "{item:?} is disabled on the header row");
+    }
+
+    let first_body = VisualTableAxis::Row(1);
+    assert_eq!(edit(first_body, Item::MoveBefore), None);
+    assert_eq!(
+        edit(first_body, Item::InsertBefore),
+        Some(TableStructureEdit::InsertRow { at: 1 })
+    );
+    assert_eq!(
+        edit(first_body, Item::MoveAfter),
+        Some(TableStructureEdit::MoveRow { from: 1, to: 2 })
+    );
+    let last_row = VisualTableAxis::Row(3);
+    assert_eq!(edit(last_row, Item::MoveAfter), None);
+    assert_eq!(
+        edit(last_row, Item::MoveBefore),
+        Some(TableStructureEdit::MoveRow { from: 3, to: 2 })
+    );
+    assert_eq!(edit(last_row, Item::Delete), Some(TableStructureEdit::DeleteRow(3)));
+
+    assert_eq!(edit(VisualTableAxis::Column(0), Item::MoveBefore), None);
+    assert_eq!(edit(VisualTableAxis::Column(2), Item::MoveAfter), None);
+    assert_eq!(
+        edit(VisualTableAxis::Column(1), Item::InsertBefore),
+        Some(TableStructureEdit::InsertColumn { at: 1 })
+    );
+    assert_eq!(
+        edit(VisualTableAxis::Column(1), Item::Delete),
+        Some(TableStructureEdit::DeleteColumn(1))
+    );
+    assert_eq!(
+        visual_table_menu_item_edit(
+            target(VisualTableAxis::Column(1)),
+            Item::Align(TableAlignment::Center),
+            TableAlignment::Center,
+        ),
+        Some(TableStructureEdit::AlignColumn {
+            column: 1,
+            alignment: TableAlignment::Default,
+        }),
+        "choosing the current alignment resets it"
+    );
+    assert!(VisualTableAxisTarget::for_block(document.version(), block, VisualTableAxis::Row(4)).is_none());
+
+    let lone = VisualTableAxisTarget {
+        axis: VisualTableAxis::Column(0),
+        column_count: 1,
+        ..target(VisualTableAxis::Column(0))
+    };
+    assert_eq!(
+        visual_table_menu_item_edit(lone, Item::Delete, TableAlignment::Default),
+        None
+    );
 }
 
 #[test]
-fn visual_table_toolbar_uses_shared_compact_button_metrics() {
-    assert_eq!(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_X_PX, 6.);
-    assert_eq!(VISUAL_TABLE_TOOLBAR_BUTTON_PADDING_Y_PX, 2.);
-    assert_eq!(VISUAL_TABLE_TOOLBAR_BUTTON_FONT_SIZE_PX, 10.);
+fn visual_table_drop_edit_rejects_self_header_and_foreign_drops() {
+    let document = MarkdownDocument::from_text(HANDLE_TABLE);
+    let blocks = document.visual_blocks();
+    let block = visual_table_block(&blocks, 0);
+    let row = |index| {
+        VisualTableAxisTarget::for_block(document.version(), block, VisualTableAxis::Row(index))
+            .unwrap()
+    };
+    let column = |index| {
+        VisualTableAxisTarget::for_block(document.version(), block, VisualTableAxis::Column(index))
+            .unwrap()
+    };
     assert_eq!(
-        table_toolbar_actions_for_view_mode(ViewMode::VisualEdit).len(),
-        6,
-        "the shared compact metrics cover every Visual Edit row/column table action"
+        visual_table_drop_edit(row(3), block.id, VisualTableAxis::Row(1)),
+        Some(TableStructureEdit::MoveRow { from: 3, to: 1 })
     );
+    assert_eq!(visual_table_drop_edit(row(2), block.id, VisualTableAxis::Row(2)), None);
+    assert_eq!(visual_table_drop_edit(row(2), block.id, VisualTableAxis::Row(0)), None);
+    assert_eq!(visual_table_drop_edit(row(0), block.id, VisualTableAxis::Row(2)), None);
+    assert_eq!(visual_table_drop_edit(row(2), block.id, VisualTableAxis::Column(1)), None);
+    assert_eq!(
+        visual_table_drop_edit(column(0), block.id, VisualTableAxis::Column(2)),
+        Some(TableStructureEdit::MoveColumn { from: 0, to: 2 })
+    );
+
+    let other = MarkdownDocument::from_text("| X | Y |\n| --- | --- |\n| 1 | 2 |");
+    let other_id = visual_table_block(&other.visual_blocks(), 0).id;
+    assert_ne!(other_id, block.id);
+    assert_eq!(visual_table_drop_edit(row(2), other_id, VisualTableAxis::Row(1)), None);
+}
+
+#[test]
+fn visual_table_axis_target_revalidation_rejects_stale_shape_and_version() {
+    let mut document = MarkdownDocument::from_text(HANDLE_TABLE);
+    let blocks = document.visual_blocks();
+    let target = VisualTableAxisTarget::for_block(
+        document.version(),
+        visual_table_block(&blocks, 0),
+        VisualTableAxis::Row(1),
+    )
+    .unwrap();
+    let offset = revalidate_visual_table_axis_target(target, document.version(), &blocks)
+        .expect("fresh target");
+    assert_eq!(document.table_range_at(offset), Some(0..HANDLE_TABLE.len()));
+    assert!(
+        revalidate_visual_table_axis_target(target, document.version() + 1, &blocks).is_none()
+    );
+    let reshaped = VisualTableAxisTarget {
+        row_count: target.row_count + 1,
+        ..target
+    };
+    assert!(revalidate_visual_table_axis_target(reshaped, document.version(), &blocks).is_none());
+
+    document
+        .edit_table_structure_at(offset, TableStructureEdit::InsertRow { at: 1 })
+        .unwrap();
+    let blocks = document.visual_blocks();
+    assert!(
+        revalidate_visual_table_axis_target(
+            VisualTableAxisTarget {
+                document_version: document.version(),
+                ..target
+            },
+            document.version(),
+            &blocks
+        )
+        .is_none(),
+        "a table whose row count changed rejects the old target"
+    );
+}
+
+fn visual_table_handle_app<'a>(
+    source: &str,
+    cx: &'a mut TestAppContext,
+) -> (Entity<MarkionApp>, &'a mut VisualTestContext) {
+    let document = MarkdownDocument::from_text(source);
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(document)];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    (app, cx)
+}
+
+fn hover_visual_table_cell(
+    app: &Entity<MarkionApp>,
+    cx: &mut VisualTestContext,
+    table_index: usize,
+    row: usize,
+    column: usize,
+) {
+    app.update(cx, |app, cx| {
+        let id = visual_table_block_id(&app.active_tab().document, table_index);
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = Some(id);
+        tab.hovered_visual_table_cell = Some((id, row, column));
+        cx.notify();
+    });
+    cx.run_until_parked();
+}
+
+fn visual_table_document_state(
+    app: &Entity<MarkionApp>,
+    cx: &mut VisualTestContext,
+) -> (String, u64, bool, usize) {
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.text().to_string(),
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.undo_stack.len(),
+        )
+    })
+}
+
+#[gpui::test]
+fn visual_table_handles_follow_the_hovered_cell_without_layout_shift(cx: &mut TestAppContext) {
+    let source = format!("{HANDLE_TABLE}\n\nAfter the table");
+    let (app, cx) = visual_table_handle_app(&source, cx);
+    let before = visual_table_document_state(&app, cx);
+    let chrome = cx.debug_bounds("visual-table-chrome-0").expect("table chrome");
+    let after_row = cx.debug_bounds("visual-block-row-1").expect("paragraph after the table");
+    assert!(cx.debug_bounds("visual-table-row-grip-0-2").is_none());
+    assert!(cx.debug_bounds("visual-table-column-grip-0-1").is_none());
+    assert!(cx.debug_bounds("visual-table-add-row-0").is_none());
+
+    hover_visual_table_cell(&app, cx, 0, 2, 1);
+    let row_grip = cx.debug_bounds("visual-table-row-grip-0-2").expect("hovered row grip");
+    assert!(cx.debug_bounds("visual-table-column-grip-0-1").is_some());
+    assert!(cx.debug_bounds("visual-table-add-row-0").is_some());
+    assert!(cx.debug_bounds("visual-table-add-column-0").is_some());
+    for other in ["visual-table-row-grip-0-1", "visual-table-row-grip-0-0", "visual-table-column-grip-0-0"] {
+        assert!(cx.debug_bounds(other).is_none(), "{other} stays hidden");
+    }
+    assert!(row_grip.size.width > px(0.) && row_grip.size.height > px(0.));
+    assert_eq!(cx.debug_bounds("visual-table-chrome-0"), Some(chrome), "table does not move");
+    assert_eq!(
+        cx.debug_bounds("visual-block-row-1"),
+        Some(after_row),
+        "content below does not move"
+    );
+    assert!(cx.debug_bounds("visual-table-add-row").is_none(), "no in-flow header");
+    assert_eq!(visual_table_document_state(&app, cx), before);
+
+    // Caret ownership alone reveals nothing and shifts nothing.
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = None;
+        tab.hovered_visual_table_cell = None;
+        let cell = visual_table_cell_range(&tab.document, 0, 1, 1);
+        app.move_to(cell.start, cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-table-row-grip-0-1").is_none());
+    assert_eq!(cx.debug_bounds("visual-table-chrome-0"), Some(chrome));
+}
+
+#[gpui::test]
+fn visual_table_row_menu_applies_one_undoable_edit(cx: &mut TestAppContext) {
+    let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
+    hover_visual_table_cell(&app, cx, 0, 2, 0);
+    let (_, version, _, _) = visual_table_document_state(&app, cx);
+    let grip = cx.debug_bounds("visual-table-row-grip-0-2").expect("row grip");
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-table-menu").is_some(), "grip click opens the row menu");
+    for enabled in [
+        "visual-table-menu-insert-before",
+        "visual-table-menu-insert-after",
+        "visual-table-menu-move-before",
+        "visual-table-menu-move-after",
+        "visual-table-menu-duplicate",
+        "visual-table-menu-clear",
+        "visual-table-menu-delete",
+    ] {
+        assert!(cx.debug_bounds(enabled).is_some(), "{enabled} is enabled for body row 2");
+    }
+    assert!(cx.debug_bounds("visual-table-menu-align-left").is_none(), "rows have no alignment");
+    assert_eq!(visual_table_document_state(&app, cx).1, version, "opening does not mutate");
+
+    let mut expected = MarkdownDocument::from_text(HANDLE_TABLE);
+    expected
+        .edit_table_structure_at(0, TableStructureEdit::InsertRow { at: 2 })
+        .unwrap();
+    let item = cx
+        .debug_bounds("visual-table-menu-insert-before")
+        .expect("insert above");
+    cx.simulate_click(item.center(), Modifiers::none());
+    cx.run_until_parked();
+    let (text, new_version, dirty, undo) = visual_table_document_state(&app, cx);
+    assert_eq!(text, expected.text());
+    assert_eq!(new_version, version + 1);
+    assert!(dirty);
+    assert_eq!(undo, 1);
+    assert!(
+        app.update(cx, |app, _| app.visual_table_menu.is_none()),
+        "the menu closes after an action"
+    );
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let field = tab
+            .document
+            .visual_editor_field_at(&tab.selected_range)
+            .expect("selection lands in a table cell");
+        assert_eq!(field.kind, VisualEditorFieldKind::TableCell { row: 2, column: 0 });
+    });
+
+    cx.update(|window, cx| app.update(cx, |app, cx| app.undo(&Undo, window, cx)));
+    cx.run_until_parked();
+    assert_eq!(visual_table_document_state(&app, cx).0, HANDLE_TABLE);
+}
+
+#[gpui::test]
+fn visual_table_header_row_menu_disables_structural_items(cx: &mut TestAppContext) {
+    let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
+    hover_visual_table_cell(&app, cx, 0, 0, 0);
+    let before = visual_table_document_state(&app, cx);
+    let grip = cx.debug_bounds("visual-table-row-grip-0-0").expect("header row grip");
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    for disabled in [
+        "visual-table-menu-insert-before-disabled",
+        "visual-table-menu-move-before-disabled",
+        "visual-table-menu-move-after-disabled",
+        "visual-table-menu-duplicate-disabled",
+        "visual-table-menu-delete-disabled",
+    ] {
+        assert!(cx.debug_bounds(disabled).is_some(), "{disabled}");
+    }
+    assert!(cx.debug_bounds("visual-table-menu-insert-after").is_some());
+    assert!(cx.debug_bounds("visual-table-menu-clear").is_some());
+    let delete = cx
+        .debug_bounds("visual-table-menu-delete-disabled")
+        .unwrap();
+    cx.simulate_click(delete.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(visual_table_document_state(&app, cx), before);
+}
+
+#[gpui::test]
+fn visual_table_column_menu_aligns_and_marks_the_current_alignment(cx: &mut TestAppContext) {
+    let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
+    hover_visual_table_cell(&app, cx, 0, 2, 0);
+    let grip = cx.debug_bounds("visual-table-column-grip-0-0").expect("column grip");
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-table-menu-move-before-disabled").is_some());
+    let center = cx
+        .debug_bounds("visual-table-menu-align-center")
+        .expect("align center");
+    cx.simulate_click(center.center(), Modifiers::none());
+    cx.run_until_parked();
+    let (text, _, _, undo) = visual_table_document_state(&app, cx);
+    assert!(
+        text.lines().nth(1).unwrap().starts_with("| :---: |"),
+        "first column is centered: {text}"
+    );
+    assert_eq!(undo, 1);
+    app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let VisualBlockKind::Table { alignments, .. } = &visual_table_block(&blocks, 0).kind else {
+            unreachable!()
+        };
+        assert_eq!(alignments[1], TableAlignment::Center, "other columns keep alignment");
+    });
+
+    hover_visual_table_cell(&app, cx, 0, 1, 0);
+    let grip = cx.debug_bounds("visual-table-column-grip-0-0").expect("column grip");
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.visual_table_menu.map(|menu| menu.alignment),
+            Some(TableAlignment::Center)
+        );
+    });
+    app.update(cx, |app, cx| {
+        app.apply_visual_table_menu_item(VisualTableMenuItem::Align(TableAlignment::Center), cx);
+    });
+    cx.run_until_parked();
+    let (text, _, _, undo) = visual_table_document_state(&app, cx);
+    assert!(text.lines().nth(1).unwrap().starts_with("| --- |"), "{text}");
+    assert_eq!(undo, 2);
+}
+
+#[gpui::test]
+fn visual_table_edge_strips_append_to_their_own_table(cx: &mut TestAppContext) {
+    let source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\n| X | Y |\n| --- | --- |\n| 7 | 8 |";
+    let (app, cx) = visual_table_handle_app(source, cx);
+    let second_index = app.update(cx, |app, _| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        blocks
+            .iter()
+            .position(|block| block.id == visual_table_block(&blocks, 1).id)
+            .unwrap()
+    });
+    hover_visual_table_cell(&app, cx, 1, 1, 1);
+    let strip = cx
+        .debug_bounds(Box::leak(format!("visual-table-add-row-{second_index}").into_boxed_str()))
+        .expect("bottom strip");
+    cx.simulate_click(strip.center(), Modifiers::none());
+    cx.run_until_parked();
+    let (text, _, _, undo) = visual_table_document_state(&app, cx);
+    assert!(text.starts_with("| A | B |\n| --- | --- |\n| 1 | 2 |\n\n"), "{text}");
+    assert!(text.ends_with("| 7   | 8   |\n|     |     |"), "{text}");
+    assert_eq!(undo, 1);
+
+    hover_visual_table_cell(&app, cx, 1, 0, 0);
+    let strip = cx
+        .debug_bounds(Box::leak(format!("visual-table-add-column-{second_index}").into_boxed_str()))
+        .expect("right strip");
+    cx.simulate_click(strip.center(), Modifiers::none());
+    cx.run_until_parked();
+    let (text, _, _, undo) = visual_table_document_state(&app, cx);
+    assert!(text.lines().last().unwrap().matches('|').count() == 4, "{text}");
+    assert!(text.starts_with("| A | B |\n"));
+    assert_eq!(undo, 2);
+}
+
+#[gpui::test]
+fn visual_table_drops_reorder_rows_and_columns_as_one_edit(cx: &mut TestAppContext) {
+    let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
+    let (block_id, row_target, column_target) = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let block = visual_table_block(&blocks, 0);
+        (
+            block.id,
+            VisualTableAxisTarget::for_block(tab.document.version(), block, VisualTableAxis::Row(3))
+                .unwrap(),
+            VisualTableAxisTarget::for_block(
+                tab.document.version(),
+                block,
+                VisualTableAxis::Column(0),
+            )
+            .unwrap(),
+        )
+    });
+    let before = visual_table_document_state(&app, cx);
+    app.update(cx, |app, cx| {
+        app.drop_visual_table_axis(row_target, block_id, VisualTableAxis::Row(3), cx);
+    });
+    assert_eq!(visual_table_document_state(&app, cx), before, "self-drop is inert");
+
+    app.update(cx, |app, cx| {
+        app.drop_visual_table_axis(row_target, block_id, VisualTableAxis::Row(1), cx);
+    });
+    cx.run_until_parked();
+    let (text, version, _, undo) = visual_table_document_state(&app, cx);
+    let body: Vec<_> = text.lines().skip(2).map(|line| line.split('|').nth(1).unwrap().trim()).collect();
+    assert_eq!(body, ["c1", "a1", "b1"]);
+    assert_eq!((version, undo), (before.1 + 1, 1));
+
+    app.update(cx, |app, cx| {
+        app.drop_visual_table_axis(column_target, block_id, VisualTableAxis::Column(2), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        visual_table_document_state(&app, cx),
+        (text.clone(), version, true, 1),
+        "a drag captured before the row move is stale"
+    );
+
+    let fresh = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        VisualTableAxisTarget::for_block(
+            tab.document.version(),
+            visual_table_block(&blocks, 0),
+            VisualTableAxis::Column(0),
+        )
+        .unwrap()
+    });
+    app.update(cx, |app, cx| {
+        app.drop_visual_table_axis(fresh, fresh.block_id, VisualTableAxis::Column(2), cx);
+    });
+    cx.run_until_parked();
+    let (text, _, _, undo) = visual_table_document_state(&app, cx);
+    assert!(text.starts_with("| H2 "), "{text}");
+    assert_eq!(undo, 2);
+}
+
+#[gpui::test]
+fn visual_table_menu_is_dismissed_with_the_block_menu(cx: &mut TestAppContext) {
+    let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
+    hover_visual_table_cell(&app, cx, 0, 1, 1);
+    let grip = cx.debug_bounds("visual-table-row-grip-0-1").expect("row grip");
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(app.update(cx, |app, _| app.visual_table_menu.is_some()));
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab_mut();
+        tab.hovered_visual_table_block = None;
+        tab.hovered_visual_table_cell = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-table-row-grip-0-1").is_some(),
+        "the grip of the open menu stays visible"
+    );
+    app.update(cx, |app, cx| app.close_visual_block_menu(cx));
+    cx.run_until_parked();
+    assert!(app.update(cx, |app, _| app.visual_table_menu.is_none()));
+
+    // Opening the block menu also replaces an open table menu.
+    let grip = cx.debug_bounds("visual-table-row-grip-0-1").unwrap();
+    hover_visual_table_cell(&app, cx, 0, 1, 1);
+    cx.simulate_click(grip.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(app.update(cx, |app, _| app.visual_table_menu.is_some()));
+    app.update(cx, |app, cx| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let target = BlockTarget::from_block(tab.document.version(), visual_table_block(&blocks, 0));
+        app.open_visual_block_menu(target, point(px(10.), px(10.)), cx);
+    });
+    app.update(cx, |app, _| {
+        assert!(app.block_menu.is_some());
+        assert!(app.visual_table_menu.is_none());
+    });
 }
 
 #[test]
@@ -7599,646 +7922,15 @@ fn visual_direct_table_cell_edit_reflows_traverses_and_undoes_once(cx: &mut Test
     });
 }
 
-#[gpui::test]
-fn visual_table_toolbar_clicks_target_the_focused_non_first_cell(cx: &mut TestAppContext) {
-    let source = "| H1 | H2 | H3 |\n| --- | --- | --- |\n| a1 | a2 | a3 |\n| b1 | b2 | b3 |\n| c1 | c2 | c3 |";
-    let cases = [
-        (TableEdit::AddRow, "visual-table-add-row"),
-        (TableEdit::DeleteRow, "visual-table-delete-row"),
-        (TableEdit::MoveRowUp, "visual-table-move-row-up"),
-        (TableEdit::MoveRowDown, "visual-table-move-row-down"),
-        (TableEdit::AddColumn, "visual-table-add-column"),
-        (TableEdit::DeleteColumn, "visual-table-delete-column"),
-    ];
-    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
 
-    for (edit, selector) in cases {
-        let document = MarkdownDocument::from_text(source);
-        let selected_range = visual_table_cell_range(&document, 0, 2, 1);
-        let mut expected = MarkdownDocument::from_text(source);
-        let expected_result = expected
-            .edit_table_at(selected_range.start, edit)
-            .expect("the focused middle cell supports every toolbar action");
-        let expected_text = expected.text().to_string();
-        let expected_selection = expected_result.selected_range.clone();
-        let expected_kind = VisualEditorFieldKind::TableCell {
-            row: expected_result.row,
-            column: expected_result.column,
-        };
 
-        app.update(cx, |app, cx| {
-            app.tabs = vec![EditorTab::new(document)];
-            app.active_tab_mut().selected_range = selected_range.clone();
-            app.active_tab_mut().visual_cursor_reveal_pending = true;
-            app.view_mode = ViewMode::VisualEdit;
-            cx.notify();
-        });
-        cx.run_until_parked();
-        let (version, blocks) = app.update(cx, |app, _| {
-            let tab = app.active_tab();
-            (tab.document.version(), tab.document.visual_blocks_shared())
-        });
 
-        let button = cx
-            .debug_bounds(selector)
-            .unwrap_or_else(|| panic!("enabled toolbar button {selector} should be rendered"));
-        cx.simulate_click(button.center(), Modifiers::none());
-        cx.run_until_parked();
 
-        app.update(cx, |app, _| {
-            let tab = app.active_tab();
-            assert_eq!(
-                tab.document.text(),
-                expected_text,
-                "wrong target for {edit:?}"
-            );
-            assert_eq!(tab.selected_range, expected_selection);
-            assert_eq!(tab.document.version(), version + 1);
-            assert!(tab.document.is_dirty());
-            assert_eq!(tab.undo_stack.len(), 1);
-            assert_eq!(tab.autosave_generation, 1);
-            assert!(!Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
-            assert_eq!(
-                tab.document
-                    .visual_editor_field_at(&tab.selected_range)
-                    .expect("result selection stays in a visual table cell")
-                    .kind,
-                expected_kind
-            );
-        });
-    }
-}
 
-#[gpui::test]
-fn visual_table_toolbar_disables_unowned_and_invalid_actions_without_side_effects(
-    cx: &mut TestAppContext,
-) {
-    let table = "| H1 | H2 |\n| --- | --- |\n| a1 | a2 |\n| b1 | b2 |";
-    let source = format!("Intro\n\n{table}");
-    let document = MarkdownDocument::from_text(source.clone());
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.active_tab_mut().selected_range = 0..0;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
 
-    assert!(
-        cx.debug_bounds("visual-table-add-row-disabled").is_none(),
-        "idle tables omit the editing header"
-    );
-    assert!(cx.debug_bounds("visual-table-add-row").is_none());
-    assert!(cx.debug_bounds("visual-table-delete-table").is_none());
 
-    app.update(cx, |app, cx| {
-        let id = visual_table_block_id(&app.active_tab().document, 0);
-        app.active_tab_mut().hovered_visual_table_block = Some(id);
-        app.active_tab_mut().visual_table_toolbar_hover_ready = Some(id);
-        cx.notify();
-    });
-    cx.run_until_parked();
 
-    let unowned_add = cx
-        .debug_bounds("visual-table-add-row-disabled")
-        .expect("hovered toolbar without an owned caret renders Add Row disabled");
-    let before = app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        (
-            tab.document.text().to_string(),
-            tab.selected_range.clone(),
-            tab.document.version(),
-            tab.document.is_dirty(),
-            tab.undo_stack.len(),
-        )
-    });
-    cx.simulate_click(unowned_add.center(), Modifiers::none());
-    cx.run_until_parked();
-    app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        assert_eq!(tab.document.text(), before.0);
-        assert_eq!(tab.selected_range, before.1);
-        assert_eq!(tab.document.version(), before.2);
-        assert_eq!(tab.document.is_dirty(), before.3);
-        assert_eq!(tab.undo_stack.len(), before.4);
-    });
 
-    let header = app.update(cx, |app, _| {
-        visual_table_cell_range(&app.active_tab().document, 0, 0, 0)
-    });
-    app.update(cx, |app, cx| app.move_to(header.start, cx));
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("visual-table-delete-row-disabled")
-            .is_some()
-    );
-    assert!(
-        cx.debug_bounds("visual-table-move-row-up-disabled")
-            .is_some()
-    );
-    assert!(
-        cx.debug_bounds("visual-table-move-row-down-disabled")
-            .is_some()
-    );
-
-    let first_body = app.update(cx, |app, _| {
-        visual_table_cell_range(&app.active_tab().document, 0, 1, 0)
-    });
-    app.update(cx, |app, cx| app.move_to(first_body.start, cx));
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("visual-table-move-row-up-disabled")
-            .is_some()
-    );
-    assert!(cx.debug_bounds("visual-table-move-row-down").is_some());
-
-    let last_body = app.update(cx, |app, _| {
-        visual_table_cell_range(&app.active_tab().document, 0, 2, 0)
-    });
-    app.update(cx, |app, cx| app.move_to(last_body.start, cx));
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("visual-table-move-row-up").is_some());
-    let disabled_down = cx
-        .debug_bounds("visual-table-move-row-down-disabled")
-        .expect("last body row cannot move down");
-    let version = app.update(cx, |app, _| app.active_tab().document.version());
-    cx.simulate_click(disabled_down.center(), Modifiers::none());
-    cx.run_until_parked();
-    app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        assert_eq!(tab.document.text(), source);
-        assert_eq!(tab.document.version(), version);
-        assert!(!tab.document.is_dirty());
-        assert!(tab.undo_stack.is_empty());
-    });
-}
-
-#[gpui::test]
-fn visual_table_toolbar_isolates_tables_and_roundtrips_one_history_entry(cx: &mut TestAppContext) {
-    let source = "| A | B |\n| --- | --- |\n| a1 | a2 |\n\nBetween\n\n| C | D |\n| --- | --- |\n| c1 | c2 |\n| d1 | d2 |";
-    let document = MarkdownDocument::from_text(source);
-    let selected = visual_table_cell_range(&document, 1, 1, 1);
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.active_tab_mut().selected_range = selected;
-        app.active_tab_mut().visual_cursor_reveal_pending = true;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
-
-    assert!(
-        cx.debug_bounds("visual-table-add-row-disabled").is_none(),
-        "the idle neighbor table omits its editing header"
-    );
-
-    app.update(cx, |app, cx| {
-        let id = visual_table_block_id(&app.active_tab().document, 0);
-        app.active_tab_mut().hovered_visual_table_block = Some(id);
-        app.active_tab_mut().visual_table_toolbar_hover_ready = Some(id);
-        cx.notify();
-    });
-    cx.run_until_parked();
-
-    let first_table_disabled = cx
-        .debug_bounds("visual-table-add-row-disabled")
-        .expect("the hovered table without the caret has no guessed target");
-    cx.simulate_click(first_table_disabled.center(), Modifiers::none());
-    cx.run_until_parked();
-    app.update(cx, |app, _| {
-        assert_eq!(app.active_tab().document.text(), source);
-        assert!(app.active_tab().undo_stack.is_empty());
-    });
-
-    let delete_row = cx
-        .debug_bounds("visual-table-delete-row")
-        .expect("the caret-owning second table exposes Delete Row");
-    cx.simulate_click(delete_row.center(), Modifiers::none());
-    cx.run_until_parked();
-    let edited = app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        assert_eq!(tab.undo_stack.len(), 1);
-        assert!(tab.document.text().contains("| a1 | a2 |"));
-        assert!(!tab.document.text().contains("| c1  | c2  |"));
-        tab.document.text().to_string()
-    });
-
-    cx.dispatch_action(Undo);
-    app.update(cx, |app, _| {
-        assert_eq!(app.active_tab().document.text(), source)
-    });
-    cx.dispatch_action(Redo);
-    app.update(cx, |app, _| {
-        assert_eq!(app.active_tab().document.text(), edited)
-    });
-}
-
-#[gpui::test]
-fn visual_table_toolbar_shows_on_hover_or_caret_without_mutating(cx: &mut TestAppContext) {
-    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
-    let document = MarkdownDocument::from_text(source);
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.active_tab_mut().selected_range = 0..0;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
-
-    let before = app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        (
-            tab.document.text().to_string(),
-            tab.selected_range.clone(),
-            tab.document.version(),
-            tab.document.is_dirty(),
-            tab.undo_stack.len(),
-            std::sync::Arc::as_ptr(&tab.document.visual_blocks_shared()),
-        )
-    });
-    assert!(cx.debug_bounds("visual-table-add-row-disabled").is_none());
-    assert!(cx.debug_bounds("visual-table-delete-table").is_none());
-
-    app.update(cx, |app, cx| {
-        let id = visual_table_block_id(&app.active_tab().document, 0);
-        app.active_tab_mut().hovered_visual_table_block = Some(id);
-        app.active_tab_mut().visual_table_toolbar_hover_ready = Some(id);
-        cx.notify();
-    });
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("visual-table-add-row-disabled").is_some());
-    assert!(cx.debug_bounds("visual-table-delete-table").is_some());
-    app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        assert_eq!(tab.document.text(), before.0);
-        assert_eq!(tab.selected_range, before.1);
-        assert_eq!(tab.document.version(), before.2);
-        assert_eq!(tab.document.is_dirty(), before.3);
-        assert_eq!(tab.undo_stack.len(), before.4);
-        assert_eq!(
-            std::sync::Arc::as_ptr(&tab.document.visual_blocks_shared()),
-            before.5
-        );
-    });
-
-    let cell = app.update(cx, |app, _| {
-        visual_table_cell_range(&app.active_tab().document, 0, 0, 0)
-    });
-    app.update(cx, |app, cx| {
-        app.active_tab_mut().hovered_visual_table_block = None;
-        app.active_tab_mut().visual_table_toolbar_hover_ready = None;
-        app.move_to(cell.start, cx);
-    });
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("visual-table-add-row").is_some(),
-        "caret ownership keeps the header visible after the pointer leaves"
-    );
-    assert!(cx.debug_bounds("visual-table-delete-table").is_some());
-}
-
-#[gpui::test]
-fn visual_table_toolbar_shows_only_after_dwell_fire(cx: &mut TestAppContext) {
-    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
-    let document = MarkdownDocument::from_text(source);
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.active_tab_mut().selected_range = 0..0;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
-
-    // Raw hover alone (what the listener sets before the dwell elapses) must
-    // not show the header.
-    let (id, generation) = app.update(cx, |app, cx| {
-        let id = visual_table_block_id(&app.active_tab().document, 0);
-        let tab = app.active_tab_mut();
-        tab.hovered_visual_table_block = Some(id);
-        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
-        cx.notify();
-        (id, app.active_tab().visual_table_hover_generation)
-    });
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("visual-table-add-row-disabled").is_none(),
-        "hover without the elapsed dwell keeps the header hidden"
-    );
-
-    // A timer armed by an older transition fires into a no-op.
-    app.update(cx, |app, cx| {
-        app.fire_visual_table_hover_dwell(0, id, generation.wrapping_sub(1), cx);
-    });
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("visual-table-add-row-disabled").is_none(),
-        "a stale-generation dwell fire shows nothing"
-    );
-
-    // The current-generation dwell fire with the pointer still over the table
-    // shows the header.
-    app.update(cx, |app, cx| {
-        app.fire_visual_table_hover_dwell(0, id, generation, cx);
-    });
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("visual-table-add-row-disabled").is_some(),
-        "the dwell fire shows the header while the pointer stays"
-    );
-}
-
-#[gpui::test]
-fn visual_table_toolbar_dwell_fire_after_pointer_leave_shows_nothing(cx: &mut TestAppContext) {
-    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
-    let document = MarkdownDocument::from_text(source);
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.active_tab_mut().selected_range = 0..0;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
-
-    let (id, armed_generation) = app.update(cx, |app, _| {
-        let id = visual_table_block_id(&app.active_tab().document, 0);
-        let tab = app.active_tab_mut();
-        tab.hovered_visual_table_block = Some(id);
-        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
-        (id, tab.visual_table_hover_generation)
-    });
-    // Pointer leaves before the dwell elapses: raw hover clears and the
-    // generation bumps, invalidating the armed dwell.
-    app.update(cx, |app, cx| {
-        let tab = app.active_tab_mut();
-        tab.hovered_visual_table_block = None;
-        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
-        cx.notify();
-    });
-    app.update(cx, |app, cx| {
-        app.fire_visual_table_hover_dwell(0, id, armed_generation, cx);
-    });
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("visual-table-add-row-disabled").is_none(),
-        "a pointer passing through within the dwell shows no header"
-    );
-}
-
-#[gpui::test]
-fn visual_table_toolbar_hide_delay_respects_reentry(cx: &mut TestAppContext) {
-    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
-    let document = MarkdownDocument::from_text(source);
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.active_tab_mut().selected_range = 0..0;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
-
-    let id = app.update(cx, |app, _| {
-        visual_table_block_id(&app.active_tab().document, 0)
-    });
-    // Shown-from-hover state: raw hover + hover-ready both set.
-    app.update(cx, |app, cx| {
-        let tab = app.active_tab_mut();
-        tab.hovered_visual_table_block = Some(id);
-        tab.visual_table_toolbar_hover_ready = Some(id);
-        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
-        cx.notify();
-    });
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("visual-table-add-row-disabled").is_some());
-
-    // Pointer leaves: the hide delay is armed with the new generation, and
-    // hover-readiness is kept until it fires.
-    let hide_generation = app.update(cx, |app, cx| {
-        let tab = app.active_tab_mut();
-        tab.hovered_visual_table_block = None;
-        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
-        cx.notify();
-        app.active_tab().visual_table_hover_generation
-    });
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("visual-table-add-row-disabled").is_some(),
-        "the header stays up during the hide-delay window"
-    );
-
-    // Re-entering within the window bumps the generation, so the pending hide
-    // fires into a no-op and the header never flickers away.
-    app.update(cx, |app, cx| {
-        let tab = app.active_tab_mut();
-        tab.hovered_visual_table_block = Some(id);
-        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
-        cx.notify();
-    });
-    app.update(cx, |app, cx| {
-        app.fire_visual_table_hide_delay(0, id, hide_generation, cx);
-    });
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("visual-table-add-row-disabled").is_some(),
-        "re-entry within the hide window keeps the header"
-    );
-
-    // Leaving for good lets the due hide clear hover-readiness.
-    let final_generation = app.update(cx, |app, cx| {
-        let tab = app.active_tab_mut();
-        tab.hovered_visual_table_block = None;
-        tab.visual_table_hover_generation = tab.visual_table_hover_generation.wrapping_add(1);
-        cx.notify();
-        app.active_tab().visual_table_hover_generation
-    });
-    app.update(cx, |app, cx| {
-        app.fire_visual_table_hide_delay(0, id, final_generation, cx);
-    });
-    app.update(cx, |app, _| {
-        // Assert the state the fire actually controls rather than a painted
-        // selector: the test harness can replay a cached list-item paint into
-        // `debug_bounds` for a frame or more, while `hover_ready == None`
-        // is what removes the header on the next real paint (pinned by the
-        // `visual_table_toolbar_is_visible` unit test).
-        assert_eq!(
-            app.active_tab().visual_table_toolbar_hover_ready,
-            None,
-            "the due hide delay hides the header once the pointer stays away"
-        );
-    });
-}
-
-#[gpui::test]
-fn visual_table_toolbar_caret_shows_immediately_without_dwell(cx: &mut TestAppContext) {
-    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
-    let document = MarkdownDocument::from_text(source);
-    let selected = visual_table_cell_range(&document, 0, 0, 0);
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.active_tab_mut().selected_range = selected;
-        app.active_tab_mut().visual_cursor_reveal_pending = true;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
-
-    app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        assert_eq!(tab.hovered_visual_table_block, None);
-        assert_eq!(tab.visual_table_toolbar_hover_ready, None);
-    });
-    assert!(
-        cx.debug_bounds("visual-table-add-row").is_some(),
-        "caret ownership shows the header immediately, with no dwell"
-    );
-}
-
-#[gpui::test]
-fn visual_table_toolbar_deletes_the_whole_table_in_one_history_entry(cx: &mut TestAppContext) {
-    let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
-    let document = MarkdownDocument::from_text(source);
-    let selected = visual_table_cell_range(&document, 0, 0, 0);
-    let expected_selection = selected.clone();
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.active_tab_mut().selected_range = selected;
-        app.active_tab_mut().visual_cursor_reveal_pending = true;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
-
-    let delete = cx
-        .debug_bounds("visual-table-delete-table")
-        .expect("caret-owned table exposes Delete Table");
-    cx.simulate_click(delete.center(), Modifiers::none());
-    cx.run_until_parked();
-    app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        assert!(!tab.document.text().contains("| A | B |"));
-        assert!(tab.document.text().contains("Intro"));
-        assert!(tab.document.text().contains("After"));
-        assert_eq!(tab.undo_stack.len(), 1);
-        assert!(tab.document.is_dirty());
-    });
-
-    cx.dispatch_action(Undo);
-    app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        assert_eq!(tab.document.text(), source);
-        assert_eq!(tab.selected_range, expected_selection);
-    });
-}
-
-#[gpui::test]
-fn visual_table_toolbar_delete_is_isolated_and_disabled_when_unsupported(cx: &mut TestAppContext) {
-    let source =
-        "| A | B |\n| --- | --- |\n| a1 | a2 |\n\nKeep\n\n| C | D |\n| --- | --- |\n| c1 | c2 |";
-    let document = MarkdownDocument::from_text(source);
-    let selected = visual_table_cell_range(&document, 0, 0, 0);
-    let (app, cx) = cx.add_window_view(|_, cx| {
-        let mut app = MarkionApp::new(cx);
-        app.tabs = vec![EditorTab::new(document)];
-        app.active_tab_mut().selected_range = selected;
-        app.active_tab_mut().visual_cursor_reveal_pending = true;
-        app.view_mode = ViewMode::VisualEdit;
-        app
-    });
-    cx.update(|window, cx| {
-        window.focus(&app.read(cx).focus_handle);
-        window.activate_window();
-    });
-    cx.run_until_parked();
-
-    let delete = cx
-        .debug_bounds("visual-table-delete-table")
-        .expect("first table delete control");
-    cx.simulate_click(delete.center(), Modifiers::none());
-    cx.run_until_parked();
-    app.update(cx, |app, _| {
-        let text = app.active_tab().document.text();
-        assert!(!text.contains("| A | B |"));
-        assert!(text.contains("| C | D |"));
-        assert!(text.contains("Keep"));
-    });
-
-    let quoted = "> | H1 | H2 |\n> | --- | --- |\n> | a | b |";
-    let quoted_document = MarkdownDocument::from_text(quoted);
-    app.update(cx, |app, cx| {
-        app.tabs = vec![EditorTab::new(quoted_document)];
-        let id = visual_table_block_id(&app.active_tab().document, 0);
-        app.active_tab_mut().hovered_visual_table_block = Some(id);
-        app.active_tab_mut().visual_table_toolbar_hover_ready = Some(id);
-        app.active_tab_mut().selected_range = 0..0;
-        app.view_mode = ViewMode::VisualEdit;
-        cx.notify();
-    });
-    cx.run_until_parked();
-    let disabled = cx
-        .debug_bounds("visual-table-delete-table-disabled")
-        .expect("quoted tables cannot be deleted as a source unit");
-    let before = app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        (
-            tab.document.text().to_string(),
-            tab.document.version(),
-            tab.document.is_dirty(),
-            tab.undo_stack.len(),
-        )
-    });
-    cx.simulate_click(disabled.center(), Modifiers::none());
-    cx.run_until_parked();
-    app.update(cx, |app, _| {
-        let tab = app.active_tab();
-        assert_eq!(tab.document.text(), before.0);
-        assert_eq!(tab.document.version(), before.1);
-        assert_eq!(tab.document.is_dirty(), before.2);
-        assert_eq!(tab.undo_stack.len(), before.3);
-    });
-}
 
 #[gpui::test]
 fn source_table_command_still_targets_the_source_caret(cx: &mut TestAppContext) {
