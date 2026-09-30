@@ -1,4 +1,5 @@
 use super::*;
+use super::application::AutosaveGate;
 
 const BOUNDARY_SCAN_WINDOW: usize = 1024;
 pub(super) const SEMANTIC_UNDO_TIMEOUT: Duration = Duration::from_millis(900);
@@ -929,6 +930,9 @@ pub(super) struct DocumentTabState {
     /// executor. Timer fires during that window are skipped; the completion
     /// re-arms when the document is dirty again.
     pub(super) autosave_in_flight: bool,
+    /// Cancellation gate of the in-flight autosave, if any. Discard paths
+    /// cancel it so a write captured before "Don't Save" cannot land after.
+    pub(super) autosave_gate: Option<Arc<AutosaveGate>>,
     pub(super) sync_scroll_state: SyncScrollState,
     /// Active drag/copy selection in the rendered preview for this tab.
     /// Independent of the source editor selection; never mutates the document.
@@ -1077,6 +1081,17 @@ impl std::ops::DerefMut for WorkspaceTab {
 }
 
 impl DocumentTabState {
+    /// Explicit-discard cleanup: cancel any in-flight autosave (removing a
+    /// recovery snapshot it already wrote) and delete the known snapshot.
+    pub(super) fn discard_recovery_state(&mut self) {
+        if let Some(gate) = self.autosave_gate.take() {
+            gate.cancel();
+        }
+        if let Some(recovery) = self.last_recovery_file.take() {
+            let _ = delete_recovery_file(recovery);
+        }
+    }
+
     fn new(document: MarkdownDocument) -> Self {
         let version = document.version();
         Self {
@@ -1161,6 +1176,7 @@ impl DocumentTabState {
             last_recovery_file: None,
             autosave_generation: 0,
             autosave_in_flight: false,
+            autosave_gate: None,
             sync_scroll_state: SyncScrollState::default(),
             preview_selection: None,
             preview_is_selecting: false,

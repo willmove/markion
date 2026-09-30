@@ -36,6 +36,7 @@ pub(super) struct AutosaveRequest {
     pub(super) silent_save: bool,
     pub(super) write_admission: Option<WriteAdmission>,
     pub(super) repository_epoch: Option<ReadEpoch>,
+    pub(super) gate: Arc<AutosaveGate>,
 }
 
 pub(super) struct AutosaveCompletion {
@@ -43,6 +44,41 @@ pub(super) struct AutosaveCompletion {
     pub(super) generation: u64,
     pub(super) repository_epoch: Option<ReadEpoch>,
     pub(super) result: AutosaveOutcome,
+    pub(super) gate: Arc<AutosaveGate>,
+}
+
+/// Cancellation gate shared by one in-flight autosave and its tab. The
+/// background stage holds the lock for its whole disk run, so an explicit
+/// discard ("Don't Save", close others, quit) either lands before the run —
+/// which then writes nothing — or after it, in which case the recovery
+/// snapshot the run left behind is deleted here. Either way nothing the user
+/// discarded reaches disk afterwards.
+#[derive(Default)]
+pub(super) struct AutosaveGate(std::sync::Mutex<AutosaveGateState>);
+
+#[derive(Default)]
+struct AutosaveGateState {
+    cancelled: bool,
+    /// Recovery snapshot written by the run and still on disk.
+    recovery: Option<PathBuf>,
+}
+
+impl AutosaveGate {
+    fn lock(&self) -> std::sync::MutexGuard<'_, AutosaveGateState> {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(super) fn cancel(&self) {
+        let mut state = self.lock();
+        state.cancelled = true;
+        if let Some(recovery) = state.recovery.take() {
+            let _ = delete_recovery_file(recovery);
+        }
+    }
+
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.lock().cancelled
+    }
 }
 
 pub(super) enum AutosaveOutcome {
@@ -55,6 +91,8 @@ pub(super) enum AutosaveOutcome {
         path: PathBuf,
         identity: DiskIdentity,
     },
+    /// Discarded before the run started; nothing was written.
+    Cancelled,
     /// Recovery snapshot written but the destination save failed; the
     /// snapshot is kept. `external_conflict` mirrors `save()`'s
     /// `ErrorKind::AlreadyExists` contract for on-disk divergence.
@@ -76,7 +114,12 @@ fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveComple
         generation: request.generation,
         repository_epoch: request.repository_epoch.clone(),
         result,
+        gate: request.gate.clone(),
     };
+    let mut gate = request.gate.lock();
+    if gate.cancelled {
+        return complete(AutosaveOutcome::Cancelled);
+    }
     let recovery = match markion::write_recovery_copy(
         recovery_dir,
         request.recovery_id,
@@ -96,6 +139,7 @@ fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveComple
     {
         let _ = delete_recovery_file(previous);
     }
+    gate.recovery = Some(recovery.clone());
     // Untitled tabs, or named tabs with silent_save off: keep recovery only.
     let Some(path) = request.path.as_ref().filter(|_| request.silent_save) else {
         return complete(AutosaveOutcome::RecoveryOnly { recovery });
@@ -103,6 +147,7 @@ fn run_autosave(recovery_dir: &Path, request: AutosaveRequest) -> AutosaveComple
     match save_text_snapshot(path, request.known.as_ref(), &request.text) {
         Ok(identity) => {
             let _ = delete_recovery_file(&recovery);
+            gate.recovery = None;
             complete(AutosaveOutcome::Saved {
                 path: path.clone(),
                 identity,
@@ -1343,17 +1388,15 @@ impl MarkionApp {
         if self.active_tab().is_image() {
             return;
         }
-        if let Some(recovery) = self.active_tab_mut().last_recovery_file.take() {
-            let _ = delete_recovery_file(recovery);
+        if let Some(state) = self.active_tab_mut().document_tab_mut() {
+            state.discard_recovery_state();
         }
     }
 
     pub(super) fn discard_all_tab_recovery_files(&mut self) {
         for tab in &mut self.tabs {
-            if tab.is_document()
-                && let Some(recovery) = tab.last_recovery_file.take()
-            {
-                let _ = delete_recovery_file(recovery);
+            if let Some(state) = tab.document_tab_mut() {
+                state.discard_recovery_state();
             }
         }
     }
@@ -1444,10 +1487,8 @@ impl MarkionApp {
     fn replace_active_with_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
         let active = self.active_tab;
         self.release_tab_image_claims(active, cx);
-        if self.tabs[active].is_document()
-            && let Some(recovery) = self.tabs[active].last_recovery_file.take()
-        {
-            let _ = delete_recovery_file(recovery);
+        if let Some(state) = self.tabs[active].document_tab_mut() {
+            state.discard_recovery_state();
         }
         self.tabs[active] = tab;
         // The replaced tab no longer exists; any menu targeting it is stale.
@@ -1750,6 +1791,8 @@ impl MarkionApp {
             return;
         }
         tab.autosave_in_flight = true;
+        let gate = Arc::new(AutosaveGate::default());
+        tab.autosave_gate = Some(gate.clone());
         let mut request = AutosaveRequest {
             recovery_id: tab.recovery_id,
             generation,
@@ -1760,6 +1803,7 @@ impl MarkionApp {
             silent_save: self.auto_save_preferences.silent_save,
             write_admission: None,
             repository_epoch: None,
+            gate,
         };
         if request.silent_save
             && let Some(path) = request.path.as_ref()
@@ -1801,6 +1845,21 @@ impl MarkionApp {
             return;
         };
         let language = self.language;
+        if let Some(state) = self.tabs[index].document_tab_mut()
+            && state
+                .autosave_gate
+                .as_ref()
+                .is_some_and(|gate| Arc::ptr_eq(gate, &outcome.gate))
+        {
+            state.autosave_gate = None;
+        }
+        // An explicitly discarded run must not re-register its snapshot or
+        // identity; the discard already cleaned up after it.
+        if outcome.gate.is_cancelled() {
+            self.tabs[index].autosave_in_flight = false;
+            cx.notify();
+            return;
+        }
         if outcome
             .repository_epoch
             .as_ref()
@@ -1818,6 +1877,7 @@ impl MarkionApp {
             let tab = &mut self.tabs[index];
             tab.autosave_in_flight = false;
             status = match outcome.result {
+                AutosaveOutcome::Cancelled => return,
                 AutosaveOutcome::RecoveryFailed { error } => {
                     tracing::warn!(error = %error, "recovery snapshot failed");
                     tf(language, Msg::StatusAutoSaveFailed, &[&error])

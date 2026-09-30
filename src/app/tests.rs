@@ -18562,6 +18562,58 @@ fn autosave_silent_save_off_keeps_named_file_and_recovery(cx: &mut TestAppContex
     assert_eq!(recovered.text, "in-memory");
 }
 
+fn discard_during_in_flight_autosave_writes_nothing(silent_save: bool, cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("discard.md");
+    fs::write(&path, "on-disk").unwrap();
+    let document = MarkdownDocument::open(&path).unwrap();
+    let recovery_dir = dir.path().join("recovery");
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.auto_save_preferences = AutoSavePreferences {
+            enabled: true,
+            silent_save,
+            delay_secs: 1,
+        };
+        app.recovery_dir = recovery_dir.clone();
+        app.tabs = vec![
+            EditorTab::new(document),
+            EditorTab::new(MarkdownDocument::new()),
+        ];
+        app.active_tab = 0;
+        app
+    });
+
+    // The autosave captures its snapshot, then the user picks "Don't Save"
+    // before the background stage runs.
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().document.set_text("discarded");
+        app.schedule_autosave(cx);
+        let generation = app.active_tab().autosave_generation;
+        app.run_due_autosave(0, generation, recovery_dir.clone(), cx);
+        assert!(app.active_tab().autosave_in_flight);
+        app.close_tab_confirmed(cx);
+        assert_eq!(app.tabs.len(), 1);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "on-disk");
+    let leftover = fs::read_dir(&recovery_dir)
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(leftover, 0, "discarded autosave left a recovery snapshot");
+}
+
+#[gpui::test]
+fn discard_cancels_in_flight_silent_autosave(cx: &mut TestAppContext) {
+    discard_during_in_flight_autosave_writes_nothing(true, cx);
+}
+
+#[gpui::test]
+fn discard_cancels_in_flight_recovery_only_autosave(cx: &mut TestAppContext) {
+    discard_during_in_flight_autosave_writes_nothing(false, cx);
+}
+
 #[gpui::test]
 fn autosave_enabled_false_does_not_run_due_work(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
@@ -18622,6 +18674,7 @@ fn autosave_completion_after_racing_edit_keeps_dirty_but_records_identity(cx: &m
                 recovery_id,
                 generation: 6,
                 repository_epoch: None,
+                gate: Default::default(),
                 result: AutosaveOutcome::Saved {
                     path: path.clone(),
                     identity: identity.clone(),
@@ -18684,6 +18737,7 @@ fn autosave_completion_from_pre_git_epoch_cannot_replace_post_sync_identity(
                 recovery_id,
                 generation: 7,
                 repository_epoch: Some(stale_epoch),
+                gate: Default::default(),
                 result: AutosaveOutcome::Saved {
                     path: path.clone(),
                     identity: stale_identity,

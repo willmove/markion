@@ -228,10 +228,8 @@ impl MarkionApp {
             self.image_operations.invalidate_document(document);
         }
         // Discard the active tab's recovery file before removing it.
-        if self.active_tab().is_document()
-            && let Some(recovery) = self.active_tab_mut().last_recovery_file.take()
-        {
-            let _ = delete_recovery_file(recovery);
+        if let Some(state) = self.active_tab_mut().document_tab_mut() {
+            state.discard_recovery_state();
         }
         let active = self.active_tab;
         self.release_tab_image_claims(active, cx);
@@ -613,10 +611,8 @@ impl MarkionApp {
                 self.image_operations.invalidate_document(document);
             }
             self.release_tab_image_claims(index, cx);
-            if let Some(state) = self.tabs[index].document_tab_mut()
-                && let Some(recovery) = state.last_recovery_file.take()
-            {
-                let _ = delete_recovery_file(recovery);
+            if let Some(state) = self.tabs[index].document_tab_mut() {
+                state.discard_recovery_state();
             }
             self.tabs.remove(index);
             if index < self.active_tab {
@@ -910,8 +906,8 @@ impl MarkionApp {
                 tab.undo_stack.clear();
                 tab.redo_stack.clear();
                 tab.reset_preview_list();
-                if let Some(recovery) = tab.last_recovery_file.take() {
-                    let _ = delete_recovery_file(recovery);
+                if let Some(state) = tab.document_tab_mut() {
+                    state.discard_recovery_state();
                 }
                 self.status = p0_t(self.language, P0Msg::ExternalReloadDiscarded).into();
             }
