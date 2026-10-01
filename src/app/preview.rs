@@ -235,7 +235,9 @@ pub(super) fn preview_block_runs(block: &PreviewBlock) -> Vec<PreviewTextRunId> 
         PreviewBlock::Heading { .. }
         | PreviewBlock::Paragraph { .. }
         | PreviewBlock::ListItem { .. }
-        | PreviewBlock::FootnoteDefinition { .. } => vec![PreviewTextRunId::Body],
+        | PreviewBlock::FootnoteDefinition { .. }
+        | PreviewBlock::DefinitionTerm { .. }
+        | PreviewBlock::DefinitionDetail { .. } => vec![PreviewTextRunId::Body],
         PreviewBlock::BlockQuote { children, .. } => children
             .iter()
             .enumerate()
@@ -3853,6 +3855,11 @@ fn callout_accent_color(kind: AlertKind) -> Rgba {
     }
 }
 
+/// Gap between a definition-list term and its first definition.
+const DEFINITION_TERM_GAP: f32 = 2.;
+/// Left indent of a definition-list definition.
+const DEFINITION_DETAIL_INDENT: f32 = 24.;
+
 /// Lucide counterparts of GitHub's alert Octicons.
 fn callout_icon(kind: AlertKind) -> crate::ui::icon::Icon {
     use crate::ui::icon::Icon;
@@ -4376,6 +4383,36 @@ fn visual_block_content_view(
         }
         VisualBlockKind::Paragraph => div()
             .mb(px(body_flow_spacing))
+            .line_height(px(typography.paragraph_line_height))
+            .text_size(px(typography.rendered_font_size))
+            .child(visual_text_with_math_element(
+                block,
+                block_index,
+                app,
+                display_scale,
+                document_dir,
+                cx,
+            )),
+        // A definition-list term sits tight above its definitions; each
+        // definition is indented, with its `:` marker hidden until revealed.
+        VisualBlockKind::DefinitionTerm => div()
+            .debug_selector(move || format!("visual-definition-term-{block_index}"))
+            .mb(px(DEFINITION_TERM_GAP))
+            .font_weight(FontWeight::BOLD)
+            .line_height(px(typography.paragraph_line_height))
+            .text_size(px(typography.rendered_font_size))
+            .child(visual_text_with_math_element(
+                block,
+                block_index,
+                app,
+                display_scale,
+                document_dir,
+                cx,
+            )),
+        VisualBlockKind::DefinitionDetail => div()
+            .debug_selector(move || format!("visual-definition-detail-{block_index}"))
+            .mb(px(body_flow_spacing))
+            .pl(px(DEFINITION_DETAIL_INDENT))
             .line_height(px(typography.paragraph_line_height))
             .text_size(px(typography.rendered_font_size))
             .child(visual_text_with_math_element(
@@ -7695,6 +7732,42 @@ pub(super) fn preview_block_view(
             .child(rich_text_with_math_element(
                 app,
                 "preview-paragraph",
+                text,
+                block_index,
+                PreviewTextRunId::Body,
+                display_scale,
+                typography.rendered_font_size,
+                typography.paragraph_line_height,
+                document_dir,
+                cx,
+            )),
+        PreviewBlock::DefinitionTerm { text, .. } => div()
+            .debug_selector(move || format!("preview-definition-term-{block_index}"))
+            .mb(px(DEFINITION_TERM_GAP))
+            .font_weight(FontWeight::BOLD)
+            .line_height(px(typography.paragraph_line_height))
+            .text_size(px(typography.rendered_font_size))
+            .child(rich_text_with_math_element(
+                app,
+                "preview-definition-term",
+                text,
+                block_index,
+                PreviewTextRunId::Body,
+                display_scale,
+                typography.rendered_font_size,
+                typography.paragraph_line_height,
+                document_dir,
+                cx,
+            )),
+        PreviewBlock::DefinitionDetail { text, .. } => div()
+            .debug_selector(move || format!("preview-definition-detail-{block_index}"))
+            .mb(px(typography.paragraph_spacing))
+            .pl(px(DEFINITION_DETAIL_INDENT))
+            .line_height(px(typography.paragraph_line_height))
+            .text_size(px(typography.rendered_font_size))
+            .child(rich_text_with_math_element(
+                app,
+                "preview-definition-detail",
                 text,
                 block_index,
                 PreviewTextRunId::Body,

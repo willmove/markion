@@ -21836,6 +21836,57 @@ fn visual_indented_code_enter_keeps_lines_in_the_block(cx: &mut TestAppContext) 
     });
 }
 
+#[gpui::test]
+fn definition_list_renders_in_read_mode_and_edits_in_visual_edit(cx: &mut TestAppContext) {
+    let source = "Apple\n: Red fruit\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Read;
+        app
+    });
+    cx.run_until_parked();
+    let term = cx
+        .debug_bounds("preview-definition-term-0")
+        .expect("bold term row");
+    let detail = cx
+        .debug_bounds("preview-definition-detail-1")
+        .expect("definition row");
+    assert!(
+        detail.top() >= term.bottom(),
+        "definition renders below its term"
+    );
+
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().selected_range = 0..0;
+        app.set_view_mode(ViewMode::VisualEdit, cx);
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-definition-term-0").is_some());
+    assert!(cx.debug_bounds("visual-definition-detail-1").is_some());
+
+    let end = source.find("fruit").unwrap() + "fruit".len();
+    app.update(cx, |app, cx| app.move_to(end, cx));
+    cx.simulate_input("s");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), "Apple\n: Red fruits\n");
+        assert!(tab.document.is_dirty());
+        assert!(
+            tab.document
+                .visual_blocks()
+                .iter()
+                .any(|block| matches!(block.kind, VisualBlockKind::DefinitionDetail)),
+            "the edited definition is still a definition"
+        );
+    });
+}
+
 #[test]
 fn search_word_range_selects_words_cjk_runs_and_single_separators() {
     let text = "foo bar_baz, 中文词";

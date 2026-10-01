@@ -211,8 +211,13 @@ fn pdf_single_block(
             level: *level,
             content: pdf_runs(text, footnotes),
         }),
-        PreviewBlock::Paragraph { text, .. } => Some(PdfBlock::Paragraph {
-            content: pdf_runs(text, footnotes),
+        PreviewBlock::Paragraph { text, .. } | PreviewBlock::DefinitionDetail { text, .. } => {
+            Some(PdfBlock::Paragraph {
+                content: pdf_runs(text, footnotes),
+            })
+        }
+        PreviewBlock::DefinitionTerm { text, .. } => Some(PdfBlock::Paragraph {
+            content: pdf_runs(&text.emboldened(), footnotes),
         }),
         PreviewBlock::ListItem {
             level,
@@ -1579,6 +1584,16 @@ fn render_docx_block(state: &mut DocxRenderState, block: &PreviewBlock) {
             state.end_list_group();
             let runs = state.rich_runs(text);
             state.push_paragraph(None, None, None, &runs);
+        }
+        PreviewBlock::DefinitionTerm { text, .. } => {
+            state.end_list_group();
+            let runs = state.rich_runs(&text.emboldened());
+            state.push_paragraph(None, None, None, &runs);
+        }
+        PreviewBlock::DefinitionDetail { text, .. } => {
+            state.end_list_group();
+            let runs = state.rich_runs(text);
+            state.push_paragraph(None, None, Some(720), &runs);
         }
         PreviewBlock::ListItem {
             level,
@@ -3175,6 +3190,60 @@ mod tests {
         let document_xml = entry(&bytes, "word/document.xml");
         assert!(document_xml.contains("<w:pBdr><w:bottom w:val=\"single\""));
         assert!(!document_xml.contains("----------"));
+    }
+
+    #[test]
+    fn definition_list_export_renders_terms_and_definitions() {
+        let document = MarkdownDocument::from_text("Apple\n: Red **fruit**\n");
+
+        let html = document.render_html_fragment();
+        assert!(
+            html.contains("<dl>") && html.contains("<dt>Apple</dt>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<dd>Red <strong>fruit</strong></dd>"),
+            "{html}"
+        );
+
+        let latex = document.render_latex_document();
+        assert!(latex.contains("\\noindent\\textbf{Apple}"), "{latex}");
+        assert!(latex.contains("\\begin{quote}"), "{latex}");
+
+        let xml = document_xml(&docx_parts(&document));
+        let term = xml.find(">Apple</w:t>").expect("term run");
+        assert!(
+            xml[..term]
+                .rfind("<w:p>")
+                .map_or(xml[..term].contains("<w:b/>"), |p| xml[p..term]
+                    .contains("<w:b/>")),
+            "bold term: {xml}"
+        );
+        let detail = xml.find(">Red </w:t>").expect("detail run");
+        assert!(
+            xml[..detail].rfind("<w:ind w:left=\"720\"/>").is_some(),
+            "indented detail"
+        );
+
+        let ir = build_pdf_ir(
+            &document,
+            &PdfExportOptions::default(),
+            None,
+            &HashMap::new(),
+        );
+        let PdfBlock::Paragraph { content } = &ir.blocks[0] else {
+            panic!("term paragraph: {:?}", ir.blocks);
+        };
+        assert!(content.iter().all(|run| run.style.bold), "bold term runs");
+        let PdfBlock::Paragraph { content } = &ir.blocks[1] else {
+            panic!("detail paragraph: {:?}", ir.blocks);
+        };
+        assert!(content.iter().any(|run| run.text.contains("Red")));
+        assert!(
+            content
+                .iter()
+                .any(|run| run.text == "fruit" && run.style.bold)
+        );
     }
 
     #[test]

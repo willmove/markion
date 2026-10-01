@@ -722,7 +722,9 @@ pub(crate) fn shift_preview_block(block: &mut PreviewBlock, delta: isize) -> Opt
         }
         | PreviewBlock::FootnoteDefinition {
             text, source_range, ..
-        } => {
+        }
+        | PreviewBlock::DefinitionTerm { text, source_range }
+        | PreviewBlock::DefinitionDetail { text, source_range } => {
             *source_range = shift_range(source_range, delta)?;
             shift_rich_text(text, delta)?;
         }

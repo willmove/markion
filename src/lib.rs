@@ -312,8 +312,8 @@ pub use table::{
 
 use parse::{
     ImageDraft, InlineStateDraft, ListItemDestination, ListItemDraft, ListLevelDraft,
-    absorb_table_of_contents, append_preview_image, append_span, clean_preview_text,
-    coalesced_offset_events, finish_rich_text, flush_list_item, gfm_alert_kind,
+    absorb_table_of_contents, append_definition_spans, append_preview_image, append_span,
+    clean_preview_text, coalesced_offset_events, finish_rich_text, flush_list_item, gfm_alert_kind,
     heading_anchor_base, heading_level_to_u8, markdown_options, push_nonempty_block,
     push_preview_footnote, push_preview_math, push_preview_rich, render_extended_html_text_nodes,
     standalone_inline_images, uniquify_heading_anchors,
@@ -2818,6 +2818,16 @@ impl MarkdownDocument {
                     output.push_str(&render_latex_rich_text(&text));
                     output.push_str("\n\n");
                 }
+                PreviewBlock::DefinitionTerm { text, .. } => {
+                    output.push_str("\\noindent\\textbf{");
+                    output.push_str(&render_latex_rich_text(&text));
+                    output.push_str("}\n\n");
+                }
+                PreviewBlock::DefinitionDetail { text, .. } => {
+                    output.push_str("\\begin{quote}\n");
+                    output.push_str(&render_latex_rich_text(&text));
+                    output.push_str("\n\\end{quote}\n\n");
+                }
                 PreviewBlock::ListItem {
                     ordered,
                     checked,
@@ -3539,10 +3549,90 @@ impl MarkdownDocument {
         let mut table: Option<TableDraft> = None;
         let mut inline = InlineStateDraft::default();
         let mut footnote: Option<(String, Vec<InlineSpan>, std::ops::Range<usize>)> = None;
+        // Open definition-list definition: its flattened inline spans and
+        // source range. Tight definitions feed `paragraph` directly; loose
+        // ones feed it through their own paragraphs.
+        let mut definition: Option<(Vec<InlineSpan>, std::ops::Range<usize>)> = None;
 
         for (event, range) in coalesced_offset_events(body, markdown_options()) {
             let source_range = body_offset + range.start..body_offset + range.end;
+            // A nested non-paragraph block ends the definition's own text:
+            // emit it now (so it precedes the nested block) with a range that
+            // stops where the nested block starts; later content renders as
+            // ordinary blocks.
+            if definition.is_some()
+                && matches!(
+                    &event,
+                    Event::Start(
+                        Tag::List(_)
+                            | Tag::CodeBlock(_)
+                            | Tag::BlockQuote(_)
+                            | Tag::Table(_)
+                            | Tag::Heading { .. }
+                            | Tag::HtmlBlock
+                            | Tag::DefinitionList
+                    ) | Event::Rule
+                )
+                && let Some((mut spans, detail_range)) = definition.take()
+            {
+                if let Some((direct, _)) = paragraph.take() {
+                    append_definition_spans(&mut spans, direct);
+                }
+                push_nonempty_block(
+                    if quote_depth > 0 {
+                        &mut quote_children
+                    } else {
+                        &mut blocks
+                    },
+                    PreviewBlock::DefinitionDetail {
+                        text: finish_rich_text(spans),
+                        source_range: detail_range.start..source_range.start,
+                    },
+                );
+            }
             match event {
+                Event::Start(Tag::DefinitionListTitle) => {
+                    inline.html.clear();
+                    paragraph = Some((Vec::new(), source_range));
+                }
+                Event::End(TagEnd::DefinitionListTitle) => {
+                    if let Some((spans, title_range)) = paragraph.take() {
+                        push_nonempty_block(
+                            if quote_depth > 0 {
+                                &mut quote_children
+                            } else {
+                                &mut blocks
+                            },
+                            PreviewBlock::DefinitionTerm {
+                                text: finish_rich_text(spans),
+                                source_range: title_range,
+                            },
+                        );
+                    }
+                }
+                Event::Start(Tag::DefinitionListDefinition) => {
+                    inline.html.clear();
+                    definition = Some((Vec::new(), source_range.clone()));
+                    paragraph = Some((Vec::new(), source_range));
+                }
+                Event::End(TagEnd::DefinitionListDefinition) => {
+                    if let Some((mut spans, detail_range)) = definition.take() {
+                        if let Some((direct, _)) = paragraph.take() {
+                            append_definition_spans(&mut spans, direct);
+                        }
+                        push_nonempty_block(
+                            if quote_depth > 0 {
+                                &mut quote_children
+                            } else {
+                                &mut blocks
+                            },
+                            PreviewBlock::DefinitionDetail {
+                                text: finish_rich_text(spans),
+                                source_range: detail_range,
+                            },
+                        );
+                    }
+                }
                 Event::Start(Tag::Heading { level, id, .. }) => {
                     let level = heading_level_to_u8(level);
                     heading = Some((level, Vec::new(), source_range.clone()));
@@ -3593,6 +3683,11 @@ impl MarkdownDocument {
                 }
                 Event::Start(Tag::Paragraph) => {
                     inline.html.clear();
+                    if let Some((spans, _)) = definition.as_mut()
+                        && let Some((direct, _)) = paragraph.take()
+                    {
+                        append_definition_spans(spans, direct);
+                    }
                     paragraph = Some((Vec::new(), source_range));
                 }
                 Event::End(TagEnd::Paragraph) => {
@@ -3602,6 +3697,8 @@ impl MarkdownDocument {
                                 append_span(footnote_spans, "\n", InlineStyle::default(), None);
                             }
                             footnote_spans.extend(spans);
+                        } else if let Some((definition_spans, _)) = definition.as_mut() {
+                            append_definition_spans(definition_spans, spans);
                         } else if let Some(item) = list_item.as_mut() {
                             // Keep a line break between sibling paragraphs that get
                             // flattened into one list item. Image spans already

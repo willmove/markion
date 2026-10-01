@@ -1323,10 +1323,15 @@ fn visual_block_from_preview(
             },
             None,
         ),
+        PreviewBlock::DefinitionTerm { .. } => (VisualBlockKind::DefinitionTerm, None),
+        PreviewBlock::DefinitionDetail { .. } => (VisualBlockKind::DefinitionDetail, None),
     };
 
     let block_prefix = block_prefix(text, &kind, source_range.clone(), quote_context.as_ref());
-    let inline_source_range = if matches!(kind, VisualBlockKind::ListItem { .. }) {
+    let inline_source_range = if matches!(
+        kind,
+        VisualBlockKind::ListItem { .. } | VisualBlockKind::DefinitionDetail
+    ) {
         block_prefix.as_ref().map_or_else(
             || source_range.clone(),
             |prefix| prefix.source_range.end..source_range.end,
@@ -3543,6 +3548,15 @@ fn block_prefix(
                     VisualBlockPrefixKind::UnorderedList { level: *level },
                 )
             }
+        }
+        VisualBlockKind::DefinitionDetail => {
+            if line.as_bytes().get(marker_start) != Some(&b':') {
+                return None;
+            }
+            (
+                skip_ascii_spacing(line, marker_start + 1),
+                VisualBlockPrefixKind::DefinitionMarker,
+            )
         }
         _ => return None,
     };
@@ -8534,6 +8548,101 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
         let tokens = data_uri_payload_ranges(&source, 1..source.len() - 1);
         assert_eq!(tokens.len(), 1);
         assert_eq!(&source[tokens[0].clone()], &payload);
+    }
+
+    #[test]
+    fn definition_list_preview_and_visual_blocks() {
+        let blocks_for = |source: &str| MarkdownDocument::from_text(source).preview_blocks();
+        let shapes = |source: &str| -> Vec<(&'static str, String, String)> {
+            blocks_for(source)
+                .iter()
+                .map(|block| {
+                    let kind = match block {
+                        PreviewBlock::DefinitionTerm { .. } => "term",
+                        PreviewBlock::DefinitionDetail { .. } => "detail",
+                        PreviewBlock::Paragraph { .. } => "paragraph",
+                        PreviewBlock::ListItem { .. } => "item",
+                        PreviewBlock::BlockQuote { .. } => "quote",
+                        _ => "other",
+                    };
+                    (
+                        kind,
+                        source[block.source_range().clone()].to_string(),
+                        block.plain_text(),
+                    )
+                })
+                .collect()
+        };
+        let s = |value: &str| value.to_string();
+
+        assert_eq!(
+            shapes("Apple\n: Red fruit\n: Also a company\n\nOrange\n: Citrus\n"),
+            vec![
+                ("term", s("Apple\n"), s("Apple")),
+                ("detail", s(": Red fruit\n"), s("Red fruit")),
+                ("detail", s(": Also a company\n\n"), s("Also a company")),
+                ("term", s("Orange\n"), s("Orange")),
+                ("detail", s(": Citrus\n"), s("Citrus")),
+            ]
+        );
+        // Loose definitions flatten their paragraphs into one detail.
+        assert_eq!(
+            shapes("Term\n\n: Loose one\n\n  second paragraph\n")[1],
+            (
+                "detail",
+                s(": Loose one\n\n  second paragraph\n"),
+                s("Loose one\nsecond paragraph")
+            )
+        );
+        // pulldown's list range overruns into the next paragraph; ownership
+        // follows the term/definition ranges instead.
+        assert_eq!(
+            shapes("Term\n: def\n\nAfter paragraph\n")[2],
+            ("paragraph", s("After paragraph\n"), s("After paragraph"))
+        );
+        // A nested block ends the definition's own text and follows it.
+        let nested = shapes("Term\n:   - nested item\n");
+        assert_eq!(nested[1].0, "detail");
+        assert_eq!(nested[1].1, ":   ");
+        assert_eq!(nested[2], ("item", s("- nested item\n"), s("nested item")));
+        // Inside a quote, terms and details are the quote's children.
+        let quoted = blocks_for("> Quoted term\n> : quoted def\n");
+        let PreviewBlock::BlockQuote { children, .. } = &quoted[0] else {
+            panic!("quote: {quoted:?}");
+        };
+        assert!(matches!(children[0], PreviewBlock::DefinitionTerm { .. }));
+        assert!(matches!(children[1], PreviewBlock::DefinitionDetail { .. }));
+
+        // Visual Edit: the `:` marker is the detail row's prefix and inline
+        // runs start after it; every byte has one owner.
+        let source = "Apple\n: Red **fruit**\n";
+        let document = MarkdownDocument::from_text(source);
+        let rows = document.visual_blocks();
+        let detail = rows
+            .iter()
+            .find(|row| matches!(row.kind, VisualBlockKind::DefinitionDetail))
+            .expect("detail row");
+        let prefix = detail.block_prefix.as_ref().expect("marker prefix");
+        assert_eq!(prefix.kind, VisualBlockPrefixKind::DefinitionMarker);
+        assert_eq!(&source[prefix.source_range.clone()], ": ");
+        assert!(detail.source_island.is_none());
+        assert!(
+            detail
+                .editable_runs
+                .iter()
+                .all(|run| run.content_range.start >= prefix.source_range.end)
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.kind, VisualBlockKind::DefinitionTerm))
+        );
+        let mut owned = vec![0usize; source.len()];
+        for row in &rows {
+            for offset in row.source_range.clone() {
+                owned[offset] += 1;
+            }
+        }
+        assert!(owned.iter().all(|count| *count == 1), "{owned:?}");
     }
 
     #[test]

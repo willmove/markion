@@ -785,6 +785,18 @@ fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
     }
 }
 
+/// Appends one definition paragraph's spans to the definition's flattened
+/// text, separating paragraphs with a line break.
+pub(crate) fn append_definition_spans(target: &mut Vec<InlineSpan>, spans: Vec<InlineSpan>) {
+    if spans.is_empty() {
+        return;
+    }
+    if !target.is_empty() {
+        append_span(target, "\n", InlineStyle::default(), None);
+    }
+    target.extend(spans);
+}
+
 pub(crate) fn push_nonempty_block(blocks: &mut Vec<PreviewBlock>, block: PreviewBlock) {
     match &block {
         PreviewBlock::Paragraph { text, .. } => {
@@ -2792,6 +2804,7 @@ pub(crate) fn markdown_options() -> Options {
         | Options::ENABLE_SMART_PUNCTUATION
         | Options::ENABLE_HEADING_ATTRIBUTES
         | Options::ENABLE_GFM
+        | Options::ENABLE_DEFINITION_LIST
 }
 
 /// Visual Edit needs byte-identical visible text so every rendered character

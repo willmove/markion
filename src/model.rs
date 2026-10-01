@@ -1603,6 +1603,11 @@ pub enum VisualBlockKind {
     FootnoteDefinition {
         label: String,
     },
+    /// Term line of a definition list.
+    DefinitionTerm,
+    /// One `: definition` of a definition list; the `:` marker is the row's
+    /// block prefix.
+    DefinitionDetail,
     /// Typora-style `[TOC]` paragraph rendered as a live outline.
     TableOfContents,
     /// Standalone link reference definition line(s) (`[label]: url`).
@@ -1884,11 +1889,25 @@ pub struct VisualProjection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisualBlockPrefixKind {
-    Heading { level: u8 },
-    BlockQuote { depth: usize },
-    UnorderedList { level: usize },
-    OrderedList { level: usize, index: u64 },
-    TaskList { level: usize, checked: bool },
+    Heading {
+        level: u8,
+    },
+    BlockQuote {
+        depth: usize,
+    },
+    UnorderedList {
+        level: usize,
+    },
+    OrderedList {
+        level: usize,
+        index: u64,
+    },
+    TaskList {
+        level: usize,
+        checked: bool,
+    },
+    /// The `:` marker (plus spacing) opening a definition-list definition.
+    DefinitionMarker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1944,6 +1963,22 @@ pub enum VisualSourceIslandKind {
 }
 
 impl RichText {
+    /// The same text with every span (or the whole unstyled text) bold, for
+    /// exporters that render definition-list terms as bold paragraphs.
+    pub fn emboldened(&self) -> RichText {
+        let mut rich = self.clone();
+        if rich.spans.is_empty() && !rich.text.is_empty() {
+            rich.spans.push(InlineSpan {
+                text: rich.text.clone(),
+                ..InlineSpan::default()
+            });
+        }
+        for span in &mut rich.spans {
+            span.style.bold = true;
+        }
+        rich
+    }
+
     pub fn plain(text: impl Into<String>) -> Self {
         let text = text.into();
         if text.is_empty() {
@@ -2085,6 +2120,18 @@ pub enum PreviewBlock {
         text: RichText,
         source_range: Range<usize>,
     },
+    /// Term line of a definition list (`Term` followed by `: definition`).
+    DefinitionTerm {
+        text: RichText,
+        source_range: Range<usize>,
+    },
+    /// One definition of a term. Inline content (directly or from the
+    /// definition's paragraphs) is flattened into `text`; the range starts at
+    /// the `:` marker and stops before any nested non-paragraph block.
+    DefinitionDetail {
+        text: RichText,
+        source_range: Range<usize>,
+    },
     /// Standalone `[TOC]` / `[toc]` paragraph. Source stays the token.
     TableOfContents {
         source_range: Range<usize>,
@@ -2106,6 +2153,8 @@ impl PreviewBlock {
             | Self::Rule { source_range }
             | Self::Table { source_range, .. }
             | Self::FootnoteDefinition { source_range, .. }
+            | Self::DefinitionTerm { source_range, .. }
+            | Self::DefinitionDetail { source_range, .. }
             | Self::TableOfContents { source_range } => source_range,
         }
     }
@@ -2130,7 +2179,9 @@ impl PreviewBlock {
             Self::Heading { text, .. }
             | Self::Paragraph { text, .. }
             | Self::ListItem { text, .. }
-            | Self::FootnoteDefinition { text, .. } => text.text.clone(),
+            | Self::FootnoteDefinition { text, .. }
+            | Self::DefinitionTerm { text, .. }
+            | Self::DefinitionDetail { text, .. } => text.text.clone(),
             Self::BlockQuote { children, .. } => children
                 .iter()
                 .map(PreviewBlock::plain_text)
