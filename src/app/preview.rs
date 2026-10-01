@@ -3853,6 +3853,44 @@ fn callout_accent_color(kind: AlertKind) -> Rgba {
     }
 }
 
+/// Lucide counterparts of GitHub's alert Octicons.
+fn callout_icon(kind: AlertKind) -> crate::ui::icon::Icon {
+    use crate::ui::icon::Icon;
+    match kind {
+        AlertKind::Note => Icon::Info,
+        AlertKind::Tip => Icon::Lightbulb,
+        AlertKind::Important => Icon::MessageSquareWarning,
+        AlertKind::Warning => Icon::TriangleAlert,
+        AlertKind::Caution => Icon::OctagonAlert,
+    }
+}
+
+/// A faint left-to-right accent tint. Alpha-only, so it sits a few percent
+/// off the theme surface in both light and dark themes.
+fn callout_background(kind: AlertKind) -> gpui::Background {
+    let accent = callout_accent_color(kind);
+    gpui::linear_gradient(
+        90.,
+        gpui::linear_color_stop(Rgba { a: 0.10, ..accent }, 0.),
+        gpui::linear_color_stop(Rgba { a: 0.03, ..accent }, 1.),
+    )
+}
+
+/// The icon + bold accent label shared by preview callout cards and the
+/// Visual Edit callout title row.
+fn callout_title_row(kind: AlertKind, font_size: f32) -> Div {
+    let accent = callout_accent_color(kind);
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .font_weight(FontWeight::BOLD)
+        .text_size(px(font_size))
+        .text_color(accent)
+        .child(crate::ui::icon::icon(callout_icon(kind), font_size, accent))
+        .child(callout_label(kind))
+}
+
 pub(super) fn visual_block_index_for_offset(
     blocks: &[VisualBlock],
     cursor: usize,
@@ -4595,19 +4633,13 @@ fn visual_block_content_view(
                 let text = app.active_tab().document.text();
                 let click_target = callout_marker_line_caret_target(text, source_range)
                     .unwrap_or(source_range.start);
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .font_weight(FontWeight::BOLD)
-                    .text_size(px(typography.rendered_font_size))
-                    .text_color(callout_accent_color(*kind))
+                callout_title_row(*kind, typography.rendered_font_size)
+                    .debug_selector(move || format!("visual-callout-title-{block_index}"))
                     .cursor(CursorStyle::IBeam)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |app, _, _, cx| app.move_to(click_target, cx)),
                     )
-                    .child(callout_label(*kind))
             }
         }
         VisualBlockKind::Whitespace => {
@@ -4767,15 +4799,23 @@ fn visual_block_content_view(
             VisualQuoteGroupEdge::Middle => (0., 0.),
             VisualQuoteGroupEdge::Last => (0., 4.),
         };
-        div()
+        let quote_row = div()
             .ml(px(quote.depth.saturating_sub(1) as f32 * 8.))
             .pl_3()
             .pt(px(padding_top))
             .pb(px(padding_bottom))
-            .border_l_1()
-            .border_color(rgb(0x94a3b8))
-            .text_color(rgb(0x475569))
-            .child(row)
+            .text_color(rgb(0x475569));
+        // Alert groups carry the callout accent rule and tint on every row so
+        // the title and body read as one card, like the preview callout.
+        match quote.alert {
+            Some(kind) => quote_row
+                .border_l_2()
+                .border_color(callout_accent_color(kind))
+                .bg(callout_background(kind))
+                .pr_2(),
+            None => quote_row.border_l_1().border_color(rgb(0x94a3b8)),
+        }
+        .child(row)
     } else {
         row
     }
@@ -7680,15 +7720,12 @@ pub(super) fn preview_block_view(
                     cx,
                 )))
         }
-        PreviewBlock::BlockQuote { children, .. } => {
-            let mut container = div()
-                .mb_3()
-                .pl_3()
-                .border_l_1()
-                .border_color(rgb(0x94a3b8))
-                .text_color(rgb(0x475569))
-                .text_size(px(typography.quote_font_size))
-                .line_height(px(typography.quote_line_height));
+        PreviewBlock::BlockQuote {
+            children,
+            alert,
+            source_range,
+        } => {
+            let mut container = div();
             for (child_index, child) in children.iter().enumerate() {
                 if let PreviewBlock::Paragraph { text, .. } = child {
                     if !text.is_empty() || text.spans.iter().any(|span| span.image.is_some()) {
@@ -7771,7 +7808,70 @@ pub(super) fn preview_block_view(
                         ))),
                 );
             }
-            container
+            let quote = div()
+                .mb_3()
+                .text_color(rgb(0x475569))
+                .text_size(px(typography.quote_font_size))
+                .line_height(px(typography.quote_line_height));
+            match alert {
+                None => quote
+                    .pl_3()
+                    .border_l_1()
+                    .border_color(rgb(0x94a3b8))
+                    .child(container),
+                Some(kind) => {
+                    let kind = *kind;
+                    let fold_key = source_range.start;
+                    let folded = app.active_tab().folded_preview_alerts.contains(&fold_key);
+                    quote
+                        .debug_selector(move || format!("preview-callout-{block_index}"))
+                        .pl_3()
+                        .pr_2()
+                        .py_2()
+                        .border_l_2()
+                        .border_color(callout_accent_color(kind))
+                        .rounded_r_md()
+                        .bg(callout_background(kind))
+                        .child(
+                            callout_title_row(kind, typography.quote_font_size)
+                                .id(ElementId::from(("preview-callout-title", block_index)))
+                                .debug_selector(move || {
+                                    format!("preview-callout-title-{block_index}")
+                                })
+                                .cursor(CursorStyle::PointingHand)
+                                .child(crate::ui::icon::icon(
+                                    if folded {
+                                        crate::ui::icon::Icon::ChevronRight
+                                    } else {
+                                        crate::ui::icon::Icon::ChevronDown
+                                    },
+                                    12.,
+                                    callout_accent_color(kind),
+                                ))
+                                .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| {
+                                    let tab = app.active_tab_mut();
+                                    if !tab.folded_preview_alerts.remove(&fold_key) {
+                                        tab.folded_preview_alerts.insert(fold_key);
+                                    }
+                                    // The virtual list caches measured rows;
+                                    // re-measure just this callout's row.
+                                    if block_index < tab.preview_list.item_count() {
+                                        tab.preview_list.splice(block_index..block_index + 1, 1);
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .when(!folded, |card| {
+                            card.child(
+                                container
+                                    .debug_selector(move || {
+                                        format!("preview-callout-body-{block_index}")
+                                    })
+                                    .mt_1(),
+                            )
+                        })
+                }
+            }
         }
         PreviewBlock::CodeBlock { language, code, .. } => {
             match app.diagram_entry(language.as_deref(), code) {

@@ -819,6 +819,7 @@ pub(crate) fn build_visual_blocks(
         ));
     }
     assign_quote_group_edges(&mut blocks);
+    assign_quote_group_alerts(&mut blocks, preview);
     blocks
 }
 
@@ -1013,6 +1014,7 @@ fn quote_context_for_row(
         leaf_source_range,
         group_source_range,
         edge: VisualQuoteGroupEdge::Middle,
+        alert: None,
     }
 }
 
@@ -1030,6 +1032,34 @@ fn quote_gap_is_structural_only(slice: &str) -> bool {
         }
         saw_quote && rest.is_empty()
     })
+}
+
+/// Tags every row of a GFM alert quote group with the alert kind the parser
+/// reported for that quote, matched by the group's source range.
+fn assign_quote_group_alerts(blocks: &mut [VisualBlock], preview: &[PreviewBlock]) {
+    let alerts: Vec<(&Range<usize>, AlertKind)> = preview
+        .iter()
+        .filter_map(|block| match block {
+            PreviewBlock::BlockQuote {
+                alert: Some(kind),
+                source_range,
+                ..
+            } => Some((source_range, *kind)),
+            _ => None,
+        })
+        .collect();
+    if alerts.is_empty() {
+        return;
+    }
+    for quote in blocks
+        .iter_mut()
+        .filter_map(|block| block.quote_context.as_mut())
+    {
+        quote.alert = alerts
+            .iter()
+            .find(|(range, _)| **range == quote.group_source_range)
+            .map(|(_, kind)| *kind);
+    }
 }
 
 fn assign_quote_group_edges(blocks: &mut [VisualBlock]) {
@@ -8313,5 +8343,46 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
         let tokens = data_uri_payload_ranges(&source, 1..source.len() - 1);
         assert_eq!(tokens.len(), 1);
         assert_eq!(&source[tokens[0].clone()], &payload);
+    }
+
+    #[test]
+    fn visual_quote_alert_kind_tags_every_alert_row() {
+        let document = MarkdownDocument::from_text(
+            "> [!WARNING]\n> first line\n> second line\n\n> plain quote\n",
+        );
+        let blocks = document.visual_blocks();
+        let quoted: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| block.quote_context.as_ref().map(|quote| (block, quote)))
+            .collect();
+        let alert_rows: Vec<_> = quoted
+            .iter()
+            .filter(|(_, quote)| quote.alert == Some(AlertKind::Warning))
+            .collect();
+        assert!(
+            alert_rows
+                .iter()
+                .any(|(block, _)| matches!(block.kind, VisualBlockKind::CalloutTitle { .. })),
+            "the title row carries the kind"
+        );
+        assert!(
+            alert_rows
+                .iter()
+                .any(|(block, _)| matches!(block.kind, VisualBlockKind::Paragraph)),
+            "body rows carry the kind"
+        );
+        let plain = quoted
+            .iter()
+            .find(|(block, _)| document.text()[block.source_range.clone()].contains("plain quote"))
+            .expect("plain quote row");
+        assert_eq!(plain.1.alert, None);
+        // Every row of the alert group shares the kind.
+        let group = alert_rows[0].1.group_source_range.clone();
+        assert!(
+            quoted
+                .iter()
+                .filter(|(_, quote)| quote.group_source_range == group)
+                .all(|(_, quote)| quote.alert == Some(AlertKind::Warning))
+        );
     }
 }

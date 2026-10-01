@@ -21662,6 +21662,129 @@ fn search_overlay_stays_inside_the_window_and_fields_do_not_move_it(cx: &mut Tes
     );
 }
 
+#[gpui::test]
+fn preview_callout_renders_alert_cards_and_folds_in_read_mode(cx: &mut TestAppContext) {
+    let source = "> [!TIP]\n> Use the grip.\n\n> plain quote\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Read;
+        app
+    });
+    cx.run_until_parked();
+    let present = |cx: &mut VisualTestContext, prefix: &str| -> Vec<usize> {
+        (0..6)
+            .filter(|index| {
+                cx.debug_bounds(Box::leak(format!("{prefix}-{index}").into_boxed_str()))
+                    .is_some()
+            })
+            .collect()
+    };
+    let titles = present(cx, "preview-callout-title");
+    assert_eq!(
+        titles.len(),
+        1,
+        "only the alert gets a callout title: {titles:?}"
+    );
+    let index = titles[0];
+    assert_eq!(
+        present(cx, "preview-callout"),
+        vec![index],
+        "the plain quote is not a callout"
+    );
+    assert_eq!(present(cx, "preview-callout-body"), vec![index]);
+
+    let before = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.text().to_string(),
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.undo_stack.len(),
+        )
+    });
+    // GPUI keeps stale debug selectors across frames, so folding is observed
+    // through the row height (re-recorded every frame) and the fold state.
+    let row_selector: &'static str =
+        Box::leak(format!("preview-block-row-{index}").into_boxed_str());
+    let open_height = cx.debug_bounds(row_selector).unwrap().size.height;
+    let title = cx
+        .debug_bounds(Box::leak(
+            format!("preview-callout-title-{index}").into_boxed_str(),
+        ))
+        .unwrap();
+    cx.simulate_click(title.center(), Modifiers::none());
+    cx.run_until_parked();
+    let folded_height = cx.debug_bounds(row_selector).unwrap().size.height;
+    assert!(
+        folded_height < open_height,
+        "folding hides the body: {open_height:?} -> {folded_height:?}"
+    );
+    assert_eq!(
+        app.update(cx, |app, _| app.active_tab().folded_preview_alerts.len()),
+        1
+    );
+    let title = cx
+        .debug_bounds(Box::leak(
+            format!("preview-callout-title-{index}").into_boxed_str(),
+        ))
+        .unwrap();
+    cx.simulate_click(title.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.debug_bounds(row_selector).unwrap().size.height,
+        open_height,
+        "unfolded again"
+    );
+    assert!(app.update(cx, |app, _| {
+        app.active_tab().folded_preview_alerts.is_empty()
+    }));
+    let after = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.text().to_string(),
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.undo_stack.len(),
+        )
+    });
+    assert_eq!(after, before, "folding never touches the document");
+}
+
+#[gpui::test]
+fn visual_callout_title_row_keeps_marker_reveal(cx: &mut TestAppContext) {
+    let source = "intro\n\n> [!CAUTION]\n> Careful.\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.run_until_parked();
+    let title_index = (0..6)
+        .find(|index| {
+            cx.debug_bounds(Box::leak(
+                format!("visual-callout-title-{index}").into_boxed_str(),
+            ))
+            .is_some()
+        })
+        .expect("styled callout title row while unfocused");
+    let marker = source.find("[!CAUTION]").unwrap();
+    app.update(cx, |app, cx| app.move_to(marker + 2, cx));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds(Box::leak(
+            format!("visual-callout-title-{title_index}").into_boxed_str()
+        ))
+        .is_none(),
+        "focusing the title row reveals the authored marker line instead"
+    );
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+    });
+}
+
 #[test]
 fn search_word_range_selects_words_cjk_runs_and_single_separators() {
     let text = "foo bar_baz, 中文词";

@@ -1916,6 +1916,9 @@ pub struct VisualQuoteContext {
     /// visual group without reparsing during rendering.
     pub group_source_range: Range<usize>,
     pub edge: VisualQuoteGroupEdge,
+    /// GFM alert kind of the containing quote group, so every row of an
+    /// alert (title and body) can carry its callout styling.
+    pub alert: Option<AlertKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

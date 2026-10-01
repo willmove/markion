@@ -64,6 +64,11 @@ icon_set! {
     FileImage => "file-image",
     FileCog => "file-cog",
     Braces => "braces",
+    Info => "info",
+    Lightbulb => "lightbulb",
+    MessageSquareWarning => "message-square-warning",
+    TriangleAlert => "triangle-alert",
+    OctagonAlert => "octagon-alert",
 }
 
 /// GPUI asset source for embedded icons. Install once on `Application::with_assets`.

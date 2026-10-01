@@ -806,6 +806,9 @@ pub(super) struct DocumentTabState {
     /// language label (hidden again when the pointer leaves and the fence does
     /// not own the caret).
     pub(super) hovered_visual_code_block: Option<VisualBlockId>,
+    /// Split Preview / Read callouts the user folded, keyed by the alert
+    /// quote's source start. View-only, never persisted.
+    pub(super) folded_preview_alerts: HashSet<usize>,
     /// Set by a collapsible block's mouse-down so the Visual Edit surface can
     /// collapse other expanded blocks without collapsing the clicked one.
     pub(super) retain_visual_source_expand: Option<VisualBlockId>,
@@ -1111,6 +1114,7 @@ impl DocumentTabState {
             visual_table_column_drag: None,
             visual_image_resize_drag: None,
             hovered_visual_code_block: None,
+            folded_preview_alerts: HashSet::new(),
             retain_visual_source_expand: None,
             visual_cursor_reveal_pending: false,
             visual_caret_follow_frames: 0,
