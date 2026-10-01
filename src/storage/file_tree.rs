@@ -386,23 +386,25 @@ fn collect_file_tree_entries(
     entries: &mut Vec<FileTreeEntry>,
     show_hidden: bool,
 ) -> io::Result<()> {
+    // Classify each child once. A per-comparison `path.is_dir()` inside the
+    // sort used to cost two filesystem round-trips per comparison, which
+    // dominated scans of large vaults.
     let mut children = fs::read_dir(root)?
         .filter_map(Result::ok)
-        .filter(|entry| !should_skip_file_tree_path(&entry.path(), show_hidden))
+        .filter(|entry| !should_skip_file_tree_entry(entry, show_hidden))
+        .map(|entry| {
+            let path = entry.path();
+            let is_dir = dir_entry_is_dir(&entry, &path);
+            (is_dir, entry.file_name(), path)
+        })
         .collect::<Vec<_>>();
-    children.sort_by(|a, b| {
-        let a_path = a.path();
-        let b_path = b.path();
-        b_path
-            .is_dir()
-            .cmp(&a_path.is_dir())
-            .then_with(|| a.file_name().cmp(&b.file_name()))
+    children.sort_by(|(a_dir, a_name, _), (b_dir, b_name, _)| {
+        b_dir.cmp(a_dir).then_with(|| a_name.cmp(b_name))
     });
 
-    for entry in children {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if path.is_dir() {
+    for (is_dir, file_name, path) in children {
+        let name = file_name.to_string_lossy().to_string();
+        if is_dir {
             entries.push(FileTreeEntry {
                 path: path.clone(),
                 name: name.clone(),
@@ -438,8 +440,19 @@ fn collect_file_tree_entries(
     Ok(())
 }
 
-fn should_skip_file_tree_path(path: &Path, show_hidden: bool) -> bool {
-    is_always_excluded(path) || is_hidden_entry(path, show_hidden)
+fn should_skip_file_tree_entry(entry: &fs::DirEntry, show_hidden: bool) -> bool {
+    let path = entry.path();
+    is_always_excluded(&path) || is_hidden_entry(entry, &path, show_hidden)
+}
+
+/// Whether a directory entry is (or links to) a directory. The entry's file
+/// type comes with the directory listing, so only symlinks (and Windows
+/// junctions) pay for a target lookup, matching `Path::is_dir`.
+fn dir_entry_is_dir(entry: &fs::DirEntry, path: &Path) -> bool {
+    match entry.file_type() {
+        Ok(file_type) if !file_type.is_symlink() => file_type.is_dir(),
+        _ => path.is_dir(),
+    }
 }
 
 /// Directories that are commonly huge or irrelevant to a Markdown workspace.
@@ -475,7 +488,7 @@ fn is_always_excluded(path: &Path) -> bool {
 /// plus the Windows hidden file attribute on Windows. Gated by `show_hidden` —
 /// when the preference is on, this layer is a no-op so hidden entries pass
 /// through (still subject to `is_always_excluded` and the extension filter).
-fn is_hidden_entry(path: &Path, show_hidden: bool) -> bool {
+fn is_hidden_entry(entry: &fs::DirEntry, path: &Path, show_hidden: bool) -> bool {
     if show_hidden {
         return false;
     }
@@ -488,19 +501,25 @@ fn is_hidden_entry(path: &Path, show_hidden: bool) -> bool {
     // Best-effort Windows hidden-attribute check. On `metadata` failure (broken
     // symlink, permission, …) treat the attribute as not-set; the dotfile check
     // above still applies independently. Non-Windows builds pay nothing here.
+    // The entry's metadata comes with the directory listing; only symlinks
+    // re-query so the target's attributes apply, as `fs::metadata` does.
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
-        if let Ok(metadata) = fs::metadata(path) {
-            if metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0 {
-                return true;
-            }
+        let metadata = match entry.file_type() {
+            Ok(file_type) if !file_type.is_symlink() => entry.metadata(),
+            _ => fs::metadata(path),
+        };
+        if let Ok(metadata) = metadata
+            && metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+        {
+            return true;
         }
     }
     #[cfg(not(windows))]
     {
-        let _ = path;
+        let _ = entry;
     }
     false
 }
