@@ -440,6 +440,25 @@ fn collect_file_tree_entries(
     Ok(())
 }
 
+/// Whether a filesystem change at `path` can alter a tree of `root` scanned
+/// with `show_hidden`. A path inside an always-excluded directory, or (with
+/// hidden entries off) a dot-named entry or anything inside one, cannot.
+/// Name rules only: watch events may name deleted paths, so the Windows
+/// hidden attribute is not consulted. Paths outside `root` count as relevant.
+pub fn file_tree_watch_path_is_relevant(root: &Path, path: &Path, show_hidden: bool) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return true;
+    };
+    !relative.components().any(|component| {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        let name = Path::new(name);
+        is_always_excluded(name)
+            || (!show_hidden && name.to_str().is_some_and(|name| name.starts_with('.')))
+    })
+}
+
 fn should_skip_file_tree_entry(entry: &fs::DirEntry, show_hidden: bool) -> bool {
     let path = entry.path();
     is_always_excluded(&path) || is_hidden_entry(entry, &path, show_hidden)
@@ -672,6 +691,32 @@ mod tests {
         let path = root.join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn file_tree_watch_path_relevance_follows_exclusion_and_hidden_rules() {
+        let root = Path::new("/vault");
+        let relevant = |rel: &str, show_hidden| {
+            file_tree_watch_path_is_relevant(root, &root.join(rel), show_hidden)
+        };
+        assert!(relevant("notes/a.md", false));
+        assert!(relevant("notes", false));
+        assert!(!relevant(".git/index", false));
+        assert!(!relevant(".git/index", true), "always excluded");
+        assert!(!relevant("app/node_modules/x/readme.md", true));
+        assert!(!relevant(".obsidian/workspace.json", false));
+        assert!(relevant(".obsidian/workspace.json", true));
+        assert!(!relevant("notes/.draft.md", false));
+        assert!(relevant("notes/.draft.md", true));
+        assert!(
+            relevant("notes/v1.2/a.md", false),
+            "dots inside names are fine"
+        );
+        assert!(file_tree_watch_path_is_relevant(
+            root,
+            Path::new("/elsewhere/.git/x"),
+            false
+        ));
     }
 
     #[test]

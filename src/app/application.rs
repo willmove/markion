@@ -105,6 +105,36 @@ pub(super) enum AutosaveOutcome {
     },
 }
 
+/// Whether a watcher event can change the file tree of `root` scanned with
+/// `show_hidden`. Content and metadata writes (including our own saves) and
+/// reads cannot; creates, deletes, and renames can unless every path they name
+/// is excluded or hidden. Unknown kinds, rescan signals, and path-less events
+/// fail open.
+pub(super) fn file_tree_watch_event_is_relevant(
+    event: &notify::Event,
+    root: &Path,
+    show_hidden: bool,
+) -> bool {
+    use notify::event::{EventKind, Flag, ModifyKind};
+    if event.flag() == Some(Flag::Rescan) {
+        return true;
+    }
+    match event.kind {
+        EventKind::Access(_)
+        | EventKind::Modify(
+            ModifyKind::Data(_) | ModifyKind::Metadata(_) | ModifyKind::Any | ModifyKind::Other,
+        ) => false,
+        EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_)) => {
+            event.paths.is_empty()
+                || event
+                    .paths
+                    .iter()
+                    .any(|path| markion::file_tree_watch_path_is_relevant(root, path, show_hidden))
+        }
+        EventKind::Any | EventKind::Other => true,
+    }
+}
+
 /// Background stage of one autosave: recovery snapshot first (so a failed or
 /// refused destination save still leaves the text recoverable), then the
 /// destination write. All file I/O for autosave lives here, off the UI
@@ -1331,6 +1361,7 @@ impl MarkionApp {
             return;
         }
         let root = self.workspace_root.clone();
+        let show_hidden = self.show_hidden_files;
         cx.spawn(async move |this, cx| {
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
             let watch_root = root.clone();
@@ -1338,9 +1369,18 @@ impl MarkionApp {
                 .background_executor()
                 .spawn(async move {
                     let tx_notify = tx.clone();
-                    let mut watcher = notify::recommended_watcher(move |_| {
-                        let _ = tx_notify.try_send(());
-                    })?;
+                    let event_root = watch_root.clone();
+                    let mut watcher = notify::recommended_watcher(
+                        move |event: notify::Result<notify::Event>| {
+                            // Errors fail open: a refresh is cheaper than a stale tree.
+                            let relevant = event.as_ref().map_or(true, |event| {
+                                file_tree_watch_event_is_relevant(event, &event_root, show_hidden)
+                            });
+                            if relevant {
+                                let _ = tx_notify.try_send(());
+                            }
+                        },
+                    )?;
                     watcher.watch(&watch_root, notify::RecursiveMode::Recursive)?;
                     Ok::<_, notify::Error>(watcher)
                 })

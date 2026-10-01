@@ -480,6 +480,9 @@ impl MarkionApp {
         // Re-scan under the new visibility rule so hidden entries appear or
         // disappear on the next render, before notifying the view.
         self.refresh_file_tree(cx);
+        // The watcher filters events by the hidden-entry rule it was armed
+        // with, so re-arm it under the new rule.
+        self.arm_file_tree_watch(cx);
         cx.notify();
     }
 

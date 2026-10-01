@@ -1,4 +1,6 @@
-use super::application::{AutosaveCompletion, AutosaveOutcome, ExternalCheckRequest};
+use super::application::{
+    AutosaveCompletion, AutosaveOutcome, ExternalCheckRequest, file_tree_watch_event_is_relevant,
+};
 use super::editing::visual_selection_format_target_for_block;
 use super::memory::{MemoryProfile, MemoryWarmup};
 use super::*;
@@ -21391,6 +21393,90 @@ fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_state
     cx.run_until_parked();
     assert!(cx.debug_bounds("search-read-guidance").is_some());
     app.update(cx, |app, _| assert!(!app.replace_visible));
+}
+
+#[test]
+fn file_tree_watch_event_relevance_skips_content_writes_and_hidden_noise() {
+    use notify::event::{
+        AccessKind, CreateKind, DataChange, EventKind, Flag, MetadataKind, ModifyKind, RemoveKind,
+        RenameMode,
+    };
+    let root = Path::new("/vault");
+    let event = |kind: EventKind, paths: &[&str]| {
+        paths.iter().fold(notify::Event::new(kind), |event, rel| {
+            event.add_path(root.join(rel))
+        })
+    };
+    let relevant = |event: &notify::Event, show_hidden| {
+        file_tree_watch_event_is_relevant(event, root, show_hidden)
+    };
+
+    // Content and metadata writes, including autosave, never refresh.
+    for kind in [
+        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+        EventKind::Modify(ModifyKind::Metadata(MetadataKind::WriteTime)),
+        EventKind::Modify(ModifyKind::Any),
+        EventKind::Access(AccessKind::Any),
+    ] {
+        assert!(!relevant(&event(kind, &["notes/a.md"]), false), "{kind:?}");
+    }
+    // Visible creates, deletes, and renames refresh.
+    let create = event(EventKind::Create(CreateKind::File), &["notes/new.md"]);
+    assert!(relevant(&create, false));
+    assert!(relevant(
+        &event(EventKind::Remove(RemoveKind::Folder), &["notes"]),
+        false
+    ));
+    // Excluded and hidden-folder churn is ignored unless hidden entries show.
+    let git = event(EventKind::Create(CreateKind::File), &[".git/objects/ab/cd"]);
+    assert!(!relevant(&git, false));
+    assert!(!relevant(&git, true));
+    let obsidian = event(
+        EventKind::Create(CreateKind::File),
+        &[".obsidian/plugins/x.md"],
+    );
+    assert!(!relevant(&obsidian, false));
+    assert!(relevant(&obsidian, true));
+    // A rename out of a hidden folder names one visible path and refreshes.
+    let rename = event(
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+        &[".obsidian/x.md", "notes/x.md"],
+    );
+    assert!(relevant(&rename, false));
+    // Unknown kinds, rescan signals, and path-less events fail open.
+    assert!(relevant(&event(EventKind::Any, &[".git/x"]), false));
+    assert!(relevant(&event(EventKind::Other, &[]), false));
+    assert!(relevant(
+        &event(EventKind::Create(CreateKind::Any), &[]),
+        false
+    ));
+    let rescan = event(
+        EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+        &["a.md"],
+    )
+    .set_flag(Flag::Rescan);
+    assert!(relevant(&rescan, false));
+}
+
+#[gpui::test]
+fn toggling_hidden_files_rearms_the_file_tree_watch(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.md"), "a").unwrap();
+    let root = dir.path().to_path_buf();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.workspace_root = root.clone();
+        app.file_tree = Some(FileTree::scan(&root).unwrap());
+        app
+    });
+    let before = app.update(cx, |app, _| app.file_tree_watch_generation);
+    app.update(cx, |app, cx| app.toggle_show_hidden_files(cx));
+    app.update(cx, |app, _| {
+        assert!(
+            app.file_tree_watch_generation > before,
+            "the watch is re-armed with the new hidden-entry rule"
+        );
+    });
 }
 
 #[test]
