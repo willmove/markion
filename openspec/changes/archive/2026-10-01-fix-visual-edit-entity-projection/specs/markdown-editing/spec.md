@@ -108,11 +108,11 @@ Visual Edit SHALL render byte-exact supported inline formatting in prose blocks 
 - **AND** the editor does not guess a rendered-tree mutation for that construct
 
 ### Requirement: Maintained Visual Edit support classification
-The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that classifies every user-visible Markdown construct into exactly one of three classes: **rendered WYSIWYG** (the construct is shown in its rendered form, including dedicated field/payload editors for code, math, diagrams, images, and tables whose editors ARE the rendered form), **progressive-reveal WYSIWYG** (the construct is rendered by default and reveals its smallest complete source syntax group when the caret enters it — inline formatting, links, inline math, structural prefixes), or **WYSIWYG coverage gap** (the construct currently shows raw source and is tracked under the `WYSIWYG coverage roadmap` for closure by a future change). The matrix SHALL name the canonical editable range and the verification evidence for each rendered/reveal class, and SHALL name the roadmap priority and implementation seam for each gap. The matrix SHALL agree with the stable requirements and the implemented `VisualBlock`/`VisualBlockEditor` behavior.
+The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that classifies every user-visible Markdown construct into exactly one of three classes: **rendered WYSIWYG** (the construct is shown in its rendered form, including dedicated field/payload editors for code, math, diagrams, images, YAML front matter, HTML blocks, and tables whose editors ARE the rendered form), **progressive-reveal WYSIWYG** (the construct is rendered by default and reveals its smallest complete source syntax group when the caret enters it — inline formatting, links, inline math, structural prefixes), or **WYSIWYG coverage gap** (the construct currently shows raw source and is tracked under the `WYSIWYG coverage roadmap` for closure by a future change). The matrix SHALL name the canonical editable range and the verification evidence for each rendered/reveal class, and SHALL name the roadmap priority and implementation seam for each gap. The matrix SHALL agree with the stable requirements and the implemented `VisualBlock`/`VisualBlockEditor` behavior. Empty ATX headings and empty list items SHALL be classified as rendered WYSIWYG with progressive-reveal structural prefixes, not as coverage gaps.
 
 #### Scenario: Contributor evaluates current WYSIWYG coverage
 - **WHEN** a contributor reads the Visual Edit WYSIWYG coverage matrix
-- **THEN** it distinguishes rendered WYSIWYG constructs (prose, code, math, diagrams, images, tables, task lists, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, decoded HTML entities, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (front matter, indented code, unclosed fences, reference-style images, malformed tables, unsupported inline-HTML forms, unproven entity forms, autolinks, task-list checkbox interaction, definition lists, empty list items)
+- **THEN** it distinguishes rendered WYSIWYG constructs (prose, headings including empty ATX headings, code, math including Pending/Error payload editors, diagrams, images including reference-style block images, tables including ragged grids, YAML front matter, lists and task lists including empty list items and clickable Visual Edit checkboxes, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, decoded HTML entities, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (indented code, unclosed fences, multiline or otherwise unprovable images, definition lists, residual unsupported gaps)
 - **AND** it explains that canonical Markdown remains the single persisted representation and that no construct is edited through a parallel rendered tree
 
 #### Scenario: A new visual block behavior is proposed
@@ -122,12 +122,12 @@ The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that
 - **AND** implementation and documentation cannot be considered complete until the matrix and invariant evidence are updated
 
 ### Requirement: WYSIWYG coverage roadmap
-The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. The initial roadmap SHALL include at minimum the following primary gaps in priority order: (1) front matter (an editing form for YAML `---` regions, and detection of TOML/JSON forms), and (2) indented code blocks. The roadmap SHALL also track secondary gaps including entity references outside the proven decode table, unclosed or malformed fenced code, reference-style and malformed inline images, malformed tables, unsupported inline-HTML forms and angle-bracket autolinks in prose, task-list checkbox click interaction, GFM definition lists, empty list items, and math render-failure states.
+The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. After this change the remaining primary gap SHALL be indented code blocks. The roadmap SHALL also track secondary gaps including unclosed or malformed fenced code, multiline or otherwise unprovable images, GFM definition lists, and residual unsupported gap bytes. YAML front matter, reference-style block images, ragged tables, and math Pending/Error states SHALL NOT remain on the roadmap. Task-list checkbox click interaction SHALL NOT remain on the roadmap once Visual Edit checkboxes are clickable.
 
 #### Scenario: Primary gaps are tracked with priority and effort
 - **WHEN** a contributor reads the WYSIWYG coverage roadmap
-- **THEN** the current primary gaps (front matter, indented code blocks) are listed with priority, effort, target class, and implementation seam
-- **AND** each primary gap points at the source location of the current transitional source-view rendering
+- **THEN** the current primary gap (indented code blocks) is listed with priority, effort, target class, and implementation seam
+- **AND** YAML front matter, reference-style block images, ragged tables, and math render-failure states are absent from the open-gap list
 
 #### Scenario: Closing a gap updates the roadmap
 - **WHEN** a future change implements WYSIWYG rendering for a construct that the roadmap tracks as a gap
@@ -135,11 +135,11 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 - **AND** the change's proposal cites this roadmap requirement as its motivation
 
 #### Scenario: Closed gaps do not regress
-- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example escaped punctuation, decoded HTML entities in the proven set, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, or GFM alerts)
+- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example YAML front matter, reference-style block images, empty ATX headings and empty list items, decoded HTML entities in the proven set, angle-bracket autolinks, ragged tables, math Pending/Error payload editors, escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, GFM alerts, or Visual Edit task-list checkbox click)
 - **THEN** the coverage matrix classifies the construct in its implemented class and the construct does not reappear on the roadmap
 
 #### Scenario: Secondary gaps are visible but lower priority
-- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example task-list checkbox interaction or angle-bracket autolinks)
+- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example unclosed fenced code or GFM definition lists)
 - **THEN** the roadmap lists the secondary gap with its effort and implementation seam
 - **AND** the contributor can open a change that closes it without re-litigating whether it is a gap
 
@@ -147,3 +147,9 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 - **WHEN** implementation or testing reveals a Markdown construct that renders as raw source in Visual Edit and is not yet on the roadmap
 - **THEN** the discovering change SHALL add the construct to this roadmap with its class, priority, effort, and seam before completing
 - **AND** the change SHALL NOT close the gap in the same change unless the gap is trivial
+
+#### Scenario: Task-list checkbox click is a closed gap
+- **WHEN** a contributor reads the WYSIWYG coverage roadmap after this change
+- **THEN** task-list checkbox click is absent from the open-gap list
+- **AND** the coverage matrix records clickable Visual Edit task checkboxes as rendered WYSIWYG
+

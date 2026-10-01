@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change customize-document-typography. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Configurable source-editor font size
 The editor SHALL use a global source-editor font-size preference, expressed in logical pixels, for Markdown source text in Edit mode and the source pane of Split Preview mode. The default SHALL be 14px, the supported range SHALL be 10–32px inclusive, and the resolved size SHALL drive source text shaping, wrapping, painting, caret placement, selection geometry, line-height calculation, scroll extents, and typewriter positioning consistently.
 
@@ -123,3 +125,15 @@ Rendered superscript and subscript SHALL use a reduced font size and a raised or
 - **WHEN** users select or focus rendered script content at different document font sizes
 - **THEN** hit testing and caret/IME bounds correspond to the displayed glyphs
 - **AND** source reveal and undo preserve the authored markup and UTF-8 boundaries
+
+### Requirement: HTML structural preview uses rendered typography
+HTML preview parts in Read mode, Split Preview, and Visual Edit SHALL derive heading sizes for `<h1>`–`<h6>`, list-marker metrics, and `<pre>` code-slot font size and line height from the resolved rendered-document body size, preserving the same visual proportions Markdown headings, lists, and fenced code use. Changing typography preferences SHALL NOT mutate document text or per-version derived Markdown caches.
+
+#### Scenario: HTML heading scales with body size
+- **WHEN** the user changes the rendered-document font size
+- **THEN** HTML `<h1>`–`<h6>` parts in preview and Visual Edit scale with Markdown headings
+- **AND** document version and derived caches remain unchanged
+
+#### Scenario: HTML pre uses the code slot
+- **WHEN** an HTML `<pre>` block is visible
+- **THEN** it uses the code-slot font family and the typography metrics derived from the rendered body size

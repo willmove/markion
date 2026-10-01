@@ -441,7 +441,7 @@ The editor SHALL bind `Ctrl+4` and `Ctrl+5` (platform `secondary-4/5`) to Headin
 - **THEN** the reference includes Heading 4, 5, and 6 shortcuts
 
 ### Requirement: Visual Edit inline formatting fidelity
-Visual Edit SHALL render byte-exact supported inline formatting in prose blocks without exposing its Markdown delimiters while the construct is unfocused. Supported formatting SHALL include emphasis, strong emphasis, safely nested strong/emphasis combinations, strikethrough, inline code, links, highlight, superscript, subscript, backslash-escaped ASCII punctuation, and exactly recognized inline HTML in the supported subset. A backslash followed by an ASCII punctuation character SHALL render as the literal punctuation character with the backslash hidden as a marker. The supported inline-HTML subset SHALL consist of the exact unattributed style pairs `<em>`/`<i>`, `<strong>`/`<b>`, `<s>`/`<del>`/`<strike>`, `<code>`, `<mark>`, `<sub>`, and `<sup>`, plus the void line-break forms `<br>`, `<br/>`, and `<br />`; their tags SHALL be hidden markers whose styling composes with Markdown formatting, and `<br>` SHALL render as an authored line break inside the inline flow. Supported links SHALL include reference-style links (full `[text][label]`, collapsed `[label][]`, and shortcut `[label]` forms) whose definitions appear elsewhere in the document: Visual Edit SHALL resolve them against the document's link reference definitions, while definitions inside fenced code blocks SHALL NOT create links. Resolving document-scoped definitions SHALL preserve exact in-block source ranges — rendering and reveal mappings for the block's own content remain byte-identical to a full-document parse. Moving the caret or a selection endpoint into a supported formatted construct — including an escaped-character group or a supported inline-HTML element — SHALL reveal one safe containing source group for precise editing without converting unrelated inline content in the same block to raw Markdown. Constructs whose source/display mapping is malformed, crossing, or otherwise ambiguous — including backslash sequences or inline HTML outside the proven subset, decoded HTML entities, and angle-bracket autolink sources the link reveal validator cannot yet classify — SHALL be classified as WYSIWYG coverage gaps under the `WYSIWYG coverage roadmap` requirement and SHALL show raw source only as a transitional editing affordance until a future change closes the gap with a byte-exact projection.
+Visual Edit SHALL render byte-exact supported inline formatting in prose blocks without exposing its Markdown delimiters while the construct is unfocused. Supported formatting SHALL include emphasis, strong emphasis, safely nested strong/emphasis combinations, strikethrough, inline code, links, highlight, superscript, subscript, backslash-escaped ASCII punctuation, decoded HTML entity references that reconstruct against the parser, angle-bracket autolinks, and exactly recognized inline HTML in the supported subset. A backslash followed by an ASCII punctuation character SHALL render as the literal punctuation character with the backslash hidden as a marker. A decoded HTML entity reference SHALL render as its decoded character(s) with the authored `&…;` token hidden as a marker, and each decoding SHALL match the semantic parser's decoding byte-for-byte. The supported inline-HTML subset SHALL consist of the style pairs `<em>`/`<i>`, `<strong>`/`<b>`, `<s>`/`<del>`/`<strike>`, `<code>`, `<mark>`, `<sub>`, and `<sup>`, plus the void line-break forms `<br>`, `<br/>`, and `<br />`, including when those tags carry only ignorable attributes `class`, `id`, or `clear`; their tags SHALL be hidden markers whose styling composes with Markdown formatting, and `<br>` SHALL render as an authored line break inside the inline flow. Supported links SHALL include reference-style links (full `[text][label]`, collapsed `[label][]`, and shortcut `[label]` forms) whose definitions appear elsewhere in the document, and pulldown-recognized angle-bracket autolinks: Visual Edit SHALL resolve reference-style links against the document's link reference definitions, while definitions inside fenced code blocks SHALL NOT create links. Resolving document-scoped definitions SHALL preserve exact in-block source ranges — rendering and reveal mappings for the block's own content remain byte-identical to a full-document parse. Moving the caret or a selection endpoint into a supported formatted construct — including an escaped-character group, an entity token, an autolink, or a supported inline-HTML element — SHALL reveal one safe containing source group for precise editing without converting unrelated inline content in the same block to raw Markdown. Unknown, stray, or unpaired inline HTML SHALL present as inert source atoms in the mixed layout. Constructs whose source/display mapping is malformed, crossing, or otherwise ambiguous — including backslash sequences outside the proven subset and entity references that cannot be reconstructed — SHALL show conservative source runs for the affected slice and SHALL NOT guess a rendered-tree mutation.
 
 #### Scenario: Default inline formatting paragraph stays visual
 - **WHEN** the default welcome document is opened in Visual Edit mode and its Inline formatting paragraph is not focused
@@ -511,20 +511,47 @@ Visual Edit SHALL render byte-exact supported inline formatting in prose blocks 
 - **AND** caret activation of the tag reveals its authored source with pointer and keyboard resolution limited to the tag's safe source boundaries
 
 #### Scenario: Unsupported inline HTML remains conservative
-- **WHEN** a prose block contains inline HTML outside the supported subset — an unknown tag, a tag carrying attributes, an unpaired or crossing tag pair, or an HTML entity such as `&amp;`
-- **THEN** Visual Edit preserves the whole-block source-backed transitional editing affordance and classifies the construct as a WYSIWYG coverage gap under the roadmap
+- **WHEN** a prose block contains inline HTML outside the supported subset — an unknown tag, a tag carrying non-ignorable attributes, or an unpaired or crossing tag pair
+- **THEN** Visual Edit shows those tags as byte-exact inert source fragments in the mixed layout
 - **AND** the editor does not guess a rendered-tree mutation for that content
+- **AND** the paragraph is not replaced by a whole-block source island
 - **AND** inline `<img>` tags keep their existing image-atom rendering and mixed-path behavior
 
-#### Scenario: Angle-bracket autolinks are a tracked WYSIWYG gap
+#### Scenario: Angle-bracket autolinks render as progressive-reveal links
 - **WHEN** a prose block contains an angle-bracket autolink such as `<https://example.com>` or `<user@example.com>`
-- **THEN** Visual Edit keeps the paragraph on the source-backed transitional editing path because the link reveal validator only accepts bracketed link sources
-- **AND** the construct is classified as a WYSIWYG coverage gap under the roadmap for closure by extending the link reveal validator
+- **THEN** Visual Edit renders the autolink as a progressive-reveal link
+- **AND** moving the caret into the construct reveals the complete authored `<…>` group
 
 #### Scenario: Ambiguous inline syntax remains conservative
 - **WHEN** a prose block contains malformed, crossing, or byte-inexact inline syntax whose visible text cannot be reconstructed byte-exactly from the authored slice
-- **THEN** Visual Edit preserves a source-backed transitional editing affordance and classifies the construct as a WYSIWYG coverage gap under the roadmap
+- **THEN** Visual Edit preserves a source-backed transitional editing affordance for the affected slice
 - **AND** the editor does not guess a rendered-tree mutation for that construct
+
+#### Scenario: Decoded entity renders as literal text
+- **WHEN** an unfocused prose block contains an HTML entity reference in the proven set, such as `&amp;`, `&#39;`, or `&#x2014;`
+- **THEN** the paragraph renders as normal prose showing the decoded character, not a whole-block source island
+- **AND** the `&…;` token stays hidden while the rest of the paragraph remains rendered
+- **AND** the rendering matches Split Preview and Read mode visible text
+
+#### Scenario: Decoded entity reveals its authored token
+- **WHEN** the caret or a selection endpoint moves into a decoded entity run such as `&amp;` or `&#39;`
+- **THEN** the complete authored `&…;` token is revealed as one editable source group
+- **AND** moving the caret away hides the token again and restores the decoded rendering without changing the document version
+
+#### Scenario: Entities compose with Markdown formatting and escapes
+- **WHEN** a prose block mixes an entity with other supported decoded syntax, such as `**a &amp; \* b**`
+- **THEN** the decoded character and the escaped character render literally inside the styled construct with the `&…;` and `\` bytes hidden
+- **AND** entering the construct reveals one safe containing source group
+
+#### Scenario: Angle-bracket autolinks are a tracked WYSIWYG gap
+- **WHEN** a prose block contains an angle-bracket autolink such as `<https://example.com>` or `<user@example.com>`
+- **THEN** the autolink is no longer a WYSIWYG coverage gap: it renders as a progressive-reveal link (see "Angle-bracket autolinks render as progressive-reveal links")
+- **AND** it is absent from the `WYSIWYG coverage roadmap` open-gap list
+
+#### Scenario: Unproven entity forms remain conservative
+- **WHEN** a prose block contains an entity reference outside the proven decode table — a multi-codepoint entity such as `&NotEqualTilde;`, a named entity absent from the maintained table, or an invalid reference
+- **THEN** Visual Edit preserves the source-backed transitional editing affordance for that block and classifies the construct as a WYSIWYG coverage gap under the roadmap
+- **AND** the editor does not guess a decoded rendering or a rendered-tree mutation for that construct
 
 ### Requirement: Visual Edit whitespace activation
 The system SHALL keep source-backed whitespace ranges available for exact caret mapping. In Visual Edit, a `Whitespace` row SHALL behave as a first-class empty line: it occupies the rendered body paragraph line height (one painted line per covered newline, floored at one line and capped at the existing pathological bound), presents an I-beam pointer, and accepts pointer placement onto an existing offset inside its source range. Clicking a whitespace row SHALL move the caret into that range and MUST NOT insert a newline or otherwise mutate the document text, version, dirty state, undo history, or derived Markdown caches. When the source caret owns a whitespace row — because the user clicked it, pressed Enter onto a new insertion line, or moved into it with keyboard navigation — Visual Edit SHALL present the same empty-paragraph-height layout plus a thin insertion caret line visually consistent with the caret in a paragraph or heading, and SHALL accept subsequent typed text at the exact source caret position. Visual Edit SHALL NOT wrap a whitespace row in a source-island box (border, padding, monospace styling, or differentiated background). Source islands SHALL remain reserved for blocks whose source has no rendered visual form (frontmatter, code, HTML, unsupported constructs) or for inline runs whose source/display mapping is ambiguous. Landing offsets SHALL lie inside the whitespace source range. For a single-newline gap between two rendered blocks, the caret SHALL land at `Whitespace.source_range.start` (the authored separator newline), not the first content byte of the following block.
@@ -566,7 +593,7 @@ The system SHALL keep source-backed whitespace ranges available for exact caret 
 - **AND** it does not paint an insertion caret until it owns the caret
 
 ### Requirement: Progressive Markdown marker reveal in Visual Edit
-Visual Edit SHALL keep supported paragraph, heading, list-item, and blockquote content visually rendered while it is focused. When precise editing requires Markdown syntax, the editor SHALL reveal only the smallest complete inline syntax group whose source mapping is proven exact, while `MarkdownDocument.text` remains the canonical representation. Display-to-source and source-to-display mappings SHALL remain UTF-8-safe and monotonic for pointer placement, selection, keyboard navigation, platform text input, and IME caret geometry. Syntax whose mapping is nested, overlapping, byte-inexact, or otherwise ambiguous MUST use a conservative source-backed edit island.
+Visual Edit SHALL keep supported paragraph, heading, list-item, and blockquote content visually rendered while it is focused. When precise editing requires Markdown syntax, the editor SHALL reveal only the smallest complete inline syntax group whose source mapping is proven exact, while `MarkdownDocument.text` remains the canonical representation. Structural prefixes of headings and list items SHALL be revealed when the caret or a selection endpoint is inside the prefix range or at the prefix end, and SHALL be revealed for the whole prefix when a heading or list item with no visible content runs owns the caret. Display-to-source and source-to-display mappings SHALL remain UTF-8-safe and monotonic for pointer placement, selection, keyboard navigation, platform text input, and IME caret geometry. Syntax whose mapping is nested, overlapping, byte-inexact, or otherwise ambiguous MUST use a conservative source-backed edit island.
 
 #### Scenario: Focusing plain prose preserves visual rendering
 - **WHEN** the user places the caret in plain text inside a supported visual paragraph, heading, list item, or blockquote
@@ -597,6 +624,16 @@ Visual Edit SHALL keep supported paragraph, heading, list-item, and blockquote c
 - **WHEN** source-based keyboard navigation moves the caret into a currently hidden marker range
 - **THEN** the next Visual Edit render reveals the owning syntax group
 - **AND** subsequent caret geometry and input use an identity-mapped visible source position
+
+#### Scenario: Caret at heading prefix end reveals the marker
+- **WHEN** the Visual Edit caret is at the end of an ATX heading prefix (the first title position, including on an empty heading)
+- **THEN** the heading prefix is revealed together with any visible title text
+- **AND** the heading is not replaced by a whole-block source island
+
+#### Scenario: Title-interior caret still hides the heading prefix
+- **WHEN** the Visual Edit caret is inside the visible title of a non-empty ATX heading and not inside the prefix range
+- **THEN** the heading prefix remains hidden
+- **AND** the heading stays in heading typography
 
 #### Scenario: Ambiguous inline syntax remains conservative
 - **WHEN** an inline construct is nested, overlapping, escaped, transformed, or otherwise lacks a proven byte-exact mapping
@@ -899,11 +936,11 @@ Visual Edit SHALL present display and fenced math whose KaTeX (or equivalent) ca
 - **AND** the block is not a source island
 
 ### Requirement: Maintained Visual Edit support classification
-The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that classifies every user-visible Markdown construct into exactly one of three classes: **rendered WYSIWYG** (the construct is shown in its rendered form, including dedicated field/payload editors for code, math, diagrams, images, YAML front matter, and tables whose editors ARE the rendered form), **progressive-reveal WYSIWYG** (the construct is rendered by default and reveals its smallest complete source syntax group when the caret enters it — inline formatting, links, inline math, structural prefixes), or **WYSIWYG coverage gap** (the construct currently shows raw source and is tracked under the `WYSIWYG coverage roadmap` for closure by a future change). The matrix SHALL name the canonical editable range and the verification evidence for each rendered/reveal class, and SHALL name the roadmap priority and implementation seam for each gap. The matrix SHALL agree with the stable requirements and the implemented `VisualBlock`/`VisualBlockEditor` behavior.
+The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that classifies every user-visible Markdown construct into exactly one of three classes: **rendered WYSIWYG** (the construct is shown in its rendered form, including dedicated field/payload editors for code, math, diagrams, images, YAML front matter, HTML blocks, and tables whose editors ARE the rendered form), **progressive-reveal WYSIWYG** (the construct is rendered by default and reveals its smallest complete source syntax group when the caret enters it — inline formatting, links, inline math, structural prefixes), or **WYSIWYG coverage gap** (the construct currently shows raw source and is tracked under the `WYSIWYG coverage roadmap` for closure by a future change). The matrix SHALL name the canonical editable range and the verification evidence for each rendered/reveal class, and SHALL name the roadmap priority and implementation seam for each gap. The matrix SHALL agree with the stable requirements and the implemented `VisualBlock`/`VisualBlockEditor` behavior. Empty ATX headings and empty list items SHALL be classified as rendered WYSIWYG with progressive-reveal structural prefixes, not as coverage gaps.
 
 #### Scenario: Contributor evaluates current WYSIWYG coverage
 - **WHEN** a contributor reads the Visual Edit WYSIWYG coverage matrix
-- **THEN** it distinguishes rendered WYSIWYG constructs (prose, code, math including Pending/Error payload editors, diagrams, images including reference-style block images, tables including ragged grids, YAML front matter, task lists including clickable Visual Edit checkboxes, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (indented code, unclosed fences, multiline or otherwise unprovable images, definition lists, residual unsupported gaps)
+- **THEN** it distinguishes rendered WYSIWYG constructs (prose, headings including empty ATX headings, code, math including Pending/Error payload editors, diagrams, images including reference-style block images, tables including ragged grids, YAML front matter, lists and task lists including empty list items and clickable Visual Edit checkboxes, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, decoded HTML entities, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (indented code, unclosed fences, multiline or otherwise unprovable images, definition lists, residual unsupported gaps)
 - **AND** it explains that canonical Markdown remains the single persisted representation and that no construct is edited through a parallel rendered tree
 
 #### Scenario: A new visual block behavior is proposed
@@ -1072,12 +1109,12 @@ Supported non-overlapping Visual Edit blocks SHALL be reorderable through Move U
 - **AND** source mode remains the lossless fallback
 
 ### Requirement: Visual Edit renders HTML images
-Visual Edit SHALL present raw-HTML images the same way Read mode does wherever Read mode renders them, and SHALL NOT collapse prose blocks into raw-source islands solely because they contain image tags. Standalone raw-HTML blocks containing `<img>` SHALL render read-only through the shared HTML-parts pipeline (text, images, tables) with the existing focused source-island editing affordance. Inline `<img>` tags inside paragraphs, headings, list items, blockquote leaves, and footnote text SHALL render as inline image atoms loaded through the same image pipeline as preview (workspace-relative paths, remote URLs, and data URIs), while the surrounding prose remains rendered and editable. Each inline image atom SHALL be source-backed: entering its byte-exact authored `<img>` tag range with the caret or a selection endpoint SHALL reveal the complete authored tag as one editable source run, and leaving the range SHALL restore the rendered atom without changing the document version. Prose blocks whose only inline HTML consists of complete `<img>` tags SHALL NOT use a whole-block HTML source island. When a prose block mixes `<img>` tags with other inline HTML (for example `<a href=…>` wrappers, `<br>`, or `<em>…</em>`), the image atoms SHALL still render and the non-image inline HTML SHALL appear as byte-exact conservative source fragments in the same mixed layout; the block SHALL NOT collapse into a whole-block source island as long as it carries at least one inline image atom. Images inside GFM table cells SHALL present the flattened alt/URL text exactly as Read mode does.
+Visual Edit SHALL present raw-HTML images the same way Read mode does wherever Read mode renders them, and SHALL NOT collapse prose blocks into raw-source islands solely because they contain image tags. Standalone raw-HTML blocks containing `<img>` SHALL render through the shared HTML-parts pipeline (text, images, tables), honoring authored width and height, with a collapsible source payload when focused rather than a whole-block source island. Inline `<img>` tags inside paragraphs, headings, list items, blockquote leaves, and footnote text SHALL render as inline image atoms loaded through the same image pipeline as preview (workspace-relative paths, remote URLs, and data URIs), while the surrounding prose remains rendered and editable. Nested HTML-only regions inside lists and quotes SHALL render as HTML blocks through that same pipeline. Each inline image atom SHALL be source-backed: entering its byte-exact authored `<img>` tag range with the caret or a selection endpoint SHALL reveal the complete authored tag as one editable source run, and leaving the range SHALL restore the rendered atom without changing the document version. Prose blocks whose only inline HTML consists of complete `<img>` tags SHALL NOT use a whole-block HTML source island. When a prose block mixes `<img>` tags with other inline HTML, the image atoms SHALL still render and the non-image inline HTML SHALL appear as rendered supported tags or inert source fragments in the same mixed layout. Images inside HTML `<td>`/`<th>` cells SHALL render as images. Images inside GFM pipe-table cells SHALL present the flattened alt/URL text exactly as Read mode does.
 
 #### Scenario: Standalone HTML image block renders
 - **WHEN** an unfocused Visual Edit document contains a raw-HTML block such as `<p align="center"><img src="logo.svg" alt="Logo"></p>`
 - **THEN** the block renders through the shared HTML-parts pipeline showing the image and honoring centering
-- **AND** focusing the block presents the existing conservative source island for editing its raw HTML
+- **AND** focusing the block keeps that rendered image visible and offers a collapsible exact HTML source payload
 
 #### Scenario: Inline HTML image renders inside prose
 - **WHEN** an unfocused Visual Edit paragraph, heading, list item, or blockquote line contains text and one or more complete `<img>` tags
@@ -1092,12 +1129,12 @@ Visual Edit SHALL present raw-HTML images the same way Read mode does wherever R
 #### Scenario: Mixed inline HTML renders images beside conservative source fragments
 - **WHEN** a prose block mixes one or more `<img>` tags with other inline HTML such as `<a href=…>` wrappers, `<br>`, or `<em>…</em>`
 - **THEN** the block renders each image atom in the mixed layout
-- **AND** the non-image inline HTML appears as byte-exact conservative source fragments alongside the atoms
-- **AND** the block does not collapse into a whole-block source island while it carries at least one inline image atom
+- **AND** supported non-image inline HTML renders and unknown tags appear as byte-exact fragments alongside the atoms
+- **AND** the block does not collapse into a whole-block source island
 
 #### Scenario: Other inline HTML keeps the conservative fallback
-- **WHEN** a prose block contains inline HTML but no `<img>` tag (for example only `<br>` or `<em>…</em>`)
-- **THEN** the block keeps the whole-block HTML source-island presentation
+- **WHEN** a prose block contains supported inline HTML but no `<img>` tag (for example only `<br>` or `<em>…</em>`)
+- **THEN** the block renders that HTML with hidden tags
 - **AND** no partial rendering mutates or misrepresents the authored source
 
 #### Scenario: HTML image in a table cell matches Read mode
@@ -1199,7 +1236,7 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 - **AND** the change's proposal cites this roadmap requirement as its motivation
 
 #### Scenario: Closed gaps do not regress
-- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example YAML front matter, reference-style block images, ragged tables, math Pending/Error payload editors, escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, GFM alerts, or Visual Edit task-list checkbox click)
+- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example YAML front matter, reference-style block images, empty ATX headings and empty list items, decoded HTML entities in the proven set, angle-bracket autolinks, ragged tables, math Pending/Error payload editors, escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, GFM alerts, or Visual Edit task-list checkbox click)
 - **THEN** the coverage matrix classifies the construct in its implemented class and the construct does not reappear on the roadmap
 
 #### Scenario: Secondary gaps are visible but lower priority
@@ -2122,3 +2159,166 @@ The Edit menu SHALL offer Paste as Plain Text, bound by default to `Ctrl+Alt+V` 
 - **WHEN** the user presses `Ctrl+Shift+V` / `Cmd+Shift+V`
 - **THEN** the view mode cycles as before
 - **AND** Paste as Plain Text is not invoked
+
+### Requirement: Shared HTML preview honors image dimensions
+Standalone HTML blocks and Visual Edit inline HTML image atoms SHALL honor authored `width` and `height` attributes on `<img>` tags. Numeric values and `px` lengths SHALL be treated as CSS pixels; percentage values SHALL be applied to the loaded image's display width. Layout SHALL keep `max-width: 100%` so oversized hints still fit the pane. Read, Split Preview, and unfocused Visual Edit SHALL use the same sized image.
+
+#### Scenario: README logo uses authored pixel size
+- **WHEN** an HTML block contains `<img src="assets/markion-logo.svg" alt="Markion logo" width="128" height="128">`
+- **THEN** the preview and Visual Edit image present at 128 by 128 logical pixels (subject to max-width of the pane)
+- **AND** pending or failed loads still show the existing alt/URL placeholder
+
+#### Scenario: Width-only hint keeps aspect ratio
+- **WHEN** an `<img>` has `width="200"` and no height
+- **THEN** the rendered image is 200 CSS pixels wide and the height follows the decoded aspect ratio
+
+### Requirement: Visual Edit HTML blocks keep rendered view when focused
+Focusing a `VisualBlockKind::Html` row SHALL keep the shared HTML-parts rendering visible. The block SHALL expose a collapsible exact source payload editor over the complete authored HTML range (the same render-plus-payload pattern used for diagrams and display math). Expanding, collapsing, or hovering the source control SHALL NOT change document version or invalidate per-version derived caches. The block SHALL NOT be replaced by a bordered whole-block source island solely because it owns the caret.
+
+#### Scenario: Focused HTML table stays rendered
+- **WHEN** the caret enters a Visual Edit HTML block that renders as a table or image
+- **THEN** the table or image remains visible
+- **AND** an exact source payload for the authored HTML is available without replacing the rendered view
+
+#### Scenario: HTML source payload is source-backed
+- **WHEN** the user edits the HTML block's source payload
+- **THEN** the mutation applies to `MarkdownDocument.text` through the existing dirty-state and undo path
+- **AND** the next derived version re-renders the HTML parts from the updated source
+
+### Requirement: HTML tables inside wrappers still render as grids
+`html_preview_parts` SHALL resolve a `<table>` that appears anywhere inside a raw HTML block, not only when the block's trimmed text starts with `<table`. Prefix and suffix HTML SHALL remain as text/image parts. Nested tables that cannot be gridded SHALL flatten rather than panic.
+
+#### Scenario: Centered wrapper around a table
+- **WHEN** a raw HTML block is `<div align="center"><table><tr><td>A</td></tr></table></div>`
+- **THEN** the preview and Visual Edit show a visual table grid containing `A`
+- **AND** the table is not flattened to a single text run
+
+#### Scenario: Caption after a table is kept
+- **WHEN** a raw HTML block is `<table><tr><td>A</td></tr></table><p>caption</p>`
+- **THEN** the parts include a table grid followed by a text part containing `caption`
+
+### Requirement: Nested list and quote HTML uses the HTML-parts pipeline
+HTML-only regions inside blockquotes and list items SHALL be emitted as `PreviewBlock::Html` in document order with source ranges that do not overlap the parent item's direct text, matching nested fenced-code partitioning. Those nested HTML blocks SHALL render through `html_preview_parts` (including images) in Read, Split Preview, and Visual Edit.
+
+#### Scenario: HTML image inside a list item renders
+- **WHEN** a list item contains a nested raw-HTML image such as `<p align="center"><img src="x.png" alt="X"></p>`
+- **THEN** Read mode and Visual Edit show the image
+- **AND** the list item's source range does not swallow the HTML block's source range
+
+#### Scenario: HTML image inside a blockquote renders
+- **WHEN** a blockquote contains an HTML-only paragraph with an `<img>`
+- **THEN** the quote renders the image through the shared HTML-parts pipeline rather than flattened alt/URL text
+
+### Requirement: Shared HTML preview preserves common document structure
+HTML preview parts SHALL present `<h1>`–`<h6>` with heading typography derived from the rendered body size, `<ul>`/`<ol>`/`<li>` with bullet or decimal markers, and `<pre>` with preserved whitespace and code-slot font. Alignment SHALL honor `left`/`right`/`center` (attribute or `text-align`). Inline `color` from allowlisted hex/`rgb()` values and underline from `<u>` SHALL paint on text spans. These presentations apply in Read, Split Preview, and Visual Edit HTML blocks.
+
+#### Scenario: HTML heading uses heading size
+- **WHEN** a raw HTML block contains `<h1>Title</h1>`
+- **THEN** the text `Title` renders at the document's H1 size, not body size
+
+#### Scenario: HTML list shows markers
+- **WHEN** a raw HTML block contains `<ul><li>one</li><li>two</li></ul>`
+- **THEN** the preview shows two marked list items rather than unmarked wrapped lines
+
+#### Scenario: HTML pre keeps spaces and newlines
+- **WHEN** a raw HTML block contains `<pre>  a\n    b</pre>`
+- **THEN** the preview shows the leading spaces and the line break instead of collapsing them to a single space
+
+#### Scenario: Right alignment and underline
+- **WHEN** a raw HTML block contains `<p align="right"><u>note</u></p>`
+- **THEN** the text is right-aligned and underlined
+
+### Requirement: HTML table cells render images and links
+HTML `<td>`/`<th>` cells SHALL render complete `<img>` tags through the shared image pipeline and SHALL apply `<a href>` as link spans. Empty cells SHALL not result solely because the cell contained only an image tag.
+
+#### Scenario: Image-only table cell
+- **WHEN** a raw HTML table cell is `<td><img src="a.png" alt="A"></td>`
+- **THEN** the cell shows the image `a.png`
+- **AND** the table remains a grid
+
+#### Scenario: Linked text in a table cell
+- **WHEN** a cell contains `<a href="https://example.com">ex</a>`
+- **THEN** the cell text `ex` is a link to that URL
+
+### Requirement: Attributed supported inline HTML still renders
+The Visual Edit supported inline-HTML subset SHALL still render when a recognized tag carries ignorable attributes `class`, `id`, or `clear`. The complete authored tags remain the reveal group. Attributes other than that ignorable set on a style tag SHALL keep the conservative-run path for that tag.
+
+#### Scenario: Classed emphasis stays visual
+- **WHEN** an unfocused prose block contains `text <em class="x">em</em> more`
+- **THEN** `em` renders as emphasis with tags hidden
+- **AND** the block does not collapse into a whole-block source island
+
+#### Scenario: Classed br still breaks
+- **WHEN** a prose block contains `a<br class="clear">b`
+- **THEN** Visual Edit stacks `b` on the next visual line
+
+### Requirement: Unsupported inline HTML is an inert atom
+Unknown, stray, or unpaired inline HTML in a prose block SHALL appear as byte-exact source fragments (inert atoms) in the mixed layout and SHALL reveal that fragment's source range when the caret enters it. Visual Edit SHALL NOT promote the whole paragraph to a source island solely because it contains such tags. The editor SHALL NOT guess a rendered-tree mutation for those tags.
+
+#### Scenario: Unknown tag stays in mixed layout
+- **WHEN** an unfocused paragraph contains `Hello <span>x</span> world`
+- **THEN** `Hello` and `world` remain rendered prose
+- **AND** the `<span>` / `</span>` source is visible as fragments rather than a whole-block island
+- **AND** focusing the paragraph does not replace it with a bordered source island
+
+### Requirement: Angle-bracket autolinks are progressive-reveal
+Visual Edit SHALL render pulldown-recognized angle-bracket autolinks (`<https://…>`, `<user@example.com>`) as links while unfocused and SHALL reveal the complete `<…>` source group when the caret or a selection endpoint enters that range.
+
+#### Scenario: URL autolink renders
+- **WHEN** a paragraph contains `<https://example.com>`
+- **THEN** Visual Edit shows a link, not a whole-paragraph source island
+- **AND** moving the caret into the construct reveals the authored `<https://example.com>` group
+
+### Requirement: Empty ATX headings and empty list items stay rendered
+The derived Markdown model SHALL retain empty ATX headings (1–6 opening hashes, with or without following spaces and with no visible title text) as heading blocks with byte-exact source ranges, and SHALL retain empty unordered and ordered list items as list-item blocks with byte-exact source ranges. Visual Edit, Read, and Split Preview SHALL present each such block in its heading or list typography and SHALL reserve the same heading- or list-row height when the payload is empty, rather than omitting the row or replacing it with an Unsupported source island. When the Visual Edit caret or a selection endpoint owns an empty heading or empty list row, Visual Edit SHALL reveal the structural prefix (`#`–`######` plus any following spaces, or the list or task marker) through the existing prefix projection, keep heading or list typography, paint a caret in that row, and accept typed text into the canonical source. Visual Edit SHALL NOT wrap that row in source-island chrome (heavy padding, bordered card, monospace poster background). Empty paragraphs that are not headings or lists remain whitespace or gaps. Caret, focus, and prefix reveal SHALL NOT invalidate per-document-version derived Markdown caches.
+
+#### Scenario: Empty ATX heading remains a heading block
+- **WHEN** the document contains a line that is only an ATX marker such as `##`, `###`, or `###     ` (hashes plus optional spaces, any level 1–6)
+- **THEN** derivation emits a heading block whose source range covers that line
+- **AND** the corresponding Visual Edit block is `Heading` with no Unsupported source island
+- **AND** Read and Split Preview reserve heading-row height for that line instead of omitting it
+
+#### Scenario: Empty list item remains a list row
+- **WHEN** the document contains a line that is only an unordered or ordered list marker such as `- ` or `1. `
+- **THEN** derivation emits a list-item block whose source range covers that line
+- **AND** the corresponding Visual Edit block is a list item with no Unsupported source island
+- **AND** Read and Split Preview reserve list-row height including the list marker
+
+#### Scenario: Focused empty heading reveals its marker
+- **WHEN** the Visual Edit caret owns an empty ATX heading row
+- **THEN** the structural prefix (`## ` or equivalent) is visible in heading typography
+- **AND** the row is not replaced by a whole-block source island
+- **AND** typed text inserts into the canonical Markdown source after the prefix
+
+#### Scenario: Focused empty list item reveals its marker
+- **WHEN** the Visual Edit caret owns an empty unordered, ordered, or task-list item whose payload text is empty
+- **THEN** the list or task marker remains visible in list typography
+- **AND** the row is not replaced by a whole-block source island
+
+#### Scenario: Unfocused empty heading keeps placeholder height
+- **WHEN** an empty ATX heading is visible in Visual Edit and does not own the caret
+- **THEN** the row keeps heading-sized layout height with no source-island border, padding, or monospace poster chrome
+- **AND** switching to Read or Split Preview keeps a heading-sized placeholder for that line
+
+#### Scenario: Format or slash heading on an empty line stays visual
+- **WHEN** the user turns an empty Visual Edit row into a heading (Format menu, block menu, or slash command), producing source such as `## `
+- **THEN** the row renders as an empty heading with revealed prefix while it owns the caret
+- **AND** it does not become an Unsupported source island
+
+#### Scenario: Empty-structure presentation does not reparse
+- **WHEN** the user moves the caret onto or off an empty heading or empty list row without changing document text
+- **THEN** document version, dirty state, undo history, and derived Markdown caches remain unchanged
+
+### Requirement: Remaining Visual Edit source islands use lightweight chrome
+Visual Edit SHALL keep an exact source-backed editing affordance for constructs that still have no rendered form (YAML front matter, indented or unclosed fenced code without a payload editor, and residual unsupported gaps that are not empty headings or empty list items). That affordance SHALL use lightweight chrome: code-slot font, a faint distinct background or left accent, and tight padding that does not insert a large bordered card into the document flow. Visual Edit SHALL NOT use heavy poster chrome (large uniform padding, rounded bordered box, and a sudden height jump) for those remaining islands. Empty ATX headings and empty list items are not remaining islands; they follow `Empty ATX headings and empty list items stay rendered`.
+
+#### Scenario: Residual unsupported gap is not a padded source card
+- **WHEN** Visual Edit must present a residual unsupported gap that is not an empty heading or empty list item
+- **THEN** the gap remains source-backed and editable
+- **AND** it does not use the previous heavy padded bordered source-island card
+
+#### Scenario: Front matter and unclosed fences stay source-backed
+- **WHEN** the document contains YAML front matter or an unclosed fenced code block
+- **THEN** Visual Edit still presents an exact source-backed editing affordance for that construct
+- **AND** the affordance uses the lightweight island chrome rather than a large padded bordered card
+- **AND** the construct remains a WYSIWYG coverage-roadmap gap until a later change closes it

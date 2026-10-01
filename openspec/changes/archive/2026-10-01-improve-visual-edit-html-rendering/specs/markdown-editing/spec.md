@@ -112,7 +112,7 @@ Visual Edit SHALL render pulldown-recognized angle-bracket autolinks (`<https://
 ## MODIFIED Requirements
 
 ### Requirement: Visual Edit inline formatting fidelity
-Visual Edit SHALL render byte-exact supported inline formatting in prose blocks without exposing its Markdown delimiters while the construct is unfocused. Supported formatting SHALL include emphasis, strong emphasis, safely nested strong/emphasis combinations, strikethrough, inline code, links, highlight, superscript, subscript, backslash-escaped ASCII punctuation, decoded HTML entity references that reconstruct against the parser, angle-bracket autolinks, and exactly recognized inline HTML in the supported subset. A backslash followed by an ASCII punctuation character SHALL render as the literal punctuation character with the backslash hidden as a marker. The supported inline-HTML subset SHALL consist of the style pairs `<em>`/`<i>`, `<strong>`/`<b>`, `<s>`/`<del>`/`<strike>`, `<code>`, `<mark>`, `<sub>`, and `<sup>`, plus the void line-break forms `<br>`, `<br/>`, and `<br />`, including when those tags carry only ignorable attributes `class`, `id`, or `clear`; their tags SHALL be hidden markers whose styling composes with Markdown formatting, and `<br>` SHALL render as an authored line break inside the inline flow. Supported links SHALL include reference-style links (full `[text][label]`, collapsed `[label][]`, and shortcut `[label]` forms) whose definitions appear elsewhere in the document, and pulldown-recognized angle-bracket autolinks: Visual Edit SHALL resolve reference-style links against the document's link reference definitions, while definitions inside fenced code blocks SHALL NOT create links. Resolving document-scoped definitions SHALL preserve exact in-block source ranges — rendering and reveal mappings for the block's own content remain byte-identical to a full-document parse. Moving the caret or a selection endpoint into a supported formatted construct — including an escaped-character group, an entity token, an autolink, or a supported inline-HTML element — SHALL reveal one safe containing source group for precise editing without converting unrelated inline content in the same block to raw Markdown. Unknown, stray, or unpaired inline HTML SHALL present as inert source atoms in the mixed layout. Constructs whose source/display mapping is malformed, crossing, or otherwise ambiguous — including backslash sequences outside the proven subset and entity references that cannot be reconstructed — SHALL show conservative source runs for the affected slice and SHALL NOT guess a rendered-tree mutation.
+Visual Edit SHALL render byte-exact supported inline formatting in prose blocks without exposing its Markdown delimiters while the construct is unfocused. Supported formatting SHALL include emphasis, strong emphasis, safely nested strong/emphasis combinations, strikethrough, inline code, links, highlight, superscript, subscript, backslash-escaped ASCII punctuation, decoded HTML entity references that reconstruct against the parser, angle-bracket autolinks, and exactly recognized inline HTML in the supported subset. A backslash followed by an ASCII punctuation character SHALL render as the literal punctuation character with the backslash hidden as a marker. A decoded HTML entity reference SHALL render as its decoded character(s) with the authored `&…;` token hidden as a marker, and each decoding SHALL match the semantic parser's decoding byte-for-byte. The supported inline-HTML subset SHALL consist of the style pairs `<em>`/`<i>`, `<strong>`/`<b>`, `<s>`/`<del>`/`<strike>`, `<code>`, `<mark>`, `<sub>`, and `<sup>`, plus the void line-break forms `<br>`, `<br/>`, and `<br />`, including when those tags carry only ignorable attributes `class`, `id`, or `clear`; their tags SHALL be hidden markers whose styling composes with Markdown formatting, and `<br>` SHALL render as an authored line break inside the inline flow. Supported links SHALL include reference-style links (full `[text][label]`, collapsed `[label][]`, and shortcut `[label]` forms) whose definitions appear elsewhere in the document, and pulldown-recognized angle-bracket autolinks: Visual Edit SHALL resolve reference-style links against the document's link reference definitions, while definitions inside fenced code blocks SHALL NOT create links. Resolving document-scoped definitions SHALL preserve exact in-block source ranges — rendering and reveal mappings for the block's own content remain byte-identical to a full-document parse. Moving the caret or a selection endpoint into a supported formatted construct — including an escaped-character group, an entity token, an autolink, or a supported inline-HTML element — SHALL reveal one safe containing source group for precise editing without converting unrelated inline content in the same block to raw Markdown. Unknown, stray, or unpaired inline HTML SHALL present as inert source atoms in the mixed layout. Constructs whose source/display mapping is malformed, crossing, or otherwise ambiguous — including backslash sequences outside the proven subset and entity references that cannot be reconstructed — SHALL show conservative source runs for the affected slice and SHALL NOT guess a rendered-tree mutation.
 
 #### Scenario: Default inline formatting paragraph stays visual
 - **WHEN** the default welcome document is opened in Visual Edit mode and its Inline formatting paragraph is not focused
@@ -198,16 +198,52 @@ Visual Edit SHALL render byte-exact supported inline formatting in prose blocks 
 - **THEN** Visual Edit preserves a source-backed transitional editing affordance for the affected slice
 - **AND** the editor does not guess a rendered-tree mutation for that construct
 
+#### Scenario: Decoded entity renders as literal text
+- **WHEN** an unfocused prose block contains an HTML entity reference in the proven set, such as `&amp;`, `&#39;`, or `&#x2014;`
+- **THEN** the paragraph renders as normal prose showing the decoded character, not a whole-block source island
+- **AND** the `&…;` token stays hidden while the rest of the paragraph remains rendered
+- **AND** the rendering matches Split Preview and Read mode visible text
+
+#### Scenario: Decoded entity reveals its authored token
+- **WHEN** the caret or a selection endpoint moves into a decoded entity run such as `&amp;` or `&#39;`
+- **THEN** the complete authored `&…;` token is revealed as one editable source group
+- **AND** moving the caret away hides the token again and restores the decoded rendering without changing the document version
+
+#### Scenario: Entities compose with Markdown formatting and escapes
+- **WHEN** a prose block mixes an entity with other supported decoded syntax, such as `**a &amp; \* b**`
+- **THEN** the decoded character and the escaped character render literally inside the styled construct with the `&…;` and `\` bytes hidden
+- **AND** entering the construct reveals one safe containing source group
+
+#### Scenario: Angle-bracket autolinks are a tracked WYSIWYG gap
+- **WHEN** a prose block contains an angle-bracket autolink such as `<https://example.com>` or `<user@example.com>`
+- **THEN** the autolink is no longer a WYSIWYG coverage gap: it renders as a progressive-reveal link (see "Angle-bracket autolinks render as progressive-reveal links")
+- **AND** it is absent from the `WYSIWYG coverage roadmap` open-gap list
+
+#### Scenario: Unproven entity forms remain conservative
+- **WHEN** a prose block contains an entity reference outside the proven decode table — a multi-codepoint entity such as `&NotEqualTilde;`, a named entity absent from the maintained table, or an invalid reference
+- **THEN** Visual Edit preserves the source-backed transitional editing affordance for that block and classifies the construct as a WYSIWYG coverage gap under the roadmap
+- **AND** the editor does not guess a decoded rendering or a rendered-tree mutation for that construct
+
 ### Requirement: Visual Edit whitespace activation
-The system SHALL keep source-backed whitespace ranges available for exact caret mapping while treating whitespace between rendered blocks as passive layout until the source caret intentionally enters that range. When the source caret owns a whitespace row — whether because the user pressed Enter at the end of a paragraph (whose source range excludes the trailing newline) or because keyboard navigation moved the caret into a whitespace-only range — Visual Edit SHALL present the row as the same passive-height layout it uses when unfocused, plus a thin insertion caret line visually consistent with the caret in a paragraph or heading, and SHALL accept subsequent typed text at the exact source caret position. Visual Edit SHALL NOT wrap a whitespace row that owns the caret in a source-island box (border, padding, monospace styling, or differentiated background), because such chrome misrepresents ordinary inter-paragraph spacing as a code-like block. Source islands SHALL remain reserved for blocks whose source has no rendered visual form (frontmatter, unclosed or indented code, unsupported constructs) or for inline runs whose source/display mapping is ambiguous and therefore requires a conservative source-editing fallback. Rendered HTML blocks SHALL keep their HTML-parts view when focused and SHALL NOT use a whole-block source island as the default focused presentation.
+The system SHALL keep source-backed whitespace ranges available for exact caret mapping. In Visual Edit, a `Whitespace` row SHALL behave as a first-class empty line: it occupies the rendered body paragraph line height (one painted line per covered newline, floored at one line and capped at the existing pathological bound), presents an I-beam pointer, and accepts pointer placement onto an existing offset inside its source range. Clicking a whitespace row SHALL move the caret into that range and MUST NOT insert a newline or otherwise mutate the document text, version, dirty state, undo history, or derived Markdown caches. When the source caret owns a whitespace row — because the user clicked it, pressed Enter onto a new insertion line, or moved into it with keyboard navigation — Visual Edit SHALL present the same empty-paragraph-height layout plus a thin insertion caret line visually consistent with the caret in a paragraph or heading, and SHALL accept subsequent typed text at the exact source caret position. Visual Edit SHALL NOT wrap a whitespace row in a source-island box (border, padding, monospace styling, or differentiated background). Source islands SHALL remain reserved for blocks whose source has no rendered visual form (frontmatter, code, HTML, unsupported constructs) or for inline runs whose source/display mapping is ambiguous. Landing offsets SHALL lie inside the whitespace source range. For a single-newline gap between two rendered blocks, the caret SHALL land at `Whitespace.source_range.start` (the authored separator newline), not the first content byte of the following block.
 
-#### Scenario: Clicking a passive gap between headings does not activate editing
-- **WHEN** the Visual Edit caret belongs to a rendered heading and the user clicks the whitespace gap between that heading and another heading
-- **THEN** the source selection and document content remain unchanged and the gap does not present an insertion caret
+#### Scenario: Clicking a blank line between headings places the caret without mutation
+- **WHEN** the Visual Edit caret belongs to a rendered heading and the user clicks the blank-line `Whitespace` row between that heading and another heading
+- **THEN** the caret moves onto an existing offset inside that whitespace range (`source_range.start` for a single-newline gap)
+- **AND** the document text, version, dirty state, undo history, and derived Markdown cache identity remain unchanged
+- **AND** the gap row presents an insertion caret
 
-#### Scenario: Clicking a passive gap before a paragraph does not activate editing
-- **WHEN** the Visual Edit caret belongs to a rendered block and the user clicks the whitespace gap between a heading and a paragraph
-- **THEN** the source selection and document content remain unchanged and the gap does not become an editable typing area
+#### Scenario: Clicking a blank line between a heading and a paragraph places the caret without mutation
+- **WHEN** the Visual Edit caret belongs to a rendered block and the user clicks the blank-line `Whitespace` row between a heading and a paragraph
+- **THEN** the caret moves onto an existing offset inside that whitespace range
+- **AND** the document text, version, dirty state, undo history, and derived Markdown cache identity remain unchanged
+- **AND** the gap row becomes the caret-owning typing surface
+
+#### Scenario: Typing after a gap click inserts at the existing newline
+- **WHEN** the user clicks the blank-line row between `## [Unreleased]` and `## [16.1.7]` in a changelog-like document and types text
+- **THEN** the typed bytes insert at the existing separator newline so a paragraph appears between the two headings
+- **AND** the following heading’s first content byte is not consumed
+- **AND** the edit does not insert an extra blank line beyond the newline that was already authored
 
 #### Scenario: Structural Enter activates an insertion line
 - **WHEN** the user presses Enter from a heading in Visual Edit and the structural edit creates a new source-backed insertion line
@@ -218,20 +254,21 @@ The system SHALL keep source-backed whitespace ranges available for exact caret 
 - **THEN** the owning whitespace row provides the source-backed editing affordance without recomputing the document's cached Markdown-derived state
 
 #### Scenario: Whitespace row owning the caret renders a caret line, not a source island
-- **WHEN** the source caret owns a whitespace row in Visual Edit — for example after creating a blank line by pressing Enter (so a second newline lands outside any paragraph range), or after pressing Down arrow across an existing blank line
-- **THEN** the row is rendered as passive-height layout with a thin insertion caret line and no border, padding, monospace styling, or differentiated background
+- **WHEN** the source caret owns a whitespace row in Visual Edit — for example after clicking it, after creating a blank line by pressing Enter, or after pressing Down or Up onto an existing blank line
+- **THEN** the row is rendered at empty-paragraph height with a thin insertion caret line and no border, padding, monospace styling, or differentiated background
 - **AND** typed text is inserted into the canonical Markdown source at the caret position through the same dirty-state, undo/redo, autosave, and per-tab isolation paths as any other edit
 
-#### Scenario: Whitespace row not owning the caret remains passive
+#### Scenario: Whitespace row not owning the caret stays an empty line
 - **WHEN** a whitespace row does not own the source caret
-- **THEN** it renders as passive layout without a caret, exactly as before, regardless of whether it owns the caret on other frames
+- **THEN** it still occupies empty-paragraph height and remains pointer-editable
+- **AND** it does not paint an insertion caret until it owns the caret
 
 ### Requirement: Maintained Visual Edit support classification
-The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that classifies every user-visible Markdown construct into exactly one of three classes: **rendered WYSIWYG** (the construct is shown in its rendered form, including dedicated field/payload editors for code, math, diagrams, images, HTML blocks, and tables whose editors ARE the rendered form), **progressive-reveal WYSIWYG** (the construct is rendered by default and reveals its smallest complete source syntax group when the caret enters it — inline formatting, links including angle-bracket autolinks, inline math, escaped punctuation, decoded entities, supported and inert inline HTML, structural prefixes), or **WYSIWYG coverage gap** (the construct currently shows raw source and is tracked under the `WYSIWYG coverage roadmap` for closure by a future change). The matrix SHALL name the canonical editable range and the verification evidence for each rendered/reveal class, and SHALL name the roadmap priority and implementation seam for each gap. The matrix SHALL agree with the stable requirements and the implemented `VisualBlock`/`VisualBlockEditor` behavior.
+The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that classifies every user-visible Markdown construct into exactly one of three classes: **rendered WYSIWYG** (the construct is shown in its rendered form, including dedicated field/payload editors for code, math, diagrams, images, YAML front matter, HTML blocks, and tables whose editors ARE the rendered form), **progressive-reveal WYSIWYG** (the construct is rendered by default and reveals its smallest complete source syntax group when the caret enters it — inline formatting, links, inline math, structural prefixes), or **WYSIWYG coverage gap** (the construct currently shows raw source and is tracked under the `WYSIWYG coverage roadmap` for closure by a future change). The matrix SHALL name the canonical editable range and the verification evidence for each rendered/reveal class, and SHALL name the roadmap priority and implementation seam for each gap. The matrix SHALL agree with the stable requirements and the implemented `VisualBlock`/`VisualBlockEditor` behavior. Empty ATX headings and empty list items SHALL be classified as rendered WYSIWYG with progressive-reveal structural prefixes, not as coverage gaps.
 
 #### Scenario: Contributor evaluates current WYSIWYG coverage
 - **WHEN** a contributor reads the Visual Edit WYSIWYG coverage matrix
-- **THEN** it distinguishes rendered WYSIWYG constructs (prose, code, math, diagrams, images, tables, task lists, footnote definitions and references, blockquotes, alerts, rules, HTML blocks with collapsible source), progressive-reveal WYSIWYG constructs (inline formatting, links, autolinks, inline math, escaped punctuation, decoded entities, supported and inert inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (front matter, indented code, unclosed fences, reference-style images, malformed tables, task-list checkbox interaction, definition lists, empty list items, math render-failure)
+- **THEN** it distinguishes rendered WYSIWYG constructs (prose, headings including empty ATX headings, code, math including Pending/Error payload editors, diagrams, images including reference-style block images, tables including ragged grids, YAML front matter, lists and task lists including empty list items and clickable Visual Edit checkboxes, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, decoded HTML entities, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (indented code, unclosed fences, multiline or otherwise unprovable images, definition lists, residual unsupported gaps)
 - **AND** it explains that canonical Markdown remains the single persisted representation and that no construct is edited through a parallel rendered tree
 
 #### Scenario: A new visual block behavior is proposed
@@ -280,12 +317,12 @@ Visual Edit SHALL present raw-HTML images the same way Read mode does wherever R
 - **AND** pending and failed loads present the same placeholders as Read mode
 
 ### Requirement: WYSIWYG coverage roadmap
-The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. After this change the primary gaps SHALL be (1) front matter (an editing form for YAML `---` regions, and detection of TOML/JSON forms) and (2) indented code blocks. The roadmap SHALL also track secondary gaps including unclosed or malformed fenced code, reference-style and malformed inline images, malformed tables, task-list checkbox click interaction, GFM definition lists, empty list items, and math render-failure states. Decoded entities, unsupported inline-HTML forms, and angle-bracket autolinks SHALL NOT remain on the roadmap once this change's implementation is complete.
+The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. After this change the remaining primary gap SHALL be indented code blocks. The roadmap SHALL also track secondary gaps including unclosed or malformed fenced code, multiline or otherwise unprovable images, GFM definition lists, and residual unsupported gap bytes. YAML front matter, reference-style block images, ragged tables, and math Pending/Error states SHALL NOT remain on the roadmap. Task-list checkbox click interaction SHALL NOT remain on the roadmap once Visual Edit checkboxes are clickable.
 
 #### Scenario: Primary gaps are tracked with priority and effort
 - **WHEN** a contributor reads the WYSIWYG coverage roadmap
-- **THEN** the current primary gaps (front matter, indented code blocks) are listed with priority, effort, target class, and implementation seam
-- **AND** each primary gap points at the source location of the current transitional source-view rendering
+- **THEN** the current primary gap (indented code blocks) is listed with priority, effort, target class, and implementation seam
+- **AND** YAML front matter, reference-style block images, ragged tables, and math render-failure states are absent from the open-gap list
 
 #### Scenario: Closing a gap updates the roadmap
 - **WHEN** a future change implements WYSIWYG rendering for a construct that the roadmap tracks as a gap
@@ -293,11 +330,11 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 - **AND** the change's proposal cites this roadmap requirement as its motivation
 
 #### Scenario: Closed gaps do not regress
-- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, decoded entities, unsupported inline HTML atoms, angle-bracket autolinks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, or GFM alerts)
+- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example YAML front matter, reference-style block images, empty ATX headings and empty list items, decoded HTML entities in the proven set, angle-bracket autolinks, ragged tables, math Pending/Error payload editors, escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, GFM alerts, or Visual Edit task-list checkbox click)
 - **THEN** the coverage matrix classifies the construct in its implemented class and the construct does not reappear on the roadmap
 
 #### Scenario: Secondary gaps are visible but lower priority
-- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example task-list checkbox interaction)
+- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example unclosed fenced code or GFM definition lists)
 - **THEN** the roadmap lists the secondary gap with its effort and implementation seam
 - **AND** the contributor can open a change that closes it without re-litigating whether it is a gap
 
@@ -305,3 +342,9 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 - **WHEN** implementation or testing reveals a Markdown construct that renders as raw source in Visual Edit and is not yet on the roadmap
 - **THEN** the discovering change SHALL add the construct to this roadmap with its class, priority, effort, and seam before completing
 - **AND** the change SHALL NOT close the gap in the same change unless the gap is trivial
+
+#### Scenario: Task-list checkbox click is a closed gap
+- **WHEN** a contributor reads the WYSIWYG coverage roadmap after this change
+- **THEN** task-list checkbox click is absent from the open-gap list
+- **AND** the coverage matrix records clickable Visual Edit task checkboxes as rendered WYSIWYG
+
