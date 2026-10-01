@@ -3,7 +3,9 @@
 ## Purpose
 
 Covers the application chrome: view modes, menus, status bar, themes, focus/typewriter modes, find/replace, preferences, cross-platform behavior, performance characteristics, and error feedback. Interface internationalization is tracked separately under the `ui-i18n` capability. Font-family/size configuration, per-theme code-highlight themes, extension-syntax toggles, error logging to file, and crash-report prompts are **not** part of this capability — they are future candidates.
+
 ## Requirements
+
 ### Requirement: View modes and application chrome
 The editor SHALL provide source, split, and preview view modes, a toggleable sidebar (file tree / outline), a visible in-window menu bar (File, Edit, View, Format, Export, Help) with click-outside-to-close behavior, and a status bar. When the sidebar is visible, its column SHALL begin directly below the menu bar and extend through both the document-tab band and main content region, while document-tab controls and document panes remain in the adjacent document-workspace column.
 
@@ -731,3 +733,184 @@ The Preferences panel General tab SHALL expose a Markdown auto-pair toggle. The 
 - **THEN** the next typed `*` in an editing surface inserts only `*`
 - **AND** document version and derived Markdown caches are unchanged by the preference change
 
+### Requirement: Open in-window menus track top-level pointer movement
+The in-window menu bar SHALL switch the visible dropdown to a different top-level menu when the pointer moves over that menu title while any top-level dropdown is already open. Pointer movement over top-level titles MUST NOT open a dropdown when no menu session is active. Existing click toggle and click-outside dismissal behavior SHALL remain available.
+
+#### Scenario: Pointer switches an open menu
+- **WHEN** the user clicks Format to open its in-window dropdown
+- **AND** moves the pointer over the View menu title
+- **THEN** the Format dropdown closes and the View dropdown opens without another click
+
+#### Scenario: Pointer can continue across menus
+- **WHEN** an in-window dropdown is open and the user moves the pointer across multiple different top-level menu titles
+- **THEN** the visible dropdown follows the currently hovered title throughout the active menu session
+
+#### Scenario: Idle menu bar does not open on hover
+- **WHEN** no in-window dropdown is open and the pointer moves over a top-level menu title
+- **THEN** no dropdown opens
+
+#### Scenario: Existing dismissal behavior ends hover tracking
+- **WHEN** the user dismisses an open dropdown by clicking its active title or outside the menu
+- **THEN** the menu session closes
+- **AND** subsequent pointer movement over top-level titles does not open a dropdown until the user clicks a title again
+
+### Requirement: Active document tab connects to the document workspace
+When more than one document tab is open, the application chrome SHALL render the document-tab controls over the document workspace rather than over the sidebar. Each document tab SHALL have rounded upper corners and square lower corners. The active tab SHALL use the active theme's document-surface fill, SHALL have no visible lower boundary separating it from the workspace, and SHALL visually connect to the shared source, visual-edit, split-preview, or read workspace below. Inactive tabs SHALL remain visually separated from that workspace. The treatment SHALL use existing active-theme palette values and SHALL preserve all existing tab actions and state indicators.
+
+#### Scenario: Tabs align with the workspace when the sidebar is visible
+- **WHEN** multiple document tabs and the sidebar are visible
+- **THEN** the document-tab controls begin at the document-workspace boundary rather than above the sidebar
+- **AND** resizing the sidebar keeps the tab controls aligned with that boundary
+
+#### Scenario: Active tab opens into every document view mode
+- **WHEN** a tab is active in Edit, Visual Edit, Split Preview, or Read mode
+- **THEN** the tab has rounded upper corners and square lower corners
+- **AND** its background continues into the shared document workspace without a lower border or accent line separating them
+- **AND** in Split Preview the connection identifies both source and preview panes as content of the same active tab
+
+#### Scenario: Inactive tabs remain distinct
+- **WHEN** multiple tabs are visible
+- **THEN** every inactive tab retains a visible boundary and subdued theme styling
+- **AND** only the active tab appears connected to the document workspace
+
+#### Scenario: Tab chrome follows the active theme
+- **WHEN** the user switches among light, dark, or custom themes while multiple tabs are open
+- **THEN** the active tab, inactive tabs, tab-band segments, borders, text, hover states, and workspace connection use the corresponding existing theme palette values
+
+#### Scenario: Single-tab layout remains unchanged
+- **WHEN** only one document tab is open
+- **THEN** neither the document tab bar nor its sidebar-alignment segment is rendered
+- **AND** no tab-band height or spacing is added to the workspace
+
+#### Scenario: Existing tab interactions are preserved
+- **WHEN** the user switches or closes a tab, creates a new tab, or views a dirty document tab
+- **THEN** the existing click targets, close behavior, new-tab action, dirty marker, keyboard navigation, and per-tab document state behave as before
+
+### Requirement: About Markion dialog exposes official project links
+
+The About Markion dialog SHALL retain its localized title, running version, product description, and explicit confirmation control while presenting two official project links in this order: the project website `https://markion.app`, followed by the GitHub repository `https://github.com/willmove/markion`. Each URL SHALL be visibly identifiable as an interactive link and pointer activation SHALL open that exact HTTPS destination in the system default browser through the platform shell. Link activation SHALL NOT render embedded web content, stop the application, or implicitly dismiss the About dialog. User-facing labels SHALL follow the active interface language, the literal URLs SHALL remain unchanged, and the dialog SHALL derive its surface, text, border, link, hover, and control colors from the active theme palette.
+
+#### Scenario: About dialog presents the website above GitHub
+
+- **WHEN** the user opens About Markion from either Help-menu surface
+- **THEN** the dialog shows the running version and product description
+- **AND** a project-website link targeting `https://markion.app` appears above a GitHub link targeting `https://github.com/willmove/markion`
+- **AND** both URLs are visually identifiable as interactive links
+
+#### Scenario: Project website opens in the system browser
+
+- **WHEN** the user activates the `https://markion.app` link in the About dialog
+- **THEN** the system default browser opens exactly `https://markion.app`
+- **AND** Markion renders no embedded web content and continues running
+- **AND** the About dialog remains open until the user explicitly dismisses it
+
+#### Scenario: GitHub repository opens in the system browser
+
+- **WHEN** the user activates the `https://github.com/willmove/markion` link in the About dialog
+- **THEN** the system default browser opens exactly `https://github.com/willmove/markion`
+- **AND** Markion renders no embedded web content and continues running
+- **AND** the About dialog remains open until the user explicitly dismisses it
+
+#### Scenario: About dialog labels follow the active language
+
+- **WHEN** the About dialog is opened after the interface language changes
+- **THEN** its title, version label, product description, project-website label, GitHub label, and confirmation control render in the active language
+- **AND** both HTTPS URLs are displayed verbatim rather than translated
+
+#### Scenario: About dialog follows the active theme
+
+- **WHEN** the About dialog is opened under a light or dark theme
+- **THEN** its surface, text, border, link, hover, and confirmation-control colors remain readable and visually consistent with that active theme
+
+#### Scenario: Confirmation dismisses the About dialog
+
+- **WHEN** the user activates the dialog's localized confirmation control
+- **THEN** the About dialog closes without changing the document, preferences, or application lifecycle
+
+### Requirement: Workspace chrome SHALL expose one stateful backup-and-sync entry
+Connected workspace chrome SHALL provide one compact Backup and Sync entry group containing a consumer-facing state summary and at most one context-sensitive primary action. The summary SHALL open a transient Backup and Sync center; a safe routine Sync Now action SHALL remain executable with one activation from chrome. The Files surface SHALL NOT repeat another Sync/Sync Now pair, and synchronization SHALL NOT occupy a persistent workspace sidebar tab. The entry SHALL not interfere with workspace switching or root-drop gestures. The existing active-document Git branch indicator SHALL retain its document-first semantics; workspace synchronization SHALL identify its own repository and SHALL not retarget when that indicator changes. Compact layout SHALL preserve existing document metrics/feedback and use text/icons as well as color.
+
+#### Scenario: Routine sync requires one ordinary action
+- **WHEN** a configured personal-notes workspace has only eligible changes
+- **THEN** activating the entry's Sync Now action starts synchronization without opening a mandatory form or repository dashboard
+
+#### Scenario: User opens synchronization details
+- **WHEN** the user activates the state summary instead of its current primary action
+- **THEN** a transient Backup and Sync center opens without changing the persistent Files/Outline navigation state
+
+#### Scenario: Active document belongs to a different repository
+- **WHEN** the active-document branch indicator refers to another repository
+- **THEN** workspace sync remains visibly bound to its configured repository and does not borrow the document's target
+
+#### Scenario: Window is narrow
+- **WHEN** the existing status row and new sync information cannot fit in full
+- **THEN** optional detail collapses without overlapping controls, removing essential error state, or wrapping the persistent status into uncontrolled rows
+
+### Requirement: Backup and Sync details SHALL separate ordinary tasks from advanced Git tools
+The transient Backup and Sync center SHALL default to the current consumer-facing state, human-readable sync location, last confirmed time, local items waiting to synchronize, updates from another device, one primary action, sync activity, version history, and settings. It SHALL NOT expose raw branch/upstream/path data, status codes, staged/unstaged layers, commit topology, or Commit Locally, Check Remote, Pull Updates, and Push Commits at equal prominence. Those details and actions SHALL remain available under an explicit Advanced Git disclosure together with complete repository changes, outgoing commit inspection, bounded recent history and file diffs.
+
+Text/Markdown inspection SHALL expose source differences; image/binary inspection SHALL show available previews/metadata. Per-file Version History SHALL also be reachable from the file/tree/tab context. Historical content SHALL support Save a Copy without resetting the branch. Oversized content SHALL degrade to metadata/external inspection. The application menu SHALL expose ordinary Backup and Sync actions first and nest transport-specific commands under Advanced Git Tools. Actions SHALL integrate with existing command/shortcut registration without conflicting default bindings.
+
+#### Scenario: User inspects an outgoing commit
+- **WHEN** the user expands Advanced Git details and opens outgoing-history details
+- **THEN** the app shows that commit's affected paths including paths outside the notes policy, and supports bounded file inspection
+
+#### Scenario: Routine center opens
+- **WHEN** a user opens the center for a healthy connected workspace
+- **THEN** the first view explains whether notes are synchronized and the next ordinary action without requiring commit, branch, remote, staging, fetch, pull, or push terminology
+
+#### Scenario: User requests one file's history
+- **WHEN** the user invokes Version History from a note's file, tree, or tab context
+- **THEN** the app opens bounded history for that file without requiring navigation to Advanced Git details
+
+#### Scenario: Diff exceeds presentation limit
+- **WHEN** a selected file exceeds the bounded text-diff limit
+- **THEN** the app reports the limit and exposes metadata or external inspection without reading/rendering unbounded content
+
+#### Scenario: User saves historical content as a copy
+- **WHEN** the user selects a historical file and chooses a new destination
+- **THEN** the app writes through normal destination checks/admission without resetting HEAD or silently replacing current content
+
+### Requirement: Stable typewriter positioning in small viewports
+
+Typewriter mode SHALL keep the active row stable during consecutive typing in small editable viewports, including short documents, newline insertion, and IME composition. Once current geometry centers an unchanged caret row, subsequent refinement frames SHALL NOT move it away and back. A new row SHALL converge without alternating between incompatible scroll targets. Presentation-only scrolling SHALL preserve document state and per-version caches.
+
+#### Scenario: Consecutive input in a short document
+- **WHEN** typewriter mode is enabled in a small window and the user types into an initially empty document
+- **THEN** characters on the same visual row do not cause the page to jump away from its centered position
+- **AND** intermediate refinement frames preserve the centered row once current geometry is available
+
+#### Scenario: Newline followed by IME composition
+- **WHEN** the user inserts a newline in a short document and composes and commits text on the new row
+- **THEN** the row converges to the viewport center without back-and-forth displacement
+- **AND** the centering operation does not mutate text, undo history, or derived caches
+
+#### Scenario: Small viewport with wrapped content
+- **WHEN** the active paragraph wraps across multiple visual rows in a small viewport
+- **THEN** typewriter centering follows the active row and remains stable across unchanged frames
+- **AND** manual scrolling remains possible until the next caret activity
+
+### Requirement: Visual Edit focus presentation
+In Visual Edit, focus mode SHALL keep the current caret-owning source-backed block at normal opacity and visibly dim all other blocks, including rich prose, nested list/quote leaves, tables, code, rendered atoms, and conservative source islands. Ownership SHALL follow the canonical caret endpoint of a selection and the existing unique visual caret mapping at block boundaries and document end. Disabling focus mode SHALL restore normal opacity to every row. Read and Split Preview rendered panes SHALL retain their normal presentation.
+
+#### Scenario: Focus follows the Visual Edit caret
+- **WHEN** focus mode is enabled and the caret moves between Visual Edit paragraphs by pointer or keyboard
+- **THEN** the newly current paragraph renders at normal opacity and the previous paragraph becomes dimmed
+- **AND** a selection uses its caret endpoint rather than keeping every selected block bright
+
+#### Scenario: Structured and conservative content respects focus
+- **WHEN** focus mode is enabled in a Visual Edit document containing quoted/list leaves, tables, code, rendered atoms, or conservative source islands
+- **THEN** the caret-owning row remains at normal opacity and other rows are dimmed regardless of their rendering branch
+
+#### Scenario: Focus toggles and context changes are presentation only
+- **WHEN** focus mode is toggled or the active tab, caret, selection, or editable view changes
+- **THEN** Visual Edit focus presentation reflects the current preference and active document caret
+- **AND** a focus-only change does not alter source text, dirty state, undo history, document version, shared derived Markdown caches, or cached source text
+
+#### Scenario: Disabled mode and preview are unchanged
+- **WHEN** focus mode is disabled or content is displayed in Read or the rendered pane of Split Preview
+- **THEN** content retains normal opacity
+
+#### Scenario: Boundary and empty-document caret
+- **WHEN** the Visual Edit caret is at a shared row boundary, the document end, or in an empty document
+- **THEN** focus presentation uses the same unique row ownership as caret painting without out-of-range access

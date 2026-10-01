@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change complete-p0-editor-workflows. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Local images SHALL be imported as portable document resources
 When a named Markdown document receives supported image bytes from the clipboard or supported image files from an OS drop, Markion SHALL store the bytes in a document-associated asset directory, SHALL use a collision-safe filename, and SHALL insert ordinary Markdown image syntax with a safe document-relative URL. The URL SHALL use forward slashes and SHALL NOT escape the asset directory through traversal. An untitled document SHALL be saved before a resource is imported.
 
@@ -61,3 +63,61 @@ When a local image URL cannot be resolved or decoded, preview and Visual Edit SH
 - **THEN** the rendered surface shows an explicit missing-resource placeholder rather than silent blank space
 - **AND** focusing or dismissing that placeholder does not change document version, dirty state, or undo history
 
+### Requirement: Data-URI image destinations SHALL be decoded and rendered inline
+
+A Markdown image whose destination is a `data:` URI (`data:<mediatype>[;base64],<data>`) SHALL be rendered in preview, Visual Edit, and raw-HTML `<img>` surfaces by decoding the URI payload entirely in-process — without issuing a network request or reading from disk. Base64-encoded payloads SHALL be decoded to bytes and fed into the same decode pipeline used for local and remote images. Non-base64 (URL-encoded) data-URI payloads SHALL be percent-decoded to bytes and rendered the same way. Decoded data-URI images SHALL be cached and deduplicated under the same bounded preview-image cache as local and remote images, keyed by the full URI, so repeated occurrences do not re-decode.
+
+#### Scenario: Base64 PNG data URI renders
+
+- **WHEN** a document contains an image with destination `data:image/png;base64,<base64-encoded PNG bytes>`
+- **THEN** preview, Visual Edit, and raw-HTML surfaces render the decoded PNG
+- **AND** no outbound network request is made for the image
+
+#### Scenario: SVG data URI renders as a vector image
+
+- **WHEN** a document contains an image with destination `data:image/svg+xml;base64,<base64-encoded SVG>` or an equivalent non-base64 `data:image/svg+xml,...` URI
+- **THEN** the surface renders the SVG through the vector rasterization path
+- **AND** the result is presented at the SVG's intrinsic size, subject to the same maximum-edge clamp as file-based SVGs
+
+#### Scenario: Non-base64 data URI is percent-decoded
+
+- **WHEN** a document contains an image with a non-base64 data URI (no `;base64` marker)
+- **THEN** the payload is percent-decoded to bytes and decoded as an image of the declared media type
+
+#### Scenario: Repeated data URI deduplicates in cache
+
+- **WHEN** the same data URI appears more than once in a document or across visible documents
+- **THEN** the payload is decoded at most once per cache residency
+- **AND** each occurrence renders the cached result
+
+#### Scenario: Malformed data URI shows explicit recovery state
+
+- **WHEN** a document contains a data URI that cannot be parsed or whose decoded bytes are not a supported image format
+- **THEN** the surface shows an explicit missing-resource placeholder rather than silently dropping the image
+- **AND** the placeholder does not mutate the document source
+
+### Requirement: Sync SHALL check note attachment participation without rewriting content
+For participating notes, Markion SHALL identify newly referenced local resources absent from the tracked or selected content, including ignored, missing, and out-of-repository resources. Approved new notes and images SHALL follow the persisted scope without repeated selection. An omitted resource SHALL offer explicit include, existing resource-organization, repair, or acknowledged-omission choices as applicable. Acknowledgment SHALL be invalidated when the relevant reference/resource changes. Network URLs and embedded data URIs SHALL retain their existing source semantics; sync SHALL NOT automatically download them, rewrite URLs, or remove unreferenced resources.
+
+#### Scenario: Note and managed image are both approved
+- **WHEN** an eligible new note references a new image within approved resource scope
+- **THEN** both participate in the normal one-click commit without another file-selection dialog
+
+#### Scenario: New reference points outside the repository
+- **WHEN** a participating note newly references an image outside repository scope
+- **THEN** the app identifies its lack of portability and offers an explicit organize/copy or acknowledged-omission action without silently changing source
+
+#### Scenario: Referenced attachment is ignored
+- **WHEN** a participating note newly references an untracked Git-ignored image
+- **THEN** the app explains the omission and requires an explicit choice rather than reporting the note's resources as fully synchronized
+
+### Requirement: Git resource updates SHALL coordinate writes and invalidate affected images
+Image imports/replacements SHALL respect repository write admission and conflict ownership. Git changes to resource bytes SHALL invalidate affected preview and image-tab caches even if referring Markdown bytes are unchanged. Unchanged Markdown SHALL retain its document version and derived state.
+
+#### Scenario: Image changes without a Markdown edit
+- **WHEN** pull replaces an image used by an open note but the note's source is identical
+- **THEN** the displayed image refreshes and the note's Markdown version/caches are not invalidated solely for that resource update
+
+#### Scenario: Image import occurs during repository mutation
+- **WHEN** a paste/drop would store a new image while Git owns the repository write barrier
+- **THEN** the app does not write the resource or insert a reference to an uncommitted failed import through an uncoordinated path

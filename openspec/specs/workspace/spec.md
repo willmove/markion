@@ -3,7 +3,9 @@
 ## Purpose
 
 Covers the file tree panel and the auto-save / crash-recovery subsystem. The file tree supports left-drag moves into folders or the workspace root, plus Copy Path and Copy Relative Path on file and folder context menus.
+
 ## Requirements
+
 ### Requirement: File tree panel with filename filtering
 The editor SHALL provide a toggleable file tree panel whose workspace root can be established by explicitly choosing File → Open Folder, by opening supported content outside the current workspace (from that content's parent directory), by restoring a previous session's workspace root on launch, or by a CLI folder open intent. The panel SHALL display Markdown files (`.md`/`.markdown`/`.mdown`), a curated set of plain-text files (`.txt`, `.text`, `.log`, `.csv`, `.tsv`, `.org`, `.rst`, `.adoc`, `.asciidoc`), and supported image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff`, `.svg`) nested under their containing folders. It SHALL list folders that exist on disk even when they contain no supported files, open Markdown and plain-text files on click as UTF-8 text, open supported image files on click as read-only images, mark the current file, support filename filtering, and support basic create / rename / delete / refresh operations for files and folders. Create File, Create Folder, and Rename SHALL collect a name through an in-app inline name editor: the editor renders inside the panel in place of the renamed row or directly below the parent folder row for create actions, and falls back to the top of the panel when that row is not visible; the editor is also rendered as a labeled prompt under the tab bar when the Files panel is hidden. Editing keys and clicks SHALL act on the name buffer only and SHALL NOT move the document caret or selection. Deleting a folder SHALL remove it recursively, including all of its contents, gated by a second confirmation for non-empty folders. Directories on a hard-coded ignore list (version-control, build-output, dependency/cache, and IDE directories) and hidden directories (whose name begins with `.`) SHALL NOT be listed. Other unsupported files (binaries, source code, and unsupported image formats) SHALL NOT appear in the tree. An explicitly selected workspace root SHALL be preserved while contained files are opened. The panel SHALL NOT scan the working directory on startup while only the in-memory welcome document is open and no session or CLI workspace root is available; instead it SHALL show an empty-state placeholder until a file or folder is opened or a session workspace root is restored. The panel SHALL let the user move a listed file or folder into another listed folder or the workspace root by left-dragging it onto that folder, onto a file inside that folder, or onto the workspace root. File and folder context menus SHALL include Copy Path and Copy Relative Path.
 
@@ -409,3 +411,123 @@ The session file (`session.toml` under the Markion config directory) SHALL accep
 - **WHEN** the app launches with a CLI file or folder open intent and `session.toml` contains a valid `[layout]` table
 - **THEN** the recorded chrome geometry is still applied
 - **AND** conflicting document or workspace-root restore remains skipped as today
+
+### Requirement: Format-aware Markdown Save As
+The editor SHALL treat Save As as saving Markion's canonical Markdown source document, open a save dialog that identifies the file type as Markdown, and advertise `.md`, `.markdown`, and `.mdown` as accepted extensions. The dialog SHALL suggest the current filename when one exists and `Untitled.md` otherwise. Before writing, the editor SHALL preserve an accepted extension case-insensitively and SHALL replace a missing, empty, or incompatible extension with `.md`. A successful Save As SHALL retain the existing document-path, dirty-state, recovery-file, and workspace-root update behavior.
+
+#### Scenario: Save As identifies Markdown documents
+- **WHEN** the user invokes Save As
+- **THEN** the save dialog identifies Markdown as the target type and advertises `.md`, `.markdown`, and `.mdown`
+
+#### Scenario: Save As supplies a canonical extension
+- **WHEN** the user confirms a Save As path with no extension or an incompatible extension
+- **THEN** the editor replaces the final extension with `.md` before writing the Markdown source
+
+#### Scenario: Save As preserves a Markdown alias
+- **WHEN** the user confirms a Save As path ending in `.md`, `.markdown`, or `.mdown` in any letter case
+- **THEN** the editor preserves that path and saves the Markdown source to it
+
+#### Scenario: Save As cancellation is non-destructive
+- **WHEN** the user cancels the format-aware Save As dialog
+- **THEN** the active document path, contents, dirty state, recovery state, workspace root, and undo history remain unchanged
+
+### Requirement: Workspace synchronization SHALL retain explicit repository ownership
+Workspace sync controls SHALL act on the explicitly connected workspace repository, independently of the active document's repository. Operations and callbacks SHALL retain captured repository identity and operation epoch across tab/workspace switches. Eligible buffers SHALL be selected by resolved path/repository membership and policy, not by all visible tabs. Foreign and untitled buffers SHALL retain their source, undo state, and recovery while being reported as excluded where relevant.
+
+#### Scenario: Previous workspace leaves dirty tabs
+- **WHEN** switching to workspace B retains a dirty tab from repository A and the user synchronizes B
+- **THEN** A's tab is not saved, committed, reloaded or uploaded by B's operation
+
+#### Scenario: Operation finishes after switching workspace
+- **WHEN** a sync started for A finishes while B is visible
+- **THEN** its state is recorded for A without replacing B's repository status or reloading unrelated tabs
+
+#### Scenario: Untitled notes are open
+- **WHEN** a connected workspace synchronizes while an untitled note is dirty
+- **THEN** the note remains unsaved and recoverable, and the app identifies that it did not participate without selecting an implicit filename
+
+### Requirement: Workspace mutations SHALL participate in repository write coordination
+File-tree create, rename, move, delete and refresh effects that write into a connected repository SHALL respect the repository write barrier and conflict ownership. Cross-root writes SHALL coordinate all affected roots. The file tree SHALL keep its supported-file visibility policy and bounded rendering; Git decorations SHALL annotate only visible rows while the Advanced Git inventory remains complete.
+
+#### Scenario: Rename is attempted during checkout
+- **WHEN** Git holds exclusive worktree mutation admission and the user attempts a file-tree rename
+- **THEN** the action waits or reports the busy state and does not execute a competing filesystem rename
+
+#### Scenario: Git updates paths omitted by the tree
+- **WHEN** a synchronization changes both visible notes and unsupported or hidden files
+- **THEN** the tree refresh preserves its filtering behavior and the complete Git inventory still accounts for all changed paths
+
+### Requirement: Legacy Sync navigation state SHALL migrate without affecting repository data
+The persistent Sync sidebar tab SHALL be removed from ordinary workspace navigation. When an existing session records that legacy tab as selected, Markion SHALL open the Files view instead and keep the workspace's stateful Backup and Sync entry available. This presentation migration SHALL NOT disconnect the repository, alter policy, delete Git history, discard pending recovery, or modify notes. Unknown future sidebar values SHALL continue to use the existing safe fallback behavior.
+
+#### Scenario: Session last used the legacy Sync tab
+- **WHEN** Markion loads a workspace snapshot whose selected sidebar tab is `sync`
+- **THEN** the Files view becomes selected and the Backup and Sync entry reflects the connected repository state
+- **AND** repository policy, history, pending operations, drafts, and note content are unchanged
+
+#### Scenario: Session uses Files or Outline
+- **WHEN** Markion loads a workspace snapshot whose selected sidebar tab is `files` or `outline`
+- **THEN** that supported selection retains its existing behavior
+
+### Requirement: File tree context menu SHALL duplicate a file or folder
+The editor SHALL offer Duplicate on the file-tree context menu for file and folder entries. Choosing it SHALL copy the right-clicked entry on disk into the same parent directory under a new name that does not collide with an existing entry. The first free name SHALL insert a localized copy marker before the extension (`notes.md` becomes a localized form such as `notes - 副本.md` or `notes - copy.md`); further collisions SHALL append an incrementing number. A folder duplicate SHALL copy that folder and its on-disk contents, including files the tree does not list. The copy SHALL use the bytes currently stored on disk and SHALL NOT read unsaved editor buffers. After a successful copy the tree SHALL refresh, the new entry SHALL become the selected tree entry, and the status bar SHALL report localized success. Open tabs SHALL keep their existing paths, text, dirty state, undo history, and derived Markdown caches. The workspace and blank-space context menu SHALL NOT offer Duplicate. If the source is missing, the destination cannot be created, or the copy fails, the editor SHALL report a localized failure status and SHALL NOT leave a partial duplicate behind.
+
+#### Scenario: Duplicate a file beside itself
+- **WHEN** the user right-clicks a file in the file tree and chooses Duplicate
+- **THEN** a new file appears in the same folder with a localized non-colliding copy name
+- **AND** the new file's bytes match the source file on disk
+- **AND** the tree selects the new file and the status bar reports localized success
+- **AND** open tabs for the source path stay on that path with unchanged text, dirty state, and undo history
+
+#### Scenario: Duplicate a folder recursively
+- **WHEN** the user right-clicks a folder and chooses Duplicate
+- **THEN** a new sibling folder is created with a localized non-colliding copy name
+- **AND** the new folder contains a copy of the source folder's on-disk contents
+- **AND** the tree refreshes and selects the new folder
+
+#### Scenario: A second duplicate picks the next free name
+- **WHEN** the user duplicates an entry whose first localized copy name already exists
+- **THEN** the editor creates the copy under the next free numbered name
+- **AND** the existing copy is left unchanged
+
+#### Scenario: Duplicate copies disk contents, not unsaved edits
+- **WHEN** the user duplicates a file that is open with unsaved edits
+- **THEN** the new file matches the source file on disk
+- **AND** the open tab keeps its unsaved text and dirty state
+
+#### Scenario: Duplicate failure removes a partial copy
+- **WHEN** Duplicate cannot finish because the source is gone or the copy fails
+- **THEN** the editor reports a localized failure status
+- **AND** no partial duplicate remains
+- **AND** document text, dirty state, undo history, and derived Markdown caches stay unchanged
+
+#### Scenario: Workspace menu does not duplicate
+- **WHEN** the user right-clicks blank space in the Files panel
+- **THEN** the context menu does not offer Duplicate
+
+### Requirement: File tree SHALL refresh when the workspace changes on disk
+While a workspace root is open, the editor SHALL detect create, delete, and rename changes under that root and refresh the file tree without a manual Refresh. Detection SHALL watch the workspace directory, and SHALL fall back to a periodic refresh when a watch cannot be started. Automatic refreshes SHALL reuse the existing background scan, preserve collapse state, keep bounded row rendering, and SHALL NOT replace the status bar text with the manual-refresh message. Manual Refresh SHALL continue to refresh the tree and report its existing localized status. Changing or clearing the workspace root SHALL stop watching or polling the previous root. An automatic refresh SHALL NOT reload open document text, dirty state, undo history, or derived Markdown caches.
+
+#### Scenario: An external create appears in the tree
+- **WHEN** a supported file or a folder is created under the open workspace root outside the editor
+- **THEN** the file tree updates to show it without the user choosing Refresh
+- **AND** the status bar does not switch to the manual-refresh message
+
+#### Scenario: An external delete or rename updates the tree
+- **WHEN** a listed file or folder under the open workspace root is deleted or renamed outside the editor
+- **THEN** the file tree updates to match the disk
+- **AND** collapse state of unaffected folders is preserved
+
+#### Scenario: Watch failure falls back to a timed refresh
+- **WHEN** the editor cannot watch the open workspace root
+- **THEN** it refreshes the file tree on a timer until the root changes or a watch can be started
+- **AND** manual Refresh still works
+
+#### Scenario: Leaving the workspace stops updates for the old root
+- **WHEN** the workspace root changes or is cleared
+- **THEN** the editor stops watching or polling the previous root
+- **AND** a late scan of the previous root does not replace the current tree
+
+#### Scenario: Automatic refresh leaves open documents alone
+- **WHEN** the file tree refreshes because of a watched or timed update
+- **THEN** open document text, dirty state, undo history, and derived Markdown caches stay unchanged

@@ -3,7 +3,9 @@
 ## Purpose
 
 Covers the in-app **Preferences panel** surface for choosing a theme (swatch grid) and an interface language (pill list), together with the persistence-format contract for those two choices. The built-in theme catalog itself (the 14 themes, ordering invariant, custom `.theme` loading) is described under `chrome-platform`; this capability focuses on the selection UI and the persisted-preferences contract.
+
 ## Requirements
+
 ### Requirement: The editor SHALL ship a fixed catalog of built-in themes
 The system SHALL provide a built-in theme catalog of at least fourteen themes returned by `builtin_theme_definitions()`, covering the original six (Paper, Ink, Solar, Forest, Rose, Graphite) plus popular editor palettes (GitHub Light/Dark, Solarized Light/Dark, One Light/Dark, Tokyo Night/Light). Each theme SHALL carry a stable name, a dark/light flag, and a `ThemeColors` palette. Theme names are identity keys written to the preferences file, so renames SHALL be avoided to prevent orphaning saved selections.
 
@@ -331,3 +333,63 @@ The Preferences panel SHALL provide an Export tab alongside General and Shortcut
 - **WHEN** the user changes page size, table of contents, image policy, margin, or page numbers in the Export tab
 - **THEN** the change applies to the next export of that format and persists via the existing `[export.docx]` / `[export.pdf]` sections
 
+### Requirement: Preferences language picker SHALL contain variable-width labels
+The Preferences panel SHALL render every entry from `Language::all()` as a complete interactive pill whose active check mark and native-language name remain inside that pill's border across supported display scales and variable system UI-font metrics. Language pills MUST NOT shrink below their marker-and-label content width; when the row lacks sufficient width, it SHALL wrap complete pills instead of clipping text, painting into adjacent controls, or compressing labels below their content width.
+
+#### Scenario: Wide UI font keeps labels inside their pills
+- **WHEN** the Preferences panel is rendered with a wide or monospaced system UI font
+- **THEN** every native-language name and the active check mark remain fully contained by their own pill border without overlapping a neighbor
+
+#### Scenario: Constrained width wraps complete pills
+- **WHEN** the available language-row width is less than the combined intrinsic width of all language pills
+- **THEN** complete pills wrap onto an additional row and every language remains visible and interactive
+- **AND** no pill shrinks its marker or native-language name beyond its content width
+
+#### Scenario: Active marker uses compact stable spacing
+- **WHEN** the user selects any supported interface language
+- **THEN** exactly that language pill shows a check mark in a dedicated leading slot separated from its native-language name by a compact fixed visual gap
+- **AND** inactive pills reserve the same leading slot without inserting whitespace characters into their labels, so language names do not shift when selection changes
+
+#### Scenario: Sufficient width retains a single comfortable row
+- **WHEN** the General Preferences panel has sufficient logical width for all language pills, including at 125% Windows display scaling
+- **THEN** all language pills appear on one row with their configured minimum width and complete marker-and-label content
+
+### Requirement: Backup and Sync preferences SHALL separate ordinary choices from advanced Git settings
+Preferences SHALL expose an ordinary Backup and Sync section for connection state, human-readable sync location, opt-in checks for updates from other devices, disconnect, and recovery access. The background-check label and description SHALL state that checking does not automatically upload or apply changes. Missing settings SHALL preserve existing editing behavior and keep background checking off; background write synchronization SHALL not be offered in this change.
+
+Git executable detection/override, branch/endpoints, approved roots, message template, commit author identity, raw diagnostics, and transport details SHALL remain accessible under Advanced Git Settings or troubleshooting rather than appearing as ordinary sync choices. Repository-specific settings SHALL be persisted atomically in a versioned local policy file separate from session data and Git-owned remote/upstream configuration. Global and per-repository background settings SHALL identify their respective default/current-workspace scope.
+
+#### Scenario: Existing installation upgrades
+- **WHEN** the app loads configuration without Git keys or a repository policy file
+- **THEN** it retains existing preferences and does not connect or synchronize any repository automatically
+
+#### Scenario: Git override is invalid
+- **WHEN** the user selects an unusable executable path
+- **THEN** Advanced Git Settings report the failed detection without making ordinary document operations unavailable
+
+#### Scenario: Ordinary settings are opened
+- **WHEN** the user opens the General preferences category
+- **THEN** it shows one Backup and Sync section using note/device language and keeps executable selection behind an Advanced Git disclosure
+
+#### Scenario: Background checking is offered
+- **WHEN** the user reviews the background update-check option
+- **THEN** the interface states that it checks for updates from other devices and does not automatically upload or apply them
+
+#### Scenario: Repository-specific background setting is shown
+- **WHEN** the current workspace has a per-repository background-check override
+- **THEN** preferences distinguish that workspace setting from the global default rather than presenting two unlabeled equivalent toggles
+
+### Requirement: Repository policies SHALL outlive recent sessions and fail closed
+Recent-workspace eviction and general Preferences reset SHALL NOT delete repository policies, Git history, credentials or unresolved recovery. Disconnect SHALL remove the sync binding/scheduling without deleting files, `.git` or remotes. Invalid/unsupported policy data SHALL disable writes with actionable feedback rather than broaden allowed scope. Replaced/moved repository identities SHALL require reconnection before using prior authorization.
+
+#### Scenario: Workspace falls out of recent list
+- **WHEN** a connected workspace is evicted from the bounded recent-workspace list
+- **THEN** its separate repository policy remains available when that same repository is opened again
+
+#### Scenario: Preferences are reset
+- **WHEN** the user resets general preferences
+- **THEN** global Git settings return to defaults and existing repository policies and recovery remain intact
+
+#### Scenario: Policy cannot be parsed
+- **WHEN** the repository policy is corrupted or has an unsupported version
+- **THEN** one-click writes are disabled with repair feedback and no permissive replacement policy is silently generated

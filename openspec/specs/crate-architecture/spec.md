@@ -2,7 +2,9 @@
 
 ## Purpose
 Define the structural invariants of the repository's Cargo workspace: the root-package layout (application crate at the repo root, absorbed library crates under `crates/*`), the GUI-free constraint on member crates, dev-profile optimization for typing-path members, and the single-version dependency policy for shared parsers.
+
 ## Requirements
+
 ### Requirement: Root-package Cargo workspace layout
 The repository SHALL be a root-package Cargo workspace: the `markion` application crate lives at the repository root (manifest `Cargo.toml`, sources in `src/`), and the same manifest carries a `[workspace]` table whose members are the library crates under `crates/*`. The application crate SHALL NOT be relocated into `crates/` (no virtual-workspace conversion). `cargo build`, `cargo run`, and `cargo test` invoked at the repository root SHALL keep operating on the application crate by default, and the release pipeline (`packager.toml`, `.github/workflows/release.yml`) SHALL keep working without workspace-specific reconfiguration.
 
@@ -99,3 +101,17 @@ A new in-tree or external diagram backend SHALL be able to depend on the GUI-fre
 - **WHEN** the diagram registry is initialized
 - **THEN** it uses statically linked backend instances and performs no dynamic-library discovery or loading
 
+### Requirement: Git synchronization SHALL have a GUI-free workspace boundary
+The workspace SHALL contain `crates/git-sync` with package name `markion-git-sync`, owning pure repository/plan/state models, system-Git adaptation, execution policy, and recovery reconciliation without depending on GPUI. Root-app modules SHALL own live document coordination, GPUI tasks, credential/conflict dialogs and rendering. Git snapshots SHALL be cached/shared and process/network/filesystem work SHALL not run on the typing/render path. No additional Git backend SHALL be required for initial delivery.
+
+#### Scenario: Core tests run headlessly
+- **WHEN** `cargo test -p markion-git-sync` is run in a headless environment
+- **THEN** its dependency graph does not require GPUI or GUI system libraries and real local Git fixtures can exercise its operations
+
+#### Scenario: Status updates without document changes
+- **WHEN** repeated repository status snapshots arrive while source text is unchanged
+- **THEN** the root app updates Git presentation from cached state without incrementing document versions or rebuilding Markdown-derived caches
+
+#### Scenario: Large repository is scanned
+- **WHEN** an asynchronous status/diff/history operation processes a large repository
+- **THEN** the UI consumes bounded snapshots/pages, avoids unbounded concurrent scans, and performs no synchronous Git calls during input/rendering

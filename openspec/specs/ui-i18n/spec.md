@@ -5,7 +5,9 @@
 Covers runtime translation of user-visible UI chrome across a fixed set of interface languages. The layer is dependency-free: a compile-time-checked `Msg` enum (one variant per user-visible string) with exhaustive per-language `match` arms, so a missing translation site is a compile error rather than a runtime fallback. Adding a language is a `match`-arm extension. Document content, the welcome Markdown, and user files are never translated — only UI chrome.
 
 This capability covers the language-selection surface reachable through the **Preferences panel**. A View → Language menu submenu is **not** implemented; it is a future-change candidate.
+
 ## Requirements
+
 ### Requirement: All user-visible UI chrome SHALL be translated through the i18n layer
 The system SHALL route every user-visible UI string (menu bar titles and items, in-app dropdown labels, status bar text, dialog text, search panel labels, file tree labels, file tree context-menu labels, the file-tree create/rename inline name-prompt label and placeholder, the recursive-folder-delete confirm dialog title and detail, preferences panel labels, and the keyboard-shortcut reference) through the i18n module's `t` / `tf` / `shortcut_reference` / `sidebar_tab_label` functions. Hard-coded user-visible English literals in these surfaces SHALL NOT remain.
 
@@ -274,3 +276,27 @@ Every user-visible string introduced for Markdown auto-pair and emoji shortcode 
 - **THEN** palette chrome relabels
 - **AND** document version, dirty state, and undo history are unchanged
 
+### Requirement: Backup, sync, and recovery chrome SHALL be fully localized by audience
+All onboarding, executable checks, scope approval, identity/credential prompts, synchronization states, progress/errors, diff/history controls, conflict actions, recovery, settings and unsupported-capability messages SHALL use the existing localization catalog for every supported UI language. Ordinary surfaces SHALL use backup, synchronization, note version, this computer, other-device update, sync location, and confirmation-time language; repository, branch, remote, commit, staging, fetch, pull, push, merge, OID, and hunk terminology SHALL be reserved for Advanced Git details except where an unsupported condition cannot be explained accurately without it. Path, branch, commit author and authored commit text SHALL remain verbatim. Generated default commit messages SHALL use the configured message template independently of interface language.
+
+Wording SHALL distinguish saved on this computer, committed locally, waiting to upload, incoming updates, confirmed delivery and uncertain delivery. It SHALL NOT describe local-only state as remotely backed up, and background-check copy SHALL say that it neither uploads nor applies changes automatically.
+
+#### Scenario: Interface language changes
+- **WHEN** the user changes language while Backup and Sync details or conflict resolution is open
+- **THEN** interface labels follow the selected language without translating paths, branch names or document content
+
+#### Scenario: Ordinary sync center opens
+- **WHEN** the user opens Backup and Sync without expanding Advanced Git details
+- **THEN** localized labels explain safety and next action without requiring Git transport vocabulary
+
+#### Scenario: Offline after local commit
+- **WHEN** a local commit succeeds and networking fails
+- **THEN** localized feedback states that work is saved on this computer and upload is pending instead of claiming a remote backup or implying the entire operation was lost
+
+#### Scenario: Background check setting is translated
+- **WHEN** the background update-check option is displayed in any supported language
+- **THEN** its localized description explicitly states that it does not automatically upload or apply changes
+
+#### Scenario: Translation is missing
+- **WHEN** a Git UI message is introduced without a required language entry
+- **THEN** the existing localization completeness mechanism detects the missing translation

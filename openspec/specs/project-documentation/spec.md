@@ -2,7 +2,9 @@
 
 ## Purpose
 Covers current bilingual project documentation, contributor commands, implemented capability claims, and links to detailed engineering contracts.
+
 ## Requirements
+
 ### Requirement: Bilingual project overview
 The repository SHALL provide a root README whose English edition is followed by a complete Simplified Chinese edition, and SHALL retain a synchronized Simplified Chinese README for existing direct-language entry points. The English and Chinese editions SHALL present equivalent, current overviews of Markion's installation, implemented workflows, limitations, configuration, export behavior, Visual Edit WYSIWYG coverage (including the WYSIWYG coverage roadmap of known gaps), and contributor verification commands. The root README SHALL provide visible in-document language navigation, the standalone Chinese README SHALL link back to the root README, and both files SHALL link to the Visual Edit WYSIWYG coverage matrix. Stable capability purposes and project context metadata SHALL describe the current implemented architecture and MUST NOT characterize an archived capability as only future work.
 
@@ -32,3 +34,20 @@ The repository SHALL provide a root README whose English edition is followed by 
 - **THEN** affected capability purposes and OpenSpec project context describe the implemented state
 - **AND** no stable metadata contradicts the archived requirements
 
+### Requirement: Local MarkNice workspace docs describe editor-skin parity, session-local Word import, and themed print-to-PDF
+The bilingual READMEs and the local MarkNice workspace guide SHALL describe the workspace editor chrome as tracking the pinned MarkNice editor section, SHALL document Import Word as a browser-session replacement that does not write back to Markion and that requires Copy Markdown or another explicit Markdown save to recover into Markion, and SHALL document Save as PDF as printing the current themed sanitized preview via the browser print dialog, distinct from Markion's native or Pandoc PDF export. Those documents SHALL continue to state that Markdown-file import, PDF import, image import, and sample-document actions are out of this workspace scope.
+
+#### Scenario: English README names the new workspace behaviors
+- **WHEN** a reader opens `README.md`
+- **THEN** the WeChat publishing workspace description includes editor-skin closeness to MarkNice, session-local Word import with a copy-or-save-Markdown recovery path, and themed print-to-PDF
+- **AND** it still distinguishes browser Word/PDF from Markion native/Pandoc exporters
+
+#### Scenario: Chinese README stays equivalent
+- **WHEN** a reader opens `README.zh-CN.md`
+- **THEN** it presents the same workspace editor-skin, Word-import, and print-to-PDF coverage in Simplified Chinese
+
+#### Scenario: Workspace guide states the recovery and print semantics
+- **WHEN** a reader opens the local MarkNice workspace guide
+- **THEN** it states that Word import never mutates the Markion document
+- **AND** it states that Save as PDF prints the themed preview and cannot prove a PDF was written
+- **AND** it does not claim Markdown, PDF, or image import, or a sample-document action, as available workspace features

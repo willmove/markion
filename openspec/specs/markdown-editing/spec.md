@@ -3,7 +3,9 @@
 ## Purpose
 
 Covers canonical Markdown source editing, parsing and formatting together with the source-backed, WYSIWYG-oriented Visual Edit surface. Edit and Split modes retain complete raw-source access; Visual Edit keeps exactly mapped constructs rendered or directly editable, progressively reveals only necessary syntax, and preserves complete source islands whenever a lossless mutation cannot be proven.
+
 ## Requirements
+
 ### Requirement: Markdown parsing via CommonMark + GFM
 The parser SHALL parse Markdown using `pulldown-cmark` configured for CommonMark conformance plus the GitHub Flavored Markdown extensions in use (tables, task lists, strikethrough, footnotes, superscript/subscript, highlight, autolinks). Parsing SHALL produce structured data consumed by the preview, Visual Edit, outline, stats, and search subsystems. Source-mapped Visual Edit derivation SHALL incrementally reuse independently parseable top-level regions after a localized source edit and SHALL fall back to a full-document parse whenever global Markdown context, region boundaries, or exact source ranges are uncertain. Incremental and fallback output SHALL be semantically and byte-range equivalent to a full parse of the current canonical source.
 
@@ -640,6 +642,18 @@ When Visual Edit is active, Enter and Backspace SHALL apply Markdown-aware struc
 - **THEN** one Undo restores the prior Markdown source and selection
 - **AND** Redo reapplies the same transition through the existing history path
 
+#### Scenario: Continued list row is visible immediately
+- **WHEN** Enter continues a list item, including the final item before blank lines
+- **THEN** the new empty item occupies a visible row below the preceding item and the painted caret moves into that row
+- **AND** typing fills that item, another Enter on the empty item exits the list, and Undo restores the prior source and caret
+- **AND** this holds for ordered, unordered and task lists with LF and CRLF source
+
+#### Scenario: Exiting an empty list item preserves the visible caret row
+- **WHEN** Enter removes a newly continued empty item's prefix after the first, middle or last list item
+- **THEN** the blank row remains visible and the caret does not return to the previous item's text
+- **AND** each subsequent Enter visibly advances the caret to a new source-backed row
+- **AND** list items containing inline links retain the same blank-row caret behavior
+
 ### Requirement: Affinity-aware Visual Edit caret
 Visual Edit SHALL preserve which canonical source side owns a collapsed caret when hidden Markdown syntax maps multiple source positions to one display boundary. Pointer placement, Left/Right navigation, local marker reveal, and subsequent text input SHALL resolve that boundary consistently without corrupting or silently crossing inline formatting.
 
@@ -983,7 +997,7 @@ When a collapsed Visual Edit caret is on a line containing only optional indenta
 - **THEN** the palette closes without guessing a mutation
 
 ### Requirement: Visual Edit SHALL support exact block transformations and operations
-A supported focused Visual Edit block SHALL expose contextual operations to turn it into Text, Heading 1 through Heading 6, Bulleted List, Numbered List, Task List, Quote, or Code Block, and to Duplicate or Delete it. The contextual block-operation menu SHALL render in an overlay above all Visual Edit document rows and media, SHALL remain anchored near its invoking control within the usable viewport, and SHALL keep every command reachable when space is constrained. Showing, positioning, scrolling within, or dismissing the menu SHALL NOT change canonical source, document version, history, or derived-cache identity. Each operation SHALL validate current document version, block identity, and exact source ownership; it SHALL perform one canonical source mutation with one undo entry and preserve unrelated bytes, line endings, dirty state, autosave/recovery behavior, tab isolation, and cache invariants.
+A supported Visual Edit block SHALL expose a compact contextual menu to turn it into Text, Heading 1 through Heading 6, Bulleted List, Numbered List, Task List, Quote, Code Block, Divider, or Table, and to Duplicate or Delete it. Right-clicking an eligible block SHALL target the clicked block without requiring caret ownership or collapsing the current exact text selection; the keyboard context-menu action SHALL target the caret-owning eligible block. The menu SHALL group Text and Heading transforms and List transforms into localized submenus no deeper than one level, identify the current block type, separate destructive Delete from non-destructive actions, and keep every enabled command reachable by pointer and keyboard. The contextual block-operation menu SHALL render in an overlay above all Visual Edit document rows and media, SHALL remain anchored near the invoking pointer or caret within the usable viewport, and SHALL keep every command and submenu reachable when space is constrained. Showing, positioning, navigating, scrolling within, or dismissing the menu SHALL NOT change canonical source, document version, selection, history, dirty state, or derived-cache identity. Each operation SHALL validate current document version, block identity, and exact source ownership; it SHALL perform one canonical source mutation with one undo entry and preserve unrelated bytes, line endings, dirty state, autosave/recovery behavior, tab isolation, and cache invariants.
 
 #### Scenario: Heading turns into a task item
 - **WHEN** the user transforms an exactly mapped heading into a Task List block
@@ -1011,16 +1025,31 @@ A supported focused Visual Edit block SHALL expose contextual operations to turn
 - **AND** underlying document content cannot visually obscure the menu or receive pointer actions within its bounds
 
 #### Scenario: Block menu stays reachable near viewport edges
-- **WHEN** the user opens the block-operation menu with insufficient space below or beside its invoking control
-- **THEN** the menu flips or is constrained within the usable viewport
+- **WHEN** the user opens the block-operation menu or one of its submenus with insufficient space below or beside its invoking control
+- **THEN** each panel flips or is constrained within the usable viewport
 - **AND** overflow commands remain reachable through menu-local scrolling without scrolling the document
 
 #### Scenario: Block menu dismissal is presentation-only
 - **WHEN** the user dismisses an open block-operation menu with Escape, an outside action, document scrolling, a tab or mode change, or stale-target invalidation
 - **THEN** the menu closes without changing canonical Markdown, document version, selection, history, dirty state, or derived-cache identity
 
+#### Scenario: Right-click targets a non-caret block without collapsing selection
+- **WHEN** Visual Edit owns an exact non-empty text selection and the user right-clicks another eligible block
+- **THEN** the compact block menu targets the clicked block while preserving the existing canonical selection until a command is invoked
+- **AND** a more specific child interaction that consumes the right-click is not replaced by the generic block menu
+
+#### Scenario: Keyboard context action opens an operable block menu
+- **WHEN** the caret owns an eligible Visual Edit block and the user invokes the platform keyboard context-menu action
+- **THEN** the compact menu opens near the painted caret or a bounded surface fallback and targets that exact block
+- **AND** Up, Down, Left, Right, Enter, and Escape navigate, confirm, return from submenus, or dismiss without mutating source before confirmation
+
+#### Scenario: Compact transform groups expose every current block type
+- **WHEN** the user opens the Text and Headings or Lists submenu
+- **THEN** Text and Heading 1 through Heading 6, or Bulleted, Numbered, and Task List respectively, are reachable with the current type identified
+- **AND** Quote, Code Block, Divider, Table, Duplicate, Move Up, Move Down, and separated Delete remain reachable from the root menu according to their availability
+
 ### Requirement: Visual Edit SHALL support source-safe block reordering
-Supported non-overlapping Visual Edit blocks SHALL be reorderable through Move Up, Move Down, and a drag grip with before/after drop targets. All reorder paths SHALL use the same exact source-unit operation, SHALL preserve the moved block bytes and deterministic separator whitespace, and SHALL create one undo entry. Nested list items, quote-group leaves, overlapping ranges, and stale targets SHALL not expose or accept guessed reordering.
+Supported non-overlapping Visual Edit blocks SHALL be reorderable through Move Up, Move Down, and a hover/focus-only drag grip with before/after drop targets. The drag grip SHALL be positioned outside normal document content flow and SHALL NOT alter content width, row height, or wrapping when shown, hidden, or dragged. All reorder paths SHALL use the same exact source-unit operation, SHALL preserve the moved block bytes and deterministic separator whitespace, and SHALL create one undo entry. Nested list items, quote-group leaves, overlapping ranges, and stale targets SHALL not expose or accept guessed reordering.
 
 #### Scenario: Block moves with button action
 - **WHEN** the user invokes Move Down on a supported paragraph before another supported block
@@ -1031,6 +1060,11 @@ Supported non-overlapping Visual Edit blocks SHALL be reorderable through Move U
 - **WHEN** the user drags a supported block grip to a valid before or after target
 - **THEN** the same canonical source result is produced as the corresponding button moves
 - **AND** drag movement before drop does not mutate source or document version
+
+#### Scenario: Drag grip is flow-neutral
+- **WHEN** an eligible block becomes hovered, focused, or actively dragged
+- **THEN** its grip appears in the leading interaction area without shifting or narrowing the block content
+- **AND** hiding the grip restores no layout because the content geometry never changed
 
 #### Scenario: Unsafe reorder is unavailable
 - **WHEN** the focused row is nested, part of an overlapping quote group, or lacks a complete exact source unit
@@ -1527,3 +1561,564 @@ When the user types `:` at a word boundary (start of line, whitespace, or openin
 - **WHEN** the slash-command palette is open because the line starts with `/`
 - **THEN** typing `:` inside that query does not open the emoji palette
 
+### Requirement: Redo uses one keyboard shortcut
+The editor SHALL bind the Redo action exactly once using the platform-mapped `secondary-y` combination: Ctrl+Y on Windows/Linux and Cmd+Y on macOS. The editor MUST NOT bind Ctrl/Cmd+Shift+Z to Redo. The in-window Edit menu and the localized keyboard shortcut reference SHALL display only the active Redo combination.
+
+#### Scenario: Redo uses Ctrl+Y on Windows and Linux
+- **WHEN** the editor runs on Windows or Linux and the user presses Ctrl+Y
+- **THEN** the editor invokes the existing Redo action
+- **AND** Ctrl+Shift+Z does not invoke Redo
+
+#### Scenario: Redo uses the mapped key on macOS
+- **WHEN** the editor runs on macOS and the user presses Cmd+Y
+- **THEN** the editor invokes the existing Redo action
+- **AND** Cmd+Shift+Z does not invoke Redo
+
+#### Scenario: Redo shortcut surfaces show one combination
+- **WHEN** the user views Edit -> Redo or opens the keyboard shortcut reference
+- **THEN** Redo is documented with Ctrl+Y on Windows/Linux or Cmd+Y on macOS
+- **AND** no second Redo shortcut is shown
+
+#### Scenario: Redo behavior is otherwise unchanged
+- **WHEN** the user invokes Redo through Ctrl/Cmd+Y or the Edit menu
+- **THEN** the existing redo history operation and status feedback are used
+
+### Requirement: Visual Edit link and footnote navigation icons
+Visual Edit SHALL attach a resolved navigation target to each actionable inline link run (including reference-style links whose destination was resolved from document-scoped definitions) and each footnote reference run. Visual Edit SHALL render a compact clickable icon immediately after the construct's rendered label. Clicking the icon SHALL navigate without mutating document text: for a URL target the editor SHALL open the destination with the platform URL opener; for a footnote reference the editor SHALL move the source caret to the matching footnote definition block and scroll that block into view. Clicking the rendered label text SHALL continue to update the source selection for editing and SHALL NOT open the destination. Constructs without a resolvable destination SHALL omit the icon.
+
+#### Scenario: Inline and reference-style links expose an open icon
+- **WHEN** a Visual Edit prose block contains an inline link or a resolved reference-style link
+- **THEN** a navigation icon is shown after the link label
+- **AND** clicking the icon opens the resolved URL
+- **AND** clicking the label places or extends the source selection without opening the URL
+
+#### Scenario: Footnote reference jumps to its definition
+- **WHEN** a Visual Edit prose block contains a footnote reference whose definition exists in the document
+- **THEN** a navigation icon is shown after the superscript footnote label
+- **AND** clicking the icon moves the caret to the footnote definition block and scrolls it into view
+
+#### Scenario: Unresolved constructs stay non-navigable
+- **WHEN** bracketed text does not resolve to a link or footnote reference
+- **THEN** Visual Edit does not show a navigation icon for that text
+
+### Requirement: Visual Edit footnote and link-definition fidelity
+Visual Edit SHALL resolve footnote references against document-scoped footnote definitions during per-block inline parsing, rendering an unfocused footnote reference as superscript visible text without exposing the surrounding `[^` `]` markers as literal runs. Visual Edit SHALL present each footnote definition as a single source-backed block whose range covers the authored `[^label]:` marker and its definition body, and SHALL NOT split the marker into an Unsupported source island while emitting the body as an ordinary paragraph. Gaps that contain only link reference definition lines (`[label]: url`) SHALL remain source-backed and editable, and SHALL NOT be classified as Unsupported source islands with island chrome; fenced-code lines shaped like definitions remain excluded from definition collection.
+
+#### Scenario: Notes sample footnote reference renders as superscript
+- **WHEN** a Visual Edit document contains `text.[^links]` together with a later `[^links]: …` definition
+- **THEN** the prose block's editable runs include a superscript footnote label and do not emit literal `[` / `^links` / `]` runs for that reference
+
+#### Scenario: Notes sample footnote definition stays one block
+- **WHEN** a document contains `[^links]: Links can point to project pages, files, and useful references.`
+- **THEN** Visual Edit exposes one footnote-definition block whose source range covers both the `[^links]:` marker and the definition body
+- **AND** that block is not an Unsupported source island
+- **AND** the definition body is not also emitted as a separate ordinary paragraph block
+
+#### Scenario: Link reference definition gap is not a source island
+- **WHEN** a document ends with a standalone `[markion-repo]: https://github.com/willmove/markion` definition line that is not inside a fenced code block
+- **THEN** Visual Edit covers that source with a non-island reference-definition block
+- **AND** the corresponding reference-style link elsewhere in the document continues to resolve as a link
+
+#### Scenario: Footnote stub collection does not shift in-block ranges
+- **WHEN** Visual Edit appends document footnote definition stubs so a prose block's footnote references resolve
+- **THEN** every editable run and reveal group for that prose block remains inside the block's own source range
+
+### Requirement: Incremental derivation preserves indented continuations
+Incremental preview/visual block derivation (`SourceMappedCache::update` and region reuse) SHALL produce block structures identical to a full-document derivation for list items and block quotes whose continuation content is separated by blank lines and indented by the container's marker width (including 2–3 space indents and indented code fences). This equivalence SHALL hold in release builds, not only under the debug-assertions oracle.
+
+#### Scenario: Ordered list item with indented continuation paragraph
+- **WHEN** a document contains `1. item`, a blank line, a 3-space-indented continuation paragraph, a blank line, and `2. two`, and any single-character edit is applied
+- **THEN** the derived blocks keep the continuation paragraph inside item 1 and item numbering intact, identical to a fresh full parse of the same text
+
+#### Scenario: Quote nested in a list item with following continuation
+- **WHEN** a list item contains an indented block quote and a further indented continuation paragraph separated by blank lines, and the document is edited
+- **THEN** the quote and continuation remain attached to their list item in the derived blocks, identical to a fresh full parse
+
+#### Scenario: Region boundaries never split a container
+- **WHEN** `split_regions` processes text where a blank line is followed by a line starting with whitespace (container continuation or indented fence)
+- **THEN** no region boundary is inserted at that line
+
+#### Scenario: Debug builds detect incremental mismatches via fallback counter
+- **WHEN** the incremental result would differ from full derivation in a debug build
+- **THEN** the full-fallback counter increments, and regression tests assert it stays constant for the covered fixtures
+
+### Requirement: Blockquote nested content stays inside the quote in preview
+The derived preview model SHALL keep content nested inside a blockquote attached to that blockquote. List items (ordered, unordered, and task list items) authored inside a blockquote SHALL be derived as children of the blockquote's preview block, never as top-level preview blocks. The rendered preview SHALL display those nested list items inside the blockquote container (within its left border and quote styling), with ordered items numbered according to the list's start index and successive items, unordered items shown with bullet markers, and task list items shown with their checked state. Nested list levels inside a blockquote SHALL retain their relative indentation level. Text extraction, statistics, export, math collection, and preview selection/copy SHALL include the text of list items nested inside blockquotes.
+
+#### Scenario: Ordered list inside a blockquote renders inside the quote
+- **WHEN** the document contains a blockquote with an ordered list (e.g. `> 1. first` / `> 2. second`)
+- **THEN** the preview renders the list items inside the blockquote container, numbered 1, 2, ...
+- **AND** no top-level list block for those items appears outside the quote
+
+#### Scenario: Ordered list start index is honored inside a blockquote
+- **WHEN** the document contains a blockquote whose ordered list starts at a number other than 1 (e.g. `> 3. third`)
+- **THEN** the preview numbers the nested items starting from that number
+
+#### Scenario: Unordered and task lists inside a blockquote
+- **WHEN** the document contains a blockquote with unordered or task list items
+- **THEN** the preview renders them inside the blockquote container with bullet markers or the correct checked state
+
+#### Scenario: Nested list levels inside a blockquote
+- **WHEN** the document contains a blockquote with a list that itself contains a nested list
+- **THEN** the preview renders all levels inside the blockquote container with relative indentation preserved
+
+#### Scenario: Quoted list text reaches derived consumers
+- **WHEN** the document contains a blockquote with list items and the user views stats, selects and copies preview text spanning the quote, exports the document, or the quote contains inline math
+- **THEN** the list item text is included in the statistics, copied text, exported output, and math rendering respectively
+
+#### Scenario: Blockquote without nested blocks is unchanged
+- **WHEN** the document contains a blockquote with only paragraph text
+- **THEN** the derived preview block and its rendering are unchanged from previous behavior
+
+### Requirement: Visual Edit preserves ordered blockquote child flow
+The derived Markdown model SHALL preserve supported paragraphs and list items nested in a blockquote as one child flow in authored order. Split Preview and Read SHALL render that flow in the same order. Visual Edit SHALL project each supported quoted leaf exactly once through a disjoint, contiguous, UTF-8-safe canonical source range carrying its blockquote context, and SHALL render ordered, unordered, nested, and task-list items inside the quote presentation rather than as top-level rows or `Unsupported` source islands. Quote and inner list/task prefixes SHALL retain exact source mappings for progressive reveal and structural editing. Authored straight quotes or other smart-punctuation candidates in otherwise supported quoted prose SHALL remain rendered editable text and SHALL NOT alone force the quoted flow into a complete source island. All derived quote flow, prefix, and presentation metadata SHALL follow the existing per-document-version cache and incremental/full-equivalence rules.
+
+#### Scenario: Mixed quoted prose and ordered list retains authored order
+- **WHEN** a blockquote contains an introductory paragraph, an ordered list, and a trailing paragraph
+- **THEN** Split Preview, Read, and Visual Edit present the introduction, list items, and trailing paragraph in authored order
+- **AND** every list item appears exactly once inside the blockquote presentation
+
+#### Scenario: Quoted list variants remain inside the quote
+- **WHEN** a blockquote contains unordered, task-list, non-1-start ordered, or nested list items
+- **THEN** Visual Edit renders their bullet, checked state, ordered number, and relative indentation inside the quote styling
+- **AND** none of the supported rows is marked `Unsupported` solely because it is nested in the blockquote
+
+#### Scenario: Quoted leaf ranges are exact and non-overlapping
+- **WHEN** the source-mapped visual model is derived for a blockquote containing multiple paragraphs, blank quoted separators, and list items
+- **THEN** each canonical source byte in the supported quote belongs to exactly one ordered quoted leaf or quote-context whitespace row
+- **AND** all owned ranges and prefix ranges are UTF-8 boundaries, monotonically ordered, and non-overlapping
+
+#### Scenario: Composite quote and list prefixes remain editable
+- **WHEN** the caret enters or structurally edits a quoted list prefix such as `> 1. ` or `> - [x] `
+- **THEN** Visual Edit reveals only the exact required quote or inner-list marker layer
+- **AND** Enter continues the combined quote/list prefix while Backspace demotes the innermost list structure before removing the quote structure
+- **AND** each action is one canonical source mutation with exact selection and undo/redo restoration
+
+#### Scenario: Smart-punctuation candidates do not create a source island
+- **WHEN** supported quoted prose or a quoted list item contains authored ASCII double quotes, single quotes, or dash sequences recognized by smart punctuation
+- **THEN** Visual Edit keeps the authored punctuation as source-exact rendered editable text
+- **AND** the enclosing quoted flow does not become a complete source island solely because Preview would substitute different punctuation glyphs
+
+#### Scenario: Incremental quoted edit equals fresh full derivation
+- **WHEN** the user inserts, deletes, or replaces UTF-8 text or a structural marker inside one quoted paragraph or list item
+- **THEN** incremental derivation produces the same ordered child variants, quote context, prefixes, content, and byte ranges as a fresh full-document derivation
+- **AND** unaffected quoted siblings retain stable visual identities when their source lineage is proven unchanged
+
+#### Scenario: Quoted flow stays version-cached
+- **WHEN** the user moves the caret, changes selection, scrolls, or repaints a mixed blockquote/list flow without mutating document text
+- **THEN** the document version and cached quoted visual model remain unchanged
+- **AND** GPUI rendering does not reparse the blockquote or rebuild derived Markdown state
+
+### Requirement: Visual Edit block chrome SHALL preserve document content geometry
+Visual Edit SHALL lay out equivalent top-level rendered content on the same document content axis and with the same available column width as its Read-mode presentation, except for intentional Markdown-semantic indentation or component-internal editing chrome. Block-operation and drag affordances SHALL remain outside normal content flow and SHALL NOT change measured content bounds, row height, or line wrapping when they appear, disappear, gain focus, or become unavailable.
+
+#### Scenario: Top-level prose and media share the document axis
+- **WHEN** an unfocused Visual Edit document contains top-level headings, paragraphs, images, formulas, code, or other rendered blocks without semantic indentation
+- **THEN** their outer content presentations use the shared document column rather than separate transformable and non-transformable leading gutters
+- **AND** equivalent Read-mode content uses the same leading axis and available column width
+
+#### Scenario: Hover and focus chrome do not reflow content
+- **WHEN** a transformable block gains or loses hover, caret ownership, menu availability, or drag-grip visibility
+- **THEN** the block's content bounds, row height, and wrapped-line breaks remain unchanged solely because of that presentation state
+- **AND** showing or hiding the chrome does not change document or derived-cache state
+
+#### Scenario: Semantic indentation remains intentional
+- **WHEN** a Visual Edit block is a nested list item, blockquote, source-backed editor, table, image field editor, or another construct with semantic or component-internal indentation
+- **THEN** that indentation remains part of the construct's presentation
+- **AND** no additional block-operation gutter is added to its normal-flow width
+
+### Requirement: Visual Edit blockquote and GFM alert fidelity
+Visual Edit SHALL render blockquote content without discarding authored structure. A blockquote that opens with a GFM alert marker line (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, or `[!CAUTION]`) SHALL present that line as a styled callout title row within the same visual quote group as the alert body, not as a raw-source island or other unstyled block. Quoted paragraphs written across consecutive lines (lazy continuation) SHALL preserve the authored line breaks in the rendered row. Every blockquote byte SHALL keep exactly one visual owner, and focusing a callout title row SHALL reveal its exact authored source line through the same progressive marker-reveal behavior as other hidden blockquote markers.
+
+#### Scenario: GFM alert renders as a callout title plus body
+- **WHEN** the document contains a GFM alert such as `> [!NOTE]` followed by one or more quoted body lines and Visual Edit is active
+- **THEN** the marker line renders as a callout title row labeled for the alert kind inside the quote group's visual styling
+- **AND** the body lines render as quoted content directly below the title row
+- **AND** no raw-source island or unsupported block appears for the marker line
+
+#### Scenario: Focusing the callout title reveals its source
+- **WHEN** the caret enters the callout title row in Visual Edit
+- **THEN** the row reveals its exact authored source line (for example `> [!NOTE]`) as an editable, byte-exact range
+- **AND** leaving the row restores the rendered title without changing document text, version, or derived caches
+
+#### Scenario: Alert with no body still shows its title
+- **WHEN** a blockquote consists solely of a GFM alert marker line with no following content
+- **THEN** Visual Edit renders the callout title row for that line without emitting a raw-source island
+
+#### Scenario: Multi-line quoted paragraphs keep line breaks
+- **WHEN** a quoted paragraph continues over consecutive source lines (for example `> line one` then `> line two` with no blank separator)
+- **THEN** the rendered row shows the lines separated by a line break
+- **AND** inline formatting, links, and the quote group's markers continue to map byte-exactly to the source
+
+#### Scenario: Unknown alert markers stay literal text
+- **WHEN** a blockquote contains a marker line with an unrecognized type such as `> [!CUSTOM]`
+- **THEN** the marker text renders as literal paragraph text on its own line without callout styling
+- **AND** any following quoted line renders below the line break
+
+#### Scenario: Structural quote separator lines are unchanged
+- **WHEN** a blockquote contains bare `>` separator lines between paragraphs
+- **THEN** those lines keep their current whitespace-row rendering and the quote group remains visually contiguous
+
+### Requirement: Visual Edit partitions prose around nested Markdown images
+
+When Visual Edit presents a paragraph or heading whose source range contains one or more nested Markdown images that are also emitted as their own image blocks, it SHALL partition those ranges into disjoint visual rows in document order: the prose before each image, the image as a rendered image row, and any leftover prose after the last image as a continuation row. Each source byte in the region SHALL belong to exactly one visual row. The image row SHALL use the same Visual Edit image presentation as a standalone image block (bounded preview, caption, missing-resource placeholder) and SHALL NOT fall back to a conservative raw-source island solely because the image originated inside the prose block. Continuation rows SHALL keep the parent construct's kind for headings and paragraphs, including quote context when the parent is a blockquote leaf. List items that contain inline Markdown images are out of scope for this requirement.
+
+#### Scenario: Adjacent-line image without a blank line
+
+- **WHEN** Visual Edit displays a paragraph whose last line is a Markdown image and the preceding prose line has no blank line before it
+- **THEN** the prose renders as a normal editable paragraph row
+- **AND** the image renders below it as a bounded image preview, not as a gray source island
+- **AND** the image alt text is not duplicated as ordinary paragraph copy
+
+#### Scenario: Same-line text surrounding an image
+
+- **WHEN** Visual Edit displays a paragraph of the form `text ![alt](url) more`
+- **THEN** the leading text, the image, and the trailing text appear as three disjoint visual rows in that order
+- **AND** no row is force-marked as an unsupported source island due to range overlap
+
+#### Scenario: Multiple images in one paragraph
+
+- **WHEN** Visual Edit displays a paragraph that contains two Markdown images with prose between them
+- **THEN** visual rows alternate prose and image in source order
+- **AND** every source byte of the paragraph is owned by exactly one row
+
+#### Scenario: Image-only and blank-line-separated images stay unchanged
+
+- **WHEN** Visual Edit displays a paragraph that is only a Markdown image, or a prose paragraph separated from an image by a blank line
+- **THEN** the image still renders as a single image row
+- **AND** the prose paragraph (when present) remains a separate row whose source range does not overlap the image
+
+#### Scenario: Quoted paragraph leaves keep quote context
+
+- **WHEN** Visual Edit displays a blockquote paragraph that contains a nested Markdown image
+- **THEN** each partitioned prose row and the image row remain inside the same quote boundary
+- **AND** the image still renders as a bounded preview rather than a raw-source island
+
+### Requirement: Structural Format actions have default keyboard shortcuts
+The editor SHALL provide platform-appropriate default keyboard shortcuts for the existing Ordered List, Unordered List, Task List, Blockquote, and Code Fence actions. On Windows and Linux the defaults SHALL be `Ctrl+Shift+[`, `Ctrl+Shift+]`, `Ctrl+Shift+X`, `Ctrl+Shift+Q`, and `Ctrl+Shift+K`, respectively; on macOS the same keys SHALL use `Cmd` in place of `Ctrl`. Invoking an action's effective shortcut SHALL perform the same Markdown transformation as invoking that action from the Format menu. Each action SHALL participate in the existing customizable-shortcut behavior and SHALL expose its effective binding both beside its Format-menu label and in the localized Editing section of the in-app shortcut reference.
+
+#### Scenario: Windows and Linux defaults match the reference mapping
+- **WHEN** the editor runs on Windows or Linux with no overrides for the five structural Format actions
+- **THEN** Ordered List uses `Ctrl+Shift+[`, Unordered List uses `Ctrl+Shift+]`, Task List uses `Ctrl+Shift+X`, Blockquote uses `Ctrl+Shift+Q`, and Code Fence uses `Ctrl+Shift+K`
+
+#### Scenario: macOS defaults use the platform modifier
+- **WHEN** the editor runs on macOS with no overrides for the five structural Format actions
+- **THEN** the same actions use `Cmd+Shift+[`, `Cmd+Shift+]`, `Cmd+Shift+X`, `Cmd+Shift+Q`, and `Cmd+Shift+K`, respectively
+
+#### Scenario: Shortcut dispatch matches the Format menu action
+- **WHEN** the user invokes the effective shortcut for one of the five actions while a document can be formatted
+- **THEN** the editor applies the same ordered-list, unordered-list, task-list, blockquote, or fenced-code transformation that the matching Format-menu item applies
+
+#### Scenario: New shortcuts are discoverable and customizable
+- **WHEN** the user opens the Format menu or the Editing section of the in-app shortcut reference
+- **THEN** all five actions display their effective platform-specific bindings
+- **AND** assigning or resetting an override updates dispatch and both displayed locations through the existing shortcut-customization behavior
+
+### Requirement: Nested container derivation preserves source ownership without crashing
+The Markdown parser SHALL preserve the destination container selected when each list item begins, even when a blockquote or nested list begins before that item is flushed. A list item outside a blockquote MUST remain a document-level block, and a list item inside a blockquote MUST remain a child of that quote. Preview and Visual Edit derivation SHALL expose the resulting blocks in authored order through non-reversed, in-bounds, UTF-8-safe source ranges. A blockquote emitted separately from its containing list item SHALL begin at or after the containing item's derived range end. If any malformed derived leaf nevertheless reaches Visual Edit, the editor SHALL preserve its canonical source through a conservative source-backed fallback and MUST NOT panic or terminate the application.
+
+#### Scenario: List contains a blockquote that contains a list
+- **WHEN** a document-level list item contains a blockquote whose body contains another list item
+- **THEN** the outer item remains a document-level preview block and the inner item remains a child of the blockquote
+- **AND** the outer item's derived range ends no later than the blockquote range begins
+- **AND** Visual Edit projects the document without reversed, overlapping ownership or process termination
+
+#### Scenario: Nested topology preserves UTF-8 and CRLF boundaries
+- **WHEN** the same list-blockquote-list topology contains CJK text or emoji and uses LF or CRLF line endings
+- **THEN** every preview and visual source-range endpoint is a valid UTF-8 boundary within the canonical source
+- **AND** the complete source remains covered in authored order
+
+#### Scenario: Ordinary list and quote nesting remains unchanged
+- **WHEN** a document contains only nested lists, only a blockquote containing a list, or a list containing a paragraph-only blockquote
+- **THEN** its items retain their correct document or quote ownership and existing rendered semantics
+- **AND** no new unsupported source fallback is introduced solely by those supported topologies
+
+#### Scenario: Invalid derived range falls back safely
+- **WHEN** an internal malformed preview leaf presents a reversed, out-of-bounds, or non-UTF-8-boundary source range to Visual Edit derivation
+- **THEN** Visual Edit does not index the canonical text with that range and does not panic
+- **AND** the affected authored bytes remain available through conservative source-backed coverage
+
+### Requirement: Visual Edit partitions a leading same-line Markdown image
+
+When Visual Edit presents a paragraph or heading that **starts** with a nested Markdown image (the image source range and the parent source range share the same start offset) and then continues with trailing prose in the same parent range, it SHALL partition into disjoint visual rows in document order: the image as a rendered image row, then leftover prose as a continuation row of the parent kind. The authored `![alt](url)` bytes SHALL belong only to the image row. Visual Edit SHALL NOT also present those bytes as a conservative source island, as visible syntax under the image preview, or as leaked alt/destination copy in the continuation row. List items that contain inline Markdown images remain out of scope.
+
+#### Scenario: Leading same-line image plus trailing prose
+
+- **WHEN** Visual Edit displays a paragraph of the form `![alt](url)trailing text` (the image is the first construct; trailing prose follows on the same line with no blank line)
+- **THEN** the image renders as a bounded image preview
+- **AND** the trailing text renders as a normal editable paragraph row below it
+- **AND** the complete authored `![alt](url)` syntax does not appear as a source island or as visible copy under the preview
+- **AND** no row is force-marked as an unsupported source island due to range overlap
+
+#### Scenario: Leading image in a heading or quoted paragraph
+
+- **WHEN** Visual Edit displays a heading or a blockquote paragraph that starts with a nested Markdown image and continues with trailing prose
+- **THEN** the image and leftover prose still partition into disjoint rows
+- **AND** quoted rows keep the same quote boundary
+- **AND** the authored image syntax is not duplicated under the preview
+
+#### Scenario: Prose-before-image and image-only cases stay unchanged
+
+- **WHEN** Visual Edit displays `text ![alt](url) more`, an image-only paragraph, or a prose paragraph separated from an image by a blank line
+- **THEN** those shapes keep their existing partitioned or standalone image presentation
+- **AND** they do not regress into overlapping source islands
+
+### Requirement: Data-URI payloads are elided across every Visual Edit source surface
+Every Visual Edit surface that displays authored data-URI bytes SHALL elide the opaque payload (the bytes after the RFC 2397 comma) into the same atomic summary token used by the image source toggle: `…{size}…` framed by ellipsis marks with a human-readable binary-unit size, rendered with distinct chip styling. This SHALL cover the image source payload editor, raw-HTML block payload editors, source-island fallback rows, caret-revealed inline Markdown image runs and inline `<img>` atoms in prose (paragraphs, headings, list items, quote leaves, footnote text), and revealed inline link destinations. The structural bytes around an elided payload (Markdown delimiters, `data:` scheme, media type, `;base64,` marker, HTML attribute quoting) SHALL stay verbatim and editable.
+
+Each elided token SHALL behave as one atomic unit on every surface that shows it: the caret snaps to its boundaries and never rests inside, selection edits replace the entire elided byte range through one exact canonical source replacement, and adjacent Backspace/Delete removes the whole payload with a single Undo restoring it. Elision SHALL be deterministic per document version, not dependent on how the surface is opened, and a surface without any data-URI payload SHALL render byte-for-byte as before this requirement. Read mode and Split Preview are unaffected.
+
+#### Scenario: Raw-HTML image block payload elides its src data URI
+
+- **WHEN** Visual Edit shows a standalone raw-HTML block containing `<img src="data:image/png;base64,AAAA…">` and its source payload is expanded
+- **THEN** the payload editor shows the tag with the `src` attribute's data-URI payload collapsed into one size-labeled token while the surrounding tag and attribute syntax stay verbatim and editable
+
+#### Scenario: Caret-revealed inline image elides in prose
+
+- **WHEN** the caret or a selection endpoint enters an inline Markdown image `![alt](data:…)` or inline `<img src="data:…">` atom inside prose and the authored bytes are revealed
+- **THEN** the revealed run shows the structural syntax verbatim with the opaque payload collapsed into the same token
+- **AND** leaving the range restores the rendered atom without changing the document version
+
+#### Scenario: Revealed link destination with a data URI elides
+
+- **WHEN** an inline link `[label](data:…)` is revealed by the caret in Visual Edit
+- **THEN** its destination payload appears as the same token instead of verbatim bytes
+
+#### Scenario: Source-island fallback elides unprovable image spans
+
+- **WHEN** a data-URI image whose exact span cannot be proven renders through the source-island fallback
+- **THEN** the island row shows the elided token instead of the raw payload
+
+#### Scenario: Prose that merely mentions data does not elide
+
+- **WHEN** revealed source contains text like `(see data:foo,bar)` whose `data:` run lacks a media type and URI delimiters
+- **THEN** no elision is applied and the text renders verbatim
+
+#### Scenario: Atomic deletion works on every surface
+
+- **WHEN** the caret sits at an elided token's trailing edge in an HTML payload, source island, or revealed run and the user presses Backspace (or forward-Delete at the leading edge)
+- **THEN** one exact canonical replacement removes the whole opaque payload and a single Undo restores it
+
+### Requirement: Image render cache identity is content-exact and repaint-bounded
+Every image source presented by preview or Visual Edit SHALL carry a cache identity that distinguishes different normalized local or remote locations and different complete data-URI bytes. For a data URI, identity derivation SHALL consume the complete URI during document-version derivation and SHALL NOT sample only selected regions. Repaint, cache lookup, claim reconciliation, and source-toggle presentation MUST reuse a constant-size identity without rescanning or cloning the complete data URI. Identity derivation SHALL remain part of the existing per-document-version derived-state lifecycle.
+
+#### Scenario: Large data URIs differ outside previous samples
+- **WHEN** two valid data-URI images have the same byte length and identical head, middle, and tail regions but differ elsewhere
+- **THEN** preview and Visual Edit assign different render-cache identities
+- **AND** each surface displays the raster produced from its own complete source
+
+#### Scenario: Editing an unsampled payload byte invalidates the raster
+- **WHEN** an edit changes bytes of a large data URI without changing its length or the former sampled regions
+- **THEN** the next document version carries a different image identity
+- **AND** the old ready or failed cache result is not reused for the edited image
+
+#### Scenario: Repainting does not scan the payload
+- **WHEN** unrelated interaction state causes repeated repaints of a document containing a multi-megabyte data-URI image
+- **THEN** deterministic counters show no complete-payload hash or clone in repaint, claim reconciliation, or cache lookup
+- **AND** the precomputed identity is reused from version-cached derived state
+
+### Requirement: Extended inline candidates preserve source provenance across parser events
+Markion SHALL recognize supported `~subscript~` syntax even when `pulldown-cmark` divides one authored candidate across adjacent text events, including when the closing delimiter is at the end of a paragraph. Reconstructing an extended-inline candidate MUST use original source provenance, MUST NOT cross a non-text semantic event, and MUST preserve escaped single-tilde text and GFM `~~strikethrough~~` semantics.
+
+#### Scenario: Trailing subscript uses the default parser
+- **WHEN** the default parser reads `H~2~` at the end of a paragraph with strikethrough enabled
+- **THEN** the document AST contains text `H` followed by a subscript containing `2`
+- **AND** preview and export consumers receive the same subscript structure
+
+#### Scenario: Strikethrough remains owned by GFM parsing
+- **WHEN** the default parser reads `~~strike~~` or text containing a closing double-tilde delimiter
+- **THEN** the input retains its existing GFM strikethrough interpretation
+- **AND** no part of the double-tilde construct is emitted as a subscript
+
+#### Scenario: Escaped tilde remains literal
+- **WHEN** an authored backslash escapes a single tilde that would otherwise resemble a subscript delimiter
+- **THEN** the parser does not reconstruct that escaped marker into a subscript
+- **AND** the resulting visible text matches the existing escape semantics
+
+### Requirement: Invalid text offsets are contained at UTF-8 boundaries
+Editor operations that consume stale, out-of-range, reversed, or mid-codepoint caret and selection offsets SHALL clamp or collapse them to valid UTF-8 boundaries before slicing canonical text. This behavior is defensive invariant containment and SHALL NOT imply support for otherwise invalid or unparsed Markdown constructs.
+
+#### Scenario: Invalid selection reaches a text consumer
+- **WHEN** copy, cut, find-prefill, link editing, or navigation receives a selection containing an invalid UTF-8 boundary
+- **THEN** the operation does not panic or slice at an invalid boundary
+- **AND** an unprovable selection collapses without mutating document text
+
+### Requirement: Terminal Visual Edit newlines own a blank caret row
+
+When an unquoted paragraph or heading reaches the document tail, Visual Edit SHALL represent its terminal line ending and any following whitespace as a source-backed `Whitespace` row. The first terminal Enter SHALL therefore place the source caret on a real blank visual row immediately, and further terminal Enter presses SHALL grow that same tail row instead of alternating between a hidden paragraph marker and a whitespace row. This derived ownership SHALL preserve the canonical Markdown bytes and contiguous, non-overlapping visual source coverage.
+
+#### Scenario: First Enter after terminal prose creates the blank row
+- **WHEN** the user places the Visual Edit caret after terminal paragraph text and presses Enter once
+- **THEN** the inserted line ending is owned by a terminal `Whitespace` row whose range reaches the document end
+- **AND** the caret paints at the blank row rather than at the end of the preceding text
+
+#### Scenario: Consecutive terminal Enter presses keep one row model
+- **WHEN** the user presses Enter repeatedly at the document tail
+- **THEN** every press extends the source-backed terminal whitespace range by one authored line ending
+- **AND** Visual Edit does not alternate between paragraph-marker and whitespace-row caret layouts
+
+#### Scenario: Terminal line-ending ownership preserves source fidelity
+- **WHEN** terminal prose uses LF or CRLF line endings
+- **THEN** the paragraph or heading and terminal whitespace blocks provide contiguous, non-overlapping coverage through the document end
+- **AND** the canonical source bytes are unchanged by the visual partition
+
+### Requirement: Source editor IME candidate geometry
+The source editor SHALL report a non-empty platform text-input rectangle at the requested composition anchor. During one IME composition, successive preedit replacements SHALL keep the candidate anchor at the composition start unless the edited row itself moves, including when typewriter mode recenters the source viewport. This behavior SHALL apply on Linux Wayland without changing document text, selection semantics, or other platforms' native input behavior.
+
+#### Scenario: Typewriter composition stays at the visible source caret
+- **WHEN** an IME composition starts in the source editor while typewriter mode has centered the active row
+- **THEN** the platform candidate rectangle has positive caret width and current source line height
+- **AND** its origin is the visible composition anchor rather than the window origin
+
+#### Scenario: Preedit growth keeps a stable anchor
+- **WHEN** one source-editor composition replaces its marked text with successively longer preedit strings
+- **THEN** each platform candidate rectangle remains anchored at the same source insertion position
+- **AND** the input method does not derive horizontal placement from the changing preedit length
+
+#### Scenario: Ordinary source editing retains accurate candidate placement
+- **WHEN** typewriter mode is disabled and an IME composition starts or updates in the source editor
+- **THEN** the candidate rectangle remains non-empty and aligned with the requested source composition anchor
+
+### Requirement: Underlined inline HTML in Visual Edit
+
+Visual Edit SHALL render well-paired inline `<u>` and `<ins>` elements with underline and hidden tag syntax, including elements inside Markdown link labels, headings, lists, blockquotes, and table cells. Tag names SHALL be case-insensitive and existing supported ignorable attributes SHALL remain accepted. Underline SHALL compose with surrounding Markdown and HTML styles and SHALL end at the matching closing element. Link labels SHALL retain their exact destination and navigation metadata.
+
+#### Scenario: Imported table of contents uses underlined links
+- **WHEN** an unfocused paragraph contains `[<u>第一章 项目概述</u>    4](#_toc232450996)`
+- **THEN** the label displays `第一章 项目概述    4` with its title underlined and its destination preserved
+- **AND** neither the HTML tags nor Markdown link delimiters appear as ordinary label text
+
+#### Scenario: Underline composes with other styles
+- **WHEN** supported inline `u` or `ins` elements contain nested Markdown or HTML formatting
+- **THEN** their content retains both underline and the nested styles
+- **AND** neighboring text outside the element does not inherit its underline
+
+#### Scenario: Focusing an underlined link reveals exact source
+- **WHEN** a caret or selection endpoint enters an underlined link label
+- **THEN** the complete safe containing link group is revealed exactly once
+- **AND** all caret mappings remain UTF-8 safe and document text, version, and derived caches remain unchanged
+
+### Requirement: Literal markup and malformed HTML remain source faithful
+
+Visual Edit SHALL distinguish Markdown-escaped punctuation and entity-decoded text from actual inline HTML events. Escaped markup SHALL retain literal meaning, including at the start of a Markdown link or formatting group. HTML pair validation SHALL use matching tag names, not merely equivalent style effects; invalid pairs and unsupported attributes SHALL retain source-backed fallback without dropping source bytes.
+
+#### Scenario: Escaped TOC title and tag text stay literal
+- **WHEN** source contains `\*\*目  录\*\*` or `[\<u>第一章 项目概述\</u>    4](#_toc232450996)`
+- **THEN** the visible stars and angle-bracket tag text remain literal and only escape backslashes and link delimiters are hidden
+- **AND** the literal tag text does not acquire semantic underline formatting
+
+#### Scenario: Style aliases are not matching HTML tags
+- **WHEN** source contains a mismatched pair such as `<u>text</ins>` or `<em>text</i>`
+- **THEN** Visual Edit preserves the authored malformed element through conservative source rendering
+- **AND** it does not silently hide the mismatched tags as a valid pair
+
+### Requirement: Visual caret and blank rows agree with source lines
+Visual Edit SHALL paint the caret on the source-backed line that receives subsequent input. A source position before an authored line ending SHALL remain on the preceding content row; a position after that ending SHALL belong to the following line. Blank-row pointer placement and vertical navigation SHALL resolve to positions on their displayed source lines, including EOF, LF, and CRLF. Interaction alone SHALL preserve document text, version, undo history, and derived caches.
+
+#### Scenario: Bare heading before a terminal newline
+- **WHEN** the source caret is immediately after `#` in a heading followed by a newline
+- **THEN** the visual caret is beside the revealed marker on the same line
+- **AND** typing or switching to Source mode agrees with that position
+
+#### Scenario: Clicking below a heading or paragraph
+- **WHEN** the user clicks a terminal blank line below a heading or paragraph
+- **THEN** the caret resolves after the preceding line ending
+- **AND** typing inserts on the clicked line without appending to the preceding content
+
+#### Scenario: Distinct consecutive blank lines
+- **WHEN** a document has consecutive blank lines, including whitespace-only lines and CRLF endings
+- **THEN** each displayed blank line has a distinct valid source-line target
+- **AND** Up/Down navigation, pointer placement, and the caret share that mapping
+
+#### Scenario: Structural and formatted neighboring rows
+- **WHEN** the caret crosses boundaries of headings, paragraphs with inline formatting, lists, or quotes
+- **THEN** its painted line agrees with the line receiving Unicode typing or IME composition
+- **AND** undo restores the exact original source
+
+### Requirement: Visual Edit preserves whitespace-only list tail lines
+Visual Edit SHALL preserve individually addressable lines in a list item's trailing whitespace, including lines containing spaces or tabs. Source-to-display mapping SHALL retain their line breaks without moving horizontal whitespace onto the preceding content line. Canonical source bytes SHALL remain unchanged by rendering, and per-version derived caches SHALL remain reusable during caret-only interaction.
+
+#### Scenario: Consecutive Enter after a nested item with whitespace-only following lines
+- **WHEN** a user continues a nested list item, exits its empty continuation with Enter, and presses Enter repeatedly before a whitespace-only line containing spaces or tabs
+- **THEN** the caret remains below the original item after exit and moves down for every subsequent newline
+- **AND** this holds with LF or CRLF, at document end and before subsequent content
+
+#### Scenario: Pointer placement and typing use the same blank-line position
+- **WHEN** the user clicks a displayed blank line following a list item and types text
+- **THEN** input is inserted at that line's canonical source offset
+- **AND** Undo restores the exact source whitespace and caret position
+
+#### Scenario: Inline syntax and blank lines preserve separate ownership
+- **WHEN** a list item contains inline formatting or links followed by whitespace-only lines
+- **THEN** its syntax remains correctly hidden or revealed and every trailing blank line keeps its own source-backed display position
+- **AND** the final separator before the next block does not create a duplicate visual line
+
+### Requirement: Spreadsheet clipboard paste becomes a GFM table
+When Edit → Paste runs on the document editing surface (not a focused text field, not an image-only clipboard), a rectangular tab-separated plain-text payload SHALL be converted to a GitHub Flavored Markdown table and inserted as one atomic undo step. A payload is rectangular TSV when it has at least two lines, every line contains a tab, and every line has the same number of columns after splitting on tabs (trailing empty columns allowed). The first row SHALL become the header row. A single cell (one line with no tab, or a 1×1 table) SHALL paste as ordinary text, not a one-cell table. Pipe characters and newlines inside cells SHALL be escaped so they do not break the GFM table. Image paste and focused text-field paste SHALL remain unchanged.
+
+#### Scenario: Excel TSV pastes as a GFM table
+- **WHEN** the clipboard plain text is `姓名\t年龄\n张三\t18` with no usable HTML, and the user pastes into a document
+- **THEN** the inserted Markdown is a GFM table whose header is `姓名` / `年龄` and whose body row is `张三` / `18`
+- **AND** undoing once removes the entire paste
+
+#### Scenario: Single cell does not become a table
+- **WHEN** the clipboard plain text is a single value with no tab
+- **THEN** paste inserts that value as ordinary text
+
+#### Scenario: Non-tabular plain text stays verbatim
+- **WHEN** the clipboard contains multiple lines of prose without tabs
+- **THEN** paste inserts the text byte-for-byte
+
+### Requirement: Headerless HTML tables use the first row as header
+When clipboard HTML converts to a table whose rows are all `<td>` cells (no header cells), the converter SHALL emit a GFM table that uses the first row as the header rather than inserting an empty header row.
+
+#### Scenario: Excel HTML table without th
+- **WHEN** the clipboard HTML is a `<table>` of `<td>` cells with at least two rows and no `<th>`
+- **THEN** the inserted GFM table uses the first data row as its header row
+- **AND** it does not contain a blank header row of empty cells
+
+### Requirement: Merged HTML tables flatten to GFM
+When clipboard HTML contains a table with `colspan` or `rowspan`, paste SHALL insert a rectangular GFM table: the spanned value occupies the origin cell and the remaining covered cells are empty. Nested tables inside a cell SHALL still fall back to one raw HTML table. The result SHALL remain a single atomic undo step.
+
+#### Scenario: Colspan flattens instead of raw HTML
+- **WHEN** the user pastes an HTML table whose first row is one cell with `colspan="2"` and whose second row has two cells
+- **THEN** the inserted text is a GFM table, not a serialized `<table>` element
+- **AND** the first header cell holds the spanned text and the second header cell is empty
+
+#### Scenario: Nested table still falls back to raw HTML
+- **WHEN** the clipboard HTML is a table whose cell contains another table
+- **THEN** paste inserts one raw HTML table for that subtree
+
+### Requirement: Word-style clipboard lists become Markdown lists
+When clipboard HTML represents a list as Word `MsoListParagraph` paragraphs or `mso-list` styled runs rather than `<ul>`/`<ol>`/`<li>`, paste SHALL reconstruct nested unordered or ordered Markdown lists from those markers and indent levels. Real `<ul>`/`<ol>` lists SHALL continue to convert as they do today.
+
+#### Scenario: Word fake numbered list
+- **WHEN** the clipboard HTML is two `MsoListParagraph` paragraphs with `mso-list` level-1 numbering
+- **THEN** the inserted Markdown is an ordered list with those two items
+
+#### Scenario: Word nested bullet list
+- **WHEN** the clipboard HTML is a level-1 bullet paragraph followed by a level-2 bullet paragraph
+- **THEN** the inserted Markdown is a nested unordered list
+
+### Requirement: Invalid clipboard HTML falls back to Unicode text
+When the clipboard offers an HTML flavor that cannot be decoded as UTF-8, Edit → Paste SHALL ignore that HTML flavor and insert using the Unicode plain-text payload, including TSV-to-table conversion when that payload is rectangular TSV.
+
+#### Scenario: Non-UTF-8 HTML still pastes Unicode text
+- **WHEN** the clipboard carries invalid-UTF-8 HTML alongside Unicode tab-separated text of a two-by-two grid
+- **THEN** paste inserts a GFM table built from the Unicode text rather than reporting an empty clipboard or inserting replacement characters from the HTML
+
+### Requirement: Paste as plain text inserts raw clipboard text
+The Edit menu SHALL offer Paste as Plain Text, bound by default to `Ctrl+Alt+V` on Windows and Linux and `Cmd+Option+V` on macOS, customizable through the existing shortcut preferences. Invoking it on the document editing surface SHALL insert the clipboard's Unicode plain text with no HTML conversion and no TSV-to-table conversion, as one atomic undo step. Focused text fields SHALL still receive raw text. Image-only clipboards SHALL follow the existing image import flow. Toggle View Mode SHALL keep `Ctrl+Shift+V` / `Cmd+Shift+V`. The action label SHALL be routed through the i18n layer in every supported interface language and SHALL appear in the keyboard shortcut reference.
+
+#### Scenario: Paste as plain text keeps tabs
+- **WHEN** the clipboard holds HTML of a table and Unicode TSV, and the user invokes Paste as Plain Text
+- **THEN** the document receives the Unicode TSV (tabs and newlines) rather than a GFM table or converted HTML
+
+#### Scenario: Ordinary paste still converts
+- **WHEN** the same clipboard is pasted with Edit → Paste
+- **THEN** the document receives converted Markdown (GFM table or formatted HTML conversion)
+
+#### Scenario: Shortcut does not steal toggle view
+- **WHEN** the user presses `Ctrl+Shift+V` / `Cmd+Shift+V`
+- **THEN** the view mode cycles as before
+- **AND** Paste as Plain Text is not invoked

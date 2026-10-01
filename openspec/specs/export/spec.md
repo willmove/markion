@@ -3,7 +3,9 @@
 ## Purpose
 
 Covers the multi-format export engine and YAML front matter metadata handling. The exports range from full-fidelity (HTML, DOCX, LaTeX) to deliberately limited (a simple single-page text PDF and basic text-snapshot PNG/JPEG). Rich image export fidelity is **not** part of this capability — it is a future candidate.
+
 ## Requirements
+
 ### Requirement: Multi-format document export
 The export engine SHALL export the document to Markdown, styled HTML, plain HTML, LaTeX, DOCX, PDF, and basic PNG/JPEG text snapshots, prompting the user for an output path and suggesting a filename based on the current document. For PDF and DOCX, the producing implementation SHALL be selected by the `[export] backend` preference: `builtin` (the default) SHALL write the file directly through the built-in PDF writer / built-in DOCX writer without spawning any pandoc subprocess, while `pandoc` SHALL first attempt the absorbed Typune export engine (pandoc subprocess, with the PDF engine taken from the `[export] pdf_engine` config value, default `xelatex`) and silently fall back to the built-in implementation when the external tool is unavailable or the conversion fails, so export always succeeds without external dependencies. The status bar message for a successful PDF/DOCX export SHALL disclose which backend produced the file. When the backend preference is `builtin`, the built-in-writer message SHALL be neutral and SHALL NOT hint that installing pandoc yields richer output. When the `pandoc` preference falls back to the built-in writer, the status message SHALL retain the hint that installing pandoc yields richer DOCX output (PDF stays neutral because the built-in PDF writer is the rich default) and SHALL additionally indicate the failure category (pandoc not found vs. conversion error). Export failures SHALL be reported with user-facing status messages.
 
@@ -345,7 +347,7 @@ The built-in PDF writer SHALL produce a true multi-page document: content is lai
 - **THEN** the PDF document properties carry those values
 
 ### Requirement: Built-in PDF writer fonts and CJK support
-The built-in PDF writer SHALL embed subsetted fonts covering every rendered glyph; it SHALL NOT substitute placeholder characters (such as `?`) for any Unicode content. Font resolution SHALL use ordered fallback stacks — a configured or per-OS system CJK font (Microsoft YaHei, PingFang SC, Noto Sans CJK SC) before a bundled OFL-licensed Noto Sans SC subset as the guaranteed fallback — declared separately for body, heading, and code text. Document language SHALL be detected well enough to select CJK-aware line breaking and CJK–Latin spacing when the document is predominantly Chinese.
+The built-in PDF writer SHALL embed subsetted fonts covering every rendered glyph; it SHALL NOT substitute placeholder characters (such as `?`) for any Unicode content, and it SHALL NOT draw Latin letters using a Symbol/Pi encoding (Adobe Symbol-style Greek lookalikes). Font resolution SHALL use ordered fallback stacks — a configured or per-OS system CJK font (Microsoft YaHei, PingFang SC, Noto Sans CJK SC) before a bundled OFL-licensed Noto Sans SC subset as the guaranteed fallback — declared separately for body, heading, and code text. The body stack's Latin face SHALL be the bundled Libertinus Serif family, even when the host fontconfig `serif` alias names a different face. Document language SHALL be detected well enough to select CJK-aware line breaking and CJK–Latin spacing when the document is predominantly Chinese.
 
 #### Scenario: Chinese text renders without substitution
 - **WHEN** a document containing Chinese text is exported via the built-in writer
@@ -358,6 +360,10 @@ The built-in PDF writer SHALL embed subsetted fonts covering every rendered glyp
 #### Scenario: Code blocks use a monospace stack
 - **WHEN** a document contains a fenced code block
 - **THEN** the code text renders with the monospace fallback stack, distinct from the body stack
+
+#### Scenario: Latin body text keeps Latin letters
+- **WHEN** a paragraph of regular or italic English is exported via the built-in writer on a host whose fontconfig `serif` alias is a Symbol or Pi family
+- **THEN** the PDF draws and encodes those letters as Latin (for example `This` stays `This`), not as Greek homoglyphs from a Symbol encoding
 
 ### Requirement: Built-in PDF writer block fidelity
 The built-in PDF writer SHALL render the cached preview blocks with structural fidelity: distinct heading levels H1–H6; bulleted, ordered (auto-numbered, no literal marker text), and task lists with nesting preserved; blockquotes as indented, visually set-off blocks; GFM alerts as styled callouts with a bold kind label; fenced code blocks in monospace with syntax highlighting and no mid-block page break when avoidable; tables with a bold header row repeated across page breaks and per-column alignment from the separator row, including parsed raw-HTML tables; horizontal rules as graphical rules; footnotes as real page footnotes linked from their references. Diagram fences SHALL render as code blocks.
@@ -417,11 +423,15 @@ The built-in PDF writer SHALL embed images whose bytes resolve — local files (
 - **THEN** the writer emits the `alt: url` text and the export still succeeds
 
 ### Requirement: Built-in PDF writer renders math
-The built-in PDF writer SHALL render valid inline and display math as vector graphics through the same GPUI-free math renderer used by native preview and HTML export, embedded as SVG, so exported formulas match the preview. When the math renderer rejects a formula, the writer SHALL emit the byte-identical authored LaTeX source in a code-styled block and the export SHALL still succeed.
+The built-in PDF writer SHALL render valid inline and display math as vector graphics through the same GPUI-free math renderer used by native preview and HTML export, embedded as SVG, so exported formulas match the preview. Inline math SHALL participate in prose layout as a single measured atom aligned to the surrounding text baseline and SHALL NOT split across a line break. When the math renderer rejects a formula, the writer SHALL emit the byte-identical authored LaTeX source in code styling — a code-styled block for display math, a code-styled in-flow run for inline math — and the export SHALL still succeed.
 
 #### Scenario: Display math matches the preview
 - **WHEN** a document contains a valid `$$`-fenced formula
 - **THEN** the PDF embeds the same sanitized SVG the preview renders, as a display equation
+
+#### Scenario: Inline math matches the preview
+- **WHEN** a paragraph contains a valid `$…$` formula mixed with surrounding prose
+- **THEN** the PDF embeds the same sanitized SVG the preview renders, as a baseline-aligned inline atom rather than the authored `$…$` source as code-styled text
 
 #### Scenario: Unrenderable math preserves its source
 - **WHEN** the math renderer rejects a formula
@@ -457,3 +467,54 @@ The pandoc PDF engine path SHALL configure CJK-capable fonts: when the document 
 - **WHEN** any PDF pandoc invocation is built
 - **THEN** it does not contain `--katex`
 
+### Requirement: Format-aware export destination dialogs
+Each styled HTML, plain HTML, PDF, LaTeX, DOCX, PNG, and JPEG export action SHALL open a save dialog that identifies the selected output type and advertises that type's accepted filename extensions. The selected action SHALL remain authoritative for the exporter: filename text SHALL NOT select a different encoder. Before exporting, the editor SHALL preserve an accepted extension case-insensitively and SHALL replace a missing, empty, or incompatible final extension with the selected type's canonical extension.
+
+The extension profiles SHALL be: styled HTML accepts `.html` and `.htm` with canonical `.html`; plain HTML accepts `.html` and `.htm` with canonical `.html` and keeps the `.plain.html` suggested suffix; PDF accepts/canonicalizes to `.pdf`; LaTeX accepts `.tex` and `.latex` with canonical `.tex`; DOCX accepts/canonicalizes to `.docx`; PNG accepts/canonicalizes to `.png`; and JPEG accepts `.jpg` and `.jpeg` with canonical `.jpg`.
+
+#### Scenario: Export dialog identifies the selected type
+- **WHEN** the user invokes a format-specific export action
+- **THEN** the save dialog's title, file-type label, accepted extensions, and suggested filename correspond to that action's output profile
+
+#### Scenario: Missing or incompatible export extension is normalized
+- **WHEN** the user confirms an export path whose final extension is missing, empty, or not accepted by the selected output profile
+- **THEN** the editor replaces the final extension with that profile's canonical extension before invoking the exporter
+
+#### Scenario: Accepted export extension alias is preserved
+- **WHEN** the user confirms a path using an accepted alias such as `.htm`, `.latex`, or `.jpeg` in any letter case
+- **THEN** the editor preserves that path and exports the selected format to it
+
+#### Scenario: Filename does not switch the exporter
+- **WHEN** the user invokes PDF export but types a filename ending in an extension associated with another format
+- **THEN** the editor normalizes the path to `.pdf` and invokes the PDF exporter rather than switching formats
+
+#### Scenario: Plain HTML keeps its distinguishing suggestion
+- **WHEN** the user invokes plain HTML export for a document whose stem is `report`
+- **THEN** the dialog suggests `report.plain.html` while advertising the HTML extensions
+
+#### Scenario: Export cancellation is non-destructive
+- **WHEN** the user cancels a format-aware export dialog
+- **THEN** no file is written and the document path, contents, dirty state, and undo history remain unchanged
+
+### Requirement: Generated YAML front matter is structurally valid and lossless
+Whenever Markion renders parsed metadata back to Markdown or constructs transient Markdown for a pandoc export, it SHALL serialize the complete front-matter mapping with one YAML-aware implementation. Recognized scalar fields, tags, and custom scalar, sequence, mapping, null, boolean, and numeric values MUST produce structurally valid YAML that parses back to the same `YamlFrontMatter` values. The implementation MUST NOT assemble YAML container values or title overrides by concatenating independently escaped line fragments.
+
+#### Scenario: Single-element custom containers round trip
+- **WHEN** custom metadata contains a one-element sequence or a one-entry mapping
+- **THEN** rendered front matter parses successfully as one value beneath the original custom key
+- **AND** the reparsed value equals the original sequence or mapping
+
+#### Scenario: Nested and multiline metadata round trips
+- **WHEN** metadata contains nested containers, multiline strings, Unicode line separators, YAML-looking scalars, quotes, backslashes, control characters, or text equal to `---` on its own line
+- **THEN** the rendered front-matter block remains structurally valid
+- **AND** parsing it returns values equal to the original metadata
+
+#### Scenario: DOCX and PDF title overrides use canonical YAML serialization
+- **WHEN** a pandoc DOCX or PDF export applies a title override containing newlines, carriage returns, quotes, backslashes, control characters, or a standalone `---` line
+- **THEN** the transient Markdown input contains valid front matter whose parsed title equals the complete override
+- **AND** the export input does not create an unintended YAML document boundary
+
+#### Scenario: Export override does not rewrite the editor source
+- **WHEN** a title override is applied while building transient pandoc input
+- **THEN** only the typed metadata used for that export invocation changes
+- **AND** the open document's canonical Markdown source, version, dirty state, and undo history remain unchanged

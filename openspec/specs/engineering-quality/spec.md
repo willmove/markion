@@ -2,7 +2,9 @@
 
 ## Purpose
 Covers executable repository quality gates, Visual Edit invariant evidence, deterministic incremental-performance checks, and Markdown parser ownership.
+
 ## Requirements
+
 ### Requirement: Executable repository quality gate
 The repository SHALL provide one documented local quality command and an automated pull-request workflow that run Rust formatting checks, the complete Cargo workspace test suite, and strict non-interactive validation of every active OpenSpec change and stable spec. Any failed command MUST fail the gate, while tests explicitly marked ignored because they require unavailable external tools or networks SHALL remain reported rather than silently reclassified as passing coverage.
 
@@ -29,7 +31,7 @@ Every Visual Edit presentation or mutation strategy SHALL have executable eviden
 - **THEN** executable tests prove that the event is rejected before canonical source mutation
 
 ### Requirement: Deterministic incremental performance gates
-Source-mapped Visual Edit performance correctness SHALL be gated with deterministic work and identity evidence rather than machine-dependent elapsed-time thresholds. Localized-edit tests SHALL bound newly parsed regions, prove reuse of unchanged regions and stable block identities, preserve shared cache identity for interaction-only state, and compare incremental blocks, outlines, and source ranges with a fresh full derivation. Wall-clock large-document benchmarks SHALL be documented as informational diagnostics and MUST NOT be a required merge gate without dedicated stable benchmark hardware.
+Source-mapped Visual Edit performance correctness SHALL be gated with deterministic work and identity evidence rather than machine-dependent elapsed-time thresholds. Localized-edit tests SHALL bound newly parsed regions, prove reuse of unchanged regions and stable block identities, preserve shared cache identity for interaction-only state, and compare incremental blocks, outlines, and source ranges with a fresh full derivation. Retained-memory correctness SHALL be gated the same way: memory accounting tests SHALL assert machine-independent relationships — that an empty site reports zero, that a report is side-effect free and repeatable, that per-tab totals grow when a tab is opened and return to their prior value when it is closed, and that opening a tab leaves process-global render caches unchanged — and MUST NOT assert absolute byte thresholds, which vary by platform and allocator. Wall-clock large-document benchmarks and absolute memory figures SHALL be documented as informational diagnostics and MUST NOT be a required merge gate without dedicated stable benchmark hardware.
 
 #### Scenario: Local edit occurs in a large document
 - **WHEN** a UTF-8-safe localized edit is applied near the beginning or middle of a large document
@@ -40,6 +42,11 @@ Source-mapped Visual Edit performance correctness SHALL be gated with determinis
 - **WHEN** a contributor invokes the release-mode large-document benchmark
 - **THEN** the output is identified as diagnostic timing evidence
 - **AND** ordinary CI success does not depend on a fixed microsecond threshold
+
+#### Scenario: Memory accounting is gated
+- **WHEN** memory accounting tests run in CI
+- **THEN** they assert relative attribution and release relationships that hold on any platform
+- **AND** they do not fail on a platform-dependent absolute byte figure
 
 ### Requirement: Markdown parser ownership
 `pulldown-cmark` SHALL remain the root application's semantic Markdown parser and canonical preview-block classifier. Visual Edit boundary helpers MAY recognize exact field, payload, delimiter, and table-cell subranges only within an already-classified semantic block; they MUST round-trip the relevant authored source, MUST reuse the shared table implementation where applicable, and MUST NOT mutate an inferred rendered tree. When an exact range proof fails, the construct SHALL be classified as a WYSIWYG coverage gap under the `markdown-editing` capability's `WYSIWYG coverage roadmap` and shown as raw source only as a transitional affordance — the editor MUST NOT guess a rendered-tree mutation. Workspace member parsers and exporters MUST NOT create an independent Visual Edit mutation model.
@@ -71,3 +78,42 @@ The workspace test suite MUST NOT read preference values from, or write preferen
 - **WHEN** a test constructs the application without supplying an isolated preferences file
 - **THEN** source font size, reading font size, and other preference fields take their documented defaults rather than whatever is stored on the developer machine
 
+### Requirement: Cross-container source ownership has executable safety evidence
+Changes to Markdown container routing SHALL include deterministic pure tests at the parser and Visual Edit projection layers. The tests MUST prove destination ownership, authored block order, non-overlapping container boundaries, in-bounds UTF-8 source ranges, complete canonical source coverage, and non-panicking fallback for malformed derived input. Regression fixtures SHALL include the smallest failing container topology and at least one realistic UTF-8 variant without depending on a developer's private document or machine state.
+
+#### Scenario: Parser ownership regression is exercised
+- **WHEN** the test suite derives preview blocks for a list item containing a blockquote that contains a list
+- **THEN** assertions distinguish document-level blocks from quoted children and verify their exact ordering and range containment
+- **AND** the test fails if routing is inferred from the later current container state
+
+#### Scenario: Visual projection safety regression is exercised
+- **WHEN** pure Visual Edit tests project both valid nested-container output and deliberately malformed range input
+- **THEN** valid input has ordered, complete, UTF-8-safe coverage without unsupported degradation
+- **AND** malformed input uses source-backed fallback without a panic
+
+#### Scenario: Verification is independent of private application state
+- **WHEN** contributors run the focused or complete workspace test suite
+- **THEN** all cross-container safety fixtures are repository-contained and deterministic
+- **AND** no session file, private note, WER process, window manager, or external service is required
+
+### Requirement: Merge-blocker regressions require semantic boundary evidence
+Correctness fixes for cache identity, generated structured text, or parser event reconstruction SHALL include fixtures that exercise the boundary responsible for the defect. Tests MUST compare semantic outcomes rather than only output shape: cache tests compare identities and decoded results for deliberately adversarial equal-length inputs; YAML tests parse generated text and compare typed values; extended-inline tests exercise the default parser and conflicting escape/GFM syntax. Synthetic invalid-state tests SHALL be described as invariant containment and MUST NOT be cited as proof that the same state is reachable through ordinary user input.
+
+#### Scenario: Cache collision regression is exercised deterministically
+- **WHEN** a regression test builds two equal-length valid image sources that differ only outside the former sampled regions
+- **THEN** it proves their keys and decoded render results are distinct
+- **AND** it does not rely on probabilistic random inputs or elapsed-time thresholds
+
+#### Scenario: Generated YAML is validated semantically
+- **WHEN** tests cover front-matter rendering or export title overrides
+- **THEN** they parse the complete generated front-matter block with the production YAML type
+- **AND** they compare the reparsed typed values with the inputs rather than accepting substring assertions alone
+
+#### Scenario: Parser boundary fix protects competing syntax
+- **WHEN** tests prove an extended-inline construct across adjacent text events
+- **THEN** the same suite also covers the default parser, escaped delimiters, GFM strikethrough, Unicode text, and boundaries adjacent to non-text inline events
+
+#### Scenario: Synthetic invalid state is labeled accurately
+- **WHEN** a test injects a malformed visual block or invalid caret/selection range that ordinary parsing does not produce
+- **THEN** the test and change report identify it as defense-in-depth invariant evidence
+- **AND** they do not claim an ordinary user-triggered reproduction without a separate end-to-end fixture
