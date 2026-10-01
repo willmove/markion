@@ -940,7 +940,7 @@ The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that
 
 #### Scenario: Contributor evaluates current WYSIWYG coverage
 - **WHEN** a contributor reads the Visual Edit WYSIWYG coverage matrix
-- **THEN** it distinguishes rendered WYSIWYG constructs (prose, headings including empty ATX headings, code, math including Pending/Error payload editors, diagrams, images including reference-style block images, tables including ragged grids, YAML front matter, lists and task lists including empty list items and clickable Visual Edit checkboxes, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, decoded HTML entities, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (indented code, unclosed fences, multiline or otherwise unprovable images, definition lists, residual unsupported gaps)
+- **THEN** it distinguishes rendered WYSIWYG constructs (prose, headings including empty ATX headings, code including indented code blocks and unclosed or malformed fences, math including Pending/Error payload editors, diagrams, images including reference-style block images, tables including ragged grids, YAML front matter, lists and task lists including empty list items and clickable Visual Edit checkboxes, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, decoded HTML entities, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (multiline or otherwise unprovable images, definition lists, residual unsupported gaps)
 - **AND** it explains that canonical Markdown remains the single persisted representation and that no construct is edited through a parallel rendered tree
 
 #### Scenario: A new visual block behavior is proposed
@@ -1223,12 +1223,12 @@ When Visual Edit lays out a prose row as mixed fragments (because the row contai
 - **AND** navigation icons and inline atoms stay on that same flow
 
 ### Requirement: WYSIWYG coverage roadmap
-The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. After this change the remaining primary gap SHALL be indented code blocks. The roadmap SHALL also track secondary gaps including unclosed or malformed fenced code, multiline or otherwise unprovable images, GFM definition lists, and residual unsupported gap bytes. YAML front matter, reference-style block images, ragged tables, and math Pending/Error states SHALL NOT remain on the roadmap. Task-list checkbox click interaction SHALL NOT remain on the roadmap once Visual Edit checkboxes are clickable.
+The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. After this change the remaining primary gap SHALL be multiline or otherwise unprovable images. The roadmap SHALL also track secondary gaps including GFM definition lists and residual unsupported gap bytes. YAML front matter, reference-style block images, ragged tables, math Pending/Error states, indented code blocks, and unclosed or malformed fenced code SHALL NOT remain on the roadmap. Task-list checkbox click interaction SHALL NOT remain on the roadmap once Visual Edit checkboxes are clickable.
 
 #### Scenario: Primary gaps are tracked with priority and effort
 - **WHEN** a contributor reads the WYSIWYG coverage roadmap
-- **THEN** the current primary gap (indented code blocks) is listed with priority, effort, target class, and implementation seam
-- **AND** YAML front matter, reference-style block images, ragged tables, and math render-failure states are absent from the open-gap list
+- **THEN** the current primary gap (multiline or otherwise unprovable images) is listed with priority, effort, target class, and implementation seam
+- **AND** YAML front matter, reference-style block images, ragged tables, math render-failure states, indented code blocks, and unclosed or malformed fenced code are absent from the open-gap list
 
 #### Scenario: Closing a gap updates the roadmap
 - **WHEN** a future change implements WYSIWYG rendering for a construct that the roadmap tracks as a gap
@@ -1236,11 +1236,11 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 - **AND** the change's proposal cites this roadmap requirement as its motivation
 
 #### Scenario: Closed gaps do not regress
-- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example YAML front matter, reference-style block images, empty ATX headings and empty list items, decoded HTML entities in the proven set, angle-bracket autolinks, ragged tables, math Pending/Error payload editors, escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, GFM alerts, or Visual Edit task-list checkbox click)
+- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example indented code blocks, unclosed or malformed fenced code, YAML front matter, reference-style block images, empty ATX headings and empty list items, decoded HTML entities in the proven set, angle-bracket autolinks, ragged tables, math Pending/Error payload editors, escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, GFM alerts, or Visual Edit task-list checkbox click)
 - **THEN** the coverage matrix classifies the construct in its implemented class and the construct does not reappear on the roadmap
 
 #### Scenario: Secondary gaps are visible but lower priority
-- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example unclosed fenced code or GFM definition lists)
+- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example GFM definition lists)
 - **THEN** the roadmap lists the secondary gap with its effort and implementation seam
 - **AND** the contributor can open a change that closes it without re-litigating whether it is a gap
 
@@ -2350,3 +2350,29 @@ Split Preview, Read mode, and Visual Edit SHALL present a GFM alert (a blockquot
 - **THEN** its title row shows the kind icon next to the label
 - **AND** the title row and every body row of that quote group use the kind's accent border and background tint
 - **AND** focusing the title row still reveals the authored marker line for editing, and the alert does not fold
+
+### Requirement: Visual Edit SHALL edit indented and unclosed code blocks as code
+Visual Edit SHALL present an indented code block as a rendered code block with a payload editor, the same as a fenced code block, instead of a raw-source island. Each body line's code-block indentation (four spaces or one tab) SHALL remain in the canonical source and SHALL NOT be displayed. Pressing Enter in, or pasting multi-line text into, an indented code payload SHALL prefix each new line with the block's indentation unit (a tab when the block already indents with tabs, otherwise four spaces), so that the new lines remain in the same code block. Indented code SHALL NOT offer an editable language label, and transforming an indented code block into another block type SHALL use its body without the indentation. A fenced code block that has no valid closing fence before its block ends (an unclosed or malformed fence) SHALL keep its payload editor and language label: the payload SHALL extend to the end of the block, and typing a closing fence SHALL be ordinary payload editing. Each edit SHALL be one source mutation through the existing history and dirty-state path.
+
+#### Scenario: Indented code renders with hidden indentation
+- **WHEN** a document contains a paragraph followed by an indented code block whose lines are indented four spaces, and Visual Edit is active
+- **THEN** the block renders as a highlighted code block whose text shows the code lines without their leading four spaces
+- **AND** the canonical source still contains the indentation
+
+#### Scenario: Enter keeps new lines in the indented code block
+- **WHEN** the caret is at the end of an indented code line and the user presses Enter and types text
+- **THEN** the new source line starts with the block's indentation followed by the typed text
+- **AND** the document still contains a single code block containing the new line
+
+#### Scenario: Pasting multiple lines into indented code
+- **WHEN** the user pastes text containing line breaks into an indented code payload
+- **THEN** every pasted line after the first starts with the block's indentation in the source
+
+#### Scenario: Unclosed fence keeps a payload editor
+- **WHEN** a document ends with a fenced code block that has an opening fence such as ```` ```rust ```` and no closing fence
+- **THEN** Visual Edit renders it as a code block with the `rust` language label and an editable payload that runs to the end of the block
+- **AND** it does not render as a raw-source island
+
+#### Scenario: Malformed closing line stays payload
+- **WHEN** a fenced code block's would-be closing line carries extra text after the fence (for example ```` ``` not-a-close ````)
+- **THEN** that line is part of the editable payload, matching CommonMark, and the block keeps its payload editor
