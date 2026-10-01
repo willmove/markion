@@ -940,7 +940,7 @@ The repository SHALL maintain a current Visual Edit WYSIWYG coverage matrix that
 
 #### Scenario: Contributor evaluates current WYSIWYG coverage
 - **WHEN** a contributor reads the Visual Edit WYSIWYG coverage matrix
-- **THEN** it distinguishes rendered WYSIWYG constructs (prose, headings including empty ATX headings, code including indented code blocks and unclosed or malformed fences, math including Pending/Error payload editors, diagrams, images including reference-style block images, tables including ragged grids, YAML front matter, lists and task lists including empty list items and clickable Visual Edit checkboxes, footnote definitions and references, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, decoded HTML entities, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (multiline or otherwise unprovable images, definition lists, residual unsupported gaps)
+- **THEN** it distinguishes rendered WYSIWYG constructs (prose, headings including empty ATX headings, code including indented code blocks and unclosed or malformed fences, math including Pending/Error payload editors, diagrams, images including reference-style block images, tables including ragged grids, YAML front matter, lists and task lists including empty list items and clickable Visual Edit checkboxes, footnote definitions and references, definition lists, blockquotes, alerts, rules, HTML blocks), progressive-reveal WYSIWYG constructs (inline formatting, links, inline math, escaped punctuation, decoded HTML entities, supported inline HTML, structural prefixes, heading attributes), and open WYSIWYG gaps (multiline or otherwise unprovable images, residual unsupported gaps)
 - **AND** it explains that canonical Markdown remains the single persisted representation and that no construct is edited through a parallel rendered tree
 
 #### Scenario: A new visual block behavior is proposed
@@ -1223,7 +1223,7 @@ When Visual Edit lays out a prose row as mixed fragments (because the row contai
 - **AND** navigation icons and inline atoms stay on that same flow
 
 ### Requirement: WYSIWYG coverage roadmap
-The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. After this change the remaining primary gap SHALL be multiline or otherwise unprovable images. The roadmap SHALL also track secondary gaps including GFM definition lists and residual unsupported gap bytes. YAML front matter, reference-style block images, ragged tables, math Pending/Error states, indented code blocks, and unclosed or malformed fenced code SHALL NOT remain on the roadmap. Task-list checkbox click interaction SHALL NOT remain on the roadmap once Visual Edit checkboxes are clickable.
+The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matrix, a prioritized roadmap of every Markdown construct that is currently classified as a WYSIWYG coverage gap. The roadmap SHALL name, for each gap, the construct, its current rendering (transitional source view), its target WYSIWYG class (rendered or progressive-reveal), its priority, its rough implementation effort, and the implementation seam in the existing code. The roadmap SHALL be closed incrementally by future changes, each of which SHALL move one or more constructs out of the gap class and update this roadmap. After this change the remaining primary gap SHALL be multiline or otherwise unprovable images. The roadmap SHALL also track residual unsupported gap bytes as a secondary gap. YAML front matter, reference-style block images, ragged tables, math Pending/Error states, indented code blocks, unclosed or malformed fenced code, and definition lists SHALL NOT remain on the roadmap. Task-list checkbox click interaction SHALL NOT remain on the roadmap once Visual Edit checkboxes are clickable.
 
 #### Scenario: Primary gaps are tracked with priority and effort
 - **WHEN** a contributor reads the WYSIWYG coverage roadmap
@@ -1236,11 +1236,11 @@ The repository SHALL maintain, as part of the Visual Edit WYSIWYG coverage matri
 - **AND** the change's proposal cites this roadmap requirement as its motivation
 
 #### Scenario: Closed gaps do not regress
-- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example indented code blocks, unclosed or malformed fenced code, YAML front matter, reference-style block images, empty ATX headings and empty list items, decoded HTML entities in the proven set, angle-bracket autolinks, ragged tables, math Pending/Error payload editors, escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, GFM alerts, or Visual Edit task-list checkbox click)
+- **WHEN** a construct previously tracked as a gap has been implemented as rendered or progressive-reveal WYSIWYG (for example definition lists, indented code blocks, unclosed or malformed fenced code, YAML front matter, reference-style block images, empty ATX headings and empty list items, decoded HTML entities in the proven set, angle-bracket autolinks, ragged tables, math Pending/Error payload editors, escaped punctuation, the supported inline-HTML subset, standalone HTML blocks, reference-style links, inline-dollar math, footnote and link-reference definitions, heading attributes, GFM alerts, or Visual Edit task-list checkbox click)
 - **THEN** the coverage matrix classifies the construct in its implemented class and the construct does not reappear on the roadmap
 
 #### Scenario: Secondary gaps are visible but lower priority
-- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example GFM definition lists)
+- **WHEN** a contributor evaluates whether to pick up a secondary gap (for example residual unsupported gap bytes)
 - **THEN** the roadmap lists the secondary gap with its effort and implementation seam
 - **AND** the contributor can open a change that closes it without re-litigating whether it is a gap
 
@@ -2376,3 +2376,29 @@ Visual Edit SHALL present an indented code block as a rendered code block with a
 #### Scenario: Malformed closing line stays payload
 - **WHEN** a fenced code block's would-be closing line carries extra text after the fence (for example ```` ``` not-a-close ````)
 - **THEN** that line is part of the editable payload, matching CommonMark, and the block keeps its payload editor
+
+### Requirement: Definition lists SHALL render in preview, Read, and Visual Edit
+The Markdown parser SHALL recognize definition lists: a term line followed by one or more definitions, each opened by a `:` marker at the start of a line. Split Preview and Read mode SHALL render each term in bold and each definition indented below it. Inline formatting inside terms and definitions SHALL render as in paragraphs. A definition that spans several paragraphs SHALL render as one definition with a line break between its paragraphs. A non-paragraph block nested in a definition (for example a list or code block) SHALL end that definition's own text and render as an ordinary block after it. Visual Edit SHALL render terms and definitions the same way, with the `:` marker hidden as a block prefix that is revealed when the caret enters the definition. Terms and definitions SHALL edit as ordinary source-backed inline text with exact caret mapping and one source mutation per edit. Definition lists inside a blockquote SHALL render inside the quote. Every source byte of a definition list SHALL have exactly one visual owner.
+
+#### Scenario: Term and definition render in preview
+- **WHEN** a document contains `Apple` followed by `: Red fruit` and is shown in Split Preview or Read mode
+- **THEN** "Apple" renders in bold and "Red fruit" renders indented below it
+- **AND** the `:` marker is not shown
+
+#### Scenario: Several definitions and terms
+- **WHEN** a term has two `:` definitions and is followed by a second term with its own definition
+- **THEN** each term renders once and each definition renders as its own indented row below its term
+
+#### Scenario: Loose multi-paragraph definition
+- **WHEN** a definition is followed by an indented continuation paragraph
+- **THEN** both paragraphs render inside the same definition, separated by a line break
+
+#### Scenario: Visual Edit hides and reveals the marker
+- **WHEN** a definition list is shown in Visual Edit and the caret is outside the definition
+- **THEN** the definition renders indented without its `:` marker
+- **AND** moving the caret into the definition reveals the authored marker for editing
+- **AND** typing inside the definition edits exactly that source text
+
+#### Scenario: Nested block in a definition
+- **WHEN** a definition contains a nested list
+- **THEN** the definition row owns only the bytes before the list, and the list renders as an ordinary list after it
