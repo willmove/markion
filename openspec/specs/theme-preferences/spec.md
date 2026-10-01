@@ -18,10 +18,10 @@ The system SHALL provide a built-in theme catalog of at least fourteen themes re
 - **THEN** the list includes GitHub Light, GitHub Dark, Solarized Light, Solarized Dark, One Light, One Dark, Tokyo Night, and Tokyo Night Light, each with a unique name
 
 ### Requirement: The Preferences panel SHALL let the user choose a theme by swatch
-The system SHALL render a Preferences panel containing a swatch grid where each theme (built-in plus any custom `.theme` files) is a card showing a preview of representative palette colors, the theme name, and a check mark on the active theme. Activating a card SHALL apply that theme immediately and persist the choice.
+The system SHALL render an Appearance tab in the Preferences panel containing a swatch grid where each theme (built-in plus any custom `.theme` files) is a card showing a preview of representative palette colors, the theme name, and a check mark on the active theme. Activating a card SHALL apply that theme immediately and persist the choice. The General tab SHALL NOT contain the swatch grid.
 
 #### Scenario: Theme cards show a color preview and the active marker
-- **WHEN** the Preferences panel is open
+- **WHEN** the Preferences panel Appearance tab is open
 - **THEN** each theme card displays a multi-segment color swatch drawn from the theme palette and shows a check mark only on the currently active theme
 
 #### Scenario: Selecting a theme applies and persists it
@@ -31,6 +31,10 @@ The system SHALL render a Preferences panel containing a swatch grid where each 
 #### Scenario: Custom themes appear alongside built-ins
 - **WHEN** custom `.theme` files exist in the themes directory
 - **THEN** they appear in the swatch grid together with the built-in themes, with built-ins winning on name collisions
+
+#### Scenario: General tab does not host the swatch grid
+- **WHEN** the Preferences panel General tab is open
+- **THEN** the theme swatch grid is not rendered in that tab
 
 ### Requirement: Theme and language choices SHALL persist in a single preferences file
 The system SHALL persist the selected theme and the selected interface language as lines in the same preferences file (`theme=<name>`, `language=<code>`). Reading the preferences file SHALL tolerate the absence of either line by applying the documented default, and SHALL tolerate unknown values by falling back to the default.
@@ -140,13 +144,6 @@ The Preferences panel SHALL render configurable values with button-like or segme
 - **WHEN** the active language or theme changes
 - **THEN** Preferences panel control labels and colors update on the next render
 
-### Requirement: Preferences panel SHALL show Language before Theme
-The Preferences panel SHALL place the Language section before the Theme section so users can choose the UI language before reviewing localized theme and preference labels.
-
-#### Scenario: Language section precedes Theme section
-- **WHEN** the Preferences panel is open
-- **THEN** the Language section appears above the Theme section
-
 ### Requirement: Preferences panel SHALL expose Heading menu depth
 The Preferences panel SHALL include a Heading menu depth control in its non-theme display settings with two choices: **H1–H5** (default) and **H1–H6**. Activating a choice SHALL apply the setting immediately, update Format menu contents, reinstall native menus, and persist the preference.
 
@@ -182,10 +179,10 @@ The editor SHALL persist Heading menu depth in `config.toml` as `heading_menu_ma
 - **THEN** Heading menu depth returns to H1–H5
 
 ### Requirement: Preferences panel SHALL expose document typography controls
-The Preferences panel SHALL expose localized numeric controls for Source font size, Reading font size, and Paragraph spacing. Each control SHALL display its current logical-pixel value, provide decrement and increment actions in 1px steps, disable actions at the supported bound, use active-theme colors, apply a changed value immediately, and persist it through the existing preferences save path.
+The Preferences panel Appearance tab SHALL expose localized numeric controls for Source font size, Reading font size, and Paragraph spacing. Each control SHALL display its current logical-pixel value, provide decrement and increment actions in 1px steps, disable actions at the supported bound, use active-theme colors, apply a changed value immediately, and persist it through the existing preferences save path. The General tab SHALL NOT host these numeric typography controls.
 
 #### Scenario: Typography controls show current values
-- **WHEN** the Preferences panel is open
+- **WHEN** the Preferences panel Appearance tab is open
 - **THEN** Source font size, Reading font size, and Paragraph spacing each render with a localized label, current pixel value, and minus/plus affordances
 - **AND** the controls follow the active language and theme
 
@@ -198,6 +195,10 @@ The Preferences panel SHALL expose localized numeric controls for Source font si
 - **WHEN** a typography value is at its minimum or maximum
 - **THEN** the control disables the action that would move beyond that bound
 - **AND** activating the disabled action does not rewrite preferences or change layout
+
+#### Scenario: General tab does not host typography sizes
+- **WHEN** the Preferences panel General tab is open
+- **THEN** Source font size, Reading font size, and Paragraph spacing controls are not rendered in that tab
 
 ### Requirement: Document typography preferences SHALL persist safely
 
@@ -280,10 +281,10 @@ The editor SHALL persist the Show-hidden-files preference in `config.toml` as a 
 
 ### Requirement: Preferences panel SHALL expose document font family controls
 
-The Preferences panel typography section SHALL include one control per font slot (source, rendered, code) with localized labels consistent with the font-size controls. Each control SHALL present a follow-theme state and an explicit-family state: in the follow-theme state it SHALL indicate that the theme (or default) font applies; activating the control SHALL present a selection list populated from the fonts installed on the machine, each entry rendered in its own family as live preview, plus a follow-theme entry that clears the stored preference. Selecting an entry SHALL apply it immediately to that document plane and persist it. The control SHALL show an advisory warning when the currently stored family (for example hand-edited into `config.toml`) is not among the installed fonts.
+The Preferences panel Appearance tab typography section SHALL include one control per font slot (source, rendered, code) with localized labels consistent with the font-size controls. Each control SHALL present a follow-theme state and an explicit-family state: in the follow-theme state it SHALL indicate that the theme (or default) font applies; activating the control SHALL present a selection list populated from the fonts installed on the machine, each entry rendered in its own family as live preview, plus a follow-theme entry that clears the stored preference. Selecting an entry SHALL apply it immediately to that document plane and persist it. The control SHALL show an advisory warning when the currently stored family (for example hand-edited into `config.toml`) is not among the installed fonts. The General tab SHALL NOT host these font-family controls.
 
 #### Scenario: Controls reflect the current slot state
-- **WHEN** the Preferences panel is open
+- **WHEN** the Preferences panel Appearance tab is open
 - **THEN** each of the three font controls shows either the follow-theme state (with the effective family named) or the user's explicit family for that slot
 
 #### Scenario: The selection list enumerates installed fonts with live previews
@@ -310,8 +311,12 @@ The Preferences panel typography section SHALL include one control per font slot
 - **WHEN** the active language or theme changes
 - **THEN** font control labels, states, and colors update on the next render
 
+#### Scenario: General tab does not host font-family slots
+- **WHEN** the Preferences panel General tab is open
+- **THEN** the source, rendered, and code font-family controls are not rendered in that tab
+
 ### Requirement: Preferences panel SHALL expose an Export tab
-The Preferences panel SHALL provide an Export tab alongside General and Shortcuts. The tab SHALL expose the PDF/DOCX backend choice (built-in writer, the default, vs. pandoc) as mutually exclusive controls that apply immediately and persist via the `[export] backend` config value. While the pandoc backend is selected, the tab SHALL additionally expose the pandoc binary path, the DOCX reference template (each with a native file picker and a reset action restoring the default), and the pandoc PDF engine. The tab SHALL show a pandoc-availability status probed in the background so rendering never spawns processes. The tab SHALL also carry the format option sections — Word page size, Word table of contents, Word image policy, PDF page size, PDF margin, PDF table of contents, and the PDF page-number footer — each mapped onto the corresponding persisted export option.
+The Preferences panel SHALL provide an Export tab alongside General, Appearance, and Shortcuts. The tab SHALL expose the PDF/DOCX backend choice (built-in writer, the default, vs. pandoc) as mutually exclusive controls that apply immediately and persist via the `[export] backend` config value. While the pandoc backend is selected, the tab SHALL additionally expose the pandoc binary path, the DOCX reference template (each with a native file picker and a reset action restoring the default), and the pandoc PDF engine. The tab SHALL show a pandoc-availability status probed in the background so rendering never spawns processes. The tab SHALL also carry the format option sections — Word page size, Word table of contents, Word image policy, PDF page size, PDF margin, PDF table of contents, and the PDF page-number footer — each mapped onto the corresponding persisted export option.
 
 #### Scenario: Backend choice applies and persists
 - **WHEN** the user selects the built-in or pandoc backend in the Export tab
@@ -393,3 +398,41 @@ Recent-workspace eviction and general Preferences reset SHALL NOT delete reposit
 #### Scenario: Policy cannot be parsed
 - **WHEN** the repository policy is corrupted or has an unsupported version
 - **THEN** one-click writes are disabled with repair feedback and no permissive replacement policy is silently generated
+
+### Requirement: Preferences panel SHALL expose silent save and auto-save delay
+The Preferences panel General tab SHALL include an Auto-save section with (1) a boolean control for silent save-to-file mapped to `[auto_save] silent_save` (default on), and (2) a numeric control for the inactivity interval mapped to `[auto_save] delay_secs` (default 5 seconds, minimum 1). Activating either control SHALL apply immediately, persist through the existing preferences save path, and use localized labels. The panel SHALL NOT expose `[auto_save] enabled`.
+
+#### Scenario: Silent-save toggle appears and persists
+- **WHEN** the Preferences panel General tab is open
+- **THEN** a silent save-to-file control is visible and reflects the current `silent_save` value
+- **AND** toggling it updates subsequent autosave destination behavior and writes `silent_save` to `config.toml`
+
+#### Scenario: Delay control appears and persists
+- **WHEN** the user adjusts the auto-save delay control within the supported range
+- **THEN** the new `delay_secs` value is applied to subsequent inactivity timers and persisted
+- **AND** values below 1 are not stored (control disables decrement at the minimum or clamps on commit)
+
+#### Scenario: Master enabled switch stays out of the panel
+- **WHEN** the Preferences panel General tab is open
+- **THEN** no control is offered for `[auto_save] enabled`
+
+### Requirement: Preferences panel SHALL expose an Appearance tab
+The Preferences panel SHALL provide an Appearance tab at the same tab-strip level as General, Shortcuts, and Export. The tab order SHALL be General, Appearance, Shortcuts, Export. Opening the Preferences panel from File → Preferences SHALL land on General. The Appearance tab SHALL host the theme swatch grid and the document typography controls (Source font size, Reading font size, Paragraph spacing, and the source/rendered/code font-family slots). The Appearance tab SHALL NOT host language, display/workspace toggles, auto-save, shortcut, or export controls.
+
+#### Scenario: Appearance tab sits beside the other Preferences tabs
+- **WHEN** the user opens the Preferences panel
+- **THEN** the tab strip offers General, Appearance, Shortcuts, and Export as sibling tabs in that order
+
+#### Scenario: Opening Preferences lands on General
+- **WHEN** the user opens the Preferences panel from File → Preferences
+- **THEN** the General tab is active
+
+#### Scenario: Appearance tab contains theme and typography
+- **WHEN** the Appearance tab is active
+- **THEN** the tab body shows the theme swatch grid and the typography controls
+- **AND** language, display/workspace, auto-save, shortcut, and export controls are not rendered in that body
+
+#### Scenario: General tab does not host appearance controls
+- **WHEN** the Preferences panel General tab is open
+- **THEN** the theme swatch grid is not rendered in that tab
+- **AND** Source font size, Reading font size, Paragraph spacing, and the three font-family slots are not rendered in that tab

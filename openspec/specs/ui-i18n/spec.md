@@ -114,7 +114,7 @@ The system SHALL route all user-visible UI strings for the Source/Split Preview 
 - **THEN** the status bar message naming the active mode is produced through the active language translation
 
 #### Scenario: Shortcut reference lists direct mode shortcuts
-- **WHEN** the user opens the keyboard shortcut reference from the Help menu
+- **WHEN** the user opens the Shortcuts tab of the Preferences panel
 - **THEN** the reference lists one localized Source/Split Preview action with `Ctrl+/` on Windows and Linux or `Cmd+/` on macOS
 - **AND** it does not list a separate Split Preview shortcut
 
@@ -300,3 +300,32 @@ Wording SHALL distinguish saved on this computer, committed locally, waiting to 
 #### Scenario: Translation is missing
 - **WHEN** a Git UI message is introduced without a required language entry
 - **THEN** the existing localization completeness mechanism detects the missing translation
+
+### Requirement: Shortcut customization UI chrome SHALL be localized
+The system SHALL route every user-visible string of the Preferences panel Shortcuts tab through the i18n layer, including the tab labels, the capture prompt, the conflict and invalid-keystroke feedback, and the per-action reset affordance, for every supported interface language.
+
+#### Scenario: Shortcuts tab labels reflect the active language
+- **WHEN** the active interface language changes
+- **THEN** the Shortcuts tab label, capture prompt, and reset control render in the active language
+
+#### Scenario: Conflict feedback reflects the active language
+- **WHEN** a shortcut assignment is rejected for conflict or invalid input
+- **THEN** the inline feedback message is produced through the active language translation
+
+### Requirement: Silent-save preference strings SHALL be localized
+Every user-visible string for the Preferences Auto-save section (section title if any, silent save-to-file control label, auto-save delay label, and any on/off or validation status feedback for those controls) SHALL be routed through the i18n layer and provided for every supported UI language. Adding the new message keys SHALL require translations in every supported language or the build SHALL fail. Recovery-only autosave status for named documents SHALL continue to use localized recovery-saved messaging rather than destination auto-save messaging.
+
+#### Scenario: Preferences panel labels reflect active language
+- **WHEN** the interface language changes while the Preferences Auto-save controls are visible
+- **THEN** the silent-save and delay labels render in the active language
+
+#### Scenario: Catalog completeness is enforced
+- **WHEN** a new Auto-save preference message key is added
+- **THEN** every supported language provides a translation or the build fails
+
+### Requirement: Appearance preferences UI chrome SHALL be localized
+Every user-visible string of the Preferences panel Appearance tab — the tab label and any section heading inside the tab — SHALL be routed through the i18n layer's `t` / `tf` functions and localized in every supported UI language.
+
+#### Scenario: Appearance tab labels reflect the active language
+- **WHEN** the active interface language is any of the supported languages and the user opens the Appearance tab
+- **THEN** the tab label and appearance section chrome render in that language with no hard-coded English literals

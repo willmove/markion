@@ -6,3 +6,9 @@ Every user-visible string of the Preferences panel Appearance tab — the tab la
 #### Scenario: Appearance tab labels reflect the active language
 - **WHEN** the active interface language is any of the supported languages and the user opens the Appearance tab
 - **THEN** the tab label and appearance section chrome render in that language with no hard-coded English literals
+
+## REMOVED Requirements
+
+### Requirement: Theme preferences UI chrome SHALL be localized
+**Reason**: The Theme tab is renamed to Appearance; "Appearance preferences UI chrome SHALL be localized" covers the tab label and its section headings.
+**Migration**: Localize the Appearance tab label and headings through `t` / `tf` as that requirement describes.

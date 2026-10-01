@@ -197,19 +197,31 @@ The editor SHALL offer Copy Path and Copy Relative Path on the file-tree context
 - **THEN** the context menu does not offer Copy Path or Copy Relative Path
 
 ### Requirement: Auto-save and recovery
-The editor SHALL auto-save after a period of inactivity, write saved documents to their file path, and write unsaved documents to a recovery copy that can be restored on the next launch. The inactivity interval SHALL come from the `[auto_save] delay_secs` config value (default 5 seconds) and auto-save SHALL be disableable via `[auto_save] enabled = false`; both are configurable only through the config file, not the Preferences panel.
+The editor SHALL, after a period of inactivity while `[auto_save] enabled` is true, write a recovery snapshot for every dirty document tab (named or untitled). The inactivity interval SHALL come from `[auto_save] delay_secs` (default 5 seconds, minimum 1). When the tab has a filesystem path and `[auto_save] silent_save` is true (default), the editor SHALL then write the document to that path, retire the corresponding recovery snapshot on success, and clear dirty when no edits raced the write. When `silent_save` is false, the editor SHALL NOT write the original path on inactivity; the recovery snapshot SHALL remain, the tab SHALL stay dirty, and status feedback SHALL report a recovery save rather than a destination auto-save. Auto-save SHALL be fully disableable via `[auto_save] enabled = false` (no timer, no recovery, no silent write-back); that master switch remains configurable only through the config file. The Preferences panel SHALL expose controls for `silent_save` and `delay_secs` only. Manual Save and Save As SHALL remain unaffected by these preferences.
 
 #### Scenario: Saved document auto-saves after the configured interval
-- **WHEN** a saved document is modified and the user is inactive past the configured auto-save interval
-- **THEN** the document is written to its file path and the status bar reports the auto-save
+- **WHEN** a named dirty document is inactive past the configured interval and `enabled` and `silent_save` are both true
+- **THEN** the document is written to its file path, the recovery snapshot for that save is retired on success, and the status bar reports the destination auto-save
 
 #### Scenario: Unsaved document writes a recovery copy
-- **WHEN** an unsaved document is modified and the user is inactive past the configured auto-save interval
+- **WHEN** an untitled dirty document is inactive past the configured interval and `enabled` is true
 - **THEN** a recovery copy is written and offered for restoration on the next launch
+- **AND** the tab remains dirty
+
+#### Scenario: Silent save disabled keeps recovery only
+- **WHEN** a named dirty document is inactive past the configured interval, `enabled` is true, and `silent_save` is false
+- **THEN** a recovery snapshot is written or replaced
+- **AND** the original file path is not modified
+- **AND** the tab remains dirty
+- **AND** the status bar reports a recovery save, not a destination auto-save
 
 #### Scenario: Auto-save disabled by config
 - **WHEN** `[auto_save] enabled = false` is set in `config.toml`
 - **THEN** no auto-save or recovery copy is written on inactivity; manual save is unaffected
+
+#### Scenario: Delay and silent_save are configurable from Preferences
+- **WHEN** the user changes the silent-save toggle or the auto-save delay in Preferences → General
+- **THEN** the new values persist in `[auto_save]` and apply to subsequent inactivity timers without requiring a restart
 
 ### Requirement: Open documents SHALL observe external file changes safely
 Markion SHALL periodically compare every named open tab with its last known on-disk identity and SHALL also compare synchronously before save. A clean tab whose file changed SHALL reload the new source in the same tab with user-facing status. A dirty tab, or a tab whose file disappeared, SHALL preserve its in-memory source and enter an explicit conflict state until the user chooses Reload, Overwrite, or Save a Copy.
@@ -531,3 +543,28 @@ While a workspace root is open, the editor SHALL detect create, delete, and rena
 #### Scenario: Automatic refresh leaves open documents alone
 - **WHEN** the file tree refreshes because of a watched or timed update
 - **THEN** open document text, dirty state, undo history, and derived Markdown caches stay unchanged
+
+### Requirement: Overflowing file tree exposes a draggable scrollbar
+The Files sidebar list SHALL provide a visible, right-side vertical scrollbar whenever the currently rendered file-tree rows exceed the visible list height. Dragging that scrollbar with the left mouse button SHALL change the visible rows and SHALL update the thumb position to match the list's scroll offset. Wheel and trackpad scrolling SHALL continue to work. The thumb SHALL hide when the rendered rows fit. Workspace scanning, hidden-entry filtering, interactive expansion, the bounded number of rows built per frame, and horizontal overflow for long names SHALL remain unchanged.
+
+#### Scenario: Overflowing file tree exposes a scrollbar
+- **WHEN** the Files sidebar is visible
+- **AND** the rendered file-tree rows do not fit in the visible list height
+- **THEN** a right-side vertical scrollbar thumb is shown
+- **AND** dragging the thumb with the left mouse button scrolls the file-tree rows
+
+#### Scenario: Fitting file tree hides the scrollbar
+- **WHEN** the Files sidebar is visible
+- **AND** the rendered file-tree rows fit in the visible list height
+- **THEN** no vertical scrollbar thumb is shown for the file tree
+
+#### Scenario: File tree wheel scrolling is preserved
+- **WHEN** the Files sidebar is visible
+- **AND** the user scrolls the file-tree list with the mouse wheel or trackpad
+- **THEN** the list scrolls as it did before the draggable scrollbar was added
+- **AND** the scrollbar thumb, when shown, moves to reflect the new scroll offset
+
+#### Scenario: File tree bounded rendering is unchanged
+- **WHEN** a workspace scan yields more matching entries than the per-frame row cap
+- **THEN** the file tree still renders only that bounded number of rows plus the existing overflow hint
+- **AND** the scrollbar extent tracks those rendered rows rather than forcing a full uncapped tree

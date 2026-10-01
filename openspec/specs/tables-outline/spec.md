@@ -11,7 +11,7 @@ The editor SHALL provide a toggleable outline panel that lists the document's he
 
 The outline SHALL present the heading hierarchy as an indented, collapsible tree. A heading that owns one or more following headings at deeper levels before the next heading at its own or a shallower level SHALL expose a disclosure control. A newly opened document outline SHALL start fully expanded. Activating a disclosure control SHALL collapse or expand that heading's descendant rows without invoking heading navigation; re-expanding an ancestor SHALL preserve any independently collapsed nested sections. Folding state SHALL remain isolated per open document and session-only.
 
-The outline SHALL render compact rows with no extra inter-row margin and no more than 2px total vertical padding for a single-line row. When the visible heading list exceeds the panel height, the outline SHALL scroll vertically so every currently visible heading remains reachable by mouse-wheel or trackpad input. Folding SHALL affect presentation only and MUST NOT mutate Markdown, document version, dirty state, selection, or undo/redo history, and MUST NOT require recomputing the document's derived outline for an unchanged document version.
+The outline SHALL render compact rows with no extra inter-row margin and no more than 2px total vertical padding for a single-line row. When the visible heading list exceeds the panel height, the outline SHALL scroll vertically so every currently visible heading remains reachable by mouse-wheel or trackpad input and by dragging a visible right-side vertical scrollbar. The scrollbar thumb SHALL hide when the visible heading list fits or the active tab is an image. Folding SHALL affect presentation only and MUST NOT mutate Markdown, document version, dirty state, selection, or undo/redo history, and MUST NOT require recomputing the document's derived outline for an unchanged document version.
 
 #### Scenario: Outline lists headings and tracks the document
 - **WHEN** the outline panel is visible
@@ -73,7 +73,13 @@ The outline SHALL render compact rows with no extra inter-row margin and no more
 #### Scenario: Overflowing outline is vertically scrollable
 - **WHEN** the expanded portions of the outline contain more headings than fit in the visible sidebar height
 - **THEN** mouse-wheel or trackpad input over the outline scrolls its visible heading rows vertically
+- **AND** a right-side vertical scrollbar thumb is shown and can be dragged with the left mouse button to scroll the same rows
 - **AND** every currently visible heading can be brought into view and activated
+
+#### Scenario: Fitting outline hides the scrollbar
+- **WHEN** the outline panel is visible
+- **AND** the expanded heading rows fit in the visible sidebar height, or the active tab is an image
+- **THEN** no vertical scrollbar thumb is shown for the outline
 
 ### Requirement: Outline heading anchors match in-document hash links
 Each outline heading SHALL expose a stable `anchor` string that in-document `#fragment` links resolve against. The id SHALL be the authored heading attribute `{#id}` when pulldown-cmark reports one; otherwise a Unicode-preserving slug of the visible title. Empty titles SHALL use `section`. Duplicate ids in document order SHALL uniquify with a numeric suffix (`hello`, `hello-1`). Changing folding, hovering, or clicking the outline SHALL still not mutate Markdown.

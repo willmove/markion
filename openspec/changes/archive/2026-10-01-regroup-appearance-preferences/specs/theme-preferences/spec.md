@@ -125,6 +125,6 @@ The Preferences panel SHALL provide an Export tab alongside General, Appearance,
 
 ## REMOVED Requirements
 
-### Requirement: Preferences panel SHALL show Language before Theme
-**Reason**: Language and appearance (theme plus typography) now live on sibling tabs (General vs Appearance), so intra-tab section order no longer applies.
-**Migration**: Language remains the first section of the General tab; theme and typography are reached by choosing the Appearance tab.
+### Requirement: Preferences panel SHALL expose a Theme tab
+**Reason**: The Theme tab added by extract-theme-preferences-tab is renamed to Appearance and now also hosts document typography; "Preferences panel SHALL expose an Appearance tab" replaces it.
+**Migration**: Theme swatches and typography are reached from Preferences → Appearance; tab order is General, Appearance, Shortcuts, Export.

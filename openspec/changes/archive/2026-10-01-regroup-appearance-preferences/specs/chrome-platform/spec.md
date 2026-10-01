@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Dense pane chrome with draggable scrollbars
-The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane, Visual Edit surface, and rendered preview pane when their content exceeds the visible area. The Visual Edit scrollbar SHALL match the Read-mode preview overlay in placement and drag behavior. The Preferences panel SHALL provide the same draggable, right-side vertical scrollbars for each of its scrollable regions — the General tab body, the Shortcuts category sidebar, the Shortcuts action list, and the Export tab body — whenever a region's content exceeds its visible area; wheel and trackpad scrolling SHALL continue to work unchanged. The visible left sidebar SHALL provide the same draggable, right-side vertical scrollbar for the Files tree list and the Outline heading list whenever that list exceeds its visible height; wheel and trackpad scrolling SHALL continue to work unchanged, and dragging a sidebar scrollbar SHALL NOT drive Sync scroll. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
+The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane, Visual Edit surface, and rendered preview pane when their content exceeds the visible area. The Visual Edit scrollbar SHALL match the Read-mode preview overlay in placement and drag behavior. The Preferences panel SHALL provide the same draggable, right-side vertical scrollbars for each of its scrollable regions — the General tab body, the Appearance tab body, the Shortcuts category sidebar, the Shortcuts action list, and the Export tab body — whenever a region's content exceeds its visible area; wheel and trackpad scrolling SHALL continue to work unchanged. The visible left sidebar SHALL provide the same draggable, right-side vertical scrollbar for the Files tree list and the Outline heading list whenever that list exceeds its visible height; wheel and trackpad scrolling SHALL continue to work unchanged, and dragging a sidebar scrollbar SHALL NOT drive Sync scroll. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
 
 #### Scenario: Large source document exposes editor scrollbar
 - **WHEN** the active document has more source lines than fit in the editor pane
@@ -27,7 +27,7 @@ The application chrome SHALL provide visible, right-side vertical scrollbars for
 
 #### Scenario: Overflowing Preferences panel region exposes a scrollbar
 - **WHEN** the Preferences panel is open
-- **AND** a scrollable panel region (General tab body, Shortcuts category sidebar, Shortcuts action list, or Export tab body) contains more content than fits its visible area
+- **AND** a scrollable panel region (General tab body, Appearance tab body, Shortcuts category sidebar, Shortcuts action list, or Export tab body) contains more content than fits its visible area
 - **THEN** that region shows a right-side vertical scrollbar thumb
 - **AND** dragging the thumb with the left mouse button scrolls that region up and down
 - **AND** the thumb position reflects the region's scroll offset
@@ -91,3 +91,4 @@ The application chrome SHALL provide visible, right-side vertical scrollbars for
 #### Scenario: Single-pane modes remain full-width
 - **WHEN** the active view mode is Edit or Read
 - **THEN** the visible editor or preview pane fills the remaining main workspace instead of retaining split-mode width
+

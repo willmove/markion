@@ -26,3 +26,4 @@ The editor SHALL, after a period of inactivity while `[auto_save] enabled` is tr
 #### Scenario: Delay and silent_save are configurable from Preferences
 - **WHEN** the user changes the silent-save toggle or the auto-save delay in Preferences → General
 - **THEN** the new values persist in `[auto_save]` and apply to subsequent inactivity timers without requiring a restart
+

@@ -74,3 +74,4 @@ The outline SHALL render compact rows with no extra inter-row margin and no more
 - **WHEN** the outline panel is visible
 - **AND** the expanded heading rows fit in the visible sidebar height, or the active tab is an image
 - **THEN** no vertical scrollbar thumb is shown for the outline
+

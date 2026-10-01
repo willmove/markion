@@ -214,24 +214,25 @@ The editor SHALL provide a find/replace workflow supporting case-sensitive and r
 - **THEN** query editing, regex and case-sensitive toggles, next/previous navigation, match counts, replace current, and replace all continue to behave as before
 
 ### Requirement: Narrow-scope preferences with persistence and reset
-The editor SHALL provide a Preferences panel and a persisted preferences file covering: theme (and custom theme selection), focus mode, typewriter mode, code-line-numbers, sidebar visibility, sidebar tab, Heading menu depth (H1–H5 default, optional H1–H6), source-editor font size, rendered-document font size, rendered paragraph spacing, and Markdown auto-pair. The preferences file SHALL be TOML (`config.toml` in the Markion config directory) with every field optional and defaulted, and SHALL additionally carry an `[auto_save]` section (`enabled`, `delay_secs`) that is configurable only via the file, not the panel. On startup, if `config.toml` does not exist but a legacy `preferences.conf` (the retired `key=value` format) does, the editor SHALL migrate it to `config.toml` once and thereafter ignore the legacy file. The editor SHALL also offer a preference reset action and a preferences summary in the Help menu. Font family, code-highlight theme, extension-syntax toggles, and image-uploader credentials are **not** configurable.
+The editor SHALL provide a Preferences panel and a persisted preferences file covering: theme (and custom theme selection), focus mode, typewriter mode, code-line-numbers, sidebar visibility, sidebar tab, Heading menu depth (H1–H5 default, optional H1–H6), source-editor font size, rendered-document font size, rendered paragraph spacing, Markdown auto-pair, and menu-action shortcut overrides. The preferences file SHALL be TOML (`config.toml` in the Markion config directory) with every field optional and defaulted, and SHALL additionally carry an `[auto_save]` section with `enabled` (default true), `silent_save` (default true), and `delay_secs` (default 5). The Preferences panel SHALL expose `silent_save` and `delay_secs`; `enabled` SHALL remain configurable only via the config file, not the panel. On startup, if `config.toml` does not exist but a legacy `preferences.conf` (the retired `key=value` format) does, the editor SHALL migrate it to `config.toml` once and thereafter ignore the legacy file. The editor SHALL also offer a preference reset action and a preferences summary in the Help menu. Font family, code-highlight theme, extension-syntax toggles, and image-uploader credentials are **not** configurable through this requirement's historical scope (font-family controls elsewhere do not expand this list).
 
 #### Scenario: Supported preferences persist and restore
-- **WHEN** the user changes a supported preference (theme, focus mode, typewriter mode, code line numbers, sidebar visibility, sidebar tab, Heading menu depth, source-editor font size, rendered-document font size, rendered paragraph spacing, or Markdown auto-pair)
+- **WHEN** the user changes a supported preference (theme, focus mode, typewriter mode, code line numbers, sidebar visibility, sidebar tab, Heading menu depth, source-editor font size, rendered-document font size, rendered paragraph spacing, Markdown auto-pair, a menu-action shortcut override, silent save, or auto-save delay)
 - **THEN** the change is written to `config.toml` and restored on the next launch
 
 #### Scenario: Legacy preferences file is migrated once
 - **WHEN** the editor starts with no `config.toml` but a legacy `preferences.conf` present
 - **THEN** the legacy values are loaded, written out as `config.toml`, and used; subsequent launches read only `config.toml`
+- **AND** missing `[auto_save] silent_save` defaults to true
 
 #### Scenario: Partial or missing config falls back to defaults
-- **WHEN** `config.toml` is missing, or present but omits fields
+- **WHEN** `config.toml` is missing, or present but omits fields (including `silent_save`)
 - **THEN** missing values take their documented defaults and the editor starts normally
 - **AND** a missing `markdown_auto_pair` key defaults to enabled
 
 #### Scenario: Preferences summary and reset
 - **WHEN** the user opens the Help → preferences summary or triggers the reset action
-- **THEN** a summary including supported typography values and Markdown auto-pair is shown, or all preferences including typography and Markdown auto-pair (default on) are reset to their defaults
+- **THEN** a summary including supported typography values, Markdown auto-pair, and auto-save panel settings is shown, or all preferences including typography, Markdown auto-pair (default on), shortcut overrides, and `[auto_save]` defaults (`enabled` true, `silent_save` true, `delay_secs` 5) are reset to their defaults
 
 ### Requirement: Cross-platform desktop application
 The editor SHALL run as a GPUI desktop application and SHALL build and run on Windows (the primary developed platform); the same source targets macOS and Linux via GPUI. On Windows the binary is built as a GUI-subsystem executable.
@@ -316,7 +317,7 @@ The editor SHALL persist the Preview adaptive width preference in the existing p
 - **THEN** Preview adaptive width is disabled
 
 ### Requirement: Dense pane chrome with draggable scrollbars
-The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane, Visual Edit surface, and rendered preview pane when their content exceeds the visible area. The Visual Edit scrollbar SHALL match the Read-mode preview overlay in placement and drag behavior. The Preferences panel SHALL provide the same draggable, right-side vertical scrollbars for each of its scrollable regions — the General tab body, the Shortcuts category sidebar, the Shortcuts action list, and the Export tab body — whenever a region's content exceeds its visible area; wheel and trackpad scrolling SHALL continue to work unchanged. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
+The application chrome SHALL provide visible, right-side vertical scrollbars for the source editor pane, Visual Edit surface, and rendered preview pane when their content exceeds the visible area. The Visual Edit scrollbar SHALL match the Read-mode preview overlay in placement and drag behavior. The Preferences panel SHALL provide the same draggable, right-side vertical scrollbars for each of its scrollable regions — the General tab body, the Appearance tab body, the Shortcuts category sidebar, the Shortcuts action list, and the Export tab body — whenever a region's content exceeds its visible area; wheel and trackpad scrolling SHALL continue to work unchanged. The visible left sidebar SHALL provide the same draggable, right-side vertical scrollbar for the Files tree list and the Outline heading list whenever that list exceeds its visible height; wheel and trackpad scrolling SHALL continue to work unchanged, and dragging a sidebar scrollbar SHALL NOT drive Sync scroll. The editor SHALL keep main pane gaps, outer padding, and visible separator chrome compact so the source and preview content occupy substantially more of the available window area than the prior spacious layout. Resize handles SHALL remain draggable even when their visible separator is compact.
 
 #### Scenario: Large source document exposes editor scrollbar
 - **WHEN** the active document has more source lines than fit in the editor pane
@@ -342,7 +343,7 @@ The application chrome SHALL provide visible, right-side vertical scrollbars for
 
 #### Scenario: Overflowing Preferences panel region exposes a scrollbar
 - **WHEN** the Preferences panel is open
-- **AND** a scrollable panel region (General tab body, Shortcuts category sidebar, Shortcuts action list, or Export tab body) contains more content than fits its visible area
+- **AND** a scrollable panel region (General tab body, Appearance tab body, Shortcuts category sidebar, Shortcuts action list, or Export tab body) contains more content than fits its visible area
 - **THEN** that region shows a right-side vertical scrollbar thumb
 - **AND** dragging the thumb with the left mouse button scrolls that region up and down
 - **AND** the thumb position reflects the region's scroll offset
@@ -357,6 +358,42 @@ The application chrome SHALL provide visible, right-side vertical scrollbars for
 - **AND** the user scrolls a scrollable panel region with the mouse wheel or trackpad
 - **THEN** the region scrolls exactly as before the draggable scrollbar was added
 - **AND** the scrollbar thumb moves to reflect the new scroll offset
+
+#### Scenario: Overflowing Files sidebar exposes a scrollbar
+- **WHEN** the sidebar is visible on the Files tab
+- **AND** the file-tree list contains more rows than fit in the visible list height
+- **THEN** the Files list shows a right-side vertical scrollbar thumb
+- **AND** dragging that thumb with the left mouse button scrolls the file-tree rows up and down
+- **AND** the thumb position reflects the list's scroll offset
+
+#### Scenario: Fitting Files sidebar hides the scrollbar
+- **WHEN** the sidebar is visible on the Files tab
+- **AND** the file-tree list fits in the visible list height
+- **THEN** no vertical scrollbar thumb is shown for the Files list
+
+#### Scenario: Overflowing Outline sidebar exposes a scrollbar
+- **WHEN** the sidebar is visible on the Outline tab for a Markdown document
+- **AND** the visible outline rows exceed the panel height
+- **THEN** the Outline list shows a right-side vertical scrollbar thumb
+- **AND** dragging that thumb with the left mouse button scrolls the heading rows up and down
+- **AND** the thumb position reflects the list's scroll offset
+
+#### Scenario: Fitting Outline sidebar hides the scrollbar
+- **WHEN** the sidebar is visible on the Outline tab
+- **AND** the visible outline rows fit in the panel height, or the active tab is an image
+- **THEN** no vertical scrollbar thumb is shown for the Outline list
+
+#### Scenario: Sidebar wheel scrolling is preserved
+- **WHEN** the sidebar is visible on Files or Outline
+- **AND** the user scrolls that list with the mouse wheel or trackpad
+- **THEN** the list scrolls as it did before the draggable scrollbar was added
+- **AND** the scrollbar thumb, when shown, moves to reflect the new scroll offset
+
+#### Scenario: Sidebar scrollbar does not drive Sync scroll
+- **WHEN** Sync scroll is enabled and the active view mode is Split Preview
+- **AND** the user drags the Files or Outline scrollbar
+- **THEN** the source editor and rendered preview keep their current independent scroll positions
+- **AND** no Sync-scroll driver is recorded from the sidebar drag
 
 #### Scenario: Main pane chrome is compact
 - **WHEN** the editor renders the main content area
@@ -923,3 +960,29 @@ In Visual Edit, focus mode SHALL keep the current caret-owning source-backed blo
 #### Scenario: Boundary and empty-document caret
 - **WHEN** the Visual Edit caret is at a shared row boundary, the document end, or in an empty document
 - **THEN** focus presentation uses the same unique row ownership as caret painting without out-of-range access
+
+### Requirement: Shortcut reference lives in the Preferences panel
+The keyboard-shortcut reference SHALL be presented as a Shortcuts tab inside the Preferences panel, keeping the platform tabs and category sidebar layout. The standalone shortcut modal SHALL be removed, and the Help menu SHALL no longer contain a Keyboard Shortcuts item. The `ShowShortcuts` action (default F1) SHALL open the Preferences panel directly on the Shortcuts tab.
+
+#### Scenario: Preferences panel exposes a Shortcuts tab
+- **WHEN** the user opens the Preferences panel
+- **THEN** a General tab and a Shortcuts tab are available, and the Shortcuts tab shows the categorized shortcut reference with platform tabs
+
+#### Scenario: Help menu no longer lists Keyboard Shortcuts
+- **WHEN** the user opens the Help menu
+- **THEN** no Keyboard Shortcuts item is present and the About item remains
+
+#### Scenario: F1 opens the Shortcuts tab
+- **WHEN** the user invokes the ShowShortcuts action
+- **THEN** the Preferences panel opens with the Shortcuts tab active
+
+### Requirement: Menu shortcut labels reflect effective bindings
+In-window menu items that display a shortcut hint SHALL render the action's effective binding — the curated default label when unmodified, or a formatted label derived from the user's override. Labels SHALL update in the same session when an override is set, reset, or cleared.
+
+#### Scenario: Menu shows an overridden binding
+- **WHEN** an action has an override and the user opens its menu
+- **THEN** the item's shortcut hint shows the override binding formatted for the current platform
+
+#### Scenario: Menu label follows a reset
+- **WHEN** an override is removed via per-action reset or preferences reset
+- **THEN** the menu item's shortcut hint returns to the curated default label
