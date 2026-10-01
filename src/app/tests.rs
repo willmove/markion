@@ -21393,6 +21393,102 @@ fn search_overlay_renders_responsively_in_localized_light_dark_and_invalid_state
     app.update(cx, |app, _| assert!(!app.replace_visible));
 }
 
+#[test]
+fn search_word_range_selects_words_cjk_runs_and_single_separators() {
+    let text = "foo bar_baz, 中文词";
+    assert_eq!(search_word_range(text, 1), 0..3);
+    assert_eq!(
+        search_word_range(text, 3),
+        0..3,
+        "end of a word still selects it"
+    );
+    assert_eq!(&text[search_word_range(text, 6)], "bar_baz");
+    assert_eq!(
+        &text[search_word_range(text, 11)],
+        "bar_baz",
+        "after the word"
+    );
+    let cjk = text.find('文').unwrap();
+    assert_eq!(&text[search_word_range(text, cjk)], "中文词");
+    assert_eq!(
+        search_word_range("a  b", 2),
+        2..3,
+        "whitespace selects itself"
+    );
+    assert_eq!(search_word_range("", 0), 0..0);
+}
+
+#[gpui::test]
+fn search_field_mouse_drag_and_double_click_select_text(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("document"))];
+        app.search_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app.search_query.set_text("alpha beta gamma");
+        app
+    });
+    cx.run_until_parked();
+    let field = cx.debug_bounds("search-find-field").expect("find field");
+    let y = field.center().y;
+    let start = point(field.left() + px(3.), y);
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.search_field_drag, Some(SearchField::Find));
+        assert_eq!(
+            app.search_query.selection(),
+            0..0,
+            "press collapses at the start"
+        );
+    });
+    // Drag past the field's right edge: the window-level listener keeps
+    // extending the selection outside the field.
+    cx.simulate_mouse_move(
+        point(field.right() + px(40.), y),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.search_query.anchor, 0);
+        assert_eq!(
+            app.search_query.selection(),
+            0..16,
+            "drag selects to the end"
+        );
+    });
+    cx.simulate_mouse_up(
+        point(field.right() + px(40.), y),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    app.update(cx, |app, _| assert_eq!(app.search_field_drag, None));
+    // Moves after release no longer change the selection.
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| assert_eq!(app.search_query.selection(), 0..16));
+
+    cx.simulate_event(MouseDownEvent {
+        position: start,
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.search_query.selection(),
+            0..5,
+            "double-click selects the word"
+        );
+        assert_eq!(app.search_field_drag, None);
+    });
+}
+
 #[gpui::test]
 fn search_ime_composition_is_field_only_in_every_view_mode(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {

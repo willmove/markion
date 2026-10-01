@@ -357,6 +357,7 @@ impl MarkionApp {
             search_result: SearchResultState::Idle,
             search_generation: None,
             search_field_bounds: [None; 13],
+            search_field_drag: None,
             pane_scrollbar_drag: None,
             auto_save_preferences: preferences.auto_save,
             git_preferences: preferences.git.clone(),

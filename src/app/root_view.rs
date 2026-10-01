@@ -2254,10 +2254,16 @@ pub(super) fn search_field_view(
     let after = buffer.get(selection.end..).unwrap_or("").to_string();
     let has_selection = !selection.is_empty();
     let text_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
+    // Where the buffer's first glyph is painted (after padding and horizontal
+    // scroll) and the font it is shaped with, so pointer x maps to a byte
+    // offset by measuring the real text instead of estimating glyph widths.
+    let text_metrics: Rc<RefCell<Option<(Pixels, Font)>>> = Rc::new(RefCell::new(None));
+    let metrics_for_click = text_metrics.clone();
     let bounds_for_click = text_bounds.clone();
     let buffer_for_click = buffer.clone();
     let app_entity = cx.entity();
     let bounds_entity = app_entity.clone();
+    let drag_entity = app_entity.clone();
     let debug_selector = match field_kind {
         SearchField::Find => "search-find-field",
         SearchField::Replace => "search-replace-field",
@@ -2321,6 +2327,7 @@ pub(super) fn search_field_view(
                 .flex()
                 .items_center()
                 .whitespace_nowrap()
+                .relative()
                 .child(div().child(before))
                 .when(has_selection, |d| {
                     d.child(div().bg(palette.input_selection).child(selected))
@@ -2328,7 +2335,63 @@ pub(super) fn search_field_view(
                 .when(active && !has_selection, |d| {
                     d.child(div().w(px(1.5)).h(px(13.)).bg(palette.active_bg))
                 })
-                .child(div().child(after)),
+                .child(div().child(after))
+                .child(
+                    canvas(
+                        |_, _, _| (),
+                        move |bounds, _, window, _| {
+                            let font = window.text_style().font();
+                            *text_metrics.borrow_mut() = Some((bounds.left(), font.clone()));
+                            // Window-level listeners keep a drag selection
+                            // extending after the pointer leaves the field.
+                            let move_entity = drag_entity.clone();
+                            window.on_mouse_event(
+                                move |event: &MouseMoveEvent, phase, window, cx| {
+                                    if phase != DispatchPhase::Bubble || !event.dragging() {
+                                        return;
+                                    }
+                                    move_entity.update(cx, |app, cx| {
+                                        if app.search_field_drag != Some(field_kind)
+                                            || app.search_focus != Some(field_kind)
+                                        {
+                                            return;
+                                        }
+                                        let Some(field) = app.focused_search_field_mut() else {
+                                            return;
+                                        };
+                                        let offset = search_field_offset_at(
+                                            window,
+                                            &font,
+                                            &field.buffer,
+                                            event.position.x - bounds.left(),
+                                        );
+                                        if field.cursor != offset {
+                                            field.cursor = offset;
+                                            field.marked_range = None;
+                                            cx.notify();
+                                        }
+                                    });
+                                },
+                            );
+                            let up_entity = drag_entity.clone();
+                            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                                if phase == DispatchPhase::Bubble
+                                    && event.button == MouseButton::Left
+                                {
+                                    up_entity.update(cx, |app, _| {
+                                        if app.search_field_drag == Some(field_kind) {
+                                            app.search_field_drag = None;
+                                        }
+                                    });
+                                }
+                            });
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                ),
         )
         .child(
             canvas(
@@ -2351,14 +2414,24 @@ pub(super) fn search_field_view(
             .left_0()
             .size_full(),
         )
-        .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
             cx.stop_propagation();
-            let Some(bounds) = bounds_for_click.borrow().as_ref().copied() else {
-                return;
+            let offset = match metrics_for_click.borrow().as_ref() {
+                Some((origin_x, font)) => search_field_offset_at(
+                    window,
+                    font,
+                    &buffer_for_click,
+                    event.position.x - *origin_x,
+                ),
+                None => {
+                    let Some(bounds) = bounds_for_click.borrow().as_ref().copied() else {
+                        return;
+                    };
+                    name_x_to_offset(&buffer_for_click, event.position.x - bounds.left())
+                }
             };
-            let offset = name_x_to_offset(&buffer_for_click, event.position.x - bounds.left());
             app_entity.update(cx, |app, cx| {
-                _window.focus(&app.focus_handle);
+                window.focus(&app.focus_handle);
                 app.search_visible = !matches!(
                     field_kind,
                     SearchField::Git(_) | SearchField::GitSetup(_) | SearchField::GitCommit
@@ -2370,16 +2443,53 @@ pub(super) fn search_field_view(
                     SearchField::Git(_) | SearchField::GitSetup(_) | SearchField::GitCommit => None,
                 };
                 app.file_tree_query_focused = false;
+                app.search_field_drag = (event.click_count < 2).then_some(field_kind);
                 if let Some(field) = app.focused_search_field_mut() {
-                    field.cursor = clamp_search_boundary(&field.buffer, offset);
-                    if !event.modifiers.shift {
-                        field.anchor = field.cursor;
+                    let offset = clamp_search_boundary(&field.buffer, offset);
+                    match event.click_count {
+                        // Double-click selects the word, triple-click the field.
+                        2 => {
+                            let word = search_word_range(&field.buffer, offset);
+                            field.anchor = word.start;
+                            field.cursor = word.end;
+                        }
+                        count if count >= 3 => {
+                            field.anchor = 0;
+                            field.cursor = field.buffer.len();
+                        }
+                        _ => {
+                            field.cursor = offset;
+                            if !event.modifiers.shift {
+                                field.anchor = field.cursor;
+                            }
+                        }
                     }
                     field.marked_range = None;
                 }
                 cx.notify();
             });
         })
+}
+
+/// The byte offset in a single-line field's `buffer` closest to `x`, measured
+/// from the first glyph with the field's real shaped text.
+fn search_field_offset_at(window: &Window, font: &Font, buffer: &str, x: Pixels) -> usize {
+    if buffer.is_empty() {
+        return 0;
+    }
+    let run = TextRun {
+        len: buffer.len(),
+        font: font.clone(),
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let index = window
+        .text_system()
+        .layout_line(buffer, px(12.), &[run], None)
+        .closest_index_for_x(x);
+    clamp_search_boundary(buffer, index)
 }
 
 fn search_toolbar_button(

@@ -1315,6 +1315,35 @@ fn clamp_search_boundary(text: &str, offset: usize) -> usize {
     offset
 }
 
+/// The word around `offset` for double-click selection: a run of
+/// non-whitespace characters other than ASCII punctuation (`_` and CJK
+/// included), or the single
+/// character there when it is whitespace or punctuation.
+fn search_word_range(text: &str, offset: usize) -> Range<usize> {
+    let offset = clamp_search_boundary(text, offset);
+    let is_word = |ch: char| !ch.is_whitespace() && (ch == '_' || !ch.is_ascii_punctuation());
+    let next = text[offset..].chars().next();
+    let previous = text[..offset].chars().next_back();
+    if !next.is_some_and(is_word) && !previous.is_some_and(is_word) {
+        return match next {
+            Some(ch) => offset..offset + ch.len_utf8(),
+            None => offset..offset,
+        };
+    }
+    let start = text[..offset]
+        .char_indices()
+        .rev()
+        .take_while(|(_, ch)| is_word(*ch))
+        .last()
+        .map_or(offset, |(index, _)| index);
+    let end = text[offset..]
+        .char_indices()
+        .take_while(|(_, ch)| is_word(*ch))
+        .last()
+        .map_or(offset, |(index, ch)| offset + index + ch.len_utf8());
+    start..end
+}
+
 fn previous_search_boundary(text: &str, offset: usize) -> usize {
     let offset = clamp_search_boundary(text, offset);
     text[..offset]
@@ -2633,6 +2662,9 @@ struct MarkionApp {
     search_result: SearchResultState,
     search_generation: Option<SearchGenerationKey>,
     search_field_bounds: [Option<Bounds<Pixels>>; 13],
+    /// The single-line field a left-button drag selection started in; moves
+    /// extend that field's selection until the button is released.
+    search_field_drag: Option<SearchField>,
     pane_scrollbar_drag: Option<PaneScrollbarDrag>,
     /// Auto-save settings from `[auto_save]`. `silent_save` and `delay_secs`
     /// are editable in Preferences → General; `enabled` remains file-only.
