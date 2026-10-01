@@ -774,7 +774,10 @@ impl MarkionApp {
                 cx.notify();
                 return;
             }
-            match (target.axis, blocks.iter().find(|block| block.id == target.block_id)) {
+            match (
+                target.axis,
+                blocks.iter().find(|block| block.id == target.block_id),
+            ) {
                 (
                     VisualTableAxis::Column(column),
                     Some(VisualBlock {

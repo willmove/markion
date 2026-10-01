@@ -176,20 +176,21 @@ pub use model::{
     PicGoCorePreferences, PicGoHttpPreferences, PreviewBlock, RecoveryDocument, RemoteImagePolicy,
     RenderedMath, ReplaceResult, RichText, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
     SYSTEM_UI_FONT_FAMILY, SearchError, SearchMatch, SearchMatchRange, SearchOptions,
-    SessionLayout, SessionState, SidebarTab, TableAlignment, TableEdit, TableEditResult, TableStructureEdit,
-    ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEdit,
-    VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix, VisualBlockPrefixKind,
-    VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
-    VisualHtmlImage, VisualInlineRun, VisualNavigationTarget, VisualProjection,
-    VisualProjectionSegment, VisualProjectionSpan, VisualQuoteContext, VisualQuoteGroupEdge,
-    VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind, VisualStructuralEdit,
-    VisualTableCell, WorkspaceSnapshot, YamlFrontMatter, builtin_theme_definitions,
-    filter_paths_in_workspace_root, layout_rect_is_visible, normalize_auto_save_delay_secs,
-    normalize_code_font_size, normalize_editor_font_size, normalize_editor_split_ratio,
-    normalize_font_family, normalize_heading_menu_max_level, normalize_image_transfer_timeout_secs,
-    normalize_paragraph_spacing, normalize_rendered_font_size, normalize_sidebar_width,
-    normalize_window_size, record_data_uri_payload_clone, reset_data_uri_work_counters,
-    resolve_font_family, touch_recent_file, touch_workspace_snapshot, with_image_identity_interner,
+    SessionLayout, SessionState, SidebarTab, TableAlignment, TableEdit, TableEditResult,
+    TableStructureEdit, ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock,
+    VisualBlockEdit, VisualBlockEditor, VisualBlockId, VisualBlockKind, VisualBlockPrefix,
+    VisualBlockPrefixKind, VisualBoundaryCandidates, VisualCaretAffinity, VisualEditorField,
+    VisualEditorFieldKind, VisualHtmlImage, VisualInlineRun, VisualNavigationTarget,
+    VisualProjection, VisualProjectionSegment, VisualProjectionSpan, VisualQuoteContext,
+    VisualQuoteGroupEdge, VisualRevealGroup, VisualRevealKind, VisualSourceIslandKind,
+    VisualStructuralEdit, VisualTableCell, WorkspaceSnapshot, YamlFrontMatter,
+    builtin_theme_definitions, filter_paths_in_workspace_root, layout_rect_is_visible,
+    normalize_auto_save_delay_secs, normalize_code_font_size, normalize_editor_font_size,
+    normalize_editor_split_ratio, normalize_font_family, normalize_heading_menu_max_level,
+    normalize_image_transfer_timeout_secs, normalize_paragraph_spacing,
+    normalize_rendered_font_size, normalize_sidebar_width, normalize_window_size,
+    record_data_uri_payload_clone, reset_data_uri_work_counters, resolve_font_family,
+    touch_recent_file, touch_workspace_snapshot, with_image_identity_interner,
 };
 pub use visual::{
     build_visual_projection, build_visual_projection_with_marked_range, data_uri_payload_ranges,
@@ -297,9 +298,9 @@ use table::{
     TableDraft, adjust_column_percents_for_delete, adjust_column_percents_for_insert,
     format_markdown_table, format_table_column_width_comment, formatted_table_cell_range,
     leading_table_column_width_comment_range, normalize_column_percents, parse_markdown_table,
-    parse_table_column_width_comment, permute_column_percents, selection_is_within_one_table_cell, table_cell_source_ranges,
-    table_position_at, table_preview_source_range, table_range_at as table_range_at_fn,
-    table_ranges as table_ranges_fn,
+    parse_table_column_width_comment, permute_column_percents, selection_is_within_one_table_cell,
+    table_cell_source_ranges, table_position_at, table_preview_source_range,
+    table_range_at as table_range_at_fn, table_ranges as table_ranges_fn,
 };
 pub use table::{
     authored_table_column_percents, percents_from_flex_weights,
@@ -8061,8 +8062,7 @@ mod tests {
         parse_markdown_table(&doc.text()[range]).unwrap().alignments
     }
 
-    const STRUCTURE_TABLE: &str =
-        "Intro\n\n| H1 | H2 | H3 |\n| :--- | :---: | ---: |\n| a1 | a2 | a3 |\n| b1 | b2 | b3 |\n| c1 | c2 | c3 |\n\nAfter";
+    const STRUCTURE_TABLE: &str = "Intro\n\n| H1 | H2 | H3 |\n| :--- | :---: | ---: |\n| a1 | a2 | a3 |\n| b1 | b2 | b3 |\n| c1 | c2 | c3 |\n\nAfter";
 
     fn structure_edit(edit: TableStructureEdit) -> (MarkdownDocument, Option<TableEditResult>) {
         let mut doc = MarkdownDocument::from_text(STRUCTURE_TABLE);
@@ -8083,7 +8083,10 @@ mod tests {
         assert_eq!(rows[3], row(&["b1", "b2", "b3"]));
         let result = result.unwrap();
         assert_eq!((result.row, result.column), (2, 0));
-        assert_eq!(doc.table_range_at(result.selected_range.start), Some(result.table_range.clone()));
+        assert_eq!(
+            doc.table_range_at(result.selected_range.start),
+            Some(result.table_range.clone())
+        );
 
         let (doc, _) = structure_edit(TableStructureEdit::InsertRow { at: 4 });
         assert_eq!(structure_rows(&doc, 0)[4], row(&["", "", ""]));
@@ -8200,7 +8203,8 @@ mod tests {
 
     #[test]
     fn table_structure_column_edits_rewrite_the_width_comment_in_one_mutation() {
-        let source = "<!-- markion-cols:20,30,50 -->\n| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
+        let source =
+            "<!-- markion-cols:20,30,50 -->\n| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
         let edit = |edit| {
             let mut doc = MarkdownDocument::from_text(source);
             let offset = doc.text().find("| A").unwrap();
@@ -8214,15 +8218,21 @@ mod tests {
             "<!-- markion-cols:30,50,20 -->"
         );
         assert_eq!(
-            edit(TableStructureEdit::InsertColumn { at: 3 }).matches(',').count(),
+            edit(TableStructureEdit::InsertColumn { at: 3 })
+                .matches(',')
+                .count(),
             3
         );
         assert_eq!(
-            edit(TableStructureEdit::DuplicateColumn(0)).matches(',').count(),
+            edit(TableStructureEdit::DuplicateColumn(0))
+                .matches(',')
+                .count(),
             3
         );
         assert_eq!(
-            edit(TableStructureEdit::DeleteColumn(0)).matches(',').count(),
+            edit(TableStructureEdit::DeleteColumn(0))
+                .matches(',')
+                .count(),
             1
         );
         assert_eq!(
@@ -8238,7 +8248,10 @@ mod tests {
         let second = doc.text().find("| X").unwrap();
         doc.edit_table_structure_at(second, TableStructureEdit::InsertRow { at: 2 })
             .unwrap();
-        assert!(doc.text().starts_with("| A | B |\n| --- | --- |\n| 1 | 2 |\n\n"));
+        assert!(
+            doc.text()
+                .starts_with("| A | B |\n| --- | --- |\n| 1 | 2 |\n\n")
+        );
         assert_eq!(structure_rows(&doc, 1).len(), 3);
     }
 

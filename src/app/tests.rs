@@ -2897,7 +2897,10 @@ fn file_tree_scan_gate_drops_stale_generation_and_queues_one_follow_up() {
     let mut gate = FileTreeScanGate::default();
     let first = gate.request().expect("first scan starts");
     assert!(gate.request().is_none(), "second request queues");
-    assert!(gate.request().is_none(), "further requests still queue once");
+    assert!(
+        gate.request().is_none(),
+        "further requests still queue once"
+    );
     let (apply, follow_up) = gate.finish(first);
     assert!(!apply, "an older generation must not replace a newer scan");
     let follow_up = follow_up.expect("one follow-up");
@@ -5899,7 +5902,6 @@ fn view_modes_have_distinct_status_and_expected_pane_layouts() {
     assert_eq!(view_mode_pane_widths(ViewMode::Read, 0.4), (0.0, 1.0));
 }
 
-
 #[test]
 fn visual_and_preview_tables_share_content_column_weights() {
     let source = concat!(
@@ -5978,8 +5980,6 @@ fn visual_table_cell_range(
         .expect("visual table cell range")
 }
 
-
-
 fn visual_table_block_id(document: &MarkdownDocument, table_index: usize) -> VisualBlockId {
     document
         .visual_blocks()
@@ -5990,7 +5990,7 @@ fn visual_table_block_id(document: &MarkdownDocument, table_index: usize) -> Vis
         .expect("visual table block")
 }
 
-fn visual_table_block<'a>(blocks: &'a [VisualBlock], table_index: usize) -> &'a VisualBlock {
+fn visual_table_block(blocks: &[VisualBlock], table_index: usize) -> &VisualBlock {
     blocks
         .iter()
         .filter(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
@@ -6010,14 +6010,18 @@ fn visual_table_menu_items_respect_header_and_table_edges() {
     let target = |axis| {
         VisualTableAxisTarget::for_block(document.version(), block, axis).expect("in-range target")
     };
-    let edit = |axis, item| visual_table_menu_item_edit(target(axis), item, TableAlignment::Default);
+    let edit =
+        |axis, item| visual_table_menu_item_edit(target(axis), item, TableAlignment::Default);
 
     let header = VisualTableAxis::Row(0);
     assert_eq!(
         edit(header, Item::InsertAfter),
         Some(TableStructureEdit::InsertRow { at: 1 })
     );
-    assert_eq!(edit(header, Item::Clear), Some(TableStructureEdit::ClearRow(0)));
+    assert_eq!(
+        edit(header, Item::Clear),
+        Some(TableStructureEdit::ClearRow(0))
+    );
     for item in [
         Item::InsertBefore,
         Item::MoveBefore,
@@ -6026,7 +6030,11 @@ fn visual_table_menu_items_respect_header_and_table_edges() {
         Item::Delete,
         Item::Align(TableAlignment::Left),
     ] {
-        assert_eq!(edit(header, item), None, "{item:?} is disabled on the header row");
+        assert_eq!(
+            edit(header, item),
+            None,
+            "{item:?} is disabled on the header row"
+        );
     }
 
     let first_body = VisualTableAxis::Row(1);
@@ -6045,7 +6053,10 @@ fn visual_table_menu_items_respect_header_and_table_edges() {
         edit(last_row, Item::MoveBefore),
         Some(TableStructureEdit::MoveRow { from: 3, to: 2 })
     );
-    assert_eq!(edit(last_row, Item::Delete), Some(TableStructureEdit::DeleteRow(3)));
+    assert_eq!(
+        edit(last_row, Item::Delete),
+        Some(TableStructureEdit::DeleteRow(3))
+    );
 
     assert_eq!(edit(VisualTableAxis::Column(0), Item::MoveBefore), None);
     assert_eq!(edit(VisualTableAxis::Column(2), Item::MoveAfter), None);
@@ -6069,7 +6080,10 @@ fn visual_table_menu_items_respect_header_and_table_edges() {
         }),
         "choosing the current alignment resets it"
     );
-    assert!(VisualTableAxisTarget::for_block(document.version(), block, VisualTableAxis::Row(4)).is_none());
+    assert!(
+        VisualTableAxisTarget::for_block(document.version(), block, VisualTableAxis::Row(4))
+            .is_none()
+    );
 
     let lone = VisualTableAxisTarget {
         axis: VisualTableAxis::Column(0),
@@ -6099,10 +6113,22 @@ fn visual_table_drop_edit_rejects_self_header_and_foreign_drops() {
         visual_table_drop_edit(row(3), block.id, VisualTableAxis::Row(1)),
         Some(TableStructureEdit::MoveRow { from: 3, to: 1 })
     );
-    assert_eq!(visual_table_drop_edit(row(2), block.id, VisualTableAxis::Row(2)), None);
-    assert_eq!(visual_table_drop_edit(row(2), block.id, VisualTableAxis::Row(0)), None);
-    assert_eq!(visual_table_drop_edit(row(0), block.id, VisualTableAxis::Row(2)), None);
-    assert_eq!(visual_table_drop_edit(row(2), block.id, VisualTableAxis::Column(1)), None);
+    assert_eq!(
+        visual_table_drop_edit(row(2), block.id, VisualTableAxis::Row(2)),
+        None
+    );
+    assert_eq!(
+        visual_table_drop_edit(row(2), block.id, VisualTableAxis::Row(0)),
+        None
+    );
+    assert_eq!(
+        visual_table_drop_edit(row(0), block.id, VisualTableAxis::Row(2)),
+        None
+    );
+    assert_eq!(
+        visual_table_drop_edit(row(2), block.id, VisualTableAxis::Column(1)),
+        None
+    );
     assert_eq!(
         visual_table_drop_edit(column(0), block.id, VisualTableAxis::Column(2)),
         Some(TableStructureEdit::MoveColumn { from: 0, to: 2 })
@@ -6111,7 +6137,10 @@ fn visual_table_drop_edit_rejects_self_header_and_foreign_drops() {
     let other = MarkdownDocument::from_text("| X | Y |\n| --- | --- |\n| 1 | 2 |");
     let other_id = visual_table_block(&other.visual_blocks(), 0).id;
     assert_ne!(other_id, block.id);
-    assert_eq!(visual_table_drop_edit(row(2), other_id, VisualTableAxis::Row(1)), None);
+    assert_eq!(
+        visual_table_drop_edit(row(2), other_id, VisualTableAxis::Row(1)),
+        None
+    );
 }
 
 #[test]
@@ -6127,9 +6156,7 @@ fn visual_table_axis_target_revalidation_rejects_stale_shape_and_version() {
     let offset = revalidate_visual_table_axis_target(target, document.version(), &blocks)
         .expect("fresh target");
     assert_eq!(document.table_range_at(offset), Some(0..HANDLE_TABLE.len()));
-    assert!(
-        revalidate_visual_table_axis_target(target, document.version() + 1, &blocks).is_none()
-    );
+    assert!(revalidate_visual_table_axis_target(target, document.version() + 1, &blocks).is_none());
     let reshaped = VisualTableAxisTarget {
         row_count: target.row_count + 1,
         ..target
@@ -6211,28 +6238,45 @@ fn visual_table_handles_follow_the_hovered_cell_without_layout_shift(cx: &mut Te
     let source = format!("{HANDLE_TABLE}\n\nAfter the table");
     let (app, cx) = visual_table_handle_app(&source, cx);
     let before = visual_table_document_state(&app, cx);
-    let chrome = cx.debug_bounds("visual-table-chrome-0").expect("table chrome");
-    let after_row = cx.debug_bounds("visual-block-row-1").expect("paragraph after the table");
+    let chrome = cx
+        .debug_bounds("visual-table-chrome-0")
+        .expect("table chrome");
+    let after_row = cx
+        .debug_bounds("visual-block-row-1")
+        .expect("paragraph after the table");
     assert!(cx.debug_bounds("visual-table-row-grip-0-2").is_none());
     assert!(cx.debug_bounds("visual-table-column-grip-0-1").is_none());
     assert!(cx.debug_bounds("visual-table-add-row-0").is_none());
 
     hover_visual_table_cell(&app, cx, 0, 2, 1);
-    let row_grip = cx.debug_bounds("visual-table-row-grip-0-2").expect("hovered row grip");
+    let row_grip = cx
+        .debug_bounds("visual-table-row-grip-0-2")
+        .expect("hovered row grip");
     assert!(cx.debug_bounds("visual-table-column-grip-0-1").is_some());
     assert!(cx.debug_bounds("visual-table-add-row-0").is_some());
     assert!(cx.debug_bounds("visual-table-add-column-0").is_some());
-    for other in ["visual-table-row-grip-0-1", "visual-table-row-grip-0-0", "visual-table-column-grip-0-0"] {
+    for other in [
+        "visual-table-row-grip-0-1",
+        "visual-table-row-grip-0-0",
+        "visual-table-column-grip-0-0",
+    ] {
         assert!(cx.debug_bounds(other).is_none(), "{other} stays hidden");
     }
     assert!(row_grip.size.width > px(0.) && row_grip.size.height > px(0.));
-    assert_eq!(cx.debug_bounds("visual-table-chrome-0"), Some(chrome), "table does not move");
+    assert_eq!(
+        cx.debug_bounds("visual-table-chrome-0"),
+        Some(chrome),
+        "table does not move"
+    );
     assert_eq!(
         cx.debug_bounds("visual-block-row-1"),
         Some(after_row),
         "content below does not move"
     );
-    assert!(cx.debug_bounds("visual-table-add-row").is_none(), "no in-flow header");
+    assert!(
+        cx.debug_bounds("visual-table-add-row").is_none(),
+        "no in-flow header"
+    );
     assert_eq!(visual_table_document_state(&app, cx), before);
 
     // Caret ownership alone reveals nothing and shifts nothing.
@@ -6253,10 +6297,15 @@ fn visual_table_row_menu_applies_one_undoable_edit(cx: &mut TestAppContext) {
     let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
     hover_visual_table_cell(&app, cx, 0, 2, 0);
     let (_, version, _, _) = visual_table_document_state(&app, cx);
-    let grip = cx.debug_bounds("visual-table-row-grip-0-2").expect("row grip");
+    let grip = cx
+        .debug_bounds("visual-table-row-grip-0-2")
+        .expect("row grip");
     cx.simulate_click(grip.center(), Modifiers::none());
     cx.run_until_parked();
-    assert!(cx.debug_bounds("visual-table-menu").is_some(), "grip click opens the row menu");
+    assert!(
+        cx.debug_bounds("visual-table-menu").is_some(),
+        "grip click opens the row menu"
+    );
     for enabled in [
         "visual-table-menu-insert-before",
         "visual-table-menu-insert-after",
@@ -6266,10 +6315,20 @@ fn visual_table_row_menu_applies_one_undoable_edit(cx: &mut TestAppContext) {
         "visual-table-menu-clear",
         "visual-table-menu-delete",
     ] {
-        assert!(cx.debug_bounds(enabled).is_some(), "{enabled} is enabled for body row 2");
+        assert!(
+            cx.debug_bounds(enabled).is_some(),
+            "{enabled} is enabled for body row 2"
+        );
     }
-    assert!(cx.debug_bounds("visual-table-menu-align-left").is_none(), "rows have no alignment");
-    assert_eq!(visual_table_document_state(&app, cx).1, version, "opening does not mutate");
+    assert!(
+        cx.debug_bounds("visual-table-menu-align-left").is_none(),
+        "rows have no alignment"
+    );
+    assert_eq!(
+        visual_table_document_state(&app, cx).1,
+        version,
+        "opening does not mutate"
+    );
 
     let mut expected = MarkdownDocument::from_text(HANDLE_TABLE);
     expected
@@ -6295,7 +6354,10 @@ fn visual_table_row_menu_applies_one_undoable_edit(cx: &mut TestAppContext) {
             .document
             .visual_editor_field_at(&tab.selected_range)
             .expect("selection lands in a table cell");
-        assert_eq!(field.kind, VisualEditorFieldKind::TableCell { row: 2, column: 0 });
+        assert_eq!(
+            field.kind,
+            VisualEditorFieldKind::TableCell { row: 2, column: 0 }
+        );
     });
 
     cx.update(|window, cx| app.update(cx, |app, cx| app.undo(&Undo, window, cx)));
@@ -6308,7 +6370,9 @@ fn visual_table_header_row_menu_disables_structural_items(cx: &mut TestAppContex
     let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
     hover_visual_table_cell(&app, cx, 0, 0, 0);
     let before = visual_table_document_state(&app, cx);
-    let grip = cx.debug_bounds("visual-table-row-grip-0-0").expect("header row grip");
+    let grip = cx
+        .debug_bounds("visual-table-row-grip-0-0")
+        .expect("header row grip");
     cx.simulate_click(grip.center(), Modifiers::none());
     cx.run_until_parked();
     for disabled in [
@@ -6334,10 +6398,15 @@ fn visual_table_header_row_menu_disables_structural_items(cx: &mut TestAppContex
 fn visual_table_column_menu_aligns_and_marks_the_current_alignment(cx: &mut TestAppContext) {
     let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
     hover_visual_table_cell(&app, cx, 0, 2, 0);
-    let grip = cx.debug_bounds("visual-table-column-grip-0-0").expect("column grip");
+    let grip = cx
+        .debug_bounds("visual-table-column-grip-0-0")
+        .expect("column grip");
     cx.simulate_click(grip.center(), Modifiers::none());
     cx.run_until_parked();
-    assert!(cx.debug_bounds("visual-table-menu-move-before-disabled").is_some());
+    assert!(
+        cx.debug_bounds("visual-table-menu-move-before-disabled")
+            .is_some()
+    );
     let center = cx
         .debug_bounds("visual-table-menu-align-center")
         .expect("align center");
@@ -6354,11 +6423,17 @@ fn visual_table_column_menu_aligns_and_marks_the_current_alignment(cx: &mut Test
         let VisualBlockKind::Table { alignments, .. } = &visual_table_block(&blocks, 0).kind else {
             unreachable!()
         };
-        assert_eq!(alignments[1], TableAlignment::Center, "other columns keep alignment");
+        assert_eq!(
+            alignments[1],
+            TableAlignment::Center,
+            "other columns keep alignment"
+        );
     });
 
     hover_visual_table_cell(&app, cx, 0, 1, 0);
-    let grip = cx.debug_bounds("visual-table-column-grip-0-0").expect("column grip");
+    let grip = cx
+        .debug_bounds("visual-table-column-grip-0-0")
+        .expect("column grip");
     cx.simulate_click(grip.center(), Modifiers::none());
     cx.run_until_parked();
     app.update(cx, |app, _| {
@@ -6372,7 +6447,10 @@ fn visual_table_column_menu_aligns_and_marks_the_current_alignment(cx: &mut Test
     });
     cx.run_until_parked();
     let (text, _, _, undo) = visual_table_document_state(&app, cx);
-    assert!(text.lines().nth(1).unwrap().starts_with("| --- |"), "{text}");
+    assert!(
+        text.lines().nth(1).unwrap().starts_with("| --- |"),
+        "{text}"
+    );
     assert_eq!(undo, 2);
 }
 
@@ -6389,29 +6467,39 @@ fn visual_table_edge_strips_append_to_their_own_table(cx: &mut TestAppContext) {
     });
     hover_visual_table_cell(&app, cx, 1, 1, 1);
     let strip = cx
-        .debug_bounds(Box::leak(format!("visual-table-add-row-{second_index}").into_boxed_str()))
+        .debug_bounds(Box::leak(
+            format!("visual-table-add-row-{second_index}").into_boxed_str(),
+        ))
         .expect("bottom strip");
     cx.simulate_click(strip.center(), Modifiers::none());
     cx.run_until_parked();
     let (text, _, _, undo) = visual_table_document_state(&app, cx);
-    assert!(text.starts_with("| A | B |\n| --- | --- |\n| 1 | 2 |\n\n"), "{text}");
+    assert!(
+        text.starts_with("| A | B |\n| --- | --- |\n| 1 | 2 |\n\n"),
+        "{text}"
+    );
     assert!(text.ends_with("| 7   | 8   |\n|     |     |"), "{text}");
     assert_eq!(undo, 1);
 
     hover_visual_table_cell(&app, cx, 1, 0, 0);
     let strip = cx
-        .debug_bounds(Box::leak(format!("visual-table-add-column-{second_index}").into_boxed_str()))
+        .debug_bounds(Box::leak(
+            format!("visual-table-add-column-{second_index}").into_boxed_str(),
+        ))
         .expect("right strip");
     cx.simulate_click(strip.center(), Modifiers::none());
     cx.run_until_parked();
     let (text, _, _, undo) = visual_table_document_state(&app, cx);
-    assert!(text.lines().last().unwrap().matches('|').count() == 4, "{text}");
+    assert!(
+        text.lines().last().unwrap().matches('|').count() == 4,
+        "{text}"
+    );
     assert!(text.starts_with("| A | B |\n"));
     assert_eq!(undo, 2);
 }
 
 #[gpui::test]
-fn visual_table_drops_reorder_rows_and_columns_as_one_edit(cx: &mut TestAppContext) {
+fn visual_table_drag_drops_reorder_rows_and_columns_as_one_edit(cx: &mut TestAppContext) {
     let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
     let (block_id, row_target, column_target) = app.update(cx, |app, _| {
         let tab = app.active_tab();
@@ -6419,8 +6507,12 @@ fn visual_table_drops_reorder_rows_and_columns_as_one_edit(cx: &mut TestAppConte
         let block = visual_table_block(&blocks, 0);
         (
             block.id,
-            VisualTableAxisTarget::for_block(tab.document.version(), block, VisualTableAxis::Row(3))
-                .unwrap(),
+            VisualTableAxisTarget::for_block(
+                tab.document.version(),
+                block,
+                VisualTableAxis::Row(3),
+            )
+            .unwrap(),
             VisualTableAxisTarget::for_block(
                 tab.document.version(),
                 block,
@@ -6433,14 +6525,22 @@ fn visual_table_drops_reorder_rows_and_columns_as_one_edit(cx: &mut TestAppConte
     app.update(cx, |app, cx| {
         app.drop_visual_table_axis(row_target, block_id, VisualTableAxis::Row(3), cx);
     });
-    assert_eq!(visual_table_document_state(&app, cx), before, "self-drop is inert");
+    assert_eq!(
+        visual_table_document_state(&app, cx),
+        before,
+        "self-drop is inert"
+    );
 
     app.update(cx, |app, cx| {
         app.drop_visual_table_axis(row_target, block_id, VisualTableAxis::Row(1), cx);
     });
     cx.run_until_parked();
     let (text, version, _, undo) = visual_table_document_state(&app, cx);
-    let body: Vec<_> = text.lines().skip(2).map(|line| line.split('|').nth(1).unwrap().trim()).collect();
+    let body: Vec<_> = text
+        .lines()
+        .skip(2)
+        .map(|line| line.split('|').nth(1).unwrap().trim())
+        .collect();
     assert_eq!(body, ["c1", "a1", "b1"]);
     assert_eq!((version, undo), (before.1 + 1, 1));
 
@@ -6477,7 +6577,9 @@ fn visual_table_drops_reorder_rows_and_columns_as_one_edit(cx: &mut TestAppConte
 fn visual_table_menu_is_dismissed_with_the_block_menu(cx: &mut TestAppContext) {
     let (app, cx) = visual_table_handle_app(HANDLE_TABLE, cx);
     hover_visual_table_cell(&app, cx, 0, 1, 1);
-    let grip = cx.debug_bounds("visual-table-row-grip-0-1").expect("row grip");
+    let grip = cx
+        .debug_bounds("visual-table-row-grip-0-1")
+        .expect("row grip");
     cx.simulate_click(grip.center(), Modifiers::none());
     cx.run_until_parked();
     assert!(app.update(cx, |app, _| app.visual_table_menu.is_some()));
@@ -6505,7 +6607,8 @@ fn visual_table_menu_is_dismissed_with_the_block_menu(cx: &mut TestAppContext) {
     app.update(cx, |app, cx| {
         let tab = app.active_tab();
         let blocks = tab.document.visual_blocks_shared();
-        let target = BlockTarget::from_block(tab.document.version(), visual_table_block(&blocks, 0));
+        let target =
+            BlockTarget::from_block(tab.document.version(), visual_table_block(&blocks, 0));
         app.open_visual_block_menu(target, point(px(10.), px(10.)), cx);
     });
     app.update(cx, |app, _| {
@@ -7921,16 +8024,6 @@ fn visual_direct_table_cell_edit_reflows_traverses_and_undoes_once(cx: &mut Test
         assert_eq!(app.active_tab().document.text(), source)
     });
 }
-
-
-
-
-
-
-
-
-
-
 
 #[gpui::test]
 fn source_table_command_still_targets_the_source_caret(cx: &mut TestAppContext) {

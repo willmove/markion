@@ -65,7 +65,9 @@ struct AutosaveGateState {
 
 impl AutosaveGate {
     fn lock(&self) -> std::sync::MutexGuard<'_, AutosaveGateState> {
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub(super) fn cancel(&self) {

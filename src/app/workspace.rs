@@ -654,10 +654,8 @@ impl MarkionApp {
                                 app.status = app.trf(Msg::StatusFileTreeDuplicated, &[&display]);
                             }
                             Err(error) => {
-                                app.status = app.trf(
-                                    Msg::StatusFileTreeDuplicateFailed,
-                                    &[&error.to_string()],
-                                );
+                                app.status = app
+                                    .trf(Msg::StatusFileTreeDuplicateFailed, &[&error.to_string()]);
                             }
                         }
                         cx.notify();

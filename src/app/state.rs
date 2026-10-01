@@ -1,5 +1,5 @@
-use super::*;
 use super::application::AutosaveGate;
+use super::*;
 
 const BOUNDARY_SCAN_WINDOW: usize = 1024;
 pub(super) const SEMANTIC_UNDO_TIMEOUT: Duration = Duration::from_millis(900);

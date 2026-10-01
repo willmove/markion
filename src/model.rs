@@ -2183,19 +2183,29 @@ pub enum TableEdit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableStructureEdit {
     /// Insert an empty body row so it ends up at index `at` (`1..=rows`).
-    InsertRow { at: usize },
+    InsertRow {
+        at: usize,
+    },
     DuplicateRow(usize),
     ClearRow(usize),
     DeleteRow(usize),
     /// Remove body row `from` and reinsert it at body index `to`.
-    MoveRow { from: usize, to: usize },
+    MoveRow {
+        from: usize,
+        to: usize,
+    },
     /// Insert an empty column so it ends up at index `at` (`0..=columns`).
-    InsertColumn { at: usize },
+    InsertColumn {
+        at: usize,
+    },
     DuplicateColumn(usize),
     ClearColumn(usize),
     DeleteColumn(usize),
     /// Remove column `from` and reinsert it at index `to`.
-    MoveColumn { from: usize, to: usize },
+    MoveColumn {
+        from: usize,
+        to: usize,
+    },
     AlignColumn {
         column: usize,
         alignment: TableAlignment,

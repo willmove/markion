@@ -223,9 +223,9 @@ impl FileTree {
     pub fn duplicate_entry(source: impl AsRef<Path>, marker: &str) -> io::Result<PathBuf> {
         let source = source.as_ref();
         fs::symlink_metadata(source)?;
-        let parent = source.parent().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "path has no parent")
-        })?;
+        let parent = source
+            .parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
         let marker = if marker.trim().is_empty() {
             "copy".to_string()
         } else {
@@ -535,9 +535,10 @@ fn unique_child_path(parent: &Path, preferred_name: &str) -> PathBuf {
 }
 
 fn duplicate_destination(parent: &Path, source: &Path, marker: &str) -> io::Result<PathBuf> {
-    let file_name = source.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "path has no file name")
-    })?;
+    let file_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
     let parsed = Path::new(file_name);
     let stem = parsed
         .file_stem()
@@ -1269,7 +1270,12 @@ mod tests {
         std::os::unix::fs::symlink(&source, &link).unwrap();
 
         let copy = FileTree::duplicate_entry(&link, "copy").unwrap();
-        assert!(fs::symlink_metadata(&copy).unwrap().file_type().is_symlink());
+        assert!(
+            fs::symlink_metadata(&copy)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(fs::read_link(&copy).unwrap(), source);
     }
 

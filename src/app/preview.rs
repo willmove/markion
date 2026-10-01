@@ -6558,8 +6558,9 @@ pub(super) fn visual_table_view(
         _ => None,
     };
     let row_count = rows.len();
-    let axis_target =
-        |axis| VisualTableAxisTarget::for_block(document_version, block, axis).filter(|_| cells.is_some());
+    let axis_target = |axis| {
+        VisualTableAxisTarget::for_block(document_version, block, axis).filter(|_| cells.is_some())
+    };
     let hovered_cell = app
         .active_tab()
         .hovered_visual_table_cell
@@ -6614,9 +6615,8 @@ pub(super) fn visual_table_view(
                 .children(row.iter().enumerate().map(|(cell_index, cell)| {
                     let is_last_cell = cell_index + 1 == row.len();
                     let offset = table_offset;
-                    let cell_key = (block.id.as_u64() << 24)
-                        | ((row_index as u64) << 12)
-                        | cell_index as u64;
+                    let cell_key =
+                        (block.id.as_u64() << 24) | ((row_index as u64) << 12) | cell_index as u64;
                     let column_drop = VisualTableAxis::Column(cell_index);
                     let column_grip = axis_target(column_drop).filter(|_| {
                         row_index == 0
@@ -6669,7 +6669,12 @@ pub(super) fn visual_table_view(
                             })
                             .on_drop::<DraggedTableColumn>(cx.listener(
                                 move |app, dragged: &DraggedTableColumn, _, cx| {
-                                    app.drop_visual_table_axis(dragged.target, block_id, column_drop, cx);
+                                    app.drop_visual_table_axis(
+                                        dragged.target,
+                                        block_id,
+                                        column_drop,
+                                        cx,
+                                    );
                                 },
                             ))
                         })
@@ -6799,9 +6804,9 @@ pub(super) fn visual_table_view(
                         )
                         .left_0()
                         .right(px(VISUAL_TABLE_EDGE_GUTTER_PX))
-                        .bottom(px(
-                            VISUAL_TABLE_EDGE_GUTTER_PX - VISUAL_TABLE_EDGE_STRIP_PX - 1.
-                        ))
+                        .bottom(px(VISUAL_TABLE_EDGE_GUTTER_PX
+                            - VISUAL_TABLE_EDGE_STRIP_PX
+                            - 1.))
                         .h(px(VISUAL_TABLE_EDGE_STRIP_PX)),
                     )
                 })
@@ -6818,9 +6823,9 @@ pub(super) fn visual_table_view(
                         )
                         .top_0()
                         .bottom(px(VISUAL_TABLE_EDGE_GUTTER_PX))
-                        .right(px(
-                            VISUAL_TABLE_EDGE_GUTTER_PX - VISUAL_TABLE_EDGE_STRIP_PX - 1.
-                        ))
+                        .right(px(VISUAL_TABLE_EDGE_GUTTER_PX
+                            - VISUAL_TABLE_EDGE_STRIP_PX
+                            - 1.))
                         .w(px(VISUAL_TABLE_EDGE_STRIP_PX)),
                     )
                 })
@@ -6902,9 +6907,10 @@ fn visual_table_grip(
         (true, VisualTableAxis::Row(_)) => {
             grip.on_drag(DraggedTableRow { target }, |_, _, _, cx| cx.new(|_| Empty))
         }
-        (true, VisualTableAxis::Column(_)) => {
-            grip.on_drag(DraggedTableColumn { target }, |_, _, _, cx| cx.new(|_| Empty))
-        }
+        (true, VisualTableAxis::Column(_)) => grip
+            .on_drag(DraggedTableColumn { target }, |_, _, _, cx| {
+                cx.new(|_| Empty)
+            }),
     }
 }
 
@@ -8166,9 +8172,14 @@ pub(super) fn visual_table_menu_view(
                 cx.notify();
             }
         }));
-    for (index, item) in visual_table_menu_items(target.axis).iter().copied().enumerate() {
+    for (index, item) in visual_table_menu_items(target.axis)
+        .iter()
+        .copied()
+        .enumerate()
+    {
         let enabled = visual_table_menu_item_edit(target, item, menu.alignment).is_some();
-        let current = matches!(item, VisualTableMenuItem::Align(alignment) if alignment == menu.alignment);
+        let current =
+            matches!(item, VisualTableMenuItem::Align(alignment) if alignment == menu.alignment);
         let destructive = matches!(item, VisualTableMenuItem::Delete);
         let selector = visual_table_menu_item_selector(item);
         panel = panel.child(
