@@ -2249,6 +2249,7 @@ fn preview_blockquote_exposes_child_list_items_as_selectable_runs() {
             quoted_item("second", 2),
         ],
         alert: None,
+        alert_title: None,
         source_range: 0..0,
     };
 
@@ -21833,6 +21834,51 @@ fn visual_indented_code_enter_keeps_lines_in_the_block(cx: &mut TestAppContext) 
             .filter(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
             .count();
         assert_eq!(code_blocks, 1, "the new line stays inside the code block");
+    });
+}
+
+#[gpui::test]
+fn titled_alert_renders_as_callout_in_read_mode_and_visual_edit(cx: &mut TestAppContext) {
+    let source = "> [!NOTE] 注意\n> 经过了前 6 章的准备。\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Read;
+        app
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("preview-callout-title-0").is_some(),
+        "the titled quote renders as a callout card"
+    );
+    assert!(cx.debug_bounds("preview-callout-body-0").is_some());
+
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.set_view_mode(ViewMode::VisualEdit, cx);
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("visual-callout-title-0").is_some(),
+        "unfocused title row shows the custom title"
+    );
+    // Focusing the title row reveals the authored marker line for editing.
+    let in_title = source.find("注意").unwrap();
+    app.update(cx, |app, cx| app.move_to(in_title, cx));
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let blocks = tab.document.visual_blocks();
+        let owner = blocks
+            .iter()
+            .find(|block| block.source_range.contains(&in_title))
+            .expect("title row owns the marker line");
+        assert!(matches!(owner.kind, VisualBlockKind::CalloutTitle { .. }));
+        assert_eq!(tab.document.text(), source);
     });
 }
 

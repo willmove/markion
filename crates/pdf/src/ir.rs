@@ -67,6 +67,8 @@ pub enum Block {
     },
     Alert {
         kind: AlertKind,
+        /// Custom label replacing the kind name (`> [!NOTE] Title`).
+        title: Option<String>,
         children: Vec<Block>,
     },
     /// Pre-wrapped lines of styled runs; run colors carry syntax highlighting.

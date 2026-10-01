@@ -316,7 +316,7 @@ use parse::{
     clean_preview_text, coalesced_offset_events, finish_rich_text, flush_list_item, gfm_alert_kind,
     heading_anchor_base, heading_level_to_u8, markdown_options, push_nonempty_block,
     push_preview_footnote, push_preview_math, push_preview_rich, render_extended_html_text_nodes,
-    standalone_inline_images, uniquify_heading_anchors,
+    split_titled_alert, standalone_inline_images, uniquify_heading_anchors,
 };
 
 use diagram::collect_html_diagrams;
@@ -2749,7 +2749,8 @@ impl MarkdownDocument {
 
     pub fn render_html_fragment(&self) -> String {
         let body = self.body_text();
-        let parser_events = coalesced_offset_events(body, markdown_options());
+        let parser_events =
+            render::rewrite_html_alerts(coalesced_offset_events(body, markdown_options()), body);
         let (events, formulas) = collect_html_math(parser_events, body);
         let (events, diagrams) = collect_html_diagrams(events);
         let mut output = String::new();
@@ -2854,8 +2855,17 @@ impl MarkdownDocument {
                     }
                     output.push_str(&format!("\\end{{{environment}}}\n\n"));
                 }
-                PreviewBlock::BlockQuote { children, .. } => {
+                PreviewBlock::BlockQuote {
+                    children,
+                    alert,
+                    alert_title,
+                    ..
+                } => {
                     output.push_str("\\begin{quote}\n");
+                    if let Some(kind) = alert {
+                        let label = alert_title.as_deref().unwrap_or(kind.label());
+                        output.push_str(&format!("\\textbf{{{}}}\\par\n", escape_latex(label)));
+                    }
                     let mut children = children.into_iter().peekable();
                     while let Some(child) = children.next() {
                         match child {
@@ -3747,8 +3757,17 @@ impl MarkdownDocument {
                                     .unwrap_or_else(|| source_range.clone()),
                             });
                         }
-                        let alert = quote_alert.take();
-                        let children = std::mem::take(&mut quote_children);
+                        let mut alert = quote_alert.take();
+                        let mut children = std::mem::take(&mut quote_children);
+                        // `> [!NOTE] Title` is not a GFM alert to the parser;
+                        // recognize the titled form here.
+                        let mut alert_title = None;
+                        if alert.is_none()
+                            && let Some((kind, title)) = split_titled_alert(text, &mut children)
+                        {
+                            alert = Some(kind);
+                            alert_title = Some(title);
+                        }
                         if !children.is_empty() || alert.is_some() {
                             let quote_range = quote_source_range.take().unwrap_or(source_range);
                             // The quote materializes as its own block, so a
@@ -3760,6 +3779,7 @@ impl MarkdownDocument {
                             blocks.push(PreviewBlock::BlockQuote {
                                 children,
                                 alert,
+                                alert_title,
                                 source_range: quote_range,
                             });
                         } else {
@@ -6980,10 +7000,14 @@ mod tests {
 
     #[test]
     fn plain_quote_and_marker_with_trailing_text_have_no_alert() {
+        // `> [!NOTE] extra` is now a titled alert (see
+        // `titled_alert_marker_becomes_alert_title`); a marker glued to text
+        // without whitespace is still not an alert.
         for source in [
             "> just a quote\n",
-            "> [!NOTE] extra\n> body\n",
+            "> [!NOTE]extra\n> body\n",
             "> [!CUSTOM]\n> body\n",
+            "> [!CUSTOM] Title\n> body\n",
         ] {
             let doc = MarkdownDocument::from_text(source);
             let blocks = doc.preview_blocks();

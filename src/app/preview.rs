@@ -3885,8 +3885,9 @@ fn callout_background(kind: AlertKind) -> gpui::Background {
 
 /// The icon + bold accent label shared by preview callout cards and the
 /// Visual Edit callout title row.
-fn callout_title_row(kind: AlertKind, font_size: f32) -> Div {
+fn callout_title_row(kind: AlertKind, title: Option<&str>, font_size: f32) -> Div {
     let accent = callout_accent_color(kind);
+    let label = SharedString::from(title.unwrap_or(callout_label(kind)).to_string());
     div()
         .flex()
         .items_center()
@@ -3895,7 +3896,7 @@ fn callout_title_row(kind: AlertKind, font_size: f32) -> Div {
         .text_size(px(font_size))
         .text_color(accent)
         .child(crate::ui::icon::icon(callout_icon(kind), font_size, accent))
-        .child(callout_label(kind))
+        .child(label)
 }
 
 pub(super) fn visual_block_index_for_offset(
@@ -4655,7 +4656,7 @@ fn visual_block_content_view(
         VisualBlockKind::Table { rows, .. } => {
             div().child(visual_table_view(app, block, block_index, rows, cx))
         }
-        VisualBlockKind::CalloutTitle { kind } => {
+        VisualBlockKind::CalloutTitle { kind, title } => {
             if owns_caret {
                 // Focused, the projection reveals the authored marker line
                 // (`> [!NOTE]`) as an editable source-backed range.
@@ -4670,7 +4671,7 @@ fn visual_block_content_view(
                 let text = app.active_tab().document.text();
                 let click_target = callout_marker_line_caret_target(text, source_range)
                     .unwrap_or(source_range.start);
-                callout_title_row(*kind, typography.rendered_font_size)
+                callout_title_row(*kind, title.as_deref(), typography.rendered_font_size)
                     .debug_selector(move || format!("visual-callout-title-{block_index}"))
                     .cursor(CursorStyle::IBeam)
                     .on_mouse_down(
@@ -7831,6 +7832,7 @@ pub(super) fn preview_block_view(
         PreviewBlock::BlockQuote {
             children,
             alert,
+            alert_title,
             source_range,
         } => {
             let mut container = div();
@@ -7941,22 +7943,25 @@ pub(super) fn preview_block_view(
                         .rounded_r_md()
                         .bg(callout_background(kind))
                         .child(
-                            callout_title_row(kind, typography.quote_font_size)
-                                .id(ElementId::from(("preview-callout-title", block_index)))
-                                .debug_selector(move || {
-                                    format!("preview-callout-title-{block_index}")
-                                })
-                                .cursor(CursorStyle::PointingHand)
-                                .child(crate::ui::icon::icon(
-                                    if folded {
-                                        crate::ui::icon::Icon::ChevronRight
-                                    } else {
-                                        crate::ui::icon::Icon::ChevronDown
-                                    },
-                                    12.,
-                                    callout_accent_color(kind),
-                                ))
-                                .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| {
+                            callout_title_row(
+                                kind,
+                                alert_title.as_deref(),
+                                typography.quote_font_size,
+                            )
+                            .id(ElementId::from(("preview-callout-title", block_index)))
+                            .debug_selector(move || format!("preview-callout-title-{block_index}"))
+                            .cursor(CursorStyle::PointingHand)
+                            .child(crate::ui::icon::icon(
+                                if folded {
+                                    crate::ui::icon::Icon::ChevronRight
+                                } else {
+                                    crate::ui::icon::Icon::ChevronDown
+                                },
+                                12.,
+                                callout_accent_color(kind),
+                            ))
+                            .on_click(cx.listener(
+                                move |app, _: &ClickEvent, _, cx| {
                                     let tab = app.active_tab_mut();
                                     if !tab.folded_preview_alerts.remove(&fold_key) {
                                         tab.folded_preview_alerts.insert(fold_key);
@@ -7967,7 +7972,8 @@ pub(super) fn preview_block_view(
                                         tab.preview_list.splice(block_index..block_index + 1, 1);
                                     }
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         )
                         .when(!folded, |card| {
                             card.child(

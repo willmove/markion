@@ -683,7 +683,12 @@ impl<'a> Layouter<'a> {
         Ok(())
     }
 
-    fn alert(&mut self, kind: AlertKind, children: &[Block]) -> Result<(), PdfError> {
+    fn alert(
+        &mut self,
+        kind: AlertKind,
+        title: Option<&str>,
+        children: &[Block],
+    ) -> Result<(), PdfError> {
         self.flush_pending(0.0);
         self.y += theme::BLOCK_SPACING * 0.5;
         let insert_idx = self.cur_page().items.len();
@@ -700,7 +705,7 @@ impl<'a> Layouter<'a> {
         self.geom.left += theme::ACCENT_INDENT;
         // Bold kind label.
         let label_run = Run {
-            text: theme::alert_label(kind).to_string(),
+            text: title.unwrap_or(theme::alert_label(kind)).to_string(),
             style: Style {
                 bold: true,
                 color: Some(theme::alert_accent(kind)),
@@ -1071,7 +1076,11 @@ impl<'a> Layouter<'a> {
                 content,
             } => self.list_item(*indent_level, *marker, content),
             Block::Quote { children } => self.quote(children),
-            Block::Alert { kind, children } => self.alert(*kind, children),
+            Block::Alert {
+                kind,
+                title,
+                children,
+            } => self.alert(*kind, title.as_deref(), children),
             Block::CodeBlock { language, lines } => self.code_block(language, lines),
             Block::Table {
                 header,

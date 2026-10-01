@@ -145,6 +145,90 @@ struct PendingFencedMath {
     authored_start: usize,
 }
 
+/// HTML export of GFM alerts: every alert quote opens with the alert classes
+/// and a `markdown-alert-title` paragraph. A plain quote whose first
+/// paragraph line is a titled marker (`[!NOTE] Title`, which pulldown-cmark
+/// does not type) becomes an alert with that title, and the marker line's
+/// events are dropped.
+pub(crate) fn rewrite_html_alerts<'a>(
+    events: Vec<(Event<'a>, Range<usize>)>,
+    source: &str,
+) -> Vec<(Event<'a>, Range<usize>)> {
+    let mut out = Vec::with_capacity(events.len());
+    let mut index = 0;
+    while index < events.len() {
+        let (event, range) = &events[index];
+        let Event::Start(Tag::BlockQuote(kind)) = event else {
+            out.push(events[index].clone());
+            index += 1;
+            continue;
+        };
+        let range = range.clone();
+        if let Some(kind) = kind {
+            let kind = crate::parse::gfm_alert_kind(*kind);
+            out.push((alert_open_html(kind, kind.label()), range));
+            index += 1;
+            continue;
+        }
+        // Untyped quote: look for `[!KIND] Title` as the first paragraph line.
+        let titled = match events.get(index + 1) {
+            Some((Event::Start(Tag::Paragraph), paragraph_range)) => {
+                let line = source
+                    .get(paragraph_range.clone())
+                    .and_then(|text| text.split('\n').next())
+                    .map(|line| line.trim_end_matches('\r'))
+                    .unwrap_or("");
+                crate::parse::titled_alert_marker(line)
+            }
+            _ => None,
+        };
+        let Some(kind) = titled else {
+            out.push(events[index].clone());
+            index += 1;
+            continue;
+        };
+        // Collect the marker line's text up to its break or the paragraph end.
+        let mut cursor = index + 2;
+        let mut line_text = String::new();
+        let mut paragraph_ended = false;
+        while let Some((event, _)) = events.get(cursor) {
+            match event {
+                Event::SoftBreak | Event::HardBreak => {
+                    cursor += 1;
+                    break;
+                }
+                Event::End(TagEnd::Paragraph) => {
+                    paragraph_ended = true;
+                    cursor += 1;
+                    break;
+                }
+                Event::Text(text) | Event::Code(text) => line_text.push_str(text),
+                _ => {}
+            }
+            cursor += 1;
+        }
+        let title = line_text
+            .find(']')
+            .map(|close| line_text[close + 1..].trim().to_string())
+            .unwrap_or_default();
+        out.push((alert_open_html(kind, &title), range));
+        if !paragraph_ended {
+            // The body keeps the rest of the first paragraph.
+            out.push(events[index + 1].clone());
+        }
+        index = cursor;
+    }
+    out
+}
+
+fn alert_open_html<'a>(kind: crate::AlertKind, title: &str) -> Event<'a> {
+    Event::Html(CowStr::from(format!(
+        "<blockquote class=\"markdown-alert markdown-alert-{}\">\n<p class=\"markdown-alert-title\">{}</p>\n",
+        kind.class_name(),
+        crate::escape::escape_html_text(title)
+    )))
+}
+
 /// Isolate formulas as opaque markers before extended-inline HTML rewriting,
 /// retaining the exact authored range for accessible labels and error
 /// fallback. Static SVG is inserted only after all text-node transforms.

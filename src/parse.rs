@@ -785,6 +785,106 @@ fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
     }
 }
 
+/// Parses a titled alert marker line (`[!NOTE] Title`): one of the five GFM
+/// kinds (ASCII case-insensitive), `]`, at least one space or tab, then
+/// non-empty title text. Untitled markers are pulldown-cmark's to recognize.
+pub(crate) fn titled_alert_marker(line: &str) -> Option<crate::AlertKind> {
+    let rest = line.strip_prefix("[!")?;
+    let close = rest.find(']')?;
+    let kind = match rest[..close].to_ascii_lowercase().as_str() {
+        "note" => crate::AlertKind::Note,
+        "tip" => crate::AlertKind::Tip,
+        "important" => crate::AlertKind::Important,
+        "warning" => crate::AlertKind::Warning,
+        "caution" => crate::AlertKind::Caution,
+        _ => return None,
+    };
+    let after = &rest[close + 1..];
+    let title = after.trim_start_matches([' ', '\t']);
+    (title.len() < after.len() && !title.trim().is_empty()).then_some(kind)
+}
+
+/// Turns an untyped quote whose first paragraph starts with a titled alert
+/// marker line into a titled alert: returns the kind and the title (the
+/// rendered first line after the marker), and removes that line from the
+/// first child, advancing its source range to the next line's content. A
+/// paragraph holding only the marker line is dropped.
+pub(crate) fn split_titled_alert(
+    text: &str,
+    children: &mut Vec<PreviewBlock>,
+) -> Option<(crate::AlertKind, String)> {
+    let Some(PreviewBlock::Paragraph {
+        text: rich,
+        source_range,
+    }) = children.first()
+    else {
+        return None;
+    };
+    let authored = text.get(source_range.clone())?;
+    let authored_line = authored
+        .split('\n')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('\r');
+    let kind = titled_alert_marker(authored_line)?;
+    let rendered_line = rich.text.split('\n').next().unwrap_or("");
+    let title = rendered_line
+        .find(']')
+        .map(|close| rendered_line[close + 1..].trim().to_string())
+        .filter(|title| !title.is_empty())?;
+
+    let Some(newline) = authored.find('\n') else {
+        children.remove(0);
+        return Some((kind, title));
+    };
+    // Drop every span up to and including the first rendered line break.
+    let mut remaining = Vec::new();
+    let mut cut = false;
+    for span in &rich.spans {
+        if cut {
+            remaining.push(span.clone());
+            continue;
+        }
+        if span.image.is_some() {
+            continue;
+        }
+        if let Some(index) = span.text.find('\n') {
+            cut = true;
+            let rest = &span.text[index + 1..];
+            if !rest.is_empty() {
+                remaining.push(InlineSpan {
+                    text: rest.to_string(),
+                    ..span.clone()
+                });
+            }
+        }
+    }
+    let body = finish_rich_text(remaining);
+    // The body starts at the next line's content: skip its quote markers.
+    let line_start = source_range.start + newline + 1;
+    let bytes = text.as_bytes();
+    let mut body_start = line_start;
+    while body_start < source_range.end && matches!(bytes[body_start], b' ' | b'\t') {
+        body_start += 1;
+    }
+    while body_start < source_range.end && bytes[body_start] == b'>' {
+        body_start += 1;
+        if body_start < source_range.end && matches!(bytes[body_start], b' ' | b'\t') {
+            body_start += 1;
+        }
+    }
+    let body_range = body_start..source_range.end;
+    if body.is_empty() || body_range.is_empty() {
+        children.remove(0);
+    } else {
+        children[0] = PreviewBlock::Paragraph {
+            text: body,
+            source_range: body_range,
+        };
+    }
+    Some((kind, title))
+}
+
 /// Appends one definition paragraph's spans to the definition's flattened
 /// text, separating paragraphs with a line break.
 pub(crate) fn append_definition_spans(target: &mut Vec<InlineSpan>, spans: Vec<InlineSpan>) {

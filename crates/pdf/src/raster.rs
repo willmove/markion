@@ -591,7 +591,12 @@ fn draw_quote(raster: &mut Raster, children: &[Block]) -> Result<(), PdfError> {
     Ok(())
 }
 
-fn draw_alert(raster: &mut Raster, kind: AlertKind, children: &[Block]) -> Result<(), PdfError> {
+fn draw_alert(
+    raster: &mut Raster,
+    kind: AlertKind,
+    title: Option<&str>,
+    children: &[Block],
+) -> Result<(), PdfError> {
     let start = raster.y;
     let left = raster.geom.left;
     let accent = theme::alert_accent(kind);
@@ -602,7 +607,7 @@ fn draw_alert(raster: &mut Raster, kind: AlertKind, children: &[Block]) -> Resul
 
     // Bold kind label, with a tint behind just the label line.
     let label_run = Run {
-        text: theme::alert_label(kind).to_string(),
+        text: title.unwrap_or(theme::alert_label(kind)).to_string(),
         style: Style {
             bold: true,
             color: Some(accent),
@@ -900,7 +905,11 @@ fn draw_block(raster: &mut Raster, block: &Block) -> Result<(), PdfError> {
             content,
         } => draw_list_item(raster, *indent_level, *marker, content),
         Block::Quote { children } => draw_quote(raster, children),
-        Block::Alert { kind, children } => draw_alert(raster, *kind, children),
+        Block::Alert {
+            kind,
+            title,
+            children,
+        } => draw_alert(raster, *kind, title.as_deref(), children),
         Block::CodeBlock { language: _, lines } => draw_code_block(raster, lines),
         Block::Table {
             header,

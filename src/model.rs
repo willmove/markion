@@ -1564,6 +1564,8 @@ pub enum VisualBlockKind {
     /// hidden until focus reveals it through the quote marker mechanism.
     CalloutTitle {
         kind: AlertKind,
+        /// Custom title authored after the marker (`> [!NOTE] Title`).
+        title: Option<String>,
     },
     CodeBlock {
         language: Option<String>,
@@ -2032,6 +2034,30 @@ pub enum AlertKind {
     Caution,
 }
 
+impl AlertKind {
+    /// Canonical label shown when an alert has no custom title.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Note => "Note",
+            Self::Tip => "Tip",
+            Self::Important => "Important",
+            Self::Warning => "Warning",
+            Self::Caution => "Caution",
+        }
+    }
+
+    /// Lowercase kind name used in `markdown-alert-<kind>` HTML classes.
+    pub fn class_name(self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::Tip => "tip",
+            Self::Important => "important",
+            Self::Warning => "warning",
+            Self::Caution => "caution",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreviewBlock {
     Heading {
@@ -2063,6 +2089,10 @@ pub enum PreviewBlock {
         /// structure (no inline events own its bytes), so consumers must
         /// account for it separately from `children`.
         alert: Option<AlertKind>,
+        /// Custom title of an alert whose marker line carries one
+        /// (`> [!NOTE] Title`); the marker line is then not part of
+        /// `children`.
+        alert_title: Option<String>,
         source_range: Range<usize>,
     },
     CodeBlock {

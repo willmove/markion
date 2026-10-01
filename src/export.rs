@@ -240,7 +240,10 @@ fn pdf_single_block(
             })
         }
         PreviewBlock::BlockQuote {
-            children, alert, ..
+            children,
+            alert,
+            alert_title,
+            ..
         } => {
             let children: Vec<PdfBlock> = children
                 .iter()
@@ -251,6 +254,7 @@ fn pdf_single_block(
             if let Some(kind) = alert {
                 Some(PdfBlock::Alert {
                     kind: pdf_alert_kind(*kind),
+                    title: alert_title.clone(),
                     children,
                 })
             } else {
@@ -1605,11 +1609,14 @@ fn render_docx_block(state: &mut DocxRenderState, block: &PreviewBlock) {
             render_docx_list_item(state, None, *level, *ordered, *checked, text);
         }
         PreviewBlock::BlockQuote {
-            children, alert, ..
+            children,
+            alert,
+            alert_title,
+            ..
         } => {
             state.end_list_group();
             if let Some(kind) = alert {
-                render_docx_alert(state, *kind, children);
+                render_docx_alert(state, *kind, alert_title.as_deref(), children);
                 return;
             }
             for child in children {
@@ -1867,7 +1874,12 @@ fn render_docx_image(state: &mut DocxRenderState, alt: &str, url: &str) {
 
 /// GFM alert blockquotes become callout paragraphs: a bold kind label plus an
 /// accented left border and indentation, instead of `> `-prefixed text.
-fn render_docx_alert(state: &mut DocxRenderState, kind: AlertKind, children: &[PreviewBlock]) {
+fn render_docx_alert(
+    state: &mut DocxRenderState,
+    kind: AlertKind,
+    title: Option<&str>,
+    children: &[PreviewBlock],
+) {
     let (label, color) = match kind {
         AlertKind::Note => ("Note", "0969DA"),
         AlertKind::Tip => ("Tip", "1A7F37"),
@@ -1882,7 +1894,7 @@ fn render_docx_alert(state: &mut DocxRenderState, kind: AlertKind, children: &[P
         bold: true,
         ..InlineStyle::default()
     };
-    let runs = docx_run(label, &label_style, false);
+    let runs = docx_run(title.unwrap_or(label), &label_style, false);
     state.push_paragraph_ex(None, None, Some(720), &border, &runs);
     for child in children {
         match child {
@@ -3190,6 +3202,66 @@ mod tests {
         let document_xml = entry(&bytes, "word/document.xml");
         assert!(document_xml.contains("<w:pBdr><w:bottom w:val=\"single\""));
         assert!(!document_xml.contains("----------"));
+    }
+
+    #[test]
+    fn alert_title_export_uses_custom_and_default_titles() {
+        let titled = MarkdownDocument::from_text("> [!NOTE] 注意\n> 经过了前 6 章的准备。\n");
+
+        let xml = document_xml(&docx_parts(&titled));
+        let label = xml.find(">注意</w:t>").expect("custom DOCX label");
+        assert!(xml[..label].contains("<w:b/>"), "label is bold");
+        assert!(
+            !xml.contains("[!NOTE]"),
+            "marker line is not body text: {xml}"
+        );
+        assert!(xml.contains("经过了前 6 章的准备。"));
+
+        let ir = build_pdf_ir(&titled, &PdfExportOptions::default(), None, &HashMap::new());
+        let PdfBlock::Alert {
+            title, children, ..
+        } = &ir.blocks[0]
+        else {
+            panic!("PDF alert block: {:?}", ir.blocks);
+        };
+        assert_eq!(title.as_deref(), Some("注意"));
+        assert!(!format!("{children:?}").contains("[!NOTE]"));
+
+        let html = titled.render_html_fragment();
+        assert!(
+            html.contains("<blockquote class=\"markdown-alert markdown-alert-note\">"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<p class=\"markdown-alert-title\">注意</p>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("经过了前 6 章的准备。") && !html.contains("[!NOTE]"),
+            "{html}"
+        );
+
+        let latex = titled.render_latex_document();
+        assert!(latex.contains("\\textbf{注意}\\par"), "{latex}");
+        assert!(!latex.contains("[!NOTE]"), "{latex}");
+
+        // Untitled alerts get their default label in HTML and LaTeX too.
+        let plain = MarkdownDocument::from_text("> [!TIP]\n> Body.\n");
+        let html = plain.render_html_fragment();
+        assert!(
+            html.contains("<p class=\"markdown-alert-title\">Tip</p>"),
+            "{html}"
+        );
+        assert!(plain.render_latex_document().contains("\\textbf{Tip}\\par"));
+
+        // A title-only alert keeps no empty paragraph in HTML.
+        let title_only =
+            MarkdownDocument::from_text("> [!TIP] Remember this\n").render_html_fragment();
+        assert!(
+            title_only.contains("<p class=\"markdown-alert-title\">Remember this</p>"),
+            "{title_only}"
+        );
+        assert!(!title_only.contains("<p></p>"), "{title_only}");
     }
 
     #[test]

@@ -545,6 +545,8 @@ struct VisualLeaf<'a> {
     /// Alert kind of the enclosing quote group, when it opens with a
     /// `[!NOTE]`-style marker line.
     alert: Option<AlertKind>,
+    /// Custom title of that alert (`> [!NOTE] Title`), if any.
+    alert_title: Option<String>,
     /// Body-less alert group: no preview child exists, so the leaf renders
     /// the group's marker line itself as a callout title row.
     marker_only: bool,
@@ -581,6 +583,7 @@ pub(crate) fn build_visual_blocks(
             PreviewBlock::BlockQuote {
                 children,
                 alert,
+                alert_title,
                 source_range,
             } => {
                 if children.is_empty() && alert.is_some() {
@@ -588,6 +591,7 @@ pub(crate) fn build_visual_blocks(
                         block,
                         quote_group: Some(source_range.clone()),
                         alert: *alert,
+                        alert_title: alert_title.clone(),
                         marker_only: true,
                     });
                 }
@@ -596,6 +600,7 @@ pub(crate) fn build_visual_blocks(
                         block: child,
                         quote_group: Some(source_range.clone()),
                         alert: *alert,
+                        alert_title: alert_title.clone(),
                         marker_only: false,
                     });
                 }
@@ -604,6 +609,7 @@ pub(crate) fn build_visual_blocks(
                 block,
                 quote_group: None,
                 alert: None,
+                alert_title: None,
                 marker_only: false,
             }),
         }
@@ -725,6 +731,7 @@ pub(crate) fn build_visual_blocks(
                         text,
                         marker_range.clone(),
                         kind,
+                        leaf.alert_title.clone(),
                         &group,
                         &mut allocate_id,
                     ));
@@ -753,6 +760,7 @@ pub(crate) fn build_visual_blocks(
                 text,
                 range.clone(),
                 kind,
+                leaf.alert_title.clone(),
                 &group,
                 &mut allocate_id,
             ));
@@ -1157,6 +1165,7 @@ fn callout_title_block(
     text: &str,
     range: Range<usize>,
     kind: AlertKind,
+    title: Option<String>,
     group: &Range<usize>,
     allocate_id: &mut impl FnMut() -> VisualBlockId,
 ) -> VisualBlock {
@@ -1173,7 +1182,7 @@ fn callout_title_block(
     quote_context.marker_ranges = vec![range.start..line_end];
     VisualBlock {
         id: allocate_id(),
-        kind: VisualBlockKind::CalloutTitle { kind },
+        kind: VisualBlockKind::CalloutTitle { kind, title },
         source_range: range,
         editable_runs: Vec::new(),
         reveal_groups: Vec::new(),
@@ -3950,7 +3959,8 @@ mod tests {
         assert!(matches!(
             blocks[0].kind,
             VisualBlockKind::CalloutTitle {
-                kind: AlertKind::Note
+                kind: AlertKind::Note,
+                title: None
             }
         ));
         assert_eq!(&source[blocks[0].source_range.clone()], "> [!NOTE]\n");
@@ -4033,7 +4043,8 @@ mod tests {
         assert!(matches!(
             blocks[0].kind,
             VisualBlockKind::CalloutTitle {
-                kind: AlertKind::Tip
+                kind: AlertKind::Tip,
+                title: None
             }
         ));
         assert_eq!(blocks[0].source_range, 0..source.len());
@@ -4066,7 +4077,8 @@ mod tests {
                     matches!(
                         block.kind,
                         VisualBlockKind::CalloutTitle {
-                            kind: AlertKind::Note
+                            kind: AlertKind::Note,
+                            title: None
                         }
                     )
                 })
@@ -4154,9 +4166,11 @@ mod tests {
 
     #[test]
     fn marker_line_with_trailing_text_stays_literal() {
-        // `> [!NOTE] extra` is not a GFM alert upstream: it must stay plain
-        // paragraph text (on its own line once soft breaks are preserved).
-        let source = "> [!NOTE] extra\n> body\n";
+        // A marker glued to text (`> [!NOTE]extra`) is neither a GFM alert
+        // nor a titled alert: it must stay plain paragraph text (on its own
+        // line once soft breaks are preserved). `> [!NOTE] extra` with a
+        // space is a titled alert instead.
+        let source = "> [!NOTE]extra\n> body\n";
         let doc = MarkdownDocument::from_text(source);
         let blocks = doc.visual_blocks_shared();
         let blocks = content_before_eof_row(source, &blocks);
@@ -4168,7 +4182,7 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         let cursor = blocks[0].editable_runs[0].content_range.start;
         let projection = build_visual_projection(source, &blocks[0], cursor..cursor, cursor);
-        assert_eq!(projection.text, "[!NOTE] extra\nbody");
+        assert_eq!(projection.text, "[!NOTE]extra\nbody");
     }
 
     #[test]
@@ -4318,6 +4332,7 @@ mod tests {
                 source_range: 0..7,
             }],
             alert: None,
+            alert_title: None,
             source_range: 9..source.len(),
         }];
         let blocks = build_visual_blocks(source, &preview, VisualBlockId::fresh);
@@ -8548,6 +8563,115 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
         let tokens = data_uri_payload_ranges(&source, 1..source.len() - 1);
         assert_eq!(tokens.len(), 1);
         assert_eq!(&source[tokens[0].clone()], &payload);
+    }
+
+    #[test]
+    fn titled_alert_marker_becomes_alert_title() {
+        let quote = |source: &str| {
+            let blocks = MarkdownDocument::from_text(source).preview_blocks();
+            match blocks.into_iter().next() {
+                Some(PreviewBlock::BlockQuote {
+                    children,
+                    alert,
+                    alert_title,
+                    ..
+                }) => (
+                    alert,
+                    alert_title,
+                    children
+                        .iter()
+                        .map(PreviewBlock::plain_text)
+                        .collect::<Vec<_>>(),
+                    children
+                        .iter()
+                        .map(|child| source[child.source_range().clone()].to_string())
+                        .collect::<Vec<_>>(),
+                ),
+                other => panic!("quote expected: {other:?}"),
+            }
+        };
+
+        // The user's report.
+        let source = "> [!NOTE] 注意\n> 经过了前 6 章的准备，各位已经跟我一起翻越了几座大山。\n";
+        let (alert, title, texts, ranges) = quote(source);
+        assert_eq!(alert, Some(AlertKind::Note));
+        assert_eq!(title.as_deref(), Some("注意"));
+        assert_eq!(
+            texts,
+            vec!["经过了前 6 章的准备，各位已经跟我一起翻越了几座大山。".to_string()]
+        );
+        assert_eq!(
+            ranges,
+            vec!["经过了前 6 章的准备，各位已经跟我一起翻越了几座大山。\n".to_string()]
+        );
+
+        let (alert, title, ..) = quote("> [!warning] Mind **the** gap\n> body\n");
+        assert_eq!(alert, Some(AlertKind::Warning));
+        assert_eq!(
+            title.as_deref(),
+            Some("Mind the gap"),
+            "title is rendered plain text"
+        );
+
+        let (alert, title, texts, _) = quote("> [!TIP] Remember this\n");
+        assert_eq!(
+            (alert, title.as_deref()),
+            (Some(AlertKind::Tip), Some("Remember this"))
+        );
+        assert!(texts.is_empty(), "title-only alert has no body");
+
+        // Lazy continuation: the body line has no `>`.
+        let (alert, _, texts, _) = quote("> [!CAUTION] Hot\nlazy body\n");
+        assert_eq!(alert, Some(AlertKind::Caution));
+        assert_eq!(texts, vec!["lazy body".to_string()]);
+
+        // Untitled GFM alerts are unchanged.
+        let (alert, title, texts, _) = quote("> [!NOTE]\n> plain alert\n");
+        assert_eq!((alert, title), (Some(AlertKind::Note), None));
+        assert_eq!(texts, vec!["plain alert".to_string()]);
+
+        for literal in [
+            "> [!CUSTOM] Title\n> body\n",
+            "> [!NOTE]Title\n> body\n",
+            "> [!NOTE] \n> body\n",
+        ] {
+            let (alert, title, texts, _) = quote(literal);
+            assert!(title.is_none(), "{literal:?}");
+            if literal.contains("CUSTOM") || literal.contains("]Title") {
+                assert_eq!(alert, None, "{literal:?}");
+                assert!(
+                    texts[0].starts_with("[!"),
+                    "marker stays literal text: {literal:?}"
+                );
+            }
+        }
+
+        // Visual Edit: the marker line (with its title) is the title row and
+        // every byte has exactly one owner.
+        let document = MarkdownDocument::from_text(source);
+        let rows = document.visual_blocks();
+        let title_row = rows
+            .iter()
+            .find(|row| matches!(row.kind, VisualBlockKind::CalloutTitle { .. }))
+            .expect("callout title row");
+        assert_eq!(
+            title_row.kind,
+            VisualBlockKind::CalloutTitle {
+                kind: AlertKind::Note,
+                title: Some("注意".to_string()),
+            }
+        );
+        assert_eq!(&source[title_row.source_range.clone()], "> [!NOTE] 注意\n");
+        let mut owned = vec![0usize; source.len()];
+        for row in &rows {
+            for offset in row.source_range.clone() {
+                owned[offset] += 1;
+            }
+        }
+        assert!(
+            owned.iter().all(|count| *count <= 1),
+            "no byte has two owners"
+        );
     }
 
     #[test]
