@@ -17020,7 +17020,7 @@ fn pasted_tsv_clipboard_becomes_gfm_table_with_one_undo(cx: &mut TestAppContext)
     app.update(cx, |app, _| {
         assert_eq!(
             app.active_tab().document.text(),
-            "before | 姓名 | 年龄 |\n| --- | --- |\n| 张三 | 18 |"
+            "before \n\n| 姓名 | 年龄 |\n| --- | --- |\n| 张三 | 18 |"
         );
         assert_eq!(app.active_tab().undo_stack.len(), 1);
         assert!(app.active_tab_mut().apply_undo());
@@ -17069,10 +17069,66 @@ fn pasted_spreadsheet_html_uses_first_row_as_gfm_header(cx: &mut TestAppContext)
     app.update(cx, |app, _| {
         assert_eq!(
             app.active_tab().document.text(),
-            "before | 姓名 | 年龄 |\n| --- | --- |\n| 张三 | 18 |"
+            "before \n\n| 姓名 | 年龄 |\n| --- | --- |\n| 张三 | 18 |"
         );
         assert!(!app.active_tab().document.text().contains("<table"));
         assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn pasted_excel_cf_html_fragment_becomes_gfm_table(cx: &mut TestAppContext) {
+    // Excel's CF_HTML fragment starts inside `<table>`: the clipboard reader
+    // hands over `<col>`/`<tr>` rows with no table element.
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("intro\n\n"))];
+        app.active_tab_mut().selected_range = 7..7;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_html(
+            "名称\t数量\r\n苹果\t3\r\n".into(),
+            "\r\n <col width=68 span=2 style='width:51pt'>\r\n \
+             <tr height=19><td class=xl63>名称</td><td class=xl63>数量</td></tr>\r\n \
+             <tr height=19><td>苹果</td><td align=right>3</td></tr>\r\n"
+                .into(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "intro\n\n| 名称 | 数量 |\n| --- | --- |\n| 苹果 | 3 |"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn pasted_spreadsheet_falls_back_to_tsv_when_html_loses_the_grid(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("x after"))];
+        app.active_tab_mut().selected_range = 0..1;
+        app
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_html(
+            "a\tb\n1\t2".into(),
+            "<div><span>a</span> <span>b</span><br><span>1</span> <span>2</span></div>".into(),
+        ));
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.paste(&Paste, window, cx));
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "| a | b |\n| --- | --- |\n| 1 | 2 |\n\n after"
+        );
     });
 }
 

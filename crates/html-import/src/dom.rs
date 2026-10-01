@@ -177,9 +177,12 @@ pub(crate) fn parse(html: &str) -> Element {
     stack.into_iter().next().unwrap_or_default()
 }
 
-fn push_text(stack: &mut [Element], text: &str) {
+fn push_text(stack: &mut Vec<Element>, text: &str) {
     if text.is_empty() {
         return;
+    }
+    if !text.trim().is_empty() {
+        close_implied_table_at_top(stack);
     }
     if let Some(top) = stack.last_mut() {
         if let Some(Node::Text(existing)) = top.children.last_mut() {
@@ -201,6 +204,11 @@ fn open_element(stack: &mut Vec<Element>, tag: OpenTag) {
         "tr" => close_implied(stack, &["table", "thead", "tbody", "tfoot"], &["tr"]),
         _ => {}
     }
+    if is_table_part_tag(&tag.name) {
+        imply_table_context(stack, &tag.name);
+    } else {
+        close_implied_table_at_top(stack);
+    }
     if closes_paragraph(&tag.name) && stack.last().map(|top| top.tag.as_str()) == Some("p") {
         pop_to(stack, stack.len() - 1);
     }
@@ -221,6 +229,58 @@ fn open_element(stack: &mut Vec<Element>, tag: OpenTag) {
         return;
     }
     stack.push(element);
+}
+
+/// Marks a `table` (or `tr`) the builder synthesized around orphan table
+/// parts; it never comes from the source HTML.
+const IMPLIED_ATTR: &str = "data-markion-implied";
+
+fn is_table_part_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "caption" | "colgroup" | "col" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
+    )
+}
+
+fn implied(tag: &str) -> Element {
+    Element {
+        tag: tag.to_owned(),
+        attrs: vec![(IMPLIED_ATTR.to_owned(), String::new())],
+        children: Vec::new(),
+    }
+}
+
+/// Table parts outside any `table` get a synthesized one, and cells outside
+/// any `tr` get a synthesized row. Excel's CF_HTML fragment, for example,
+/// starts inside its `<table>`: `StartFragment` points at the `<col>`/`<tr>`
+/// run, so the extracted fragment has rows but no table.
+fn imply_table_context(stack: &mut Vec<Element>, name: &str) {
+    if !stack[1..].iter().any(|element| element.tag == "table") {
+        stack.push(implied("table"));
+    }
+    if matches!(name, "td" | "th") {
+        let row_open = stack[1..]
+            .iter()
+            .rev()
+            .map(|element| element.tag.as_str())
+            .find(|tag| matches!(*tag, "tr" | "table" | "thead" | "tbody" | "tfoot"))
+            == Some("tr");
+        if !row_open {
+            stack.push(implied("tr"));
+        }
+    }
+}
+
+/// Content that is not a table part ends a synthesized table instead of
+/// being swallowed into it.
+fn close_implied_table_at_top(stack: &mut Vec<Element>) {
+    if stack.len() > 1
+        && stack
+            .last()
+            .is_some_and(|top| top.tag == "table" && top.attr(IMPLIED_ATTR).is_some())
+    {
+        pop_to(stack, stack.len() - 1);
+    }
 }
 
 /// Closes an implied open element (e.g. a new `li` closes the previous `li`)

@@ -535,3 +535,50 @@ fn wps_shaped_html_table() {
         </table></body></html>";
     assert_eq!(md(html), "| 项目 | 数量 |\n| --- | --- |\n| A | 2 |");
 }
+
+/// Real Excel 16 (Windows) CF_HTML payload sliced at its
+/// `StartFragment`/`EndFragment` offsets, as the clipboard reader hands it
+/// over: the fragment starts inside `<table>`, so it carries `<col>` and
+/// `<tr>` rows but no table element.
+#[test]
+fn excel_cf_html_fragment_without_table_element() {
+    let fragment = include_str!("fixtures/excel16_cf_html_fragment.html");
+    assert!(!fragment.contains("<table"));
+    assert_eq!(
+        md(fragment),
+        "| 名称 | 数量 | 单价 | 备注 |\n\
+         | --- | --- | --- | --- |\n\
+         | 苹果 | 3 | 4.50 | a\\|b |\n\
+         | 香蕉 | 12 | 2.25 |  |\n\
+         | \\*粗体\\* | 1000 | 0.10 | 多行 |"
+    );
+}
+
+#[test]
+fn orphan_cells_get_an_implied_row_and_table() {
+    assert_eq!(md("<td>a</td><td>b</td>"), "| a | b |\n| --- | --- |");
+    assert_eq!(
+        md("<tbody><tr><td>x</td></tr><tr><td>y</td></tr></tbody>"),
+        "| x |\n| --- |\n| y |"
+    );
+}
+
+#[test]
+fn content_after_orphan_rows_is_not_swallowed_by_the_implied_table() {
+    assert_eq!(
+        md("<tr><td>a</td><td>b</td></tr><tr><td>1</td><td>2</td></tr><p>after</p>"),
+        "| a | b |\n| --- | --- |\n| 1 | 2 |\n\nafter"
+    );
+    assert_eq!(
+        md("<tr><td>a</td></tr><tr><td>1</td></tr>tail text"),
+        "| a |\n| --- |\n| 1 |\n\ntail text"
+    );
+}
+
+#[test]
+fn real_tables_are_unchanged_by_implied_table_handling() {
+    assert_eq!(
+        md("<p>before</p><table><tr><td>a</td></tr><tr><td>1</td></tr></table><p>after</p>"),
+        "before\n\n| a |\n| --- |\n| 1 |\n\nafter"
+    );
+}

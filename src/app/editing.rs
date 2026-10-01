@@ -104,13 +104,53 @@ pub(super) fn visual_selection_format_target_for_block(
 }
 
 fn converted_clipboard_markdown(html: Option<&str>, text: &str) -> String {
+    let tsv = markion_html_import::tsv_to_markdown(text);
     if let Some(html) = html {
         let markdown = markion_html_import::html_to_markdown(html);
-        if !markdown.is_empty() {
+        // A rectangular tab grid in the plain-text flavor is a spreadsheet
+        // copy; if the HTML flavor lost the grid (an unfamiliar dialect),
+        // the TSV table is the faithful conversion.
+        if !markdown.is_empty() && (tsv.is_none() || contains_gfm_table(&markdown)) {
             return markdown;
         }
     }
-    markion_html_import::tsv_to_markdown(text).unwrap_or_else(|| text.to_owned())
+    tsv.unwrap_or_else(|| text.to_owned())
+}
+
+fn is_gfm_delimiter_row(line: &str) -> bool {
+    let line = line.trim();
+    line.starts_with('|')
+        && line.contains('-')
+        && line.chars().all(|ch| matches!(ch, '|' | '-' | ':' | ' '))
+}
+
+fn contains_gfm_table(markdown: &str) -> bool {
+    markdown.lines().any(is_gfm_delimiter_row)
+}
+
+/// A pasted Markdown fragment that starts (or ends) with a GFM table only
+/// parses as a table when the table owns whole lines, so text sharing the
+/// caret's line is pushed into its own paragraph with a blank line.
+fn separate_pasted_tables(insertion: &str, line_before: &str, line_after: &str) -> String {
+    let mut lines = insertion.lines();
+    let starts_with_table = lines
+        .next()
+        .is_some_and(|line| line.trim_start().starts_with('|'))
+        && lines.next().is_some_and(is_gfm_delimiter_row);
+    let ends_with_table = insertion
+        .lines()
+        .last()
+        .is_some_and(|line| line.trim_start().starts_with('|'))
+        && contains_gfm_table(insertion);
+    let mut result = String::with_capacity(insertion.len() + 4);
+    if starts_with_table && !line_before.trim().is_empty() {
+        result.push_str("\n\n");
+    }
+    result.push_str(insertion);
+    if ends_with_table && !line_after.trim().is_empty() {
+        result.push_str("\n\n");
+    }
+    result
 }
 
 impl MarkionApp {
@@ -3511,7 +3551,19 @@ impl MarkionApp {
             let insertion = if plain {
                 text
             } else {
-                converted_clipboard_markdown(item.html(), &text)
+                let markdown = converted_clipboard_markdown(item.html(), &text);
+                let tab = self.active_tab();
+                let source = tab.document.text();
+                let range = tab.safe_selected_range();
+                let line_start = source[..range.start].rfind('\n').map_or(0, |at| at + 1);
+                let line_end = source[range.end..]
+                    .find('\n')
+                    .map_or(source.len(), |at| range.end + at);
+                separate_pasted_tables(
+                    &markdown,
+                    &source[line_start..range.start],
+                    &source[range.end..line_end],
+                )
             };
             self.insert_pasted_document_text(&insertion, window, cx);
         } else if !plain
