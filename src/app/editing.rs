@@ -3159,7 +3159,10 @@ impl MarkionApp {
                     }
                     return;
                 }
+                // Indented code gets its line indentation from the field's
+                // replacement sanitizer, like a pasted line break.
                 VisualEditorFieldKind::CodePayload
+                | VisualEditorFieldKind::IndentedCodePayload
                 | VisualEditorFieldKind::MathPayload
                 | VisualEditorFieldKind::HtmlSource
                 | VisualEditorFieldKind::FrontMatterSource

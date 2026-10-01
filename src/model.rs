@@ -1768,6 +1768,10 @@ impl VisualBlockEditor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VisualEditorFieldKind {
     CodePayload,
+    /// Body of an indented code block. The field's source keeps each body
+    /// line's four-column indentation; Visual Edit hides it and re-adds it
+    /// on Enter and paste.
+    IndentedCodePayload,
     MathPayload,
     HtmlSource,
     /// Complete authored YAML front-matter span, including `---` delimiters.
@@ -2033,6 +2037,9 @@ pub enum PreviewBlock {
         /// Number of list containers enclosing this block when it nests
         /// inside a list item; 0 for a top-level block.
         list_depth: usize,
+        /// `true` for a backtick/tilde fence, `false` for an indented code
+        /// block (whose body lines carry the four-column indentation).
+        fenced: bool,
     },
     MathBlock {
         latex: String,

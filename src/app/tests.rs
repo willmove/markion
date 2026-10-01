@@ -2567,6 +2567,7 @@ fn blk(tag: &str) -> PreviewBlock {
         code: tag.to_string(),
         source_range: 0..0,
         list_depth: 0,
+        fenced: true,
     }
 }
 
@@ -21782,6 +21783,56 @@ fn visual_callout_title_row_keeps_marker_reveal(cx: &mut TestAppContext) {
     );
     app.update(cx, |app, _| {
         assert_eq!(app.active_tab().document.text(), source);
+    });
+}
+
+#[gpui::test]
+fn visual_indented_code_enter_keeps_lines_in_the_block(cx: &mut TestAppContext) {
+    let source = "para\n\n    code1\n    code2\n\nafter\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        let caret = source.find("code1").unwrap() + "code1".len();
+        app.active_tab_mut().selected_range = caret..caret;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let field = tab
+            .document
+            .visual_editor_field_at(&tab.selected_range)
+            .expect("caret is in the indented code payload");
+        assert_eq!(field.kind, VisualEditorFieldKind::IndentedCodePayload);
+        let projection = visual_editor_field_projection(tab.document.text(), &field);
+        assert_eq!(
+            projection.text, "code1\ncode2\n",
+            "indentation is not displayed"
+        );
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.insert_newline(&InsertNewline, window, cx));
+    });
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(
+            tab.document.text(),
+            "para\n\n    code1\n    x\n    code2\n\nafter\n"
+        );
+        let code_blocks = tab
+            .document
+            .visual_blocks()
+            .into_iter()
+            .filter(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .count();
+        assert_eq!(code_blocks, 1, "the new line stays inside the code block");
     });
 }
 

@@ -360,7 +360,7 @@ pub(crate) fn push_preview_rich(
     quote_depth: usize,
     list_item: &mut Option<ListItemDraft>,
     image: &mut Option<ImageDraft>,
-    code: &mut Option<(Option<String>, String, Range<usize>)>,
+    code: &mut Option<(Option<String>, String, Range<usize>, bool)>,
     table: &mut Option<TableDraft>,
     text: &str,
     style: InlineStyle,
@@ -371,7 +371,7 @@ pub(crate) fn push_preview_rich(
         image.alt.push_str(text);
         return;
     }
-    if let Some((_, code, _)) = code.as_mut() {
+    if let Some((_, code, _, _)) = code.as_mut() {
         code.push_str(text);
         return;
     }
@@ -438,7 +438,7 @@ pub(crate) fn push_preview_math(
     quote_depth: usize,
     list_item: &mut Option<ListItemDraft>,
     image: &mut Option<ImageDraft>,
-    code: &mut Option<(Option<String>, String, Range<usize>)>,
+    code: &mut Option<(Option<String>, String, Range<usize>, bool)>,
     table: &mut Option<TableDraft>,
     math: MathSource,
     style: InlineStyle,
@@ -448,7 +448,7 @@ pub(crate) fn push_preview_math(
         image.alt.push_str(&math.authored);
         return;
     }
-    if let Some((_, code, _)) = code.as_mut() {
+    if let Some((_, code, _, _)) = code.as_mut() {
         code.push_str(&math.authored);
         return;
     }

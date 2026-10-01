@@ -426,9 +426,18 @@ fn block_body(source: &str, block: &VisualBlock) -> Result<String, BlockEditErro
         return Ok(String::new());
     }
     if let Some(VisualBlockEditor::Code { payload, .. }) = block.editor.as_ref() {
-        let payload = source
+        let authored = source
             .get(payload.source_range.clone())
             .ok_or(BlockEditError::Ambiguous)?;
+        // An indented code body sheds its per-line indentation, or the
+        // transformed block would still parse as indented code.
+        let dedented;
+        let payload = if payload.kind == crate::VisualEditorFieldKind::IndentedCodePayload {
+            dedented = crate::indented_code_display(authored, payload.source_range.start).0;
+            dedented.as_str()
+        } else {
+            authored
+        };
         return Ok(payload
             .strip_suffix("\r\n")
             .or_else(|| payload.strip_suffix('\n'))
@@ -709,6 +718,32 @@ mod tests {
         let mut transformed = adjacent.text().to_string();
         transformed.replace_range(edit.range, &edit.replacement);
         assert_eq!(transformed, "- [ ] one\n\ntwo");
+    }
+
+    #[test]
+    fn indented_code_transforms_with_its_indentation_removed() {
+        let doc = MarkdownDocument::from_text("    let a = 1;\n    let b = 2;\n");
+        let index = doc
+            .visual_blocks()
+            .iter()
+            .position(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("indented code block");
+        let (blocks, target) = target_for(&doc, index);
+        let edit = transform_block(
+            doc.text(),
+            doc.version(),
+            &blocks,
+            &target,
+            BlockTransform::Text,
+        )
+        .expect("transform indented code");
+        let mut transformed = doc.text().to_string();
+        transformed.replace_range(edit.range, &edit.replacement);
+        assert!(
+            !transformed.contains("    let b"),
+            "the body lines are no longer indented: {transformed:?}"
+        );
+        assert!(transformed.contains("let a = 1;") && transformed.contains("let b = 2;"));
     }
 
     #[test]

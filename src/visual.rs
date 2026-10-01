@@ -1400,9 +1400,15 @@ fn visual_block_editor(
     source_range: Range<usize>,
 ) -> Option<VisualBlockEditor> {
     match block {
-        PreviewBlock::CodeBlock { language, .. } => {
+        PreviewBlock::CodeBlock {
+            language, fenced, ..
+        } => {
+            let fenced = *fenced;
+            if !fenced {
+                return indented_code_editor(text, source_range);
+            }
             let (payload_range, info_range, opening_fence, closing_fence) =
-                fenced_payload_ranges(text, source_range, '`', '~')?;
+                fenced_payload_ranges(text, source_range, '`', '~', true)?;
             // Diagram fences (e.g. `mermaid`) used to bail out here and fall
             // back to a complete source island, because Visual Edit had no way
             // to present a rendered diagram. The view layer now routes diagram
@@ -1441,7 +1447,7 @@ fn visual_block_editor(
                     dollar_math_payload_ranges(text, source_range.clone())
                 }
                 MathDelimiter::Fenced => {
-                    fenced_payload_ranges(text, source_range.clone(), '`', '~')
+                    fenced_payload_ranges(text, source_range.clone(), '`', '~', false)
                         .map(|(payload, _, opening, closing)| (payload, opening, closing))
                 }
                 MathDelimiter::InlineDollar => None,
@@ -1661,11 +1667,91 @@ fn find_data_scheme(bytes: &[u8]) -> Option<usize> {
     None
 }
 
+/// Payload editor for an indented code block. The parser starts the block
+/// after the first line's indentation, so the whole range is body; fences,
+/// info string, and closing fence are empty ranges at the block edges.
+fn indented_code_editor(text: &str, source_range: Range<usize>) -> Option<VisualBlockEditor> {
+    let body = text.get(source_range.clone())?;
+    if body.trim().is_empty() {
+        return None;
+    }
+    let start = source_range.start;
+    let end = source_range.end;
+    Some(VisualBlockEditor::Code {
+        opening_fence: start..start,
+        payload: VisualEditorField {
+            kind: VisualEditorFieldKind::IndentedCodePayload,
+            source_range,
+        },
+        info_range: None,
+        info: VisualEditorField {
+            kind: VisualEditorFieldKind::CodeInfo,
+            source_range: start..start,
+        },
+        closing_fence: end..end,
+    })
+}
+
+/// The indentation unit re-added to new lines of an indented code body: a
+/// tab when the body already indents with tabs, otherwise four spaces.
+pub fn indented_code_indent_unit(body: &str) -> &'static str {
+    if body.split('\n').skip(1).any(|line| line.starts_with('\t')) {
+        "\t"
+    } else {
+        "    "
+    }
+}
+
+/// Byte length of the code-block indentation at the start of `line`: one tab,
+/// or up to four spaces (shorter on blank lines).
+pub fn indented_code_line_indent(line: &str) -> usize {
+    if line.starts_with('\t') {
+        1
+    } else {
+        line.bytes()
+            .take(4)
+            .take_while(|byte| *byte == b' ')
+            .count()
+    }
+}
+
+/// A `(display range, source range)` pair of one shown slice.
+pub type DisplaySourcePair = (Range<usize>, Range<usize>);
+
+/// Display text of an indented code body with each line's indentation
+/// hidden, plus `(display range, source range)` pairs covering every shown
+/// byte. The body's source range starts after the first line's indentation
+/// (the parser places it there), so only later lines are dedented.
+pub fn indented_code_display(body: &str, body_start: usize) -> (String, Vec<DisplaySourcePair>) {
+    let mut text = String::with_capacity(body.len());
+    let mut segments = Vec::new();
+    let mut offset = 0usize;
+    for (index, line) in body.split_inclusive('\n').enumerate() {
+        let hidden = if index == 0 {
+            0
+        } else {
+            indented_code_line_indent(line)
+        };
+        let shown = &line[hidden..];
+        if !shown.is_empty() {
+            let display_start = text.len();
+            text.push_str(shown);
+            segments.push((
+                display_start..text.len(),
+                body_start + offset + hidden..body_start + offset + line.len(),
+            ));
+        }
+        offset += line.len();
+    }
+    (text, segments)
+}
+
 fn fenced_payload_ranges(
     text: &str,
     source_range: Range<usize>,
     first_marker: char,
     second_marker: char,
+    allow_unclosed: bool,
 ) -> Option<(
     Range<usize>,
     Option<Range<usize>>,
@@ -1756,7 +1842,15 @@ fn fenced_payload_ranges(
             }
         }
     }
-    let (closing_start, closing_indent, closing_len) = closing?;
+    // An unclosed fence (no valid closing line before the block ends) keeps
+    // its payload editor: the payload runs to the block end and the closing
+    // fence is an empty range there, so typing a closing fence is ordinary
+    // payload editing.
+    let (closing_start, closing_indent, closing_len) = match closing {
+        Some(closing) => closing,
+        None if allow_unclosed => (source.len(), 0, 0),
+        None => return None,
+    };
     let closing_fence = source_range.start + closing_start + closing_indent
         ..source_range.start + closing_start + closing_indent + closing_len;
     Some((
@@ -4832,8 +4926,9 @@ mod tests {
             .into_iter()
             .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
             .expect("unclosed fence");
-        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Code));
-        assert!(block.editor.is_none());
+        // Unclosed fences are no longer islands (see the code gap tests).
+        assert_eq!(block.source_island, None);
+        assert!(block.editor.is_some());
         assert_eq!(&unclosed[block.source_range.clone()], unclosed);
 
         let invalid = MarkdownDocument::from_text("---\n: not mapping\n---\n\nBody");
@@ -5748,7 +5843,7 @@ mod tests {
         let fence_start = source.find("```").unwrap();
         let fence_end = source.rfind("```").unwrap() + 3;
         let (payload, info, opening, closing) =
-            fenced_payload_ranges(source, fence_start..fence_end, '`', '~')
+            fenced_payload_ranges(source, fence_start..fence_end, '`', '~', false)
                 .expect("nested fence resolves its editor ranges");
         assert_eq!(&source[opening], "```");
         assert_eq!(info.map(|range| &source[range]), Some("sh"));
@@ -5764,7 +5859,7 @@ mod tests {
         let fence_start = source.find("```").unwrap();
         let fence_end = source.rfind("```").unwrap() + 3;
         let (payload, info, opening, closing) =
-            fenced_payload_ranges(source, fence_start..fence_end, '`', '~')
+            fenced_payload_ranges(source, fence_start..fence_end, '`', '~', false)
                 .expect("nested fence with tricky payload");
         assert_eq!(&source[opening], "```");
         assert!(info.is_none());
@@ -5777,7 +5872,7 @@ mod tests {
         let fence_start = source.find("~~~").unwrap();
         let fence_end = source.rfind("~~~").unwrap() + 3;
         let (payload, info, opening, closing) =
-            fenced_payload_ranges(source, fence_start..fence_end, '`', '~')
+            fenced_payload_ranges(source, fence_start..fence_end, '`', '~', false)
                 .expect("nested tilde fence");
         assert_eq!(&source[opening], "~~~");
         assert_eq!(info.map(|range| &source[range]), Some("rust"));
@@ -5792,10 +5887,12 @@ mod tests {
         // lenient nested-list scan must not fabricate a closing fence here.
         let source = "  ```\n    ```\n";
         let fence_start = source.find("```").unwrap();
-        assert!(fenced_payload_ranges(source, fence_start..source.len(), '`', '~').is_none());
+        assert!(
+            fenced_payload_ranges(source, fence_start..source.len(), '`', '~', false).is_none()
+        );
         // Same guard for a column-zero unclosed fence.
         let source = "```\n    ```\n";
-        assert!(fenced_payload_ranges(source, 0..source.len(), '`', '~').is_none());
+        assert!(fenced_payload_ranges(source, 0..source.len(), '`', '~', false).is_none());
     }
 
     #[test]
@@ -5812,9 +5909,13 @@ mod tests {
             .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
             .expect("code row");
         assert_eq!(code.list_depth, 2);
-        // No fences to split, so the row keeps the conservative Code source
-        // island (verbatim source, still editable through the island).
-        assert_eq!(code.source_island, Some(VisualSourceIslandKind::Code));
+        // An indented code block now gets the indented-code payload editor
+        // (indentation hidden in the display) instead of a source island.
+        assert_eq!(code.source_island, None);
+        let Some(VisualBlockEditor::Code { payload, .. }) = &code.editor else {
+            panic!("indented code payload editor");
+        };
+        assert_eq!(payload.kind, VisualEditorFieldKind::IndentedCodePayload);
         assert!(
             blocks
                 .iter()
@@ -6174,17 +6275,107 @@ mod tests {
     }
 
     #[test]
-    fn unclosed_fences_remain_complete_source_islands() {
-        // Unclosed fences cannot yield a payload range, so they fall back to
-        // the complete source island regardless of language.
-        let source = "```rust\nfn main() {}\n";
+    fn unclosed_fence_keeps_a_payload_editor_to_the_block_end() {
+        // Closes the "unclosed/malformed fenced code" coverage gap: the
+        // payload runs to the block end and the closing fence is empty there.
+        let source = "intro\n\n```rust\nfn main() {}\n";
         let block = MarkdownDocument::from_text(source)
             .visual_blocks()
             .into_iter()
             .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
             .expect("code block");
-        assert!(block.editor.is_none(), "unexpected editor for {source:?}");
-        assert_eq!(block.source_island, Some(VisualSourceIslandKind::Code));
+        assert_eq!(block.source_island, None);
+        let Some(VisualBlockEditor::Code {
+            opening_fence,
+            payload,
+            info,
+            closing_fence,
+            ..
+        }) = block.editor
+        else {
+            panic!("unclosed fence payload editor");
+        };
+        assert_eq!(&source[opening_fence], "```");
+        assert_eq!(&source[info.source_range], "rust");
+        assert_eq!(payload.kind, VisualEditorFieldKind::CodePayload);
+        assert_eq!(&source[payload.source_range.clone()], "fn main() {}\n");
+        assert!(closing_fence.is_empty());
+        assert_eq!(closing_fence.start, source.len());
+
+        // A malformed closing line (info string after the fence) does not
+        // close the block in CommonMark; it stays payload.
+        let source = "```\ncode\n``` not-a-close\n";
+        let block = MarkdownDocument::from_text(source)
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("code block");
+        let Some(VisualBlockEditor::Code { payload, .. }) = block.editor else {
+            panic!("malformed fence payload editor");
+        };
+        assert_eq!(&source[payload.source_range], "code\n``` not-a-close\n");
+    }
+
+    #[test]
+    fn indented_code_gets_a_dedented_payload_editor() {
+        let source = "para\n\n    code1\n\n    code2\n\nafter\n";
+        let block = MarkdownDocument::from_text(source)
+            .visual_blocks()
+            .into_iter()
+            .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .expect("indented code block");
+        assert_eq!(block.source_island, None);
+        let Some(VisualBlockEditor::Code {
+            payload,
+            info_range,
+            opening_fence,
+            closing_fence,
+            ..
+        }) = block.editor
+        else {
+            panic!("indented code payload editor");
+        };
+        assert_eq!(payload.kind, VisualEditorFieldKind::IndentedCodePayload);
+        assert_eq!(
+            &source[payload.source_range.clone()],
+            "code1\n\n    code2\n"
+        );
+        assert!(info_range.is_none() && opening_fence.is_empty() && closing_fence.is_empty());
+
+        let body = &source[payload.source_range.clone()];
+        let (display, segments) = crate::indented_code_display(body, payload.source_range.start);
+        assert_eq!(display, "code1\n\ncode2\n", "indentation is hidden");
+        for (display_range, source_range) in &segments {
+            assert_eq!(
+                &display[display_range.clone()],
+                &source[source_range.clone()]
+            );
+        }
+        assert_eq!(crate::indented_code_indent_unit(body), "    ");
+        assert_eq!(crate::indented_code_indent_unit("a\n\tb\n"), "\t");
+
+        // Pasting multi-line text re-enters the block on every line.
+        let mut document = MarkdownDocument::from_text(source);
+        let at = source.find("code2").unwrap() + "code2".len();
+        let edit = document
+            .direct_visual_block_edit(at..at, "\nx\ny")
+            .expect("validated direct edit");
+        assert_eq!(edit.replacement, "\n    x\n    y");
+        document.replace_range(edit.range, &edit.replacement);
+        assert_eq!(
+            document.text(),
+            "para\n\n    code1\n\n    code2\n    x\n    y\n\nafter\n"
+        );
+        let blocks = document.visual_blocks();
+        let code_blocks: Vec<_> = blocks
+            .iter()
+            .filter(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
+            .collect();
+        assert_eq!(
+            code_blocks.len(),
+            1,
+            "the pasted lines stay in the code block"
+        );
     }
 
     #[test]

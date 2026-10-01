@@ -194,7 +194,9 @@ pub use model::{
 };
 pub use visual::{
     build_visual_projection, build_visual_projection_with_marked_range, data_uri_payload_ranges,
-    destination_data_uri_fingerprint, elided_payload_token, format_byte_size, task_checkbox_toggle,
+    destination_data_uri_fingerprint, elided_payload_token, format_byte_size,
+    indented_code_display, indented_code_indent_unit, indented_code_line_indent,
+    task_checkbox_toggle,
 };
 
 /// A compiled find pattern shared by source-document and rendered-preview
@@ -3533,7 +3535,7 @@ impl MarkdownDocument {
         let mut list_stack: Vec<ListLevelDraft> = Vec::new();
         let mut list_item: Option<ListItemDraft> = None;
         let mut image: Option<ImageDraft> = None;
-        let mut code: Option<(Option<String>, String, std::ops::Range<usize>)> = None;
+        let mut code: Option<(Option<String>, String, std::ops::Range<usize>, bool)> = None;
         let mut table: Option<TableDraft> = None;
         let mut inline = InlineStateDraft::default();
         let mut footnote: Option<(String, Vec<InlineSpan>, std::ops::Range<usize>)> = None;
@@ -3779,6 +3781,7 @@ impl MarkdownDocument {
                     }
                 }
                 Event::Start(Tag::CodeBlock(kind)) => {
+                    let fenced = matches!(kind, CodeBlockKind::Fenced(_));
                     let language = match kind {
                         CodeBlockKind::Fenced(info) => info
                             .split_whitespace()
@@ -3787,10 +3790,10 @@ impl MarkdownDocument {
                             .map(ToOwned::to_owned),
                         CodeBlockKind::Indented => None,
                     };
-                    code = Some((language, String::new(), source_range));
+                    code = Some((language, String::new(), source_range, fenced));
                 }
                 Event::End(TagEnd::CodeBlock) => {
-                    if let Some((language, code, code_range)) = code.take() {
+                    if let Some((language, code, code_range, fenced)) = code.take() {
                         if let Some(item) = list_item.as_mut() {
                             item.record_nested_block_start(code_range.start);
                         }
@@ -3817,6 +3820,7 @@ impl MarkdownDocument {
                                 code,
                                 source_range: code_range,
                                 list_depth,
+                                fenced,
                             });
                         }
                     }
@@ -4634,6 +4638,15 @@ fn sanitize_visual_field_replacement(
         | VisualEditorFieldKind::HtmlSource
         | VisualEditorFieldKind::FrontMatterSource
         | VisualEditorFieldKind::ImageSource => replacement.to_string(),
+        // Every inserted line break must re-enter the indented code block, or
+        // the following text would fall out of it into a paragraph.
+        VisualEditorFieldKind::IndentedCodePayload => {
+            let indent = indented_code_indent_unit(&source[field_range.clone()]);
+            replacement
+                .replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .replace('\n', &format!("\n{indent}"))
+        }
         VisualEditorFieldKind::CodeInfo => replacement
             .chars()
             .filter(|ch| !ch.is_whitespace() && *ch != '`')

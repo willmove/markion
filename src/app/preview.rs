@@ -5657,6 +5657,27 @@ pub(super) fn visual_editor_field_projection(
     field: &VisualEditorField,
 ) -> VisualProjection {
     let authored = &source[field.source_range.clone()];
+    if field.kind == VisualEditorFieldKind::IndentedCodePayload {
+        // Each body line's indentation stays in the source but is not shown:
+        // its bytes belong to no segment, so the caret skips over them.
+        let (text, pieces) = markion::indented_code_display(authored, field.source_range.start);
+        return VisualProjection {
+            text,
+            segments: pieces
+                .into_iter()
+                .map(
+                    |(display_range, source_range)| markion::VisualProjectionSegment {
+                        display_range,
+                        source_range,
+                        atomic: false,
+                    },
+                )
+                .collect(),
+            spans: Vec::new(),
+            revealed_source_ranges: Vec::new(),
+            source_anchor: field.source_range.start,
+        };
+    }
     let terminator = match field.kind {
         VisualEditorFieldKind::ImageAlt => Some(']'),
         VisualEditorFieldKind::ImageDestination => Some(')'),
@@ -5668,6 +5689,7 @@ pub(super) fn visual_editor_field_projection(
             .map(|delimiter| if delimiter == '(' { ')' } else { delimiter }),
         VisualEditorFieldKind::TableCell { .. } => Some('|'),
         VisualEditorFieldKind::CodePayload
+        | VisualEditorFieldKind::IndentedCodePayload
         | VisualEditorFieldKind::MathPayload
         | VisualEditorFieldKind::HtmlSource
         | VisualEditorFieldKind::FrontMatterSource
@@ -5739,13 +5761,26 @@ fn visual_code_editor(
 ) -> Stateful<Div> {
     let typography = app.typography_metrics();
     let palette = code_palette(app.code_theme);
-    let code = &app.active_tab().document.text()[payload.source_range.clone()];
+    let authored = &app.active_tab().document.text()[payload.source_range.clone()];
+    // An indented code body is highlighted (and copied) as its display text,
+    // with each line's indentation removed, so highlight ranges line up with
+    // the dedented projection.
+    let indented = payload.kind == VisualEditorFieldKind::IndentedCodePayload;
+    let dedented;
+    let code: &str = if indented {
+        dedented = markion::indented_code_display(authored, payload.source_range.start).0;
+        &dedented
+    } else {
+        authored
+    };
     let highlighted = app.highlighted_code(language, code);
     let (styled, _) = code_block_text(&highlighted, palette);
     // The language chip appears only while the pointer is inside the fence or
     // the fence owns the caret; otherwise the header shows no label at all.
-    let show_info = visual_block_owns_caret(app, block_index)
-        || app.active_tab().hovered_visual_code_block == Some(block_id);
+    // Indented code has no info string to edit, so it never shows the chip.
+    let show_info = !indented
+        && (visual_block_owns_caret(app, block_index)
+            || app.active_tab().hovered_visual_code_block == Some(block_id));
     let label = if show_info {
         CodeHeaderLanguage::Field(info, block_index, block_id)
     } else {

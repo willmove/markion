@@ -39,6 +39,7 @@ pub fn is_auto_pair_restricted_field(kind: VisualEditorFieldKind) -> bool {
     matches!(
         kind,
         VisualEditorFieldKind::CodePayload
+            | VisualEditorFieldKind::IndentedCodePayload
             | VisualEditorFieldKind::MathPayload
             | VisualEditorFieldKind::HtmlSource
             | VisualEditorFieldKind::FrontMatterSource
@@ -265,6 +266,9 @@ mod tests {
     fn restricted_fields_cover_code_math_html_and_info() {
         assert!(is_auto_pair_restricted_field(
             VisualEditorFieldKind::CodePayload
+        ));
+        assert!(is_auto_pair_restricted_field(
+            VisualEditorFieldKind::IndentedCodePayload
         ));
         assert!(is_auto_pair_restricted_field(
             VisualEditorFieldKind::MathPayload
