@@ -837,7 +837,7 @@ impl Render for MarkionApp {
                 |root| root.child(git_conflicts::conflict_view(self, cx)),
             )
             .when(self.search_visible, |root| {
-                root.child(search_panel_view(self, cx))
+                root.child(search_panel_view(self, window, cx))
             })
             .when(self.file_tree_context_menu.is_some(), |root| {
                 root.child(file_tree_context_menu_view(self, cx))
@@ -2051,7 +2051,11 @@ pub(super) fn visual_edit_surface_view(
         ))
 }
 
-pub(super) fn search_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+pub(super) fn search_panel_view(
+    app: &MarkionApp,
+    window: &Window,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
     let palette = app.palette();
     let summary = match app.search_result {
         SearchResultState::Ready => app.trf(
@@ -2069,34 +2073,162 @@ pub(super) fn search_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) 
     let can_replace = can_navigate && app.replace_visible;
     let invalid = matches!(app.search_result, SearchResultState::InvalidPattern(_));
     let top = px(36. + document_tab_band_height(app.tabs.len()));
+    let viewport = window.viewport_size();
+    let moved_width = px(SEARCH_OVERLAY_MAX_WIDTH)
+        .min(viewport.width - px(2. * SEARCH_OVERLAY_MARGIN))
+        .max(px(0.));
+    // A moved overlay is re-clamped every frame against the current viewport
+    // so a window shrink pulls it back inside; the stored origin is kept.
+    let moved_origin = app.search_overlay_origin.map(|origin| {
+        let height = app
+            .search_overlay_bounds
+            .map_or(px(80.), |bounds| bounds.size.height);
+        clamp_search_overlay_origin(origin, size(moved_width, height), viewport)
+    });
+    let bounds_entity = cx.entity();
 
-    div()
-        .absolute()
-        .top(top)
-        .left(px(16.))
-        .right(px(16.))
-        .flex()
-        .justify_end()
-        .child(
-            div()
-                .debug_selector(|| "search-panel".to_string())
-                .w_full()
-                .max_w(px(680.))
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .border_1()
-                .border_color(palette.border)
-                .bg(palette.panel_bg)
-                .text_color(palette.text)
-                .shadow_md()
-                .occlude()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
+    let container = match moved_origin {
+        Some(origin) => div().absolute().left(origin.x).top(origin.y).w(moved_width),
+        None => div()
+            .absolute()
+            .top(top)
+            .left(px(SEARCH_OVERLAY_MARGIN))
+            .right(px(SEARCH_OVERLAY_MARGIN))
+            .flex()
+            .justify_end(),
+    };
+    container.child(
+        div()
+            .id("search-panel")
+            .debug_selector(|| "search-panel".to_string())
+            .relative()
+            .w_full()
+            .max_w(px(SEARCH_OVERLAY_MAX_WIDTH))
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .border_1()
+            .border_color(palette.border)
+            .bg(palette.panel_bg)
+            .text_color(palette.text)
+            .shadow_md()
+            .occlude()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .on_drag_move::<DraggedSearchOverlay>(cx.listener(
+                |app, event: &DragMoveEvent<DraggedSearchOverlay>, window, cx| {
+                    let Some(bounds) = app.search_overlay_bounds else {
+                        return;
+                    };
+                    let origin = clamp_search_overlay_origin(
+                        event.event.position - app.search_overlay_grab,
+                        bounds.size,
+                        window.viewport_size(),
+                    );
+                    if app.search_overlay_origin != Some(origin) {
+                        app.search_overlay_origin = Some(origin);
+                        cx.notify();
+                    }
+                },
+            ))
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, _, cx| {
+                        // The canvas fills the panel's padding box; add
+                        // back the 1 px border to get the panel's bounds.
+                        let border = px(1.);
+                        let panel = Bounds {
+                            origin: bounds.origin - point(border, border),
+                            size: size(
+                                bounds.size.width + border * 2.,
+                                bounds.size.height + border * 2.,
+                            ),
+                        };
+                        bounds_entity.update(cx, |app, _| {
+                            app.search_overlay_bounds = Some(panel);
+                        });
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+            .child(search_overlay_grip(app, palette, cx))
+            .child(
+                div()
+                    .debug_selector(|| "search-find-row".to_string())
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(56.))
+                            .text_size(px(12.))
+                            .text_color(palette.muted)
+                            .child(app.tr(Msg::SearchFind)),
+                    )
+                    .child(search_field_view(
+                        SearchField::Find,
+                        &app.search_query,
+                        app.search_focus == Some(SearchField::Find),
+                        invalid,
+                        palette,
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .min_w(px(52.))
+                            .text_size(px(12.))
+                            .text_color(palette.muted)
+                            .child(summary),
+                    )
+                    .child(search_toolbar_button(
+                        app.tr(Msg::SearchPrev),
+                        palette,
+                        app.search_control_focus == Some(SearchOverlayControl::Previous),
+                        can_navigate,
+                        cx.listener(MarkionApp::click_find_previous),
+                    ))
+                    .child(search_toolbar_button(
+                        app.tr(Msg::SearchNext),
+                        palette,
+                        app.search_control_focus == Some(SearchOverlayControl::Next),
+                        can_navigate,
+                        cx.listener(MarkionApp::click_find_next),
+                    ))
+                    .child(search_toolbar_button(
+                        app.tr(Msg::SearchMatchCase),
+                        palette,
+                        app.search_case_sensitive
+                            || app.search_control_focus == Some(SearchOverlayControl::MatchCase),
+                        true,
+                        cx.listener(MarkionApp::click_toggle_case),
+                    ))
+                    .child(search_toolbar_button(
+                        app.tr(Msg::SearchUseRegex),
+                        palette,
+                        app.search_regex
+                            || app.search_control_focus == Some(SearchOverlayControl::Regex),
+                        true,
+                        cx.listener(MarkionApp::click_toggle_regex),
+                    ))
+                    .child(search_toolbar_button(
+                        app.tr(Msg::SearchClose),
+                        palette,
+                        app.search_control_focus == Some(SearchOverlayControl::Close),
+                        true,
+                        cx.listener(MarkionApp::click_close_search),
+                    )),
+            )
+            .when(app.replace_visible, |panel| {
+                panel.child(
                     div()
-                        .debug_selector(|| "search-find-row".to_string())
+                        .debug_selector(|| "search-replace-row".to_string())
                         .w_full()
                         .flex()
                         .items_center()
@@ -2107,117 +2239,99 @@ pub(super) fn search_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) 
                                 .w(px(56.))
                                 .text_size(px(12.))
                                 .text_color(palette.muted)
-                                .child(app.tr(Msg::SearchFind)),
+                                .child(app.tr(Msg::SearchReplace)),
                         )
                         .child(search_field_view(
-                            SearchField::Find,
-                            &app.search_query,
-                            app.search_focus == Some(SearchField::Find),
-                            invalid,
+                            SearchField::Replace,
+                            &app.replace_text,
+                            app.search_focus == Some(SearchField::Replace),
+                            false,
                             palette,
                             cx,
                         ))
-                        .child(
-                            div()
-                                .min_w(px(52.))
-                                .text_size(px(12.))
-                                .text_color(palette.muted)
-                                .child(summary),
-                        )
                         .child(search_toolbar_button(
-                            app.tr(Msg::SearchPrev),
+                            app.tr(Msg::SearchReplaceCurrent),
                             palette,
-                            app.search_control_focus == Some(SearchOverlayControl::Previous),
-                            can_navigate,
-                            cx.listener(MarkionApp::click_find_previous),
+                            app.search_control_focus == Some(SearchOverlayControl::ReplaceCurrent),
+                            can_replace,
+                            cx.listener(MarkionApp::click_replace_current),
                         ))
                         .child(search_toolbar_button(
-                            app.tr(Msg::SearchNext),
+                            app.tr(Msg::SearchReplaceAll),
                             palette,
-                            app.search_control_focus == Some(SearchOverlayControl::Next),
-                            can_navigate,
-                            cx.listener(MarkionApp::click_find_next),
-                        ))
-                        .child(search_toolbar_button(
-                            app.tr(Msg::SearchMatchCase),
-                            palette,
-                            app.search_case_sensitive
-                                || app.search_control_focus
-                                    == Some(SearchOverlayControl::MatchCase),
-                            true,
-                            cx.listener(MarkionApp::click_toggle_case),
-                        ))
-                        .child(search_toolbar_button(
-                            app.tr(Msg::SearchUseRegex),
-                            palette,
-                            app.search_regex
-                                || app.search_control_focus == Some(SearchOverlayControl::Regex),
-                            true,
-                            cx.listener(MarkionApp::click_toggle_regex),
-                        ))
-                        .child(search_toolbar_button(
-                            app.tr(Msg::SearchClose),
-                            palette,
-                            app.search_control_focus == Some(SearchOverlayControl::Close),
-                            true,
-                            cx.listener(MarkionApp::click_close_search),
+                            app.search_control_focus == Some(SearchOverlayControl::ReplaceAll),
+                            can_replace,
+                            cx.listener(MarkionApp::click_replace_all),
                         )),
                 )
-                .when(app.replace_visible, |panel| {
+            })
+            .when(
+                app.search_form == SearchPanelForm::Replace
+                    && matches!(app.view_mode, ViewMode::Read),
+                |panel| {
                     panel.child(
                         div()
-                            .debug_selector(|| "search-replace-row".to_string())
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .w(px(56.))
-                                    .text_size(px(12.))
-                                    .text_color(palette.muted)
-                                    .child(app.tr(Msg::SearchReplace)),
-                            )
-                            .child(search_field_view(
-                                SearchField::Replace,
-                                &app.replace_text,
-                                app.search_focus == Some(SearchField::Replace),
-                                false,
-                                palette,
-                                cx,
-                            ))
-                            .child(search_toolbar_button(
-                                app.tr(Msg::SearchReplaceCurrent),
-                                palette,
-                                app.search_control_focus
-                                    == Some(SearchOverlayControl::ReplaceCurrent),
-                                can_replace,
-                                cx.listener(MarkionApp::click_replace_current),
-                            ))
-                            .child(search_toolbar_button(
-                                app.tr(Msg::SearchReplaceAll),
-                                palette,
-                                app.search_control_focus == Some(SearchOverlayControl::ReplaceAll),
-                                can_replace,
-                                cx.listener(MarkionApp::click_replace_all),
-                            )),
+                            .debug_selector(|| "search-read-guidance".to_string())
+                            .text_size(px(12.))
+                            .text_color(palette.muted)
+                            .child(app.tr(Msg::SearchReadReplaceUnavailable)),
                     )
-                })
-                .when(
-                    app.search_form == SearchPanelForm::Replace
-                        && matches!(app.view_mode, ViewMode::Read),
-                    |panel| {
-                        panel.child(
-                            div()
-                                .debug_selector(|| "search-read-guidance".to_string())
-                                .text_size(px(12.))
-                                .text_color(palette.muted)
-                                .child(app.tr(Msg::SearchReadReplaceUnavailable)),
-                        )
-                    },
-                ),
+                },
+            ),
+    )
+}
+
+const SEARCH_OVERLAY_MAX_WIDTH: f32 = 680.;
+
+/// The overlay's move grip: a dotted strip in the panel's leading padding.
+/// Press records the grab offset, a drag moves the panel (see the panel's
+/// `on_drag_move`), and a double-click restores the default position.
+fn search_overlay_grip(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    let tooltip_label = SharedString::from(app.tr(Msg::SearchMoveGrip));
+    div()
+        .id("search-overlay-grip")
+        .debug_selector(|| "search-overlay-grip".to_string())
+        .absolute()
+        .left(px(1.))
+        .top(px(6.))
+        .bottom(px(6.))
+        .w(px(10.))
+        .rounded_sm()
+        .cursor(CursorStyle::OpenHand)
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(2.))
+        .hover(move |style| style.bg(palette.border))
+        .children((0..4).map(move |_| div().size(px(2.)).rounded_full().bg(palette.muted)))
+        .tooltip(move |_, cx| {
+            cx.new(|_| SearchTooltip {
+                palette,
+                label: tooltip_label.clone(),
+            })
+            .into()
+        })
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|app, event: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                if event.click_count >= 2 {
+                    if app.search_overlay_origin.take().is_some() {
+                        cx.notify();
+                    }
+                    return;
+                }
+                if let Some(bounds) = app.search_overlay_bounds {
+                    app.search_overlay_grab = event.position - bounds.origin;
+                }
+            }),
         )
+        .on_drag(DraggedSearchOverlay, |_, _, _, cx| cx.new(|_| Empty))
 }
 
 pub(super) fn hide_search_overlay_state(

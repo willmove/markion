@@ -21480,6 +21480,189 @@ fn toggling_hidden_files_rearms_the_file_tree_watch(cx: &mut TestAppContext) {
 }
 
 #[test]
+fn search_overlay_origin_clamps_inside_the_viewport() {
+    let viewport = size(px(1000.), px(700.));
+    let panel = size(px(680.), px(80.));
+    let inside = point(px(100.), px(200.));
+    assert_eq!(clamp_search_overlay_origin(inside, panel, viewport), inside);
+    assert_eq!(
+        clamp_search_overlay_origin(point(px(-50.), px(-10.)), panel, viewport),
+        point(px(16.), px(16.)),
+        "top-left edges"
+    );
+    assert_eq!(
+        clamp_search_overlay_origin(point(px(900.), px(690.)), panel, viewport),
+        point(px(1000. - 680. - 16.), px(700. - 80. - 16.)),
+        "bottom-right edges"
+    );
+    assert_eq!(
+        clamp_search_overlay_origin(
+            point(px(300.), px(300.)),
+            size(px(1200.), px(80.)),
+            viewport
+        ),
+        point(px(16.), px(300.)),
+        "a panel wider than the viewport pins to the leading margin"
+    );
+}
+
+fn search_overlay_app(cx: &mut TestAppContext) -> (Entity<MarkionApp>, &mut VisualTestContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "alpha beta alpha",
+        ))];
+        app.search_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        app.search_control_focus = Some(SearchOverlayControl::FindField);
+        app.search_query.set_text("alpha");
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    (app, cx)
+}
+
+fn drag_search_overlay_grip(cx: &mut VisualTestContext, by: Point<Pixels>) {
+    let grip = cx.debug_bounds("search-overlay-grip").expect("move grip");
+    let start = grip.center();
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    for step in 1..=4 {
+        let fraction = step as f32 / 4.;
+        cx.simulate_mouse_move(
+            point(start.x + by.x * fraction, start.y + by.y * fraction),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+    }
+    cx.simulate_mouse_up(start + by, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn search_overlay_grip_moves_the_panel_without_touching_layout_or_document(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = search_overlay_app(cx);
+    let panel = cx.debug_bounds("search-panel").expect("search panel");
+    let document_before = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.text().to_string(),
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.undo_stack.len(),
+        )
+    });
+    let editor_before = cx.debug_bounds("editor-pane");
+
+    drag_search_overlay_grip(cx, point(px(-200.), px(120.)));
+    let moved = cx.debug_bounds("search-panel").expect("search panel");
+    assert!(
+        (moved.left() - (panel.left() - px(200.))).abs() < px(1.),
+        "{panel:?} -> {moved:?}"
+    );
+    assert!(
+        (moved.top() - (panel.top() + px(120.))).abs() < px(1.),
+        "{panel:?} -> {moved:?}"
+    );
+    assert!(app.update(cx, |app, _| app.search_overlay_origin.is_some()));
+    assert_eq!(
+        cx.debug_bounds("editor-pane"),
+        editor_before,
+        "workspace layout is unchanged"
+    );
+    let document_after = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        (
+            tab.document.text().to_string(),
+            tab.document.version(),
+            tab.document.is_dirty(),
+            tab.undo_stack.len(),
+        )
+    });
+    assert_eq!(document_after, document_before);
+
+    // Close and reopen in the same session: the moved position is kept.
+    app.update(cx, |app, cx| app.close_search_overlay(cx));
+    cx.run_until_parked();
+    assert!(!app.update(cx, |app, _| app.search_visible));
+    app.update(cx, |app, cx| {
+        app.search_visible = true;
+        app.search_focus = Some(SearchField::Find);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("search-panel"), Some(moved));
+
+    // Double-clicking the grip restores the default position.
+    let grip = cx.debug_bounds("search-overlay-grip").unwrap();
+    cx.simulate_event(MouseDownEvent {
+        position: grip.center(),
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(grip.center(), MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(app.update(cx, |app, _| app.search_overlay_origin.is_none()));
+    assert_eq!(cx.debug_bounds("search-panel"), Some(panel));
+}
+
+#[gpui::test]
+fn search_overlay_stays_inside_the_window_and_fields_do_not_move_it(cx: &mut TestAppContext) {
+    let (app, cx) = search_overlay_app(cx);
+    let panel = cx.debug_bounds("search-panel").expect("search panel");
+
+    // Dragging inside the find field selects text instead of moving the panel.
+    let field = cx.debug_bounds("search-find-field").unwrap();
+    cx.simulate_mouse_down(field.center(), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        field.center() + point(px(-60.), px(80.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        field.center() + point(px(-60.), px(80.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("search-panel"), Some(panel));
+    assert!(app.update(cx, |app, _| app.search_overlay_origin.is_none()));
+
+    // Dragging far past the bottom-left corner keeps the panel inside.
+    drag_search_overlay_grip(cx, point(px(-5000.), px(5000.)));
+    let viewport = cx.update(|window, _| window.viewport_size());
+    let moved = cx.debug_bounds("search-panel").unwrap();
+    assert!(moved.left() >= px(16.) - px(0.5), "{moved:?}");
+    assert!(
+        moved.bottom() <= viewport.height - px(16.) + px(0.5),
+        "{moved:?} in {viewport:?}"
+    );
+
+    // A stored origin outside a smaller viewport is clamped at render time.
+    app.update(cx, |app, cx| {
+        app.search_overlay_origin = Some(point(viewport.width, viewport.height));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let clamped = cx.debug_bounds("search-panel").unwrap();
+    assert!(
+        clamped.right() <= viewport.width - px(16.) + px(0.5),
+        "{clamped:?}"
+    );
+    assert!(
+        clamped.bottom() <= viewport.height - px(16.) + px(0.5),
+        "{clamped:?}"
+    );
+}
+
+#[test]
 fn search_word_range_selects_words_cjk_runs_and_single_separators() {
     let text = "foo bar_baz, 中文词";
     assert_eq!(search_word_range(text, 1), 0..3);

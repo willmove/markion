@@ -1344,6 +1344,28 @@ fn search_word_range(text: &str, offset: usize) -> Range<usize> {
     start..end
 }
 
+/// Margin kept between a moved Find / Replace overlay and the window edges.
+const SEARCH_OVERLAY_MARGIN: f32 = 16.;
+
+/// Clamps a moved overlay's top-left so the whole panel stays inside the
+/// viewport with a margin; a panel larger than the viewport pins to the
+/// leading margin.
+fn clamp_search_overlay_origin(
+    origin: Point<Pixels>,
+    panel: Size<Pixels>,
+    viewport: Size<Pixels>,
+) -> Point<Pixels> {
+    let axis = |value: Pixels, extent: Pixels, limit: Pixels| {
+        let min = px(SEARCH_OVERLAY_MARGIN);
+        let max = (limit - extent - min).max(min);
+        value.max(min).min(max)
+    };
+    point(
+        axis(origin.x, panel.width, viewport.width),
+        axis(origin.y, panel.height, viewport.height),
+    )
+}
+
 fn previous_search_boundary(text: &str, offset: usize) -> usize {
     let offset = clamp_search_boundary(text, offset);
     text[..offset]
@@ -2036,6 +2058,11 @@ fn document_tab_band_height(tab_count: usize) -> f32 {
 /// independently (mirrors Zed's `DraggedSplitHandle`).
 #[derive(Debug, Clone)]
 struct DraggedEditorSplitHandle;
+
+/// Drag payload of the Find / Replace overlay's move grip.
+#[derive(Debug, Clone)]
+struct DraggedSearchOverlay;
+
 #[derive(Debug, Clone)]
 struct DraggedSidebarHandle;
 #[derive(Debug, Clone)]
@@ -2665,6 +2692,13 @@ struct MarkionApp {
     /// The single-line field a left-button drag selection started in; moves
     /// extend that field's selection until the button is released.
     search_field_drag: Option<SearchField>,
+    /// Session-only top-left of a moved Find / Replace overlay in window
+    /// coordinates; `None` keeps the default upper-right layout.
+    search_overlay_origin: Option<Point<Pixels>>,
+    /// The overlay panel's painted bounds, for clamping and grab offsets.
+    search_overlay_bounds: Option<Bounds<Pixels>>,
+    /// Pointer position minus the panel origin when a grip drag started.
+    search_overlay_grab: Point<Pixels>,
     pane_scrollbar_drag: Option<PaneScrollbarDrag>,
     /// Auto-save settings from `[auto_save]`. `silent_save` and `delay_secs`
     /// are editable in Preferences → General; `enabled` remains file-only.
