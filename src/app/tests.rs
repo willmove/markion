@@ -6237,6 +6237,362 @@ fn visual_table_document_state(
     })
 }
 
+const TABLE_NAVIGATION_SAMPLE: &str = "## Table\n\n\
+| Syntax        | Example                                     | Purpose    |\n\
+| :------------- | :-------------------------------------------: | ----------: |\n\
+| `**bold**`    | **bold**                                    | Emphasis   |\n\
+| `[text](url)` | [link](https://github.com/willmove/markion) | Navigation |\n\
+| `- [ ] task`  | - [ ]                                       | Checklist  |\n\
+|               |                                             |            |\n\
+|               |                                             |            |\n\nAfter";
+
+fn assert_visual_table_caret_in_cell(
+    app: &Entity<MarkionApp>,
+    cx: &mut VisualTestContext,
+    row: usize,
+    column: usize,
+) {
+    let block_index = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let cursor = tab.cursor_offset();
+        let field = tab
+            .document
+            .visual_editor_field_at(&(cursor..cursor))
+            .unwrap();
+        assert_eq!(field.kind, VisualEditorFieldKind::TableCell { row, column });
+        let paint = tab
+            .visual_last_caret_paint
+            .as_ref()
+            .expect("current cell caret paints");
+        assert_eq!(paint.source_cursor, cursor);
+        assert_eq!(paint.frame_generation, tab.visual_frame_generation);
+        assert!(paint.caret_emitted);
+        paint.block_index
+    });
+    let cell = cx
+        .debug_bounds(test_debug_selector(format!(
+            "visual-table-cell-{block_index}-{row}-{column}"
+        )))
+        .unwrap();
+    app.update(cx, |app, _| {
+        let caret = app
+            .active_tab()
+            .visual_last_caret_paint
+            .as_ref()
+            .unwrap()
+            .bounds;
+        assert!(caret.left() >= cell.left() && caret.right() <= cell.right());
+        assert!(caret.top() >= cell.top() && caret.bottom() <= cell.bottom());
+    });
+}
+
+#[gpui::test]
+fn visual_table_vertical_arrows_preserve_columns_and_empty_rows(cx: &mut TestAppContext) {
+    for newline in ["\n", "\r\n"] {
+        let source = TABLE_NAVIGATION_SAMPLE.replace('\n', newline);
+        let (app, vcx) = visual_table_handle_app(&source, cx);
+        vcx.simulate_resize(size(px(1200.), px(900.)));
+        vcx.run_until_parked();
+        let before = visual_table_document_state(&app, vcx);
+        let blocks = app.update(vcx, |app, _| {
+            app.active_tab().document.visual_blocks_shared()
+        });
+        for column in 0..3 {
+            let start = app.update(vcx, |app, _| {
+                visual_table_cell_range(&app.active_tab().document, 0, 0, column).end
+            });
+            app.update(vcx, |app, cx| app.move_to(start, cx));
+            vcx.run_until_parked();
+            for row in 1..=5 {
+                // Focused source markup can wrap. No step may skip a row or
+                // switch columns; walk those lines before reaching the cell.
+                let mut arrived = false;
+                for _ in 0..32 {
+                    vcx.dispatch_action(Down);
+                    vcx.run_until_parked();
+                    let field = app
+                        .update(vcx, |app, _| {
+                            let tab = app.active_tab();
+                            tab.document
+                                .visual_editor_field_at(&(tab.cursor_offset()..tab.cursor_offset()))
+                        })
+                        .expect("Down must stay in the table until its last row");
+                    if field.kind == (VisualEditorFieldKind::TableCell { row, column }) {
+                        arrived = true;
+                        break;
+                    }
+                    assert_eq!(
+                        field.kind,
+                        VisualEditorFieldKind::TableCell {
+                            row: row - 1,
+                            column
+                        }
+                    );
+                }
+                assert!(arrived, "Down reaches row {row}, column {column}");
+                assert_visual_table_caret_in_cell(&app, vcx, row, column);
+            }
+            vcx.dispatch_action(Down);
+            vcx.run_until_parked();
+            app.update(vcx, |app, _| {
+                let tab = app.active_tab();
+                assert!(
+                    tab.cursor_offset()
+                        >= visual_table_block(&tab.document.visual_blocks(), 0)
+                            .source_range
+                            .end
+                );
+            });
+            let end = app.update(vcx, |app, _| {
+                visual_table_cell_range(&app.active_tab().document, 0, 5, column).start
+            });
+            app.update(vcx, |app, cx| app.move_to(end, cx));
+            vcx.run_until_parked();
+            for row in (0..5).rev() {
+                let mut arrived = false;
+                for _ in 0..32 {
+                    vcx.dispatch_action(Up);
+                    vcx.run_until_parked();
+                    let field = app
+                        .update(vcx, |app, _| {
+                            let tab = app.active_tab();
+                            tab.document
+                                .visual_editor_field_at(&(tab.cursor_offset()..tab.cursor_offset()))
+                        })
+                        .expect("Up must reach the header through existing rows");
+                    if field.kind == (VisualEditorFieldKind::TableCell { row, column }) {
+                        arrived = true;
+                        break;
+                    }
+                    assert_eq!(
+                        field.kind,
+                        VisualEditorFieldKind::TableCell {
+                            row: row + 1,
+                            column
+                        }
+                    );
+                }
+                assert!(arrived);
+                assert_visual_table_caret_in_cell(&app, vcx, row, column);
+            }
+            let header = app.update(vcx, |app, _| {
+                visual_table_cell_range(&app.active_tab().document, 0, 0, column).start
+            });
+            app.update(vcx, |app, cx| app.move_to(header, cx));
+            vcx.run_until_parked();
+            vcx.dispatch_action(Up);
+            vcx.run_until_parked();
+            app.update(vcx, |app, _| {
+                let tab = app.active_tab();
+                assert!(
+                    tab.cursor_offset()
+                        < visual_table_block(&tab.document.visual_blocks(), 0)
+                            .source_range
+                            .start
+                );
+            });
+        }
+        assert_eq!(visual_table_document_state(&app, vcx), before);
+        app.update(vcx, |app, _| {
+            assert!(Arc::ptr_eq(
+                &blocks,
+                &app.active_tab().document.visual_blocks_shared()
+            ))
+        });
+    }
+}
+
+#[gpui::test]
+fn visual_table_empty_cells_click_paint_compose_and_undo(cx: &mut TestAppContext) {
+    for newline in ["\n", "\r\n"] {
+        let source =
+            "| | Example | |\n| --- | :---: | ---: |\n| | | |\n| | | |".replace('\n', newline);
+        let (app, vcx) = visual_table_handle_app(&source, cx);
+        let before = visual_table_document_state(&app, vcx);
+        let blocks = app.update(vcx, |app, _| {
+            app.active_tab().document.visual_blocks_shared()
+        });
+        for row in 0..=2 {
+            for column in 0..3 {
+                if row == 0 && column == 1 {
+                    continue;
+                }
+                let cell = vcx
+                    .debug_bounds(test_debug_selector(format!(
+                        "visual-table-cell-0-{row}-{column}"
+                    )))
+                    .unwrap();
+                for position in [
+                    cell.center(),
+                    point(cell.left() + px(10.), cell.bottom() - px(3.)),
+                ] {
+                    vcx.simulate_mouse_down(position, MouseButton::Left, Modifiers::none());
+                    vcx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+                    vcx.run_until_parked();
+                    assert_visual_table_caret_in_cell(&app, vcx, row, column);
+                    assert_eq!(visual_table_document_state(&app, vcx), before);
+                }
+            }
+        }
+        app.update(vcx, |app, _| {
+            assert!(Arc::ptr_eq(
+                &blocks,
+                &app.active_tab().document.visual_blocks_shared()
+            ))
+        });
+        for _ in 0..3 {
+            app.update(vcx, |_, cx| cx.notify());
+            vcx.run_until_parked();
+            app.update(vcx, |app, _| {
+                let snapshot = &app.active_tab().visual_navigation_snapshots[&0];
+                assert_eq!(
+                    snapshot
+                        .lines
+                        .iter()
+                        .map(|line| line.windows.len())
+                        .sum::<usize>(),
+                    9,
+                    "unchanged repaints keep one geometry window per cell"
+                );
+            });
+        }
+        // Tab and Shift-Tab must also produce a visible empty-cell caret.
+        vcx.dispatch_action(Outdent);
+        vcx.run_until_parked();
+        assert_visual_table_caret_in_cell(&app, vcx, 2, 1);
+        vcx.dispatch_action(Indent);
+        vcx.run_until_parked();
+        assert_visual_table_caret_in_cell(&app, vcx, 2, 2);
+        for composition in ["你", "你好🙂"] {
+            vcx.update(|window, cx| {
+                app.update(cx, |app, cx| {
+                    EntityInputHandler::replace_and_mark_text_in_range(
+                        app,
+                        None,
+                        composition,
+                        None,
+                        window,
+                        cx,
+                    );
+                });
+            });
+            vcx.run_until_parked();
+            app.update(vcx, |app, _| {
+                assert!(app.active_tab().visual_marked_range_bounds.is_some());
+                assert_eq!(app.active_tab().undo_stack.len(), 1);
+            });
+        }
+        vcx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                EntityInputHandler::unmark_text(app, window, cx)
+            })
+        });
+        app.update(vcx, |app, _| {
+            let tab = app.active_tab();
+            let range = visual_table_cell_range(&tab.document, 0, 2, 2);
+            assert_eq!(&tab.document.text()[range], "你好🙂");
+        });
+        vcx.dispatch_action(Undo);
+        vcx.run_until_parked();
+        app.update(vcx, |app, _| {
+            assert_eq!(app.active_tab().document.text(), source)
+        });
+        assert_visual_table_caret_in_cell(&app, vcx, 2, 2);
+    }
+}
+
+#[gpui::test]
+fn visual_table_wrapped_and_selection_navigation_stays_in_column(cx: &mut TestAppContext) {
+    let long_cell = "你好🙂 longword ".repeat(24);
+    let source = format!(
+        "| A | B | C |\n| --- | --- | --- |\n| left | {long_cell} | right |\n| | | |\n| | | |\n\nAfter"
+    );
+    let (app, cx) = visual_table_handle_app(&source, cx);
+    let range = app.update(cx, |app, _| {
+        visual_table_cell_range(&app.active_tab().document, 0, 1, 1)
+    });
+    app.update(cx, |app, cx| app.move_to(range.start, cx));
+    cx.run_until_parked();
+    let snapshot = app.update(cx, |app, _| {
+        app.active_tab().visual_navigation_snapshots[&0].for_source_range(&range)
+    });
+    assert!(snapshot.lines.len() > 2);
+    let preferred = snapshot.caret_x_for_source(range.start).unwrap();
+    for line in 1..snapshot.lines.len() {
+        cx.dispatch_action(Down);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert!(range.contains(&tab.cursor_offset()) || tab.cursor_offset() == range.end);
+            assert_eq!(tab.visual_preferred_x, Some(preferred));
+            let current = tab.visual_navigation_snapshots[&0].for_source_range(&range);
+            assert_eq!(
+                current.line_index_for_source(tab.cursor_offset()),
+                Some(line)
+            );
+        });
+    }
+    cx.dispatch_action(End);
+    cx.run_until_parked();
+    app.update(cx, |app, _| assert_eq!(app.cursor_offset(), range.end));
+    cx.dispatch_action(Home);
+    cx.run_until_parked();
+    let anchor = app.update(cx, |app, _| app.cursor_offset());
+    for row in 2..=3 {
+        cx.dispatch_action(SelectDown);
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            let target = visual_table_cell_range(&tab.document, 0, row, 1).start;
+            assert_eq!(tab.cursor_offset(), target);
+            assert_eq!(tab.selected_range, anchor..target);
+            assert!(tab.document.text().is_char_boundary(target));
+        });
+    }
+    cx.dispatch_action(SelectUp);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.cursor_offset(),
+            visual_table_cell_range(&app.active_tab().document, 0, 2, 1).start
+        );
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+}
+
+#[gpui::test]
+fn visual_table_padding_fallback_preserves_precise_text_clicks(cx: &mut TestAppContext) {
+    let source = "| A | B |\n| --- | --- |\n| left | 你好🙂 text |";
+    let (app, cx) = visual_table_handle_app(source, cx);
+    let range = app.update(cx, |app, _| {
+        visual_table_cell_range(&app.active_tab().document, 0, 1, 1)
+    });
+    let position = app.update(cx, |app, _| {
+        let snapshot = app.active_tab().visual_navigation_snapshots[&0].for_source_range(&range);
+        let window = &snapshot.lines[0].windows[0];
+        let position = window.layout.position_for_index("你好".len()).unwrap();
+        point(position.x, position.y + window.layout.line_height() * 0.5)
+    });
+    cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.cursor_offset(), range.start + "你好".len())
+    });
+    let cell = cx.debug_bounds("visual-table-cell-0-1-1").unwrap();
+    let padding = point(cell.left() + px(10.), cell.bottom() - px(3.));
+    cx.simulate_mouse_down(padding, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(padding, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_visual_table_caret_in_cell(&app, cx, 1, 1);
+    app.update(cx, |app, _| {
+        assert_eq!(app.cursor_offset(), range.start);
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+}
+
 #[gpui::test]
 fn visual_table_handles_follow_the_hovered_cell_without_layout_shift(cx: &mut TestAppContext) {
     let source = format!("{HANDLE_TABLE}\n\nAfter the table");

@@ -799,6 +799,18 @@ impl Element for VisualListElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.app.update(cx, |app, _| {
+            let tab = app.active_tab_mut();
+            let blocks = tab.visual_list_blocks.clone();
+            // All cells contribute again below. Rebuild table geometry for
+            // this paint instead of accumulating duplicate/stale windows on
+            // hover, resize, or unchanged-selection repaints.
+            tab.visual_navigation_snapshots.retain(|index, _| {
+                !blocks.get(*index).is_some_and(|block| {
+                    matches!(block.editor, Some(VisualBlockEditor::Table { .. }))
+                })
+            });
+        });
         self.list
             .paint(id, inspector_id, bounds, state, prepaint, window, cx);
     }
@@ -920,8 +932,9 @@ struct VisualEditableText {
     /// its own segments, so an unfocused row would otherwise paint a stray
     /// caret at its nearest boundary.
     caret_active: bool,
-    /// Focused multi-field blocks register geometry only for their active
-    /// field, so sibling cells cannot overwrite the navigation snapshot.
+    /// Tables register every cell; navigation scopes their shared block
+    /// snapshot to the active cell. Other multi-field blocks retain the
+    /// active-field gate.
     navigation_active: bool,
     /// Script glyphs move vertically inside their body line; navigation
     /// groups them with that line instead of inventing an extra arrow stop.
@@ -1193,6 +1206,7 @@ impl Element for VisualEditableText {
         let whitespace_click = whitespace_caret.clone();
         let row_top = bounds.top();
         let hitbox_for_down = hitbox.clone();
+        let block_index = self.block_index;
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble
                 || event.button != MouseButton::Left
@@ -1247,6 +1261,17 @@ impl Element for VisualEditableText {
             } else {
                 return;
             };
+            if entity
+                .read(cx)
+                .active_tab()
+                .visual_list_blocks
+                .get(block_index)
+                .is_some_and(|block| matches!(block.editor, Some(VisualBlockEditor::Table { .. })))
+            {
+                // The outer cell owns padding clicks; it must not replace a
+                // precise text click or double-click word selection.
+                cx.stop_propagation();
+            }
             let focus_handle = entity.read(cx).focus_handle.clone();
             window.focus(&focus_handle);
             entity.update(cx, |app, cx| {
@@ -5463,7 +5488,7 @@ fn visual_editor_field_element(
                         field.source_range.clone(),
                         visual_highlight_style(span.style, span.link.is_some()),
                         &mut None,
-                        !block_owns_caret,
+                        true,
                         px(resolved_script_metrics(span.style, metrics, app, cx)
                             .map_or(0., |(_, _, top)| top)),
                         app,
@@ -5503,7 +5528,7 @@ fn visual_editor_field_element(
     // Table cells render inline formatting (bold, links, etc.) while unfocused,
     // and reveal the authored source markup when focused for editing -
     // mirroring how non-table visual blocks reveal inline constructs.
-    let (projection, text, highlights, token_displays) = if let Some(rich) = cell_rich {
+    let (mut projection, mut text, highlights, token_displays) = if let Some(rich) = cell_rich {
         if caret_active {
             // Focused cells reveal authored source; a data-URI payload inside
             // collapses into the shared token (falls back to the ordinary
@@ -5536,6 +5561,18 @@ fn visual_editor_field_element(
         (proj, txt, Vec::new(), Vec::new())
     };
 
+    if matches!(field.kind, VisualEditorFieldKind::TableCell { .. }) && text.is_empty() {
+        // A display-only blank supplies real line/caret geometry. Both edges
+        // map to the existing insertion offset; it never enters Markdown.
+        text.push('\u{a0}');
+        projection.text = text.clone();
+        projection.segments.push(markion::VisualProjectionSegment {
+            display_range: 0..text.len(),
+            source_range: field.source_range.start..field.source_range.start,
+            atomic: true,
+        });
+    }
+
     #[cfg(test)]
     let test_projection = caret_active.then_some((text.clone(), Vec::new()));
     let styled = if !token_displays.is_empty() {
@@ -5561,7 +5598,9 @@ fn visual_editor_field_element(
         source_cursor,
         marked_range,
         caret_active,
-        navigation_active: caret_active || !block_owns_caret,
+        navigation_active: matches!(field.kind, VisualEditorFieldKind::TableCell { .. })
+            || caret_active
+            || !block_owns_caret,
         navigation_y_offset: Pixels::ZERO,
         entity: cx.entity(),
         whitespace_caret: None,
@@ -6744,6 +6783,9 @@ pub(super) fn visual_table_view(
                     });
                     preview_table_cell_flex(column_weights.get(cell_index).copied().unwrap_or(1.0))
                         .id(ElementId::from(("visual-table-cell-chrome", cell_key)))
+                        .debug_selector(move || {
+                            format!("visual-table-cell-{block_index}-{row_index}-{cell_index}")
+                        })
                         .relative()
                         .p_2()
                         .when(!is_last_cell, |style| {
@@ -6755,6 +6797,27 @@ pub(super) fn visual_table_view(
                             view.on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |app, _, _, cx| app.move_to(offset, cx)),
+                            )
+                        })
+                        .when_some(field, |view, field| {
+                            let insertion = field.source_range.start;
+                            view.on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |app, event: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    window.focus(&app.focus_handle);
+                                    app.file_tree_query_focused = false;
+                                    app.search_focus = None;
+                                    app.search_control_focus = None;
+                                    app.input_marked_len = 0;
+                                    app.active_tab_mut().clear_preview_selection();
+                                    app.active_tab_mut().is_selecting = true;
+                                    if event.modifiers.shift {
+                                        app.select_to(insertion, cx);
+                                    } else {
+                                        app.move_to(insertion, cx);
+                                    }
+                                }),
                             )
                         })
                         .when(cells.is_some(), |view| {

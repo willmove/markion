@@ -31,6 +31,29 @@ Markion's Visual Edit mode is WYSIWYG-first: rendering is the default presentati
 | YAML front matter | `VisualBlockEditor::FrontMatter`: collapsible document header (localized YAML label plus parsed `title` when present) over the complete authored `---` / `...` span | Complete authored header including opening and closing delimiters | TOML/JSON front matter is not detected | Exact source preservation, valid/invalid YAML stays the payload editor (not an island), title in collapsed chrome, expand/hover without version change |
 | Unsupported or malformed constructs | Transitional source view over the complete containing range, using the same lightweight island chrome | Complete containing source range | Exact mapping cannot be proven | Lossless source-mode round-trip and no guessed mutation |
 
+### GFM table cell navigation and empty-cell coverage
+
+Visual Edit registers every painted cell's navigation geometry, then scopes
+wrapped-line and Home/End targets to the active cell. Up/Down at a cell's line
+boundary enters the same column in the adjacent logical row, including empty
+cells and the header; only the table's outer row boundary hands off to the
+adjacent visual block. Shift-Up/Down uses the same targets. The Markdown
+delimiter row never becomes a navigation stop.
+
+Empty cells use a display-only blank mapped to their existing source insertion
+offset, so they paint a caret without adding Markdown bytes. The cell interior
+and padding accept pointer placement; text clicks keep precise hit testing and
+table grips/resize controls keep their own handlers.
+
+GPUI regressions `visual_table_vertical_arrows_preserve_columns_and_empty_rows`,
+`visual_table_empty_cells_click_paint_compose_and_undo`,
+`visual_table_wrapped_and_selection_navigation_stays_in_column`, and
+`visual_table_padding_fallback_preserves_precise_text_clicks` cover the reported
+three-column Markdown sample, LF/CRLF, consecutive empty rows, empty headers,
+caret ownership/bounds, wrapping, Tab/Shift-Tab, CJK/emoji composition, undo,
+precise text versus padding clicks, source preservation and shared cache reuse.
+These are automated layout/input checks; no manual app smoke test is implied.
+
 ### Caret source-line boundary regression coverage
 
 Terminal LF/CRLF stays with the preceding heading or paragraph. Visual Edit

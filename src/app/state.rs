@@ -311,6 +311,42 @@ impl VisualNavigationWindow {
 }
 
 impl VisualNavigationSnapshot {
+    /// Keep only geometry belonging to one exact table cell. A table row's
+    /// windows share Y coordinates, but sibling columns are not arrow or
+    /// Home/End targets for the active cell.
+    pub(super) fn for_source_range(&self, range: &Range<usize>) -> Self {
+        let mut snapshot = self.clone();
+        for line in &mut snapshot.lines {
+            line.windows.retain(|window| {
+                window.projection.source_anchor >= range.start
+                    && window.projection.source_anchor <= range.end
+                    && window.projection.segments.iter().all(|segment| {
+                        segment.source_range.start >= range.start
+                            && segment.source_range.end <= range.end
+                    })
+            });
+            for window in &mut line.windows {
+                // GPUI gives a wrap boundary the preceding line's trailing
+                // caret position. Use the next UTF-8 boundary when that is
+                // the first position that actually paints on this cell line.
+                if window.start_display < window.end_display
+                    && window
+                        .layout
+                        .position_for_index(window.start_display)
+                        .is_some_and(|point| point.y < line.y + window.y_offset - gpui::px(0.5))
+                    && let Some(ch) = window.projection.text[window.start_display..]
+                        .chars()
+                        .next()
+                {
+                    window.start_display =
+                        (window.start_display + ch.len_utf8()).min(window.end_display);
+                }
+            }
+        }
+        snapshot.lines.retain(|line| !line.windows.is_empty());
+        snapshot
+    }
+
     /// Line whose display windows contain the display position of `source`.
     pub(super) fn line_index_for_source(&self, source: usize) -> Option<usize> {
         let mut best: Option<(usize, Pixels)> = None;
@@ -372,7 +408,8 @@ impl VisualNavigationSnapshot {
             let sample = gpui::point(preferred_x, window.sample_y(line.y));
             let display = match window.layout.index_for_position(sample) {
                 Ok(index) | Err(index) => index,
-            };
+            }
+            .clamp(window.start_display, window.end_display);
             let candidates = window.projection.boundary_candidates(display);
             for source in [candidates.upstream_source, candidates.downstream_source] {
                 let Some(display) = window.projection.display_for_source(source) else {

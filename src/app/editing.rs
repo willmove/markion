@@ -3946,7 +3946,17 @@ impl MarkionApp {
         {
             return None;
         }
-        Some((block_index, snapshot.clone()))
+        let snapshot = if let Some(VisualBlockEditor::Table { cells }) =
+            tab.visual_list_blocks[block_index].editor.as_ref()
+        {
+            let cell = cells.iter().find(|cell| {
+                cursor >= cell.field.source_range.start && cursor <= cell.field.source_range.end
+            })?;
+            snapshot.for_source_range(&cell.field.source_range)
+        } else {
+            snapshot.clone()
+        };
+        Some((block_index, snapshot))
     }
 
     fn move_visual_vertical(
@@ -4000,6 +4010,51 @@ impl MarkionApp {
                 line_index,
                 source_offset: target,
             });
+            return true;
+        }
+
+        // Leaving a cell's last/first painted line enters the same column in
+        // the adjacent logical row, not the block following the whole table.
+        let next_cell = {
+            let tab = self.active_tab();
+            tab.visual_list_blocks[block_index]
+                .editor
+                .as_ref()
+                .and_then(|editor| {
+                    let VisualBlockEditor::Table { cells } = editor else {
+                        return None;
+                    };
+                    let current = cells.iter().find(|cell| {
+                        cursor >= cell.field.source_range.start
+                            && cursor <= cell.field.source_range.end
+                    })?;
+                    let row = match direction {
+                        VisualNavigationDirection::Up => current.row.checked_sub(1)?,
+                        VisualNavigationDirection::Down => current.row + 1,
+                    };
+                    cells
+                        .iter()
+                        .find(|cell| cell.row == row && cell.column == current.column)
+                        .map(|cell| cell.field.source_range.clone())
+                })
+        };
+        if let Some(range) = next_cell {
+            let target_snapshot = self.active_tab().visual_navigation_snapshots[&block_index]
+                .for_source_range(&range);
+            let target_line = match direction {
+                VisualNavigationDirection::Down => 0,
+                VisualNavigationDirection::Up => target_snapshot.lines.len().saturating_sub(1),
+            };
+            let target = target_snapshot
+                .closest_source_on_line(target_line, preferred_x)
+                .unwrap_or(range.start)
+                .clamp(range.start, range.end);
+            if extend_selection {
+                self.select_to(target, cx);
+            } else {
+                self.move_to(target, cx);
+            }
+            self.active_tab_mut().visual_preferred_x = Some(preferred_x);
             return true;
         }
 
