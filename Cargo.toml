@@ -65,7 +65,13 @@ repository = "https://github.com/willmove/markion"
 [dependencies]
 anyhow = "1.0"
 thiserror.workspace = true
-gpui = "0.2.2"
+# LOCAL BUILD FIX (uncommitted): full Xcode is not installed on this machine,
+# and gpui's default macOS build compiles Metal shaders at build time via
+# `xcrun metal` (ships only with full Xcode). `runtime_shaders` defers shader
+# compilation to app startup via Metal's driver-level source compiler, which
+# needs no developer tools. Revert and install full Xcode to restore
+# build-time precompiled metallib.
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 raw-window-handle = "0.6"
 reqwest = { package = "zed-reqwest", version = "0.12.15-zed", default-features = false, features = ["rustls-tls-native-roots"] }
