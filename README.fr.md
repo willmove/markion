@@ -20,9 +20,9 @@ Téléchargez la dernière version depuis [GitHub Releases](https://github.com/w
 |---|---|---|
 | Windows | Installeur NSIS `.exe` | x86_64 |
 | Linux | `.deb` et AppImage | x86_64 |
-| macOS | `.app` et `.dmg` | Apple Silicon (arm64), macOS 11+ |
+| macOS | `.app` et `.dmg` | Apple Silicon (arm64) et Intel (x64), macOS 11+ |
 
-Les publications ne sont pas signées au niveau de la plateforme. Windows SmartScreen peut exiger **Informations complémentaires → Exécuter quand même**, et macOS Gatekeeper peut exiger un clic droit sur l'application puis **Ouvrir**. **Aide → Rechercher des mises à jour…** propose une invite de mise à jour exploitable sur toutes les plateformes : les installations NSIS Windows x86_64 étiquetées bénéficient d'un téléchargement-installation en un clic vérifié cryptographiquement (Minisign via cargo-packager) qui refuse de démarrer tant qu'un document comporte des modifications non enregistrées, tandis que macOS et Linux ouvrent le fichier de publication correspondant dans le navigateur système. Les Mac Intel peuvent exécuter la version arm64 via Rosetta ; un binaire universel et la notarisation Apple ne sont pas fournis actuellement.
+Les publications Windows ne sont pas signées ; SmartScreen peut exiger **Informations complémentaires → Exécuter quand même**. Les publications macOS sont scellées par une signature ad hoc gratuite — sans certificat Developer ID payant ni notarisation —, Gatekeeper avertit donc au premier lancement, mais l'option **Ouvrir quand même** des Réglages Système → Confidentialité et sécurité reste disponible (voir le README principal pour le détail). **Aide → Rechercher des mises à jour…** propose une invite de mise à jour exploitable sur toutes les plateformes : les installations NSIS Windows x86_64 étiquetées bénéficient d'un téléchargement-installation en un clic vérifié cryptographiquement (Minisign via cargo-packager) qui refuse de démarrer tant qu'un document comporte des modifications non enregistrées, tandis que macOS et Linux ouvrent le fichier de publication correspondant dans le navigateur système. Les Mac Apple Silicon et Intel disposent chacun d'un DMG natif ; un binaire universel et la notarisation Apple ne sont pas fournis actuellement.
 
 ## Modes d'édition
 

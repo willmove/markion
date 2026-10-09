@@ -20,9 +20,9 @@ Markion 是一款使用 Rust 和 GPUI 打造的原生桌面 Markdown 編輯器�
 |---|---|---|
 | Windows | NSIS `.exe` 安裝程式 | x86_64 |
 | Linux | `.deb` 和 AppImage | x86_64 |
-| macOS | `.app` 和 `.dmg` | Apple Silicon（arm64），macOS 11+ |
+| macOS | `.app` 和 `.dmg` | Apple Silicon（arm64）與 Intel（x64），macOS 11+ |
 
-目前發佈版本尚未進行平台程式碼簽章。Windows SmartScreen 可能要求選擇「更多資訊 → 仍要執行」，macOS Gatekeeper 可能要求對應用程式按右鍵並選擇「打開」。**說明 → 檢查更新…** 在所有平台都提供可操作的更新提示：帶標籤的 Windows x86_64 NSIS 安裝可進行經過 cargo-packager Minisign 加密驗證的一鍵下載並安裝，且當任一文件存在未儲存變更時拒絕啟動；macOS 與 Linux 會在系統瀏覽器中開啟對應的發佈檔案。Intel Mac 可透過 Rosetta 執行 arm64 版本；目前尚不提供通用二進位和 Apple 公證。
+Windows 發佈包未簽章，SmartScreen 可能要求選擇「更多資訊 → 仍要執行」。macOS 發佈包使用免費的 ad-hoc 程式碼簽章——沒有付費 Developer ID 憑證，也未公證——Gatekeeper 首次啟動仍會警告，但可在「系統設定 → 隱私權與安全性」中點按「仍要打開」（詳見主 README 的 macOS 首次啟動說明）。**說明 → 檢查更新…** 在所有平台都提供可操作的更新提示：帶標籤的 Windows x86_64 NSIS 安裝可進行經過 cargo-packager Minisign 加密驗證的一鍵下載並安裝，且當任一文件存在未儲存變更時拒絕啟動；macOS 與 Linux 會在系統瀏覽器中開啟對應的發佈檔案。Apple Silicon 與 Intel Mac 各有原生 DMG；目前尚不提供通用二進位和 Apple 公證。
 
 ## 編輯模式
 

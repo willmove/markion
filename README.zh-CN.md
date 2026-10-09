@@ -20,9 +20,17 @@ Markion 是一款使用 Rust 和 GPUI 构建的原生桌面 Markdown 编辑器�
 |---|---|---|
 | Windows | NSIS `.exe` 安装程序 | x86_64 |
 | Linux | `.deb` 和 AppImage | x86_64 |
-| macOS | `.app` 和 `.dmg` | Apple Silicon（arm64），macOS 11+ |
+| macOS | `.app` 和 `.dmg` | Apple Silicon（arm64）与 Intel（x64），macOS 11+ |
 
-当前发布版本尚未进行平台代码签名。Windows SmartScreen 可能要求选择“更多信息 → 仍要运行”，macOS Gatekeeper 可能要求右键应用并选择“打开”。“帮助 → 检查更新…”在所有平台都提供可操作的更新提示：带标签的 Windows x86_64 NSIS 安装可进行经过 cargo-packager Minisign 加密验证的一键下载并安装，且当任一文档存在未保存更改时拒绝启动；macOS 与 Linux 会在系统浏览器中打开对应的发布文件。Intel Mac 可通过 Rosetta 运行 arm64 版本；目前尚不提供通用二进制和 Apple 公证。
+Windows 发布包未签名，SmartScreen 可能要求选择“更多信息 → 仍要运行”。macOS 发布包使用免费的 ad-hoc 代码签名封装——没有付费 Developer ID 证书，也未公证——因此 Gatekeeper 首次启动仍会警告，但提供“仍要打开”通道（见下一段）。“帮助 → 检查更新…”在所有平台都提供可操作的更新提示：带标签的 Windows x86_64 NSIS 安装可进行经过 cargo-packager Minisign 加密验证的一键下载并安装，且当任一文档存在未保存更改时拒绝启动；macOS 与 Linux 会在系统浏览器中打开对应的发布文件。Apple Silicon 与 Intel Mac 各有原生 DMG；目前尚不提供通用二进制和 Apple 公证。
+
+**macOS 首次启动提示“无法检查它是否包含恶意软件”。** Gatekeeper 会对未经 Apple 公证的应用发出警告；v0.4.7 及更早版本还会被报“已损坏”，因为其 bundle 没有有效签名。当前 DMG 均带 ad-hoc 代码签名，签名有效、警告可绕过：在“系统设置 → 隐私与安全性”中点按一次“仍要打开”即可（macOS 13/14 也可以右键应用选择“打开”）。两种终端方式可以完全跳过提示——用 `curl -LO` 下载（curl 不会设置隔离标记），或清除浏览器下载带来的隔离标记：
+
+```bash
+xattr -cr /Applications/Markion.app
+```
+
+每次通过浏览器下载更新后需重新执行 `xattr` 命令；安装位置需要权限时在命令前加 `sudo`。无论哪种方式，下载文件本身都完好——每个 Release 都附有 `sha256sums.txt` 可供校验。
 
 ## 编辑模式
 

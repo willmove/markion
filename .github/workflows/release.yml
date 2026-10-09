@@ -41,6 +41,14 @@ jobs:
             formats: app,dmg
             verify_formats: app,dmg
             artifact_name: markion-macos-arm64
+          # Cross-compiled on the arm64 runner: same-OS cross-compilation of
+          # the Metal backend is fully supported, and Intel macOS runners are
+          # being retired by GitHub.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            formats: app,dmg
+            verify_formats: app,dmg
+            artifact_name: markion-macos-x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             formats: nsis
@@ -100,10 +108,12 @@ jobs:
           }
           echo "MARKION_UPDATE_PUBLIC_KEY=$UPDATE_PUBLIC_KEY" >> "$GITHUB_ENV"
 
-      # Each runner is native for its matrix target, and packager expects the
-      # executable in target/release rather than target/<triple>/release.
+      # Each runner is native for its matrix target except the cross-compiled
+      # macOS x86_64 entry, which builds with an explicit --target into
+      # target/<triple>/release (the packaging step below points the packager
+      # there). All other entries keep the native target/release layout.
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release ${{ matrix.target == 'x86_64-apple-darwin' && '--target x86_64-apple-darwin' || '' }}
 
       - name: Verify pinned MarkNice workspace source
         run: cargo run --release -p wechat-workspace --bin verify-bundle -- assets/marknice-workspace
@@ -114,7 +124,29 @@ jobs:
         run: cargo install cargo-packager --version 0.11.8 --locked --force
 
       - name: Package (${{ matrix.formats }})
+        if: runner.os != 'macOS' || matrix.target == 'aarch64-apple-darwin'
         run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }}
+
+      # Cross-compiled x86_64: --target stamps the x64 arch into the DMG name
+      # (Markion_<version>_x64.dmg), --binaries-dir points at the triple-dir
+      # binary, and CARGO_BUILD_TARGET keeps the packager's
+      # before-packaging-command rebuilding the same cross target instead of
+      # clobbering anything with a host-arch rebuild.
+      - name: Package (${{ matrix.formats }}, cross x86_64)
+        if: runner.os == 'macOS' && matrix.target == 'x86_64-apple-darwin'
+        env:
+          CARGO_BUILD_TARGET: x86_64-apple-darwin
+        run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }} --target x86_64-apple-darwin --binaries-dir target/x86_64-apple-darwin/release
+
+      # packager.toml seals macOS bundles with an ad-hoc signature
+      # (signing-identity = "-"). Fail the build when that seal is missing so
+      # an unsealed "app is damaged" bundle can never ship again.
+      - name: Verify ad-hoc code signature
+        if: runner.os == 'macOS'
+        run: |
+          codesign --verify --deep --strict "dist/Markion.app"
+          codesign -dv "dist/Markion.app" 2>&1 | tee /tmp/codesign.txt
+          grep -q "Signature=adhoc" /tmp/codesign.txt
 
       # cargo-packager has no zip/rpm formats; assemble those after NSIS/DEB.
       - name: Package Windows portable zip
@@ -133,11 +165,16 @@ jobs:
             ./scripts/verify-packaged-workspace.ps1 -Format $_ -ArtifactsRoot dist
           }
 
+      # macOS artifacts upload only the DMG: the unpacked .app is never
+      # published or mirrored (its verification ran above), and with two macOS
+      # matrix entries both containing dist/Markion.app, merged artifact
+      # downloads downstream would hit same-path conflicts with undefined
+      # behavior.
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/*
+          path: ${{ runner.os == 'macOS' && 'dist/*.dmg' || 'dist/*' }}
           if-no-files-found: error
           retention-days: 14
 
@@ -285,7 +322,7 @@ jobs:
   # Mirrors the tagged release's installers and packaging config to a domestic
   # Aliyun OSS Bucket at a stable `${OSS_PREFIX}/latest/` path, alongside a
   # generated `manifest.json` for mirror metadata and future clients.
-  # Packages: Windows NSIS + portable zip, macOS DMG, Linux DEB + RPM + AppImage.
+  # Packages: Windows NSIS + portable zip, macOS DMGs (arm64 + x64), Linux DEB + RPM + AppImage.
   # The mirrored `update.json` is the Release's manifest with its installer
   # URL rewritten to the OSS host, so each distribution channel serves a
   # self-consistent manifest/installer pair with identical signatures.
@@ -352,6 +389,7 @@ jobs:
             --pattern "markion_${VERSION}_x64-setup.exe" \
             --pattern "markion_${VERSION}_x64-portable.zip" \
             --pattern "Markion_${VERSION}_aarch64.dmg" \
+            --pattern "Markion_${VERSION}_x64.dmg" \
             --pattern "markion_${VERSION}_amd64.deb" \
             --pattern "markion_${VERSION}_x86_64.rpm" \
             --pattern "markion_${VERSION}_x86_64.AppImage" \
@@ -414,6 +452,7 @@ jobs:
               "windows-x86_64": f"markion_{version}_x64-setup.exe",
               "windows-x86_64-portable": f"markion_{version}_x64-portable.zip",
               "macos-aarch64":  f"Markion_{version}_aarch64.dmg",
+              "macos-x86_64":   f"Markion_{version}_x64.dmg",
               "linux-amd64":    f"markion_{version}_amd64.deb",
               "linux-rpm":      f"markion_{version}_x86_64.rpm",
               "linux-appimage": f"markion_{version}_x86_64.AppImage",
@@ -496,6 +535,7 @@ jobs:
           upload "dist/markion_${VERSION}_x64-setup.exe" "${prefix_dir}/markion_${VERSION}_x64-setup.exe"
           upload "dist/markion_${VERSION}_x64-portable.zip" "${prefix_dir}/markion_${VERSION}_x64-portable.zip"
           upload "dist/Markion_${VERSION}_aarch64.dmg" "${prefix_dir}/Markion_${VERSION}_aarch64.dmg"
+          upload "dist/Markion_${VERSION}_x64.dmg" "${prefix_dir}/Markion_${VERSION}_x64.dmg"
           upload "dist/markion_${VERSION}_amd64.deb" "${prefix_dir}/markion_${VERSION}_amd64.deb"
           upload "dist/markion_${VERSION}_x86_64.rpm" "${prefix_dir}/markion_${VERSION}_x86_64.rpm"
           upload "dist/markion_${VERSION}_x86_64.AppImage" "${prefix_dir}/markion_${VERSION}_x86_64.AppImage"
@@ -517,6 +557,7 @@ jobs:
             "markion_${VERSION}_x64-setup.exe" \
             "markion_${VERSION}_x64-portable.zip" \
             "Markion_${VERSION}_aarch64.dmg" \
+            "Markion_${VERSION}_x64.dmg" \
             "markion_${VERSION}_amd64.deb" \
             "markion_${VERSION}_x86_64.rpm" \
             "markion_${VERSION}_x86_64.AppImage" \

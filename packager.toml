@@ -27,14 +27,19 @@
 # Those two artifacts still go through scripts/verify-packaged-workspace.ps1.
 #
 # NOTE on signing: builds have no paid platform code-signing certificate, so
-# users can still see Gatekeeper (macOS) / SmartScreen (Windows) warnings. The
-# Windows NSIS installer is separately signed with minisign for the in-app
-# updater; that authenticates update downloads but is not Authenticode signing.
+# users can still see Gatekeeper (macOS) / SmartScreen (Windows) warnings.
+# macOS bundles are sealed with an ad-hoc signature (see [macos] below), which
+# keeps the signature valid-but-untrusted so Gatekeeper offers the "Open
+# Anyway" path instead of the hard "app is damaged" block an unsealed bundle
+# triggers. The Windows NSIS installer is separately signed with minisign for
+# the in-app updater; that authenticates update downloads but is not
+# Authenticode signing.
 #
 # Aliyun OSS mirror (release.yml `mirror-oss` job):
 #   After a successful `v*` tag build, the release workflow also uploads the
-#   six packages (NSIS, portable zip, DMG, DEB, RPM, AppImage), updater
-#   `update.json` + `.sig`, this `packager.toml`, a generated `manifest.json`,
+#   seven packages (NSIS, portable zip, arm64 DMG, x64 DMG, DEB, RPM,
+#   AppImage), updater `update.json` + `.sig`, this `packager.toml`, a
+#   generated `manifest.json`,
 #   and `sha256sums.txt` to an Aliyun OSS Bucket at:
 #       ${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/<filename>
 #   The in-app "Check for Updates…" action discovers releases from GitHub's
@@ -93,8 +98,15 @@ formats = ["nsis", "app", "dmg", "deb", "appimage"]
 # macOS options
 # ---------------------------------------------------------------------------
 [macos]
-# Unsigned build: signing-identity is intentionally omitted. Gatekeeper will
-# warn end users. Minimum macOS version for the arm64 build.
+# Ad-hoc code signing ("-" identity, no Apple Developer account): seals the
+# bundle (CodeResources, bound Info.plist) so Gatekeeper treats the signature
+# as valid-but-untrusted and offers System Settings → Privacy & Security →
+# "Open Anyway". An unsealed bundle (linker ad-hoc binary signature only) is
+# reported as a hard "app is damaged" block with no override. This is NOT
+# Developer ID signing or notarization; the first-launch warning remains.
+# CI additionally verifies the seal with `codesign --verify --deep --strict`.
+signing-identity = "-"
+# Minimum macOS version for the arm64 and x64 builds.
 minimum-system-version = "11.0"
 
 # ---------------------------------------------------------------------------

@@ -20,9 +20,9 @@ Descarga la compilación más reciente desde [GitHub Releases](https://github.co
 |---|---|---|
 | Windows | Instalador NSIS `.exe` | x86_64 |
 | Linux | `.deb` y AppImage | x86_64 |
-| macOS | `.app` y `.dmg` | Apple Silicon (arm64), macOS 11+ |
+| macOS | `.app` y `.dmg` | Apple Silicon (arm64) e Intel (x64), macOS 11+ |
 
-Las publicaciones no llevan firma de código de plataforma. Windows SmartScreen puede requerir **Más información → Ejecutar de todas formas**, y macOS Gatekeeper puede requerir hacer clic derecho en la aplicación y elegir **Abrir**. **Ayuda → Buscar actualizaciones…** ofrece un aviso de actualización accionable en todas las plataformas: las instalaciones NSIS etiquetadas de Windows x86_64 obtienen una descarga e instalación de un clic verificada criptográficamente (Minisign de cargo-packager) que se niega a iniciar mientras algún documento tenga cambios sin guardar, mientras que macOS y Linux abren el archivo de publicación correspondiente en el navegador del sistema. Los Mac Intel pueden ejecutar la compilación arm64 mediante Rosetta; no se ofrecen actualmente un binario universal ni la notarización de Apple.
+Las publicaciones de Windows no llevan firma de código; SmartScreen puede requerir **Más información → Ejecutar de todas formas**. Las publicaciones de macOS van selladas con una firma de código ad hoc gratuita —sin certificado Developer ID de pago ni notarización—, por lo que Gatekeeper avisa en el primer inicio pero mantiene disponible la opción **Abrir de todas formas** en Ajustes del Sistema → Privacidad y seguridad (detalles en el README principal). **Ayuda → Buscar actualizaciones…** ofrece un aviso de actualización accionable en todas las plataformas: las instalaciones NSIS etiquetadas de Windows x86_64 obtienen una descarga e instalación de un clic verificada criptográficamente (Minisign de cargo-packager) que se niega a iniciar mientras algún documento tenga cambios sin guardar, mientras que macOS y Linux abren el archivo de publicación correspondiente en el navegador del sistema. Los Mac Apple Silicon e Intel disponen cada uno de un DMG nativo; no se ofrecen actualmente un binario universal ni la notarización de Apple.
 
 ## Modos de edición
 

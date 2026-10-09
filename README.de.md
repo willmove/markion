@@ -20,9 +20,9 @@ Lade den aktuellen Build von [GitHub Releases](https://github.com/willmove/marki
 |---|---|---|
 | Windows | NSIS-`.exe`-Installer | x86_64 |
 | Linux | `.deb` und AppImage | x86_64 |
-| macOS | `.app` und `.dmg` | Apple Silicon (arm64), macOS 11+ |
+| macOS | `.app` und `.dmg` | Apple Silicon (arm64) und Intel (x64), macOS 11+ |
 
-Releases sind nicht plattformseitig codesigniert. Windows SmartScreen verlangt eventuell **Weitere Informationen → Trotzdem ausführen**, und macOS Gatekeeper eventuell ein Rechtsklicken der App und die Wahl von **Öffnen**. **Hilfe → Nach Updates suchen…** bietet auf jeder Plattform eine umsetzbare Update-Aufforderung: Getaggte Windows-x86_64-NSIS-Installationen erhalten einen kryptografisch verifizierten (cargo-packager-Minisign) Ein-Klick-Download mit Installation, der den Start verweigert, solange ein Dokument ungespeicherte Änderungen enthält; macOS und Linux öffnen die passende Release-Datei im Systembrowser. Intel-Macs können den arm64-Build über Rosetta ausführen; ein Universal-Binary und eine Apple-Notarisierung werden derzeit nicht bereitgestellt.
+Windows-Releases sind nicht codesigniert; SmartScreen verlangt eventuell **Weitere Informationen → Trotzdem ausführen**. macOS-Releases sind mit einer kostenlosen Ad-hoc-Codesignatur versiegelt — ohne kostenpflichtiges Developer-ID-Zertifikat und ohne Notarisierung —, sodass Gatekeeper beim ersten Start zwar warnt, aber der Weg über Systemeinstellungen → Datenschutz & Sicherheit → **Trotzdem öffnen** verfügbar bleibt (Details im Haupt-README). **Hilfe → Nach Updates suchen…** bietet auf jeder Plattform eine umsetzbare Update-Aufforderung: Getaggte Windows-x86_64-NSIS-Installationen erhalten einen kryptografisch verifizierten (cargo-packager-Minisign) Ein-Klick-Download mit Installation, der den Start verweigert, solange ein Dokument ungespeicherte Änderungen enthält; macOS und Linux öffnen die passende Release-Datei im Systembrowser. Apple-Silicon- und Intel-Macs erhalten jeweils ein natives DMG; ein Universal-Binary und eine Apple-Notarisierung werden derzeit nicht bereitgestellt.
 
 ## Bearbeitungsmodi
 

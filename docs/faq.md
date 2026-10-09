@@ -13,10 +13,10 @@ Markion is a native desktop Markdown editor built in Rust with the [GPUI](https:
 | Platform | Target | Notes |
 |---|---|---|
 | Windows | `x86_64-pc-windows-msvc` | Windows 10 and later; NSIS `.exe` installer |
-| macOS | `aarch64-apple-darwin` | Apple Silicon native; **min macOS 11.0**; Intel Macs run via Rosetta. A universal binary is a future task. |
+| macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | Apple Silicon and Intel Macs each get a native build; **min macOS 11.0**. A universal binary is a future task. |
 | Linux | `x86_64-unknown-linux-gnu` | Built on Ubuntu 22.04; ships as `.deb` and `.AppImage` |
 
-**Releases are not platform code-signed.** On first launch you can still see Gatekeeper (macOS) or SmartScreen (Windows) warnings; bypass them manually to run Markion. The Windows x86_64 in-app updater separately verifies its NSIS payload with a Minisign key, which does not suppress SmartScreen. macOS and Linux update actions open the release download in the system browser. Linux users installing the `.deb` get the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) pulled in automatically.
+**Windows releases are unsigned; macOS releases are sealed with a free ad-hoc code signature** (no paid Developer ID certificate, no notarization). On first launch you will still see Gatekeeper (macOS) or SmartScreen (Windows) warnings, but the macOS warning is overridable via *System Settings → Privacy & Security → Open Anyway* — [Troubleshooting](#troubleshooting) has the exact steps, including the pre-ad-hoc "app is damaged" case and Terminal alternatives. The Windows x86_64 in-app updater separately verifies its NSIS payload with a Minisign key, which does not suppress SmartScreen. macOS and Linux update actions open the release download in the system browser. Linux users installing the `.deb` get the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) pulled in automatically.
 
 ## Markdown support
 
@@ -211,7 +211,13 @@ Markion caches derived document state (preview blocks, outline, statistics, synt
 
 ## Troubleshooting
 
-- **macOS says Markion "can't be opened because it is from an unidentified developer."** This is Gatekeeper. Right-click the app and choose **Open**, or in *System Settings → Privacy & Security* click **Open Anyway**. Releases are unsigned.
+- **macOS says Markion "can't be opened because Apple cannot check it for malicious software" (or, on releases up to v0.4.7, "is damaged and can't be opened").** This is Gatekeeper reacting to a download without Apple notarization — the file is intact (the `sha256sums.txt` attached to each release will confirm it). Current DMGs are ad-hoc code-signed, so the warning is overridable: approve Markion once under *System Settings → Privacy & Security → Open Anyway* (on macOS 13/14, right-clicking the app and choosing **Open** also works). The older "damaged" wording came from releases whose bundle carried no valid signature; if you ever see it again, clear the quarantine flag macOS puts on downloaded files:
+
+  ```bash
+  xattr -cr /Applications/Markion.app
+  ```
+
+  The same command works for any release version; repeat it after each browser-downloaded update and prefix `sudo` if your install location requires it. Downloading with `curl -LO <dmg-url>` avoids the prompt entirely, because curl does not set the quarantine flag.
 - **Windows SmartScreen warns before running the installer.** Click **More info → Run anyway**. Releases are unsigned.
 - **PDF export produced a tiny, plain-looking file.** The built-in PDF writer (a text snapshot) was used because pandoc or its PDF engine was not installed. Install [pandoc](https://pandoc.org/) and a LaTeX engine (e.g. `xelatex`), or set `[export] pdf_engine = "pdfroff"` and install groff, then re-export — the status bar will say "pandoc engine" when the richer path succeeds.
 - **A custom theme is not appearing in Preferences.** Confirm the `.toml` file is in the themes directory (see [Configuration locations](#configuration-locations)), that its `name` field is set and non-empty, and that no built-in theme has the same name (built-ins take precedence).

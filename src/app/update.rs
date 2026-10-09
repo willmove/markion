@@ -461,6 +461,7 @@ fn browser_download_url_with_os_release(
     let asset_suffix = match (os, arch) {
         ("windows", "x86_64") => "_x64-setup.exe",
         ("macos", "aarch64") => "_aarch64.dmg",
+        ("macos", "x86_64") => "_x64.dmg",
         ("linux", "x86_64") if linux_wants_appimage(os_release) => "_x86_64.AppImage",
         ("linux", "x86_64") => "_amd64.deb",
         _ => return Ok(release.html_url.clone()),
@@ -533,6 +534,7 @@ mod tests {
             assets: [
                 ("markion_9.9.9_x64-setup.exe", "windows"),
                 ("Markion_9.9.9_aarch64.dmg", "macos"),
+                ("Markion_9.9.9_x64.dmg", "macos-x64"),
                 ("markion_9.9.9_amd64.deb", "linux"),
                 ("markion_9.9.9_x86_64.AppImage", "appimage"),
             ]
@@ -643,6 +645,22 @@ mod tests {
         assert_eq!(
             browser_download_url(&release, "freebsd", "x86_64").unwrap(),
             release.html_url
+        );
+    }
+
+    #[test]
+    fn macos_asset_follows_the_cpu_architecture() {
+        let release = release_with_version("9.9.9");
+        let arm64_url = "https://github.com/willmove/markion/releases/download/v9.9.9/macos";
+        let x64_url = "https://github.com/willmove/markion/releases/download/v9.9.9/macos-x64";
+        assert_eq!(
+            browser_download_url(&release, "macos", "aarch64").unwrap(),
+            arm64_url
+        );
+        assert_eq!(
+            browser_download_url(&release, "macos", "x86_64").unwrap(),
+            x64_url,
+            "Intel Macs must deep-link the x64 DMG, not fall back to the Release page"
         );
     }
 

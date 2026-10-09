@@ -20,9 +20,9 @@ Markion は Rust と GPUI で構築されたネイティブデスクトップ Ma
 |---|---|---|
 | Windows | NSIS `.exe` インストーラー | x86_64 |
 | Linux | `.deb` と AppImage | x86_64 |
-| macOS | `.app` と `.dmg` | Apple Silicon（arm64）、macOS 11+ |
+| macOS | `.app` と `.dmg` | Apple Silicon（arm64）および Intel（x64）、macOS 11+ |
 
-リリースはプラットフォームのコード署名を行っていません。Windows SmartScreen では「詳細情報 → 実行」が必要な場合があり、macOS Gatekeeper ではアプリを右クリックして「開く」を選ぶ必要がある場合があります。**ヘルプ → 更新を確認…** はすべてのプラットフォームで実行可能な更新プロンプトを提供します。タグ付きの Windows x86_64 NSIS インストールでは、cargo-packager Minisign による暗号学的に検証されたワンクリックのダウンロード＆インストールが利用でき、未保存の変更があるドキュメントが存在する間は起動を拒否します。macOS と Linux では、対応するリリースファイルをシステムブラウザーで開きます。Intel Mac では Rosetta 経由で arm64 ビルドを実行できます。ユニバーサルバイナリと Apple 公証は現在提供していません。
+Windows のリリースはコード署名されておらず、SmartScreen で「詳細情報 → 実行」が必要な場合があります。macOS のリリースは無料のアドホックコード署名で封印されており（有料の Developer ID 証明書や公証はなし）、Gatekeeper は初回起動時に警告しますが、「システム設定 → プライバシーとセキュリティ」の「このまま開く」で許可できます（詳細はメイン README の macOS 初回起動の説明を参照）。**ヘルプ → 更新を確認…** はすべてのプラットフォームで実行可能な更新プロンプトを提供します。タグ付きの Windows x86_64 NSIS インストールでは、cargo-packager Minisign による暗号学的に検証されたワンクリックのダウンロード＆インストールが利用でき、未保存の変更があるドキュメントが存在する間は起動を拒否します。macOS と Linux では、対応するリリースファイルをシステムブラウザーで開きます。Apple Silicon と Intel Mac にはそれぞれネイティブの DMG があります。ユニバーサルバイナリと Apple 公証は現在提供していません。
 
 ## 編集モード
 
