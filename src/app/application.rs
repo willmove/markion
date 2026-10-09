@@ -396,6 +396,8 @@ impl MarkionApp {
             git_preferences: preferences.git.clone(),
             export_preferences: preferences.export.clone(),
             image_preferences: preferences.images.clone(),
+            ai_preferences: preferences.ai.clone(),
+            ai_ui: ai_panel::AiUi::new(&preferences.ai, cx),
             recovery_dir: default_recovery_dir(),
             external_check_in_flight: false,
             preview_probe_results: HashMap::new(),
@@ -897,6 +899,16 @@ impl MarkionApp {
 
     /// Why edits to the active document are refused, or `None` when allowed.
     pub(super) fn active_git_lock_message(&self) -> Option<&'static str> {
+        if self
+            .active_tab()
+            .path()
+            .is_some_and(|path| self.ai_ui.locked_paths.contains(path))
+        {
+            return Some(markion::ai_i18n::ai_t(
+                self.language,
+                markion::ai_i18n::AiMsg::Running,
+            ));
+        }
         if self.git_ui.settings.is_some() || self.git_ui.inspection.is_some() {
             return Some(self.git_label(GitMsg::Busy));
         }
@@ -1110,6 +1122,9 @@ impl MarkionApp {
         cx: &mut Context<Self>,
     ) {
         for (request, outcome) in outcomes {
+            if self.ai_ui.locked_paths.contains(&request.path) {
+                continue;
+            }
             let Some(index) = self.tabs.iter().position(|tab| {
                 tab.document_tab()
                     .is_some_and(|doc| doc.recovery_id == request.recovery_id)
@@ -1236,6 +1251,7 @@ impl MarkionApp {
             workspace_root_needs_reset(&self.workspace_root, self.file_tree.is_some(), &root);
 
         if root_changed {
+            self.ai_ui.workspace_changed();
             self.collapsed_tree_paths.clear();
             self.file_tree_needs_initial_collapse = true;
             self.selected_tree_path = None;
@@ -1745,6 +1761,12 @@ impl MarkionApp {
         if tab.is_image() || tab.autosave_generation != generation || !tab.document.is_dirty() {
             return;
         }
+        if tab
+            .path()
+            .is_some_and(|path| self.ai_ui.locked_paths.contains(path))
+        {
+            return;
+        }
 
         let tab = &mut self.tabs[active_index];
         // One write per tab at a time; when the running one lands, its apply
@@ -2205,6 +2227,7 @@ impl MarkionApp {
             git: self.git_preferences.clone(),
             export: self.export_preferences.clone(),
             images: self.image_preferences.clone(),
+            ai: self.ai_preferences.clone(),
             shortcut_overrides: self.shortcut_overrides.clone(),
         }
     }

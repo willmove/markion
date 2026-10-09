@@ -493,6 +493,8 @@ pub struct AppPreferences {
     /// Cloud-provider credentials remain owned by the configured external
     /// uploader and are never stored here.
     pub images: ImagePreferences,
+    /// Optional AI configuration; credentials live in the platform credential store.
+    pub ai: markion_ai::AiPreferences,
     /// Menu-action shortcut overrides ([shortcuts] table): stable action id
     /// -> GPUI keystroke string. Actions without an entry use their default
     /// binding.
@@ -531,6 +533,7 @@ impl Default for AppPreferences {
             git: GitPreferences::default(),
             export: ExportPreferences::default(),
             images: ImagePreferences::default(),
+            ai: markion_ai::AiPreferences::default(),
             shortcut_overrides: std::collections::BTreeMap::new(),
         }
     }

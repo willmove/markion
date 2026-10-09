@@ -1219,7 +1219,12 @@ impl MarkionApp {
         cx.notify();
     }
 
-    fn remap_tabs_after_move(&mut self, source: &Path, new_source: &Path, cx: &mut Context<Self>) {
+    pub(super) fn remap_tabs_after_move(
+        &mut self,
+        source: &Path,
+        new_source: &Path,
+        cx: &mut Context<Self>,
+    ) {
         let matching: Vec<(usize, PathBuf)> = self
             .tabs
             .iter()

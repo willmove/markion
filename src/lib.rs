@@ -11,6 +11,9 @@ use std::{
 use pulldown_cmark::{Alignment, CodeBlockKind, CowStr, Event, Parser, Tag, TagEnd, html};
 use regex::RegexBuilder;
 
+pub mod ai_actions;
+pub mod ai_credentials;
+pub mod ai_i18n;
 mod auto_pair;
 pub mod block_edit;
 mod diagram;
@@ -545,6 +548,7 @@ pub enum MutationOrigin {
     SearchReplace,
     SearchReplaceAll,
     ImageOperation,
+    AiWriting,
     Undo,
     Redo,
     ExternalReload,
@@ -9247,6 +9251,7 @@ Intro.
                 ..ExportPreferences::default()
             },
             images: ImagePreferences::default(),
+            ai: markion_ai::AiPreferences::default(),
             shortcut_overrides: std::collections::BTreeMap::new(),
         };
 

@@ -139,6 +139,11 @@ impl MarkionApp {
                     app.sidebar_tab = preferences.sidebar_tab;
                     app.auto_save_preferences = preferences.auto_save;
                     app.image_preferences = preferences.images;
+                    app.ai_preferences = preferences.ai;
+                    app.ai_ui.invalidate();
+                    app.ai_ui.sync_draft(&app.ai_preferences, cx);
+                    app.ai_ui
+                        .set_guidance(&app.ai_preferences.writing_guidance.clone(), cx);
                     // Reset also restores the default interface language.
                     app.language = Language::from_code(&preferences.language);
                     app.clear_shortcut_overrides(cx);

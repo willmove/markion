@@ -12,6 +12,9 @@
 
 Markion is a native desktop Markdown editor built with Rust and GPUI. It combines responsive source editing, a source-backed Visual Edit mode, live preview, workspace tools, and multi-format export in one lightweight application. Markdown remains the canonical document format—no Electron, Tauri, or WebView.
 
+
+[AI Agent guide](docs/ai-agent-guide.md) — Bring your own key or use local models; AI is off by default.
+
 ## Install
 
 Download the latest build from [GitHub Releases](https://github.com/willmove/markion/releases).

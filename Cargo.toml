@@ -120,6 +120,7 @@ markion-html-import = { path = "crates/html-import" }
 same-file.workspace = true
 markion-diagram = { path = "crates/diagram", features = ["mermaid"] }
 markion-git-sync = { path = "crates/git-sync" }
+markion-ai = { path = "crates/ai" }
 markion-pdf = { path = "crates/pdf" }
 wechat-workspace = { path = "crates/wechat-workspace" }
 # Drives syntect scope parsing directly in src/highlight.rs (colors keep coming

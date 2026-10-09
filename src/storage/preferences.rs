@@ -98,6 +98,7 @@ struct PreferencesFile {
     git: GitFile,
     export: ExportFile,
     images: ImagesFile,
+    ai: markion_ai::AiPreferences,
     /// [shortcuts] table: action id -> GPUI keystroke string.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     shortcuts: BTreeMap<String, String>,
@@ -481,6 +482,7 @@ impl From<&AppPreferences> for PreferencesFile {
                 docx: DocxExportFile::from(&preferences.export.docx),
             },
             images: ImagesFile::from(&preferences.images),
+            ai: preferences.ai.clone(),
             shortcuts: preferences.shortcut_overrides.clone(),
         }
     }
@@ -556,6 +558,7 @@ impl From<PreferencesFile> for AppPreferences {
                 docx: file.export.docx.into(),
             },
             images: file.images.into(),
+            ai: file.ai,
             shortcut_overrides: file.shortcuts,
         }
     }
@@ -849,6 +852,36 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_defaults_and_malformed_fields_preserve_other_preferences() {
+        let old = parse_app_preferences("theme = 'Ink'\nlanguage = 'zh'\n").unwrap();
+        assert!(!old.ai.enabled);
+        assert_eq!(old.theme, "Ink");
+        let malformed = parse_app_preferences("theme = 'Forest'\n[ai]\nenabled = true\nselected_profile = 'bad'\n[[ai.profiles]]\nid = 'bad'\nendpoint = false\n").unwrap();
+        assert_eq!(malformed.theme, "Forest");
+        assert!(malformed.ai.request_profile().is_err());
+        let invalid = parse_app_preferences("language = 'zh'\nai = 'wrong'\n").unwrap();
+        assert_eq!(invalid.language, "zh");
+        assert!(!invalid.ai.enabled);
+    }
+
+    #[test]
+    fn ai_profiles_round_trip_without_credentials() {
+        let mut preferences = AppPreferences::default();
+        let mut local = markion_ai::Profile::preset("local", "local-notes");
+        local.model = "installed-model".into();
+        preferences.ai.profiles.push(local);
+        preferences.ai.selected_profile = "local-notes".into();
+        preferences.ai.enabled = true;
+        preferences.ai.writing_guidance = "Preserve Markdown headings".into();
+        let rendered = render_app_preferences(&preferences);
+        assert!(!rendered.contains("api_key"));
+        assert!(!rendered.contains("credential"));
+        let parsed = parse_app_preferences(&rendered).unwrap();
+        assert_eq!(parsed.ai, preferences.ai);
+        parsed.ai.request_profile().unwrap();
+    }
 
     #[test]
     fn shortcut_overrides_round_trip_and_empty_table_is_omitted() {

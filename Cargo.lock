@@ -3492,6 +3492,7 @@ dependencies = [
  "image",
  "libc",
  "markdown",
+ "markion-ai",
  "markion-diagram",
  "markion-docx-import",
  "markion-git-sync",
@@ -3524,6 +3525,24 @@ dependencies = [
  "wechat-workspace",
  "windows 0.61.3",
  "winresource",
+ "zed-reqwest",
+]
+
+[[package]]
+name = "markion-ai"
+version = "0.4.7"
+dependencies = [
+ "dunce",
+ "percent-encoding",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml 0.8.23",
+ "url",
+ "windows-sys 0.59.0",
  "zed-reqwest",
 ]
 

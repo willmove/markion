@@ -174,6 +174,7 @@ actions!(
         SetVisualEditMode,
         SetReadMode,
         ToggleSidebar,
+        ToggleAiPanel,
         ToggleOutline,
         ToggleFileTree,
         FocusFileTreeSearch,
@@ -459,6 +460,12 @@ mod menu_shortcuts {
         "Ctrl+Shift+B",
         "Cmd+Shift+B",
     );
+    pub const TOGGLE_AI_PANEL: MenuShortcut = MenuShortcut::new(
+        "toggle-ai-panel",
+        "secondary-shift-a",
+        "Ctrl+Shift+A",
+        "Cmd+Shift+A",
+    );
     pub const TOGGLE_FILE_TREE: MenuShortcut = MenuShortcut::new(
         "toggle-file-tree",
         "secondary-shift-f",
@@ -686,6 +693,7 @@ mod menu_shortcuts {
         SET_VISUAL_EDIT_MODE,
         SET_READ_MODE,
         TOGGLE_SIDEBAR,
+        TOGGLE_AI_PANEL,
         TOGGLE_FILE_TREE,
         TOGGLE_OUTLINE,
         TOGGLE_FOCUS_MODE,
@@ -2362,6 +2370,7 @@ enum PreferencesTab {
     Images,
     Shortcuts,
     Export,
+    Ai,
 }
 
 /// A shortcut row waiting for the user to press a new key combination.
@@ -2387,6 +2396,8 @@ struct PaneScrollbarDrag {
     thumb_grab_offset_y: Pixels,
 }
 
+mod ai_input;
+mod ai_panel;
 /// Farthest the grapheme-boundary helpers look back for a line start before
 /// giving up and scanning from an arbitrary char boundary. Only pathological
 /// newline-free lines hit the cap; real grapheme clusters are tens of bytes at
@@ -2710,6 +2721,8 @@ struct MarkionApp {
     /// in the Preferences panel; kept to round-trip on save.
     export_preferences: ExportPreferences,
     image_preferences: ImagePreferences,
+    ai_preferences: markion_ai::AiPreferences,
+    ai_ui: ai_panel::AiUi,
     recovery_dir: PathBuf,
     /// One background external-change round at a time: while the disk work of
     /// `check_external_changes` is in flight, further poll ticks are skipped

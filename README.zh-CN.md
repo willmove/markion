@@ -12,6 +12,9 @@
 
 Markion 是一款使用 Rust 和 GPUI 构建的原生桌面 Markdown 编辑器。它在一个轻量应用中提供流畅的源码编辑、基于源码的可视化编辑、实时预览、工作区工具与多格式导出。Markdown 始终是文档的标准数据格式——不使用 Electron、Tauri 或 WebView。
 
+
+[AI Agent 使用指南](docs/ai-agent-guide.zh-CN.md) — 自带 API Key 或使用本地模型，AI 默认关闭。
+
 ## 安装
 
 请从 [GitHub Releases](https://github.com/willmove/markion/releases) 下载最新版本。

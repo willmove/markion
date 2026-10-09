@@ -383,6 +383,11 @@ impl MarkionApp {
         if self.preferences_tab == tab {
             return;
         }
+        // Leaving AI settings with an unsaved draft defers the switch behind
+        // the inline save/discard confirmation.
+        if self.ai_guard_tab_switch(tab, cx) {
+            return;
+        }
         self.preferences_tab = tab;
         // Leaving the Shortcuts tab must not strand a capturing row with the
         // keymap cleared.

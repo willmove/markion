@@ -1,0 +1,24 @@
+[package]
+name = "markion-ai"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "GUI-free, bounded AI protocols and assistance for Markion"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+pulldown-cmark.workspace = true
+thiserror.workspace = true
+url = "2.5"
+percent-encoding.workspace = true
+dunce = "1.0"
+tokio.workspace = true
+reqwest = { package = "zed-reqwest", version = "0.12.15-zed", default-features = false, features = ["rustls-tls-native-roots", "json", "stream"] }
+
+[dev-dependencies]
+toml.workspace = true
+tempfile = "3.20"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

@@ -800,7 +800,14 @@ impl VisualTestContext {
         })
     }
 
-    /// Simulates the user resizing the window to the new size.
+    /// Simulate a monitor DPI change without modifying host display settings.
+    pub fn simulate_scale_factor(&self, scale_factor: f32) {
+        self.cx
+            .test_window(self.window)
+            .simulate_scale_factor(scale_factor);
+    }
+
+    /// Simulates resizing the test window to the supplied logical size.
     pub fn simulate_resize(&self, size: Size<Pixels>) {
         self.simulate_window_resize(self.window, size)
     }

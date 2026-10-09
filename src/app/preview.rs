@@ -5007,6 +5007,7 @@ pub(super) fn visual_block_menu(
     presentation: BlockMenuPresentation,
     palette: ThemePalette,
     max_height: Pixels,
+    ai_controls: Option<Div>,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
     let submenu = state.submenu;
@@ -5043,6 +5044,9 @@ pub(super) fn visual_block_menu(
         if block_menu_item_is_followed_by_separator(item) {
             root_panel = root_panel.child(block_menu_separator(palette));
         }
+    }
+    if let Some(controls) = ai_controls {
+        root_panel = root_panel.child(controls);
     }
     div()
         .id(("visual-block-menu", state.target.block_id.as_u64()))

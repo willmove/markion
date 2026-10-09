@@ -14,6 +14,7 @@ use std::{
 
 pub(crate) struct TestWindowState {
     pub(crate) bounds: Bounds<Pixels>,
+    scale_factor: f32,
     pub(crate) handle: AnyWindowHandle,
     display: Rc<dyn PlatformDisplay>,
     pub(crate) title: Option<String>,
@@ -59,6 +60,7 @@ impl TestWindow {
     ) -> Self {
         Self(Rc::new(Mutex::new(TestWindowState {
             bounds: params.bounds,
+            scale_factor: 2.0,
             display,
             platform,
             handle,
@@ -75,6 +77,16 @@ impl TestWindow {
             input_handler: None,
             is_fullscreen: false,
         })))
+    }
+
+    pub fn simulate_scale_factor(&mut self, scale_factor: f32) {
+        assert!(scale_factor.is_finite() && scale_factor > 0.);
+        let size = {
+            let mut state = self.0.lock();
+            state.scale_factor = scale_factor;
+            state.bounds.size
+        };
+        self.simulate_resize(size);
     }
 
     pub fn simulate_resize(&mut self, size: Size<Pixels>) {
@@ -134,7 +146,7 @@ impl PlatformWindow for TestWindow {
     }
 
     fn scale_factor(&self) -> f32 {
-        2.0
+        self.0.lock().scale_factor
     }
 
     fn appearance(&self) -> WindowAppearance {

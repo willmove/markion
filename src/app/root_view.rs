@@ -220,6 +220,7 @@ impl Render for MarkionApp {
             .on_action(cx.listener(Self::resolve_git_conflict))
             .on_action(cx.listener(Self::clear_recent_files))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::toggle_ai_panel))
             .on_action(cx.listener(Self::toggle_file_tree))
             .on_action(cx.listener(Self::focus_file_tree_search))
             .on_action(cx.listener(Self::clear_file_tree_search))
@@ -426,6 +427,10 @@ impl Render for MarkionApp {
                     .child(
                         div()
                             .id("document-workspace-column")
+                            .when(
+                                self.ai_ui.open && f32::from(window.viewport_size().width) >= 900.,
+                                |d| d.mr(px(self.ai_ui.width)),
+                            )
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
@@ -533,6 +538,11 @@ impl Render for MarkionApp {
                                                 MouseButton::Left,
                                                 cx.listener(Self::on_mouse_up),
                                             )
+                                            .on_mouse_up(MouseButton::Right,cx.listener(|a,e:&MouseUpEvent,_,cx|{
+                                                if a.ai_preferences.enabled && !a.active_tab().safe_selected_range().is_empty() {
+                                                    a.show_preview_context_menu(e.position,None,cx);
+                                                }
+                                            }))
                                             .on_mouse_up_out(
                                                 MouseButton::Left,
                                                 cx.listener(Self::on_mouse_up),
@@ -727,6 +737,7 @@ impl Render for MarkionApp {
                             .child(status_feedback),
                     )
                     .child(git_panel::workspace_entry(self, cx))
+                    .child(ai_panel::entry_view(self, cx))
                     .child(
                         div()
                             .debug_selector(|| "status-bar-context".to_string())
@@ -862,7 +873,10 @@ impl Render for MarkionApp {
                 root.child(visual_table_menu_view(self, cx))
             })
             .when(self.preferences_panel_open, |root| {
-                root.child(preferences_panel_view(self, cx))
+                root.child(preferences_panel_view(self, window, cx))
+            })
+            .when(self.ai_ui.open && !self.preferences_panel_open, |root| {
+                root.child(ai_panel::panel_view(self, window, cx))
             })
             .when(self.link_editor.is_some(), |root| {
                 root.child(link_editor_view(self, cx))
@@ -1297,6 +1311,9 @@ fn visual_block_menu_overlay_view(
     let presentation = app
         .block_menu_presentation()
         .expect("an open block menu keeps an exact live target");
+    let ai_controls = (app.ai_preferences.enabled
+        && !app.active_tab().safe_selected_range().is_empty())
+    .then(|| ai_panel::selection_actions(app, cx));
     anchored()
         .position(menu.anchor)
         .offset(point(px(8.), px(8.)))
@@ -1309,6 +1326,7 @@ fn visual_block_menu_overlay_view(
                     presentation,
                     app.palette(),
                     max_height,
+                    ai_controls,
                     cx,
                 )),
         )
@@ -4274,6 +4292,11 @@ pub(super) fn preview_context_menu_view(app: &MarkionApp, cx: &mut Context<Marki
         .border_color(palette.border)
         .bg(palette.surface_bg)
         .shadow_md()
+        .when(
+            app.ai_preferences.enabled
+                && (has_selection || !app.active_tab().safe_selected_range().is_empty()),
+            |d| d.child(ai_panel::selection_actions(app, cx)),
+        )
         .children(items.into_iter().map(move |(action, enabled)| {
             let app_entity = app_entity.clone();
             let label = t(app.language, preview_context_action_label(action));
@@ -4690,6 +4713,15 @@ pub(super) fn active_menu_dropdown(
                 menu_shortcuts::SELECT_ALL
             )),
         AppMenu::View if !document_actions_enabled => panel
+            .child(menu_action_button(
+                markion::ai_i18n::ai_t(language, markion::ai_i18n::AiMsg::Tab),
+                Some(
+                    menu_shortcuts::TOGGLE_AI_PANEL
+                        .effective_label(shortcut_overrides, shortcut_platform),
+                ),
+                palette,
+                cx.listener(|a, _, w, cx| a.toggle_ai_panel(&ToggleAiPanel, w, cx)),
+            ))
             .child(image_action_unavailable_menu_row(language, palette))
             .child(menu_separator(palette))
             .child(action_item!(
@@ -4712,6 +4744,15 @@ pub(super) fn active_menu_dropdown(
                 menu_shortcuts::CYCLE_THEME
             )),
         AppMenu::View => panel
+            .child(menu_action_button(
+                markion::ai_i18n::ai_t(language, markion::ai_i18n::AiMsg::Tab),
+                Some(
+                    menu_shortcuts::TOGGLE_AI_PANEL
+                        .effective_label(shortcut_overrides, shortcut_platform),
+                ),
+                palette,
+                cx.listener(|a, _, w, cx| a.toggle_ai_panel(&ToggleAiPanel, w, cx)),
+            ))
             .child(action_item!(
                 Msg::ItemToggleView,
                 toggle_view_mode,
@@ -5583,7 +5624,11 @@ pub(super) fn open_recent_submenu_panel(
 /// Modal overlay for the in-app Preferences panel. Clicks dispatch through
 /// `cx.listener` closures so each setting updates live app state and persists
 /// through the existing preferences path.
-pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+pub(super) fn preferences_panel_view(
+    app: &MarkionApp,
+    window: &Window,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
     let palette = app.palette();
     let active_tab = app.preferences_tab;
     let panel_width = if active_tab == PreferencesTab::Shortcuts {
@@ -5612,6 +5657,13 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                 .w_full()
                 .max_w(px(panel_width))
                 .max_h(px(560.))
+                .when(active_tab == PreferencesTab::Ai, |panel| {
+                    panel
+                        .h(px(
+                            (f32::from(window.viewport_size().height) - 32.).clamp(180., 560.)
+                        ))
+                        .overflow_hidden()
+                })
                 .when(active_tab == PreferencesTab::Shortcuts, |panel| {
                     panel.h(px(560.)).overflow_hidden()
                 })
@@ -5887,6 +5939,9 @@ pub(super) fn preferences_panel_view(app: &MarkionApp, cx: &mut Context<MarkionA
                 })
                 .when(active_tab == PreferencesTab::Export, |panel| {
                     panel.child(preferences_export_body(app, palette, cx))
+                })
+                .when(active_tab == PreferencesTab::Ai, |panel| {
+                    panel.child(ai_panel::settings_view(app, cx))
                 }),
         )
 }
@@ -5901,6 +5956,7 @@ fn preferences_tab_strip(
         .pb_3()
         .flex_none()
         .flex()
+        .flex_wrap()
         .items_center()
         .gap_1()
         .child(preferences_tab_button(
@@ -5941,6 +5997,14 @@ fn preferences_tab_strip(
             palette,
             cx.listener(|app, _: &MouseUpEvent, _window, cx| {
                 app.select_preferences_tab(PreferencesTab::Export, cx);
+            }),
+        ))
+        .child(preferences_tab_button(
+            markion::ai_i18n::ai_t(app.language, markion::ai_i18n::AiMsg::Tab),
+            app.preferences_tab == PreferencesTab::Ai,
+            palette,
+            cx.listener(|app, _: &MouseUpEvent, _window, cx| {
+                app.select_preferences_tab(PreferencesTab::Ai, cx);
             }),
         ))
 }

@@ -2562,6 +2562,16 @@ pub fn shortcut_catalog(lang: Language, heading_menu_max_level: u8) -> ShortcutC
         });
 
     catalog
+        .section_mut(ShortcutCategory::View)
+        .expect("View exists")
+        .actions
+        .push(ShortcutAction {
+            label: crate::ai_i18n::ai_t(lang, crate::ai_i18n::AiMsg::Tab),
+            ids: &["toggle-ai-panel"],
+            windows_linux: &["Ctrl+Shift+A"],
+            macos: &["Cmd+Shift+A"],
+        });
+    catalog
 }
 
 /// One section of the Help → Markdown Reference overlay.

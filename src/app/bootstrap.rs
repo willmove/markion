@@ -113,6 +113,10 @@ pub(super) fn install_menus(language: Language, heading_menu_max_level: u8, cx: 
                 MenuItem::action(t(language, Msg::ItemReadMode), SetReadMode),
                 MenuItem::separator(),
                 MenuItem::action(t(language, Msg::ItemToggleSidebar), ToggleSidebar),
+                MenuItem::action(
+                    markion::ai_i18n::ai_t(language, markion::ai_i18n::AiMsg::Tab),
+                    ToggleAiPanel,
+                ),
                 MenuItem::action(t(language, Msg::ItemFiles), ToggleFileTree),
                 MenuItem::action(t(language, Msg::ItemOutline), ToggleOutline),
                 MenuItem::action(t(language, Msg::ItemFocusMode), ToggleFocusMode),
@@ -328,6 +332,7 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         // NB: no `secondary-b` for the sidebar — that collides with Bold.
         // Use Ctrl/Cmd+Shift+B instead.
         registry_binding(cx, eff(&menu_shortcuts::TOGGLE_SIDEBAR), ToggleSidebar),
+        registry_binding(cx, eff(&menu_shortcuts::TOGGLE_AI_PANEL), ToggleAiPanel),
         registry_binding(cx, eff(&menu_shortcuts::TOGGLE_FILE_TREE), ToggleFileTree),
         registry_binding(
             cx,
@@ -413,6 +418,8 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
     if let Some(binding) = menu_shortcuts::SHOW_SHORTCUTS.effective_binding(overrides) {
         cx.bind_keys([registry_binding(cx, binding, ShowShortcuts)]);
     }
+    // Install input bindings after editor defaults and customized bindings.
+    ai_input::bind(cx);
 }
 
 pub(super) fn run() {
@@ -478,6 +485,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 app.restore_session_on_startup(&startup_intent, cx);
                 app.check_recovery_on_startup(window, cx);
                 app.arm_external_file_poll(cx);
+                app.arm_ai_local_data(cx);
                 app.arm_file_tree_watch(cx);
                 app.arm_git_branch_poll(cx);
                 app.arm_git_recovery(cx);
