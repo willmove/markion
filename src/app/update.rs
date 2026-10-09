@@ -11,8 +11,12 @@
 //! Windows x86_64 tagged builds with an embedded updater public key can, after
 //! explicit user confirmation, download a signed NSIS installer, verify its
 //! cargo-packager Minisign signature, launch it in passive mode, and exit.
-//! Other builds open the matching Release asset in the system browser. All
-//! network and installer work runs off the render path and never touches
+//! Linux x86_64 builds launched as an AppImage (the AppImage runtime exports
+//! `APPIMAGE`) can likewise download the signed AppImage, verify it, replace
+//! the running AppImage file in place, and relaunch the updated copy. DEB/RPM
+//! installs cannot self-replace without root, so they — like macOS and keyless
+//! builds — open the matching Release asset in the system browser. All network
+//! and installer work runs off the render path and never touches
 //! cached-per-version Markdown state.
 
 use super::*;
@@ -43,20 +47,20 @@ const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/willmove/markion/rel
 /// `api.github.com` works, and cargo-packager-updater falls through to the
 /// next endpoint on a network failure or non-success status. GitHub's API
 /// remains the version authority for the initial update check.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 const OSS_SIGNED_UPDATE_MANIFEST_URL: &str =
     "https://marknice.oss-cn-heyuan.aliyuncs.com/markion-releases/latest/update.json";
 
 /// GitHub-hosted fallback manifest for clients that cannot reach the OSS
 /// mirror at all.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 const GITHUB_SIGNED_UPDATE_MANIFEST_URL: &str =
     "https://github.com/willmove/markion/releases/latest/download/update.json";
 
 /// Ordered manifest endpoints consumed by the signed updater and asserted by
-/// the unit tests. Non-Windows builds keep these reachable for the tests
+/// the unit tests. Non-updating builds keep these reachable for the tests
 /// without tripping the dead-code lint that CI's `-D warnings` rejects.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 fn signed_update_manifest_endpoints() -> [&'static str; 2] {
     [
         OSS_SIGNED_UPDATE_MANIFEST_URL,
@@ -100,12 +104,32 @@ fn configured_update_public_key() -> Option<&'static str> {
         .filter(|key| !key.is_empty())
 }
 
+/// True when this process was launched through an AppImage runtime, which
+/// exports `APPIMAGE` pointing at the .AppImage file on disk — exactly the
+/// file the signed updater replaces. DEB/RPM installs and extracted AppDir
+/// runs have no such variable and cannot self-replace without root.
+fn running_as_appimage() -> bool {
+    std::env::var("APPIMAGE").is_ok_and(|path| !path.trim().is_empty())
+}
+
+/// Decides the primary update action. Signed automatic installation needs an
+/// embedded updater public key and a package the updater can replace itself:
+/// the current-user NSIS install on Windows x86_64, or an AppImage launch
+/// (`appimage` = `APPIMAGE`'s value) on Linux x86_64. Everything else keeps
+/// the browser-download fallback.
 fn update_primary_action_for(
     os: &str,
     arch: &str,
     public_key: Option<&str>,
+    appimage: Option<&str>,
 ) -> UpdatePrimaryAction {
-    if os == "windows" && arch == "x86_64" && public_key.is_some_and(|key| !key.trim().is_empty()) {
+    let key = public_key.is_some_and(|key| !key.trim().is_empty());
+    let self_updatable_package = match (os, arch) {
+        ("windows", "x86_64") => true,
+        ("linux", "x86_64") => appimage.is_some_and(|path| !path.trim().is_empty()),
+        _ => false,
+    };
+    if key && self_updatable_package {
         UpdatePrimaryAction::SignedInstall
     } else {
         UpdatePrimaryAction::BrowserDownload
@@ -113,7 +137,12 @@ fn update_primary_action_for(
 }
 
 fn current_update_primary_action() -> UpdatePrimaryAction {
-    update_primary_action_for(consts::OS, consts::ARCH, configured_update_public_key())
+    update_primary_action_for(
+        consts::OS,
+        consts::ARCH,
+        configured_update_public_key(),
+        std::env::var("APPIMAGE").ok().as_deref(),
+    )
 }
 
 impl MarkionApp {
@@ -292,11 +321,12 @@ impl MarkionApp {
                 .background_executor()
                 .spawn(async move { install_signed_update() })
                 .await;
-            if let Err(error) = result {
-                let _ = this.update(cx, |app, cx| {
-                    app.show_update_install_failure(error.to_string(), url, window_handle, cx);
-                });
-            }
+            let _ = this.update(cx, |app, cx| match result {
+                Ok(()) => app.finish_signed_update(window_handle, cx),
+                Err(error) => {
+                    app.show_update_install_failure(error.to_string(), url, window_handle, cx)
+                }
+            });
         })
         .detach();
     }
@@ -334,6 +364,50 @@ impl MarkionApp {
             }
         })
         .detach();
+    }
+
+    /// Follow-through after a successful signed install. Windows handed off
+    /// to the passive NSIS installer, which manages the app's exit itself. A
+    /// Linux AppImage update replaced the file under the running process, so
+    /// start the updated AppImage and quit this instance (documents are clean
+    /// by the pre-install gate; window bounds and preferences are persisted
+    /// first, mirroring the normal exit path). When relaunching fails the
+    /// update is already installed — keep running and ask the user to restart
+    /// Markion manually.
+    fn finish_signed_update(&mut self, window_handle: AnyWindowHandle, cx: &mut Context<Self>) {
+        #[cfg(target_os = "linux")]
+        {
+            let language = self.language;
+            let relaunched = std::env::var("APPIMAGE")
+                .ok()
+                .filter(|path| !path.trim().is_empty())
+                .is_some_and(|appimage| std::process::Command::new(appimage).spawn().is_ok());
+            if relaunched {
+                if let Ok(bounds) = window_handle.update(cx, |_, window, _| window.window_bounds())
+                {
+                    self.apply_window_bounds(bounds);
+                }
+                self.flush_layout();
+                cx.quit();
+                return;
+            }
+            self.status = t(language, Msg::StatusUpdateInstalledRestart).into();
+            cx.notify();
+            let _ = window_handle.update(cx, |_, window, cx| {
+                std::mem::drop(window.prompt(
+                    PromptLevel::Info,
+                    t(language, Msg::DialogUpdateInstalledTitle),
+                    Some(t(language, Msg::DialogUpdateInstalledRestartDetail)),
+                    &[PromptButton::ok(t(language, Msg::DialogButtonOk))],
+                    cx,
+                ));
+            });
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Windows handed off to the passive installer; nothing to do.
+            let _ = (window_handle, cx);
+        }
     }
 }
 
@@ -376,10 +450,49 @@ fn install_signed_update() -> Result<()> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn install_signed_update() -> Result<()> {
+    use cargo_packager_updater::{Config, check_update, semver::Version, url::Url};
+
+    let public_key = configured_update_public_key()
+        .ok_or_else(|| anyhow!("this build does not contain an updater public key"))?;
+    // The updater replaces the file named by APPIMAGE in place; refuse rather
+    // than corrupt a deb/rpm install whose /usr/bin binary needs root.
+    std::env::var("APPIMAGE")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| anyhow!("Markion is not running as an AppImage"))?;
+    let current_version =
+        Version::parse(env!("CARGO_PKG_VERSION")).context("parsing the running Markion version")?;
+    let endpoints = signed_update_manifest_endpoints()
+        .into_iter()
+        .map(|url| Url::parse(url).context("parsing the signed update manifest URL"))
+        .collect::<Result<Vec<_>>>()?;
+    let config = Config {
+        endpoints,
+        pubkey: public_key.to_string(),
+        windows: None,
+    };
+    let update = check_update(current_version, config)
+        .context("checking the signed update manifest")?
+        .ok_or_else(|| anyhow!("the signed update manifest contains no newer version"))?;
+    // download_and_install verifies the minisign signature against the
+    // manifest before replacing the AppImage and restores the previous file
+    // when the write fails, but like the Windows path it can `expect` inside;
+    // catch that panic so the app keeps running and can offer the immutable
+    // GitHub asset as a manual fallback.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        update.download_and_install()
+    })) {
+        Ok(result) => result.context("downloading, verifying, and installing the signed update"),
+        Err(_) => Err(anyhow!("the verified update could not be installed")),
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn install_signed_update() -> Result<()> {
     Err(anyhow!(
-        "signed automatic installation is supported only on Windows"
+        "signed automatic installation is not supported on this platform"
     ))
 }
 
@@ -395,10 +508,15 @@ fn fetch_latest_release(url: &str) -> Result<GitHubRelease> {
 /// Compares the release tag against the running build's version and, if newer,
 /// maps the user's platform to the matching GitHub asset URL.
 fn compare_with_running(release: &GitHubRelease) -> UpdateCheckOutcome {
-    compare_with_running_for(release, consts::OS, consts::ARCH)
+    compare_with_running_for(release, consts::OS, consts::ARCH, running_as_appimage())
 }
 
-fn compare_with_running_for(release: &GitHubRelease, os: &str, arch: &str) -> UpdateCheckOutcome {
+fn compare_with_running_for(
+    release: &GitHubRelease,
+    os: &str,
+    arch: &str,
+    appimage: bool,
+) -> UpdateCheckOutcome {
     let Some(version) = release.tag_name.strip_prefix('v') else {
         return UpdateCheckOutcome::Failed {
             error: format!(
@@ -429,7 +547,7 @@ fn compare_with_running_for(release: &GitHubRelease, os: &str, arch: &str) -> Up
     if remote <= current {
         return UpdateCheckOutcome::UpToDate;
     }
-    let url = match browser_download_url(release, os, arch) {
+    let url = match browser_download_url(release, os, arch, appimage) {
         Ok(url) => url,
         Err(error) => {
             return UpdateCheckOutcome::Failed {
@@ -446,8 +564,13 @@ fn compare_with_running_for(release: &GitHubRelease, os: &str, arch: &str) -> Up
 
 /// Returns the exact supported package URL, or the Release page on an
 /// unsupported OS/architecture where no installable package can be promised.
-fn browser_download_url(release: &GitHubRelease, os: &str, arch: &str) -> Result<String, String> {
-    browser_download_url_with_os_release(release, os, arch, read_os_release().as_deref())
+fn browser_download_url(
+    release: &GitHubRelease,
+    os: &str,
+    arch: &str,
+    appimage: bool,
+) -> Result<String, String> {
+    browser_download_url_with_os_release(release, os, arch, appimage, read_os_release().as_deref())
 }
 
 /// Like [`browser_download_url`], with the `/etc/os-release` contents supplied
@@ -456,12 +579,16 @@ fn browser_download_url_with_os_release(
     release: &GitHubRelease,
     os: &str,
     arch: &str,
+    appimage: bool,
     os_release: Option<&str>,
 ) -> Result<String, String> {
     let asset_suffix = match (os, arch) {
         ("windows", "x86_64") => "_x64-setup.exe",
         ("macos", "aarch64") => "_aarch64.dmg",
         ("macos", "x86_64") => "_x64.dmg",
+        // An AppImage install offers the AppImage on any distro — the user
+        // picked that package type and the signed updater replaces it.
+        ("linux", "x86_64") if appimage => "_x86_64.AppImage",
         ("linux", "x86_64") if linux_wants_appimage(os_release) => "_x86_64.AppImage",
         ("linux", "x86_64") => "_amd64.deb",
         _ => return Ok(release.html_url.clone()),
@@ -561,29 +688,45 @@ mod tests {
     }
 
     #[test]
-    fn signed_install_requires_windows_x86_64_and_a_public_key() {
+    fn signed_install_requires_a_self_updatable_package_and_a_public_key() {
+        let key = Some("encoded-public-key");
+        let appimage = Some("/opt/Markion.AppImage");
         assert_eq!(
-            update_primary_action_for("windows", "x86_64", Some("encoded-public-key")),
+            update_primary_action_for("windows", "x86_64", key, None),
             UpdatePrimaryAction::SignedInstall
         );
         assert_eq!(
-            update_primary_action_for("windows", "x86_64", None),
+            update_primary_action_for("windows", "x86_64", None, None),
             UpdatePrimaryAction::BrowserDownload
         );
         assert_eq!(
-            update_primary_action_for("windows", "x86_64", Some("   ")),
+            update_primary_action_for("windows", "x86_64", Some("   "), None),
             UpdatePrimaryAction::BrowserDownload
         );
         assert_eq!(
-            update_primary_action_for("windows", "aarch64", Some("encoded-public-key")),
+            update_primary_action_for("windows", "aarch64", key, None),
             UpdatePrimaryAction::BrowserDownload
         );
         assert_eq!(
-            update_primary_action_for("macos", "aarch64", Some("encoded-public-key")),
+            update_primary_action_for("linux", "x86_64", key, appimage),
+            UpdatePrimaryAction::SignedInstall
+        );
+        assert_eq!(
+            update_primary_action_for("linux", "x86_64", key, None),
+            UpdatePrimaryAction::BrowserDownload,
+            "deb/rpm installs have no APPIMAGE and must keep the browser fallback"
+        );
+        assert_eq!(
+            update_primary_action_for("linux", "x86_64", key, Some("   ")),
             UpdatePrimaryAction::BrowserDownload
         );
         assert_eq!(
-            update_primary_action_for("linux", "x86_64", Some("encoded-public-key")),
+            update_primary_action_for("linux", "x86_64", None, appimage),
+            UpdatePrimaryAction::BrowserDownload,
+            "untagged/local builds embed no key"
+        );
+        assert_eq!(
+            update_primary_action_for("macos", "aarch64", key, None),
             UpdatePrimaryAction::BrowserDownload
         );
     }
@@ -612,6 +755,14 @@ mod tests {
         assert!(source.contains("background_executor()"));
         assert!(source.contains("catch_unwind"));
         assert!(source.contains("Msg::DialogButtonDownloadManually"));
+        assert!(
+            source.contains("std::env::var(\"APPIMAGE\")"),
+            "the AppImage launch signal gates the Linux signed-install path"
+        );
+        assert!(
+            source.contains("finish_signed_update"),
+            "a successful install must relaunch-and-quit (Linux) or defer to the installer (Windows)"
+        );
         let endpoints = signed_update_manifest_endpoints();
         assert!(endpoints[0].ends_with("/markion-releases/latest/update.json"));
         assert!(endpoints[1].ends_with("/latest/download/update.json"));
@@ -639,11 +790,11 @@ mod tests {
     fn unsupported_platform_uses_the_release_page_as_browser_fallback() {
         let release = release_with_version("9.9.9");
         assert_eq!(
-            browser_download_url(&release, "windows", "aarch64").unwrap(),
+            browser_download_url(&release, "windows", "aarch64", false).unwrap(),
             release.html_url
         );
         assert_eq!(
-            browser_download_url(&release, "freebsd", "x86_64").unwrap(),
+            browser_download_url(&release, "freebsd", "x86_64", false).unwrap(),
             release.html_url
         );
     }
@@ -654,11 +805,11 @@ mod tests {
         let arm64_url = "https://github.com/willmove/markion/releases/download/v9.9.9/macos";
         let x64_url = "https://github.com/willmove/markion/releases/download/v9.9.9/macos-x64";
         assert_eq!(
-            browser_download_url(&release, "macos", "aarch64").unwrap(),
+            browser_download_url(&release, "macos", "aarch64", false).unwrap(),
             arm64_url
         );
         assert_eq!(
-            browser_download_url(&release, "macos", "x86_64").unwrap(),
+            browser_download_url(&release, "macos", "x86_64", false).unwrap(),
             x64_url,
             "Intel Macs must deep-link the x64 DMG, not fall back to the Release page"
         );
@@ -669,13 +820,14 @@ mod tests {
         let release = release_with_version("9.9.9");
         let appimage_url = "https://github.com/willmove/markion/releases/download/v9.9.9/appimage";
         let deb_url = "https://github.com/willmove/markion/releases/download/v9.9.9/linux";
-        let offered = |os_release: Option<&str>| {
-            browser_download_url_with_os_release(&release, "linux", "x86_64", os_release).unwrap()
+        let offered = |os_release: Option<&str>, appimage: bool| {
+            browser_download_url_with_os_release(&release, "linux", "x86_64", appimage, os_release)
+                .unwrap()
         };
         let arch_id = "ID=arch\n";
         let omarchy_id = "ID=omarchy\nID_LIKE=arch\n";
         let quoted_manjaro = "NAME=\"Manjaro Linux\"\nID=manjaro\nID_LIKE=\"arch\"\n";
-        let endeavour = "ID=endeavouros\nID_LIKE=\"arch\"\n";
+        let endeavour = "ID=endeavouros\nID_LIKE=arch\n";
         let debian = "ID=debian\nID_LIKE=debian\n";
         for os_release in [
             Some(arch_id),
@@ -684,26 +836,36 @@ mod tests {
             Some(endeavour),
         ] {
             assert_eq!(
-                offered(os_release),
+                offered(os_release, false),
                 appimage_url,
                 "pacman-based {os_release:?} should be offered the AppImage"
             );
         }
         for os_release in [Some(debian), None] {
             assert_eq!(
-                offered(os_release),
+                offered(os_release, false),
                 deb_url,
                 "deb-based or unknown {os_release:?} should keep the DEB"
             );
         }
+        assert_eq!(
+            offered(Some(debian), true),
+            appimage_url,
+            "an AppImage install must be offered the AppImage even on deb systems"
+        );
+        assert_eq!(
+            offered(None, true),
+            appimage_url,
+            "an AppImage install must be offered the AppImage even when os-release is unreadable"
+        );
     }
 
     #[test]
     fn missing_supported_asset_retains_the_release_page_fallback() {
         let mut release = release_with_version("9.9.9");
         release.assets.clear();
-        assert!(browser_download_url(&release, "windows", "x86_64").is_err());
-        match compare_with_running_for(&release, "windows", "x86_64") {
+        assert!(browser_download_url(&release, "windows", "x86_64", false).is_err());
+        match compare_with_running_for(&release, "windows", "x86_64", false) {
             UpdateCheckOutcome::Failed { manual_url, .. } => {
                 assert_eq!(manual_url, release.html_url);
             }

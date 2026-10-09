@@ -944,6 +944,7 @@ pub enum Msg {
     StatusUpdateCheckFailed,
     StatusUpdateDownloading,
     StatusUpdateInstallFailed,
+    StatusUpdateInstalledRestart,
     StatusKeyboardShortcuts,
     StatusUndo,
     StatusNothingToUndo,
@@ -1270,6 +1271,10 @@ pub enum Msg {
     DialogUpdateInstallFailedTitle,
     /// Signed update failure body. {0}=error message.
     DialogUpdateInstallFailedDetail,
+    /// AppImage update replaced the file but relaunch failed: title.
+    DialogUpdateInstalledTitle,
+    /// AppImage update replaced the file; manual restart required.
+    DialogUpdateInstalledRestartDetail,
     /// Keyboard Shortcuts dialog title.
     DialogShortcutsTitle,
     /// Preferences dialog title.
@@ -3944,6 +3949,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::StatusUpdateCheckFailed => "Update check failed: {0}",
         Msg::StatusUpdateDownloading => "Downloading and verifying Markion {0}…",
         Msg::StatusUpdateInstallFailed => "Automatic update failed: {0}",
+        Msg::StatusUpdateInstalledRestart => "Update installed — restart Markion to finish",
         Msg::StatusKeyboardShortcuts => "Keyboard shortcuts",
         Msg::StatusUndo => "Undo",
         Msg::StatusNothingToUndo => "Nothing to undo",
@@ -4167,6 +4173,10 @@ fn en(msg: Msg) -> &'static str {
             "Markion could not download, verify, or start the update:
 
 {0}"
+        }
+        Msg::DialogUpdateInstalledTitle => "Update Installed",
+        Msg::DialogUpdateInstalledRestartDetail => {
+            "The update is installed. Restart Markion to start using the new version."
         }
         Msg::DialogShortcutsTitle => "Keyboard Shortcuts",
         Msg::DialogPreferencesTitle => "Preferences",
@@ -4606,6 +4616,9 @@ fn ja(msg: Msg) -> &'static str {
         Msg::StatusUpdateCheckFailed => "更新確認に失敗しました: {0}",
         Msg::StatusUpdateDownloading => "Markion {0} をダウンロードして検証しています…",
         Msg::StatusUpdateInstallFailed => "自動更新に失敗しました: {0}",
+        Msg::StatusUpdateInstalledRestart => {
+            "更新をインストールしました。Markion を再起動すると完了します"
+        }
         Msg::StatusKeyboardShortcuts => "キーボードショートカット",
         Msg::StatusUndo => "元に戻す",
         Msg::StatusNothingToUndo => "元に戻す操作はありません",
@@ -4833,6 +4846,10 @@ fn ja(msg: Msg) -> &'static str {
             "更新をダウンロード、検証、または開始できませんでした:
 
 {0}"
+        }
+        Msg::DialogUpdateInstalledTitle => "更新をインストールしました",
+        Msg::DialogUpdateInstalledRestartDetail => {
+            "新しいバージョンはインストール済みです。Markion を再起動すると利用できます。"
         }
         Msg::DialogShortcutsTitle => "キーボードショートカット",
         Msg::DialogPreferencesTitle => "設定",
@@ -5260,6 +5277,9 @@ fn fr(msg: Msg) -> &'static str {
         Msg::StatusUpdateCheckFailed => "Échec de la vérification : {0}",
         Msg::StatusUpdateDownloading => "Téléchargement et vérification de Markion {0}…",
         Msg::StatusUpdateInstallFailed => "Échec de la mise à jour automatique : {0}",
+        Msg::StatusUpdateInstalledRestart => {
+            "Mise à jour installée — redémarrez Markion pour terminer"
+        }
         Msg::StatusKeyboardShortcuts => "Raccourcis clavier",
         Msg::StatusUndo => "Annuler",
         Msg::StatusNothingToUndo => "Rien à annuler",
@@ -5501,6 +5521,10 @@ fn fr(msg: Msg) -> &'static str {
             "Markion n’a pas pu télécharger, vérifier ou démarrer la mise à jour :
 
 {0}"
+        }
+        Msg::DialogUpdateInstalledTitle => "Mise à jour installée",
+        Msg::DialogUpdateInstalledRestartDetail => {
+            "La mise à jour est installée. Redémarrez Markion pour utiliser la nouvelle version."
         }
         Msg::DialogShortcutsTitle => "Raccourcis clavier",
         Msg::DialogPreferencesTitle => "Préférences",
@@ -5948,6 +5972,9 @@ fn de(msg: Msg) -> &'static str {
         Msg::StatusUpdateCheckFailed => "Update-Prüfung fehlgeschlagen: {0}",
         Msg::StatusUpdateDownloading => "Markion {0} wird heruntergeladen und geprüft…",
         Msg::StatusUpdateInstallFailed => "Automatisches Update fehlgeschlagen: {0}",
+        Msg::StatusUpdateInstalledRestart => {
+            "Update installiert — Markion zum Abschluss neu starten"
+        }
         Msg::StatusKeyboardShortcuts => "Tastenkürzel",
         Msg::StatusUndo => "Rückgängig",
         Msg::StatusNothingToUndo => "Nichts rückgängig zu machen",
@@ -6179,6 +6206,10 @@ fn de(msg: Msg) -> &'static str {
             "Markion konnte das Update nicht herunterladen, prüfen oder starten:
 
 {0}"
+        }
+        Msg::DialogUpdateInstalledTitle => "Update installiert",
+        Msg::DialogUpdateInstalledRestartDetail => {
+            "Das Update ist installiert. Starten Sie Markion neu, um die neue Version zu verwenden."
         }
         Msg::DialogShortcutsTitle => "Tastenkürzel",
         Msg::DialogPreferencesTitle => "Einstellungen",
@@ -6620,6 +6651,9 @@ fn es(msg: Msg) -> &'static str {
         Msg::StatusUpdateCheckFailed => "Error al buscar actualizaciones: {0}",
         Msg::StatusUpdateDownloading => "Descargando y verificando Markion {0}…",
         Msg::StatusUpdateInstallFailed => "Error de actualización automática: {0}",
+        Msg::StatusUpdateInstalledRestart => {
+            "Actualización instalada: reinicia Markion para terminar"
+        }
         Msg::StatusKeyboardShortcuts => "Atajos de teclado",
         Msg::StatusUndo => "Deshacer",
         Msg::StatusNothingToUndo => "Nada que deshacer",
@@ -6853,6 +6887,10 @@ fn es(msg: Msg) -> &'static str {
             "Markion no pudo descargar, verificar o iniciar la actualización:
 
 {0}"
+        }
+        Msg::DialogUpdateInstalledTitle => "Actualización instalada",
+        Msg::DialogUpdateInstalledRestartDetail => {
+            "La actualización está instalada. Reinicia Markion para usar la nueva versión."
         }
         Msg::DialogShortcutsTitle => "Atajos de teclado",
         Msg::DialogPreferencesTitle => "Preferencias",
@@ -7285,6 +7323,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::StatusUpdateCheckFailed => "检查更新失败：{0}",
         Msg::StatusUpdateDownloading => "正在下载并验证 Markion {0}…",
         Msg::StatusUpdateInstallFailed => "自动更新失败：{0}",
+        Msg::StatusUpdateInstalledRestart => "更新已安装，重启 Markion 即可完成",
         Msg::StatusKeyboardShortcuts => "键盘快捷键",
         Msg::StatusUndo => "已撤销",
         Msg::StatusNothingToUndo => "没有可撤销的操作",
@@ -7501,6 +7540,8 @@ fn zh(msg: Msg) -> &'static str {
 
 {0}"
         }
+        Msg::DialogUpdateInstalledTitle => "更新已安装",
+        Msg::DialogUpdateInstalledRestartDetail => "新版本已安装。重启 Markion 即可使用新版本。",
         Msg::DialogShortcutsTitle => "键盘快捷键",
         Msg::DialogPreferencesTitle => "首选项",
         Msg::DialogPreferencesDetail => PREFERENCES_DETAIL_ZH,
@@ -7916,6 +7957,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::StatusUpdateCheckFailed => "檢查更新失敗：{0}",
         Msg::StatusUpdateDownloading => "正在下載並驗證 Markion {0}…",
         Msg::StatusUpdateInstallFailed => "自動更新失敗：{0}",
+        Msg::StatusUpdateInstalledRestart => "更新已安裝，重新啟動 Markion 即可完成",
         Msg::StatusKeyboardShortcuts => "鍵盤快速鍵",
         Msg::StatusUndo => "已復原",
         Msg::StatusNothingToUndo => "沒有可復原的動作",
@@ -8131,6 +8173,10 @@ fn zh_hant(msg: Msg) -> &'static str {
             "Markion 無法下載、驗證或啟動更新：
 
 {0}"
+        }
+        Msg::DialogUpdateInstalledTitle => "更新已安裝",
+        Msg::DialogUpdateInstalledRestartDetail => {
+            "新版本已安裝。重新啟動 Markion 即可使用新版本。"
         }
         Msg::DialogShortcutsTitle => "鍵盤快速鍵",
         Msg::DialogPreferencesTitle => "偏好設定",

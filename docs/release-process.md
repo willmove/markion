@@ -11,9 +11,9 @@ This runbook is the canonical procedure for publishing a stable Markion release 
 - Preserve public tags. Never delete, force-move, or recreate a published tag without explicit authorization.
 - Required tools: stable Rust and Cargo, Git, GitHub CLI (`gh`), OpenSpec CLI, and an authenticated GitHub account with permission to push and publish Releases.
 
-### Windows updater signing
+### Updater signing (Windows NSIS + Linux AppImage)
 
-The one-click Windows x86_64 updater uses a dedicated cargo-packager Minisign key. Generate the production keypair once, outside the repository, and keep an encrypted offline backup:
+The one-click updater uses a dedicated cargo-packager Minisign key. The same keypair signs the Windows x86_64 NSIS installer and the Linux x86_64 AppImage, and one `update.json` manifest carries both platform entries. Generate the production keypair once, outside the repository, and keep an encrypted offline backup:
 
 ```bash
 cargo install cargo-packager --version 0.11.8 --locked
@@ -27,15 +27,15 @@ This creates `markion-updater.key` and `markion-updater.key.pub`. Never commit e
 - `CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD`: the key password.
 - `CARGO_PACKAGER_SIGN_PUBLIC_KEY`: the complete contents of `markion-updater.key.pub`.
 
-The public key is embedded only in tagged builds. The private key and password are consumed only by the tag-only `prepare-update` job and must never appear in repository files, logs, or workflow artifacts. The existing OSS secrets are also required because `update.json` directs the Windows client to the installer under `${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/`.
+The public key is embedded only in tagged Windows and Linux builds. The private key and password are consumed only by the tag-only `prepare-update` job and must never appear in repository files, logs, or workflow artifacts. The existing OSS secrets are also required because `update.json` directs Windows and Linux clients to the installers under `${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/`.
 
-Minisign authenticates the updater payload; it is not Windows Authenticode signing. SmartScreen can therefore still warn when launching Markion or its installer. macOS bundles are sealed with a free ad-hoc code signature (`[macos] signing-identity = "-"` in `packager.toml`), which keeps Gatekeeper's first-launch warning overridable via *System Settings → Privacy & Security → Open Anyway* — but macOS builds remain without Developer ID signing or notarization.
+Minisign authenticates the updater payload; it is not Windows Authenticode signing or Linux package-manager signing. SmartScreen can therefore still warn when launching Markion or its installer. macOS bundles are sealed with a free ad-hoc code signature (`[macos] signing-identity = "-"` in `packager.toml`), which keeps Gatekeeper's first-launch warning overridable via *System Settings → Privacy & Security → Open Anyway* — but macOS builds remain without Developer ID signing or notarization.
 
 Treat rotation as a planned migration, not a secret replacement. The current client trusts one key and the workflow verifies that the embedded public key matches the signing private key, so changing both keys in one release would strand existing clients. Before rotating, implement and test a bridge client that trusts both old and new public keys, publish that bridge while signing with the old key, and wait for it to be distributed. Only then sign subsequent releases with the new key, retaining the old key for a documented transition period.
 
 ### Aliyun OSS mirror configuration
 
-The `mirror-oss` job uploads the seven packages (Windows NSIS installer, Windows portable `.zip`, macOS arm64 DMG, macOS x64 DMG, Linux DEB, Linux RPM, Linux AppImage), the signed Windows updater metadata, `packager.toml`, `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/` in `OSS_BUCKET`, then verifies that every mirrored object is publicly reachable with HTTP 200 and that the mirrored `update.json` version matches the tag. A green mirror job therefore always means the mirror actually serves the release — a lesson learned when a third-party upload action silently no-op'd while reporting success.
+The `mirror-oss` job uploads the seven packages (Windows NSIS installer, Windows portable `.zip`, macOS arm64 DMG, macOS x64 DMG, Linux DEB, Linux RPM, Linux AppImage), the signed updater metadata (both installer `.sig` files and `update.json`), `packager.toml`, `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/` in `OSS_BUCKET`, then verifies that every mirrored object is publicly reachable with HTTP 200 and that the mirrored `update.json` version matches the tag with every platform URL on the OSS host. A green mirror job therefore always means the mirror actually serves the release — a lesson learned when a third-party upload action silently no-op'd while reporting success.
 
 Configure these repository secrets with the exact public values; a wrong value fails only at tag time:
 
@@ -157,7 +157,7 @@ All of these jobs must succeed:
 - Build and package on `macos-latest` (arm64 native).
 - Build and package on `macos-latest` (cross-compiled `x86_64-apple-darwin`, which also verifies the ad-hoc code signature of the produced `.app`).
 - Build and package on `ubuntu-22.04`.
-- Sign the Windows updater and build metadata.
+- Sign the updater installers (Windows NSIS + Linux AppImage) and build metadata.
 - Publish GitHub Release.
 - Mirror installers to Aliyun OSS.
 
@@ -168,7 +168,7 @@ release with pending rows is not ready to publish.
 
 If the workflow fails, inspect it with `gh run view <tag-run-id> --log-failed`. Do not report the release as complete. If the public tag already exists, preserve it and either fix forward or ask the maintainer how to proceed. If only `mirror-oss` failed after the GitHub assets were published, fix the cause on `main`, then run `gh workflow run release.yml --ref main -f mirror_tag=vX.Y.Z`; monitor that repair run and verify the public mirror before continuing.
 
-The tag-only `prepare-update` job signs the exact Windows NSIS installer and produces `update.json` naming the GitHub asset as the installer URL; that is the manifest the Release attaches. The `mirror-oss` job rewrites only that installer URL to the OSS `latest/` object and uploads the result, so each distribution channel serves a self-consistent manifest/installer pair with an identical signature. Both `release` and `mirror-oss` depend on that prepared metadata but not on each other, so a GitHub Release failure does not block the mirror and vice versa. The mirror uploads the seven packages (NSIS, portable zip, arm64 DMG, x64 DMG, DEB, RPM, AppImage), the Windows installer `.sig`, the OSS-URL `update.json`, `packager.toml`, a generated `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/`. A signing, publication, or mirror failure is an incomplete release—correct or retry it before reporting completion.
+The tag-only `prepare-update` job signs the exact Windows NSIS installer and Linux AppImage and produces `update.json` with a `windows-x86_64` entry (`format: "nsis"`) and a `linux-x86_64` entry (`format: "appimage"`), each naming the GitHub asset as its installer URL; that is the manifest the Release attaches. The `mirror-oss` job rewrites every platform's installer URL to the OSS `latest/` object and uploads the result, so each distribution channel serves a self-consistent manifest/installer pair with identical signatures. Both `release` and `mirror-oss` depend on that prepared metadata but not on each other, so a GitHub Release failure does not block the mirror and vice versa. The mirror uploads the seven packages (NSIS, portable zip, arm64 DMG, x64 DMG, DEB, RPM, AppImage), both installer `.sig` files, the OSS-URL `update.json`, `packager.toml`, a generated `manifest.json`, and `sha256sums.txt` to `${OSS_PREFIX}/latest/`. A signing, publication, or mirror failure is an incomplete release—correct or retry it before reporting completion.
 
 Windows portable `.zip` and Linux `.rpm` are assembled after `cargo-packager` (which has no zip/rpm formats): `scripts/build-windows-portable.ps1` and `scripts/build-linux-rpm.sh`. Both still pass `scripts/verify-packaged-workspace.ps1` before upload.
 
@@ -275,10 +275,11 @@ Confirm that:
 - The Release is published, not a draft, and not an unintended prerelease.
 - The curated notes and full comparison link are present.
 - The assets include `markion_X.Y.Z_x64-setup.exe`, `markion_X.Y.Z_x64-portable.zip`, `Markion_X.Y.Z_aarch64.dmg`, `Markion_X.Y.Z_x64.dmg`, `markion_X.Y.Z_amd64.deb`, `markion_X.Y.Z_x86_64.rpm`, and `markion_X.Y.Z_x86_64.AppImage`.
-- The assets also include `markion_X.Y.Z_x64-setup.exe.sig` and `update.json`; the Release's `update.json` has version `X.Y.Z`, a `windows-x86_64` entry with `format: "nsis"`, the full signature, and the GitHub asset URL `https://github.com/willmove/markion/releases/download/vX.Y.Z/markion_X.Y.Z_x64-setup.exe` as the installer URL.
+- The assets also include `markion_X.Y.Z_x64-setup.exe.sig`, `markion_X.Y.Z_x86_64.AppImage.sig`, and `update.json`; the Release's `update.json` has version `X.Y.Z`, a `windows-x86_64` entry with `format: "nsis"` and the GitHub asset URL `https://github.com/willmove/markion/releases/download/vX.Y.Z/markion_X.Y.Z_x64-setup.exe` as the installer URL, and a `linux-x86_64` entry with `format: "appimage"`, its full signature, and the GitHub AppImage asset URL as the installer URL.
 - The tag workflow succeeded on all native build jobs (Windows, macOS arm64, macOS x86_64 cross, Linux) and in the publish job.
-- The `prepare-update` and `mirror-oss` jobs succeeded, and the Aliyun OSS path `${OSS_PREFIX}/latest/` contains the seven packages, the Windows `.sig`, `update.json`, `packager.toml`, `manifest.json`, and `sha256sums.txt`. The version fields inside both manifests equal `X.Y.Z`, the mirrored `update.json` names the OSS installer URL, and both manifests carry identical signature content.
+- The `prepare-update` and `mirror-oss` jobs succeeded, and the Aliyun OSS path `${OSS_PREFIX}/latest/` contains the seven packages, both installer `.sig` files, `update.json`, `packager.toml`, `manifest.json`, and `sha256sums.txt`. The version fields inside both manifests equal `X.Y.Z`, the mirrored `update.json` names the OSS URL for both the NSIS installer and the AppImage, and both manifests carry identical signature content.
 - From a clean Windows x86_64 installation of the previous version, the updater accepts the signature, starts the passive NSIS installer, and refuses to begin while any document is dirty. Manual download remains available when the signed path fails.
+- From a previous-version Linux AppImage (launch it so the AppImage runtime is active), the updater accepts the signature, replaces the `.AppImage` in place, relaunches the new version, and also refuses to begin while any document is dirty. A `.deb`-installed Linux build keeps the browser-download flow.
 - Local `main`, `origin/main`, the release commit, and the annotated tag resolve to the intended release state.
 - The local worktree is clean.
 

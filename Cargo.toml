@@ -158,9 +158,14 @@ zed-xim = { path = "vendor/zed-xim" }
 # avoids MSVC 19.44's reproducible C1056 object timestamp failures.
 cc = { path = "vendor/cc-rs" }
 
+# Signed in-app updater: Windows verifies and launches the passive NSIS
+# installer, Linux verifies and replaces the running AppImage in place. macOS
+# keeps the browser-download path, so the crate stays off its build graph.
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+cargo-packager-updater = "0.2.3"
+
 # Process footprint counters for memory diagnostics (matches gpui's windows 0.61).
 [target.'cfg(windows)'.dependencies]
-cargo-packager-updater = "0.2.3"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",

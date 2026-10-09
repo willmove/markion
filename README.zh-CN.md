@@ -22,7 +22,7 @@ Markion 是一款使用 Rust 和 GPUI 构建的原生桌面 Markdown 编辑器�
 | Linux | `.deb` 和 AppImage | x86_64 |
 | macOS | `.app` 和 `.dmg` | Apple Silicon（arm64）与 Intel（x64），macOS 11+ |
 
-Windows 发布包未签名，SmartScreen 可能要求选择“更多信息 → 仍要运行”。macOS 发布包使用免费的 ad-hoc 代码签名封装——没有付费 Developer ID 证书，也未公证——因此 Gatekeeper 首次启动仍会警告，但提供“仍要打开”通道（见下一段）。“帮助 → 检查更新…”在所有平台都提供可操作的更新提示：带标签的 Windows x86_64 NSIS 安装可进行经过 cargo-packager Minisign 加密验证的一键下载并安装，且当任一文档存在未保存更改时拒绝启动；macOS 与 Linux 会在系统浏览器中打开对应的发布文件。Apple Silicon 与 Intel Mac 各有原生 DMG；目前尚不提供通用二进制和 Apple 公证。
+Windows 发布包未签名，SmartScreen 可能要求选择“更多信息 → 仍要运行”。macOS 发布包使用免费的 ad-hoc 代码签名封装——没有付费 Developer ID 证书，也未公证——因此 Gatekeeper 首次启动仍会警告，但提供“仍要打开”通道（见下一段）。“帮助 → 检查更新…”在所有平台都提供可操作的更新提示：带标签的 Windows x86_64 NSIS 安装与 Linux AppImage 启动可进行经过 cargo-packager Minisign 加密验证的一键下载并安装，且当任一文档存在未保存更改时拒绝启动——Linux 上会原地替换运行中的 AppImage 并自动重启 Markion；macOS 与 Linux `.deb`/`.rpm` 安装会在系统浏览器中打开对应的发布文件。Apple Silicon 与 Intel Mac 各有原生 DMG；目前尚不提供通用二进制和 Apple 公证。
 
 **macOS 首次启动提示“无法检查它是否包含恶意软件”。** Gatekeeper 会对未经 Apple 公证的应用发出警告；v0.4.7 及更早版本还会被报“已损坏”，因为其 bundle 没有有效签名。当前 DMG 均带 ad-hoc 代码签名，签名有效、警告可绕过：在“系统设置 → 隐私与安全性”中点按一次“仍要打开”即可（macOS 13/14 也可以右键应用选择“打开”）。两种终端方式可以完全跳过提示——用 `curl -LO` 下载（curl 不会设置隔离标记），或清除浏览器下载带来的隔离标记：
 
@@ -163,7 +163,7 @@ PDF 和 DOCX 会优先尝试已整合的 Typune/pandoc 导出引擎。如果 pan
 - 可视化编辑以所见即所得为默认呈现契约，同时保留标准 Markdown；暂无字节精确渲染证明的结构会以源码作为过渡编辑通道（登记在 [WYSIWYG 覆盖路线图](docs/visual-editing-quality.md)中），而不会猜测富文本树变更；仅当可证明存在不重叠的源码边界时才提供块级重排。目前的主要缺口包括已解码 HTML 实体、前言与缩进代码块；其他畸形或尚未支持的结构列在矩阵的次级缺口中。
 - 屏幕渲染（分栏/阅读预览与可视化编辑）使用内嵌的 RaTeX 引擎排版数学公式；LaTeX 导出保留原生 `$...$`/`$$...$$` 源码交给读者自己的工具链处理，内置 DOCX 导出后备通道（仅在 pandoc 不可用时使用）仍会将公式降级为可读的纯文本近似显示，而非嵌入排版好的字形。
 - 可视化表格单元格支持直接编辑，且选区完全落在一个单元格内时可使用加粗/斜体/行内代码/链接。GFM 表列宽可拖拽，并以紧挨表格前的 HTML 注释（`<!-- markion-cols:… -->`）写入源码。行内图片宽度为 10–100% 的整数，且支持拖拽缩放。引用式/多行图片和畸形表格仍是 WYSIWYG 覆盖路线图上的已知缺口，暂时保留源码驱动编辑路径。
-- 一键更新在完成 Minisign 验证后会安装 Windows NSIS 版本；macOS 包替换与 Linux `.deb`/AppImage 自替换仍是后续工作，且更新身份验证并非 Windows Authenticode 或 Apple 公证。
+- 一键更新在完成 Minisign 验证后会安装 Windows NSIS 版本，并原地替换运行中的 Linux AppImage（替换后自动重启）；macOS 包替换与 Linux `.deb`/`.rpm` 自替换仍是后续工作，且更新身份验证并非 Windows Authenticode 或 Apple 公证。
 - 尚未实现文件树拖放移动和完整的自定义主题安装界面。
 - 图片导出是基础文本快照，超大文档尚未在所有派生子系统中使用 rope 或完全增量解析。
 

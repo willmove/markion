@@ -22,7 +22,7 @@ Markion 是一款使用 Rust 和 GPUI 打造的原生桌面 Markdown 編輯器�
 | Linux | `.deb` 和 AppImage | x86_64 |
 | macOS | `.app` 和 `.dmg` | Apple Silicon（arm64）與 Intel（x64），macOS 11+ |
 
-Windows 發佈包未簽章，SmartScreen 可能要求選擇「更多資訊 → 仍要執行」。macOS 發佈包使用免費的 ad-hoc 程式碼簽章——沒有付費 Developer ID 憑證，也未公證——Gatekeeper 首次啟動仍會警告，但可在「系統設定 → 隱私權與安全性」中點按「仍要打開」（詳見主 README 的 macOS 首次啟動說明）。**說明 → 檢查更新…** 在所有平台都提供可操作的更新提示：帶標籤的 Windows x86_64 NSIS 安裝可進行經過 cargo-packager Minisign 加密驗證的一鍵下載並安裝，且當任一文件存在未儲存變更時拒絕啟動；macOS 與 Linux 會在系統瀏覽器中開啟對應的發佈檔案。Apple Silicon 與 Intel Mac 各有原生 DMG；目前尚不提供通用二進位和 Apple 公證。
+Windows 發佈包未簽章，SmartScreen 可能要求選擇「更多資訊 → 仍要執行」。macOS 發佈包使用免費的 ad-hoc 程式碼簽章——沒有付費 Developer ID 憑證，也未公證——Gatekeeper 首次啟動仍會警告，但可在「系統設定 → 隱私權與安全性」中點按「仍要打開」（詳見主 README 的 macOS 首次啟動說明）。**說明 → 檢查更新…** 在所有平台都提供可操作的更新提示：帶標籤的 Windows x86_64 NSIS 安裝與 Linux AppImage 啟動可進行經過 cargo-packager Minisign 加密驗證的一鍵下載並安裝——Linux 上會原地替換執行中的 AppImage 並自動重新啟動 Markion——且當任一文件存在未儲存變更時拒絕啟動；macOS 與 Linux `.deb`/`.rpm` 安裝會在系統瀏覽器中開啟對應的發佈檔案。Apple Silicon 與 Intel Mac 各有原生 DMG；目前尚不提供通用二進位和 Apple 公證。
 
 ## 編輯模式
 
@@ -155,7 +155,7 @@ PDF 和 DOCX 會優先嘗試已整合的 Typune/pandoc 匯出引擎。如果 pan
 - 視覺化編輯以所見即所得為預設呈現契約，同時保留標準 Markdown；暫無位元組精確渲染證明的結構會以原始碼作為過渡編輯通道（登記在 [WYSIWYG 涵蓋路線圖](docs/visual-editing-quality.md)中），而不會猜測富文字樹變更；僅當可證明存在不重疊的原始碼邊界時才提供區塊重排。目前的主要缺口包括已解碼 HTML 實體、前言與縮排程式碼區塊；其他畸形或尚未支援的結構列在矩陣的次級缺口中。
 - 螢幕渲染（分割/閱讀預覽與視覺化編輯）使用內嵌的 RaTeX 引擎排版數學公式；LaTeX 匯出保留原生 `$...$`/`$$...$$` 原始碼交給讀者自己的工具鏈處理，內建 DOCX 匯出後備通道（僅在 pandoc 不可用時使用）仍會將公式降級為可讀的純文字近似顯示，而非嵌入排版好的字形。
 - 視覺化表格儲存格支援直接編輯，且選取範圍完全落在一個儲存格內時可使用粗體/斜體/行內程式碼/連結。GFM 表格欄寬可拖曳，並以緊鄰表格前的 HTML 註解（`<!-- markion-cols:… -->`）寫入原始碼。行內圖片寬度為 10–100% 的整數，且支援拖曳縮放。參考式/多行圖片和畸形表格仍是 WYSIWYG 涵蓋路線圖上的已知缺口，暫時保留原始碼驅動編輯路徑。
-- 一鍵更新在完成 Minisign 驗證後會安裝 Windows NSIS 版本；macOS 套件替換與 Linux `.deb`/AppImage 自我替換仍是後續工作，且更新身分驗證並非 Windows Authenticode 或 Apple 公證。
+- 一鍵更新在完成 Minisign 驗證後會安裝 Windows NSIS 版本，並原地替換執行中的 Linux AppImage（替換後自動重新啟動）；macOS 套件替換與 Linux `.deb`/`.rpm` 自我替換仍是後續工作，且更新身分驗證並非 Windows Authenticode 或 Apple 公證。
 - 尚未實作檔案樹拖放移動和完整的自訂主題安裝介面。
 - 圖片匯出是基礎文字快照，超大文件尚未在所有衍生子系統中使用 rope 或完全增量解析。
 

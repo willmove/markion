@@ -31,21 +31,23 @@
 # macOS bundles are sealed with an ad-hoc signature (see [macos] below), which
 # keeps the signature valid-but-untrusted so Gatekeeper offers the "Open
 # Anyway" path instead of the hard "app is damaged" block an unsealed bundle
-# triggers. The Windows NSIS installer is separately signed with minisign for
-# the in-app updater; that authenticates update downloads but is not
-# Authenticode signing.
+# triggers. The Windows NSIS installer and the Linux AppImage are separately
+# signed with minisign for the in-app updater; that authenticates update
+# downloads but is not Authenticode or package-manager signing.
 #
 # Aliyun OSS mirror (release.yml `mirror-oss` job):
 #   After a successful `v*` tag build, the release workflow also uploads the
 #   seven packages (NSIS, portable zip, arm64 DMG, x64 DMG, DEB, RPM,
-#   AppImage), updater `update.json` + `.sig`, this `packager.toml`, a
-#   generated `manifest.json`,
+#   AppImage), updater `update.json` + both installer `.sig` files, this
+#   `packager.toml`, a generated `manifest.json`,
 #   and `sha256sums.txt` to an Aliyun OSS Bucket at:
 #       ${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/<filename>
 #   The in-app "Check for Updates…" action discovers releases from GitHub's
-#   latest-release API. Signed Windows builds then use the stable `update.json`
-#   asset to authenticate and install the NSIS package; `manifest.json` remains
-#   general mirror metadata.
+#   latest-release API. Tagged Windows builds then use the stable
+#   `update.json` asset (windows-x86_64/nsis entry) to authenticate and
+#   install the NSIS package, and AppImage-launched tagged Linux builds use
+#   the linux-x86_64/appimage entry to replace the running AppImage in place;
+#   `manifest.json` remains general mirror metadata.
 #   There is NO `[updater]` table here: cargo-packager 0.11.x's `Config` struct
 #   has no `updater` field, and every config table is `deny_unknown_fields`,
 #   so adding one breaks `cargo packager` immediately. Updater metadata and its

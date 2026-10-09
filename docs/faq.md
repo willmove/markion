@@ -16,7 +16,17 @@ Markion is a native desktop Markdown editor built in Rust with the [GPUI](https:
 | macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | Apple Silicon and Intel Macs each get a native build; **min macOS 11.0**. A universal binary is a future task. |
 | Linux | `x86_64-unknown-linux-gnu` | Built on Ubuntu 22.04; ships as `.deb` and `.AppImage` |
 
-**Windows releases are unsigned; macOS releases are sealed with a free ad-hoc code signature** (no paid Developer ID certificate, no notarization). On first launch you will still see Gatekeeper (macOS) or SmartScreen (Windows) warnings, but the macOS warning is overridable via *System Settings → Privacy & Security → Open Anyway* — [Troubleshooting](#troubleshooting) has the exact steps, including the pre-ad-hoc "app is damaged" case and Terminal alternatives. The Windows x86_64 in-app updater separately verifies its NSIS payload with a Minisign key, which does not suppress SmartScreen. macOS and Linux update actions open the release download in the system browser. Linux users installing the `.deb` get the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) pulled in automatically.
+**Windows releases are unsigned; macOS releases are sealed with a free ad-hoc code signature** (no paid Developer ID certificate, no notarization). On first launch you will still see Gatekeeper (macOS) or SmartScreen (Windows) warnings, but the macOS warning is overridable via *System Settings → Privacy & Security → Open Anyway* — [Troubleshooting](#troubleshooting) has the exact steps, including the pre-ad-hoc "app is damaged" case and Terminal alternatives. The Windows x86_64 in-app updater separately verifies its NSIS payload with a Minisign key, which does not suppress SmartScreen; AppImage-launched Linux installs update through the same signed flow (see [Updating Markion](#updating-markion)). macOS and Linux `.deb`/`.rpm` update actions open the release download in the system browser. Linux users installing the `.deb` get the required runtime libraries (Wayland / X11 / Vulkan / fontconfig) pulled in automatically.
+
+## Updating Markion
+
+**Help → Check for Updates…** compares your running version with the latest GitHub Release:
+
+- **Windows (NSIS install):** one-click download, Minisign verification, passive reinstall — no browser needed. The update refuses to start while any document has unsaved changes.
+- **Linux (AppImage):** the same signed one-click flow. Markion downloads the new AppImage, verifies its Minisign signature, replaces the running `.AppImage` file in place, and relaunches itself. No root password or package manager is involved.
+- **Linux (`.deb` / `.rpm`) and macOS:** Markion opens the matching release file in the system browser; download and install it as before. A DEB/RPM install lives in system directories owned by root and cannot replace itself silently — switch to the AppImage if you want in-app self-updates.
+
+AppImage first launch on Ubuntu 24.04+ can fail with a missing-FUSE error (`libfuse.so.2: cannot open shared object file`); install it once with `sudo apt install libfuse2`, or launch the AppImage with `--appimage-extract-and-run`.
 
 ## Markdown support
 

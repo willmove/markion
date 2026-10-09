@@ -95,9 +95,11 @@ jobs:
             cpio
 
       # The public key is intentionally embedded only in the tagged Windows
-      # binary. Untagged and local builds keep the browser-download path.
+      # and Linux binaries — the two platforms whose updater can install a
+      # signed package (NSIS passive install / AppImage in-place replace).
+      # Untagged and local builds keep the browser-download path.
       - name: Configure updater public key for tagged builds
-        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        if: (runner.os == 'Windows' || runner.os == 'Linux') && startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           UPDATE_PUBLIC_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PUBLIC_KEY }}
@@ -179,7 +181,7 @@ jobs:
           retention-days: 14
 
   prepare-update:
-    name: Sign Windows updater and build metadata
+    name: Sign updater installers and build metadata
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -234,23 +236,39 @@ jobs:
           cargo packager signer sign "$installer"
           test -s "$installer.sig"
 
-      - name: Verify signing keypair and installer signature
+      - name: Sign Linux AppImage
+        shell: bash
+        env:
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY }}
+          CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD: ${{ secrets.CARGO_PACKAGER_SIGN_PRIVATE_KEY_PASSWORD }}
+        run: |
+          appimage="dist/markion_${VERSION}_x86_64.AppImage"
+          test -f "$appimage"
+          cargo packager signer sign "$appimage"
+          test -s "$appimage.sig"
+
+      - name: Verify signing keypair and installer signatures
         shell: bash
         env:
           CARGO_PACKAGER_SIGN_PUBLIC_KEY: ${{ secrets.CARGO_PACKAGER_SIGN_PUBLIC_KEY }}
         run: |
-          installer="dist/markion_${VERSION}_x64-setup.exe"
           printf '%s' "$CARGO_PACKAGER_SIGN_PUBLIC_KEY" | base64 --decode > updater-public.key
-          base64 --decode "$installer.sig" > updater-signature.sig
-          minisign -Vm "$installer" -p updater-public.key -x updater-signature.sig
+          for package in \
+            "dist/markion_${VERSION}_x64-setup.exe" \
+            "dist/markion_${VERSION}_x86_64.AppImage"
+          do
+            base64 --decode "$package.sig" > updater-signature.sig
+            minisign -Vm "$package" -p updater-public.key -x updater-signature.sig
+          done
 
       - name: Build update.json
         shell: bash
         run: |
           # GitHub-Release variant: the manifest attached to the Release names
-          # the GitHub asset as the installer. The mirror-oss job derives the
-          # OSS variant by rewriting only this URL, so both variants share the
-          # identical version, signature, and format for the same signed file.
+          # the GitHub assets as the signed installers (Windows NSIS, Linux
+          # AppImage). The mirror-oss job derives the OSS variant by rewriting
+          # every platform URL, so both variants share the identical version,
+          # signatures, and formats for the same signed files.
           # This job runs only on v* tag refs, so GITHUB_REF_NAME is the tag.
           python3 - <<'PY'
           import datetime
@@ -265,6 +283,12 @@ jobs:
               f"https://github.com/{os.environ['GITHUB_REPOSITORY']}"
               f"/releases/download/{os.environ['GITHUB_REF_NAME']}/{installer}"
           )
+          appimage = f"markion_{version}_x86_64.AppImage"
+          appimage_signature = pathlib.Path(f"dist/{appimage}.sig").read_text().strip()
+          appimage_url = (
+              f"https://github.com/{os.environ['GITHUB_REPOSITORY']}"
+              f"/releases/download/{os.environ['GITHUB_REF_NAME']}/{appimage}"
+          )
           out = {
               "version": version,
               "notes": f"Markion {version}",
@@ -276,7 +300,12 @@ jobs:
                       "url": url,
                       "signature": signature,
                       "format": "nsis",
-                  }
+                  },
+                  "linux-x86_64": {
+                      "url": appimage_url,
+                      "signature": appimage_signature,
+                      "format": "appimage",
+                  },
               },
           }
           pathlib.Path("dist/update.json").write_text(
@@ -291,6 +320,7 @@ jobs:
           name: markion-update-metadata
           path: |
             dist/markion_${{ env.VERSION }}_x64-setup.exe.sig
+            dist/markion_${{ env.VERSION }}_x86_64.AppImage.sig
             dist/update.json
           if-no-files-found: error
           retention-days: 14
@@ -323,9 +353,9 @@ jobs:
   # Aliyun OSS Bucket at a stable `${OSS_PREFIX}/latest/` path, alongside a
   # generated `manifest.json` for mirror metadata and future clients.
   # Packages: Windows NSIS + portable zip, macOS DMGs (arm64 + x64), Linux DEB + RPM + AppImage.
-  # The mirrored `update.json` is the Release's manifest with its installer
-  # URL rewritten to the OSS host, so each distribution channel serves a
-  # self-consistent manifest/installer pair with identical signatures.
+  # The mirrored `update.json` is the Release's manifest with every platform's
+  # installer URL rewritten to the OSS host, so each distribution channel
+  # serves a self-consistent manifest/installer pair with identical signatures.
   # Independent of the `release` job: a GitHub Release failure does not block
   # the mirror, and vice versa. Runs only on `v*` tags.
   #
@@ -394,6 +424,7 @@ jobs:
             --pattern "markion_${VERSION}_x86_64.rpm" \
             --pattern "markion_${VERSION}_x86_64.AppImage" \
             --pattern "markion_${VERSION}_x64-setup.exe.sig" \
+            --pattern "markion_${VERSION}_x86_64.AppImage.sig" \
             --pattern "update.json"
 
       - name: List artifacts to mirror
@@ -405,7 +436,7 @@ jobs:
           sha256sum *.exe *.dmg *.deb *.rpm *.AppImage *.zip > sha256sums.txt
           cat sha256sums.txt
 
-      - name: Rewrite update.json installer URL to the OSS host
+      - name: Rewrite update.json installer URLs to the OSS host
         shell: bash
         env:
           OSS_PUBLIC_BASE: ${{ secrets.OSS_PUBLIC_BASE }}
@@ -413,16 +444,15 @@ jobs:
         run: |
           # OSS variant of the updater manifest: take the manifest published on
           # the GitHub Release (or downloaded from it in mirror-repair mode)
-          # and point its installer URL at the OSS `latest/` object. Everything
-          # else — version, pub_date, signature, format — stays identical
-          # because both hosts serve the same signed installer file.
+          # and point every platform's installer URL at the OSS `latest/`
+          # object named by that URL. Everything else — version, pub_date,
+          # signatures, formats — stays identical because both hosts serve the
+          # same signed installer files.
           python3 - <<'PY'
           import json
           import os
           import pathlib
 
-          version = os.environ["VERSION"]
-          installer = f"markion_{version}_x64-setup.exe"
           base = (
               os.environ["OSS_PUBLIC_BASE"].rstrip("/")
               + "/"
@@ -431,7 +461,9 @@ jobs:
           )
           path = pathlib.Path("dist/update.json")
           manifest = json.loads(path.read_text(encoding="utf-8"))
-          manifest["platforms"]["windows-x86_64"]["url"] = f"{base}/{installer}"
+          for entry in manifest["platforms"].values():
+              filename = entry["url"].rsplit("/", 1)[-1]
+              entry["url"] = f"{base}/{filename}"
           path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
           print(json.dumps(manifest, indent=2))
           PY
@@ -540,6 +572,7 @@ jobs:
           upload "dist/markion_${VERSION}_x86_64.rpm" "${prefix_dir}/markion_${VERSION}_x86_64.rpm"
           upload "dist/markion_${VERSION}_x86_64.AppImage" "${prefix_dir}/markion_${VERSION}_x86_64.AppImage"
           upload "dist/markion_${VERSION}_x64-setup.exe.sig" "${prefix_dir}/markion_${VERSION}_x64-setup.exe.sig"
+          upload "dist/markion_${VERSION}_x86_64.AppImage.sig" "${prefix_dir}/markion_${VERSION}_x86_64.AppImage.sig"
           upload "dist/update.json" "${prefix_dir}/update.json"
           upload "dist/manifest.json" "${prefix_dir}/manifest.json"
           upload "dist/sha256sums.txt" "${prefix_dir}/sha256sums.txt"
@@ -562,6 +595,7 @@ jobs:
             "markion_${VERSION}_x86_64.rpm" \
             "markion_${VERSION}_x86_64.AppImage" \
             "markion_${VERSION}_x64-setup.exe.sig" \
+            "markion_${VERSION}_x86_64.AppImage.sig" \
             "update.json" \
             "manifest.json" \
             "sha256sums.txt" \
@@ -578,8 +612,13 @@ jobs:
             echo "Mirror verification failed: update.json version != ${VERSION}" >&2
             exit 1
           }
-          curl -fsSL "${base}/update.json" | grep -q "\"url\": \"${base}/markion_${VERSION}_x64-setup.exe\"" || {
-            echo "Mirror verification failed: update.json installer URL is not on the OSS host" >&2
-            exit 1
-          }
+          for installer in \
+            "markion_${VERSION}_x64-setup.exe" \
+            "markion_${VERSION}_x86_64.AppImage"
+          do
+            curl -fsSL "${base}/update.json" | grep -q "\"url\": \"${base}/${installer}\"" || {
+              echo "Mirror verification failed: update.json ${installer} URL is not on the OSS host" >&2
+              exit 1
+            }
+          done
           echo "All mirrored assets verified at ${base}/"
