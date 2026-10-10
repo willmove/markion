@@ -18,7 +18,7 @@
 
 - [x] 3.1 Update `.github/workflows/release.yml`: cached lavapipe build, bundling before `fix-appimage-permissions.sh`, unchanged signing order; verify the workflow YAML parses and the Linux steps run in that order.
 - [x] 3.2 Extend `scripts/verify-packaged-workspace.ps1` to assert the bundled stack files in the AppImage; verify against a locally built AppImage.
-- [ ] 3.3 Add the `appimage-smoke` job (ubuntu-22.04, Xvfb + icewm, catalog firejail build, no Vulkan ICD, `firejail --appimage`, `xdotool search --onlyvisible`, screenshot artifact) and make `release`/`mirror-oss` depend on it; verify it passes on the pull-request run.
+- [x] 3.3 Add the `appimage-smoke` job (ubuntu-22.04, Xvfb + icewm, catalog firejail build, no Vulkan ICD, `firejail --appimage`, `xdotool search --onlyvisible`, screenshot artifact) and make `release`/`mirror-oss` depend on it; verify it passes on the pull-request run.
 
 ## 4. Integration verification
 

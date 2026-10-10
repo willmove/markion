@@ -96,6 +96,30 @@ in the same container with `MARKION_SMOKE_REQUIRE_NO_VULKAN_DRIVER=1`:
 - It fails for v0.4.8 with "the application exited instead of showing a window".
 - It refuses to run in a container that has `mesa-vulkan-drivers` installed.
 
+## 3.3 Pull-request CI (GitHub-hosted ubuntu-22.04)
+
+The `release` workflow passed on PR #18 in runs 38047584887 and 38049146341.
+
+- The first run built the stack from scratch ("Build software Vulkan stack",
+  about 2 minutes 45 seconds) and saved it to the cache. The second run
+  restored it from the cache and skipped the build.
+- `appimage-smoke` ran with all system ICD manifests moved away (`none`) and
+  the catalog's firejail 0.9.73, which mounts the image at
+  `/run/firejail/appimage`. Its log shows:
+  - `Instance extension "VK_KHR_surface" is not supported`
+  - `restarting Markion on the bundled software Vulkan driver …
+    stack=/run/firejail/appimage/usr/lib/markion-vulkan`
+  - `Adapter: "llvmpipe (LLVM 15.0.7, 256 bits)"`
+  - `Markion - Untitled.md` visible
+  - `PASS`
+- The screenshot is uploaded as the `appimage-smoke-test` artifact.
+- `Verify packaged MarkNice workspace (deb,appimage,rpm)` passed with the new
+  stack assertion.
+
+The `quality` workflow fails on `clippy::approx_constant` in
+`src/app/preview.rs`. `main` fails the same way since Rust 1.99
+(run 38037606920), and clippy reports nothing in the files this change adds.
+
 ## 4.2 Hardware-first path and overrides
 
 With `mesa-vulkan-drivers` 23.2.1 installed, the system lavapipe stands in for
