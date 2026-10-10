@@ -138,16 +138,26 @@ jobs:
         if: runner.os != 'macOS' || matrix.target == 'aarch64-apple-darwin'
         run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }}
 
+      # cargo-packager 0.11.8 parses --binaries-dir but never merges it into
+      # the config (only out_dir/formats/target are merged), so the packager
+      # reads binaries from packager.toml's `binaries-dir` (target/release),
+      # where the cross build never puts anything. Stage the cross-built
+      # binary at the path the config expects before packaging.
+      - name: Stage cross binary for packager
+        if: runner.os == 'macOS' && matrix.target == 'x86_64-apple-darwin'
+        run: |
+          mkdir -p target/release
+          cp target/x86_64-apple-darwin/release/markion target/release/markion
+
       # Cross-compiled x86_64: --target stamps the x64 arch into the DMG name
-      # (Markion_<version>_x64.dmg), --binaries-dir points at the triple-dir
-      # binary, and CARGO_BUILD_TARGET keeps the packager's
-      # before-packaging-command rebuilding the same cross target instead of
-      # clobbering anything with a host-arch rebuild.
+      # (Markion_<version>_x64.dmg), and CARGO_BUILD_TARGET keeps the
+      # packager's before-packaging-command rebuilding the same cross target
+      # instead of clobbering anything with a host-arch rebuild.
       - name: Package (${{ matrix.formats }}, cross x86_64)
         if: runner.os == 'macOS' && matrix.target == 'x86_64-apple-darwin'
         env:
           CARGO_BUILD_TARGET: x86_64-apple-darwin
-        run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }} --target x86_64-apple-darwin --binaries-dir target/x86_64-apple-darwin/release
+        run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }} --target x86_64-apple-darwin
 
       # cargo-packager 0.11.8 produces AppImages with restrictive permissions
       # (AppRun 0744, dirs 0700) that fail the AppImage catalog test when run
