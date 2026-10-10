@@ -87,6 +87,48 @@ try {
             Push-Location $cleanupRoot
             try { Invoke-Native "AppImage extraction" { & $package.FullName --appimage-extract } }
             finally { Pop-Location }
+            
+            # Verify AppImage permissions: AppRun and directories must be
+            # world-executable (0755 or 0555), all files world-readable.
+            # This prevents the firejail sandbox failure seen in the AppImage
+            # catalog test (https://github.com/AppImage/appimage.github.io/pull/6581).
+            $squashfsRoot = Join-Path $cleanupRoot "squashfs-root"
+            Invoke-Native "AppImage permission verification" {
+                bash -c @"
+set -euo pipefail
+root='$($squashfsRoot -replace '\\','/')'
+cd `"`$root`"
+# Check AppRun is executable by others (mode & 0001)
+if [[ ! -x AppRun ]]; then
+    echo 'ERROR: AppRun is not executable' >&2
+    exit 1
+fi
+apprun_perms=`$(stat -c '%a' AppRun)
+# stat -c '%a' returns 3-digit octal (e.g. '755'), so match XX5 pattern
+if [[ ! `$apprun_perms =~ [0-9][0-9]5$ ]]; then
+    echo `"ERROR: AppRun permissions are `$apprun_perms, expected world-executable (e.g. 0755)$`" >&2
+    exit 1
+fi
+# Check all directories are readable+executable by others (mode & 0005 == 0005)
+while IFS= read -r -d '' dir; do
+    dir_perms=`$(stat -c '%a' `"`$dir`")
+    if [[ ! `$dir_perms =~ [0-9][0-9]5$ ]]; then
+        echo `"ERROR: Directory `$dir has permissions `$dir_perms, expected world-readable+executable (e.g. 0755)$`" >&2
+        exit 1
+    fi
+done < <(find . -type d -print0)
+# Check all files are readable by others (mode & 0004)
+while IFS= read -r -d '' file; do
+    file_perms=`$(stat -c '%a' `"`$file`")
+    last_digit=`${file_perms: -1}
+    if [[ ! `$last_digit =~ [4567] ]]; then
+        echo `"ERROR: File `$file has permissions `$file_perms, not world-readable$`" >&2
+        exit 1
+    fi
+done < <(find . -type f -print0)
+echo 'AppImage permissions OK: AppRun and directories are world-executable, files are world-readable'
+"@
+            }
         }
         "zip" {
             $package = Get-ChildItem -LiteralPath $artifacts -Filter "*-portable.zip" -File | Select-Object -First 1
