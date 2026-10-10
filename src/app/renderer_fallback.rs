@@ -221,7 +221,10 @@ mod tests {
         assert_eq!(get(ACTIVE_ENV).as_deref(), Some("1"));
 
         let env = fallback_environment(stack, Some(OsStr::new("")));
-        let library_path = env.iter().find(|(key, _)| *key == "LD_LIBRARY_PATH").unwrap();
+        let library_path = env
+            .iter()
+            .find(|(key, _)| *key == "LD_LIBRARY_PATH")
+            .unwrap();
         assert_eq!(library_path.1, OsString::from(stack.as_os_str()));
     }
 }

@@ -484,13 +484,8 @@ fn report_startup_failure(payload: &(dyn Any + Send), log_dir: Option<&std::path
             .unwrap_or_default()
             .language,
     );
-    let alert = startup_alert::compose_alert(
-        language,
-        kind,
-        software_fallback_failed,
-        &detail,
-        log_dir,
-    );
+    let alert =
+        startup_alert::compose_alert(language, kind, software_fallback_failed, &detail, log_dir);
     startup_alert::show(&alert);
     std::process::exit(1);
 }

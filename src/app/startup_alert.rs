@@ -151,7 +151,7 @@ fn dialog_commands(alert: &StartupAlert) -> [(&'static str, Vec<String>); 3] {
 
 /// xmessage neither wraps nor scrolls horizontally, so long lines would be cut
 /// off at the screen edge.
-const XMESSAGE_COLUMNS: usize = 76;
+const XMESSAGE_COLUMNS: usize = 80;
 
 /// Wraps every line at spaces to at most `columns` display columns, counting
 /// wide (CJK) characters as two and breaking words that do not fit. Wrapped
@@ -281,12 +281,28 @@ mod tests {
         assert!(alert.body.contains(TROUBLESHOOTING_URL));
         assert!(alert.body.contains("could not start either"));
         assert!(alert.body.contains("Details: NoSupportedDeviceFound\n"));
-        assert!(alert.body.ends_with("Log files: /home/u/.cache/markion/logs"));
+        assert!(
+            alert
+                .body
+                .ends_with("Log files: /home/u/.cache/markion/logs")
+        );
+        assert!(
+            wrap_text(&alert.body, XMESSAGE_COLUMNS)
+                .lines()
+                .any(|line| line == TROUBLESHOOTING_URL),
+            "the guide URL must stay on one line in the xmessage dialog"
+        );
     }
 
     #[test]
     fn alert_follows_the_interface_language() {
-        let alert = compose_alert(Language::ZhHans, StartupFailureKind::Other, false, "boom", None);
+        let alert = compose_alert(
+            Language::ZhHans,
+            StartupFailureKind::Other,
+            false,
+            "boom",
+            None,
+        );
         assert_eq!(alert.title, "Markion 无法启动");
         assert_eq!(alert.body, "Markion 启动失败。\n\n详细信息：boom");
     }
@@ -302,10 +318,19 @@ mod tests {
         let programs: Vec<_> = calls.iter().map(|(program, _)| program.as_str()).collect();
         assert_eq!(programs, ["zenity", "kdialog", "xmessage"]);
         assert!(calls[0].1.contains(&"--no-markup".to_string()));
-        assert!(calls[0].1.contains(&"--text=a <b>body</b> & more".to_string()));
+        assert!(
+            calls[0]
+                .1
+                .contains(&"--text=a <b>body</b> & more".to_string())
+        );
         assert_eq!(
             calls[1].1,
-            ["--title", "Markion cannot start", "--error", "a <b>body</b> & more"]
+            [
+                "--title",
+                "Markion cannot start",
+                "--error",
+                "a <b>body</b> & more"
+            ]
         );
         assert_eq!(
             calls[2].1.last().unwrap(),
@@ -332,7 +357,10 @@ mod tests {
 
     #[test]
     fn xmessage_text_is_wrapped_to_fit_the_screen() {
-        let long = format!("Title\n\n- {}\n    0: detail", "word ".repeat(40).trim_end());
+        let long = format!(
+            "Title\n\n- {}\n    0: detail",
+            "word ".repeat(40).trim_end()
+        );
         let wrapped = wrap_text(&long, 20);
         let lines: Vec<_> = wrapped.lines().collect();
         assert_eq!(lines[0], "Title");
@@ -341,14 +369,28 @@ mod tests {
         assert_eq!(lines[3], "  word word word");
         assert_eq!(*lines.last().unwrap(), "    0: detail");
         assert!(lines.iter().all(|line| line.chars().count() <= 20));
-        assert_eq!(wrapped.split_whitespace().filter(|word| *word == "word").count(), 40);
+        assert_eq!(
+            wrapped
+                .split_whitespace()
+                .filter(|word| *word == "word")
+                .count(),
+            40
+        );
     }
 
     #[test]
     fn wrapping_breaks_unspaced_cjk_text_by_display_width() {
         let wrapped = wrap_text(&"图".repeat(15), 10);
-        assert_eq!(wrapped.lines().collect::<Vec<_>>(), ["图图图图图", "图图图图图", "图图图图图"]);
-        assert_eq!(wrap_text("https://example.com/abcdefghij", 10).lines().count(), 3);
+        assert_eq!(
+            wrapped.lines().collect::<Vec<_>>(),
+            ["图图图图图", "图图图图图", "图图图图图"]
+        );
+        assert_eq!(
+            wrap_text("https://example.com/abcdefghij", 10)
+                .lines()
+                .count(),
+            3
+        );
     }
 
     #[test]

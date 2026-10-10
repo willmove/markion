@@ -8595,7 +8595,10 @@ mod tests {
             for message in messages {
                 let text = startup_failure_tf(*language, message, &["ARG"]);
                 assert!(!text.trim().is_empty(), "{language:?} {message:?}");
-                assert!(!text.contains("{0}"), "{language:?} {message:?} keeps a placeholder");
+                assert!(
+                    !text.contains("{0}"),
+                    "{language:?} {message:?} keeps a placeholder"
+                );
             }
             for message in [
                 StartupFailureMsg::RendererLinux,
