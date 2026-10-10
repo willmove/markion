@@ -104,14 +104,15 @@ if [[ ! -x AppRun ]]; then
     exit 1
 fi
 apprun_perms=`$(stat -c '%a' AppRun)
-if [[ ! `$apprun_perms =~ [0-9][0-9][0-9]5$ ]]; then
+# stat -c '%a' returns 3-digit octal (e.g. '755'), so match XX5 pattern
+if [[ ! `$apprun_perms =~ [0-9][0-9]5$ ]]; then
     echo `"ERROR: AppRun permissions are `$apprun_perms, expected world-executable (e.g. 0755)$`" >&2
     exit 1
 fi
 # Check all directories are readable+executable by others (mode & 0005 == 0005)
 while IFS= read -r -d '' dir; do
     dir_perms=`$(stat -c '%a' `"`$dir`")
-    if [[ ! `$dir_perms =~ [0-9][0-9][0-9]5$ ]]; then
+    if [[ ! `$dir_perms =~ [0-9][0-9]5$ ]]; then
         echo `"ERROR: Directory `$dir has permissions `$dir_perms, expected world-readable+executable (e.g. 0755)$`" >&2
         exit 1
     fi
