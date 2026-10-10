@@ -23,6 +23,8 @@ out_dir="$(realpath -m "$2")"
 mkdir -p "$out_dir"
 display_number="${SMOKE_DISPLAY:-99}"
 window_timeout="${SMOKE_WINDOW_TIMEOUT:-30}"
+# icewm's own windows are visible too, so look for the application's title.
+window_name="${SMOKE_WINDOW_NAME:-^Markion}"
 
 pids=()
 cleanup() {
@@ -73,7 +75,7 @@ for _ in $(seq 1 "$window_timeout"); do
         echo "ERROR: the application exited instead of showing a window"
         break
     fi
-    if windows="$(timeout 5 xdotool search --onlyvisible --name '.' 2>/dev/null)" && [[ -n "$windows" ]]; then
+    if windows="$(timeout 5 xdotool search --onlyvisible --name "$window_name" 2>/dev/null)" && [[ -n "$windows" ]]; then
         result=0
         break
     fi
@@ -83,7 +85,7 @@ done
 if [[ $result -eq 0 ]]; then
     sleep 3
     echo "== Visible windows"
-    for window in $(xdotool search --onlyvisible --name '.'); do
+    for window in $(xdotool search --onlyvisible --name "$window_name"); do
         echo "  $window: $(xdotool getwindowname "$window")"
     done
     import -window root "$out_dir/screenshot.png"
