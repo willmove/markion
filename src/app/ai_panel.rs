@@ -44,6 +44,11 @@ struct WritingReview {
     complete: bool,
     applied: bool,
 }
+struct InputOverflow {
+    source: Option<String>,
+    bytes: Option<usize>,
+    budget: usize,
+}
 pub(super) struct AiUi {
     pub open: bool,
     pub width: f32,
@@ -53,12 +58,23 @@ pub(super) struct AiUi {
     conversations: Vec<Conversation>,
     current: usize,
     composer: Entity<AiInput>,
+    composer_drafts: HashMap<u64, String>,
     settings: SettingsDraft,
     target_language: Entity<AiInput>,
     target_tone: Entity<AiInput>,
     draft: Profile,
     pending: Option<PendingSwitch>,
     confirm_remove: bool,
+    confirm_delete: Option<u64>,
+    confirm_clear: bool,
+    history_open: bool,
+    profiles_open: bool,
+    writing_open: bool,
+    writing_action: Option<WritingAction>,
+    writing_settings_open: bool,
+    privacy_open: bool,
+    saving: bool,
+    save_and_enable: bool,
     history_epoch: Arc<std::sync::atomic::AtomicU64>,
     history_lock: Arc<std::sync::Mutex<()>>,
     advanced: bool,
@@ -69,8 +85,10 @@ pub(super) struct AiUi {
     enable_after_test: bool,
     settings_feedback: Option<AiMsg>,
     panel_feedback: Option<AiMsg>,
+    input_overflow: Option<InputOverflow>,
     tool_activity: Option<(u64, AiMsg)>,
     models: Vec<String>,
+    model_filter: Entity<AiInput>,
     models_identity: Option<String>,
     scroll: ScrollHandle,
     settings_scroll: ScrollHandle,
@@ -122,6 +140,9 @@ async fn execute_journal(
 }
 fn profile_identity(p: &Profile) -> String {
     format!("{}|{}|{}|{}", p.id, p.endpoint, p.protocol, p.model)
+}
+fn discovery_identity(p: &Profile) -> String {
+    format!("{}|{}|{}", p.id, p.endpoint, p.protocol)
 }
 // Custom ships no endpoint and local ones are routinely edited, so both
 // presets expose Base URL in basic setup; cloud presets keep it in Advanced.
@@ -233,12 +254,23 @@ impl AiUi {
             conversations: vec![Conversation::new(1)],
             current: 0,
             composer: cx.new(|cx| AiInput::new("", true, false, cx)),
+            composer_drafts: HashMap::new(),
             settings: SettingsDraft::new(&draft, &prefs.writing_guidance, cx),
             target_language: cx.new(|cx| AiInput::new("", false, false, cx)),
             target_tone: cx.new(|cx| AiInput::new("", false, false, cx)),
             draft,
             pending: None,
             confirm_remove: false,
+            confirm_delete: None,
+            confirm_clear: false,
+            history_open: false,
+            profiles_open: false,
+            writing_open: false,
+            writing_action: None,
+            writing_settings_open: false,
+            privacy_open: false,
+            saving: false,
+            save_and_enable: false,
             history_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             history_lock: Arc::new(std::sync::Mutex::new(())),
             advanced: false,
@@ -250,8 +282,10 @@ impl AiUi {
             enable_after_test: false,
             settings_feedback: None,
             panel_feedback: None,
+            input_overflow: None,
             tool_activity: None,
             models: Vec::new(),
+            model_filter: cx.new(|cx| AiInput::new("", false, false, cx)),
             models_identity: None,
             scroll: ScrollHandle::new(),
             settings_scroll: ScrollHandle::new(),
@@ -327,19 +361,22 @@ impl AiUi {
     }
     // Discovery results survive draft edits; only an identity change clears them.
     fn retain_models(&mut self) {
-        let identity = profile_identity(&self.draft);
+        let identity = discovery_identity(&self.draft);
         if self.models_identity.as_deref() != Some(identity.as_str()) {
             self.models.clear();
             self.models_identity = None;
         }
     }
     fn read_draft(&self, cx: &App) -> Result<Profile, AiMsg> {
+        self.read_settings(cx, false)
+    }
+    fn read_settings(&self, cx: &App, discovery: bool) -> Result<Profile, AiMsg> {
         let mut profile = self.draft.clone();
         profile.name = self.settings.name.read(cx).text().trim().into();
         profile.model = self.settings.model.read(cx).text().trim().into();
         profile.endpoint = self.settings.endpoint.read(cx).text().trim().into();
         profile.protocol = self.settings.protocol.read(cx).text().trim().into();
-        if profile.model.is_empty() {
+        if !discovery && profile.model.is_empty() {
             return Err(AiMsg::ModelMissing);
         }
         if profile.base_url().is_err() {
@@ -388,7 +425,9 @@ impl AiUi {
             output_tokens: values[7] as u32,
         };
         profile.invalid_reason = None;
-        profile.validate().map_err(|_| AiMsg::Invalid)?;
+        if !discovery {
+            profile.validate().map_err(|_| AiMsg::Invalid)?;
+        }
         Ok(profile)
     }
     fn running(&self) -> bool {
@@ -998,23 +1037,39 @@ impl MarkionApp {
             let Ok(buffers) = this.update(cx, |a, _| a.ai_buffers()) else {
                 return;
             };
-            let attachment = cx
+            let label = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned());
+            let (attachment, bytes) = cx
                 .background_spawn(async move {
-                    let parent = path.parent().ok_or(AiError::Scope)?;
-                    let grant = markion_ai::workspace::ReadGrant::new(parent, parent)?;
-                    let name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .ok_or(AiError::Scope)?;
-                    let result = markion_ai::workspace::read(&grant, name, None, budget, &buffers)?;
-                    Ok::<_, AiError>(Attachment {
-                        identity: Some(result.identity),
-                        document: result.document,
-                        label: name.into(),
-                        path: Some(grant.scope.join(name)),
-                        range: Some(result.start..result.end),
-                        text: result.text,
-                    })
+                    let bytes = dunce::canonicalize(&path)
+                        .ok()
+                        .and_then(|p| buffers.get(&p))
+                        .map(|b| b.text.len())
+                        .or_else(|| {
+                            std::fs::metadata(&path)
+                                .ok()
+                                .and_then(|m| usize::try_from(m.len()).ok())
+                        });
+                    let attachment = (|| {
+                        let parent = path.parent().ok_or(AiError::Scope)?;
+                        let grant = markion_ai::workspace::ReadGrant::new(parent, parent)?;
+                        let name = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .ok_or(AiError::Scope)?;
+                        let result =
+                            markion_ai::workspace::read(&grant, name, None, budget, &buffers)?;
+                        Ok::<_, AiError>(Attachment {
+                            identity: Some(result.identity),
+                            document: result.document,
+                            label: name.into(),
+                            path: Some(grant.scope.join(name)),
+                            range: Some(result.start..result.end),
+                            text: result.text,
+                        })
+                    })();
+                    (attachment, bytes)
                 })
                 .await;
             let _ = this.update(cx, |a, cx| {
@@ -1029,9 +1084,9 @@ impl MarkionApp {
                 }
                 match attachment {
                     Ok(attachment) => {
-                        a.ai_ui.conversation_mut().attachments.push(attachment);
-                        cx.notify();
+                        a.ai_add_attachment(attachment, cx);
                     }
+                    Err(AiError::Limit) => a.ai_input_feedback(label, bytes, budget, cx),
                     Err(e) => a.ai_feedback(e, cx),
                 }
             });
@@ -1333,6 +1388,7 @@ impl MarkionApp {
         }
     }
     fn ai_feedback(&mut self, error: AiError, cx: &mut Context<Self>) {
+        self.ai_ui.input_overflow = None;
         self.status = ai_error(self.language, error).into();
         self.ai_ui.panel_feedback = Some(match error {
             AiError::Disabled => AiMsg::Disabled,
@@ -1350,6 +1406,47 @@ impl MarkionApp {
             AiError::Scope => AiMsg::ScopeError,
             AiError::Stale => AiMsg::Stale,
         });
+        cx.notify();
+    }
+    fn ai_feedback_message(&mut self, message: AiMsg, cx: &mut Context<Self>) {
+        self.ai_ui.input_overflow = None;
+        self.status = ai_t(self.language, message).into();
+        self.ai_ui.panel_feedback = Some(message);
+        cx.notify();
+    }
+    fn ai_input_feedback(
+        &mut self,
+        source: Option<String>,
+        bytes: Option<usize>,
+        budget: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.ai_feedback_message(AiMsg::InputOverBudget, cx);
+        self.ai_ui.input_overflow = Some(InputOverflow {
+            source,
+            bytes,
+            budget,
+        });
+    }
+    fn ai_add_attachment(&mut self, attachment: Attachment, cx: &mut Context<Self>) {
+        let budget = self
+            .ai_preferences
+            .selected()
+            .map_or(65536, |p| p.limits.input_bytes);
+        if attachment.text.len() > budget {
+            self.ai_input_feedback(
+                Some(attachment.label),
+                Some(attachment.text.len()),
+                budget,
+                cx,
+            );
+            return;
+        }
+        self.ai_ui.conversation_mut().attachments.push(attachment);
+        if self.ai_ui.panel_feedback == Some(AiMsg::InputOverBudget) {
+            self.ai_ui.panel_feedback = None;
+            self.ai_ui.input_overflow = None;
+        }
         cx.notify();
     }
     fn ai_settings_message(&mut self, msg: AiMsg, cx: &mut Context<Self>) {
@@ -1378,19 +1475,30 @@ impl MarkionApp {
         cx.notify();
     }
     fn ai_enable(&mut self, cx: &mut Context<Self>) {
+        let capability = self.ai_ui.capability.clone().filter(|(id, _)| {
+            self.ai_preferences
+                .selected()
+                .is_some_and(|p| *id == profile_identity(p))
+        });
         self.ai_preferences.enabled = !self.ai_preferences.enabled;
         self.ai_ui.enable_after_test = false;
         self.ai_ui.invalidate();
         if !self.ai_preferences.enabled {
             self.ai_ui.open = false;
+        } else {
+            self.ai_ui.capability = capability;
         }
         self.persist_preferences();
         cx.notify();
     }
     fn ai_save(&mut self, cx: &mut Context<Self>) {
+        if self.ai_ui.saving {
+            return;
+        }
         let profile = match self.ai_ui.read_draft(cx) {
             Ok(p) => p,
             Err(msg) => {
+                self.ai_ui.save_and_enable = false;
                 self.ai_settings_message(msg, cx);
                 return;
             }
@@ -1408,6 +1516,7 @@ impl MarkionApp {
                 .use_for_session(&profile, Secret::new(key))
                 .is_err()
             {
+                self.ai_ui.save_and_enable = false;
                 self.ai_settings_feedback(AiError::InvalidProfile, cx);
                 return;
             }
@@ -1417,22 +1526,38 @@ impl MarkionApp {
         let reference = match self.ai_ui.credentials.record(&profile) {
             Ok(r) => r,
             Err(_) => {
+                self.ai_ui.save_and_enable = false;
                 self.ai_settings_feedback(AiError::Unavailable, cx);
                 return;
             }
         };
+        let typed_key = key.clone();
         let task = PlatformStore(cx).write(&reference, Secret::new(key));
+        self.ai_ui.saving = true;
+        cx.notify();
         let generation = self.ai_ui.configuration;
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |app, cx| {
                 if generation != app.ai_ui.configuration {
+                    app.ai_ui.saving = false;
+                    app.ai_ui.save_and_enable = false;
                     return;
                 }
+                app.ai_ui.saving = false;
                 if result.is_ok() {
                     app.ai_ui.credentials.remove_session(&reference);
+                    if app.ai_ui.read_draft(cx).as_ref() != Ok(&profile)
+                        || app.ai_ui.settings.key.read(cx).text() != typed_key
+                        || app.ai_ui.settings.guidance.read(cx).text() != guidance
+                    {
+                        app.ai_ui.save_and_enable = false;
+                        app.ai_settings_message(AiMsg::DraftUnsavedPrompt, cx);
+                        return;
+                    }
                     app.ai_commit_profile(profile, guidance, cx);
                 } else {
+                    app.ai_ui.save_and_enable = false;
                     app.ai_ui.settings_feedback = Some(AiMsg::KeyUnavailable);
                     cx.notify();
                 }
@@ -1441,24 +1566,32 @@ impl MarkionApp {
         .detach();
     }
     fn ai_commit_profile(&mut self, profile: Profile, guidance: String, cx: &mut Context<Self>) {
+        let previous = self.ai_preferences.clone();
+        let enable = std::mem::take(&mut self.ai_ui.save_and_enable);
         let old_capability = self
             .ai_ui
             .capability
-            .take()
+            .clone()
             .filter(|(id, _)| *id == profile_identity(&profile));
-        self.ai_ui.invalidate();
-        self.ai_preferences.selected_profile = profile.id.clone();
-        if let Some(existing) = self
-            .ai_preferences
-            .profiles
-            .iter_mut()
-            .find(|p| p.id == profile.id)
-        {
+        let mut next = previous.clone();
+        next.selected_profile = profile.id.clone();
+        next.enabled |= enable;
+        next.writing_guidance = guidance.clone();
+        if let Some(existing) = next.profiles.iter_mut().find(|p| p.id == profile.id) {
             *existing = profile.clone();
         } else {
-            self.ai_preferences.profiles.push(profile.clone());
+            next.profiles.push(profile.clone());
         }
-        self.ai_preferences.writing_guidance = guidance;
+        let mut preferences = self.current_preferences();
+        preferences.ai = next.clone();
+        if !(cfg!(test) && self.preferences_path == default_preferences_path())
+            && save_app_preferences(&self.preferences_path, &preferences).is_err()
+        {
+            self.ai_settings_message(AiMsg::SaveFailed, cx);
+            return;
+        }
+        self.ai_ui.invalidate();
+        self.ai_preferences = next;
         self.ai_ui.draft = profile;
         self.ai_ui.capability = old_capability;
         self.ai_ui.retain_models();
@@ -1466,7 +1599,6 @@ impl MarkionApp {
             .settings
             .key
             .update(cx, |input, cx| input.set("", cx));
-        self.persist_preferences();
         self.ai_ui.settings_feedback = Some(AiMsg::Saved);
         cx.notify();
         if let Some(pending) = self.ai_ui.pending.take() {
@@ -1576,9 +1708,16 @@ impl MarkionApp {
         false
     }
     fn ai_save_guidance(&mut self, cx: &mut Context<Self>) {
-        self.ai_preferences.writing_guidance =
-            self.ai_ui.settings.guidance.read(cx).text().to_owned();
-        self.persist_preferences();
+        let guidance = self.ai_ui.settings.guidance.read(cx).text().to_owned();
+        let mut preferences = self.current_preferences();
+        preferences.ai.writing_guidance = guidance.clone();
+        if !(cfg!(test) && self.preferences_path == default_preferences_path())
+            && save_app_preferences(&self.preferences_path, &preferences).is_err()
+        {
+            self.ai_settings_message(AiMsg::SaveFailed, cx);
+            return;
+        }
+        self.ai_preferences.writing_guidance = guidance;
         self.ai_settings_message(AiMsg::Saved, cx);
     }
     fn ai_request_remove(&mut self, cx: &mut Context<Self>) {
@@ -1629,7 +1768,7 @@ impl MarkionApp {
         if self.ai_ui.running() {
             return;
         }
-        let profile = match self.ai_ui.read_draft(cx) {
+        let profile = match self.ai_ui.read_settings(cx, discover) {
             Ok(p) => p,
             Err(msg) => {
                 self.ai_settings_message(msg, cx);
@@ -1664,7 +1803,11 @@ impl MarkionApp {
                     None => None,
                 },
             };
-            let identity = profile_identity(&profile);
+            let identity = if discover {
+                discovery_identity(&profile)
+            } else {
+                profile_identity(&profile)
+            };
             let result = network::runtime_handle()
                 .spawn(async move {
                     if discover {
@@ -1759,6 +1902,10 @@ impl MarkionApp {
                 .context(&brief, profile.limits.input_bytes)
             {
                 Ok(m) => m,
+                Err(AiError::Limit) => {
+                    self.ai_input_feedback(None, None, profile.limits.input_bytes, cx);
+                    return;
+                }
                 Err(e) => {
                     self.ai_feedback(e, cx);
                     return;
@@ -1848,8 +1995,12 @@ impl MarkionApp {
                     .push(markion_ai::protocol::encode_message(protocol, message));
             }
         }
-        if markion_ai::protocol::request_body(&profile, &request, true).is_err() {
-            self.ai_feedback(AiError::Limit, cx);
+        if let Err(error) = markion_ai::protocol::request_body(&profile, &request, true) {
+            if error == AiError::Limit {
+                self.ai_input_feedback(None, None, profile.limits.input_bytes, cx);
+            } else {
+                self.ai_feedback(error, cx);
+            }
             return;
         }
         self.ai_ui.request = self.ai_ui.request.wrapping_add(1);
@@ -1887,6 +2038,7 @@ impl MarkionApp {
             .is_none_or(|(_, c)| c.streaming);
         self.ai_ui.open = true;
         self.ai_ui.panel_feedback = None;
+        self.ai_ui.input_overflow = None;
         self.ai_ui.tool_activity = None;
         cx.notify();
         let (host_sender, host_receiver) = tokio::sync::mpsc::channel(4);
@@ -2038,6 +2190,11 @@ impl MarkionApp {
         .detach();
     }
     fn ai_new_conversation(&mut self, cx: &mut Context<Self>) {
+        self.ai_ui.confirm_delete = None;
+        self.ai_ui.composer_drafts.insert(
+            self.ai_ui.conversation().id,
+            self.ai_ui.composer.read(cx).text().into(),
+        );
         if self.ai_ui.conversations.len() >= 20 {
             if let Some(index) = self
                 .ai_ui
@@ -2045,7 +2202,8 @@ impl MarkionApp {
                 .iter()
                 .position(|c| c.active.is_none())
             {
-                self.ai_ui.conversations.remove(index);
+                let removed = self.ai_ui.conversations.remove(index);
+                self.ai_ui.composer_drafts.remove(&removed.id);
             } else {
                 return;
             }
@@ -2061,6 +2219,8 @@ impl MarkionApp {
             + 1;
         self.ai_ui.conversations.push(Conversation::new(next));
         self.ai_ui.current = self.ai_ui.conversations.len() - 1;
+        self.ai_ui.panel_feedback = None;
+        self.ai_ui.input_overflow = None;
         self.ai_ui.review = None;
         self.ai_ui.scope = None;
         self.ai_ui.composer.update(cx, |i, cx| i.set("", cx));
@@ -2080,15 +2240,17 @@ impl MarkionApp {
                 .and_then(|s| preview::preview_selection_plain_text(s, &blocks));
             if let Some(text) = text {
                 let document = Some(tab.document.instance_id().get());
-                self.ai_ui.conversation_mut().attachments.push(Attachment {
-                    identity: None,
-                    document,
-                    label: ai_t(self.language, AiMsg::Selection).into(),
-                    path: None,
-                    range: None,
-                    text,
-                });
-                cx.notify();
+                self.ai_add_attachment(
+                    Attachment {
+                        identity: None,
+                        document,
+                        label: ai_t(self.language, AiMsg::Selection).into(),
+                        path: None,
+                        range: None,
+                        text,
+                    },
+                    cx,
+                );
             } else {
                 self.ai_feedback(AiError::Scope, cx);
             }
@@ -2121,20 +2283,24 @@ impl MarkionApp {
             text: tab.document.text()[range.clone()].into(),
             range: Some(range),
         };
-        if attachment.text.len()
-            > self
-                .ai_preferences
-                .selected()
-                .map_or(65536, |p| p.limits.input_bytes)
-        {
-            self.ai_feedback(AiError::Limit, cx);
-            return;
-        }
-        self.ai_ui.conversation_mut().attachments.push(attachment);
-        cx.notify();
+        self.ai_add_attachment(attachment, cx);
     }
     fn ai_write(&mut self, action: WritingAction, scope: Option<u8>, cx: &mut Context<Self>) {
         if !self.ai_preferences.enabled || self.ai_ui.running() || self.active_tab().is_image() {
+            return;
+        }
+        self.ai_ui.writing_action = Some(action);
+        if action == WritingAction::Translate
+            && self.ai_ui.target_language.read(cx).text().trim().is_empty()
+        {
+            self.ai_ui.writing_open = true;
+            self.ai_feedback_message(AiMsg::ChooseLanguage, cx);
+            return;
+        }
+        if action == WritingAction::Tone && self.ai_ui.target_tone.read(cx).text().trim().is_empty()
+        {
+            self.ai_ui.writing_open = true;
+            self.ai_feedback_message(AiMsg::ChooseTone, cx);
             return;
         }
         let tab = self.active_tab();
@@ -2456,6 +2622,8 @@ impl MarkionApp {
         .detach();
     }
     fn ai_clear_history(&mut self, cx: &mut Context<Self>) {
+        self.ai_ui.confirm_clear = false;
+        self.ai_ui.composer_drafts.clear();
         let id = self
             .ai_ui
             .conversations
@@ -2478,6 +2646,8 @@ impl MarkionApp {
             return;
         }
         let id = self.ai_ui.conversation().id;
+        self.ai_ui.confirm_delete = None;
+        self.ai_ui.composer_drafts.remove(&id);
         self.ai_ui.conversation_mut().revoke();
         self.ai_ui.grants.remove(&id);
         self.ai_ui.conversations.remove(self.ai_ui.current);
@@ -2487,6 +2657,15 @@ impl MarkionApp {
         self.ai_ui.current = 0;
         self.ai_ui.review = None;
         self.ai_ui.scope = None;
+        let draft = self
+            .ai_ui
+            .composer_drafts
+            .get(&self.ai_ui.conversation().id)
+            .cloned()
+            .unwrap_or_default();
+        self.ai_ui
+            .composer
+            .update(cx, |input, cx| input.set(draft, cx));
         self.ai_ui.plan = Default::default();
         self.ai_ui.outcomes.clear();
         self.ai_ui.destination_inputs.clear();
@@ -2500,6 +2679,43 @@ impl MarkionApp {
         self.ai_write_history(Some(entries), cx);
         cx.notify();
     }
+    fn ai_select_conversation(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.ai_ui.running() || index >= self.ai_ui.conversations.len() {
+            return;
+        }
+        let old = self.ai_ui.conversation().id;
+        self.ai_ui
+            .composer_drafts
+            .insert(old, self.ai_ui.composer.read(cx).text().into());
+        self.ai_ui.current = index;
+        self.ai_ui.panel_feedback = None;
+        self.ai_ui.input_overflow = None;
+        let draft = self
+            .ai_ui
+            .composer_drafts
+            .get(&self.ai_ui.conversation().id)
+            .cloned()
+            .unwrap_or_default();
+        self.ai_ui.composer.update(cx, |i, cx| i.set(draft, cx));
+        self.ai_ui.review = None;
+        self.ai_ui.scope = None;
+        self.ai_ui.confirm_delete = None;
+        self.ai_ui.history_open = false;
+        cx.notify();
+    }
+    fn ai_stop(&mut self, cx: &mut Context<Self>) {
+        for conversation in &mut self.ai_ui.conversations {
+            conversation.stop();
+        }
+        if let Some(cancel) = &self.ai_ui.batch {
+            cancel.cancel();
+        }
+        if let Some(cancel) = self.ai_ui.probe.take() {
+            cancel.cancel();
+        }
+        self.ai_ui.panel_feedback = Some(AiMsg::Stopped);
+        cx.notify();
+    }
 }
 fn button(
     label: AiMsg,
@@ -2507,12 +2723,96 @@ fn button(
     cx: &mut Context<MarkionApp>,
     callback: impl Fn(&mut MarkionApp, &mut Window, &mut Context<MarkionApp>) + 'static,
 ) -> Stateful<Div> {
+    let enabled = match label {
+        AiMsg::Send => {
+            !app.ai_ui.running() && !app.ai_ui.composer.read(cx).text().trim().is_empty()
+        }
+        AiMsg::Test | AiMsg::Discover => !app.ai_ui.running() && !app.ai_ui.saving,
+        AiMsg::RunWriting | AiMsg::Whole | AiMsg::Preceding => {
+            !app.ai_ui.running() && app.ai_preferences.enabled
+        }
+        AiMsg::Save | AiMsg::SaveEnable => !app.ai_ui.saving,
+        _ => true,
+    };
+    control(label, None, enabled, app, cx, callback)
+}
+struct AiTooltip {
+    text: SharedString,
+    palette: ThemePalette,
+}
+fn toggle(
+    label: AiMsg,
+    checked: bool,
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+    callback: impl Fn(&mut MarkionApp, &mut Window, &mut Context<MarkionApp>) + 'static,
+) -> Stateful<Div> {
     let palette = app.palette();
-    let callback = std::rc::Rc::new(callback);
+    button(label, app, cx, callback)
+        .flex()
+        .items_center()
+        .gap_2()
+        .border_0()
+        .p_0()
+        .focus(move |style| style.bg(palette.active_bg))
+        .child(
+            div()
+                .size(px(16.))
+                .flex_shrink_0()
+                .border_1()
+                .border_color(app.palette().border)
+                .when(checked, |d| {
+                    d.bg(app.palette().active_bg).child(crate::ui::icon::icon(
+                        crate::ui::icon::Icon::Check,
+                        14.,
+                        app.palette().active_text,
+                    ))
+                }),
+        )
+}
+impl Render for AiTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .p_2()
+            .bg(self.palette.panel_bg)
+            .text_color(self.palette.text)
+            .border_1()
+            .border_color(self.palette.border)
+            .text_size(px(12.))
+            .child(self.text.clone())
+    }
+}
+fn icon_button(
+    label: AiMsg,
+    icon: crate::ui::icon::Icon,
+    enabled: bool,
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+    callback: impl Fn(&mut MarkionApp, &mut Window, &mut Context<MarkionApp>) + 'static,
+) -> Stateful<Div> {
+    control(label, Some(icon), enabled, app, cx, callback)
+}
+fn control(
+    label: AiMsg,
+    icon: Option<crate::ui::icon::Icon>,
+    enabled: bool,
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+    callback: impl Fn(&mut MarkionApp, &mut Window, &mut Context<MarkionApp>) + 'static,
+) -> Stateful<Div> {
+    let palette = app.palette();
+    let callback = std::rc::Rc::new(
+        move |a: &mut MarkionApp, w: &mut Window, cx: &mut Context<MarkionApp>| {
+            if enabled {
+                callback(a, w, cx);
+            }
+        },
+    );
     let keyboard_callback = callback.clone();
     let space_callback = callback.clone();
     div()
         .id(("ai-button", label as usize))
+        .flex_shrink_0()
         .focusable()
         .tab_index(0)
         .on_action(cx.listener(move |a, _: &InsertNewline, w, cx| {
@@ -2539,6 +2839,8 @@ fn button(
                 AiMsg::Recovery => "ai-recovery-control",
                 AiMsg::Apply => "ai-apply",
                 AiMsg::Revalidate => "ai-revalidate",
+                AiMsg::DeleteConversation if icon.is_some() => "ai-delete-control",
+                AiMsg::DeleteConversation => "ai-delete-confirm",
                 _ => "ai-control",
             }
             .into()
@@ -2549,10 +2851,29 @@ fn button(
         .border_1()
         .border_color(palette.border)
         .focus(|style| style.border_color(palette.active_text))
-        .cursor_pointer()
-        .hover(|s| s.bg(palette.active_bg))
+        .when(enabled, |d| {
+            d.cursor_pointer().hover(|s| s.bg(palette.active_bg))
+        })
+        .when(!enabled, |d| d.opacity(0.45))
         .text_size(px(12.))
-        .child(ai_t(app.language, label))
+        .when_some(icon, |d, glyph| {
+            let text = ai_t(app.language, label);
+            d.size(px(30.))
+                .p_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .flex_shrink_0()
+                .child(crate::ui::icon::icon(glyph, 15., palette.text))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| AiTooltip {
+                        text: text.into(),
+                        palette,
+                    })
+                    .into()
+                })
+        })
+        .when(icon.is_none(), |d| d.child(ai_t(app.language, label)))
         .on_mouse_up(
             MouseButton::Left,
             cx.listener(move |app, _, w, cx| {
@@ -2574,11 +2895,13 @@ fn chip(
     callback: impl Fn(&mut MarkionApp, &mut Window, &mut Context<MarkionApp>) + 'static,
 ) -> Stateful<Div> {
     let palette = app.palette();
+    let label = label.into();
     let callback = std::rc::Rc::new(callback);
     let keyboard_callback = callback.clone();
     let space_callback = callback.clone();
     div()
         .id(id)
+        .flex_shrink_0()
         .focusable()
         .tab_index(0)
         .on_action(cx.listener(move |a, _: &InsertNewline, w, cx| {
@@ -2613,7 +2936,17 @@ fn chip(
             palette.surface_bg
         })
         .text_size(px(12.))
-        .child(label.into())
+        .min_w_0()
+        .max_w_full()
+        .truncate()
+        .child(label.clone())
+        .tooltip(move |_, cx| {
+            cx.new(|_| AiTooltip {
+                text: label.clone(),
+                palette,
+            })
+            .into()
+        })
         .on_mouse_up(
             MouseButton::Left,
             cx.listener(move |app, _, w, cx| {
@@ -2647,6 +2980,8 @@ fn row(label: AiMsg, input: Entity<AiInput>, app: &MarkionApp) -> Div {
     div()
         .flex()
         .flex_col()
+        .w_full()
+        .min_w_0()
         .gap_1()
         .child(
             div()
@@ -2764,9 +3099,9 @@ fn message_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElem
     let rows = Arc::new(rows);
     div()
         .id("ai-messages")
-        .h(px(230.))
-        .min_h(px(100.))
-        .flex_shrink_0()
+        .debug_selector(|| "ai-messages".into())
+        .flex_1()
+        .min_h(px(80.))
         .child(
             list(
                 app.ai_ui.message_list.clone(),
@@ -2805,20 +3140,39 @@ fn message_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElem
                                     },
                                 )))
                             })
-                            .child(button(AiMsg::Copy, app, cx, move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                            }))
-                            .when(
-                                message.complete && message.role == "assistant",
-                                |d| {
-                                    d.child(button(AiMsg::NewNote, app, cx, move |a, w, cx| {
-                                        a.open_in_new_tab(
-                                            MarkdownDocument::from_text(note_text.clone()),
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1()
+                                    .mt_1()
+                                    .child(icon_button(
+                                        AiMsg::Copy,
+                                        crate::ui::icon::Icon::Copy,
+                                        true,
+                                        app,
+                                        cx,
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                text.clone(),
+                                            ))
+                                        },
+                                    ))
+                                    .when(message.complete && message.role == "assistant", |d| {
+                                        d.child(icon_button(
+                                            AiMsg::NewNote,
+                                            crate::ui::icon::Icon::FileText,
+                                            true,
+                                            app,
                                             cx,
-                                        );
-                                        w.focus(&a.focus_handle);
-                                    }))
-                                },
+                                            move |a, w, cx| {
+                                                a.open_in_new_tab(
+                                                    MarkdownDocument::from_text(note_text.clone()),
+                                                    cx,
+                                                );
+                                                w.focus(&a.focus_handle);
+                                            },
+                                        ))
+                                    }),
                             )
                         })
                         .into_any_element()
@@ -3027,31 +3381,58 @@ fn plan_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement
         )
 }
 pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
+    use crate::ui::icon::Icon;
     let p = app.palette();
     let l = app.language;
+    let draft = app.ai_ui.read_draft(cx).ok();
+    let tested = draft.as_ref().is_some_and(|profile| {
+        app.ai_ui
+            .capability
+            .as_ref()
+            .is_some_and(|(identity, _)| identity == &profile_identity(profile))
+    });
+    let mut key_profile = app.ai_ui.draft.clone();
+    key_profile.endpoint = app.ai_ui.settings.endpoint.read(cx).text().trim().into();
+    key_profile.protocol = app.ai_ui.settings.protocol.read(cx).text().trim().into();
+    let key_state = if app.ai_ui.credentials.session_key(&key_profile).is_some() {
+        AiMsg::KeySession
+    } else if key_profile
+        .credential_reference()
+        .ok()
+        .is_some_and(|reference| {
+            app.ai_ui
+                .credentials
+                .references()
+                .iter()
+                .any(|r| r.reference == reference)
+        })
+    {
+        AiMsg::KeyStored
+    } else {
+        AiMsg::KeyAbsent
+    };
     let mut body =
         div()
-            .id("ai-settings-body")
-            .debug_selector(|| "ai-settings-body".into())
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&app.ai_ui.settings_scroll)
-            .px_4()
+            .id("ai-settings-fields")
+            .w_full()
+            .flex_shrink_0()
             .flex()
             .flex_col()
             .gap_3()
-            .child(
-                button(AiMsg::Enable, app, cx, |a, _, cx| a.ai_enable(cx)).child(
-                    if app.ai_preferences.enabled {
-                        " ✓"
-                    } else {
-                        " ○"
-                    },
-                ),
-            )
+            .child(toggle(
+                AiMsg::Enable,
+                app.ai_preferences.enabled,
+                app,
+                cx,
+                |a, _, cx| a.ai_enable(cx),
+            ))
             .when(!app.ai_preferences.enabled, |d| {
-                d.child(ai_t(l, AiMsg::Disabled))
+                d.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(p.muted)
+                        .child(ai_t(l, AiMsg::Disabled)),
+                )
             })
             .when(app.ai_ui.pending.is_some(), |d| {
                 d.child(
@@ -3059,12 +3440,7 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> i
                         .flex()
                         .flex_wrap()
                         .gap_1()
-                        .items_center()
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .child(ai_t(l, AiMsg::DraftUnsavedPrompt)),
-                        )
+                        .child(ai_t(l, AiMsg::DraftUnsavedPrompt))
                         .child(button(AiMsg::DraftSave, app, cx, |a, _, cx| a.ai_save(cx)))
                         .child(button(AiMsg::DraftDiscard, app, cx, |a, _, cx| {
                             a.ai_discard_pending(cx)
@@ -3080,24 +3456,24 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> i
                         .flex()
                         .flex_wrap()
                         .gap_1()
-                        .items_center()
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .child(ai_t(l, AiMsg::RemoveConfirmPrompt)),
-                        )
+                        .child(ai_t(l, AiMsg::RemoveConfirmPrompt))
                         .child(button(AiMsg::RemoveProfile, app, cx, |a, _, cx| {
                             a.ai_remove_profile(false, cx)
                         }))
                         .child(button(AiMsg::RemoveForgetKey, app, cx, |a, _, cx| {
                             a.ai_remove_profile(true, cx)
                         }))
-                        .child(button(AiMsg::DraftKeepEditing, app, cx, |a, _, cx| {
+                        .child(button(AiMsg::Cancel, app, cx, |a, _, cx| {
                             a.ai_ui.confirm_remove = false;
                             cx.notify();
                         })),
                 )
             })
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(ai_t(l, AiMsg::ServiceSettings)),
+            )
             .child(div().flex().flex_wrap().gap_1().children(
                 app.ai_preferences.profiles.iter().map(|profile| {
                     let id = profile.id.clone();
@@ -3114,14 +3490,18 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> i
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
                     .gap_1()
                     .child(button(AiMsg::AddProfile, app, cx, |a, _, cx| {
                         a.ai_request_switch(PendingSwitch::AddProfile, cx)
                     }))
-                    .child(button(AiMsg::RemoveProfile, app, cx, |a, _, cx| {
-                        a.ai_request_remove(cx)
-                    })),
+                    .child(icon_button(
+                        AiMsg::RemoveProfile,
+                        Icon::Trash,
+                        !app.ai_ui.saving,
+                        app,
+                        cx,
+                        |a, _, cx| a.ai_request_remove(cx),
+                    )),
             )
             .child(div().text_size(px(12.)).child(ai_t(l, AiMsg::Provider)))
             .child(
@@ -3150,233 +3530,280 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> i
                     })),
             )
             .child(row(AiMsg::Name, app.ai_ui.settings.name.clone(), app))
-            .child(row(AiMsg::Model, app.ai_ui.settings.model.clone(), app))
-            .child(row(AiMsg::Key, app.ai_ui.settings.key.clone(), app))
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(p.muted)
-                    .child(ai_t(l, AiMsg::KeyHint)),
-            )
-            .child(
-                button(AiMsg::SessionKey, app, cx, |a, _, cx| {
-                    a.ai_ui.session_only = !a.ai_ui.session_only;
-                    cx.notify();
-                })
-                .child(if app.ai_ui.session_only {
-                    " ✓"
-                } else {
-                    " ○"
-                }),
-            )
             .when(basic_endpoint(&app.ai_ui.draft.provider), |d| {
                 d.child(row(
                     AiMsg::Endpoint,
                     app.ai_ui.settings.endpoint.clone(),
                     app,
                 ))
+                .child(div().text_size(px(12.)).child(ai_t(l, AiMsg::Protocol)))
+                .child(protocol_chips(app, cx))
             })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(p.muted)
-                            .child(ai_t(l, AiMsg::Protocol)),
-                    )
-                    .child(if basic_endpoint(&app.ai_ui.draft.provider) {
-                        protocol_chips(app, cx)
-                    } else {
-                        protocol_locked(app, cx)
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_1()
-                    .child(button(AiMsg::Save, app, cx, |a, _, cx| a.ai_save(cx)))
-                    .child(button(AiMsg::Test, app, cx, |a, _, cx| {
-                        a.ai_probe(false, cx)
-                    }))
-                    .child(button(AiMsg::Discover, app, cx, |a, _, cx| {
-                        a.ai_probe(true, cx)
-                    })),
-            )
-            .when_some(app.ai_ui.settings_feedback, |d, msg| {
-                d.child(div().text_size(px(12.)).child(ai_t(l, msg)))
+            .when(!basic_endpoint(&app.ai_ui.draft.provider), |d| {
+                d.child(protocol_locked(app, cx))
             })
-            .when(
-                app.ai_ui.enable_after_test && !app.ai_preferences.enabled,
-                |d| {
-                    d.child(button(AiMsg::EnableAiAfterTest, app, cx, |a, _, cx| {
-                        if !a.ai_preferences.enabled {
-                            a.ai_enable(cx);
-                        }
-                    }))
-                },
+            .child(row(AiMsg::Key, app.ai_ui.settings.key.clone(), app))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(ai_t(l, key_state)),
             )
             .child(
                 div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_1()
-                    .children(app.ai_ui.models.iter().map(|model| {
-                        let model = model.clone();
-                        let selected = app.ai_ui.settings.model.read(cx).text() == model;
-                        chip(
-                            ElementId::Name(format!("ai-model-chip-{model}").into()),
-                            model.clone(),
-                            selected,
-                            app,
-                            cx,
-                            move |a, _, cx| {
-                                a.ai_ui
-                                    .settings
-                                    .model
-                                    .update(cx, |i, cx| i.set(model.clone(), cx))
-                            },
-                        )
-                    })),
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(ai_t(l, AiMsg::KeyHint)),
             )
-            .child(button(
-                if app.ai_ui.advanced {
-                    AiMsg::AdvancedExpanded
-                } else {
-                    AiMsg::AdvancedCollapsed
-                },
+            .child(toggle(
+                AiMsg::SessionKey,
+                app.ai_ui.session_only,
                 app,
                 cx,
                 |a, _, cx| {
-                    a.ai_ui.advanced = !a.ai_ui.advanced;
+                    a.ai_ui.session_only = !a.ai_ui.session_only;
                     cx.notify();
                 },
-            ));
-    if app.ai_ui.advanced {
+            ))
+            .child(div().text_size(px(11.)).text_color(p.muted).child(ai_t(
+                l,
+                if app.ai_ui.session_only {
+                    AiMsg::CredentialPolicy
+                } else {
+                    AiMsg::KeySecurePolicy
+                },
+            )))
+            .child(button(AiMsg::Discover, app, cx, |a, _, cx| {
+                a.ai_probe(true, cx)
+            }));
+    if !app.ai_ui.models.is_empty()
+        && app.ai_ui.models_identity.as_deref() == Some(discovery_identity(&key_profile).as_str())
+    {
+        let filter = app.ai_ui.model_filter.read(cx).text().to_lowercase();
         body = body
-            .when(!basic_endpoint(&app.ai_ui.draft.provider), |d| {
-                d.child(row(
-                    AiMsg::Endpoint,
-                    app.ai_ui.settings.endpoint.clone(),
+            .child(row(
+                AiMsg::SearchModels,
+                app.ai_ui.model_filter.clone(),
+                app,
+            ))
+            .child(
+                div()
+                    .id("ai-discovered-models")
+                    .max_h(px(120.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(
+                        app.ai_ui
+                            .models
+                            .iter()
+                            .filter(|model| model.to_lowercase().contains(&filter))
+                            .map(|model| {
+                                let model = model.clone();
+                                chip(
+                                    ElementId::Name(format!("ai-model-chip-{model}").into()),
+                                    model.clone(),
+                                    app.ai_ui.settings.model.read(cx).text() == model,
+                                    app,
+                                    cx,
+                                    move |a, _, cx| {
+                                        a.ai_ui
+                                            .settings
+                                            .model
+                                            .update(cx, |i, cx| i.set(model.clone(), cx))
+                                    },
+                                )
+                            }),
+                    ),
+            );
+    }
+    body = body
+        .child(row(AiMsg::Model, app.ai_ui.settings.model.clone(), app))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .items_center()
+                .child(button(AiMsg::Test, app, cx, |a, _, cx| {
+                    a.ai_probe(false, cx)
+                }))
+                .child(div().text_size(px(12.)).text_color(p.muted).child(ai_t(
+                    l,
+                    if tested {
+                        if app
+                            .ai_ui
+                            .capability
+                            .as_ref()
+                            .is_some_and(|(_, caps)| caps.tools)
+                        {
+                            AiMsg::TestSucceeded
+                        } else {
+                            AiMsg::TestTextOnly
+                        }
+                    } else {
+                        AiMsg::VerifyAgain
+                    },
+                ))),
+        )
+        .when_some(
+            app.ai_ui
+                .settings_feedback
+                .filter(|msg| tested || !matches!(msg, AiMsg::TestSucceeded | AiMsg::TestTextOnly)),
+            |d, msg| d.child(div().text_size(px(12.)).child(ai_t(l, msg))),
+        )
+        .child(disclosure(
+            if app.ai_ui.advanced {
+                AiMsg::AdvancedExpanded
+            } else {
+                AiMsg::AdvancedCollapsed
+            },
+            app.ai_ui.advanced,
+            app,
+            cx,
+            |a, _, cx| {
+                a.ai_ui.advanced = !a.ai_ui.advanced;
+                cx.notify();
+            },
+        ));
+    if app.ai_ui.advanced {
+        body = body.when(!basic_endpoint(&app.ai_ui.draft.provider), |d| {
+            d.child(row(
+                AiMsg::Endpoint,
+                app.ai_ui.settings.endpoint.clone(),
+                app,
+            ))
+            .child(div().text_size(px(12.)).child(ai_t(l, AiMsg::Protocol)))
+            .child(protocol_chips(app, cx))
+        });
+        for (index, label) in [
+            AiMsg::LimitInputBytes,
+            AiMsg::LimitOutputBytes,
+            AiMsg::LimitToolBytes,
+            AiMsg::LimitMaxTools,
+            AiMsg::LimitMaxOperations,
+            AiMsg::LimitTimeout,
+            AiMsg::LimitIdle,
+            AiMsg::LimitOutputTokens,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let input = app.ai_ui.settings.limits[index].clone();
+            let units = if index < 3 {
+                input
+                    .read(cx)
+                    .text()
+                    .parse::<usize>()
+                    .ok()
+                    .map(|bytes| format!("{:.1} KiB", bytes as f64 / 1024.))
+            } else {
+                None
+            };
+            body = body.child(row(label, input, app).when_some(units, |d, units| {
+                d.child(div().text_size(px(11.)).text_color(p.muted).child(units))
+            }));
+        }
+    }
+    body = body
+        .child(
+            div()
+                .border_t_1()
+                .border_color(p.border)
+                .pt_2()
+                .child(disclosure(
+                    AiMsg::WritingSettings,
+                    app.ai_ui.writing_settings_open,
                     app,
-                ))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(p.muted)
-                        .child(ai_t(l, AiMsg::Protocol)),
-                )
-                .child(protocol_chips(app, cx))
-            })
-            .child(row(
-                AiMsg::LimitInputBytes,
-                app.ai_ui.settings.limits[0].clone(),
-                app,
-            ))
-            .child(row(
-                AiMsg::LimitOutputBytes,
-                app.ai_ui.settings.limits[1].clone(),
-                app,
-            ))
-            .child(row(
-                AiMsg::LimitToolBytes,
-                app.ai_ui.settings.limits[2].clone(),
-                app,
-            ))
-            .child(row(
-                AiMsg::LimitMaxTools,
-                app.ai_ui.settings.limits[3].clone(),
-                app,
-            ))
-            .child(row(
-                AiMsg::LimitMaxOperations,
-                app.ai_ui.settings.limits[4].clone(),
-                app,
-            ))
-            .child(row(
-                AiMsg::LimitTimeout,
-                app.ai_ui.settings.limits[5].clone(),
-                app,
-            ))
-            .child(row(
-                AiMsg::LimitIdle,
-                app.ai_ui.settings.limits[6].clone(),
-                app,
-            ))
-            .child(row(
-                AiMsg::LimitOutputTokens,
-                app.ai_ui.settings.limits[7].clone(),
-                app,
-            ))
-            .child(row(
+                    cx,
+                    |a, _, cx| {
+                        a.ai_ui.writing_settings_open = !a.ai_ui.writing_settings_open;
+                        cx.notify();
+                    },
+                )),
+        )
+        .when(app.ai_ui.writing_settings_open, |d| {
+            d.child(row(
                 AiMsg::Guidance,
                 app.ai_ui.settings.guidance.clone(),
                 app,
             ))
-            .child(button(AiMsg::Save, app, cx, |a, _, cx| {
+            .child(button(AiMsg::SaveGuidance, app, cx, |a, _, cx| {
                 a.ai_save_guidance(cx)
             }))
-            .child(
-                button(AiMsg::History, app, cx, |a, _, cx| {
+        })
+        .child(
+            div()
+                .border_t_1()
+                .border_color(p.border)
+                .pt_2()
+                .child(disclosure(
+                    AiMsg::PrivacySettings,
+                    app.ai_ui.privacy_open,
+                    app,
+                    cx,
+                    |a, _, cx| {
+                        a.ai_ui.privacy_open = !a.ai_ui.privacy_open;
+                        cx.notify();
+                    },
+                )),
+        )
+        .when(app.ai_ui.privacy_open, |d| {
+            d.child(toggle(
+                AiMsg::History,
+                app.ai_preferences.save_history,
+                app,
+                cx,
+                |a, _, cx| {
                     a.ai_preferences.save_history = !a.ai_preferences.save_history;
                     a.persist_preferences();
                     a.ai_save_history(cx);
                     cx.notify();
-                })
-                .child(if app.ai_preferences.save_history {
-                    " ✓"
+                },
+            ))
+            .child(div().text_size(px(11.)).text_color(p.muted).child(ai_t(
+                l,
+                if app.ai_preferences.save_history {
+                    AiMsg::HistoryLocal
                 } else {
-                    " ○"
-                }),
+                    AiMsg::HistorySession
+                },
+            )))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .child(button(AiMsg::OpenHistory, app, cx, |a, _, cx| {
+                        a.ai_load_history(cx);
+                        a.ai_ui.history_open = true;
+                        a.preferences_panel_open = false;
+                        a.ai_ui.open = true;
+                        cx.notify();
+                    }))
+                    .child(button(AiMsg::ClearHistory, app, cx, |a, _, cx| {
+                        a.ai_ui.confirm_clear = true;
+                        cx.notify();
+                    })),
             )
-            .child(button(AiMsg::OpenHistory, app, cx, |a, _, cx| {
-                a.ai_load_history(cx)
-            }))
-            .child(button(AiMsg::ClearHistory, app, cx, |a, _, cx| {
-                a.ai_clear_history(cx);
-            }))
-            .children(
-                app.ai_ui
-                    .conversations
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| !c.messages.is_empty())
-                    .map(|(index, c)| {
-                        let id = c.id;
-                        div()
-                            .id(("ai-history", id as usize))
-                            .flex()
-                            .flex_wrap()
-                            .gap_1()
-                            .child(c.history().title)
-                            .child(button(AiMsg::OpenHistory, app, cx, move |a, w, cx| {
-                                a.ai_ui.current = index;
-                                a.preferences_panel_open = false;
-                                a.ai_ui.open = true;
-                                a.ai_ui.review = None;
-                                a.ensure_ai_subscription(cx);
-                                w.focus(&a.ai_ui.composer.read(cx).focus);
-                                cx.notify();
-                            }))
-                            .child(button(
-                                AiMsg::DeleteConversation,
-                                app,
-                                cx,
-                                move |a, _, cx| {
-                                    if let Some(index) =
-                                        a.ai_ui.conversations.iter().position(|c| c.id == id)
-                                    {
-                                        a.ai_ui.current = index;
-                                        a.ai_delete_conversation(cx);
-                                    }
-                                },
-                            ))
-                    }),
-            )
-            .child(div().child(ai_t(l, AiMsg::RetainedKeys)))
+            .when(app.ai_ui.confirm_clear, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .child(ai_t(l, AiMsg::ClearConfirm))
+                        .child(button(AiMsg::ClearHistory, app, cx, |a, _, cx| {
+                            a.ai_clear_history(cx)
+                        }))
+                        .child(button(AiMsg::Cancel, app, cx, |a, _, cx| {
+                            a.ai_ui.confirm_clear = false;
+                            cx.notify();
+                        })),
+                )
+            })
+            .child(div().text_size(px(12.)).child(ai_t(l, AiMsg::RetainedKeys)))
             .children(app.ai_ui.credentials.references().iter().map(|r| {
                 let reference = r.reference.clone();
                 div()
@@ -3387,33 +3814,866 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> i
                     .child(button(AiMsg::Forget, app, cx, move |a, _, cx| {
                         a.ai_forget(reference.clone(), cx)
                     }))
-            }));
+            }))
+        })
+        .child(disclosure(
+            AiMsg::Recovery,
+            app.ai_ui.recovery_open,
+            app,
+            cx,
+            |a, _, cx| {
+                a.ai_ui.recovery_open = !a.ai_ui.recovery_open;
+                cx.notify();
+            },
+        ))
+        .when(app.ai_ui.recovery_open, |d| d.child(recovery_view(app, cx)));
+    div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .child(
+            div()
+                .id("ai-settings-body")
+                .debug_selector(|| "ai-settings-body".into())
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&app.ai_ui.settings_scroll)
+                .px_4()
+                .pb_3()
+                .flex()
+                .flex_col()
+                .child(body),
+        )
+        .child(
+            div()
+                .id("ai-settings-footer")
+                .debug_selector(|| "ai-settings-footer".into())
+                .flex_shrink_0()
+                .border_t_1()
+                .border_color(p.border)
+                .px_4()
+                .py_2()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .items_center()
+                .when(app.ai_ui.settings.dirty(&app.ai_ui.draft, cx), |d| {
+                    d.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(ai_t(l, AiMsg::Unsaved)),
+                    )
+                })
+                .child(div().flex_1())
+                .child(button(AiMsg::Save, app, cx, |a, _, cx| {
+                    a.ai_ui.save_and_enable = false;
+                    a.ai_save(cx);
+                }))
+                .when(!app.ai_preferences.enabled, |d| {
+                    d.child(button(AiMsg::SaveEnable, app, cx, |a, _, cx| {
+                        a.ai_ui.save_and_enable = true;
+                        a.ai_save(cx);
+                    }))
+                }),
+        )
+}
+fn disclosure(
+    label: AiMsg,
+    expanded: bool,
+    app: &MarkionApp,
+    cx: &mut Context<MarkionApp>,
+    callback: impl Fn(&mut MarkionApp, &mut Window, &mut Context<MarkionApp>) + 'static,
+) -> Stateful<Div> {
+    button(label, app, cx, callback)
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(crate::ui::icon::icon(
+            if expanded {
+                crate::ui::icon::Icon::ChevronDown
+            } else {
+                crate::ui::icon::Icon::ChevronRight
+            },
+            14.,
+            app.palette().muted,
+        ))
+}
+fn context_label(source: &Attachment, app: &MarkionApp) -> String {
+    let file = source
+        .path
+        .as_ref()
+        .map(|path| {
+            path.strip_prefix(&app.workspace_root)
+                .unwrap_or(path)
+                .display()
+                .to_string()
+        })
+        .unwrap_or_else(|| ai_t(app.language, AiMsg::NewNote).into());
+    let range = source
+        .range
+        .as_ref()
+        .map(|r| format!(" · {}..{} bytes", r.start, r.end))
+        .unwrap_or_default();
+    format!(
+        "{} · {}{} · {:.1} KiB",
+        file,
+        source.label,
+        range,
+        source.text.len() as f32 / 1024.
+    )
+}
+fn conversation_picker(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .children(
+            app.ai_ui
+                .conversations
+                .iter()
+                .enumerate()
+                .map(|(index, c)| {
+                    let title = c.history().title;
+                    let label = if title.is_empty() {
+                        format!("#{}", c.id)
+                    } else {
+                        title.chars().take(60).collect()
+                    };
+                    chip(
+                        ElementId::Name(format!("ai-conversation-tab-{}", c.id).into()),
+                        label,
+                        index == app.ai_ui.current,
+                        app,
+                        cx,
+                        move |a, _, cx| a.ai_select_conversation(index, cx),
+                    )
+                    .min_w_0()
+                    .when(app.ai_ui.running(), |d| d.opacity(0.45))
+                }),
+        )
+}
+fn writing_controls(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Stateful<Div> {
+    let mut view = div()
+        .id("ai-writing-actions")
+        .debug_selector(|| "ai-writing-actions".into())
+        .flex_shrink_0()
+        .w_full()
+        .min_h(px(64.))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .children(WritingAction::ALL.into_iter().map(|action| {
+                    chip(
+                        ElementId::Name(format!("ai-writing-{action:?}").into()),
+                        ai_t(app.language, writing_label(action)),
+                        app.ai_ui.writing_action == Some(action),
+                        app,
+                        cx,
+                        move |a, _, cx| {
+                            a.ai_ui.writing_action = Some(action);
+                            a.ai_ui.panel_feedback = None;
+                            cx.notify();
+                        },
+                    )
+                })),
+        );
+    if app.ai_ui.writing_action == Some(WritingAction::Translate) {
+        view = view
+            .child(row(
+                AiMsg::TargetLanguage,
+                app.ai_ui.target_language.clone(),
+                app,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(Language::all().iter().map(|&language| {
+                        let name = language.native_name();
+                        chip(
+                            ElementId::Name(format!("ai-language-{name}").into()),
+                            name,
+                            app.ai_ui.target_language.read(cx).text() == name,
+                            app,
+                            cx,
+                            move |a, _, cx| {
+                                a.ai_ui.target_language.update(cx, |i, cx| i.set(name, cx))
+                            },
+                        )
+                    })),
+            );
     }
-    body.child(button(AiMsg::Recovery, app, cx, |a, _, cx| {
-        a.ai_ui.recovery_open = !a.ai_ui.recovery_open;
-        cx.notify();
-    }))
-    .when(app.ai_ui.recovery_open, |d| d.child(recovery_view(app, cx)))
+    if app.ai_ui.writing_action == Some(WritingAction::Tone) {
+        view = view.child(row(AiMsg::TargetTone, app.ai_ui.target_tone.clone(), app));
+    }
+    view.when_some(app.ai_ui.writing_action, |d, action| {
+        d.child(button(AiMsg::RunWriting, app, cx, move |a, _, cx| {
+            a.ai_write(action, None, cx)
+        }))
+    })
+}
+fn writing_review_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Stateful<Div> {
+    let mut view = div()
+        .id("ai-writing-review")
+        .debug_selector(|| "ai-writing-review".into())
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_2()
+        .border_1()
+        .border_color(app.palette().border);
+    if let Some(review) = &app.ai_ui.review {
+        let text = review.text.clone();
+        view = view
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(ai_t(app.language, AiMsg::Review)),
+            )
+            .child(format!(
+                "{} · {}..{}",
+                review
+                    .target
+                    .path
+                    .as_ref()
+                    .map(|p| p
+                        .strip_prefix(&app.workspace_root)
+                        .unwrap_or(p)
+                        .display()
+                        .to_string())
+                    .unwrap_or_else(|| ai_t(app.language, AiMsg::NewNote).into()),
+                review.target.range.start,
+                review.target.range.end
+            ))
+            .when(review.complete, |d| {
+                d.child(change_summary(&review.target.source, &review.text, app))
+            })
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .id("ai-review-before")
+                    .max_h(px(120.))
+                    .overflow_y_scroll()
+                    .child(ai_t(app.language, AiMsg::Before))
+                    .child(review.target.source.clone()),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .id("ai-review-after")
+                    .max_h(px(120.))
+                    .overflow_y_scroll()
+                    .child(ai_t(app.language, AiMsg::After))
+                    .child(text.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .child(icon_button(
+                        AiMsg::Copy,
+                        crate::ui::icon::Icon::Copy,
+                        true,
+                        app,
+                        cx,
+                        move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                        },
+                    ))
+                    .when(
+                        review.complete && !review.applied && review.target.editable,
+                        |d| {
+                            d.child(button(AiMsg::Replace, app, cx, |a, w, cx| {
+                                a.ai_apply_writing(false, cx);
+                                if a.ai_ui.review.as_ref().is_some_and(|r| r.applied) {
+                                    w.focus(&a.focus_handle);
+                                }
+                            }))
+                            .child(button(
+                                AiMsg::Insert,
+                                app,
+                                cx,
+                                |a, w, cx| {
+                                    a.ai_apply_writing(true, cx);
+                                    if a.ai_ui.review.as_ref().is_some_and(|r| r.applied) {
+                                        w.focus(&a.focus_handle);
+                                    }
+                                },
+                            ))
+                        },
+                    )
+                    .when(review.complete, |d| {
+                        d.child(button(AiMsg::NewNote, app, cx, |a, _, cx| {
+                            if let Some(r) = &a.ai_ui.review {
+                                a.open_in_new_tab(MarkdownDocument::from_text(r.text.clone()), cx);
+                            }
+                        }))
+                    })
+                    .child(icon_button(
+                        AiMsg::Discard,
+                        crate::ui::icon::Icon::Close,
+                        true,
+                        app,
+                        cx,
+                        |a, _, cx| {
+                            a.ai_ui.review = None;
+                            cx.notify();
+                        },
+                    ))
+                    .child(button(AiMsg::Regenerate, app, cx, |a, _, cx| {
+                        a.ai_regenerate(cx)
+                    })),
+            );
+    }
+    view
+}
+fn changed_text<'a>(before: &'a str, after: &'a str) -> (Vec<&'a str>, Vec<&'a str>) {
+    let before: Vec<_> = before.split_inclusive('\n').collect();
+    let after: Vec<_> = after.split_inclusive('\n').collect();
+    let prefix = before
+        .iter()
+        .zip(&after)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let suffix = before[prefix..]
+        .iter()
+        .rev()
+        .zip(after[prefix..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    (
+        before[prefix..before.len() - suffix].to_vec(),
+        after[prefix..after.len() - suffix].to_vec(),
+    )
+}
+fn change_summary(before: &str, after: &str, app: &MarkionApp) -> Div {
+    let (removed, added) = changed_text(before, after);
+    let p = app.palette();
+    let mut view = div().flex().flex_col().gap_1().text_size(px(12.));
+    if before == after {
+        return view.child(ai_t(app.language, AiMsg::NoChanges));
+    }
+    view = view.child(format!(
+        "{}: -{} / +{}",
+        ai_t(app.language, AiMsg::Changes),
+        removed.len(),
+        added.len()
+    ));
+    view.child(
+        div()
+            .id("ai-change-summary")
+            .max_h(px(180.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .children(
+                removed
+                    .iter()
+                    .take(40)
+                    .map(|line| div().bg(p.surface_bg).child(format!("- {line}"))),
+            )
+            .children(
+                added
+                    .iter()
+                    .take(40)
+                    .map(|line| div().bg(p.active_bg).child(format!("+ {line}"))),
+            ),
+    )
 }
 pub(super) fn panel_view(
     app: &MarkionApp,
     window: &Window,
     cx: &mut Context<MarkionApp>,
 ) -> impl IntoElement {
+    use crate::ui::icon::Icon;
     let p = app.palette();
     let l = app.language;
     let narrow = f32::from(window.viewport_size().width) < 900.;
     let c = app.ai_ui.conversation();
     let running = app.ai_ui.running();
-    let mut body = div()
-        .id("ai-panel")
+    let mut header = div()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(ai_t(l, AiMsg::Tab)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(icon_button(
+                            AiMsg::New,
+                            Icon::Plus,
+                            !running,
+                            app,
+                            cx,
+                            |a, _, cx| a.ai_new_conversation(cx),
+                        ))
+                        .child(icon_button(
+                            AiMsg::OpenHistory,
+                            Icon::History,
+                            true,
+                            app,
+                            cx,
+                            |a, _, cx| {
+                                a.ai_ui.history_open = !a.ai_ui.history_open;
+                                cx.notify();
+                            },
+                        ))
+                        .child(icon_button(
+                            AiMsg::Settings,
+                            Icon::Settings,
+                            true,
+                            app,
+                            cx,
+                            |a, w, cx| a.ai_open_settings(None, w, cx),
+                        ))
+                        .child(icon_button(
+                            AiMsg::Close,
+                            Icon::Close,
+                            true,
+                            app,
+                            cx,
+                            |a, w, cx| {
+                                a.ai_ui.open = false;
+                                w.focus(&a.focus_handle);
+                                cx.notify();
+                            },
+                        )),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .child(chip(
+                    "ai-chat-mode",
+                    ai_t(l, AiMsg::ChatMode),
+                    !app.ai_ui.agent,
+                    app,
+                    cx,
+                    |a, _, cx| {
+                        if !a.ai_ui.running() {
+                            a.ai_ui.agent = false;
+                            cx.notify();
+                        }
+                    },
+                ))
+                .child(chip(
+                    "ai-workspace-mode",
+                    ai_t(l, AiMsg::WorkspaceMode),
+                    app.ai_ui.agent,
+                    app,
+                    cx,
+                    |a, _, cx| {
+                        if !a.ai_ui.running() {
+                            a.ai_ui.agent = true;
+                            cx.notify();
+                        }
+                    },
+                ))
+                .child(div().flex_1())
+                .child(div().text_size(px(11.)).text_color(p.muted).child(ai_t(
+                    l,
+                    if app.ai_preferences.save_history {
+                        AiMsg::HistoryLocal
+                    } else {
+                        AiMsg::HistorySession
+                    },
+                ))),
+        );
+    if let Some(profile) = app.ai_preferences.selected() {
+        header = header.child(
+            chip(
+                "ai-current-profile",
+                format!("{} · {}", profile.name, profile.model),
+                app.ai_ui.profiles_open,
+                app,
+                cx,
+                |a, _, cx| {
+                    a.ai_ui.profiles_open = !a.ai_ui.profiles_open;
+                    cx.notify();
+                },
+            )
+            .min_w_0(),
+        );
+    }
+    let mut content = div()
+        .id("ai-content")
+        .debug_selector(|| "ai-content".into())
+        .track_scroll(&app.ai_ui.scroll)
+        .flex_1()
+        .min_h_0()
         .overflow_y_scroll()
-        .on_action(cx.listener(|a, _: &ClearFileTreeSearch, w, cx| {
-            a.ai_ui.scope = None;
-            w.focus(&a.focus_handle);
-            cx.stop_propagation();
-            cx.notify();
-        }))
+        .flex()
+        .flex_col()
+        .gap_2();
+    if app.ai_ui.profiles_open {
+        content = content.child(div().flex().flex_wrap().gap_1().children(
+            app.ai_preferences.profiles.iter().map(|profile| {
+                let id = profile.id.clone();
+                chip(
+                    ElementId::Name(format!("ai-panel-profile-{id}").into()),
+                    format!("{} · {}", profile.name, profile.model),
+                    profile.id == app.ai_preferences.selected_profile,
+                    app,
+                    cx,
+                    move |a, w, cx| {
+                        if a.ai_ui.running() {
+                            return;
+                        }
+                        a.ai_request_switch(PendingSwitch::Profile(id.clone()), cx);
+                        if a.ai_ui.pending.is_some() {
+                            a.ai_open_settings(None, w, cx);
+                        } else {
+                            a.persist_preferences();
+                            a.ai_ui.profiles_open = false;
+                        }
+                        cx.notify();
+                    },
+                )
+            }),
+        ));
+    }
+    if app.ai_ui.history_open {
+        content = content.child(conversation_picker(app, cx)).child(
+            div()
+                .flex()
+                .gap_1()
+                .child(icon_button(
+                    AiMsg::DeleteConversation,
+                    Icon::Trash,
+                    !running,
+                    app,
+                    cx,
+                    |a, _, cx| {
+                        a.ai_ui.confirm_delete = Some(a.ai_ui.conversation().id);
+                        cx.notify();
+                    },
+                ))
+                .when(app.ai_preferences.save_history, |d| {
+                    d.child(button(AiMsg::OpenHistory, app, cx, |a, _, cx| {
+                        a.ai_load_history(cx)
+                    }))
+                }),
+        );
+    }
+    if app.ai_ui.confirm_delete == Some(c.id) {
+        content = content.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .child(ai_t(l, AiMsg::DeleteConfirm))
+                .child(button(AiMsg::DeleteConversation, app, cx, |a, _, cx| {
+                    a.ai_delete_conversation(cx)
+                }))
+                .child(button(AiMsg::Cancel, app, cx, |a, _, cx| {
+                    a.ai_ui.confirm_delete = None;
+                    cx.notify();
+                })),
+        );
+    }
+    if let Some((msg, field)) = app
+        .ai_configuration_gap()
+        .filter(|_| app.ai_preferences.enabled)
+    {
+        content = content.child(div().text_size(px(12.)).child(ai_t(l, msg)).child(button(
+            AiMsg::OpenAiSettings,
+            app,
+            cx,
+            move |a, w, cx| a.ai_open_settings(Some(field), w, cx),
+        )));
+    }
+    if app.ai_ui.agent {
+        let verified = app.ai_preferences.selected().is_some_and(|profile| {
+            app.ai_ui
+                .capability
+                .as_ref()
+                .is_some_and(|(id, caps)| *id == profile_identity(profile) && caps.tools)
+        });
+        if !verified {
+            content = content.child(
+                div()
+                    .text_size(px(12.))
+                    .child(ai_t(l, AiMsg::ToolsNeedTest))
+                    .child(button(AiMsg::OpenAiSettings, app, cx, |a, w, cx| {
+                        a.ai_open_settings(None, w, cx)
+                    })),
+            );
+        }
+        content = content.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .child(button(AiMsg::Grant, app, cx, |a, _, cx| a.ai_grant(cx)))
+                .when_some(c.grant.as_ref(), |d, path| {
+                    d.child(div().text_size(px(12.)).child(path.display().to_string()))
+                        .child(button(AiMsg::Revoke, app, cx, |a, _, cx| {
+                            let id = a.ai_ui.conversation().id;
+                            a.ai_ui.conversation_mut().revoke();
+                            a.ai_ui.grants.remove(&id);
+                            a.ai_ui.plan = Default::default();
+                            cx.notify();
+                        }))
+                }),
+        );
+        if c.grant.is_none() {
+            content = content.child(div().text_size(px(12.)).child(ai_t(l, AiMsg::FolderNeeded)));
+        }
+    }
+    content = content.child(message_view(app, cx));
+    if let Some((_, message)) = app
+        .ai_ui
+        .tool_activity
+        .filter(|(id, _)| *id == c.id && c.active.is_some())
+    {
+        content = content.child(div().text_size(px(12.)).child(ai_t(l, message)));
+    }
+    if let Some(message) = app.ai_ui.panel_feedback {
+        content = content.child(div().text_size(px(12.)).child(ai_t(l, message)));
+        if message == AiMsg::InputOverBudget
+            && let Some(detail) = &app.ai_ui.input_overflow
+        {
+            content = content.child(
+                div()
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .child(
+                        div().w_full().truncate().child(
+                            detail
+                                .source
+                                .clone()
+                                .unwrap_or_else(|| ai_t(l, AiMsg::PendingContext).into()),
+                        ),
+                    )
+                    .when_some(detail.bytes, |d, bytes| {
+                        d.child(div().child(format!("{bytes} B ({:.1} KiB)", bytes as f64 / 1024.)))
+                    })
+                    .child(div().child(format!(
+                        "{}: {} B ({} KiB)",
+                        ai_t(l, AiMsg::LimitInputBytes),
+                        detail.budget,
+                        detail.budget / 1024
+                    )))
+                    .child(button(AiMsg::OpenAiSettings, app, cx, |a, window, cx| {
+                        a.ai_open_settings(Some(AiSettingsField::Limits), window, cx);
+                    })),
+            );
+        }
+    }
+    if c.error.is_some() {
+        content = content.child(button(AiMsg::Retry, app, cx, |a, _, cx| {
+            a.ai_send(true, cx)
+        }));
+    }
+    if app.ai_ui.writing_open {
+        content = content.child(writing_controls(app, cx));
+    }
+    if let Some(action) = app.ai_ui.scope {
+        content = content.child(
+            div()
+                .p_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(ai_t(l, AiMsg::Scope))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .child(button(AiMsg::Whole, app, cx, move |a, _, cx| {
+                            a.ai_write(action, Some(1), cx)
+                        }))
+                        .child(button(AiMsg::Preceding, app, cx, move |a, _, cx| {
+                            a.ai_write(action, Some(2), cx)
+                        }))
+                        .child(button(AiMsg::Cancel, app, cx, |a, _, cx| {
+                            a.ai_ui.scope = None;
+                            cx.notify();
+                        })),
+                ),
+        );
+    }
+    if app.ai_ui.review.is_some() {
+        content = content.child(writing_review_view(app, cx));
+    }
+    if app.ai_ui.agent
+        && !app.ai_ui.plan.operations.is_empty()
+        && app.ai_ui.plan_conversation == Some(c.id)
+    {
+        content = content.child(plan_view(app, cx));
+    }
+    if !c.sources.is_empty() {
+        content = content.child(
+            div()
+                .text_size(px(11.))
+                .text_color(p.muted)
+                .child(ai_t(l, AiMsg::PriorSources))
+                .child(div().flex().flex_wrap().gap_1().children(
+                    c.sources.iter().enumerate().map(|(index, source)| {
+                        let source = source.clone();
+                        chip(
+                            ElementId::Name(format!("ai-source-{index}").into()),
+                            context_label(&source, app),
+                            false,
+                            app,
+                            cx,
+                            move |a, _, cx| a.ai_open_source(&source, cx),
+                        )
+                        .text_size(px(11.))
+                    }),
+                )),
+        );
+    }
+    if app.ai_ui.recovery_open {
+        content = content.child(recovery_view(app, cx));
+    }
+    let workspace_ready = !app.ai_ui.agent
+        || (c.grant.is_some()
+            && app.ai_preferences.selected().is_some_and(|profile| {
+                app.ai_ui
+                    .capability
+                    .as_ref()
+                    .is_some_and(|(id, caps)| *id == profile_identity(profile) && caps.tools)
+            }));
+    let send_ready = app.ai_preferences.enabled
+        && app.ai_configuration_gap().is_none()
+        && workspace_ready
+        && !app.ai_ui.composer.read(cx).text().trim().is_empty();
+    let mut composer = div()
+        .id("ai-composer-region")
+        .debug_selector(|| "ai-composer-region".into())
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .pt_2()
+        .border_t_1()
+        .border_color(p.border);
+    if !c.attachments.is_empty() {
+        composer = composer
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(ai_t(l, AiMsg::PendingContext)),
+            )
+            .child(
+                div()
+                    .id("ai-pending-context")
+                    .max_h(px(64.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(c.attachments.iter().enumerate().map(|(index, source)| {
+                        chip(
+                            ElementId::Name(format!("ai-attachment-{index}").into()),
+                            format!("{} ×", context_label(source, app)),
+                            true,
+                            app,
+                            cx,
+                            move |a, _, cx| {
+                                a.ai_ui.conversation_mut().attachments.remove(index);
+                                cx.notify();
+                            },
+                        )
+                        .text_size(px(11.))
+                    })),
+            );
+    }
+    composer = composer
+        .child(
+            div()
+                .border_1()
+                .border_color(p.border)
+                .rounded_md()
+                .px_2()
+                .child(app.ai_ui.composer.clone()),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .child(icon_button(
+                    AiMsg::File,
+                    Icon::Attach,
+                    !running,
+                    app,
+                    cx,
+                    |a, _, cx| a.ai_attach_file(cx),
+                ))
+                .child(button(AiMsg::Selection, app, cx, |a, _, cx| {
+                    a.ai_attach_document(true, cx)
+                }))
+                .child(button(AiMsg::Document, app, cx, |a, _, cx| {
+                    a.ai_attach_document(false, cx)
+                }))
+                .child(disclosure(
+                    AiMsg::WritingMenu,
+                    app.ai_ui.writing_open,
+                    app,
+                    cx,
+                    |a, _, cx| {
+                        a.ai_ui.writing_open = !a.ai_ui.writing_open;
+                        cx.notify();
+                    },
+                ))
+                .child(div().flex_1())
+                .child(icon_button(
+                    if running { AiMsg::Stop } else { AiMsg::Send },
+                    if running { Icon::Stop } else { Icon::Send },
+                    running || send_ready,
+                    app,
+                    cx,
+                    |a, _, cx| {
+                        if a.ai_ui.running() {
+                            a.ai_stop(cx);
+                        } else {
+                            a.ai_send(false, cx);
+                        }
+                    },
+                )),
+        )
+        .when_some(c.usage.as_ref(), |d, usage| {
+            d.child(div().text_size(px(11.)).text_color(p.muted).child(
+                format!("{}: {} / {}", ai_t(l, AiMsg::Usage),
+                usage.input_tokens.map_or_else(|| "—".into(), |n| n.to_string()),
+                usage.output_tokens.map_or_else(|| "—".into(), |n| n.to_string())),
+            ))
+        });
+    div()
+        .id("ai-panel")
         .debug_selector(|| "ai-panel".into())
         .absolute()
         .right_0()
@@ -3439,311 +4699,16 @@ pub(super) fn panel_view(
         .flex()
         .flex_col()
         .gap_2()
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .justify_between()
-                .gap_1()
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(ai_t(l, AiMsg::Tab)),
-                )
-                .child(button(AiMsg::Settings, app, cx, |a, w, cx| {
-                    a.ai_open_settings(None, w, cx);
-                }))
-                .child(button(AiMsg::Close, app, cx, |a, w, cx| {
-                    a.ai_ui.open = false;
-                    w.focus(&a.focus_handle);
-                    cx.notify();
-                })),
-        )
-        .when_some(
-            if app.ai_preferences.enabled {
-                app.ai_configuration_gap()
-            } else {
-                None
-            },
-            |d, (msg, field)| {
-                d.child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .items_center()
-                        .child(div().text_size(px(12.)).child(ai_t(l, msg)))
-                        .child(button(AiMsg::OpenAiSettings, app, cx, move |a, w, cx| {
-                            a.ai_open_settings(Some(field), w, cx)
-                        })),
-                )
-            },
-        )
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_1()
-                .child(button(AiMsg::New, app, cx, |a, _, cx| {
-                    a.ai_new_conversation(cx)
-                }))
-                .child(button(AiMsg::DeleteConversation, app, cx, |a, _, cx| {
-                    a.ai_delete_conversation(cx)
-                }))
-                .when(running, |d| {
-                    d.child(button(AiMsg::Stop, app, cx, |a, _, cx| {
-                        for c in &mut a.ai_ui.conversations {
-                            c.stop();
-                        }
-                        if let Some(cancel) = &a.ai_ui.batch {
-                            cancel.cancel();
-                        }
-                        if let Some(cancel) = a.ai_ui.probe.take() {
-                            cancel.cancel();
-                        }
-                        a.ai_ui.panel_feedback = Some(AiMsg::Stopped);
-                        cx.notify();
-                    }))
-                }),
-        )
-        .child(
-            div()
-                .text_size(px(10.))
-                .text_color(p.muted)
-                .child(ai_t(l, AiMsg::SessionHistory)),
-        )
-        .when_some(app.ai_preferences.selected(), |d, profile| {
-            d.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(p.muted)
-                    .child(format!("{} · {}", profile.name, profile.model)),
-            )
-        })
-        .child(
-            div()
-                .id("ai-conversation-tabs")
-                .h(px(32.))
-                .flex_shrink_0()
-                .overflow_y_scroll()
-                .flex()
-                .flex_wrap()
-                .gap_1()
-                .children(
-                    app.ai_ui
-                        .conversations
-                        .iter()
-                        .enumerate()
-                        .map(|(index, c)| {
-                            let title = c.history().title;
-                            let label = if title.is_empty() {
-                                format!("#{}", c.id)
-                            } else {
-                                title.chars().take(20).collect()
-                            };
-                            chip(
-                                ElementId::Name(format!("ai-conversation-tab-{}", c.id).into()),
-                                label,
-                                index == app.ai_ui.current,
-                                app,
-                                cx,
-                                move |a, _, cx| {
-                                    a.ai_ui.current = index;
-                                    a.ai_ui.review = None;
-                                    a.ai_ui.scope = None;
-                                    cx.notify();
-                                },
-                            )
-                            .px_1()
-                        }),
-                ),
-        )
-        .child(message_view(app, cx))
-        .child(
-            div().text_size(px(10.)).text_color(p.muted).child(
-                c.usage
-                    .as_ref()
-                    .map(|usage| {
-                        format!(
-                            "{}: {} / {}",
-                            ai_t(l, AiMsg::Usage),
-                            usage
-                                .input_tokens
-                                .map_or_else(|| "—".into(), |n| n.to_string()),
-                            usage
-                                .output_tokens
-                                .map_or_else(|| "—".into(), |n| n.to_string())
-                        )
-                    })
-                    .unwrap_or_else(|| ai_t(l, AiMsg::UsageUnavailable).into()),
-            ),
-        )
-        .when_some(
-            app.ai_ui
-                .tool_activity
-                .filter(|(id, _)| *id == c.id && c.active.is_some()),
-            |d, (_, msg)| d.child(div().text_size(px(11.)).child(ai_t(l, msg))),
-        )
-        .when_some(app.ai_ui.panel_feedback, |d, msg| {
-            d.child(div().text_size(px(12.)).child(ai_t(l, msg)))
-        })
-        .when(c.error.is_some(), |d| {
-            d.child(button(AiMsg::Retry, app, cx, |a, _, cx| {
-                a.ai_send(true, cx)
-            }))
-        })
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_1()
-                .child(button(AiMsg::Selection, app, cx, |a, _, cx| {
-                    a.ai_attach_document(true, cx)
-                }))
-                .child(button(AiMsg::Document, app, cx, |a, _, cx| {
-                    a.ai_attach_document(false, cx)
-                }))
-                .child(button(AiMsg::File, app, cx, |a, _, cx| {
-                    a.ai_attach_file(cx)
-                })),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_1()
-                .children(c.attachments.iter().enumerate().map(|(index, a)| {
-                    chip(
-                        ElementId::Name(format!("ai-attachment-{index}").into()),
-                        format!("{} · {} B ×", a.label, a.text.len()),
-                        true,
-                        app,
-                        cx,
-                        move |a, _, cx| {
-                            a.ai_ui.conversation_mut().attachments.remove(index);
-                            cx.notify();
-                        },
-                    )
-                    .px_1()
-                    .py_0()
-                    .text_size(px(10.))
-                })),
-        )
-        .when(c.attachments.is_empty(), |d| {
-            d.child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(p.muted)
-                    .child(ai_t(l, AiMsg::NoContext)),
-            )
-        })
-        .child(
-            div()
-                .id("ai-writing-actions")
-                .debug_selector(|| "ai-writing-actions".into())
-                .h(px(64.))
-                .flex_shrink_0()
-                .overflow_y_scroll()
-                .flex()
-                .flex_wrap()
-                .gap_1()
-                .children(WritingAction::ALL.into_iter().map(|action| {
-                    button(writing_label(action), app, cx, move |a, _, cx| {
-                        a.ai_write(action, None, cx)
-                    })
-                })),
-        )
-        .child(
-            div()
-                .flex()
-                .gap_2()
-                .child(row(
-                    AiMsg::TargetLanguage,
-                    app.ai_ui.target_language.clone(),
-                    app,
-                ))
-                .child(row(AiMsg::TargetTone, app.ai_ui.target_tone.clone(), app)),
-        )
-        .child(
-            div()
-                .text_size(px(10.))
-                .text_color(p.muted)
-                .child(ai_t(l, AiMsg::Composer)),
-        )
-        .child(
-            div()
-                .border_1()
-                .border_color(p.border)
-                .rounded_md()
-                .px_2()
-                .child(app.ai_ui.composer.clone()),
-        )
-        .child(button(AiMsg::Send, app, cx, |a, _, cx| {
-            a.ai_send(false, cx)
-        }))
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .gap_1()
-                .child(button(AiMsg::Grant, app, cx, |a, _, cx| a.ai_grant(cx)))
-                .child(
-                    button(AiMsg::Agent, app, cx, |a, _, cx| {
-                        a.ai_ui.agent = !a.ai_ui.agent;
-                        cx.notify();
-                    })
-                    .child(if app.ai_ui.agent { " ✓" } else { " ○" }),
-                ),
-        )
-        .when_some(c.grant.as_ref(), |d, path| {
-            d.child(
-                div()
-                    .text_size(px(11.))
-                    .child(path.display().to_string())
-                    .child(button(AiMsg::Revoke, app, cx, |a, _, cx| {
-                        let id = a.ai_ui.conversation().id;
-                        a.ai_ui.conversation_mut().revoke();
-                        a.ai_ui.grants.remove(&id);
-                        a.ai_ui.plan = Default::default();
-                        a.ai_ui.agent = false;
-                        cx.notify();
-                    })),
-            )
-        })
-        .when(
-            !app.ai_ui.plan.operations.is_empty() && app.ai_ui.plan_conversation == Some(c.id),
-            |d| d.child(plan_view(app, cx)),
-        )
-        .child(button(AiMsg::Recovery, app, cx, |a, _, cx| {
-            a.ai_ui.recovery_open = !a.ai_ui.recovery_open;
+        .overflow_hidden()
+        .on_action(cx.listener(|a, _: &ClearFileTreeSearch, w, cx| {
+            a.ai_ui.scope = None;
+            w.focus(&a.focus_handle);
+            cx.stop_propagation();
             cx.notify();
         }))
-        .when(app.ai_ui.recovery_open, |d| d.child(recovery_view(app, cx)));
-    body = body
-        .when(!c.sources.is_empty(), |d| {
-            d.child(div().child(ai_t(l, AiMsg::Sources)).children(
-                c.sources.iter().enumerate().map(|(index, source)| {
-                    let source = source.clone();
-                    let label = source.range.as_ref().map_or_else(
-                        || source.label.clone(),
-                        |range| format!("{} · {}..{}", source.label, range.start, range.end),
-                    );
-                    chip(
-                        ElementId::Name(format!("ai-source-{index}").into()),
-                        label,
-                        false,
-                        app,
-                        cx,
-                        move |a, _, cx| {
-                            a.ai_open_source(&source, cx);
-                        },
-                    )
-                    .px_1()
-                    .py_0()
-                    .text_size(px(11.))
-                }),
-            ))
-        })
+        .child(header)
+        .child(content)
+        .child(composer)
         .child(
             div()
                 .absolute()
@@ -3768,9 +4733,9 @@ pub(super) fn panel_view(
                                 if phase == DispatchPhase::Bubble && event.dragging() {
                                     move_entity.update(cx, |a, cx| {
                                         if a.ai_ui.resize_drag {
-                                            a.ai_ui.width = (f32::from(
+                                            a.ai_ui.width = f32::from(
                                                 w.viewport_size().width - event.position.x,
-                                            ))
+                                            )
                                             .clamp(AI_PANEL_MIN_WIDTH, AI_PANEL_MAX_WIDTH);
                                             cx.notify();
                                         }
@@ -3787,121 +4752,7 @@ pub(super) fn panel_view(
                     })
                     .size_full(),
                 ),
-        );
-    if let Some(action) = app.ai_ui.scope {
-        body = body.child(
-            div()
-                .p_2()
-                .border_1()
-                .border_color(p.border)
-                .child(ai_t(l, AiMsg::Scope))
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .child(button(AiMsg::Whole, app, cx, move |a, _, cx| {
-                            a.ai_write(action, Some(1), cx)
-                        }))
-                        .child(button(AiMsg::Preceding, app, cx, move |a, _, cx| {
-                            a.ai_write(action, Some(2), cx)
-                        }))
-                        .child(button(AiMsg::Discard, app, cx, |a, _, cx| {
-                            a.ai_ui.scope = None;
-                            cx.notify();
-                        })),
-                ),
-        );
-    }
-    if let Some(review) = &app.ai_ui.review {
-        let text = review.text.clone();
-        body = body.child(
-            div()
-                .id("ai-writing-review")
-                .debug_selector(|| "ai-writing-review".into())
-                .h(px(240.))
-                .flex_shrink_0()
-                .overflow_y_scroll()
-                .border_1()
-                .border_color(p.border)
-                .p_2()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(ai_t(l, AiMsg::Review))
-                .child(format!(
-                    "{} · {}..{} · v{}",
-                    review
-                        .target
-                        .path
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| ai_t(l, AiMsg::NewNote).into()),
-                    review.target.range.start,
-                    review.target.range.end,
-                    review.target.version
-                ))
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .child(ai_t(l, AiMsg::Before))
-                        .child(review.target.source.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .child(ai_t(l, AiMsg::After))
-                        .child(text.clone()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .child(button(AiMsg::Copy, app, cx, move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                        }))
-                        .when(
-                            review.complete && !review.applied && review.target.editable,
-                            |d| {
-                                d.child(button(AiMsg::Replace, app, cx, |a, w, cx| {
-                                    a.ai_apply_writing(false, cx);
-                                    if a.ai_ui.review.as_ref().is_some_and(|r| r.applied) {
-                                        w.focus(&a.focus_handle);
-                                    }
-                                }))
-                                .child(button(
-                                    AiMsg::Insert,
-                                    app,
-                                    cx,
-                                    |a, w, cx| {
-                                        a.ai_apply_writing(true, cx);
-                                        if a.ai_ui.review.as_ref().is_some_and(|r| r.applied) {
-                                            w.focus(&a.focus_handle);
-                                        }
-                                    },
-                                ))
-                            },
-                        )
-                        .when(review.complete, |d| {
-                            d.child(button(AiMsg::NewNote, app, cx, |a, _, cx| {
-                                if let Some(r) = &a.ai_ui.review {
-                                    let text = r.text.clone();
-                                    a.open_in_new_tab(MarkdownDocument::from_text(text), cx);
-                                }
-                            }))
-                        })
-                        .child(button(AiMsg::Discard, app, cx, |a, _, cx| {
-                            a.ai_ui.review = None;
-                            cx.notify();
-                        }))
-                        .child(button(AiMsg::Regenerate, app, cx, |a, _, cx| {
-                            a.ai_regenerate(cx);
-                        })),
-                ),
-        );
-    }
-    body
+        )
 }
 
 #[cfg(test)]
@@ -4192,6 +5043,153 @@ mod tests {
         assert!(!basic_endpoint("deepseek"));
     }
     #[gpui::test]
+    fn printable_keys_work_in_composer_and_settings_without_editing_document(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, cx) = setup(cx);
+        for settings in [false, true] {
+            cx.update(|window, cx| {
+                cx.clear_key_bindings();
+                bind_app_keys(cx, &BTreeMap::new());
+                a.update(cx, |a, cx| {
+                    a.ai_ui.open = true;
+                    let input = if settings {
+                        a.ai_open_settings(Some(AiSettingsField::Model), window, cx);
+                        a.ai_ui.settings.model.clone()
+                    } else {
+                        a.ai_ui.composer.clone()
+                    };
+                    input.update(cx, |i, cx| i.set("", cx));
+                    window.focus(&input.read(cx).focus);
+                    window.activate_window();
+                });
+            });
+            cx.simulate_keystrokes("h e l l o space shift-w o r l d . 1");
+            a.update(cx, |a, cx| {
+                let input = if settings {
+                    &a.ai_ui.settings.model
+                } else {
+                    &a.ai_ui.composer
+                };
+                assert_eq!(input.read(cx).text(), "hello World.1");
+                assert_eq!(a.active_tab().document.text(), "# 中文😀\r\n\noriginal");
+                assert!(a.active_tab().undo_stack.is_empty());
+            });
+            cx.simulate_keystrokes("ctrl-a backspace ctrl-z");
+            a.update(cx, |a, cx| {
+                let input = if settings {
+                    &a.ai_ui.settings.model
+                } else {
+                    &a.ai_ui.composer
+                };
+                assert_eq!(input.read(cx).text(), "hello World.1");
+                assert!(a.active_tab().undo_stack.is_empty());
+            });
+        }
+    }
+    #[gpui::test]
+    fn attachment_overflow_reports_utf8_bytes_and_larger_budget_keeps_complete_text(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, cx) = setup(cx);
+        a.update(cx, |a, cx| {
+            let mut profile = Profile::preset("local", "large-test");
+            profile.model = "synthetic".into();
+            a.ai_preferences.selected_profile = profile.id.clone();
+            a.ai_preferences.profiles = vec![profile];
+            let text = "文".repeat(30_000);
+            let attachment = Attachment {
+                identity: None,
+                document: None,
+                label: "large.md".into(),
+                path: None,
+                range: None,
+                text: text.clone(),
+            };
+            a.ai_add_attachment(attachment.clone(), cx);
+            assert!(a.ai_ui.conversation().attachments.is_empty());
+            assert_eq!(a.ai_ui.panel_feedback, Some(AiMsg::InputOverBudget));
+            let detail = a.ai_ui.input_overflow.as_ref().unwrap();
+            assert_eq!(detail.source.as_deref(), Some("large.md"));
+            assert_eq!(detail.bytes, Some(90_000));
+            assert_eq!(detail.budget, 65_536);
+            a.ai_preferences.profiles[0].limits.input_bytes = 262_144;
+            a.ai_add_attachment(attachment, cx);
+            assert_eq!(a.ai_ui.panel_feedback, None);
+            assert_eq!(a.ai_ui.conversation().attachments[0].text, text);
+            let messages = a
+                .ai_ui
+                .conversation()
+                .context("summarize", 262_144)
+                .unwrap();
+            assert!(messages.last().unwrap().content.contains(&text));
+            let request = Request {
+                system: "Synthetic system guidance".into(),
+                messages,
+                ..Default::default()
+            };
+            assert!(
+                markion_ai::protocol::request_body(&a.ai_preferences.profiles[0], &request, true)
+                    .is_ok()
+            );
+            assert!(a.active_tab().undo_stack.is_empty());
+        });
+    }
+    #[gpui::test]
+    fn aggregate_and_wire_overflow_preserve_draft_without_starting_request(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, cx) = setup(cx);
+        a.update(cx, |a, cx| {
+            let mut profile = Profile::preset("local", "budget-test");
+            profile.model = "synthetic".into();
+            profile.limits.input_bytes = 1024;
+            a.ai_preferences.selected_profile = profile.id.clone();
+            a.ai_preferences.profiles = vec![profile.clone()];
+            a.ai_ui.composer.update(cx, |i, cx| i.set("keep draft", cx));
+            for label in ["a.md", "b.md"] {
+                a.ai_add_attachment(
+                    Attachment {
+                        identity: None,
+                        document: None,
+                        label: label.into(),
+                        path: None,
+                        range: None,
+                        text: "x".repeat(600),
+                    },
+                    cx,
+                );
+            }
+            let request_id = a.ai_ui.request;
+            a.ai_send(false, cx);
+            assert_eq!(a.ai_ui.panel_feedback, Some(AiMsg::InputOverBudget));
+            assert_eq!(a.ai_ui.conversation().attachments.len(), 2);
+            assert_eq!(a.ai_ui.request, request_id);
+            assert_eq!(a.ai_ui.composer.read(cx).text(), "keep draft");
+            assert!(a.ai_ui.conversation().active.is_none());
+            a.ai_ui.conversation_mut().attachments.clear();
+            let request = Request {
+                system: "s".repeat(1024),
+                messages: vec![markion_ai::Message {
+                    role: "user".into(),
+                    content: "small".into(),
+                }],
+                ..Default::default()
+            };
+            a.ai_start(profile, request, "keep draft".into(), cx);
+            assert_eq!(a.ai_ui.panel_feedback, Some(AiMsg::InputOverBudget));
+            assert_eq!(a.ai_ui.request, request_id);
+            assert_eq!(a.ai_ui.composer.read(cx).text(), "keep draft");
+            a.ai_feedback(AiError::Limit, cx);
+            assert_eq!(a.ai_ui.panel_feedback, Some(AiMsg::OverBudget));
+            assert!(a.ai_ui.input_overflow.is_none());
+            a.ai_input_feedback(None, None, 1024, cx);
+            a.ai_new_conversation(cx);
+            assert_eq!(a.ai_ui.panel_feedback, None);
+            assert!(a.ai_ui.input_overflow.is_none());
+        });
+    }
+    #[gpui::test]
     fn settings_dirty_tracks_edits_against_persisted_profile(cx: &mut TestAppContext) {
         let (a, cx) = setup(cx);
         a.update(cx, |a, cx| {
@@ -4302,6 +5300,149 @@ mod tests {
         });
     }
     #[gpui::test]
+    fn discovery_accepts_blank_model_but_testing_requires_it(cx: &mut TestAppContext) {
+        let (a, cx) = setup(cx);
+        a.update(cx, |a, cx| {
+            a.ai_preferences.enabled = false;
+            a.ai_ui.draft = Profile::preset("local", "default");
+            a.ai_ui.fill_inputs(cx);
+            assert!(a.ai_ui.read_settings(cx, true).is_ok());
+            assert_eq!(a.ai_ui.read_draft(cx), Err(AiMsg::ModelMissing));
+            a.ai_probe(true, cx);
+            assert!(a.ai_ui.probe.is_some());
+            assert_eq!(a.ai_ui.settings_feedback, Some(AiMsg::DiscoveryRunning));
+            assert!(!a.ai_preferences.enabled);
+            a.ai_ui.invalidate();
+        });
+    }
+    #[gpui::test]
+    fn save_enable_persists_draft_and_keeps_only_matching_verification(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, cx) = setup(cx);
+        a.update(cx, |a, cx| {
+            a.preferences_path = dir.path().join("config.toml");
+            a.ai_preferences.enabled = false;
+            a.ai_ui.draft = Profile::preset("local", "default");
+            a.ai_ui.fill_inputs(cx);
+            a.ai_ui
+                .settings
+                .model
+                .update(cx, |i, cx| i.set("verified-model", cx));
+            let profile = a.ai_ui.read_draft(cx).unwrap();
+            a.ai_ui.capability = Some((
+                profile_identity(&profile),
+                Capabilities {
+                    text: true,
+                    streaming: true,
+                    tools: true,
+                },
+            ));
+            a.ai_ui.save_and_enable = true;
+            a.ai_save(cx);
+            assert!(a.ai_preferences.enabled);
+            assert_eq!(a.ai_preferences.selected().unwrap().model, "verified-model");
+            assert!(a.ai_ui.capability.as_ref().unwrap().1.tools);
+            let saved = load_app_preferences(&a.preferences_path).unwrap();
+            assert!(saved.ai.enabled);
+            assert_eq!(saved.ai.selected().unwrap().model, "verified-model");
+            a.ai_ui
+                .settings
+                .model
+                .update(cx, |i, cx| i.set("different-model", cx));
+            a.ai_save(cx);
+            assert!(a.ai_ui.capability.is_none());
+        });
+    }
+    #[gpui::test]
+    fn save_failure_keeps_disabled_state_and_draft(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, cx) = setup(cx);
+        a.update(cx, |a, cx| {
+            a.preferences_path = dir.path().to_path_buf();
+            a.ai_preferences.enabled = false;
+            a.ai_ui.draft = Profile::preset("local", "default");
+            a.ai_ui.fill_inputs(cx);
+            a.ai_ui
+                .settings
+                .model
+                .update(cx, |i, cx| i.set("keep-draft", cx));
+            let previous = a.ai_preferences.clone();
+            a.ai_ui.save_and_enable = true;
+            a.ai_save(cx);
+            assert_eq!(a.ai_preferences, previous);
+            assert!(!a.ai_preferences.enabled);
+            assert_eq!(a.ai_ui.settings_feedback, Some(AiMsg::SaveFailed));
+            assert_eq!(a.ai_ui.settings.model.read(cx).text(), "keep-draft");
+            assert!(!a.ai_ui.save_and_enable);
+            a.ai_ui
+                .settings
+                .guidance
+                .update(cx, |i, cx| i.set("retained guidance draft", cx));
+            a.ai_save_guidance(cx);
+            assert_eq!(a.ai_preferences, previous);
+            assert_eq!(a.ai_ui.settings_feedback, Some(AiMsg::SaveFailed));
+            assert_eq!(
+                a.ai_ui.settings.guidance.read(cx).text(),
+                "retained guidance draft"
+            );
+        });
+    }
+    #[gpui::test]
+    fn missing_writing_parameters_do_not_start_provider_requests(cx: &mut TestAppContext) {
+        let (a, cx) = setup(cx);
+        a.update(cx, |a, cx| {
+            let version = a.active_tab().document.version();
+            for (action, message) in [
+                (WritingAction::Translate, AiMsg::ChooseLanguage),
+                (WritingAction::Tone, AiMsg::ChooseTone),
+            ] {
+                a.ai_write(action, Some(1), cx);
+                assert_eq!(a.ai_ui.panel_feedback, Some(message));
+                assert!(a.ai_ui.writing_open);
+                assert!(!a.ai_ui.running());
+                assert!(a.ai_ui.review.is_none());
+            }
+            assert_eq!(a.active_tab().document.version(), version);
+        });
+    }
+    #[gpui::test]
+    fn conversation_switch_restores_drafts_and_deletion_restores_remaining_draft(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, cx) = setup(cx);
+        a.update(cx, |a, cx| {
+            a.ai_ui
+                .composer
+                .update(cx, |i, cx| i.set("first unfinished prompt", cx));
+            a.ai_new_conversation(cx);
+            assert!(a.ai_ui.composer.read(cx).text().is_empty());
+            a.ai_ui
+                .composer
+                .update(cx, |i, cx| i.set("second draft", cx));
+            a.ai_select_conversation(0, cx);
+            assert_eq!(a.ai_ui.composer.read(cx).text(), "first unfinished prompt");
+            a.ai_select_conversation(1, cx);
+            assert_eq!(a.ai_ui.composer.read(cx).text(), "second draft");
+            a.ai_delete_conversation(cx);
+            assert_eq!(a.ai_ui.composer.read(cx).text(), "first unfinished prompt");
+            assert_eq!(a.ai_ui.composer_drafts.len(), 1);
+        });
+    }
+    #[test]
+    fn bounded_change_summary_detects_insert_delete_unicode_and_final_newline() {
+        assert_eq!(
+            changed_text("unchanged\nold\ntail", "unchanged\nnew😀\ntail"),
+            (vec!["old\n"], vec!["new😀\n"])
+        );
+        assert_eq!(
+            changed_text("same", "same\n"),
+            (vec!["same"], vec!["same\n"])
+        );
+        assert_eq!(changed_text("", "new"), (vec![], vec!["new"]));
+        assert_eq!(changed_text("old", ""), (vec!["old"], vec![]));
+        assert_eq!(changed_text("same", "same"), (vec![], vec![]));
+    }
+    #[gpui::test]
     fn probe_runs_against_valid_draft_while_disabled(cx: &mut TestAppContext) {
         let (a, cx) = setup(cx);
         a.update(cx, |a, cx| {
@@ -4344,7 +5485,7 @@ mod tests {
         let (a, cx) = setup(cx);
         a.update(cx, |a, cx| {
             a.ai_ui.models = vec!["m1".into(), "m2".into()];
-            a.ai_ui.models_identity = Some(profile_identity(&a.ai_ui.draft));
+            a.ai_ui.models_identity = Some(discovery_identity(&a.ai_ui.draft));
             a.ai_ui.settings.model.update(cx, |i, cx| i.set("m1", cx));
             a.ai_ui.fill_inputs(cx);
             assert_eq!(a.ai_ui.models.len(), 2);
@@ -4353,7 +5494,7 @@ mod tests {
             assert!(a.ai_ui.models.is_empty());
             assert!(a.ai_ui.models_identity.is_none());
             a.ai_ui.models = vec!["m3".into()];
-            a.ai_ui.models_identity = Some(profile_identity(&a.ai_ui.draft));
+            a.ai_ui.models_identity = Some(discovery_identity(&a.ai_ui.draft));
             a.ai_ui.draft.id = "other".into();
             a.ai_ui.fill_inputs(cx);
             assert!(a.ai_ui.models.is_empty());
@@ -4785,6 +5926,7 @@ mod tests {
                         a.theme = theme;
                         a.ai_ui.open = true;
                         a.ai_ui.advanced = true;
+                        a.ai_ui.writing_open = true;
                         a.ai_ui.recovery_open = true;
                         review(a, 0..1, "替换😀");
                         cx.notify();
@@ -4794,8 +5936,14 @@ mod tests {
                     assert!(bounds.size.width <= px(544.));
                     assert!(bounds.size.height <= px(420.));
                     assert!(cx.debug_bounds("ai-writing-actions").unwrap().size.height >= px(64.));
-                    assert!(cx.debug_bounds("ai-writing-review").unwrap().size.height >= px(240.));
+                    assert!(cx.debug_bounds("ai-writing-review").unwrap().size.height > px(0.));
                     assert!(cx.debug_bounds("ai-recovery-list").unwrap().size.height >= px(300.));
+                    let composer = cx.debug_bounds("ai-composer-region").unwrap();
+                    assert!(composer.size.height > px(0.));
+                    assert!(composer.bottom() <= bounds.bottom());
+                    assert!(composer.top() >= bounds.top());
+                    let content = cx.debug_bounds("ai-content").unwrap();
+                    assert!(content.bottom() <= composer.top());
                     a.update(cx, |a, cx| {
                         a.preferences_panel_open = true;
                         a.preferences_tab = PreferencesTab::Ai;
@@ -4803,6 +5951,9 @@ mod tests {
                     });
                     cx.run_until_parked();
                     assert!(cx.debug_bounds("ai-settings-body").is_some());
+                    let footer = cx.debug_bounds("ai-settings-footer").unwrap();
+                    assert!(footer.size.height > px(0.));
+                    assert!(footer.bottom() <= px(420.));
                     a.update(cx, |a, cx| {
                         a.preferences_panel_open = false;
                         cx.notify();
@@ -4810,6 +5961,58 @@ mod tests {
                 }
             }
         }
+    }
+    #[gpui::test]
+    fn chat_messages_grow_with_window_and_scrolling_keeps_composer_fixed(cx: &mut TestAppContext) {
+        let (a, cx) = setup(cx);
+        a.update(cx, |a, cx| {
+            a.ai_ui.open = true;
+            cx.notify();
+        });
+        cx.simulate_resize(size(px(1000.), px(500.)));
+        cx.run_until_parked();
+        let short = cx.debug_bounds("ai-messages").unwrap().size.height;
+        cx.simulate_resize(size(px(1000.), px(900.)));
+        cx.run_until_parked();
+        let tall = cx.debug_bounds("ai-messages").unwrap().size.height;
+        assert!(tall > short + px(200.));
+        let before = cx.debug_bounds("ai-composer-region").unwrap();
+        a.update(cx, |a, cx| {
+            a.ai_ui.writing_open = true;
+            a.ai_ui.recovery_open = true;
+            review(a, 0..1, &"changed\n".repeat(30));
+            a.ai_ui.scroll.set_offset(point(px(0.), px(-10000.)));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let after = cx.debug_bounds("ai-composer-region").unwrap();
+        assert_eq!(before, after);
+    }
+    #[gpui::test]
+    fn deleting_from_history_requires_a_second_explicit_activation(cx: &mut TestAppContext) {
+        let (a, cx) = setup(cx);
+        a.update(cx, |a, cx| {
+            a.ai_ui.open = true;
+            a.ai_ui.history_open = true;
+            a.ai_new_conversation(cx);
+            cx.notify();
+        });
+        cx.simulate_resize(size(px(1000.), px(900.)));
+        cx.run_until_parked();
+        let control = cx.debug_bounds("ai-delete-control").unwrap();
+        cx.simulate_click(control.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        a.update(cx, |a, _| {
+            assert_eq!(a.ai_ui.conversations.len(), 2);
+            assert_eq!(a.ai_ui.confirm_delete, Some(a.ai_ui.conversation().id));
+        });
+        let confirmation = cx.debug_bounds("ai-delete-confirm").unwrap();
+        cx.simulate_click(confirmation.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        a.update(cx, |a, _| {
+            assert_eq!(a.ai_ui.conversations.len(), 1);
+            assert!(a.ai_ui.confirm_delete.is_none());
+        });
     }
     #[gpui::test]
     fn reviewed_moves_refuse_dirty_buffers_autosaves_and_git_claims(cx: &mut TestAppContext) {

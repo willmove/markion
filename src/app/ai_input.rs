@@ -25,6 +25,12 @@ actions!(
     ]
 );
 pub(super) struct Submit;
+fn is_text_key(event: &KeyDownEvent) -> bool {
+    let modifiers = event.keystroke.modifiers;
+    event.prefer_character_input
+        || (!(modifiers.control || modifiers.alt || modifiers.platform || modifiers.function)
+            && (event.keystroke.key_char.is_some() || event.keystroke.key == "space"))
+}
 pub(super) struct AiInput {
     pub focus: FocusHandle,
     pub field: SearchFieldState,
@@ -34,6 +40,8 @@ pub(super) struct AiInput {
     redo: Vec<SearchFieldState>,
     composition: Option<SearchFieldState>,
     lines: Vec<(usize, ShapedLine)>,
+    layout_key: Option<(String, Pixels, TextRun)>,
+    reveal_caret: bool,
     bounds: Option<Bounds<Pixels>>,
     selecting: bool,
     scroll: ScrollHandle,
@@ -60,6 +68,8 @@ impl AiInput {
             redo: Vec::new(),
             composition: None,
             lines: Vec::new(),
+            layout_key: None,
+            reveal_caret: true,
             bounds: None,
             selecting: false,
             scroll: ScrollHandle::new(),
@@ -73,9 +83,11 @@ impl AiInput {
         self.undo.clear();
         self.redo.clear();
         self.composition = None;
+        self.reveal_caret = true;
         cx.notify();
     }
     fn checkpoint(&mut self) {
+        self.reveal_caret = true;
         if self.undo.len() >= 100 {
             self.undo.remove(0);
         }
@@ -123,9 +135,27 @@ impl AiInput {
             self.field.anchor = range.start + selected.start;
             self.field.cursor = range.start + selected.end;
         }
+        self.reveal_caret = true;
         cx.notify();
     }
     fn vertical(&mut self, delta: isize) {
+        if !self.lines.is_empty()
+            && self
+                .layout_key
+                .as_ref()
+                .is_some_and(|k| k.0 == self.field.buffer)
+        {
+            let row = self.caret_row();
+            let next = (row as isize + delta).clamp(0, self.lines.len() as isize - 1) as usize;
+            let (start, line) = &self.lines[row];
+            let x = line.x_for_index(self.field.cursor.saturating_sub(*start).min(line.len()));
+            let (start, line) = &self.lines[next];
+            self.field.cursor =
+                clamp_search_boundary(&self.field.buffer, *start + line.closest_index_for_x(x));
+            self.field.anchor = self.field.cursor;
+            self.reveal_caret = true;
+            return;
+        }
         let cursor = self.field.cursor;
         let start = self.field.buffer[..cursor].rfind('\n').map_or(0, |i| i + 1);
         let column = self.field.buffer[start..cursor].chars().count();
@@ -148,6 +178,103 @@ impl AiInput {
             .map_or(rest.len(), |(i, _)| i);
         self.field.cursor = next + offset;
         self.field.anchor = self.field.cursor;
+        self.reveal_caret = true;
+    }
+    fn caret_row(&self) -> usize {
+        self.lines
+            .iter()
+            .rposition(|(start, _)| *start <= self.field.cursor)
+            .unwrap_or(0)
+    }
+    fn shape_rows(&mut self, width: Pixels, window: &Window) {
+        let style = window.text_style();
+        let run = TextRun {
+            len: self.field.buffer.len(),
+            font: style.font(),
+            color: style.color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let key = (self.field.buffer.clone(), width, run.clone());
+        if self.layout_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.lines.clear();
+        let mut offset = 0;
+        for text in self.field.buffer.split('\n') {
+            let first_row = self.lines.len();
+            if self.multiline && !text.is_empty() {
+                if let Ok(wrapped) = window.text_system().shape_text(
+                    text.to_owned().into(),
+                    px(13.),
+                    &[TextRun {
+                        len: text.len(),
+                        ..run.clone()
+                    }],
+                    Some(width.max(px(1.))),
+                    None,
+                ) {
+                    for line in wrapped {
+                        let mut starts = vec![0];
+                        starts.extend(
+                            line.wrap_boundaries
+                                .iter()
+                                .map(|b| line.runs()[b.run_ix].glyphs[b.glyph_ix].index),
+                        );
+                        starts.push(text.len());
+                        for range in starts.windows(2) {
+                            let segment = &text[range[0]..range[1]];
+                            self.lines.push((
+                                offset + range[0],
+                                window.text_system().shape_line(
+                                    segment.to_owned().into(),
+                                    px(13.),
+                                    &[TextRun {
+                                        len: segment.len(),
+                                        ..run.clone()
+                                    }],
+                                    None,
+                                ),
+                            ));
+                        }
+                    }
+                }
+            } else {
+                let display: String = if self.masked {
+                    "*".repeat(text.len())
+                } else {
+                    text.into()
+                };
+                let len = display.len();
+                self.lines.push((
+                    offset,
+                    window.text_system().shape_line(
+                        display.into(),
+                        px(13.),
+                        &[TextRun { len, ..run.clone() }],
+                        None,
+                    ),
+                ));
+            }
+            if self.lines.len() == first_row {
+                self.lines.push((
+                    offset,
+                    window.text_system().shape_line(
+                        text.to_owned().into(),
+                        px(13.),
+                        &[TextRun {
+                            len: text.len(),
+                            ..run.clone()
+                        }],
+                        None,
+                    ),
+                ));
+            }
+            offset += text.len() + 1;
+        }
+        self.layout_key = Some(key);
+        self.reveal_caret = true;
     }
     fn index(&self, position: Point<Pixels>) -> usize {
         let Some(bounds) = self.bounds else {
@@ -160,6 +287,106 @@ impl AiInput {
         };
         let index = start + line.closest_index_for_x(position.x - bounds.left());
         clamp_search_boundary(&self.field.buffer, index.min(self.field.buffer.len()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn direct_printable_keystrokes_reach_input(cx: &mut TestAppContext) {
+        // Windows represents Space without key_char; simulated IME normally fills it in.
+        let mut space = KeyDownEvent {
+            keystroke: gpui::Keystroke::parse("space").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        };
+        assert!(space.keystroke.key_char.is_none());
+        assert!(is_text_key(&space));
+        space.keystroke.modifiers.control = true;
+        assert!(!is_text_key(&space));
+        space.prefer_character_input = true;
+        assert!(is_text_key(&space));
+        for multiline in [false, true] {
+            let (input, cx) = cx.add_window_view(|_, cx| AiInput::new("", multiline, false, cx));
+            cx.update(|window, cx| {
+                bind(cx);
+                window.activate_window();
+                window.focus(&input.read(cx).focus);
+            });
+            cx.simulate_keystrokes("h e l l o space shift-w o r l d . 1");
+            input.update(cx, |input, _| {
+                assert_eq!(input.text(), "hello World.1");
+                assert!(input.field.marked_range.is_none());
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn wrapped_rows_preserve_utf8_navigation_hit_testing_and_ime(cx: &mut TestAppContext) {
+        let text = "中文😀连续输入没有手动换行。Long prompt with several words.\n下一行😀";
+        let (input, cx) = cx.add_window_view(|_, cx| AiInput::new(text, true, false, cx));
+        cx.update(|window, cx| {
+            input.update(cx, |input, cx| {
+                input.shape_rows(px(80.), window);
+                let narrow_rows = input.lines.len();
+                assert!(narrow_rows > 2);
+                assert_eq!(input.text(), text);
+                assert!(input.undo.is_empty());
+                input.bounds = Some(Bounds::new(
+                    point(px(10.), px(10.)),
+                    size(px(80.), px(200.)),
+                ));
+                for (row, (start, line)) in input.lines.iter().enumerate() {
+                    assert!(text.is_char_boundary(*start));
+                    assert!(text.is_char_boundary(*start + line.len()));
+                    assert_eq!(
+                        input.index(point(px(10.), px(12. + row as f32 * 20.))),
+                        *start
+                    );
+                }
+                input.field.cursor = input.lines[1].0;
+                input.field.anchor = input.field.cursor;
+                input.vertical(-1);
+                assert_eq!(input.field.cursor, 0);
+                input.vertical(1);
+                assert_eq!(input.field.cursor, input.lines[1].0);
+                let offset = input.field.byte_to_utf16(input.field.cursor);
+                let bounds = input
+                    .bounds_for_range(offset..offset, input.bounds.unwrap(), window, cx)
+                    .unwrap();
+                assert_eq!(bounds.top(), px(30.));
+                input.shape_rows(px(240.), window);
+                assert!(input.lines.len() < narrow_rows);
+                assert_eq!(input.text(), text);
+                input.replace_and_mark_text_in_range(
+                    Some(offset..offset),
+                    "输入😀",
+                    Some(4..4),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    input.marked_text_range(window, cx),
+                    Some(offset..offset + 4)
+                );
+                input.shape_rows(px(80.), window);
+                let cursor = input.field.byte_to_utf16(input.field.cursor);
+                let bounds = input
+                    .bounds_for_range(cursor..cursor, input.bounds.unwrap(), window, cx)
+                    .unwrap();
+                let hit = input
+                    .character_index_for_point(bounds.origin, window, cx)
+                    .unwrap();
+                assert_eq!(hit, cursor);
+                input.unmark_text(window, cx);
+                assert_eq!(input.undo.len(), 1);
+                input.field = input.undo.pop().unwrap();
+                assert_eq!(input.text(), text);
+            });
+        });
     }
 }
 pub(super) fn bind(cx: &mut App) {
@@ -275,10 +502,38 @@ impl EntityInputHandler for AiInput {
     }
 }
 impl Render for AiInput {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let width = self.bounds.map_or(px(280.), |b| b.size.width);
+        self.shape_rows(width, window);
+        if self.reveal_caret {
+            let row = self.caret_row();
+            let y = px(row as f32 * 20.);
+            let viewport = self.scroll.bounds().size.height.max(px(36.));
+            let mut offset = self.scroll.offset();
+            if y + offset.y < px(0.) {
+                offset.y = -y;
+            }
+            if y + px(20.) + offset.y > viewport {
+                offset.y = viewport - y - px(20.);
+            }
+            if self.multiline {
+                offset.x = px(0.);
+            } else if let Some((start, line)) = self.lines.get(row) {
+                let x = line.x_for_index(self.field.cursor - start);
+                let viewport = self.scroll.bounds().size.width.max(px(36.));
+                if x + offset.x < px(0.) {
+                    offset.x = -x;
+                }
+                if x + px(4.) + offset.x > viewport {
+                    offset.x = viewport - x - px(4.);
+                }
+            }
+            self.scroll.set_offset(offset);
+            self.reveal_caret = false;
+        }
         let input = cx.entity();
         let paint_input = input.clone();
-        let height = px(self.field.buffer.lines().count().max(1) as f32 * 20. + 20.);
+        let height = px(self.lines.len().max(1) as f32 * 20. + 12.);
         let view = div()
             .id("ai-input")
             .key_context("AiInput")
@@ -287,7 +542,9 @@ impl Render for AiInput {
             .w_full()
             .max_h(px(if self.multiline { 140. } else { 42. }))
             .min_h(px(36.))
-            .overflow_scroll()
+            .overflow_y_scroll()
+            .overflow_x_hidden()
+            .when(!self.multiline, |d| d.overflow_x_scroll())
             .track_scroll(&self.scroll)
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(|s, _: &InputBackspace, _, cx| {
@@ -304,36 +561,43 @@ impl Render for AiInput {
             }))
             .on_action(cx.listener(|s, _: &InputLeft, _, cx| {
                 s.field.move_caret(SearchCaretMove::Left);
+                s.reveal_caret = true;
                 cx.stop_propagation();
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &InputRight, _, cx| {
                 s.field.move_caret(SearchCaretMove::Right);
+                s.reveal_caret = true;
                 cx.stop_propagation();
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &InputSelectLeft, _, cx| {
                 s.field.move_caret(SearchCaretMove::SelectLeft);
+                s.reveal_caret = true;
                 cx.stop_propagation();
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &InputSelectRight, _, cx| {
                 s.field.move_caret(SearchCaretMove::SelectRight);
+                s.reveal_caret = true;
                 cx.stop_propagation();
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &InputSelectAll, _, cx| {
                 s.field.move_caret(SearchCaretMove::SelectAll);
+                s.reveal_caret = true;
                 cx.stop_propagation();
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &InputHome, _, cx| {
                 s.field.move_caret(SearchCaretMove::Home);
+                s.reveal_caret = true;
                 cx.stop_propagation();
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &InputEnd, _, cx| {
                 s.field.move_caret(SearchCaretMove::End);
+                s.reveal_caret = true;
                 cx.stop_propagation();
                 cx.notify();
             }))
@@ -375,6 +639,7 @@ impl Render for AiInput {
                     if let Some(old) = s.undo.pop() {
                         s.redo.push(s.field.clone());
                         s.field = old;
+                        s.reveal_caret = true;
                         cx.notify();
                     }
                 }
@@ -385,6 +650,7 @@ impl Render for AiInput {
                     if let Some(old) = s.redo.pop() {
                         s.undo.push(s.field.clone());
                         s.field = old;
+                        s.reveal_caret = true;
                         cx.notify();
                     }
                 }
@@ -403,7 +669,11 @@ impl Render for AiInput {
                 cx.stop_propagation();
             }))
             .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key != "tab" && event.keystroke.key != "escape" {
+                // Printable keys must reach the platform text handler (WM_CHAR on Windows).
+                if !is_text_key(event)
+                    && event.keystroke.key != "tab"
+                    && event.keystroke.key != "escape"
+                {
                     cx.stop_propagation();
                 }
             }))
@@ -437,36 +707,17 @@ impl Render for AiInput {
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        let s = input.read(cx);
-                        let style = window.text_style();
-                        let run = TextRun {
-                            len: 0,
-                            font: style.font(),
-                            color: style.color,
-                            background_color: None,
-                            underline: None,
-                            strikethrough: None,
-                        };
-                        let mut offset = 0;
-                        let mut lines = Vec::new();
-                        for text in s.field.buffer.split('\n') {
-                            let display = if s.masked {
-                                "*".repeat(text.len())
-                            } else {
-                                text.into()
-                            };
-                            let len = display.len();
-                            lines.push((
-                                offset,
-                                window.text_system().shape_line(
-                                    display.into(),
-                                    px(13.),
-                                    &[TextRun { len, ..run.clone() }],
-                                    None,
-                                ),
-                            ));
-                            offset += text.len() + 1;
-                        }
+                        let lines = input.update(cx, |s, cx| {
+                            let previous = s.lines.len();
+                            let previous_width = s.layout_key.as_ref().map(|key| key.1);
+                            s.shape_rows(bounds.size.width, window);
+                            if previous != s.lines.len()
+                                || previous_width != Some(bounds.size.width)
+                            {
+                                cx.notify();
+                            }
+                            s.lines.clone()
+                        });
                         (bounds, lines)
                     },
                     move |_, (bounds, lines), window, cx| {
@@ -476,6 +727,7 @@ impl Render for AiInput {
                         let cursor = s.field.cursor;
                         let marked = s.field.marked_range.clone();
                         let color = window.text_style().color;
+                        let caret_row = s.caret_row();
                         window.handle_input(
                             &focus,
                             ElementInputHandler::new(bounds, paint_input.clone()),
@@ -500,7 +752,7 @@ impl Render for AiInput {
                                 ));
                             }
                             let _ = line.paint(origin, px(20.), window, cx);
-                            if focus.is_focused(window) && cursor >= *start && cursor <= end {
+                            if focus.is_focused(window) && row == caret_row {
                                 window.paint_quad(fill(
                                     Bounds::new(
                                         point(
@@ -540,6 +792,13 @@ impl Render for AiInput {
                     },
                 )
                 .w_full()
+                .when(!self.multiline, |d| {
+                    d.min_w(
+                        self.lines
+                            .first()
+                            .map_or(px(0.), |(_, line)| line.width + px(4.)),
+                    )
+                })
                 .h(height),
             );
         macro_rules! block {($view:expr,$($action:ty),+)=>{$view$(.on_action(cx.listener(|_,_:&$action,_,cx|cx.stop_propagation())))+};}

@@ -598,12 +598,13 @@ pub(crate) mod tests {
             assert!(reqs[1].contains("connection_probe"));
             assert!(!reqs.iter().any(|r| r.contains("Attached material")));
         }
-        let (p, handle) = mock(
+        let (mut p, handle) = mock(
             "200 OK",
             "application/json",
             r#"{"data":[{"id":"b"},{"id":"a"},{"id":"a"}]}"#,
         )
         .await;
+        p.model.clear();
         assert_eq!(
             discover_models(&p, None, &Cancellation::default())
                 .await

@@ -471,6 +471,32 @@ mod tests {
         assert!(grant.resolve("note.md", true, true).is_err());
     }
     #[test]
+    fn larger_input_budget_reads_complete_file_but_disk_ceiling_stays_finite() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = "文".repeat(30_000);
+        fs::write(dir.path().join("large.md"), &text).unwrap();
+        let grant = ReadGrant::new(dir.path(), dir.path()).unwrap();
+        assert!(matches!(
+            read(&grant, "large.md", None, 65_536, &BTreeMap::new()),
+            Err(AiError::Limit)
+        ));
+        let result = read(&grant, "large.md", None, 262_144, &BTreeMap::new()).unwrap();
+        assert_eq!(result.text, text);
+        assert_eq!(result.start, 0);
+        assert_eq!(result.end, 90_000);
+        fs::write(dir.path().join("huge.md"), "x".repeat(1024 * 1024 + 1)).unwrap();
+        assert!(matches!(
+            read(
+                &grant,
+                "huge.md",
+                Some(0..100),
+                1024 * 1024,
+                &BTreeMap::new()
+            ),
+            Err(AiError::Limit)
+        ));
+    }
+    #[test]
     fn replaced_scope_and_sibling_prefix_fail() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("a");

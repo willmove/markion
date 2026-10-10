@@ -69,6 +69,16 @@ icon_set! {
     MessageSquareWarning => "message-square-warning",
     TriangleAlert => "triangle-alert",
     OctagonAlert => "octagon-alert",
+    Close => "x",
+    Plus => "plus",
+    Settings => "settings",
+    Send => "arrow-up",
+    Stop => "square",
+    Copy => "copy",
+    History => "clock",
+    Trash => "trash",
+    Attach => "paperclip",
+    Check => "check",
 }
 
 /// GPUI asset source for embedded icons. Install once on `Application::with_assets`.
