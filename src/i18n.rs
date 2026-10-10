@@ -559,6 +559,90 @@ pub fn image_recovery_t(language: Language, message: ImageRecoveryMsg) -> &'stat
     catalog[message as usize]
 }
 
+/// Startup-failure report shown outside GPUI (stderr and an OS dialog), so it
+/// must stay plain text. Placeholders: `RendererLinux` `{0}` = troubleshooting
+/// guide URL, `Details` `{0}` = error text, `LogDirectory` `{0}` = log path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum StartupFailureMsg {
+    Title,
+    RendererLinux,
+    RendererGeneric,
+    SoftwareFallbackFailed,
+    Generic,
+    Details,
+    LogDirectory,
+}
+
+pub fn startup_failure_tf(language: Language, message: StartupFailureMsg, args: &[&str]) -> String {
+    let catalog: &[&str; 7] = match language {
+        Language::En => &[
+            "Markion cannot start",
+            "Markion could not start its graphics renderer. Markion draws its window with Vulkan, and no usable Vulkan driver was found.\n\nTo fix this:\n- Install the Vulkan driver for your graphics card, or Mesa's software driver on machines without a GPU (Debian/Ubuntu/Fedora: mesa-vulkan-drivers, Arch: vulkan-swrast).\n- To force a specific driver, start Markion with VK_DRIVER_FILES=/path/to/driver_icd.json (VK_ICD_FILENAMES on older Vulkan loaders).\n- If a stale driver manifest or a crashing implicit layer is installed, disable it with VK_LOADER_DRIVERS_DISABLE or VK_LOADER_LAYERS_DISABLE.\n- The Markion AppImage includes a software Vulkan driver; MARKION_SOFTWARE_VULKAN=1 forces it.\n\nFull guide: {0}",
+            "Markion could not start its graphics renderer. Update your graphics driver and try again.",
+            "The software Vulkan driver bundled with Markion could not start either.",
+            "Markion failed to start.",
+            "Details: {0}",
+            "Log files: {0}",
+        ],
+        Language::ZhHans => &[
+            "Markion 无法启动",
+            "Markion 无法启动图形渲染器。Markion 使用 Vulkan 绘制窗口，但未找到可用的 Vulkan 驱动。\n\n解决方法：\n- 安装显卡对应的 Vulkan 驱动；没有 GPU 的机器可安装 Mesa 软件驱动（Debian/Ubuntu/Fedora：mesa-vulkan-drivers，Arch：vulkan-swrast）。\n- 如需强制使用某个驱动，请以 VK_DRIVER_FILES=/path/to/driver_icd.json 启动 Markion（较旧的 Vulkan 加载器使用 VK_ICD_FILENAMES）。\n- 如果系统中有失效的驱动清单或会崩溃的隐式层，可用 VK_LOADER_DRIVERS_DISABLE 或 VK_LOADER_LAYERS_DISABLE 将其禁用。\n- Markion AppImage 自带 Vulkan 软件驱动；设置 MARKION_SOFTWARE_VULKAN=1 可强制使用。\n\n完整指南：{0}",
+            "Markion 无法启动图形渲染器。请更新显卡驱动后重试。",
+            "Markion 自带的 Vulkan 软件驱动也无法启动。",
+            "Markion 启动失败。",
+            "详细信息：{0}",
+            "日志文件：{0}",
+        ],
+        Language::ZhHant => &[
+            "Markion 無法啟動",
+            "Markion 無法啟動圖形算繪器。Markion 使用 Vulkan 繪製視窗，但找不到可用的 Vulkan 驅動程式。\n\n解決方法：\n- 安裝顯示卡對應的 Vulkan 驅動程式；沒有 GPU 的電腦可安裝 Mesa 軟體驅動程式（Debian/Ubuntu/Fedora：mesa-vulkan-drivers，Arch：vulkan-swrast）。\n- 如需強制使用特定驅動程式，請以 VK_DRIVER_FILES=/path/to/driver_icd.json 啟動 Markion（較舊的 Vulkan 載入器使用 VK_ICD_FILENAMES）。\n- 若系統中有失效的驅動程式清單或會當機的隱含層，可用 VK_LOADER_DRIVERS_DISABLE 或 VK_LOADER_LAYERS_DISABLE 將其停用。\n- Markion AppImage 內建 Vulkan 軟體驅動程式；設定 MARKION_SOFTWARE_VULKAN=1 可強制使用。\n\n完整指南：{0}",
+            "Markion 無法啟動圖形算繪器。請更新顯示卡驅動程式後再試一次。",
+            "Markion 內建的 Vulkan 軟體驅動程式也無法啟動。",
+            "Markion 啟動失敗。",
+            "詳細資訊：{0}",
+            "記錄檔：{0}",
+        ],
+        Language::Ja => &[
+            "Markion を起動できません",
+            "Markion はグラフィックス レンダラーを起動できませんでした。Markion は Vulkan でウィンドウを描画しますが、使用可能な Vulkan ドライバーが見つかりません。\n\n対処方法:\n- グラフィックス カード用の Vulkan ドライバーをインストールしてください。GPU のないマシンでは Mesa のソフトウェア ドライバーを使用できます (Debian/Ubuntu/Fedora: mesa-vulkan-drivers、Arch: vulkan-swrast)。\n- 特定のドライバーを強制するには、VK_DRIVER_FILES=/path/to/driver_icd.json を指定して Markion を起動します (古い Vulkan ローダーでは VK_ICD_FILENAMES)。\n- 古いドライバー マニフェストやクラッシュする暗黙レイヤーがある場合は、VK_LOADER_DRIVERS_DISABLE または VK_LOADER_LAYERS_DISABLE で無効にしてください。\n- Markion の AppImage にはソフトウェア Vulkan ドライバーが含まれています。MARKION_SOFTWARE_VULKAN=1 で強制的に使用できます。\n\n詳しいガイド: {0}",
+            "Markion はグラフィックス レンダラーを起動できませんでした。グラフィックス ドライバーを更新してから、もう一度お試しください。",
+            "Markion に同梱のソフトウェア Vulkan ドライバーも起動できませんでした。",
+            "Markion を起動できませんでした。",
+            "詳細: {0}",
+            "ログ ファイル: {0}",
+        ],
+        Language::Fr => &[
+            "Impossible de démarrer Markion",
+            "Markion n’a pas pu démarrer son moteur de rendu graphique. Markion dessine sa fenêtre avec Vulkan, et aucun pilote Vulkan utilisable n’a été trouvé.\n\nPour corriger ce problème :\n- Installez le pilote Vulkan de votre carte graphique, ou le pilote logiciel de Mesa sur les machines sans GPU (Debian/Ubuntu/Fedora : mesa-vulkan-drivers, Arch : vulkan-swrast).\n- Pour forcer un pilote précis, lancez Markion avec VK_DRIVER_FILES=/path/to/driver_icd.json (VK_ICD_FILENAMES avec les anciens chargeurs Vulkan).\n- Si un manifeste de pilote obsolète ou une couche implicite qui plante est installé, désactivez-le avec VK_LOADER_DRIVERS_DISABLE ou VK_LOADER_LAYERS_DISABLE.\n- L’AppImage de Markion inclut un pilote Vulkan logiciel ; MARKION_SOFTWARE_VULKAN=1 force son utilisation.\n\nGuide complet : {0}",
+            "Markion n’a pas pu démarrer son moteur de rendu graphique. Mettez à jour votre pilote graphique, puis réessayez.",
+            "Le pilote Vulkan logiciel fourni avec Markion n’a pas pu démarrer non plus.",
+            "Markion n’a pas pu démarrer.",
+            "Détails : {0}",
+            "Fichiers journaux : {0}",
+        ],
+        Language::De => &[
+            "Markion kann nicht starten",
+            "Markion konnte seinen Grafik-Renderer nicht starten. Markion zeichnet sein Fenster mit Vulkan, und es wurde kein nutzbarer Vulkan-Treiber gefunden.\n\nSo beheben Sie das Problem:\n- Installieren Sie den Vulkan-Treiber Ihrer Grafikkarte oder auf Rechnern ohne GPU den Software-Treiber von Mesa (Debian/Ubuntu/Fedora: mesa-vulkan-drivers, Arch: vulkan-swrast).\n- Um einen bestimmten Treiber zu erzwingen, starten Sie Markion mit VK_DRIVER_FILES=/path/to/driver_icd.json (VK_ICD_FILENAMES bei älteren Vulkan-Loadern).\n- Ist ein veraltetes Treibermanifest oder eine abstürzende implizite Ebene installiert, deaktivieren Sie sie mit VK_LOADER_DRIVERS_DISABLE oder VK_LOADER_LAYERS_DISABLE.\n- Das Markion-AppImage enthält einen Software-Vulkan-Treiber; MARKION_SOFTWARE_VULKAN=1 erzwingt ihn.\n\nVollständige Anleitung: {0}",
+            "Markion konnte seinen Grafik-Renderer nicht starten. Aktualisieren Sie Ihren Grafiktreiber und versuchen Sie es erneut.",
+            "Auch der mit Markion gelieferte Software-Vulkan-Treiber konnte nicht starten.",
+            "Markion konnte nicht gestartet werden.",
+            "Details: {0}",
+            "Protokolldateien: {0}",
+        ],
+        Language::Es => &[
+            "Markion no puede iniciarse",
+            "Markion no pudo iniciar su motor de renderizado gráfico. Markion dibuja su ventana con Vulkan y no se encontró ningún controlador Vulkan utilizable.\n\nPara solucionarlo:\n- Instale el controlador Vulkan de su tarjeta gráfica o, en equipos sin GPU, el controlador por software de Mesa (Debian/Ubuntu/Fedora: mesa-vulkan-drivers, Arch: vulkan-swrast).\n- Para forzar un controlador concreto, inicie Markion con VK_DRIVER_FILES=/path/to/driver_icd.json (VK_ICD_FILENAMES con cargadores Vulkan antiguos).\n- Si hay instalado un manifiesto de controlador obsoleto o una capa implícita que falla, desactívelo con VK_LOADER_DRIVERS_DISABLE o VK_LOADER_LAYERS_DISABLE.\n- El AppImage de Markion incluye un controlador Vulkan por software; MARKION_SOFTWARE_VULKAN=1 obliga a usarlo.\n\nGuía completa: {0}",
+            "Markion no pudo iniciar su motor de renderizado gráfico. Actualice el controlador gráfico e inténtelo de nuevo.",
+            "El controlador Vulkan por software incluido con Markion tampoco pudo iniciarse.",
+            "Markion no pudo iniciarse.",
+            "Detalles: {0}",
+            "Archivos de registro: {0}",
+        ],
+    };
+    substitute(catalog[message as usize], args)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum ImageStatusMsg {
@@ -8494,6 +8578,49 @@ mod tests {
             p0_tf(Language::En, P0Msg::ImageReplaceFailed, &["boom"]),
             "Could not replace image: boom"
         );
+    }
+
+    #[test]
+    fn startup_failure_catalog_is_complete_for_every_language() {
+        let messages = [
+            StartupFailureMsg::Title,
+            StartupFailureMsg::RendererLinux,
+            StartupFailureMsg::RendererGeneric,
+            StartupFailureMsg::SoftwareFallbackFailed,
+            StartupFailureMsg::Generic,
+            StartupFailureMsg::Details,
+            StartupFailureMsg::LogDirectory,
+        ];
+        for language in Language::all() {
+            for message in messages {
+                let text = startup_failure_tf(*language, message, &["ARG"]);
+                assert!(!text.trim().is_empty(), "{language:?} {message:?}");
+                assert!(!text.contains("{0}"), "{language:?} {message:?} keeps a placeholder");
+            }
+            for message in [
+                StartupFailureMsg::RendererLinux,
+                StartupFailureMsg::Details,
+                StartupFailureMsg::LogDirectory,
+            ] {
+                assert!(
+                    startup_failure_tf(*language, message, &["ARG"]).contains("ARG"),
+                    "{language:?} {message:?} drops its argument"
+                );
+            }
+            // The remediation commands are literal and must survive translation.
+            let linux = startup_failure_tf(*language, StartupFailureMsg::RendererLinux, &["ARG"]);
+            for literal in [
+                "mesa-vulkan-drivers",
+                "vulkan-swrast",
+                "VK_DRIVER_FILES",
+                "VK_ICD_FILENAMES",
+                "VK_LOADER_DRIVERS_DISABLE",
+                "VK_LOADER_LAYERS_DISABLE",
+                "MARKION_SOFTWARE_VULKAN=1",
+            ] {
+                assert!(linux.contains(literal), "{language:?} lacks {literal}");
+            }
+        }
     }
 
     #[test]

@@ -1,4 +1,12 @@
+use std::{
+    any::Any,
+    panic::{self, AssertUnwindSafe},
+    sync::atomic::{AtomicBool, Ordering},
+};
+
 use super::layout::startup_window_bounds;
+use super::renderer_fallback::{self, FallbackUnavailable};
+use super::startup_alert::{self, StartupFailureKind};
 use super::*;
 
 pub(super) fn install_window_close_guard(
@@ -429,11 +437,65 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
         "Markion starting"
     );
 
+    renderer_fallback::prepare_startup();
+
     // Load the syntect grammar registry off the main thread so the first
     // highlighted code block never blocks the typing path (~100ms of grammar
     // parsing happens here instead of on first use).
     std::thread::spawn(markion::warm_highlighter);
 
+    // GPUI panics when it cannot create a renderer (e.g. no Vulkan driver).
+    // Failures before the main window is up become an actionable report or a
+    // software-Vulkan restart; later panics propagate unchanged.
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+        if std::env::var_os(startup_alert::SIMULATE_RENDERER_FAILURE_ENV).is_some() {
+            panic!("{}", startup_alert::SIMULATED_RENDERER_FAILURE);
+        }
+        run_application(startup_intent);
+    }));
+    if let Err(payload) = outcome {
+        if STARTUP_COMPLETE.load(Ordering::Acquire) {
+            panic::resume_unwind(payload);
+        }
+        report_startup_failure(&*payload, log_dir.as_deref());
+    }
+}
+
+static STARTUP_COMPLETE: AtomicBool = AtomicBool::new(false);
+
+fn report_startup_failure(payload: &(dyn Any + Send), log_dir: Option<&std::path::Path>) -> ! {
+    let detail = startup_alert::panic_message(payload);
+    let kind = startup_alert::classify_failure(&detail);
+    tracing::error!(?kind, error = %detail, "Markion failed to start");
+
+    let mut software_fallback_failed = false;
+    if kind == StartupFailureKind::Renderer {
+        match renderer_fallback::restart_on_software_stack() {
+            FallbackUnavailable::AlreadyActive => software_fallback_failed = true,
+            FallbackUnavailable::ExecFailed(error) => {
+                tracing::error!(%error, "could not restart on the bundled software Vulkan driver");
+            }
+            reason => tracing::info!(?reason, "software Vulkan fallback not used"),
+        }
+    }
+
+    let language = Language::from_code(
+        &load_app_preferences(default_preferences_path())
+            .unwrap_or_default()
+            .language,
+    );
+    let alert = startup_alert::compose_alert(
+        language,
+        kind,
+        software_fallback_failed,
+        &detail,
+        log_dir,
+    );
+    startup_alert::show(&alert);
+    std::process::exit(1);
+}
+
+fn run_application(startup_intent: StartupOpenIntent) {
     Application::new()
         .with_assets(crate::ui::icon::IconAssets)
         .run(move |cx: &mut App| {
@@ -488,6 +550,7 @@ pub(super) fn run_with_startup_intent(startup_intent: StartupOpenIntent) {
                 cx.activate(true);
             })
             .expect("failed to initialize the Markion main window");
+        STARTUP_COMPLETE.store(true, Ordering::Release);
         cx.activate(true);
     });
 }
