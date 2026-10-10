@@ -156,7 +156,8 @@ All of these jobs must succeed:
 - Build and package on `windows-latest`.
 - Build and package on `macos-latest` (arm64 native).
 - Build and package on `macos-latest` (cross-compiled `x86_64-apple-darwin`, which also verifies the ad-hoc code signature of the produced `.app`).
-- Build and package on `ubuntu-22.04`.
+- Build and package on `ubuntu-22.04` (the AppImage includes the lavapipe software Vulkan fallback from `scripts/build-lavapipe.sh`, bundled before the permission fix).
+- AppImage smoke test (no GPU, no Vulkan driver): starts the AppImage like the AppImage catalog test (Xvfb, icewm, `firejail --appimage`) and requires a non-blank window. `release` and `mirror-oss` wait for it; its screenshot is the `appimage-smoke-test` artifact.
 - Sign the updater installers (Windows NSIS + Linux AppImage) and build metadata.
 - Publish GitHub Release.
 - Mirror installers to Aliyun OSS.

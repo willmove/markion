@@ -103,6 +103,41 @@ jobs:
           # AppImages need FUSE or --appimage-extract-and-run
           echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
 
+      # Mesa lavapipe + Vulkan loader for the AppImage's software rendering
+      # fallback (machines without a GPU or Vulkan driver). Building Mesa
+      # takes a while, so the result is cached until the build script changes.
+      - name: Cache software Vulkan stack
+        if: runner.os == 'Linux'
+        id: vulkan-stack-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/markion-vulkan
+          key: markion-vulkan-${{ matrix.os }}-${{ hashFiles('scripts/build-lavapipe.sh') }}
+
+      - name: Build software Vulkan stack
+        if: runner.os == 'Linux' && steps.vulkan-stack-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get install -y \
+            python3-venv \
+            python3-mako \
+            python3-yaml \
+            bison \
+            flex \
+            ninja-build \
+            llvm-15-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb-dri3-dev \
+            libxcb-present-dev \
+            libxcb-shm0-dev \
+            libxcb-randr0-dev \
+            libxcb-sync-dev \
+            libxshmfence-dev \
+            libxrandr-dev \
+            libdrm-dev \
+            zlib1g-dev
+          bash scripts/build-lavapipe.sh "${{ runner.temp }}/markion-vulkan"
+
       # The public key is intentionally embedded only in the tagged Windows
       # and Linux binaries — the two platforms whose updater can install a
       # signed package (NSIS passive install / AppImage in-place replace).
@@ -159,6 +194,11 @@ jobs:
           CARGO_BUILD_TARGET: x86_64-apple-darwin
         run: cargo packager --release --config packager.toml --formats ${{ matrix.formats }} --target x86_64-apple-darwin
 
+      # Runs before the permission fix so the bundled files are normalized too.
+      - name: Bundle software Vulkan driver into AppImage
+        if: runner.os == 'Linux'
+        run: bash scripts/bundle-appimage-vulkan.sh dist/*.AppImage "${{ runner.temp }}/markion-vulkan"
+
       # cargo-packager 0.11.8 produces AppImages with restrictive permissions
       # (AppRun 0744, dirs 0700) that fail the AppImage catalog test when run
       # inside a firejail sandbox as a non-owner user. Extract, normalize all
@@ -208,6 +248,82 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # Starts the packaged AppImage the way the AppImage catalog test does
+  # (https://github.com/AppImage/appimage.github.io): Ubuntu 22.04, Xvfb +
+  # icewm, the catalog's firejail build, `firejail --appimage`, and no Vulkan
+  # driver on the system, so it can only pass through the bundled software
+  # Vulkan fallback. Tagged releases are not published unless it passes.
+  appimage-smoke:
+    name: AppImage smoke test (no GPU, no Vulkan driver)
+    needs: build
+    if: github.event_name != 'workflow_dispatch' || inputs.mirror_tag == ''
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux packages
+        uses: actions/download-artifact@v4
+        with:
+          name: markion-linux-x86_64
+          path: dist
+
+      - name: Install the catalog test environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb \
+            icewm \
+            x11-utils \
+            xdotool \
+            imagemagick \
+            libfuse2 \
+            fuse \
+            libgl1-mesa-dri \
+            libosmesa6 \
+            mesa-utils \
+            libvulkan1
+          # Same firejail build and install steps as the catalog's code/worker.sh.
+          mkdir -p "$RUNNER_TEMP/firejail" && cd "$RUNNER_TEMP/firejail"
+          wget -q https://github.com/AppImage/appimage.github.io/releases/download/deps/alpine-firejail-git20230825.tar.gz
+          musl="$(wget -q https://dl-cdn.alpinelinux.org/alpine/v3.13/main/x86_64/ -O - | grep -o 'musl-1[^"]*\.apk' | head -n 1)"
+          wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.13/main/x86_64/$musl"
+          tar xf alpine-firejail-git20230825.tar.gz
+          mkdir -p firejail
+          tar xf musl-*.apk -C ./firejail/ 2>/dev/null || true
+          tar xf firejail-0*.apk -C ./firejail/ 2>/dev/null || true
+          sudo cp -Rf ./firejail/etc/* /etc/
+          sudo cp -Rf ./firejail/lib/* /lib/
+          sudo cp -Rf ./firejail/usr/* /usr/
+          sudo chown root:root /usr/bin/firejail
+          sudo chmod u+s /usr/bin/firejail
+          firejail --version | head -n 1
+
+      # Hosted runners may ship Mesa's Vulkan drivers; move their manifests
+      # away so the test reproduces a machine without any Vulkan driver.
+      - name: Remove system Vulkan drivers
+        run: |
+          for dir in /usr/share/vulkan/icd.d /etc/vulkan/icd.d /usr/local/share/vulkan/icd.d; do
+            if [ -d "$dir" ]; then
+              sudo mkdir -p "$RUNNER_TEMP/disabled-icd$dir"
+              sudo find "$dir" -name '*.json' -exec mv -t "$RUNNER_TEMP/disabled-icd$dir" {} +
+            fi
+          done
+
+      - name: Start the AppImage under firejail and wait for its window
+        env:
+          MARKION_SMOKE_REQUIRE_NO_VULKAN_DRIVER: '1'
+        run: bash scripts/smoke-test-appimage.sh dist/*.AppImage "$RUNNER_TEMP/appimage-smoke"
+
+      - name: Upload smoke test screenshot and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-smoke-test
+          path: ${{ runner.temp }}/appimage-smoke
+          if-no-files-found: ignore
+          retention-days: 14
+
   prepare-update:
     name: Sign updater installers and build metadata
     needs: build
@@ -220,6 +336,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: markion-*
           merge-multiple: true
 
       - name: Derive version without leading v
@@ -355,16 +472,19 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [build, prepare-update]
+    needs: [build, appimage-smoke, prepare-update]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      # The pattern keeps the appimage-smoke-test screenshot and log out of
+      # the published Release files.
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: markion-*
           merge-multiple: true
 
       - name: List artifacts to publish
@@ -395,13 +515,14 @@ jobs:
   # 200, so a "successful" job always means the mirror actually works.
   mirror-oss:
     name: Mirror installers to Aliyun OSS
-    needs: [build, prepare-update]
+    needs: [build, appimage-smoke, prepare-update]
     if: >-
       ${{
         always() &&
         (
           (startsWith(github.ref, 'refs/tags/v') &&
             needs.build.result == 'success' &&
+            needs.appimage-smoke.result == 'success' &&
             needs.prepare-update.result == 'success') ||
           (github.event_name == 'workflow_dispatch' && inputs.mirror_tag != '')
         )
@@ -432,6 +553,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: markion-*
           merge-multiple: true
 
       - name: Download published release assets for mirror repair

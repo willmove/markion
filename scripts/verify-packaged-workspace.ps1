@@ -129,6 +129,20 @@ done < <(find . -type f -print0)
 echo 'AppImage permissions OK: AppRun and directories are world-executable, files are world-readable'
 "@
             }
+
+            # The software Vulkan fallback (scripts/bundle-appimage-vulkan.sh)
+            # is what lets the AppImage start on machines without a GPU driver.
+            $vulkanStack = Join-Path $squashfsRoot "usr/lib/markion-vulkan"
+            foreach ($required in @("libvulkan_lvp.so", "libvulkan.so.1", "lvp_icd.x86_64.json", "VERSIONS")) {
+                if (-not (Test-Path -LiteralPath (Join-Path $vulkanStack $required) -PathType Leaf)) {
+                    throw "AppImage software Vulkan stack is missing usr/lib/markion-vulkan/$required"
+                }
+            }
+            $icd = Get-Content -LiteralPath (Join-Path $vulkanStack "lvp_icd.x86_64.json") -Raw | ConvertFrom-Json
+            if ($icd.ICD.library_path -ne "./libvulkan_lvp.so") {
+                throw "AppImage lavapipe ICD manifest must use the manifest-relative library path ./libvulkan_lvp.so, found '$($icd.ICD.library_path)'"
+            }
+            Write-Host "AppImage software Vulkan stack OK: $((Get-Content -LiteralPath (Join-Path $vulkanStack 'VERSIONS')) -join ', ')"
         }
         "zip" {
             $package = Get-ChildItem -LiteralPath $artifacts -Filter "*-portable.zip" -File | Select-Object -First 1
