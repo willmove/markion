@@ -52,7 +52,7 @@ When set, `run_with_startup_intent` deliberately panics with the canonical GPU-c
 
 ### D5 — Troubleshooting doc is the single source for remediation text
 
-`docs/linux-gpu-troubleshooting.md` captures the three stacked root causes from the field (no software driver → stale NVIDIA ICD manifest → crashing Mesa `device_select` implicit layer) with verified commands. The dialog's short steps and the doc must stay consistent (spec scenario); the doc also records the AppImage-specific note that Markion bundles no Vulkan libraries and uses the host stack.
+`docs/linux-gpu-troubleshooting.md` captures the three stacked root causes from the field (no software driver → stale NVIDIA ICD manifest → crashing Mesa `device_select` implicit layer) with verified commands. The dialog's short steps and the doc must stay consistent (spec scenario); the doc also records how the AppImage behaves. *(Superseded by `bundle-appimage-software-vulkan`: the AppImage now bundles Mesa lavapipe and a Vulkan loader as a fallback used only when the host stack cannot start the renderer, so the doc describes that fallback and its `MARKION_SOFTWARE_VULKAN` override.)*
 
 ### D6 — Phase B (wgpu migration) is gated by a spike and may split out
 
