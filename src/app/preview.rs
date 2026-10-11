@@ -2188,7 +2188,7 @@ fn inline_math_baseline_margin(
 /// GPUI's default text line-height when a block does not set one explicitly
 /// (`relative(phi)` ≈ 1.618 × font size).
 fn default_text_line_height(font_size: f32) -> f32 {
-    font_size * 1.618_034
+    font_size * std::f32::consts::GOLDEN_RATIO
 }
 
 fn visual_inline_text_metrics(
