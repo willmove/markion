@@ -243,6 +243,10 @@ mod inprocess_jobserver {
 
         pub(super) async fn acquire(&self) -> JobToken {
             loop {
+                // Markion: Rust 1.99 deprecates `fetch_update` in favor of
+                // `try_update`, which is newer than this crate's MSRV; the
+                // crate-level `deny(warnings)` is not capped for path patches.
+                #[allow(deprecated)]
                 let res = self
                     .0
                     .fetch_update(AcqRel, Acquire, |tokens| tokens.checked_sub(1));

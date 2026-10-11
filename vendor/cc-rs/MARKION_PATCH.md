@@ -15,3 +15,9 @@ cc-rs's undocumented `/Brepro` flag for Microsoft's `cl.exe` 19.44, because the
 same C1056 still occurs sequentially while cl.exe rewrites the deterministic
 timestamp field. `clang-cl` retains `/Brepro`. Cargo remains free to compile
 Rust crates and independent build scripts in parallel.
+
+Because this is a path patch, Cargo does not cap its lints, so the crate-level
+`#![deny(warnings)]` applies to Markion builds. The jobserver token loop in
+`src/parallel/job_token.rs` allows the `fetch_update` deprecation introduced in
+Rust 1.99 rather than switching to `try_update`, which would raise the crate's
+MSRV.
