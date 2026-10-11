@@ -277,8 +277,6 @@ mod tests {
             Some(Path::new("/home/u/.cache/markion/logs")),
         );
         assert_eq!(alert.title, "Markion cannot start");
-        assert!(alert.body.contains("no usable Vulkan driver was found"));
-        assert!(alert.body.contains(TROUBLESHOOTING_URL));
         assert!(alert.body.contains("could not start either"));
         assert!(alert.body.contains("Details: NoSupportedDeviceFound\n"));
         assert!(
@@ -286,12 +284,19 @@ mod tests {
                 .body
                 .ends_with("Log files: /home/u/.cache/markion/logs")
         );
-        assert!(
-            wrap_text(&alert.body, XMESSAGE_COLUMNS)
-                .lines()
-                .any(|line| line == TROUBLESHOOTING_URL),
-            "the guide URL must stay on one line in the xmessage dialog"
-        );
+        if cfg!(target_os = "linux") {
+            assert!(alert.body.contains("no usable Vulkan driver was found"));
+            assert!(alert.body.contains(TROUBLESHOOTING_URL));
+            assert!(
+                wrap_text(&alert.body, XMESSAGE_COLUMNS)
+                    .lines()
+                    .any(|line| line == TROUBLESHOOTING_URL),
+                "the guide URL must stay on one line in the xmessage dialog"
+            );
+        } else {
+            assert!(alert.body.contains("Update your graphics driver"));
+            assert!(!alert.body.contains(TROUBLESHOOTING_URL));
+        }
     }
 
     #[test]
