@@ -29,7 +29,11 @@ This creates `markion-updater.key` and `markion-updater.key.pub`. Never commit e
 
 The public key is embedded only in tagged Windows and Linux builds. The private key and password are consumed only by the tag-only `prepare-update` job and must never appear in repository files, logs, or workflow artifacts. The existing OSS secrets are also required because `update.json` directs Windows and Linux clients to the installers under `${OSS_PUBLIC_BASE}/${OSS_PREFIX}/latest/`.
 
-Minisign authenticates the updater payload; it is not Windows Authenticode signing or Linux package-manager signing. SmartScreen can therefore still warn when launching Markion or its installer. macOS bundles are sealed with a free ad-hoc code signature (`[macos] signing-identity = "-"` in `packager.toml`), which keeps Gatekeeper's first-launch warning overridable via *System Settings → Privacy & Security → Open Anyway* — but macOS builds remain without Developer ID signing or notarization.
+Minisign authenticates the updater payload; it is not Windows Authenticode signing or Linux package-manager signing. SmartScreen can therefore still warn when launching Markion or its installer. macOS bundles are sealed with a free ad-hoc code signature by default (`[macos] signing-identity = "-"` in `packager.toml`), which current macOS still blocks after a browser download.
+
+### macOS Developer ID signing and notarization
+
+When the `APPLE_SIGNING_IDENTITY`, `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_PRIVATE_KEY` secrets are configured, tag builds sign both macOS bundles with the Developer ID (hardened runtime), notarize and staple the `.app` and the DMG, and fail rather than publish if Apple rejects a submission. [macos-signing.md](macos-signing.md) covers provisioning, verification, and rotation. Without those secrets the tag build still succeeds with ad-hoc DMGs but emits a `This tagged release's macOS DMGs are NOT notarized` warning; partial secret sets fail the macOS jobs.
 
 Treat rotation as a planned migration, not a secret replacement. The current client trusts one key and the workflow verifies that the embedded public key matches the signing private key, so changing both keys in one release would strand existing clients. Before rotating, implement and test a bridge client that trusts both old and new public keys, publish that bridge while signing with the old key, and wait for it to be distributed. Only then sign subsequent releases with the new key, retaining the old key for a documented transition period.
 
@@ -155,7 +159,7 @@ All of these jobs must succeed:
 
 - Build and package on `windows-latest`.
 - Build and package on `macos-latest` (arm64 native).
-- Build and package on `macos-latest` (cross-compiled `x86_64-apple-darwin`, which also verifies the ad-hoc code signature of the produced `.app`).
+- Build and package on `macos-latest` (cross-compiled `x86_64-apple-darwin`). Both macOS jobs verify the signature their run selected — ad-hoc, or Developer ID with stapled notarization tickets on the `.app` and DMG — and log `macOS signing mode: <mode>; notarize: <true|false>`.
 - Build and package on `ubuntu-22.04` (the AppImage includes the lavapipe software Vulkan fallback from `scripts/build-lavapipe.sh`, bundled before the permission fix).
 - AppImage smoke test (no GPU, no Vulkan driver): starts the AppImage like the AppImage catalog test (Xvfb, icewm, `firejail --appimage`) and requires a non-blank window. `release` and `mirror-oss` wait for it; its screenshot is the `appimage-smoke-test` artifact.
 - Sign the updater installers (Windows NSIS + Linux AppImage) and build metadata.
@@ -201,7 +205,7 @@ One-sentence summary of the release.
 ## Compatibility
 
 - State whether Markdown files, preferences, or workspace data require migration.
-- State relevant platform limitations. Markion's unsigned Windows installers normally require SmartScreen bypass steps; the ad-hoc-signed macOS DMGs still trigger a Gatekeeper warning that users dismiss via *System Settings → Privacy & Security → Open Anyway* (or the documented `xattr -cr` / `curl -LO` alternatives).
+- State relevant platform limitations. Markion's unsigned Windows installers normally require SmartScreen bypass steps; state whether the macOS DMGs are notarized (the macOS build logs print `notarize: true`). Notarized DMGs need no workaround; non-notarized (ad-hoc) DMGs are blocked by Gatekeeper after a browser download, so keep the documented `xattr -cr` / `curl -LO` instructions in that case.
 
 ## Downloads
 
@@ -235,7 +239,7 @@ One-sentence summary of the release.
 ## 兼容性
 
 - 说明 Markdown 文件、偏好设置或工作区数据是否需要迁移。
-- 说明相关的平台限制。Markion 的 Windows 安装包未签名，通常需要手动绕过 SmartScreen；macOS DMG 带 ad-hoc 签名，首次启动仍会触发 Gatekeeper 警告，用户可通过“系统设置 → 隐私与安全性 → 仍要打开”放行（或使用文档中的 `xattr -cr` / `curl -LO` 替代方式）。
+- 说明相关的平台限制。Markion 的 Windows 安装包未签名，通常需要手动绕过 SmartScreen；注明 macOS DMG 是否已公证（macOS 构建日志会打印 `notarize: true`）。已公证的 DMG 无需任何额外操作；未公证（ad-hoc）的 DMG 通过浏览器下载后会被 Gatekeeper 拦截，此时保留文档中的 `xattr -cr` / `curl -LO` 说明。
 
 ## 下载
 

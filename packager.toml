@@ -26,14 +26,15 @@
 #   - Linux:   markion_<version>_x86_64.rpm        (scripts/build-linux-rpm.sh, from the DEB payload)
 # Those two artifacts still go through scripts/verify-packaged-workspace.ps1.
 #
-# NOTE on signing: builds have no paid platform code-signing certificate, so
-# users can still see Gatekeeper (macOS) / SmartScreen (Windows) warnings.
-# macOS bundles are sealed with an ad-hoc signature (see [macos] below), which
-# keeps the signature valid-but-untrusted so Gatekeeper offers the "Open
-# Anyway" path instead of the hard "app is damaged" block an unsealed bundle
-# triggers. The Windows NSIS installer and the Linux AppImage are separately
-# signed with minisign for the in-app updater; that authenticates update
-# downloads but is not Authenticode or package-manager signing.
+# NOTE on signing: Windows builds have no Authenticode certificate, so
+# SmartScreen warns. macOS bundles are ad-hoc sealed by default (see [macos]
+# below); the release workflow switches them to Developer ID signing plus
+# Apple notarization when the Apple secrets are configured
+# (docs/macos-signing.md). Only a notarized app opens after a browser
+# download — current macOS rejects a quarantined ad-hoc bundle as "damaged".
+# The Windows NSIS installer and the Linux AppImage are separately signed with
+# minisign for the in-app updater; that authenticates update downloads but is
+# not Authenticode or package-manager signing.
 #
 # Aliyun OSS mirror (release.yml `mirror-oss` job):
 #   After a successful `v*` tag build, the release workflow also uploads the
@@ -101,12 +102,13 @@ formats = ["nsis", "app", "dmg", "deb", "appimage"]
 # ---------------------------------------------------------------------------
 [macos]
 # Ad-hoc code signing ("-" identity, no Apple Developer account): seals the
-# bundle (CodeResources, bound Info.plist) so Gatekeeper treats the signature
-# as valid-but-untrusted and offers System Settings → Privacy & Security →
-# "Open Anyway". An unsealed bundle (linker ad-hoc binary signature only) is
-# reported as a hard "app is damaged" block with no override. This is NOT
-# Developer ID signing or notarization; the first-launch warning remains.
-# CI additionally verifies the seal with `codesign --verify --deep --strict`.
+# bundle (CodeResources, bound Info.plist) so the signature is valid. This is
+# NOT Developer ID signing or notarization: Gatekeeper still rejects the
+# quarantined app after a browser download. Keep this line exactly as is —
+# scripts/configure-macos-signing.sh rewrites it to the Developer ID identity
+# in CI when the Apple secrets exist, and cargo-packager then signs with the
+# hardened runtime and notarizes. CI verifies the selected signature with
+# `codesign --verify --deep --strict` (plus stapler/spctl when notarized).
 signing-identity = "-"
 # Minimum macOS version for the arm64 and x64 builds.
 minimum-system-version = "11.0"

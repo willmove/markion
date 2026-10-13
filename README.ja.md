@@ -22,7 +22,7 @@ Markion は Rust と GPUI で構築されたネイティブデスクトップ Ma
 | Linux | `.deb` と AppImage | x86_64 |
 | macOS | `.app` と `.dmg` | Apple Silicon（arm64）および Intel（x64）、macOS 11+ |
 
-Windows のリリースはコード署名されておらず、SmartScreen で「詳細情報 → 実行」が必要な場合があります。macOS のリリースは無料のアドホックコード署名で封印されており（有料の Developer ID 証明書や公証はなし）、Gatekeeper は初回起動時に警告しますが、「システム設定 → プライバシーとセキュリティ」の「このまま開く」で許可できます（詳細はメイン README の macOS 初回起動の説明を参照）。**ヘルプ → 更新を確認…** はすべてのプラットフォームで実行可能な更新プロンプトを提供します。タグ付きの Windows x86_64 NSIS インストールと Linux の AppImage 起動では、cargo-packager Minisign による暗号学的に検証されたワンクリックのダウンロード＆インストールが利用でき（Linux では実行中の AppImage をその場で置き換え、Markion を自動的に再起動します）、未保存の変更があるドキュメントが存在する間は起動を拒否します。macOS と Linux の `.deb`/`.rpm` インストールでは、対応するリリースファイルをシステムブラウザーで開きます。Apple Silicon と Intel Mac にはそれぞれネイティブの DMG があります。ユニバーサルバイナリと Apple 公証は現在提供していません。
+Windows のリリースはコード署名されておらず、SmartScreen で「詳細情報 → 実行」が必要な場合があります。macOS のリリースは、メンテナーが CI に Apple の認証情報を設定している場合は Developer ID で署名・公証されます。そうでない場合は無料のアドホック署名のみで、ブラウザーでダウンロードすると現在の macOS では「壊れているため開けません」とブロックされます（対処方法はメイン README の macOS 初回起動の説明を参照）。**ヘルプ → 更新を確認…** はすべてのプラットフォームで実行可能な更新プロンプトを提供します。タグ付きの Windows x86_64 NSIS インストールと Linux の AppImage 起動では、cargo-packager Minisign による暗号学的に検証されたワンクリックのダウンロード＆インストールが利用でき（Linux では実行中の AppImage をその場で置き換え、Markion を自動的に再起動します）、未保存の変更があるドキュメントが存在する間は起動を拒否します。macOS と Linux の `.deb`/`.rpm` インストールでは、対応するリリースファイルをシステムブラウザーで開きます。Apple Silicon と Intel Mac にはそれぞれネイティブの DMG があります。ユニバーサルバイナリは現在提供していません。
 
 ## 編集モード
 

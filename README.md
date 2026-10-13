@@ -25,15 +25,15 @@ Download the latest build from [GitHub Releases](https://github.com/willmove/mar
 | Linux | `.deb` and AppImage | x86_64 |
 | macOS | `.app` and `.dmg` | Apple Silicon (arm64) and Intel (x64), macOS 11+ |
 
-Windows releases are unsigned; SmartScreen may require **More info → Run anyway**. macOS releases are sealed with a free ad-hoc code signature — no paid Developer ID certificate or notarization — so Gatekeeper still warns on first launch but offers the **Open Anyway** path (see the next paragraph). **Help → Check for Updates…** offers an actionable update prompt on every platform: tagged Windows x86_64 NSIS installations and Linux AppImage launches get a cryptographically verified (cargo-packager Minisign) one-click download-and-install that refuses to start while any document has unsaved changes — on Linux the running AppImage is replaced in place and Markion relaunches itself — while macOS and Linux `.deb`/`.rpm` installs open the matching release file in the system browser. Apple Silicon and Intel Macs each get a native DMG; a universal binary and Apple notarization are not currently provided.
+Windows releases are unsigned; SmartScreen may require **More info → Run anyway**. macOS releases are signed with an Apple Developer ID and notarized once the maintainer's Apple credentials are configured in CI (each release's notes say whether its DMGs are notarized); otherwise they carry only a free ad-hoc signature, which current macOS blocks after a browser download (see the next paragraph). **Help → Check for Updates…** offers an actionable update prompt on every platform: tagged Windows x86_64 NSIS installations and Linux AppImage launches get a cryptographically verified (cargo-packager Minisign) one-click download-and-install that refuses to start while any document has unsaved changes — on Linux the running AppImage is replaced in place and Markion relaunches itself — while macOS and Linux `.deb`/`.rpm` installs open the matching release file in the system browser. Apple Silicon and Intel Macs each get a native DMG; a universal binary is not currently provided.
 
-**macOS first launch — "Apple cannot check it for malicious software."** Gatekeeper warns about apps without an Apple notarization; releases up to v0.4.7 were also reported as "damaged" because their bundle carried no valid signature. Current DMGs are ad-hoc code-signed, which keeps the signature valid and the warning overridable: approve Markion once under *System Settings → Privacy & Security → Open Anyway* (on macOS 13/14, right-clicking the app and choosing **Open** also works). Two Terminal alternatives skip the prompt entirely — download with `curl -LO` (curl does not set the quarantine flag), or clear the flag after a browser download:
+**macOS first launch.** A notarized DMG opens like any other Mac app: drag Markion to Applications and double-click it, and macOS asks once to confirm an app downloaded from the Internet. A build that is not notarized — including every release up to v0.4.9 — is refused by Gatekeeper after a browser download, usually as "Markion is damaged and can't be opened" (older macOS versions may instead say Apple "cannot check it for malicious software" and offer *System Settings → Privacy & Security → Open Anyway*). The file is not damaged; macOS blocks apps that Apple has not notarized. For such builds, download with `curl -LO` (curl does not set the quarantine flag), or clear the flag once after a browser download:
 
 ```bash
 xattr -cr /Applications/Markion.app
 ```
 
-Repeat the `xattr` command after each browser-downloaded update; prefix `sudo` if your install location requires it. The download itself is intact either way — each release ships a `sha256sums.txt` you can verify against.
+Repeat the `xattr` command after each browser-downloaded update of a non-notarized build; prefix `sudo` if your install location requires it. The download itself is intact either way — each release ships a `sha256sums.txt` you can verify against.
 
 ## Editing modes
 
@@ -257,15 +257,15 @@ Markion 是一款使用 Rust 和 GPUI 构建的原生桌面 Markdown 编辑器�
 | Linux | `.deb` 和 AppImage | x86_64 |
 | macOS | `.app` 和 `.dmg` | Apple Silicon（arm64）与 Intel（x64），macOS 11+ |
 
-Windows 发布包未签名，SmartScreen 可能要求选择“更多信息 → 仍要运行”。macOS 发布包使用免费的 ad-hoc 代码签名封装——没有付费 Developer ID 证书，也未公证——因此 Gatekeeper 首次启动仍会警告，但提供“仍要打开”通道（见下一段）。“帮助 → 检查更新…”在所有平台都提供可操作的更新提示：带标签的 Windows x86_64 NSIS 安装可进行经过 cargo-packager Minisign 加密验证的一键下载并安装，且当任一文档存在未保存更改时拒绝启动；macOS 与 Linux 会在系统浏览器中打开对应的发布文件。Apple Silicon 与 Intel Mac 各有原生 DMG；目前尚不提供通用二进制和 Apple 公证。
+Windows 发布包未签名，SmartScreen 可能要求选择“更多信息 → 仍要运行”。在维护者于 CI 中配置 Apple 凭据后，macOS 发布包会使用 Apple Developer ID 签名并经过公证（每个版本的发布说明会注明其 DMG 是否已公证）；否则只带免费的 ad-hoc 签名，而当前的 macOS 会拦截通过浏览器下载的此类应用（见下一段）。“帮助 → 检查更新…”在所有平台都提供可操作的更新提示：带标签的 Windows x86_64 NSIS 安装可进行经过 cargo-packager Minisign 加密验证的一键下载并安装，且当任一文档存在未保存更改时拒绝启动；macOS 与 Linux 会在系统浏览器中打开对应的发布文件。Apple Silicon 与 Intel Mac 各有原生 DMG；目前尚不提供通用二进制。
 
-**macOS 首次启动提示“无法检查它是否包含恶意软件”。** Gatekeeper 会对未经 Apple 公证的应用发出警告；v0.4.7 及更早版本还会被报“已损坏”，因为其 bundle 没有有效签名。当前 DMG 均带 ad-hoc 代码签名，签名有效、警告可绕过：在“系统设置 → 隐私与安全性”中点按一次“仍要打开”即可（macOS 13/14 也可以右键应用选择“打开”）。两种终端方式可以完全跳过提示——用 `curl -LO` 下载（curl 不会设置隔离标记），或清除浏览器下载带来的隔离标记：
+**macOS 首次启动。** 已公证的 DMG 与普通 Mac 应用一样打开：把 Markion 拖入“应用程序”后双击，macOS 只会询问一次是否打开从互联网下载的应用。未公证的构建（包括 v0.4.9 及更早的所有版本）通过浏览器下载后会被 Gatekeeper 拒绝，通常提示“Markion 已损坏，无法打开”（较旧的 macOS 可能改为提示“无法检查其是否包含恶意软件”，并在“系统设置 → 隐私与安全性”中提供“仍要打开”）。文件本身并未损坏，这是 macOS 对未经 Apple 公证应用的拦截。对此类构建，可用 `curl -LO` 下载（curl 不会设置隔离标记），或在浏览器下载后清除一次隔离标记：
 
 ```bash
 xattr -cr /Applications/Markion.app
 ```
 
-每次通过浏览器下载更新后需重新执行 `xattr` 命令；安装位置需要权限时在命令前加 `sudo`。无论哪种方式，下载文件本身都完好——每个 Release 都附有 `sha256sums.txt` 可供校验。
+未公证的构建每次通过浏览器下载更新后需重新执行 `xattr` 命令；安装位置需要权限时在命令前加 `sudo`。无论哪种方式，下载文件本身都完好——每个 Release 都附有 `sha256sums.txt` 可供校验。
 
 ## 编辑模式
 
