@@ -135,6 +135,26 @@ pub(super) fn file_tree_watch_event_is_relevant(
     }
 }
 
+/// Whether a watcher event should request a Git details refresh. Unlike the
+/// file tree, content modifications count; see
+/// [`git_refresh::git_watch_path_is_relevant`] for the `.git` rules.
+pub(super) fn git_watch_event_is_relevant(event: &notify::Event, root: &Path) -> bool {
+    use notify::event::{EventKind, Flag};
+    if event.flag() == Some(Flag::Rescan) {
+        return true;
+    }
+    match event.kind {
+        EventKind::Access(_) => false,
+        _ => {
+            event.paths.is_empty()
+                || event
+                    .paths
+                    .iter()
+                    .any(|path| git_refresh::git_watch_path_is_relevant(root, path))
+        }
+    }
+}
+
 /// Background stage of one autosave: recovery snapshot first (so a failed or
 /// refused destination save still leaves the text recoverable), then the
 /// destination write. All file I/O for autosave lives here, off the UI
@@ -1383,6 +1403,9 @@ impl MarkionApp {
         let show_hidden = self.show_hidden_files;
         cx.spawn(async move |this, cx| {
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            // Git details have their own relevance rules: content edits and
+            // repository state files count, unlike for the file tree.
+            let (git_tx, git_rx) = std::sync::mpsc::sync_channel(1);
             let watch_root = root.clone();
             let watched = cx
                 .background_executor()
@@ -1398,6 +1421,12 @@ impl MarkionApp {
                             if relevant {
                                 let _ = tx_notify.try_send(());
                             }
+                            let git_relevant = event.as_ref().map_or(true, |event| {
+                                git_watch_event_is_relevant(event, &event_root)
+                            });
+                            if git_relevant {
+                                let _ = git_tx.try_send(());
+                            }
                         },
                     )?;
                     watcher.watch(&watch_root, notify::RecursiveMode::Recursive)?;
@@ -1405,8 +1434,20 @@ impl MarkionApp {
                 })
                 .await;
             let _watcher = match watched {
-                Ok(watcher) => watcher,
+                Ok(watcher) => {
+                    let _ = this.update(cx, |app, _| {
+                        if app.file_tree_watch_generation == generation {
+                            app.git_ui.watcher_polling = false;
+                        }
+                    });
+                    watcher
+                }
                 Err(_) => {
+                    let _ = this.update(cx, |app, _| {
+                        if app.file_tree_watch_generation == generation {
+                            app.git_ui.watcher_polling = true;
+                        }
+                    });
                     loop {
                         Timer::after(FILE_TREE_POLL_INTERVAL).await;
                         let still_current = this
@@ -1433,13 +1474,22 @@ impl MarkionApp {
                 if !still_current {
                     break;
                 }
-                if rx.try_recv().is_err() {
+                let tree_changed = rx.try_recv().is_ok();
+                let git_changed = git_rx.try_recv().is_ok();
+                if !tree_changed && !git_changed {
                     continue;
                 }
                 while rx.try_recv().is_ok() {}
+                while git_rx.try_recv().is_ok() {}
                 let _ = this.update(cx, |app, cx| {
-                    if app.file_tree_watch_generation == generation {
+                    if app.file_tree_watch_generation != generation {
+                        return;
+                    }
+                    if tree_changed {
                         app.refresh_file_tree(cx);
+                    }
+                    if git_changed {
+                        app.refresh_git_details(cx);
                     }
                 });
             }

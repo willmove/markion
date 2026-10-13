@@ -5,7 +5,7 @@ use std::{
     process::{Command, ExitStatus, Stdio},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -224,13 +224,22 @@ impl GitCommand {
 #[derive(Clone, Debug)]
 pub struct GitCommandRunner {
     executable: PathBuf,
+    invocations: Option<Arc<AtomicUsize>>,
 }
 
 impl GitCommandRunner {
     pub fn new(executable: impl Into<PathBuf>) -> Self {
         Self {
             executable: executable.into(),
+            invocations: None,
         }
+    }
+
+    /// Count every spawned Git process. Tests use this to pin process
+    /// budgets without timing-based assertions.
+    pub fn with_invocation_counter(mut self, counter: Arc<AtomicUsize>) -> Self {
+        self.invocations = Some(counter);
+        self
     }
 
     pub fn executable(&self) -> &Path {
@@ -265,6 +274,9 @@ impl GitCommandRunner {
 
         let start = Instant::now();
         let mut child = command.spawn().map_err(GitCommandError::Spawn)?;
+        if let Some(invocations) = &self.invocations {
+            invocations.fetch_add(1, Ordering::Relaxed);
+        }
         let stdin_writer = request.standard_input.clone().map(|bytes| {
             let mut stdin = child.stdin.take().expect("stdin configured as piped");
             thread::spawn(move || -> io::Result<()> {
@@ -471,6 +483,20 @@ mod tests {
             error.output().unwrap().termination,
             ProcessTermination::Cancelled
         );
+    }
+
+    #[test]
+    fn invocation_counter_counts_each_spawned_process() {
+        let directory = tempdir().unwrap();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counted = GitCommandRunner::new("git").with_invocation_counter(counter.clone());
+        run_ok(&counted, directory.path(), ["--version"]);
+        run_ok(&counted, directory.path(), ["--version"]);
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
+
+        let plain = GitCommandRunner::new("git");
+        run_ok(&plain, directory.path(), ["--version"]);
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
     }
 
     fn run_ok<const N: usize>(runner: &GitCommandRunner, directory: &Path, args: [&str; N]) {

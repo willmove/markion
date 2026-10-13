@@ -547,7 +547,7 @@ fn run_application(startup_intent: StartupOpenIntent) {
                 app.arm_git_branch_poll(cx);
                 app.arm_git_recovery(cx);
                 app.arm_git_background_checks(cx);
-                app.arm_git_details_poll(cx);
+                app.arm_git_details_refresh(window, cx);
                 // File-tree scanning is driven by session restore, CLI folder
                 // open, or opening a document — not by the process CWD.
                 cx.activate(true);

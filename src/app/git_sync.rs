@@ -5,7 +5,7 @@ use markion_git_sync::{
     JournalStore, NewFileClass, NewFileRule, OnboardingService, OperationKind, RecoveryAssessment,
     RecoveryManager, RemoteTransport, RemoteUrl, RepositoryCapabilities, RepositoryPolicy,
     RepositoryState, SyncOptions, SyncOutcome, SyncPlan, SyncPolicies, SyncTarget,
-    inspect_note_attachments, repository_adoptable,
+    inspect_notes_attachments, repository_adoptable,
 };
 use std::collections::BTreeSet;
 use std::time::Instant;
@@ -55,6 +55,8 @@ pub(super) struct GitSyncCompletion {
     /// Absolute paths owned by the conflict when `outcome` stops in
     /// resolution; empty otherwise.
     pub(super) conflict_paths: Vec<PathBuf>,
+    /// Held-back tracked changes that paused integration; empty otherwise.
+    pub(super) held_back_tracked: Vec<PathBuf>,
 }
 
 enum RecoveryGuard {
@@ -1793,6 +1795,7 @@ impl MarkionApp {
                         buffers,
                         images,
                         conflict_paths: Vec::new(),
+                        held_back_tracked: Vec::new(),
                     },
                     cx,
                 );
@@ -1817,6 +1820,7 @@ impl MarkionApp {
             buffers,
             images,
             conflict_paths,
+            held_back_tracked,
         } = completion;
         let conflict_active = matches!(
             &outcome,
@@ -1957,6 +1961,12 @@ impl MarkionApp {
             {
                 self.git_label(GitMsg::NewEdits).into()
             }
+            SyncOutcome::Synchronized { held_back, .. } if held_back > 0 => git_tf(
+                self.language,
+                GitMsg::SyncCompleteHeldBack,
+                &[&held_back.to_string()],
+            )
+            .into(),
             SyncOutcome::Synchronized { .. } | SyncOutcome::UpToDate => {
                 t(self.language, Msg::StatusGitSyncComplete).into()
             }
@@ -1966,6 +1976,16 @@ impl MarkionApp {
             SyncOutcome::UncertainDelivery { reason, .. } => {
                 git_tf(self.language, GitMsg::Uncertain, &[&reason]).into()
             }
+            SyncOutcome::NeedsAttention { .. } if !held_back_tracked.is_empty() => git_tf(
+                self.language,
+                GitMsg::HeldBackTrackedBlocks,
+                &[&held_back_tracked
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")],
+            )
+            .into(),
             SyncOutcome::NeedsAttention { reason, .. } => {
                 self.trf(Msg::StatusGitSyncFailed, &[&reason])
             }
@@ -2171,6 +2191,8 @@ fn default_notes_policy(
         background_fetch,
         last_confirmed_remote: None,
         acknowledged_resource_omissions: Vec::new(),
+        allowed_extensions: Default::default(),
+        included_once: Vec::new(),
     }
 }
 
@@ -2333,6 +2355,10 @@ fn run_git_operation(
         return Err("documents changed while preparing the snapshot; retry synchronization".into());
     }
     let before = repository.status().map_err(|error| error.to_string())?;
+    // Buffers and changes held back from the automatic commit; they are
+    // neither saved, inspected, nor committed by this operation.
+    let mut held_back_buffers = HashSet::new();
+    let mut held_back_changes = HashSet::new();
     if captures_content {
         if let Some(request) = &version_request {
             if request.message.trim().is_empty()
@@ -2390,28 +2416,29 @@ fn run_git_operation(
                     .into(),
             );
         }
-        // Check the entire inventory before saving any buffer. Policy exceptions stay visible.
+        // Check the entire inventory before saving any buffer. Held-back
+        // exceptions stay visible and uncommitted but never block the rest;
+        // an explicitly selected local version must still be fully approved.
+        let partition = policy.partition(&before.worktree.changes, &repository);
         for change in before.worktree.changes.iter().filter(|change| {
             version_request
                 .as_ref()
                 .is_none_or(|request| request.selected.contains(&change.path))
         }) {
-            repository
-                .validate_write_path(&change.path)
-                .map_err(|e| e.to_string())?;
-            if policy.decide_path(&change.path, change.kind, false, false)
-                != markion_git_sync::PathDecision::Automatic
-                || change
-                    .original_path
-                    .as_ref()
-                    .is_some_and(|from| policy.rename_needs_review(from, &change.path))
-            {
+            let automatic = partition.automatic.contains(&change.path);
+            if version_request.is_some() && !automatic {
                 return Err(format!(
                     "{} is outside the approved synchronization scope",
                     change.path.display()
                 ));
             }
+            if automatic {
+                repository
+                    .validate_write_path(&change.path)
+                    .map_err(|e| e.to_string())?;
+            }
         }
+        let mut dirty_relatives = Vec::new();
         for buffer in buffers.iter().filter(|buffer| {
             buffer.dirty
                 && version_request.as_ref().is_none_or(|request| {
@@ -2428,25 +2455,58 @@ fn run_git_operation(
             repository
                 .validate_write_path(relative)
                 .map_err(|e| e.to_string())?;
-            let tracked = repository.path_is_tracked(relative);
-            if !(if tracked {
+            dirty_relatives.push(relative.to_path_buf());
+        }
+        // One batched tracked query and one batched ignore query, however
+        // many buffers are dirty.
+        let tracked = repository
+            .tracked_among(&dirty_relatives)
+            .map_err(|e| e.to_string())?;
+        let untracked = dirty_relatives
+            .iter()
+            .filter(|relative| !tracked.contains(*relative))
+            .cloned()
+            .collect::<Vec<_>>();
+        let ignored = repository
+            .ignored_among(&untracked)
+            .map_err(|e| e.to_string())?;
+        for relative in &dirty_relatives {
+            let allowed = if tracked.contains(relative) {
                 policy.tracked_path_allowed(relative)
             } else {
-                policy.new_path_allowed(relative, repository.path_is_ignored(relative), false)
-            }) {
+                policy.new_path_allowed(relative, ignored.contains(relative), false)
+                    || policy
+                        .included_once
+                        .iter()
+                        .any(|record| record.path == *relative)
+            };
+            if allowed {
+                continue;
+            }
+            if version_request.is_some() {
                 return Err(format!(
                     "{} is outside the approved synchronization scope",
                     relative.display()
                 ));
             }
+            // Excluded buffers remain untouched (unsaved) and visibly excluded.
+            held_back_buffers.insert(policy.identity.worktree_root.join(relative));
         }
+        held_back_changes.extend(
+            partition
+                .held_back
+                .iter()
+                .map(|held| held.path.clone())
+                .chain(partition.ignored.iter().cloned()),
+        );
     }
     if captures_content {
         let mut notes = std::collections::BTreeMap::new();
         for change in before.worktree.changes.iter().filter(|change| {
-            version_request
-                .as_ref()
-                .is_none_or(|request| request.selected.contains(&change.path))
+            !held_back_changes.contains(&change.path)
+                && version_request
+                    .as_ref()
+                    .is_none_or(|request| request.selected.contains(&change.path))
         }) {
             if matches!(
                 markion_git_sync::NewFileClass::classify(&change.path),
@@ -2459,20 +2519,32 @@ fn run_git_operation(
             }
         }
         for buffer in buffers.iter().filter(|buffer| {
-            version_request.as_ref().is_none_or(|request| {
-                buffer
-                    .path
-                    .strip_prefix(&policy.identity.worktree_root)
-                    .is_ok_and(|relative| request.selected.contains(relative))
-            })
+            !held_back_buffers.contains(&buffer.path)
+                && version_request.as_ref().is_none_or(|request| {
+                    buffer
+                        .path
+                        .strip_prefix(&policy.identity.worktree_root)
+                        .is_ok_and(|relative| request.selected.contains(relative))
+                })
         }) {
+            let held_back = buffer
+                .path
+                .strip_prefix(&policy.identity.worktree_root)
+                .is_ok_and(|relative| held_back_changes.contains(relative));
+            if held_back {
+                continue;
+            }
             if buffer.dirty || notes.contains_key(&buffer.path) {
                 notes.insert(buffer.path.clone(), buffer.text.clone());
             }
         }
-        for (path, text) in notes {
-            let report = inspect_note_attachments(&repository, &policy, &path, &text)
-                .map_err(|error| error.to_string())?;
+        let inputs = notes
+            .iter()
+            .map(|(path, text)| (path.as_path(), text.as_str()))
+            .collect::<Vec<_>>();
+        let reports = inspect_notes_attachments(&repository, &policy, &inputs)
+            .map_err(|error| error.to_string())?;
+        for ((path, _), report) in notes.iter().zip(reports) {
             if let Some(issue) = report
                 .issues
                 .iter()
@@ -2490,6 +2562,7 @@ fn run_git_operation(
     for buffer in buffers.iter().filter(|buffer| {
         captures_content
             && buffer.dirty
+            && !held_back_buffers.contains(&buffer.path)
             && version_request.as_ref().is_none_or(|request| {
                 buffer
                     .path
@@ -2518,14 +2591,14 @@ fn run_git_operation(
         let mut paths = request.selected.iter().cloned().collect::<Vec<_>>();
         paths.sort();
         paths
+    } else if captures_content {
+        // Exactly what the engine's preflight approves; held-back changes
+        // stay in the worktree.
+        policy
+            .partition(&state.worktree.changes, &repository)
+            .automatic
     } else {
-        state
-            .worktree
-            .changes
-            .iter()
-            .filter(|_| captures_content)
-            .map(|change| change.path.clone())
-            .collect::<Vec<_>>()
+        Vec::new()
     };
     let before_head = state.head.clone();
     let worktree_root = policy.identity.worktree_root.clone();
@@ -2591,6 +2664,7 @@ fn run_git_operation(
     if operation == markion_git_sync::OperationKind::CheckRemote {
         gate.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
+    let mut held_back_tracked = Vec::new();
     let outcome = match operation {
         markion_git_sync::OperationKind::CommitLocally if version_request.is_some() => {
             engine.commit_selected(&plan, &policy, &cancellation)
@@ -2609,19 +2683,24 @@ fn run_git_operation(
         }
         _ => engine.sync_now(&plan, &mut policy, None, None, &cancellation),
     }
-    .unwrap_or_else(|error| SyncOutcome::NeedsAttention {
-        phase: journal
-            .load()
-            .ok()
-            .and_then(|entries| {
-                entries
-                    .active
-                    .into_iter()
-                    .find(|entry| entry.operation_id == operation_id)
-            })
-            .map(|entry| entry.phase)
-            .unwrap_or(markion_git_sync::OperationPhase::Preparing),
-        reason: error.to_string(),
+    .unwrap_or_else(|error| {
+        if let markion_git_sync::SyncEngineError::HeldBackTrackedChanges { paths } = &error {
+            held_back_tracked = paths.clone();
+        }
+        SyncOutcome::NeedsAttention {
+            phase: journal
+                .load()
+                .ok()
+                .and_then(|entries| {
+                    entries
+                        .active
+                        .into_iter()
+                        .find(|entry| entry.operation_id == operation_id)
+                })
+                .map(|entry| entry.phase)
+                .unwrap_or(markion_git_sync::OperationPhase::Preparing),
+            reason: error.to_string(),
+        }
     });
     let exclusive = gate
         .lock()
@@ -2630,6 +2709,18 @@ fn run_git_operation(
         .map(Ok)
         .unwrap_or_else(|| registry.begin_exclusive(&policy.identity, &operation_id))
         .map_err(|e| e.to_string())?;
+    // Include-once approvals end once the file is committed or gone.
+    if !policy.included_once.is_empty() {
+        let approved = policy
+            .included_once
+            .iter()
+            .map(|record| record.path.clone())
+            .collect::<Vec<_>>();
+        if let Ok(tracked) = engine.repository().tracked_among(&approved) {
+            let root = policy.identity.worktree_root.clone();
+            policy.prune_included_once(|path| !tracked.contains(path) && root.join(path).exists());
+        }
+    }
     let _ = store.update(|policies| {
         // Disconnect while a network request is running must not reconnect the policy.
         if policies
@@ -2729,6 +2820,7 @@ fn run_git_operation(
         buffers,
         images,
         conflict_paths,
+        held_back_tracked,
     })
 }
 
@@ -2960,6 +3052,8 @@ mod tests {
             background_fetch: false,
             last_confirmed_remote: None,
             acknowledged_resource_omissions: Vec::new(),
+            allowed_extensions: Default::default(),
+            included_once: Vec::new(),
         };
         let mut policies = SyncPolicies::empty();
         policies.upsert(policy.clone());

@@ -1,5 +1,6 @@
 use super::application::{
     AutosaveCompletion, AutosaveOutcome, ExternalCheckRequest, file_tree_watch_event_is_relevant,
+    git_watch_event_is_relevant,
 };
 use super::editing::visual_selection_format_target_for_block;
 use super::memory::{MemoryProfile, MemoryWarmup};
@@ -12393,6 +12394,7 @@ fn git_image_only_reconciliation_releases_image_bytes_without_rebuilding_markdow
                     changed: true,
                 }],
                 conflict_paths: Vec::new(),
+                held_back_tracked: Vec::new(),
             },
             cx,
         );
@@ -22949,6 +22951,8 @@ fn git_settings_input_tab_escape_and_undo_do_not_mutate_document(cx: &mut TestAp
         background_fetch: false,
         last_confirmed_remote: None,
         acknowledged_resource_omissions: vec![],
+        allowed_extensions: Default::default(),
+        included_once: Vec::new(),
     };
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -22957,6 +22961,7 @@ fn git_settings_input_tab_escape_and_undo_do_not_mutate_document(cx: &mut TestAp
             policy,
             fields: std::array::from_fn(|_| SearchFieldState::default()),
             advanced: false,
+            device_exclusions: Vec::new(),
         });
         app.search_focus = Some(SearchField::Git(0));
         app
@@ -23964,16 +23969,28 @@ fn visual_empty_anchor_marker_row_is_compact_and_editable(cx: &mut TestAppContex
 }
 
 fn run_git(directory: &Path, arguments: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .current_dir(directory)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            directory.join(".markion-test-no-global"),
-        )
-        .args(arguments)
-        .output()
-        .unwrap();
+    // Windows can fail to start a console process with STATUS_DLL_INIT_FAILED
+    // (0xC0000142) when many tests spawn Git at once. The process never ran,
+    // so retrying is safe; any other failure is reported immediately.
+    const STATUS_DLL_INIT_FAILED: i32 = 0xC000_0142_u32 as i32;
+    let mut attempts = 0;
+    let output = loop {
+        attempts += 1;
+        let output = std::process::Command::new("git")
+            .current_dir(directory)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                directory.join(".markion-test-no-global"),
+            )
+            .args(arguments)
+            .output()
+            .unwrap();
+        if output.status.code() != Some(STATUS_DLL_INIT_FAILED) || attempts >= 5 {
+            break output;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
     assert!(
         output.status.success(),
         "git {arguments:?} ({:?}): {} {}",
@@ -24336,6 +24353,7 @@ fn sync_ending_in_conflict_keeps_a_path_claim_instead_of_the_repository_lock(
                 buffers: Vec::new(),
                 images: Vec::new(),
                 conflict_paths: vec![conflicted.clone()],
+                held_back_tracked: Vec::new(),
             },
             cx,
         );
@@ -24350,5 +24368,439 @@ fn sync_ending_in_conflict_keeps_a_path_claim_instead_of_the_repository_lock(
         assert_eq!(app.active_git_lock_message(), None);
         app.active_tab_mut().document.set_text("b edited\n");
         assert_eq!(app.try_save_named_tab(0), NamedSave::Saved);
+    });
+}
+
+#[test]
+fn git_watch_event_relevance_counts_content_writes_but_not_access_or_git_internals() {
+    use notify::event::{AccessKind, CreateKind, DataChange, EventKind, ModifyKind};
+    let root = Path::new("/vault");
+    let event = |kind: EventKind, rel: &str| notify::Event::new(kind).add_path(root.join(rel));
+    let content = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+    // Unlike the file tree, an edit to a note's content refreshes Git details.
+    assert!(git_watch_event_is_relevant(
+        &event(content, "notes/a.md"),
+        root
+    ));
+    assert!(git_watch_event_is_relevant(
+        &event(content, ".git/index"),
+        root
+    ));
+    assert!(!git_watch_event_is_relevant(
+        &event(EventKind::Access(AccessKind::Any), "notes/a.md"),
+        root
+    ));
+    assert!(!git_watch_event_is_relevant(
+        &event(EventKind::Create(CreateKind::File), ".git/objects/ab/cd"),
+        root
+    ));
+}
+
+/// Serializes the Git-refresh app tests: each spawns dozens of Git processes,
+/// and running them concurrently on Windows can exhaust process start-up
+/// resources (`STATUS_DLL_INIT_FAILED`) in unrelated setup commands.
+static GIT_REFRESH_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn git_refresh_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    GIT_REFRESH_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// A committed repository opened as the workspace, ready for details refreshes.
+fn git_refresh_workspace() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    run_git(directory.path(), &["init", "-q", "-b", "main"]);
+    run_git(directory.path(), &["config", "user.name", "Markion Test"]);
+    run_git(
+        directory.path(),
+        &["config", "user.email", "test@markion.invalid"],
+    );
+    fs::write(directory.path().join("note.md"), "note\n").unwrap();
+    run_git(directory.path(), &["add", "--", "note.md"]);
+    run_git(directory.path(), &["commit", "-q", "-m", "initial"]);
+    directory
+}
+
+#[gpui::test]
+fn git_details_refresh_requests_coalesce_into_one_follow_up(cx: &mut TestAppContext) {
+    let _serial = git_refresh_test_guard();
+    let directory = git_refresh_workspace();
+    let workspace = dunce::canonicalize(directory.path()).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.workspace_root = workspace.clone();
+        app
+    });
+    app.update(cx, |app, cx| {
+        for _ in 0..3 {
+            app.refresh_git_details(cx);
+        }
+        assert_eq!(app.git_ui.refresh_runs, 1);
+        assert!(app.git_ui.refresh_queued);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.git_ui.refresh_runs, 2,
+            "three requests run at most two refreshes"
+        );
+        assert!(!app.git_ui.refreshing && !app.git_ui.refresh_queued);
+        assert!(app.git_ui.snapshot.is_some());
+    });
+}
+
+#[gpui::test]
+fn git_fallback_refresh_only_fires_while_the_window_is_active(cx: &mut TestAppContext) {
+    let _serial = git_refresh_test_guard();
+    let directory = git_refresh_workspace();
+    let workspace = dunce::canonicalize(directory.path()).unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.workspace_root = workspace.clone();
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.arm_git_details_refresh(window, cx));
+    });
+    cx.run_until_parked();
+    let started = app.update(cx, |app, _| app.git_ui.refresh_runs);
+    assert!(started >= 1, "arming requests an initial refresh");
+
+    cx.deactivate_window();
+    app.update(cx, |app, cx| {
+        assert!(!app.git_ui.window_active);
+        app.git_ui.last_refresh_started = None;
+        app.git_fallback_refresh_tick(cx);
+        assert_eq!(
+            app.git_ui.refresh_runs, started,
+            "inactive window: no timer refresh"
+        );
+    });
+
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    let reactivated = app.update(cx, |app, _| {
+        assert!(app.git_ui.window_active);
+        app.git_ui.refresh_runs
+    });
+    assert!(reactivated > started, "activation requests a refresh");
+
+    app.update(cx, |app, cx| {
+        // A refresh just started, so the 60 s fallback stays quiet.
+        app.git_fallback_refresh_tick(cx);
+        assert_eq!(app.git_ui.refresh_runs, reactivated);
+        app.git_ui.last_refresh_started =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(61));
+        app.git_fallback_refresh_tick(cx);
+        assert_eq!(app.git_ui.refresh_runs, reactivated + 1);
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn git_details_refresh_reuses_the_repository_until_control_files_change(cx: &mut TestAppContext) {
+    let _serial = git_refresh_test_guard();
+    let directory = git_refresh_workspace();
+    let workspace = dunce::canonicalize(directory.path()).unwrap();
+    let invocations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.workspace_root = workspace.clone();
+        app.git_ui.refresh_invocations = Some(invocations.clone());
+        app
+    });
+    let mut refresh = || {
+        invocations.store(0, std::sync::atomic::Ordering::Relaxed);
+        app.update(cx, |app, cx| app.refresh_git_details(cx));
+        cx.run_until_parked();
+        app.update(cx, |app, _| assert!(app.git_ui.snapshot.is_some()));
+        invocations.load(std::sync::atomic::Ordering::Relaxed)
+    };
+    let first = refresh();
+    let second = refresh();
+    // Discovery (1) plus the capability probe (3) are skipped on reuse.
+    assert!(second + 4 <= first, "first {first}, second {second}");
+    assert!(second <= 6, "routine refresh budget, got {second}");
+
+    fs::write(directory.path().join("added.md"), "added\n").unwrap();
+    run_git(directory.path(), &["add", "--", "added.md"]);
+    let after_index_change = refresh();
+    assert!(
+        after_index_change >= second + 4,
+        "index change rediscovers: {after_index_change} vs {second}"
+    );
+}
+
+#[gpui::test]
+fn git_refresh_captures_text_only_for_dirty_documents(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let clean = directory.path().join("clean.md");
+    let dirty = directory.path().join("dirty.md");
+    fs::write(&clean, "clean\n").unwrap();
+    fs::write(&dirty, "dirty\n").unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        let mut edited = EditorTab::new(MarkdownDocument::open(&dirty).unwrap());
+        edited.document.set_text("dirty edited\n");
+        app.tabs = vec![
+            EditorTab::new(MarkdownDocument::open(&clean).unwrap()),
+            edited,
+        ];
+        app
+    });
+    app.update(cx, |app, _| {
+        let captured = app.capture_dirty_git_documents();
+        assert_eq!(captured.len(), 1);
+        let ((_, version), text) = &captured[&dirty];
+        assert_eq!(text, "dirty edited\n");
+        assert_eq!(*version, app.tabs[1].document.version());
+    });
+}
+
+/// A committed notes repository with a saved sync policy in a temporary
+/// policy file, opened as the workspace.
+fn scope_exception_workspace(
+    cx: &mut TestAppContext,
+) -> (
+    tempfile::TempDir,
+    Entity<MarkionApp>,
+    &mut VisualTestContext,
+    PathBuf,
+) {
+    let directory = git_refresh_workspace();
+    let workspace = dunce::canonicalize(directory.path()).unwrap();
+    let repository = markion_git_sync::GitRepository::discover(
+        markion_git_sync::GitCommandRunner::new("git"),
+        &workspace,
+    )
+    .unwrap();
+    let policy = markion_git_sync::RepositoryPolicy {
+        identity: repository.identity().clone(),
+        target: markion_git_sync::SyncTarget {
+            local_branch: "main".into(),
+            remote: "origin".into(),
+            remote_branch: "main".into(),
+            destination_ref: "refs/heads/main".into(),
+            fetch_url: "https://example.invalid/notes.git".into(),
+            push_url: "https://example.invalid/notes.git".into(),
+        },
+        tracked_roots: vec![PathBuf::new()],
+        new_file_rules: vec![markion_git_sync::NewFileRule {
+            root: PathBuf::new(),
+            classes: std::collections::BTreeSet::from([
+                markion_git_sync::NewFileClass::Markdown,
+                markion_git_sync::NewFileClass::Text,
+                markion_git_sync::NewFileClass::Image,
+            ]),
+        }],
+        message_template: String::new(),
+        include_device_name: false,
+        background_fetch: false,
+        last_confirmed_remote: None,
+        acknowledged_resource_omissions: Vec::new(),
+        allowed_extensions: Default::default(),
+        included_once: Vec::new(),
+    };
+    let policy_path = directory.path().join(".git").join("test-git-sync.toml");
+    let mut policies = markion_git_sync::SyncPolicies::empty();
+    policies.upsert(policy);
+    markion_git_sync::PolicyStore::new(&policy_path)
+        .save(&policies)
+        .unwrap();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.workspace_root = workspace.clone();
+        app.git_ui.policy_store_override = Some(policy_path.clone());
+        app
+    });
+    (directory, app, cx, workspace)
+}
+
+fn refresh_details(app: &Entity<MarkionApp>, cx: &mut VisualTestContext) {
+    app.update(cx, |app, cx| app.refresh_git_details(cx));
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn held_back_files_are_reported_separately_from_pending_notes(cx: &mut TestAppContext) {
+    let _serial = git_refresh_test_guard();
+    let (_directory, app, cx, workspace) = scope_exception_workspace(cx);
+    fs::write(workspace.join("note.md"), "edited\n").unwrap();
+    fs::write(workspace.join("report.pdf"), "pdf").unwrap();
+    fs::write(workspace.join(".DS_Store"), "junk").unwrap();
+    refresh_details(&app, cx);
+    app.update(cx, |app, _| {
+        let details = app.git_ui.snapshot.as_ref().expect("details refreshed");
+        assert_eq!(details.partition.automatic, [PathBuf::from("note.md")]);
+        assert_eq!(details.partition.ignored, [PathBuf::from(".DS_Store")]);
+        let presentation = super::git_panel::backup_sync_presentation(app);
+        assert_eq!(presentation.held_back_items, 1);
+        assert_eq!(presentation.local_items, 1);
+        assert_eq!(
+            presentation.state,
+            markion_git_sync::BackupSyncState::PendingLocal
+        );
+        let label = super::git_panel::backup_sync_state_label(app, &presentation);
+        assert!(
+            label.contains("1 files are not included in sync"),
+            "{label}"
+        );
+        let held = &details.partition.held_back[0];
+        assert_eq!(
+            super::git_panel::held_back_reason_label(Language::En, held),
+            "Not synced: .pdf files are not included by default"
+        );
+    });
+}
+
+#[gpui::test]
+fn held_back_file_decisions_update_policy_and_device_exclusions(cx: &mut TestAppContext) {
+    use super::git_panel::GitScopeDecision;
+    let _serial = git_refresh_test_guard();
+    let (_directory, app, cx, workspace) = scope_exception_workspace(cx);
+    fs::write(workspace.join("report.pdf"), "pdf").unwrap();
+    fs::write(workspace.join("data.bin"), "bytes").unwrap();
+    fs::write(workspace.join("scratch.bin"), "bytes").unwrap();
+    refresh_details(&app, cx);
+    let held = |app: &Entity<MarkionApp>, cx: &mut VisualTestContext| {
+        app.update(cx, |app, _| {
+            let mut paths = app
+                .git_ui
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .partition
+                .held_back
+                .iter()
+                .map(|held| held.path.clone())
+                .collect::<Vec<_>>();
+            paths.sort();
+            paths
+        })
+    };
+    assert_eq!(held(&app, cx).len(), 3);
+
+    for decision in [
+        GitScopeDecision::AlwaysSyncType("pdf".into()),
+        GitScopeDecision::IncludeOnce(PathBuf::from("data.bin")),
+        GitScopeDecision::ExcludeOnDevice(PathBuf::from("scratch.bin")),
+    ] {
+        app.update(cx, |app, cx| app.apply_git_scope_decision(decision, cx));
+        cx.run_until_parked();
+    }
+    refresh_details(&app, cx);
+    assert!(held(&app, cx).is_empty(), "every decision took effect");
+    app.update(cx, |app, _| {
+        let details = app.git_ui.snapshot.as_ref().unwrap();
+        let mut automatic = details.partition.automatic.clone();
+        automatic.sort();
+        assert_eq!(
+            automatic,
+            [PathBuf::from("data.bin"), PathBuf::from("report.pdf")]
+        );
+        assert!(
+            !details
+                .state
+                .worktree
+                .changes
+                .iter()
+                .any(|change| change.path == Path::new("scratch.bin")),
+            "device exclusion hides the file without a repository change"
+        );
+    });
+
+    // Changing an included-once file lapses the approval.
+    fs::write(workspace.join("data.bin"), "changed").unwrap();
+    refresh_details(&app, cx);
+    assert_eq!(held(&app, cx), [PathBuf::from("data.bin")]);
+
+    app.update(cx, |app, cx| {
+        app.apply_git_scope_decision(
+            GitScopeDecision::RemoveExclusion(PathBuf::from("scratch.bin")),
+            cx,
+        )
+    });
+    cx.run_until_parked();
+    refresh_details(&app, cx);
+    assert_eq!(
+        held(&app, cx),
+        [PathBuf::from("data.bin"), PathBuf::from("scratch.bin")]
+    );
+}
+
+#[test]
+fn extra_file_types_parse_and_reject_invalid_entries() {
+    use super::git_panel::parse_extensions;
+    assert_eq!(
+        parse_extensions(" pdf; .DOCX ;; m4a ").unwrap(),
+        std::collections::BTreeSet::from(["docx".to_string(), "m4a".into(), "pdf".into()])
+    );
+    assert!(parse_extensions("").unwrap().is_empty());
+    assert!(parse_extensions("pdf; bad type").is_none());
+    assert!(parse_extensions("averyveryverylongext").is_none());
+}
+
+#[gpui::test]
+fn sync_completion_messages_name_held_back_files(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let identity = markion_git_sync::RepositoryIdentity::new(
+        directory.path().into(),
+        directory.path().join(".git"),
+        directory.path().join(".git"),
+    );
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.language = Language::En;
+        app.git_operations.register(identity.clone());
+        app
+    });
+    app.update(cx, |app, cx| {
+        let completion =
+            |app: &mut MarkionApp, outcome, held_back_tracked| super::git_sync::GitSyncCompletion {
+                _exclusive: app
+                    .git_operations
+                    .begin_exclusive(&identity, "held-back")
+                    .unwrap(),
+                operation: markion_git_sync::OperationKind::SyncNow,
+                outcome,
+                buffers: Vec::new(),
+                images: Vec::new(),
+                conflict_paths: Vec::new(),
+                held_back_tracked,
+            };
+        let synchronized = completion(
+            app,
+            markion_git_sync::SyncOutcome::Synchronized {
+                commit: None,
+                remote_tip: None,
+                pending_local_changes: 0,
+                held_back: 2,
+            },
+            Vec::new(),
+        );
+        app.apply_git_sync_completion(synchronized, cx);
+        assert_eq!(app.status.as_ref(), "Sync complete · 2 files not included");
+
+        let paused = completion(
+            app,
+            markion_git_sync::SyncOutcome::NeedsAttention {
+                phase: markion_git_sync::OperationPhase::NeedsAttention,
+                reason: "held back".into(),
+            },
+            vec![PathBuf::from("other/notes.md")],
+        );
+        app.apply_git_sync_completion(paused, cx);
+        assert!(
+            app.status.contains("review other/notes.md first"),
+            "{}",
+            app.status
+        );
+        // A paused integration holds no repository-wide write lock.
+        assert!(
+            !app.git_operations
+                .is_mutating(&directory.path().join("x.md"))
+        );
     });
 }

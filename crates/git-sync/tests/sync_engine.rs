@@ -569,6 +569,8 @@ fn operation(
         background_fetch: false,
         last_confirmed_remote: None,
         acknowledged_resource_omissions: Vec::new(),
+        allowed_extensions: Default::default(),
+        included_once: Vec::new(),
     };
     let plan = SyncPlan {
         operation_id: operation_id.into(),

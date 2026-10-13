@@ -68,6 +68,30 @@ fn draft(fingerprint: String) -> ConflictDraft {
 }
 
 #[test]
+fn assessment_without_checkpoints_starts_no_git_process() {
+    let fixture = TwoCloneFixture::new();
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let repository = GitRepository::discover(
+        GitCommandRunner::new("git").with_invocation_counter(counter.clone()),
+        &fixture.first,
+    )
+    .unwrap();
+    let state = repository.status().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let manager = RecoveryManager::new(
+        repository,
+        JournalStore::new(
+            data.path().join("journal.toml"),
+            data.path().join("recovery"),
+        ),
+    );
+    counter.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert!(manager.assess().unwrap().is_empty());
+    assert!(manager.assess_with_state(&state).unwrap().is_empty());
+    assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 0);
+}
+
+#[test]
 fn assessment_distinguishes_head_superseded_and_unreachable_commits() {
     let fixture = TwoCloneFixture::new();
     let worktree = &fixture.first;
@@ -109,7 +133,10 @@ fn assessment_distinguishes_head_superseded_and_unreachable_commits() {
         journal.begin(value).unwrap();
     }
 
-    let assessments = RecoveryManager::new(repository, journal).assess().unwrap();
+    let state = repository.status().unwrap();
+    let manager = RecoveryManager::new(repository, journal);
+    let assessments = manager.assess().unwrap();
+    assert_eq!(manager.assess_with_state(&state).unwrap(), assessments);
 
     assert_eq!(
         assessments,

@@ -1,9 +1,10 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet},
     ffi::OsString,
     fs, io,
     io::Read,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::SystemTime,
 };
 
@@ -62,6 +63,21 @@ pub enum TargetResolutionError {
 pub struct GitRepository {
     runner: GitCommandRunner,
     identity: RepositoryIdentity,
+    bare: bool,
+    shallow: bool,
+    /// Capability facts that do not come from `git status`, probed once per
+    /// repository instance (and therefore once per write operation, which
+    /// always discovers a fresh instance). Clones share the result.
+    probe: Arc<Mutex<Option<CapabilityProbe>>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CapabilityProbe {
+    sparse: bool,
+    partial: bool,
+    has_submodules: bool,
+    tracked_gitlinks: bool,
+    uses_lfs: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,22 +137,37 @@ impl GitRepository {
         start: impl AsRef<Path>,
     ) -> Result<Self, RepositoryError> {
         let start = start.as_ref();
-        let worktree_root = canonical_git_path(&runner, start, ["rev-parse", "--show-toplevel"])?;
-        let git_dir = canonical_git_path(&runner, start, ["rev-parse", "--absolute-git-dir"])?;
-        let common_raw = run_text(
+        // One process answers every discovery question.
+        let output = run_text(
             &runner,
             start,
-            GitCommand::new(start).args(["rev-parse", "--git-common-dir"]),
+            GitCommand::new(start).args([
+                "rev-parse",
+                "--show-toplevel",
+                "--absolute-git-dir",
+                "--git-common-dir",
+                "--is-bare-repository",
+                "--is-shallow-repository",
+            ]),
         )?;
-        let common = PathBuf::from(common_raw.trim());
-        let common_dir = dunce::canonicalize(if common.is_absolute() {
-            common
-        } else {
-            start.join(common)
-        })?;
+        let mut lines = output.lines().map(str::trim);
+        let mut next = |name: &str| {
+            lines
+                .next()
+                .filter(|line| !line.is_empty())
+                .ok_or_else(|| RepositoryError::InvalidOutput(format!("missing {name}")))
+        };
+        let worktree_root = canonical_discovered_path(start, next("worktree root")?)?;
+        let git_dir = canonical_discovered_path(start, next("Git directory")?)?;
+        let common_dir = canonical_discovered_path(start, next("common Git directory")?)?;
+        let bare = next("bare flag")? == "true";
+        let shallow = next("shallow flag")? == "true";
         Ok(Self {
             runner,
             identity: RepositoryIdentity::new(worktree_root, git_dir, common_dir),
+            bare,
+            shallow,
+            probe: Arc::default(),
         })
     }
 
@@ -148,33 +179,87 @@ impl GitRepository {
         &self.runner
     }
 
+    /// Repository capabilities as of a fresh status read. Detached HEAD and
+    /// untracked nested repositories come from that status; everything else
+    /// comes from the memoized probe.
     pub fn capabilities(&self) -> Result<RepositoryCapabilities, RepositoryError> {
-        let root = &self.identity.worktree_root;
-        let bare = self.bool_query(["rev-parse", "--is-bare-repository"])?;
-        let shallow = self.bool_query(["rev-parse", "--is-shallow-repository"])?;
-        let detached_head = self
-            .run_allow_failure(GitCommand::new(root).args(["symbolic-ref", "--quiet", "HEAD"]))?
-            .is_none();
-        let linked_worktree = self.identity.git_dir != self.identity.common_dir;
-        let sparse = self.config_bool("core.sparseCheckout")?
-            || self.identity.git_dir.join("info/sparse-checkout").is_file();
-        let partial = self.config_exists("extensions.partialClone")?
-            || self.config_regexp_exists(r"^remote\..*\.promisor$")?;
-        let has_submodules = root.join(".gitmodules").is_file();
-        let has_nested_repositories = contains_nested_repository(root, &self.identity.git_dir)?;
-        let uses_lfs = self.tracked_attributes_use_lfs()?;
+        Ok(self.status()?.capabilities)
+    }
+
+    fn capabilities_from_status(
+        &self,
+        detached_head: bool,
+        untracked_nested: bool,
+    ) -> Result<RepositoryCapabilities, RepositoryError> {
+        let probe = self.capability_probe()?;
         Ok(RepositoryCapabilities {
-            ordinary_worktree: !bare,
+            ordinary_worktree: !self.bare,
             detached_head,
-            linked_worktree,
-            bare,
-            shallow,
+            linked_worktree: self.identity.git_dir != self.identity.common_dir,
+            bare: self.bare,
+            shallow: self.shallow,
+            sparse: probe.sparse,
+            partial: probe.partial,
+            has_submodules: probe.has_submodules,
+            has_nested_repositories: untracked_nested || probe.tracked_gitlinks,
+            uses_lfs: probe.uses_lfs,
+        })
+    }
+
+    fn capability_probe(&self) -> Result<CapabilityProbe, RepositoryError> {
+        let mut cached = self.probe.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(probe) = *cached {
+            return Ok(probe);
+        }
+        let root = &self.identity.worktree_root;
+        let config = self.run_allow_failure(
+            GitCommand::new(root)
+                .args([
+                    "config",
+                    "-z",
+                    "--get-regexp",
+                    r"^(core\.sparsecheckout|extensions\.partialclone|remote\..*\.promisor)$",
+                ])
+                .read_only(true),
+        )?;
+        let (mut sparse, mut partial) = (false, false);
+        for entry in config.as_deref().unwrap_or_default().split('\0') {
+            let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+            match key {
+                "" => {}
+                "core.sparsecheckout" => sparse |= value.is_empty() || git_bool(value),
+                _ => partial = true,
+            }
+        }
+        sparse |= self.identity.git_dir.join("info/sparse-checkout").is_file();
+        let probe = CapabilityProbe {
             sparse,
             partial,
-            has_submodules,
-            has_nested_repositories,
-            uses_lfs,
-        })
+            has_submodules: root.join(".gitmodules").is_file(),
+            tracked_gitlinks: self.index_has_gitlinks()?,
+            uses_lfs: self.tracked_attributes_use_lfs()?,
+        };
+        *cached = Some(probe);
+        Ok(probe)
+    }
+
+    /// Tracked gitlinks (mode 160000) mean submodule-like content even without
+    /// `.gitmodules`. An index listing too large to inspect fails closed.
+    fn index_has_gitlinks(&self) -> Result<bool, RepositoryError> {
+        let output = self.run(
+            GitCommand::new(&self.identity.worktree_root)
+                .args(["ls-files", "-z", "--stage"])
+                .read_only(true),
+            CommandLimits {
+                max_stdout_bytes: 16 * 1024 * 1024,
+                ..CommandLimits::default()
+            },
+        )?;
+        Ok(output.stdout_truncated
+            || output
+                .stdout
+                .split(|byte| *byte == 0)
+                .any(|record| record.starts_with(b"160000 ")))
     }
 
     /// Validate a repository-relative write target without following an
@@ -250,6 +335,54 @@ impl GitRepository {
         nul_delimited_paths(&output.stdout)
     }
 
+    /// Which of `paths` Git ignores, in one `check-ignore --stdin` process.
+    /// Like the single-path query, tracked paths are never reported.
+    pub fn ignored_among(&self, paths: &[PathBuf]) -> Result<HashSet<PathBuf>, RepositoryError> {
+        if paths.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let mut input = Vec::new();
+        for path in paths {
+            input.extend_from_slice(git_path_text(path).as_bytes());
+            input.push(0);
+        }
+        let output = self.run_allow_failure_bytes(
+            GitCommand::new(&self.identity.worktree_root)
+                .args(["check-ignore", "-z", "--stdin"])
+                .standard_input(input)
+                .read_only(true),
+        )?;
+        let ignored: HashSet<String> = output
+            .unwrap_or_default()
+            .split(|byte| *byte == 0)
+            .filter(|record| !record.is_empty())
+            .map(|record| String::from_utf8_lossy(record).into_owned())
+            .collect();
+        Ok(paths
+            .iter()
+            .filter(|path| ignored.contains(&git_path_text(path)))
+            .cloned()
+            .collect())
+    }
+
+    /// Which of `paths` are tracked, from one full index listing. Comparing in
+    /// memory avoids pathspec glob interpretation entirely.
+    pub fn tracked_among(&self, paths: &[PathBuf]) -> Result<HashSet<PathBuf>, RepositoryError> {
+        if paths.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let tracked: HashSet<String> = self
+            .tracked_paths()?
+            .iter()
+            .map(|path| git_path_text(path))
+            .collect();
+        Ok(paths
+            .iter()
+            .filter(|path| tracked.contains(&git_path_text(path)))
+            .cloned()
+            .collect())
+    }
+
     pub fn path_is_ignored(&self, path: &Path) -> bool {
         self.run(
             GitCommand::new(&self.identity.worktree_root)
@@ -307,6 +440,10 @@ impl GitRepository {
         )?;
         let mut parsed = parse_porcelain_v2(&output.stdout)?;
         parsed.worktree.operation_in_progress = self.operation_in_progress();
+        let capabilities = self.capabilities_from_status(
+            parsed.branch.head.is_none(),
+            !parsed.untracked_directories.is_empty(),
+        )?;
         let history = match (parsed.branch.ahead, parsed.branch.behind) {
             (0, 0) if parsed.branch.upstream.is_some() => HistoryRelation::Equal,
             (ahead, 0) if ahead > 0 => HistoryRelation::Ahead { commits: ahead },
@@ -321,7 +458,7 @@ impl GitRepository {
             branch: parsed.branch.head,
             upstream: parsed.branch.upstream,
             worktree: parsed.worktree,
-            capabilities: self.capabilities()?,
+            capabilities,
             history,
             checked_at: SystemTime::now(),
         })
@@ -336,14 +473,8 @@ impl GitRepository {
         if !self.ref_is_valid(&format!("refs/heads/{local_branch}"))? {
             return Err(TargetResolutionError::InvalidName.into());
         }
-        let remote = self.required_text(
-            GitCommand::new(root).args([
-                "config",
-                "--get",
-                &format!("branch.{local_branch}.remote"),
-            ]),
-            TargetResolutionError::MissingRemote,
-        )?;
+        let (remote, merge_ref) = self.branch_upstream_config(&local_branch)?;
+        let remote = remote.ok_or(TargetResolutionError::MissingRemote)?;
         if remote == "."
             || remote.is_empty()
             || remote.starts_with('-')
@@ -351,14 +482,7 @@ impl GitRepository {
         {
             return Err(TargetResolutionError::InvalidName.into());
         }
-        let merge_ref = self.required_text(
-            GitCommand::new(root).args([
-                "config",
-                "--get",
-                &format!("branch.{local_branch}.merge"),
-            ]),
-            TargetResolutionError::MissingRemoteBranch,
-        )?;
+        let merge_ref = merge_ref.ok_or(TargetResolutionError::MissingRemoteBranch)?;
         let remote_branch = merge_ref
             .strip_prefix("refs/heads/")
             .filter(|branch| !branch.is_empty())
@@ -860,40 +984,6 @@ impl GitRepository {
         Ok(renames)
     }
 
-    fn bool_query<const N: usize>(&self, args: [&str; N]) -> Result<bool, RepositoryError> {
-        Ok(self
-            .run_text(GitCommand::new(&self.identity.worktree_root).args(args))?
-            .trim()
-            == "true")
-    }
-
-    fn config_bool(&self, key: &str) -> Result<bool, RepositoryError> {
-        Ok(self
-            .run_allow_failure(
-                GitCommand::new(&self.identity.worktree_root)
-                    .args(["config", "--bool", "--get", key]),
-            )?
-            .is_some_and(|value| value.trim() == "true"))
-    }
-
-    fn config_exists(&self, key: &str) -> Result<bool, RepositoryError> {
-        Ok(self
-            .run_allow_failure(
-                GitCommand::new(&self.identity.worktree_root).args(["config", "--get", key]),
-            )?
-            .is_some())
-    }
-
-    fn config_regexp_exists(&self, pattern: &str) -> Result<bool, RepositoryError> {
-        Ok(self
-            .run_allow_failure(GitCommand::new(&self.identity.worktree_root).args([
-                "config",
-                "--get-regexp",
-                pattern,
-            ]))?
-            .is_some())
-    }
-
     fn tracked_attributes_use_lfs(&self) -> Result<bool, RepositoryError> {
         let output = self.run_allow_failure(
             GitCommand::new(&self.identity.worktree_root)
@@ -919,7 +1009,55 @@ impl GitRepository {
             .map(|(_, operation)| (*operation).to_owned())
     }
 
+    /// `branch.<name>.remote` and `branch.<name>.merge`, each the last value
+    /// like `git config --get`. Branch names in the conservative safe set are
+    /// read with one regexp query; anything else uses per-key queries.
+    fn branch_upstream_config(
+        &self,
+        branch: &str,
+    ) -> Result<(Option<String>, Option<String>), RepositoryError> {
+        let root = &self.identity.worktree_root;
+        if !is_conservative_ref_name(branch) {
+            let get = |key: &str| -> Result<Option<String>, RepositoryError> {
+                Ok(self
+                    .run_allow_failure(
+                        GitCommand::new(root)
+                            .args(["config", "--get", &format!("branch.{branch}.{key}")])
+                            .read_only(true),
+                    )?
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty()))
+            };
+            return Ok((get("remote")?, get("merge")?));
+        }
+        let pattern = format!(r"^branch\.{}\.(remote|merge)$", branch.replace('.', r"\."));
+        let output = self.run_allow_failure(
+            GitCommand::new(root)
+                .args(["config", "-z", "--get-regexp", &pattern])
+                .read_only(true),
+        )?;
+        let (mut remote, mut merge) = (None, None);
+        let prefix = format!("branch.{branch}.");
+        for entry in output.as_deref().unwrap_or_default().split('\0') {
+            let Some((key, value)) = entry.split_once('\n') else {
+                continue;
+            };
+            let value = value.trim();
+            let value = (!value.is_empty()).then(|| value.to_owned());
+            match key.strip_prefix(&prefix) {
+                Some("remote") => remote = value,
+                Some("merge") => merge = value,
+                _ => {}
+            }
+        }
+        Ok((remote, merge))
+    }
+
     fn ref_is_valid(&self, reference: &str) -> Result<bool, RepositoryError> {
+        // check-ref-format rejects one-level names, so the fast path does too.
+        if reference.contains('/') && is_conservative_ref_name(reference) {
+            return Ok(true);
+        }
         Ok(self
             .run_allow_failure(
                 GitCommand::new(&self.identity.worktree_root)
@@ -1003,6 +1141,24 @@ impl GitRepository {
         }
     }
 
+    fn run_allow_failure_bytes(
+        &self,
+        command: GitCommand,
+    ) -> Result<Option<Vec<u8>>, RepositoryError> {
+        match self.runner.run(
+            &command,
+            CommandLimits {
+                max_stdout_bytes: 16 * 1024 * 1024,
+                ..CommandLimits::default()
+            },
+            &CancellationToken::new(),
+        ) {
+            Ok(output) => Ok(Some(output.stdout)),
+            Err(GitCommandError::Failed { output }) if output.status_code == Some(1) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     fn run(
         &self,
         command: GitCommand,
@@ -1037,19 +1193,121 @@ fn nul_delimited_paths(bytes: &[u8]) -> Result<Vec<PathBuf>, RepositoryError> {
     Ok(paths)
 }
 
-fn canonical_git_path<const N: usize>(
-    runner: &GitCommandRunner,
-    start: &Path,
-    args: [&str; N],
-) -> Result<PathBuf, RepositoryError> {
-    let raw = run_text(runner, start, GitCommand::new(start).args(args))?;
-    let raw = PathBuf::from(raw.trim());
+impl crate::ScopeFacts for GitRepository {
+    fn is_symlink(&self, path: &Path) -> bool {
+        fs::symlink_metadata(self.identity.worktree_root.join(path))
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    }
+
+    fn is_nested_repository(&self, path: &Path) -> bool {
+        self.identity.worktree_root.join(path).join(".git").exists()
+    }
+
+    fn fingerprint(&self, path: &Path) -> Option<String> {
+        self.content_fingerprint(path).ok()
+    }
+
+    fn worktree_blob_ids(&self, paths: &[PathBuf]) -> Option<HashMap<PathBuf, String>> {
+        let texts: Vec<String> = paths.iter().map(|path| git_path_text(path)).collect();
+        if texts.iter().any(|text| text.contains('\n')) {
+            return None;
+        }
+        let mut input = texts.join("\n").into_bytes();
+        input.push(b'\n');
+        let output = self
+            .run(
+                GitCommand::new(&self.identity.worktree_root)
+                    .args(["hash-object", "--stdin-paths"])
+                    .standard_input(input)
+                    .read_only(true),
+                CommandLimits::default(),
+            )
+            .ok()?;
+        let ids: Vec<String> = output
+            .stdout_text()
+            .lines()
+            .map(|line| line.trim().to_owned())
+            .collect();
+        (ids.len() == paths.len()).then(|| paths.iter().cloned().zip(ids).collect())
+    }
+
+    fn index_blob_ids(&self, paths: &[PathBuf]) -> Option<HashMap<PathBuf, String>> {
+        let output = self
+            .run(
+                GitCommand::new(&self.identity.worktree_root)
+                    .args(["ls-files", "-z", "--stage"])
+                    .read_only(true),
+                CommandLimits {
+                    max_stdout_bytes: 16 * 1024 * 1024,
+                    ..CommandLimits::default()
+                },
+            )
+            .ok()
+            .filter(|output| !output.stdout_truncated)?;
+        let wanted: HashMap<String, &PathBuf> = paths
+            .iter()
+            .map(|path| (git_path_text(path), path))
+            .collect();
+        let mut ids = HashMap::new();
+        for record in output.stdout.split(|byte| *byte == 0) {
+            let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
+                continue;
+            };
+            let path = String::from_utf8_lossy(&record[tab + 1..]);
+            if let Some(original) = wanted.get(path.as_ref()) {
+                let metadata = String::from_utf8_lossy(&record[..tab]);
+                if let Some(oid) = metadata.split(' ').nth(1) {
+                    ids.insert((*original).clone(), oid.to_owned());
+                }
+            }
+        }
+        Some(ids)
+    }
+}
+
+fn canonical_discovered_path(start: &Path, raw: &str) -> Result<PathBuf, RepositoryError> {
+    let raw = PathBuf::from(raw);
     dunce::canonicalize(if raw.is_absolute() {
         raw
     } else {
         start.join(raw)
     })
     .map_err(Into::into)
+}
+
+/// A ref or branch name that `git check-ref-format` always accepts: ASCII
+/// letters, digits, `.`, `_`, `-` and `/`-separated components that do not
+/// start with `.` or `-` and do not end with `.` or `.lock`.
+fn is_conservative_ref_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
+        && !name.contains("..")
+        && name.split('/').all(|component| {
+            !component.is_empty()
+                && !component.starts_with(['.', '-'])
+                && !component.ends_with('.')
+                && !component.ends_with(".lock")
+        })
+}
+
+/// Repository-relative path in Git's spelling (`/` separators).
+fn git_path_text(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.into_owned()
+    }
+}
+
+/// Git's boolean config spelling (`git config --bool`).
+fn git_bool(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "true" | "yes" | "on" | "1"
+    )
 }
 
 fn run_text(
@@ -1100,31 +1358,6 @@ fn parse_history_entry(record: &[u8]) -> Result<HistoryEntry, RepositoryError> {
         authored_iso: fields[5].to_owned(),
         subject: fields[6].to_owned(),
     })
-}
-
-fn contains_nested_repository(root: &Path, own_git_dir: &Path) -> io::Result<bool> {
-    let mut pending = VecDeque::from([root.to_path_buf()]);
-    while let Some(directory) = pending.pop_front() {
-        for entry in fs::read_dir(&directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            if file_type.is_symlink() {
-                continue;
-            }
-            if entry.file_name() == ".git" {
-                let resolved = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-                if directory != root && resolved != own_git_dir {
-                    return Ok(true);
-                }
-                continue;
-            }
-            if file_type.is_dir() {
-                pending.push_back(path);
-            }
-        }
-    }
-    Ok(false)
 }
 
 #[cfg(test)]
@@ -1345,6 +1578,212 @@ mod tests {
         git(dir.path(), ["init", "-q", nested.to_str().unwrap()]);
         assert!(repository.capabilities().unwrap().has_nested_repositories);
         assert!(!repository.capabilities().unwrap().supports_write_sync());
+    }
+
+    fn counted(dir: &Path) -> (GitRepository, Arc<std::sync::atomic::AtomicUsize>) {
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let runner = GitCommandRunner::new("git").with_invocation_counter(counter.clone());
+        (GitRepository::discover(runner, dir).unwrap(), counter)
+    }
+
+    fn spawned(counter: &std::sync::atomic::AtomicUsize) -> usize {
+        counter.swap(0, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[test]
+    fn discovery_uses_one_process_and_later_status_reads_use_one_each() {
+        let dir = initialized_repository();
+        let (repository, counter) = counted(dir.path());
+        assert_eq!(spawned(&counter), 1, "discovery");
+        assert!(
+            repository
+                .status()
+                .unwrap()
+                .capabilities
+                .supports_write_sync()
+        );
+        spawned(&counter);
+        for _ in 0..3 {
+            repository.status().unwrap();
+            assert_eq!(spawned(&counter), 1, "status after the capability probe");
+        }
+        // Clones share the memoized probe.
+        repository.clone().status().unwrap();
+        assert_eq!(spawned(&counter), 1);
+    }
+
+    #[test]
+    fn unsupported_shapes_are_still_detected_without_a_worktree_walk() {
+        let detached = initialized_repository();
+        git(detached.path(), ["checkout", "-q", "--detach"]);
+        let capabilities = discovered(detached.path()).capabilities().unwrap();
+        assert!(capabilities.detached_head && !capabilities.supports_write_sync());
+
+        let gitlink = initialized_repository();
+        let inner = initialized_repository();
+        let head = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(inner.path())
+            .output()
+            .unwrap();
+        let head = String::from_utf8(head.stdout).unwrap();
+        git(
+            gitlink.path(),
+            [
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{},vendored", head.trim()),
+            ],
+        );
+        assert!(
+            discovered(gitlink.path())
+                .capabilities()
+                .unwrap()
+                .has_nested_repositories
+        );
+
+        let sparse = initialized_repository();
+        git(sparse.path(), ["config", "core.sparseCheckout", "yes"]);
+        assert!(discovered(sparse.path()).capabilities().unwrap().sparse);
+
+        let partial = initialized_repository();
+        git(
+            partial.path(),
+            ["config", "extensions.partialClone", "origin"],
+        );
+        assert!(discovered(partial.path()).capabilities().unwrap().partial);
+
+        let promisor = initialized_repository();
+        git(
+            promisor.path(),
+            ["config", "remote.origin.promisor", "true"],
+        );
+        assert!(discovered(promisor.path()).capabilities().unwrap().partial);
+
+        let plain = discovered(initialized_repository().path())
+            .capabilities()
+            .unwrap();
+        assert!(plain.supports_write_sync());
+    }
+
+    #[test]
+    fn target_resolution_uses_at_most_four_processes_and_honors_insteadof() {
+        let dir = initialized_repository();
+        git(
+            dir.path(),
+            [
+                "config",
+                "url.https://mirror.invalid/.insteadOf",
+                "https://example.invalid/",
+            ],
+        );
+        let (repository, counter) = counted(dir.path());
+        spawned(&counter);
+        let target = repository.resolve_sync_target().unwrap();
+        assert!(spawned(&counter) <= 4);
+        assert_eq!(target.remote, "origin");
+        assert_eq!(target.destination_ref, "refs/heads/main");
+        assert_eq!(target.fetch_url, "https://mirror.invalid/notes.git");
+
+        git(
+            dir.path(),
+            [
+                "remote",
+                "set-url",
+                "--add",
+                "--push",
+                "origin",
+                "https://a.invalid/x.git",
+            ],
+        );
+        git(
+            dir.path(),
+            [
+                "remote",
+                "set-url",
+                "--add",
+                "--push",
+                "origin",
+                "https://b.invalid/x.git",
+            ],
+        );
+        assert!(matches!(
+            repository.resolve_sync_target(),
+            Err(RepositoryError::Target(
+                TargetResolutionError::MultiplePushDestinations
+            ))
+        ));
+    }
+
+    #[test]
+    fn unusual_branch_names_fall_back_to_per_key_queries() {
+        let dir = initialized_repository();
+        git(dir.path(), ["checkout", "-q", "-b", "notes+daily"]);
+        git(
+            dir.path(),
+            ["config", "branch.notes+daily.remote", "origin"],
+        );
+        git(
+            dir.path(),
+            [
+                "config",
+                "branch.notes+daily.merge",
+                "refs/heads/notes+daily",
+            ],
+        );
+        let target = discovered(dir.path()).resolve_sync_target().unwrap();
+        assert_eq!(target.local_branch, "notes+daily");
+        assert_eq!(target.remote_branch, "notes+daily");
+        assert!(is_conservative_ref_name("feature/2026.10-notes_a"));
+        for unsafe_name in ["", "a..b", ".hidden", "x.lock", "a//b", "-x", "a/", "a b"] {
+            assert!(!is_conservative_ref_name(unsafe_name), "{unsafe_name}");
+        }
+    }
+
+    #[test]
+    fn batched_ignore_and_tracked_queries_are_literal_and_single_process() {
+        let dir = initialized_repository();
+        fs::write(dir.path().join(".gitignore"), "*.log\n[ab].tmp\n").unwrap();
+        let names = [
+            "- dash.md",
+            "中文 note.md",
+            "[ab].md",
+            "a.md",
+            "skip.log",
+            "a.tmp",
+        ];
+        for name in names {
+            fs::write(dir.path().join(name), "x").unwrap();
+        }
+        git(dir.path(), ["add", "--", ".gitignore", "a.md"]);
+        git(dir.path(), ["commit", "-q", "-m", "tracked"]);
+        let (repository, counter) = counted(dir.path());
+        let paths: Vec<PathBuf> = names.iter().map(PathBuf::from).collect();
+
+        spawned(&counter);
+        let ignored = repository.ignored_among(&paths).unwrap();
+        assert_eq!(spawned(&counter), 1);
+        assert_eq!(
+            ignored,
+            HashSet::from([PathBuf::from("skip.log"), PathBuf::from("a.tmp")])
+        );
+
+        let tracked = repository.tracked_among(&paths).unwrap();
+        assert_eq!(spawned(&counter), 1);
+        assert_eq!(tracked, HashSet::from([PathBuf::from("a.md")]));
+
+        assert!(repository.ignored_among(&[]).unwrap().is_empty());
+        assert!(
+            repository
+                .ignored_among(&[PathBuf::from("- dash.md")])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    fn discovered(path: &Path) -> GitRepository {
+        GitRepository::discover(GitCommandRunner::new("git"), path).unwrap()
     }
 
     #[test]

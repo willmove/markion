@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     CancellationToken, CommandLimits, ConflictDraft, ConflictKind, GitCommand, GitCommandError,
     GitObjectId, GitRepository, JournalError, JournalStore, OperationCheckpoint, OperationPhase,
-    RepositoryError, SyncTarget, persist::atomic_write,
+    RepositoryError, RepositoryState, SyncTarget, persist::atomic_write,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -819,7 +819,38 @@ impl RecoveryManager {
 
     pub fn assess(&self) -> Result<Vec<RecoveryAssessment>, ConflictError> {
         let journal = self.journal.load()?;
+        if !self.has_checkpoints(&journal) {
+            return Ok(Vec::new());
+        }
         let state = self.repository.status()?;
+        self.assess_journal(journal, &state)
+    }
+
+    /// Like [`Self::assess`], reusing a status the caller already read. Without
+    /// a checkpoint for this repository no Git process is started at all.
+    pub fn assess_with_state(
+        &self,
+        state: &RepositoryState,
+    ) -> Result<Vec<RecoveryAssessment>, ConflictError> {
+        let journal = self.journal.load()?;
+        if !self.has_checkpoints(&journal) {
+            return Ok(Vec::new());
+        }
+        self.assess_journal(journal, state)
+    }
+
+    fn has_checkpoints(&self, journal: &crate::OperationJournal) -> bool {
+        journal
+            .active
+            .iter()
+            .any(|checkpoint| checkpoint.identity == *self.repository.identity())
+    }
+
+    fn assess_journal(
+        &self,
+        journal: crate::OperationJournal,
+        state: &RepositoryState,
+    ) -> Result<Vec<RecoveryAssessment>, ConflictError> {
         let mut assessments = Vec::new();
         for checkpoint in journal
             .active

@@ -51,6 +51,8 @@ fn default_notes_policy(
         background_fetch: false,
         last_confirmed_remote: None,
         acknowledged_resource_omissions: Vec::new(),
+        allowed_extensions: Default::default(),
+        included_once: Vec::new(),
     }
 }
 

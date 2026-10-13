@@ -3259,7 +3259,9 @@ impl MarkionApp {
 
     pub(super) fn indent(&mut self, _: &Indent, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(SearchField::Git(index)) = self.search_focus {
-            self.search_focus = Some(SearchField::Git((index + 1) % 5));
+            self.search_focus = Some(SearchField::Git(
+                (index + 1) % super::git_panel::GIT_SETTINGS_FIELDS,
+            ));
             window.focus(&self.focus_handle);
             cx.notify();
             return;
@@ -3324,7 +3326,10 @@ impl MarkionApp {
 
     pub(super) fn outdent(&mut self, _: &Outdent, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(SearchField::Git(index)) = self.search_focus {
-            self.search_focus = Some(SearchField::Git((index + 4) % 5));
+            self.search_focus = Some(SearchField::Git(
+                (index + super::git_panel::GIT_SETTINGS_FIELDS - 1)
+                    % super::git_panel::GIT_SETTINGS_FIELDS,
+            ));
             cx.notify();
             return;
         }

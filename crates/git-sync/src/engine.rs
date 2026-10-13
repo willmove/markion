@@ -12,7 +12,7 @@ use crate::{
     ChangeKind, CommandLimits, GitCommand, GitCommandError, GitObjectId, GitRepository,
     HistoryRelation, JournalError, JournalStore, OperationCheckpoint, OperationKind,
     OperationPhase, PathDecision, ProcessTermination, RepositoryError, RepositoryPolicy,
-    ReviewPlan, SyncOutcome, SyncPlan,
+    ReviewPlan, ScopePartition, SyncOutcome, SyncPlan,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +58,34 @@ pub enum SyncEngineError {
     NoCommit,
     #[error("local version requires a nonblank commit message")]
     InvalidCommitMessage,
+    #[error(
+        "files held back from sync were changed and must be reviewed before updates can be applied"
+    )]
+    HeldBackTrackedChanges { paths: Vec<PathBuf> },
+}
+
+/// Held-back paths captured at preflight, which integration may tolerate.
+#[derive(Clone, Debug, Default)]
+struct HeldBackPaths {
+    new_files: BTreeSet<PathBuf>,
+    tracked: BTreeSet<PathBuf>,
+}
+
+impl HeldBackPaths {
+    fn of(partition: &ScopePartition) -> Self {
+        Self {
+            // Ignored OS artifacts stay untracked in the worktree as well.
+            new_files: partition
+                .held_back_new()
+                .map(|held| held.path.clone())
+                .chain(partition.ignored.iter().cloned())
+                .collect(),
+            tracked: partition
+                .held_back_tracked()
+                .map(|held| held.path.clone())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -107,7 +135,8 @@ impl GitSyncEngine {
         cancellation: &CancellationToken,
     ) -> Result<SyncOutcome, SyncEngineError> {
         validate_operation_id(&plan.operation_id)?;
-        let state = self.preflight(plan, policy, reviewed)?;
+        let (state, partition) = self.preflight(plan, policy, reviewed)?;
+        let held_back = HeldBackPaths::of(&partition);
         let mut checkpoint = OperationCheckpoint {
             operation_id: plan.operation_id.clone(),
             kind: OperationKind::SyncNow,
@@ -185,6 +214,7 @@ impl GitSyncEngine {
                         &intended_commit,
                         &remote_tip,
                         relation,
+                        &held_back,
                         cancellation,
                     ) {
                         Ok(commit) => intended_commit = commit,
@@ -206,6 +236,13 @@ impl GitSyncEngine {
                                 phase: OperationPhase::Resolving,
                                 reason: error.to_string(),
                             });
+                        }
+                        // Nothing was integrated: record a paused, retryable state so
+                        // recovery does not treat the checkpoint as an interrupted merge.
+                        Err(error @ SyncEngineError::HeldBackTrackedChanges { .. }) => {
+                            checkpoint.phase = OperationPhase::NeedsAttention;
+                            let _ = self.persist_checkpoint(&mut checkpoint);
+                            return Err(error);
                         }
                         Err(error) => return Err(error),
                     }
@@ -268,7 +305,7 @@ impl GitSyncEngine {
         cancellation: &CancellationToken,
     ) -> Result<SyncOutcome, SyncEngineError> {
         validate_operation_id(&plan.operation_id)?;
-        let state = self.preflight(plan, policy, reviewed)?;
+        let (state, _) = self.preflight(plan, policy, reviewed)?;
         if plan.paths.is_empty() {
             return Ok(SyncOutcome::UpToDate);
         }
@@ -440,10 +477,11 @@ impl GitSyncEngine {
         cancellation: &CancellationToken,
     ) -> Result<SyncOutcome, SyncEngineError> {
         validate_operation_id(&plan.operation_id)?;
-        let state = self.preflight(plan, policy, None)?;
+        let (state, partition) = self.preflight(plan, policy, None)?;
         if !plan.paths.is_empty() {
             return Err(SyncEngineError::UnsafeRepositoryState);
         }
+        let held_back = HeldBackPaths::of(&partition);
         let local = state.head.clone().ok_or(SyncEngineError::NoCommit)?;
         let mut checkpoint = self.new_checkpoint(plan, OperationKind::PullUpdates, &state);
         self.journal.begin(checkpoint.clone())?;
@@ -475,8 +513,14 @@ impl GitSyncEngine {
         checkpoint.resulting_commit = Some(local.clone());
         checkpoint.phase = OperationPhase::Integrating;
         self.persist_checkpoint(&mut checkpoint)?;
-        let commit = match self.integrate(&mut checkpoint, &local, &remote, relation, cancellation)
-        {
+        let commit = match self.integrate(
+            &mut checkpoint,
+            &local,
+            &remote,
+            relation,
+            &held_back,
+            cancellation,
+        ) {
             Ok(commit) => commit,
             Err(error) if self.repository.status()?.worktree.has_conflicts => {
                 // Reconcile even if cancellation interrupted Git's response.
@@ -495,6 +539,13 @@ impl GitSyncEngine {
                     phase: OperationPhase::Resolving,
                     reason: error.to_string(),
                 });
+            }
+            // Nothing was integrated: record a paused, retryable state so
+            // recovery does not treat the checkpoint as an interrupted merge.
+            Err(error @ SyncEngineError::HeldBackTrackedChanges { .. }) => {
+                checkpoint.phase = OperationPhase::NeedsAttention;
+                let _ = self.persist_checkpoint(&mut checkpoint);
+                return Err(error);
             }
             Err(error) => return Err(error),
         };
@@ -668,7 +719,7 @@ impl GitSyncEngine {
         plan: &SyncPlan,
         policy: &RepositoryPolicy,
         reviewed: Option<&ReviewPlan>,
-    ) -> Result<crate::RepositoryState, SyncEngineError> {
+    ) -> Result<(crate::RepositoryState, ScopePartition), SyncEngineError> {
         if plan.identity != *self.repository.identity()
             || !policy.validates_identity(self.repository.identity())
             || plan.target != policy.target
@@ -688,28 +739,10 @@ impl GitSyncEngine {
             return Err(SyncEngineError::UnsafeRepositoryState);
         }
 
-        let mut expected = Vec::new();
-        for change in &state.worktree.changes {
-            let absolute = self.repository.identity().worktree_root.join(&change.path);
-            let is_symlink = fs::symlink_metadata(&absolute)
-                .map(|metadata| metadata.file_type().is_symlink())
-                .unwrap_or(false);
-            let ignored = change.kind == ChangeKind::Untracked && self.is_ignored(&change.path);
-            match policy.decide_path(&change.path, change.kind, ignored, is_symlink) {
-                PathDecision::Automatic => expected.push(change.path.clone()),
-                PathDecision::Ignored => {}
-                PathDecision::Attention => return Err(SyncEngineError::StalePlan),
-            }
-            if change.kind == ChangeKind::Renamed
-                && change
-                    .original_path
-                    .as_ref()
-                    .is_some_and(|from| policy.rename_needs_review(from, &change.path))
-            {
-                return Err(SyncEngineError::StalePlan);
-            }
-        }
-        if sorted_paths(expected) != sorted_paths(plan.paths.clone()) {
+        // Held-back changes stay in the worktree and never block the plan;
+        // the plan must name exactly the automatic ones.
+        let partition = policy.partition(&state.worktree.changes, &self.repository);
+        if sorted_paths(partition.automatic.clone()) != sorted_paths(plan.paths.clone()) {
             return Err(SyncEngineError::StalePlan);
         }
         if let Some(reviewed) = reviewed
@@ -717,7 +750,7 @@ impl GitSyncEngine {
         {
             return Err(SyncEngineError::StalePlan);
         }
-        Ok(state)
+        Ok((state, partition))
     }
 
     fn preflight_selected(
@@ -763,8 +796,8 @@ impl GitSyncEngine {
             let is_symlink = fs::symlink_metadata(&absolute)
                 .map(|metadata| metadata.file_type().is_symlink())
                 .unwrap_or(false);
-            let ignored = change.kind == ChangeKind::Untracked && self.is_ignored(path);
-            if policy.decide_path(path, change.kind, ignored, is_symlink) != PathDecision::Automatic
+            // Status never lists ignored paths, so no untracked entry is ignored.
+            if policy.decide_path(path, change.kind, false, is_symlink) != PathDecision::Automatic
                 || change
                     .original_path
                     .as_ref()
@@ -890,19 +923,38 @@ impl GitSyncEngine {
         expected_head: &GitObjectId,
         remote_tip: &GitObjectId,
         relation: HistoryRelation,
+        held_back: &HeldBackPaths,
         cancellation: &CancellationToken,
     ) -> Result<GitObjectId, SyncEngineError> {
         let state = self.repository.status()?;
-        if state.head.as_ref() != Some(expected_head)
-            || !state.worktree.changes.is_empty()
-            || state.worktree.has_external_staging
-        {
+        if state.head.as_ref() != Some(expected_head) || state.worktree.has_external_staging {
             return Err(SyncEngineError::UnsafeRepositoryState);
         }
-        let incoming = self.incoming_paths(expected_head, remote_tip, cancellation)?;
-        self.validate_incoming_paths(expected_head, remote_tip, &incoming, cancellation)?;
+        // Held-back new files present at preflight may stay; incoming
+        // collisions with them are refused below. A held-back tracked change
+        // pauses integration, and anything else (an edit made during fetch)
+        // still blocks as before.
+        let mut tracked_held = Vec::new();
+        for change in &state.worktree.changes {
+            if change.kind == ChangeKind::Untracked && held_back.new_files.contains(&change.path) {
+                continue;
+            }
+            if held_back.tracked.contains(&change.path) {
+                tracked_held.push(change.path.clone());
+                continue;
+            }
+            return Err(SyncEngineError::UnsafeRepositoryState);
+        }
+        if !tracked_held.is_empty() {
+            return Err(SyncEngineError::HeldBackTrackedChanges {
+                paths: tracked_held,
+            });
+        }
+        let incoming = self.incoming_entries(expected_head, remote_tip, cancellation)?;
+        self.validate_incoming_paths(&incoming)?;
         let fingerprints = incoming
             .iter()
+            .map(|entry| &entry.path)
             .filter(|path| {
                 self.repository
                     .identity()
@@ -964,31 +1016,28 @@ impl GitSyncEngine {
             .ok_or(SyncEngineError::NoCommit)
     }
 
-    fn validate_incoming_paths(
-        &self,
-        local: &GitObjectId,
-        remote: &GitObjectId,
-        paths: &[PathBuf],
-        cancellation: &CancellationToken,
-    ) -> Result<(), SyncEngineError> {
+    fn validate_incoming_paths(&self, entries: &[IncomingEntry]) -> Result<(), SyncEngineError> {
         let mut casefolded = BTreeSet::new();
-        for path in paths {
-            self.repository.validate_write_path(path)?;
-            let folded = path.to_string_lossy().to_lowercase();
-            if !casefolded.insert(folded) {
+        for entry in entries {
+            self.repository.validate_write_path(&entry.path)?;
+            // Only paths that exist on the remote side can collide by case;
+            // the deleted half of a rename does not.
+            if !entry.present_remotely() {
+                continue;
+            }
+            if !casefolded.insert(entry.path.to_string_lossy().to_lowercase()) {
                 return Err(SyncEngineError::UnsafeIncomingPaths);
             }
-            let local_entry = self.tree_entry(local, path, cancellation)?;
-            let remote_entry = self.tree_entry(remote, path, cancellation)?;
-            if remote_entry
-                .as_deref()
-                .is_some_and(|entry| entry.starts_with("120000 "))
-            {
+            if matches!(entry.remote_mode.as_str(), "120000" | "160000") {
                 return Err(SyncEngineError::UnsafeIncomingPaths);
             }
-            if local_entry.is_none()
-                && remote_entry.is_some()
-                && self.repository.identity().worktree_root.join(path).exists()
+            if !entry.present_locally()
+                && self
+                    .repository
+                    .identity()
+                    .worktree_root
+                    .join(&entry.path)
+                    .exists()
             {
                 return Err(SyncEngineError::UnsafeIncomingPaths);
             }
@@ -1064,23 +1113,38 @@ impl GitSyncEngine {
             );
         }
         self.remove_fetch_ref(&checkpoint.operation_id);
-        let pending = self.repository.status()?.worktree.changes.len();
+        let partition = policy.partition(
+            &self.repository.status()?.worktree.changes,
+            &self.repository,
+        );
         Ok(SyncOutcome::Synchronized {
             commit: Some(commit),
             remote_tip: Some(confirmed_remote),
-            pending_local_changes: pending,
+            pending_local_changes: partition.automatic.len(),
+            held_back: partition.held_back.len(),
         })
     }
 
-    fn incoming_paths(
+    /// Every path that differs between `local` and `remote`, with the file
+    /// modes on both sides, from one `diff --raw` listing. `--no-renames`
+    /// keeps both sides of a rename so the old path also gets a preimage.
+    fn incoming_entries(
         &self,
         local: &GitObjectId,
         remote: &GitObjectId,
         cancellation: &CancellationToken,
-    ) -> Result<Vec<PathBuf>, SyncEngineError> {
-        let output = self.run(
-            GitCommand::new(&self.repository.identity().worktree_root)
-                .args(["diff", "--name-only", "-z", local.as_str(), remote.as_str()])
+    ) -> Result<Vec<IncomingEntry>, SyncEngineError> {
+        let output = self.repository.runner().run(
+            &GitCommand::new(&self.repository.identity().worktree_root)
+                .args([
+                    "diff",
+                    "--raw",
+                    "-z",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    local.as_str(),
+                    remote.as_str(),
+                ])
                 .read_only(true),
             CommandLimits {
                 max_stdout_bytes: 16 * 1024 * 1024,
@@ -1088,29 +1152,10 @@ impl GitSyncEngine {
             },
             cancellation,
         )?;
-        Ok(output
-            .split(|byte| *byte == 0)
-            .filter(|path| !path.is_empty())
-            .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned()))
-            .collect())
-    }
-
-    fn tree_entry(
-        &self,
-        commit: &GitObjectId,
-        path: &Path,
-        cancellation: &CancellationToken,
-    ) -> Result<Option<String>, SyncEngineError> {
-        let output = self.run(
-            GitCommand::new(&self.repository.identity().worktree_root)
-                .args(["ls-tree", commit.as_str()])
-                .literal_paths([path])
-                .read_only(true),
-            CommandLimits::default(),
-            cancellation,
-        )?;
-        let text = String::from_utf8_lossy(&output).trim().to_string();
-        Ok((!text.is_empty()).then_some(text))
+        if output.stdout_truncated {
+            return Err(SyncEngineError::UnsafeIncomingPaths);
+        }
+        parse_raw_diff(&output.stdout).ok_or(SyncEngineError::UnsafeIncomingPaths)
     }
 
     fn staged_paths(
@@ -1266,18 +1311,6 @@ impl GitSyncEngine {
         }
     }
 
-    fn is_ignored(&self, path: &Path) -> bool {
-        self.run(
-            GitCommand::new(&self.repository.identity().worktree_root)
-                .args(["check-ignore", "-q"])
-                .literal_paths([path])
-                .read_only(true),
-            CommandLimits::default(),
-            &CancellationToken::new(),
-        )
-        .is_ok()
-    }
-
     fn file_fingerprint(&self, path: &Path) -> Result<String, SyncEngineError> {
         let metadata = fs::metadata(self.repository.identity().worktree_root.join(path))?;
         let modified = metadata
@@ -1349,6 +1382,45 @@ fn noninteractive_network_request(mut request: GitCommand) -> GitCommand {
     request
         .interactive_credentials(false)
         .env("GCM_INTERACTIVE", "Never")
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IncomingEntry {
+    path: PathBuf,
+    local_mode: String,
+    remote_mode: String,
+}
+
+impl IncomingEntry {
+    fn present_locally(&self) -> bool {
+        self.local_mode != "000000"
+    }
+
+    fn present_remotely(&self) -> bool {
+        self.remote_mode != "000000"
+    }
+}
+
+/// Parse `git diff --raw -z --no-renames`: `:<old> <new> <oid> <oid> <status>`
+/// followed by one path per record.
+fn parse_raw_diff(output: &[u8]) -> Option<Vec<IncomingEntry>> {
+    let mut fields = output
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    let mut entries = Vec::new();
+    while let Some(metadata) = fields.next() {
+        let metadata = std::str::from_utf8(metadata.strip_prefix(b":")?).ok()?;
+        let mut parts = metadata.split(' ');
+        let local_mode = parts.next()?.to_owned();
+        let remote_mode = parts.next()?.to_owned();
+        let path = fields.next()?;
+        entries.push(IncomingEntry {
+            path: PathBuf::from(String::from_utf8_lossy(path).into_owned()),
+            local_mode,
+            remote_mode,
+        });
+    }
+    Some(entries)
 }
 
 fn parse_name_status_paths(output: &[u8]) -> Option<Vec<PathBuf>> {
@@ -1437,6 +1509,23 @@ mod tests {
         let debug = format!("{request:?}");
         assert!(debug.contains("GCM_INTERACTIVE"));
         assert!(!debug.contains("Never"));
+    }
+
+    #[test]
+    fn raw_diff_reports_modes_for_both_sides() {
+        let zero = "0".repeat(40);
+        let oid = "a".repeat(40);
+        let input = format!(
+            ":000000 100644 {zero} {oid} A\0new note.md\0:100644 000000 {oid} {zero} D\0old.md\0:000000 120000 {zero} {oid} A\0link\0"
+        );
+        let entries = parse_raw_diff(input.as_bytes()).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].path, PathBuf::from("new note.md"));
+        assert!(!entries[0].present_locally() && entries[0].present_remotely());
+        assert!(entries[1].present_locally() && !entries[1].present_remotely());
+        assert_eq!(entries[2].remote_mode, "120000");
+        assert!(parse_raw_diff(b"garbage\0path\0").is_none());
+        assert!(parse_raw_diff(b"").unwrap().is_empty());
     }
 
     #[test]

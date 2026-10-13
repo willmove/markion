@@ -4,15 +4,48 @@ use markion_git_sync::{
     BackgroundFetchResult, BackupSyncAction, BackupSyncFacts, BackupSyncPresentation,
     BackupSyncState, CancellationToken, ConnectionState, DiffRequest, DocumentSyncState,
     GitCommandRunner, GitObjectId, GitRepository, HistoryEntry, HistoryRelation, JournalStore,
-    OperationCheckpoint, OperationKind, OperationPhase, OperationProgress, PathDecision, RemoteUrl,
+    OperationCheckpoint, OperationKind, OperationPhase, OperationProgress, RemoteUrl,
     RepositoryIdentity, RepositoryPolicy, RepositoryState, SyncOutcome,
 };
+use std::collections::BTreeSet;
 use std::time::SystemTime;
 
 const PAGE_SIZE: usize = 50;
 const PREVIEW_LIMIT: usize = 64 * 1024;
 
 pub(super) type GitRestoreTarget = (DocumentInstanceId, u64, Option<DiskIdentity>, bool);
+
+/// A per-file decision for a change held back from sync.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum GitScopeDecision {
+    IncludeOnce(PathBuf),
+    AlwaysSyncType(String),
+    ExcludeOnDevice(PathBuf),
+    RemoveExclusion(PathBuf),
+}
+
+/// Localized reason a change is held back from sync.
+pub(super) fn held_back_reason_label(
+    language: Language,
+    held: &markion_git_sync::HeldBack,
+) -> String {
+    use markion_git_sync::HeldBackReason;
+    match &held.reason {
+        HeldBackReason::Hidden => git_t(language, GitMsg::HeldBackHidden).into(),
+        HeldBackReason::FileType {
+            extension: Some(extension),
+        } => git_tf(language, GitMsg::HeldBackFileType, &[extension]),
+        HeldBackReason::FileType { extension: None } => {
+            git_t(language, GitMsg::HeldBackFileTypeUnknown).into()
+        }
+        HeldBackReason::OutsideFolders => git_t(language, GitMsg::HeldBackOutsideFolders).into(),
+        HeldBackReason::Symlink => git_t(language, GitMsg::HeldBackSymlink).into(),
+        HeldBackReason::NestedRepository => git_t(language, GitMsg::HeldBackNested).into(),
+        HeldBackReason::PairedMove { .. } => git_t(language, GitMsg::HeldBackMoved).into(),
+        HeldBackReason::RenameAcrossScope => git_t(language, GitMsg::HeldBackRename).into(),
+        HeldBackReason::ChangedSinceApproval => git_t(language, GitMsg::HeldBackChanged).into(),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum GitPage {
@@ -78,6 +111,20 @@ pub(super) struct GitUi {
     pub advanced_open: bool,
     pub snapshot: Option<Arc<GitDetails>>,
     pub refreshing: bool,
+    /// A refresh was requested while one was in flight; run one follow-up.
+    pub refresh_queued: bool,
+    /// Number of refreshes started, for coalescing diagnostics and tests.
+    pub refresh_runs: u64,
+    pub last_refresh_started: Option<std::time::Instant>,
+    /// Whether the main window is active; the fallback timer only fires then.
+    pub window_active: bool,
+    /// The workspace watcher failed and the file tree polls instead.
+    pub watcher_polling: bool,
+    pub repository_cache: git_refresh::RepositoryCache,
+    pub fingerprint_cache: git_refresh::FingerprintCache,
+    /// Test-only counter for Git processes started by details refreshes.
+    #[cfg(test)]
+    pub refresh_invocations: Option<Arc<std::sync::atomic::AtomicUsize>>,
     pub page: GitPage,
     pub offset: usize,
     pub history_path_override: Option<PathBuf>,
@@ -100,6 +147,9 @@ pub(super) struct GitUi {
     /// Test-only journal location so tests never touch the user's journal.
     #[cfg(test)]
     pub journal_override: Option<JournalStore>,
+    /// Test-only policy file so tests never touch the user's sync policies.
+    #[cfg(test)]
+    pub policy_store_override: Option<PathBuf>,
     pub phase: Arc<std::sync::Mutex<Option<markion_git_sync::OperationPhase>>>,
     pub pending_exit: Option<(gpui::AnyWindowHandle, UnsavedExitKind)>,
     pub remote_checks: HashMap<PathBuf, SystemTime>,
@@ -118,10 +168,16 @@ pub(super) struct GitUi {
     pub retry_operation: Option<(RepositoryIdentity, OperationKind)>,
 }
 
+pub(super) const GIT_SETTINGS_FIELDS: usize = 6;
+
 pub(super) struct GitSettings {
     pub policy: RepositoryPolicy,
-    pub fields: [SearchFieldState; 5],
+    /// Tracked roots, new-file roots, message template, author name, author
+    /// email, extra file types.
+    pub fields: [SearchFieldState; GIT_SETTINGS_FIELDS],
     pub advanced: bool,
+    /// Markion-owned device-local exclusions, listed for removal.
+    pub device_exclusions: Vec<PathBuf>,
 }
 
 pub(super) struct GitDetails {
@@ -131,7 +187,10 @@ pub(super) struct GitDetails {
     pub policy: Option<RepositoryPolicy>,
     pub history: Vec<HistoryEntry>,
     pub history_path: Option<PathBuf>,
+    /// Paths that are not committed automatically: held-back changes and
+    /// ignored operating-system artifacts.
     pub attention: HashSet<PathBuf>,
+    pub partition: markion_git_sync::ScopePartition,
     pub fingerprints: HashMap<PathBuf, String>,
     pub decorations: HashMap<PathBuf, String>,
     pub attachments: Vec<(PathBuf, markion_git_sync::AttachmentIssue)>,
@@ -162,6 +221,15 @@ pub(super) fn journal() -> JournalStore {
 }
 
 impl MarkionApp {
+    /// Location of the sync policy file (a temporary file in tests).
+    pub(super) fn git_policy_path(&self) -> PathBuf {
+        #[cfg(test)]
+        if let Some(path) = &self.git_ui.policy_store_override {
+            return path.clone();
+        }
+        default_git_sync_policy_path()
+    }
+
     pub(super) fn git_journal(&self) -> JournalStore {
         #[cfg(test)]
         if let Some(journal) = &self.git_ui.journal_override {
@@ -215,11 +283,23 @@ impl MarkionApp {
             SearchFieldState::new(policy.message_template.clone()),
             SearchFieldState::default(),
             SearchFieldState::default(),
+            SearchFieldState::new(
+                policy
+                    .allowed_extensions
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
         ];
+        // `info/exclude` is a small local file; listing it is cheap.
+        let device_exclusions =
+            markion_git_sync::device_exclusions(&policy.identity.common_dir).unwrap_or_default();
         self.git_ui.settings = Some(GitSettings {
             policy,
             fields,
             advanced: false,
+            device_exclusions,
         });
         self.search_visible = false;
         self.search_focus = Some(SearchField::Git(0));
@@ -259,6 +339,12 @@ impl MarkionApp {
             })
             .collect();
         policy.message_template = form.fields[2].buffer.clone();
+        let Some(extensions) = parse_extensions(&form.fields[5].buffer) else {
+            self.status = self.git_label(GitMsg::InvalidFileTypes).into();
+            cx.notify();
+            return;
+        };
+        policy.allowed_extensions = extensions;
         let author = markion_git_sync::RepositoryAuthor {
             name: form.fields[3].buffer.trim().into(),
             email: form.fields[4].buffer.trim().into(),
@@ -363,15 +449,25 @@ impl MarkionApp {
         cx.notify();
     }
 
-    pub(super) fn arm_git_details_poll(&mut self, cx: &mut Context<Self>) {
+    /// Git details refresh is change-driven: watcher events, window activation,
+    /// saves, operations and navigation request it explicitly. This loop is
+    /// only a low-frequency fallback and never fires while the window is
+    /// inactive.
+    pub(super) fn arm_git_details_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.git_ui.window_active = window.is_window_active();
+        cx.observe_window_activation(window, |app, window, cx| {
+            app.git_ui.window_active = window.is_window_active();
+            if app.git_ui.window_active {
+                app.refresh_git_details(cx);
+            }
+        })
+        .detach();
         self.refresh_git_details(cx);
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_secs(5)).await;
+                Timer::after(git_refresh::GIT_FALLBACK_TICK).await;
                 if this
-                    .update(cx, |app, cx| {
-                        app.refresh_git_details(cx);
-                    })
+                    .update(cx, |app, cx| app.git_fallback_refresh_tick(cx))
                     .is_err()
                 {
                     break;
@@ -381,11 +477,65 @@ impl MarkionApp {
         .detach();
     }
 
+    pub(super) fn git_fallback_refresh_tick(&mut self, cx: &mut Context<Self>) {
+        if !self.git_ui.window_active {
+            return;
+        }
+        let interval = if self.git_ui.watcher_polling {
+            git_refresh::GIT_FALLBACK_REFRESH_POLLING
+        } else {
+            git_refresh::GIT_FALLBACK_REFRESH
+        };
+        if self
+            .git_ui
+            .last_refresh_started
+            .is_none_or(|started| started.elapsed() >= interval)
+        {
+            self.refresh_git_details(cx);
+        }
+    }
+
+    /// Text of named dirty documents, keyed by path, for a details refresh.
+    /// Clean documents match their files, which the background task reads
+    /// when needed, so their text is never copied on the UI thread.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn capture_dirty_git_documents(
+        &self,
+    ) -> HashMap<PathBuf, ((DocumentInstanceId, u64), String)> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| {
+                let tab = tab.document_tab()?;
+                if !tab.document.is_dirty() {
+                    return None;
+                }
+                Some((
+                    tab.document.path()?.to_path_buf(),
+                    (
+                        (tab.document.instance_id(), tab.document.version()),
+                        tab.document.text().to_string(),
+                    ),
+                ))
+            })
+            .collect()
+    }
+
+    /// Request a Git details refresh. Requests made while one is in flight
+    /// coalesce into a single follow-up refresh.
     pub(super) fn refresh_git_details(&mut self, cx: &mut Context<Self>) {
         if self.git_ui.refreshing {
+            self.git_ui.refresh_queued = true;
             return;
         }
         self.git_ui.refreshing = true;
+        self.git_ui.refresh_queued = false;
+        self.git_ui.refresh_runs += 1;
+        self.git_ui.last_refresh_started = Some(std::time::Instant::now());
+        let repository_cache = self.git_ui.repository_cache.clone();
+        let fingerprint_cache = self.git_ui.fingerprint_cache.clone();
+        let policy_path = self.git_policy_path();
+        #[cfg(test)]
+        let invocations = self.git_ui.refresh_invocations.clone();
         let workspace = self.workspace_root.clone();
         let executable = self
             .git_preferences
@@ -399,17 +549,7 @@ impl MarkionApp {
             .history_path_override
             .clone()
             .or_else(|| self.active_tab().path().map(Path::to_path_buf));
-        let live_notes: HashMap<_, _> = self
-            .tabs
-            .iter()
-            .filter_map(|tab| {
-                let tab = tab.document_tab()?;
-                Some((
-                    tab.document.path()?.to_path_buf(),
-                    tab.document.text().to_string(),
-                ))
-            })
-            .collect();
+        let live_notes = self.capture_dirty_git_documents();
         let dirty_paths = self
             .tabs
             .iter()
@@ -421,9 +561,16 @@ impl MarkionApp {
             let queried_active_path = active_path.clone();
             let result = cx
                 .background_spawn(async move {
+                    let runner = || {
+                        let runner = GitCommandRunner::new(&executable);
+                        #[cfg(test)]
+                        if let Some(invocations) = invocations {
+                            return runner.with_invocation_counter(invocations);
+                        }
+                        runner
+                    };
                     let repository =
-                        GitRepository::discover(GitCommandRunner::new(executable), &root)
-                            .map_err(|error| error.to_string())?;
+                        repository_cache.get_or_discover(&root, &executable, runner)?;
                     let mut state = repository.status().map_err(|error| error.to_string())?;
                     for absolute in &dirty_paths {
                         let Ok(relative) =
@@ -451,7 +598,7 @@ impl MarkionApp {
                         .worktree
                         .changes
                         .sort_by(|left, right| left.path.cmp(&right.path));
-                    let policy = PolicyStore::new(default_git_sync_policy_path())
+                    let policy = PolicyStore::new(policy_path)
                         .load()
                         .map_err(|error| error.to_string())?
                         .repositories
@@ -467,24 +614,17 @@ impl MarkionApp {
                             .classify_history(local, &remote, policy.last_confirmed_remote.as_ref())
                             .map_err(|e| e.to_string())?;
                     }
-                    let attention = state
-                        .worktree
-                        .changes
+                    // The same partition the engine applies: held-back changes
+                    // are listed for a decision and never block the rest.
+                    let partition = policy
+                        .as_ref()
+                        .map(|policy| policy.partition(&state.worktree.changes, &repository))
+                        .unwrap_or_default();
+                    let attention = partition
+                        .held_back
                         .iter()
-                        .filter(|change| {
-                            policy.as_ref().is_some_and(|policy| {
-                                let symlink = fs::symlink_metadata(
-                                    repository.identity().worktree_root.join(&change.path),
-                                )
-                                .is_ok_and(|metadata| metadata.file_type().is_symlink());
-                                policy.decide_path(&change.path, change.kind, false, symlink)
-                                    == PathDecision::Attention
-                                    || change.original_path.as_ref().is_some_and(|from| {
-                                        policy.rename_needs_review(from, &change.path)
-                                    })
-                            })
-                        })
-                        .map(|change| change.path.clone())
+                        .map(|held| held.path.clone())
+                        .chain(partition.ignored.iter().cloned())
                         .collect();
                     let history_path = queried_active_path
                         .as_ref()
@@ -528,20 +668,31 @@ impl MarkionApp {
                             let fingerprint = if dirty_paths.contains(&absolute) {
                                 live_notes
                                     .get(&absolute)
-                                    .map(|text| {
-                                        markion_git_sync::content_fingerprint_bytes(text.as_bytes())
+                                    .map(|(key, text)| {
+                                        fingerprint_cache.buffer(*key).unwrap_or_else(|| {
+                                            let fingerprint =
+                                                markion_git_sync::content_fingerprint_bytes(
+                                                    text.as_bytes(),
+                                                );
+                                            fingerprint_cache
+                                                .remember_buffer(*key, fingerprint.clone());
+                                            fingerprint
+                                        })
                                     })
                                     .unwrap_or_else(|| "missing".into())
                             } else {
-                                repository
-                                    .content_fingerprint(&change.path)
-                                    .unwrap_or_else(|_| "unavailable".into())
+                                fingerprint_cache.file(&absolute, || {
+                                    repository
+                                        .content_fingerprint(&change.path)
+                                        .unwrap_or_else(|_| "unavailable".into())
+                                })
                             };
                             (change.path.clone(), fingerprint)
                         })
                         .collect();
                     let mut attachments = Vec::new();
                     if let Some(policy) = &policy {
+                        let mut notes = Vec::new();
                         for change in state.worktree.changes.iter().skip(offset).take(PAGE_SIZE) {
                             let absolute = repository.identity().worktree_root.join(&change.path);
                             if !matches!(
@@ -550,28 +701,37 @@ impl MarkionApp {
                             ) {
                                 continue;
                             }
-                            let text = live_notes.get(&absolute).cloned().or_else(|| {
-                                fs::metadata(&absolute)
-                                    .ok()
-                                    .filter(|m| m.len() <= 2 * 1024 * 1024)
-                                    .and_then(|_| fs::read_to_string(&absolute).ok())
-                            });
+                            let text = live_notes
+                                .get(&absolute)
+                                .map(|(_, text)| text.clone())
+                                .or_else(|| {
+                                    fs::metadata(&absolute)
+                                        .ok()
+                                        .filter(|m| m.len() <= 2 * 1024 * 1024)
+                                        .and_then(|_| fs::read_to_string(&absolute).ok())
+                                });
                             if let Some(text) = text {
-                                let report = markion_git_sync::inspect_note_attachments(
-                                    &repository,
-                                    policy,
-                                    &change.path,
-                                    &text,
-                                )
-                                .map_err(|e| e.to_string())?;
-                                attachments.extend(
-                                    report
-                                        .issues
-                                        .into_iter()
-                                        .filter(|issue| !issue.previously_acknowledged)
-                                        .map(|issue| (change.path.clone(), issue)),
-                                );
+                                notes.push((change.path.clone(), text));
                             }
+                        }
+                        let inputs = notes
+                            .iter()
+                            .map(|(path, text)| (path.as_path(), text.as_str()))
+                            .collect::<Vec<_>>();
+                        let reports = markion_git_sync::inspect_notes_attachments(
+                            &repository,
+                            policy,
+                            &inputs,
+                        )
+                        .map_err(|e| e.to_string())?;
+                        for ((path, _), report) in notes.iter().zip(reports) {
+                            attachments.extend(
+                                report
+                                    .issues
+                                    .into_iter()
+                                    .filter(|issue| !issue.previously_acknowledged)
+                                    .map(|issue| (path.clone(), issue)),
+                            );
                         }
                     }
                     let recovery = journal()
@@ -581,6 +741,12 @@ impl MarkionApp {
                         .into_iter()
                         .filter(|checkpoint| checkpoint.identity == *repository.identity())
                         .collect();
+                    // Reuses this refresh's status; no extra Git process
+                    // without a checkpoint for this repository.
+                    let assessments =
+                        markion_git_sync::RecoveryManager::new(repository.clone(), journal())
+                            .assess_with_state(&state)
+                            .map_err(|e| e.to_string())?;
                     Ok::<_, String>(GitDetails {
                         workspace: root,
                         identity: repository.identity().clone(),
@@ -589,20 +755,20 @@ impl MarkionApp {
                         history,
                         history_path,
                         attention,
+                        partition,
                         fingerprints,
                         decorations,
                         attachments,
                         recovery,
                         page,
                         offset,
-                        assessments: markion_git_sync::RecoveryManager::new(repository, journal())
-                            .assess()
-                            .map_err(|e| e.to_string())?,
+                        assessments,
                     })
                 })
                 .await;
             let _ = this.update(cx, |app, cx| {
                 app.git_ui.refreshing = false;
+                let follow_up = std::mem::take(&mut app.git_ui.refresh_queued);
                 if workspace != app.workspace_root
                     || page != app.git_ui.page
                     || offset != app.git_ui.offset
@@ -612,6 +778,8 @@ impl MarkionApp {
                     app.refresh_git_details(cx);
                     return;
                 }
+                // Apply this result even when a follow-up is queued, so
+                // continuous triggers cannot starve the snapshot.
                 match result {
                     Ok(details) => {
                         app.sync_git_commit_draft(&details);
@@ -621,6 +789,9 @@ impl MarkionApp {
                         app.git_ui.snapshot = None;
                         app.git_ui.reports.insert(workspace, error);
                     }
+                }
+                if follow_up {
+                    app.refresh_git_details(cx);
                 }
                 cx.notify();
             });
@@ -1246,6 +1417,7 @@ pub(super) fn backup_sync_presentation(app: &MarkionApp) -> BackupSyncPresentati
             has_external_operation: false,
             delivery_uncertain: false,
             last_confirmed_at: None,
+            held_back_items: 0,
         });
     };
 
@@ -1350,6 +1522,8 @@ pub(super) fn backup_sync_presentation(app: &MarkionApp) -> BackupSyncPresentati
         Some(BackgroundFetchResult::ActionableError(_))
     ));
     let delivery_uncertain = matches!(last_outcome, Some(SyncOutcome::UncertainDelivery { .. }));
+    // Held-back changes and ignored artifacts are not waiting to synchronize;
+    // they are reported separately as files not included in sync.
     let pending_paths = details
         .state
         .worktree
@@ -1357,6 +1531,7 @@ pub(super) fn backup_sync_presentation(app: &MarkionApp) -> BackupSyncPresentati
         .iter()
         .map(|change| change.path.clone())
         .chain(dirty_named_paths)
+        .filter(|path| !details.attention.contains(path))
         .collect::<HashSet<_>>()
         .len();
 
@@ -1379,10 +1554,7 @@ pub(super) fn backup_sync_presentation(app: &MarkionApp) -> BackupSyncPresentati
                 .as_ref()
                 .is_some_and(|view| view.identity == details.identity),
         recovery_items: details.recovery.len(),
-        attention_items: details.attention.len()
-            + details.attachments.len()
-            + outcome_attention
-            + background_attention,
+        attention_items: details.attachments.len() + outcome_attention + background_attention,
         has_external_staging: details.state.worktree.has_external_staging,
         has_external_operation: details.state.worktree.operation_in_progress.is_some(),
         delivery_uncertain,
@@ -1391,10 +1563,32 @@ pub(super) fn backup_sync_presentation(app: &MarkionApp) -> BackupSyncPresentati
             .remote_confirmations
             .get(&details.identity.worktree_root)
             .copied(),
+        held_back_items: details.partition.held_back.len(),
     })
 }
 
-fn backup_sync_state_label(
+/// The primary state, followed by the not-included count whenever files are
+/// held back, so a plain "synchronized" never hides unsynced files.
+pub(super) fn backup_sync_state_label(
+    app: &MarkionApp,
+    presentation: &BackupSyncPresentation,
+) -> SharedString {
+    let primary = backup_sync_primary_label(app, presentation);
+    if presentation.held_back_items == 0 {
+        return primary;
+    }
+    format!(
+        "{primary} · {}",
+        git_tf(
+            app.language,
+            GitMsg::HeldBackSummary,
+            &[&presentation.held_back_items.to_string()],
+        )
+    )
+    .into()
+}
+
+fn backup_sync_primary_label(
     app: &MarkionApp,
     presentation: &BackupSyncPresentation,
 ) -> SharedString {
@@ -1619,6 +1813,31 @@ pub(super) fn panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl
                     &[&presentation.incoming_commits.to_string()],
                 )),
             ]))
+            .when(presentation.held_back_items > 0, |body| {
+                body.child(
+                    div()
+                        .id("backup-sync-held-back")
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(git_tf(
+                            app.language,
+                            GitMsg::HeldBackSummary,
+                            &[&presentation.held_back_items.to_string()],
+                        ))
+                        .child(button(
+                            "backup-sync-held-back-review",
+                            app.git_label(GitMsg::Review),
+                            true,
+                            palette,
+                            cx,
+                            |app, _, cx| {
+                                app.git_ui.advanced_open = true;
+                                app.set_git_page(GitPage::Changes, cx);
+                            },
+                        )),
+                )
+            })
             .when_some(presentation.last_confirmed_at, |body, confirmed| {
                 body.child(
                     div().text_color(palette.muted).child(git_tf(
@@ -2225,12 +2444,67 @@ fn advanced_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl I
                             .min_w_0(),
                         ),
                 );
-                if details.attention.contains(&change.path) {
-                    rows = rows.child(
+                if let Some(held) = details
+                    .partition
+                    .held_back
+                    .iter()
+                    .find(|held| held.path == change.path)
+                {
+                    let mut decisions = div().flex().flex_wrap().gap_1().child(
                         div()
-                            .text_color(palette.invalid)
-                            .child(app.git_label(GitMsg::Attention)),
+                            .text_color(palette.muted)
+                            .child(held_back_reason_label(app.language, held)),
                     );
+                    if held.decidable() {
+                        let include = held.path.clone();
+                        decisions = decisions.child(button(
+                            ("git-held-include", index),
+                            app.git_label(GitMsg::IncludeOnce),
+                            connected,
+                            palette,
+                            cx,
+                            move |app, _, cx| {
+                                app.apply_git_scope_decision(
+                                    GitScopeDecision::IncludeOnce(include.clone()),
+                                    cx,
+                                )
+                            },
+                        ));
+                        if let markion_git_sync::HeldBackReason::FileType {
+                            extension: Some(extension),
+                        } = &held.reason
+                        {
+                            let extension = extension.clone();
+                            decisions = decisions.child(button(
+                                ("git-held-type", index),
+                                git_tf(app.language, GitMsg::AlwaysSyncType, &[&extension]),
+                                connected,
+                                palette,
+                                cx,
+                                move |app, _, cx| {
+                                    app.apply_git_scope_decision(
+                                        GitScopeDecision::AlwaysSyncType(extension.clone()),
+                                        cx,
+                                    )
+                                },
+                            ));
+                        }
+                        let exclude = held.path.clone();
+                        decisions = decisions.child(button(
+                            ("git-held-exclude", index),
+                            app.git_label(GitMsg::ExcludeOnDevice),
+                            connected,
+                            palette,
+                            cx,
+                            move |app, _, cx| {
+                                app.apply_git_scope_decision(
+                                    GitScopeDecision::ExcludeOnDevice(exclude.clone()),
+                                    cx,
+                                )
+                            },
+                        ));
+                    }
+                    rows = rows.child(decisions);
                 }
             }
         } else {
@@ -2424,6 +2698,8 @@ pub(super) fn recovery_policy(checkpoint: OperationCheckpoint) -> Option<Reposit
         background_fetch: false,
         last_confirmed_remote: None,
         acknowledged_resource_omissions: Vec::new(),
+        allowed_extensions: Default::default(),
+        included_once: Vec::new(),
     })
 }
 
@@ -2493,6 +2769,104 @@ impl MarkionApp {
                     store
                         .update(|policies| policies.upsert(policy))
                         .map_err(|e| e.to_string())
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                if let Err(error) = result {
+                    app.status = app.trf(Msg::StatusGitSyncFailed, &[&error]);
+                }
+                app.refresh_git_details(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Apply one per-file decision for a held-back change, or remove a
+    /// device-local exclusion. Runs in the background and never while a Git
+    /// operation is running.
+    pub(super) fn apply_git_scope_decision(
+        &mut self,
+        decision: GitScopeDecision,
+        cx: &mut Context<Self>,
+    ) {
+        if self.git_ui.running.is_some() {
+            self.status = self.git_label(GitMsg::Busy).into();
+            cx.notify();
+            return;
+        }
+        let Some(details) = &self.git_ui.snapshot else {
+            return;
+        };
+        let identity = details.identity.clone();
+        let policy_path = self.git_policy_path();
+        let executable = self
+            .git_preferences
+            .executable
+            .clone()
+            .unwrap_or_else(|| "git".into());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let repository = GitRepository::discover(
+                        GitCommandRunner::new(executable),
+                        &identity.worktree_root,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    if repository.identity() != &identity {
+                        return Err("repository identity changed".to_string());
+                    }
+                    let update_policy = |edit: &dyn Fn(&mut RepositoryPolicy)| {
+                        let store = PolicyStore::new(policy_path.clone());
+                        store
+                            .update(|policies| {
+                                if let Some(policy) = policies
+                                    .repositories
+                                    .iter_mut()
+                                    .find(|policy| policy.identity == identity)
+                                {
+                                    edit(policy);
+                                }
+                            })
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    };
+                    match decision {
+                        GitScopeDecision::IncludeOnce(path) => {
+                            repository
+                                .validate_write_path(&path)
+                                .map_err(|e| e.to_string())?;
+                            let fingerprint = repository
+                                .content_fingerprint(&path)
+                                .map_err(|e| e.to_string())?;
+                            update_policy(&|policy| {
+                                policy.included_once.retain(|record| record.path != path);
+                                policy.included_once.push(markion_git_sync::ScopeException {
+                                    path: path.clone(),
+                                    content_fingerprint: fingerprint.clone(),
+                                });
+                            })
+                        }
+                        GitScopeDecision::AlwaysSyncType(extension) => {
+                            if !markion_git_sync::valid_extension(&extension) {
+                                return Err("invalid file type".into());
+                            }
+                            update_policy(&|policy| {
+                                policy.allowed_extensions.insert(extension.clone());
+                            })
+                        }
+                        GitScopeDecision::ExcludeOnDevice(path) => {
+                            repository
+                                .validate_write_path(&path)
+                                .map_err(|e| e.to_string())?;
+                            markion_git_sync::add_device_exclusion(&identity.common_dir, &path)
+                                .map_err(|e| e.to_string())
+                        }
+                        GitScopeDecision::RemoveExclusion(path) => {
+                            markion_git_sync::remove_device_exclusion(&identity.common_dir, &path)
+                                .map_err(|e| e.to_string())
+                        }
+                    }
                 })
                 .await;
             let _ = this.update(cx, |app, cx| {
@@ -2687,6 +3061,19 @@ fn assessment_id(assessment: &markion_git_sync::RecoveryAssessment) -> &str {
     }
 }
 
+/// `pdf; .docx; M4A` → `{docx, m4a, pdf}`; `None` when any entry is invalid.
+pub(super) fn parse_extensions(value: &str) -> Option<BTreeSet<String>> {
+    value
+        .split(';')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let extension = entry.trim_start_matches('.').to_ascii_lowercase();
+            markion_git_sync::valid_extension(&extension).then_some(extension)
+        })
+        .collect()
+}
+
 fn parse_scope(value: &str) -> Result<Vec<PathBuf>, ()> {
     value
         .split(';')
@@ -2725,6 +3112,7 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> D
         GitMsg::Message,
         GitMsg::Name,
         GitMsg::Email,
+        GitMsg::ExtraFileTypes,
     ];
     let mut advanced_fields = div().flex().flex_col().gap_2();
     for (index, label) in labels.into_iter().enumerate() {
@@ -2848,6 +3236,41 @@ pub(super) fn settings_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> D
                 .when(form.advanced, |view| {
                     view.child(app.git_label(GitMsg::WholeHistory))
                         .child(advanced_fields)
+                })
+                .when(!form.device_exclusions.is_empty(), |view| {
+                    let mut list = div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(app.git_label(GitMsg::DeviceExclusions));
+                    for (index, path) in form.device_exclusions.iter().enumerate() {
+                        let remove = path.clone();
+                        list = list.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(path.display().to_string())
+                                .child(button(
+                                    ("git-remove-exclusion", index),
+                                    app.git_label(GitMsg::RemoveExclusion),
+                                    app.git_ui.running.is_none(),
+                                    palette,
+                                    cx,
+                                    move |app, _, cx| {
+                                        if let Some(form) = &mut app.git_ui.settings {
+                                            form.device_exclusions.retain(|path| *path != remove);
+                                        }
+                                        app.apply_git_scope_decision(
+                                            GitScopeDecision::RemoveExclusion(remove.clone()),
+                                            cx,
+                                        );
+                                    },
+                                )),
+                        );
+                    }
+                    view.child(list)
                 })
                 .child(
                     div()

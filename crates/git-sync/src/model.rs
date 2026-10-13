@@ -280,6 +280,9 @@ pub struct BackupSyncFacts {
     pub has_external_operation: bool,
     pub delivery_uncertain: bool,
     pub last_confirmed_at: Option<SystemTime>,
+    /// Changes held back from sync for a decision. They never select the
+    /// needs-attention state and are not counted as waiting to synchronize.
+    pub held_back_items: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -290,6 +293,8 @@ pub struct BackupSyncPresentation {
     pub outgoing_commits: usize,
     pub incoming_commits: usize,
     pub last_confirmed_at: Option<SystemTime>,
+    /// Shown alongside every primary state while non-zero.
+    pub held_back_items: usize,
 }
 
 impl BackupSyncPresentation {
@@ -376,6 +381,7 @@ impl BackupSyncPresentation {
             outgoing_commits,
             incoming_commits,
             last_confirmed_at: facts.last_confirmed_at,
+            held_back_items: facts.held_back_items,
         }
     }
 
@@ -404,7 +410,10 @@ pub enum SyncOutcome {
     Synchronized {
         commit: Option<GitObjectId>,
         remote_tip: Option<GitObjectId>,
+        /// Approved changes still waiting locally (new edits after capture).
         pending_local_changes: usize,
+        /// Changes held back from sync and still waiting for a decision.
+        held_back: usize,
     },
     CommittedLocally {
         commit: GitObjectId,
@@ -451,6 +460,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn held_back_items_are_reported_separately_and_never_select_attention() {
+        let mut facts = backup_facts();
+        facts.held_back_items = 2;
+        let presentation = BackupSyncPresentation::project(facts.clone());
+        assert_eq!(presentation.state, BackupSyncState::Synchronized);
+        assert_eq!(presentation.held_back_items, 2);
+        assert_eq!(presentation.local_items, 0);
+
+        facts.pending_paths = 1;
+        let presentation = BackupSyncPresentation::project(facts);
+        assert_eq!(presentation.state, BackupSyncState::PendingLocal);
+        assert_eq!(presentation.held_back_items, 2);
+    }
+
     fn backup_facts() -> BackupSyncFacts {
         BackupSyncFacts {
             connection: ConnectionState::Available,
@@ -465,6 +489,7 @@ mod tests {
             has_external_operation: false,
             delivery_uncertain: false,
             last_confirmed_at: Some(SystemTime::UNIX_EPOCH),
+            held_back_items: 0,
         }
     }
 

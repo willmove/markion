@@ -2413,6 +2413,7 @@ mod editor_element;
 mod export_prefs;
 mod git_conflicts;
 mod git_panel;
+mod git_refresh;
 mod git_sync;
 mod image_operations;
 mod image_preferences;

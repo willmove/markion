@@ -9,6 +9,7 @@ mod auth;
 mod background;
 mod conflict;
 mod engine;
+mod exclusion;
 mod journal;
 mod model;
 mod persist;
@@ -35,6 +36,7 @@ pub use conflict::{
     ConflictSide, ConflictSource, ReconcileReport, RecoveryAssessment, RecoveryManager,
 };
 pub use engine::{GitSyncEngine, SyncEngineError, SyncOptions};
+pub use exclusion::{add_device_exclusion, device_exclusions, remove_device_exclusion};
 pub use journal::{
     ConflictDraft, JournalError, JournalStore, OperationCheckpoint, OperationJournal,
     OperationSummary, PreimageEntry, PreimageManifest,
@@ -46,8 +48,10 @@ pub use model::{
     RepositorySnapshot, SyncOutcome, SyncPlan, SyncTarget, WorktreeState,
 };
 pub use policy::{
-    NewFileClass, NewFileRule, PathDecision, PolicyError, PolicyStore, RepositoryPolicy,
-    ReviewPlan, ScopeException, SyncPolicies, default_commit_message, tracked_path_is_notes_like,
+    HeldBack, HeldBackReason, NewFileClass, NewFileRule, PathDecision, PolicyError, PolicyStore,
+    RepositoryPolicy, ReviewPlan, ScopeException, ScopeFacts, ScopePartition, SyncPolicies,
+    default_commit_message, file_extension, is_os_artifact, tracked_path_is_notes_like,
+    valid_extension,
 };
 pub use process::{
     CancellationToken, CommandLimits, GitCommand, GitCommandError, GitCommandOutput,
@@ -59,7 +63,7 @@ pub use repository::{
 };
 pub use resources::{
     AttachmentIssue, AttachmentIssueKind, AttachmentReport, attachment_reference_fingerprint,
-    inspect_note_attachments,
+    inspect_note_attachments, inspect_notes_attachments,
 };
 pub use setup::{
     CloneResult, ConnectReview, OnboardingError, OnboardingService, PublicationResult,

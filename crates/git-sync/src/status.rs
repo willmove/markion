@@ -18,6 +18,9 @@ pub struct BranchStatus {
 pub struct ParsedStatus {
     pub branch: BranchStatus,
     pub worktree: WorktreeState,
+    /// Untracked entries Git reported as a whole directory. With
+    /// `--untracked-files=all` Git only does this for nested repositories.
+    pub untracked_directories: Vec<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -34,6 +37,7 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> Result<ParsedStatus, StatusParseError
     let records: Vec<&[u8]> = bytes.split(|byte| *byte == 0).collect();
     let mut branch = BranchStatus::default();
     let mut changes = Vec::new();
+    let mut untracked_directories = Vec::new();
     let mut index = 0;
     while index < records.len() {
         let record = records[index];
@@ -53,7 +57,13 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> Result<ParsedStatus, StatusParseError
             }
             b'u' => changes.push(parse_unmerged(record)?),
             b'?' => changes.push(FileChange {
-                path: parse_prefixed_path(record, 2)?,
+                path: {
+                    let path = parse_prefixed_path(record, 2)?;
+                    if record.ends_with(b"/") {
+                        untracked_directories.push(path.clone());
+                    }
+                    path
+                },
                 original_path: None,
                 kind: ChangeKind::Untracked,
                 index_status: '?',
@@ -80,6 +90,7 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> Result<ParsedStatus, StatusParseError
             has_conflicts,
             operation_in_progress: None,
         },
+        untracked_directories,
     })
 }
 
@@ -238,6 +249,16 @@ mod tests {
             Some(std::path::Path::new("notes/old.md"))
         );
         assert_eq!(parsed.worktree.changes[2].kind, ChangeKind::Untracked);
+    }
+
+    #[test]
+    fn untracked_directory_records_are_reported_as_nested_candidates() {
+        let parsed = parse_porcelain_v2(
+            b"# branch.oid (initial)\x00# branch.head main\x00? d/a.md\x00? nested/\x00",
+        )
+        .unwrap();
+        assert_eq!(parsed.untracked_directories, [PathBuf::from("nested/")]);
+        assert_eq!(parsed.worktree.changes.len(), 2);
     }
 
     #[test]

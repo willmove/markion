@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     fs, io,
     path::{Component, Path, PathBuf},
     time::SystemTime,
@@ -7,7 +7,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ChangeKind, GitObjectId, RepositoryIdentity, SyncTarget, persist::atomic_write};
+use crate::{
+    ChangeKind, FileChange, GitObjectId, RepositoryIdentity, SyncTarget, persist::atomic_write,
+};
 
 pub const POLICY_SCHEMA_VERSION: u32 = 1;
 
@@ -60,6 +62,14 @@ pub struct RepositoryPolicy {
     pub last_confirmed_remote: Option<GitObjectId>,
     #[serde(default)]
     pub acknowledged_resource_omissions: Vec<ScopeException>,
+    /// Extra new-file extensions the user chose to always synchronize
+    /// (lowercase, without the dot), applied within the new-file roots.
+    #[serde(default)]
+    pub allowed_extensions: BTreeSet<String>,
+    /// Held-back files the user approved once, bound to their content at
+    /// approval time.
+    #[serde(default)]
+    pub included_once: Vec<ScopeException>,
 }
 
 impl RepositoryPolicy {
@@ -79,12 +89,140 @@ impl RepositoryPolicy {
         if ignored || is_symlink || !is_safe_relative(path) || contains_dot_component(path) {
             return false;
         }
-        let Some(class) = NewFileClass::classify(path) else {
-            return false;
-        };
-        self.new_file_rules
+        let class = NewFileClass::classify(path);
+        let extra = file_extension(path)
+            .is_some_and(|extension| self.allowed_extensions.contains(&extension));
+        self.new_file_rules.iter().any(|rule| {
+            path_in_root(path, &rule.root)
+                && (extra || class.is_some_and(|class| rule.classes.contains(&class)))
+        })
+    }
+
+    /// Split the current changes into what Sync Now commits automatically,
+    /// what is held back for a decision, and operating-system artifacts that
+    /// are ignored. Held-back changes never block the automatic ones.
+    pub fn partition(&self, changes: &[FileChange], facts: &dyn ScopeFacts) -> ScopePartition {
+        let mut partition = ScopePartition::default();
+        for change in changes {
+            let path = &change.path;
+            if change.kind == ChangeKind::Untracked {
+                if is_os_artifact(path) {
+                    partition.ignored.push(path.clone());
+                    continue;
+                }
+                let reason = if facts.is_nested_repository(path) {
+                    Some(HeldBackReason::NestedRepository)
+                } else if facts.is_symlink(path) {
+                    Some(HeldBackReason::Symlink)
+                } else if self.new_path_allowed(path, false, false) {
+                    None
+                } else if let Some(record) = self.included_once.iter().find(|r| r.path == *path) {
+                    (facts.fingerprint(path).as_deref() != Some(&record.content_fingerprint))
+                        .then_some(HeldBackReason::ChangedSinceApproval)
+                } else if contains_dot_component(path) {
+                    Some(HeldBackReason::Hidden)
+                } else if self
+                    .new_file_rules
+                    .iter()
+                    .any(|rule| path_in_root(path, &rule.root))
+                {
+                    Some(HeldBackReason::FileType {
+                        extension: file_extension(path),
+                    })
+                } else {
+                    Some(HeldBackReason::OutsideFolders)
+                };
+                match reason {
+                    None => partition.automatic.push(path.clone()),
+                    Some(reason) => partition.held_back.push(HeldBack {
+                        path: path.clone(),
+                        tracked: false,
+                        reason,
+                    }),
+                }
+            } else if change
+                .original_path
+                .as_ref()
+                .is_some_and(|from| self.rename_needs_review(from, path))
+            {
+                partition.held_back.push(HeldBack {
+                    path: path.clone(),
+                    tracked: true,
+                    reason: HeldBackReason::RenameAcrossScope,
+                });
+            } else if self.tracked_path_allowed(path) {
+                partition.automatic.push(path.clone());
+            } else {
+                partition.held_back.push(HeldBack {
+                    path: path.clone(),
+                    tracked: true,
+                    reason: HeldBackReason::OutsideFolders,
+                });
+            }
+        }
+        self.pair_moves(changes, facts, &mut partition);
+        partition
+    }
+
+    /// Hold back a tracked deletion whose content exactly matches a held-back
+    /// new file, so a move never propagates as a deletion alone.
+    fn pair_moves(
+        &self,
+        changes: &[FileChange],
+        facts: &dyn ScopeFacts,
+        partition: &mut ScopePartition,
+    ) {
+        let new_files: Vec<PathBuf> = partition
+            .held_back
             .iter()
-            .any(|rule| path_in_root(path, &rule.root) && rule.classes.contains(&class))
+            .filter(|held| !held.tracked)
+            .map(|held| held.path.clone())
+            .collect();
+        let deletions: Vec<PathBuf> = changes
+            .iter()
+            .filter(|change| {
+                change.kind == ChangeKind::Deleted && partition.automatic.contains(&change.path)
+            })
+            .map(|change| change.path.clone())
+            .collect();
+        if new_files.is_empty() || deletions.is_empty() {
+            return;
+        }
+        let paired: Vec<(PathBuf, Option<PathBuf>)> = match (
+            facts.worktree_blob_ids(&new_files),
+            facts.index_blob_ids(&deletions),
+        ) {
+            (Some(new_ids), Some(deleted_ids)) => deletions
+                .iter()
+                .filter_map(|deleted| {
+                    let id = deleted_ids.get(deleted)?;
+                    let with = new_files
+                        .iter()
+                        .find(|candidate| new_ids.get(*candidate) == Some(id))?;
+                    Some((deleted.clone(), Some(with.clone())))
+                })
+                .collect(),
+            // Content cannot be compared: conservatively hold every deletion.
+            _ => deletions
+                .iter()
+                .map(|deleted| (deleted.clone(), None))
+                .collect(),
+        };
+        for (deleted, with) in paired {
+            partition.automatic.retain(|path| *path != deleted);
+            partition.held_back.push(HeldBack {
+                path: deleted,
+                tracked: true,
+                reason: HeldBackReason::PairedMove { with },
+            });
+        }
+    }
+
+    /// Drop include-once approvals that no longer apply: the file was
+    /// committed (now tracked) or no longer exists.
+    pub fn prune_included_once(&mut self, still_pending: impl Fn(&Path) -> bool) {
+        self.included_once
+            .retain(|record| still_pending(&record.path));
     }
 
     pub fn decide_path(
@@ -137,6 +275,124 @@ impl RepositoryPolicy {
         }
         message
     }
+}
+
+/// Per-path facts the policy needs but cannot compute itself. Implemented by
+/// [`crate::GitRepository`]; tests can supply fakes.
+pub trait ScopeFacts {
+    fn is_symlink(&self, path: &Path) -> bool;
+    fn is_nested_repository(&self, path: &Path) -> bool;
+    /// SHA-256 content fingerprint, as recorded by include-once approvals.
+    fn fingerprint(&self, path: &Path) -> Option<String>;
+    /// Blob ids the worktree files would get if added. `None` when they cannot
+    /// be computed, in which case moves are paired conservatively.
+    fn worktree_blob_ids(&self, paths: &[PathBuf]) -> Option<HashMap<PathBuf, String>>;
+    /// Blob ids recorded in the index for tracked paths.
+    fn index_blob_ids(&self, paths: &[PathBuf]) -> Option<HashMap<PathBuf, String>>;
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScopePartition {
+    /// Committed by Sync Now and Commit Locally without further review.
+    pub automatic: Vec<PathBuf>,
+    /// Listed as not included in sync; never committed automatically.
+    pub held_back: Vec<HeldBack>,
+    /// Untracked operating-system artifacts that are never proposed.
+    pub ignored: Vec<PathBuf>,
+}
+
+impl ScopePartition {
+    pub fn held_back_new(&self) -> impl Iterator<Item = &HeldBack> {
+        self.held_back.iter().filter(|held| !held.tracked)
+    }
+
+    pub fn held_back_tracked(&self) -> impl Iterator<Item = &HeldBack> {
+        self.held_back.iter().filter(|held| held.tracked)
+    }
+
+    pub fn is_held_back(&self, path: &Path) -> bool {
+        self.held_back.iter().any(|held| held.path == path)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldBack {
+    pub path: PathBuf,
+    /// Whether the path is tracked (a modification, deletion or rename)
+    /// rather than a new file.
+    pub tracked: bool,
+    pub reason: HeldBackReason,
+}
+
+impl HeldBack {
+    /// Whether the per-file decisions (include once, always allow the type,
+    /// exclude on this device) can be offered for this change.
+    pub fn decidable(&self) -> bool {
+        !self.tracked
+            && !matches!(
+                self.reason,
+                HeldBackReason::Symlink | HeldBackReason::NestedRepository
+            )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HeldBackReason {
+    /// A hidden file or a file under a hidden folder.
+    Hidden,
+    /// A file type the notes policy does not synchronize by default.
+    FileType {
+        extension: Option<String>,
+    },
+    /// Outside the folders approved for synchronization.
+    OutsideFolders,
+    Symlink,
+    NestedRepository,
+    /// A tracked deletion whose content moved to a held-back new file
+    /// (`None` when the content could not be compared).
+    PairedMove {
+        with: Option<PathBuf>,
+    },
+    /// A rename across the boundary of the approved folders.
+    RenameAcrossScope,
+    /// Approved once, but the file changed after the approval.
+    ChangedSinceApproval,
+}
+
+/// Untracked files that operating systems and office suites create next to
+/// user content. They are never proposed as notes.
+pub fn is_os_artifact(path: &Path) -> bool {
+    const DIRECTORIES: &[&str] = &[
+        ".appledouble",
+        ".spotlight-v100",
+        ".trashes",
+        ".fseventsd",
+        ".temporaryitems",
+        "$recycle.bin",
+    ];
+    const FILES: &[&str] = &[
+        ".ds_store",
+        "thumbs.db",
+        "ehthumbs.db",
+        "ehthumbs_vista.db",
+        "desktop.ini",
+        "icon\r",
+    ];
+    let mut components = path.components().filter_map(|component| match component {
+        Component::Normal(name) => Some(name.to_string_lossy().to_lowercase()),
+        _ => None,
+    });
+    let Some(name) = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+    else {
+        return false;
+    };
+    components.any(|component| DIRECTORIES.contains(&component.as_str()))
+        || FILES.contains(&name.as_str())
+        || name.starts_with("._")
+        || name.starts_with("~$")
+        || (name.starts_with(".~lock.") && name.ends_with('#'))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -361,6 +617,18 @@ fn local_timestamp_parts(timestamp: SystemTime) -> (String, String) {
     )
 }
 
+/// Lowercase extension without the dot, when the file name has one.
+pub fn file_extension(path: &Path) -> Option<String> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    (!extension.is_empty()).then_some(extension)
+}
+
+/// An extension the user may approve: 1–16 ASCII letters or digits.
+pub fn valid_extension(extension: &str) -> bool {
+    (1..=16).contains(&extension.len())
+        && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
 fn path_in_root(path: &Path, root: &Path) -> bool {
     root.as_os_str().is_empty() || path.starts_with(root)
 }
@@ -403,6 +671,283 @@ pub fn tracked_path_is_notes_like(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct FakeFacts {
+        symlinks: Vec<PathBuf>,
+        nested: Vec<PathBuf>,
+        fingerprints: HashMap<PathBuf, String>,
+        worktree_blobs: Option<HashMap<PathBuf, String>>,
+        index_blobs: HashMap<PathBuf, String>,
+    }
+
+    impl ScopeFacts for FakeFacts {
+        fn is_symlink(&self, path: &Path) -> bool {
+            self.symlinks.iter().any(|candidate| candidate == path)
+        }
+        fn is_nested_repository(&self, path: &Path) -> bool {
+            self.nested.iter().any(|candidate| candidate == path)
+        }
+        fn fingerprint(&self, path: &Path) -> Option<String> {
+            self.fingerprints.get(path).cloned()
+        }
+        fn worktree_blob_ids(&self, _: &[PathBuf]) -> Option<HashMap<PathBuf, String>> {
+            self.worktree_blobs.clone()
+        }
+        fn index_blob_ids(&self, _: &[PathBuf]) -> Option<HashMap<PathBuf, String>> {
+            Some(self.index_blobs.clone())
+        }
+    }
+
+    fn change(path: &str, kind: ChangeKind) -> FileChange {
+        FileChange {
+            path: PathBuf::from(path),
+            original_path: None,
+            kind,
+            index_status: if kind == ChangeKind::Untracked {
+                '?'
+            } else {
+                '.'
+            },
+            worktree_status: match kind {
+                ChangeKind::Untracked => '?',
+                ChangeKind::Deleted => 'D',
+                _ => 'M',
+            },
+            conflict: None,
+        }
+    }
+
+    fn reason_of(partition: &ScopePartition, path: &str) -> Option<HeldBackReason> {
+        partition
+            .held_back
+            .iter()
+            .find(|held| held.path == Path::new(path))
+            .map(|held| held.reason.clone())
+    }
+
+    fn whole_repository_policy() -> RepositoryPolicy {
+        let mut policy = policy(Path::new("repo"));
+        policy.tracked_roots = vec![PathBuf::new()];
+        policy.new_file_rules[0].root = PathBuf::new();
+        policy
+    }
+
+    #[test]
+    fn os_artifacts_are_recognized_case_insensitively() {
+        for path in [
+            ".DS_Store",
+            "notes/.ds_store",
+            "notes/._photo.png",
+            "Thumbs.db",
+            "notes/ehthumbs_vista.db",
+            "Desktop.ini",
+            "Icon\r",
+            ".Spotlight-V100/Store-V2/x",
+            "$RECYCLE.BIN/S-1/x",
+            "notes/~$report.docx",
+            "notes/.~lock.report.odt#",
+        ] {
+            assert!(is_os_artifact(Path::new(path)), "{path:?}");
+        }
+        for path in [
+            "DS_Store.md",
+            "notes/thumbs.db.md",
+            "notes/report.docx",
+            ".~lock.x",
+        ] {
+            assert!(!is_os_artifact(Path::new(path)), "{path:?}");
+        }
+    }
+
+    #[test]
+    fn partition_holds_back_exceptions_and_ignores_os_artifacts() {
+        let policy = policy(Path::new("repo"));
+        let facts = FakeFacts {
+            symlinks: vec![PathBuf::from("notes/link.md")],
+            nested: vec![PathBuf::from("notes/vendored/")],
+            ..FakeFacts::default()
+        };
+        let changes = [
+            change("notes/today.md", ChangeKind::Untracked),
+            change("notes/edited.md", ChangeKind::Modified),
+            change("notes/report.pdf", ChangeKind::Untracked),
+            change("notes/.secret.md", ChangeKind::Untracked),
+            change("other/new.md", ChangeKind::Untracked),
+            change("other/tracked.md", ChangeKind::Modified),
+            change("notes/link.md", ChangeKind::Untracked),
+            change("notes/vendored/", ChangeKind::Untracked),
+            change("notes/.DS_Store", ChangeKind::Untracked),
+            change(".DS_Store", ChangeKind::Modified),
+        ];
+        let partition = policy.partition(&changes, &facts);
+        assert_eq!(
+            partition.automatic,
+            [
+                PathBuf::from("notes/today.md"),
+                PathBuf::from("notes/edited.md")
+            ]
+        );
+        assert_eq!(partition.ignored, [PathBuf::from("notes/.DS_Store")]);
+        assert_eq!(
+            reason_of(&partition, "notes/report.pdf"),
+            Some(HeldBackReason::FileType {
+                extension: Some("pdf".into())
+            })
+        );
+        assert_eq!(
+            reason_of(&partition, "notes/.secret.md"),
+            Some(HeldBackReason::Hidden)
+        );
+        assert_eq!(
+            reason_of(&partition, "other/new.md"),
+            Some(HeldBackReason::OutsideFolders)
+        );
+        assert_eq!(
+            reason_of(&partition, "notes/link.md"),
+            Some(HeldBackReason::Symlink)
+        );
+        assert_eq!(
+            reason_of(&partition, "notes/vendored/"),
+            Some(HeldBackReason::NestedRepository)
+        );
+        // Tracked copies follow the tracked-path policy, even for OS artifacts.
+        let tracked = partition
+            .held_back
+            .iter()
+            .find(|held| held.path == Path::new("other/tracked.md"))
+            .unwrap();
+        assert!(tracked.tracked && !tracked.decidable());
+        assert_eq!(
+            reason_of(&partition, ".DS_Store"),
+            Some(HeldBackReason::OutsideFolders)
+        );
+        assert!(
+            partition
+                .held_back
+                .iter()
+                .filter(|held| matches!(
+                    held.reason,
+                    HeldBackReason::Symlink | HeldBackReason::NestedRepository
+                ))
+                .all(|held| !held.decidable())
+        );
+    }
+
+    #[test]
+    fn allowed_extensions_and_include_once_approvals() {
+        let mut policy = whole_repository_policy();
+        let mut facts = FakeFacts::default();
+        facts
+            .fingerprints
+            .insert(PathBuf::from("doc.txt.bin"), "sha256:a".into());
+        let changes = [
+            change("report.pdf", ChangeKind::Untracked),
+            change("doc.txt.bin", ChangeKind::Untracked),
+            change(".hidden/report.pdf", ChangeKind::Untracked),
+        ];
+        policy.allowed_extensions.insert("pdf".into());
+        policy.included_once.push(ScopeException {
+            path: PathBuf::from("doc.txt.bin"),
+            content_fingerprint: "sha256:a".into(),
+        });
+        let partition = policy.partition(&changes, &facts);
+        assert_eq!(
+            partition.automatic,
+            [PathBuf::from("report.pdf"), PathBuf::from("doc.txt.bin")]
+        );
+        // An allowed type never admits hidden paths.
+        assert_eq!(
+            reason_of(&partition, ".hidden/report.pdf"),
+            Some(HeldBackReason::Hidden)
+        );
+
+        facts
+            .fingerprints
+            .insert(PathBuf::from("doc.txt.bin"), "sha256:changed".into());
+        let partition = policy.partition(&changes, &facts);
+        assert_eq!(
+            reason_of(&partition, "doc.txt.bin"),
+            Some(HeldBackReason::ChangedSinceApproval)
+        );
+
+        policy.prune_included_once(|path| path != Path::new("doc.txt.bin"));
+        assert!(policy.included_once.is_empty());
+        assert!(valid_extension("pdf") && valid_extension("m4a"));
+        assert!(!valid_extension("") && !valid_extension(".pdf") && !valid_extension("a b"));
+    }
+
+    #[test]
+    fn exact_content_moves_are_held_back_together() {
+        let policy = whole_repository_policy();
+        let changes = [
+            change("assets/photo.pdf", ChangeKind::Deleted),
+            change(".archive/photo.pdf", ChangeKind::Untracked),
+            change("assets/other.pdf", ChangeKind::Deleted),
+        ];
+        let facts = FakeFacts {
+            worktree_blobs: Some(HashMap::from([(
+                PathBuf::from(".archive/photo.pdf"),
+                "blob-1".into(),
+            )])),
+            index_blobs: HashMap::from([
+                (PathBuf::from("assets/photo.pdf"), "blob-1".into()),
+                (PathBuf::from("assets/other.pdf"), "blob-2".into()),
+            ]),
+            ..FakeFacts::default()
+        };
+        let partition = policy.partition(&changes, &facts);
+        assert_eq!(partition.automatic, [PathBuf::from("assets/other.pdf")]);
+        assert_eq!(
+            reason_of(&partition, "assets/photo.pdf"),
+            Some(HeldBackReason::PairedMove {
+                with: Some(PathBuf::from(".archive/photo.pdf"))
+            })
+        );
+
+        // Without comparable content every deletion is held back.
+        let unknown = FakeFacts {
+            worktree_blobs: None,
+            ..FakeFacts::default()
+        };
+        let partition = policy.partition(&changes, &unknown);
+        assert!(partition.automatic.is_empty());
+        assert_eq!(
+            reason_of(&partition, "assets/other.pdf"),
+            Some(HeldBackReason::PairedMove { with: None })
+        );
+    }
+
+    #[test]
+    fn policies_without_new_fields_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PolicyStore::new(dir.path().join("git-sync.toml"));
+        let mut policies = SyncPolicies::empty();
+        let mut saved = policy(dir.path());
+        saved.allowed_extensions.insert("pdf".into());
+        saved.included_once.push(ScopeException {
+            path: PathBuf::from("a.bin"),
+            content_fingerprint: "sha256:a".into(),
+        });
+        policies.upsert(saved.clone());
+        store.save(&policies).unwrap();
+        assert_eq!(store.load().unwrap().repositories[0], saved);
+
+        let text = fs::read_to_string(dir.path().join("git-sync.toml")).unwrap();
+        let legacy: String = text
+            .lines()
+            .filter(|line| !line.starts_with("allowed_extensions"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let legacy = legacy
+            .split("[[repositories.included_once]]")
+            .next()
+            .unwrap()
+            .to_owned();
+        fs::write(dir.path().join("git-sync.toml"), legacy).unwrap();
+        let loaded = store.load().unwrap().repositories.remove(0);
+        assert!(loaded.allowed_extensions.is_empty() && loaded.included_once.is_empty());
+    }
+
     fn policy(root: &Path) -> RepositoryPolicy {
         RepositoryPolicy {
             identity: RepositoryIdentity::new(
@@ -428,6 +973,8 @@ mod tests {
             background_fetch: false,
             last_confirmed_remote: None,
             acknowledged_resource_omissions: Vec::new(),
+            allowed_extensions: Default::default(),
+            included_once: Vec::new(),
         }
     }
 
