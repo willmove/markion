@@ -22,7 +22,7 @@ Markion 是一款使用 Rust 和 GPUI 打造的原生桌面 Markdown 編輯器�
 | Linux | `.deb` 和 AppImage | x86_64 |
 | macOS | `.app` 和 `.dmg` | Apple Silicon（arm64）與 Intel（x64），macOS 11+ |
 
-Windows 發佈包未簽章，SmartScreen 可能要求選擇「更多資訊 → 仍要執行」。macOS 發佈包使用免費的 ad-hoc 程式碼簽章——沒有付費 Developer ID 憑證，也未公證——Gatekeeper 首次啟動仍會警告，但可在「系統設定 → 隱私權與安全性」中點按「仍要打開」（詳見主 README 的 macOS 首次啟動說明）。**說明 → 檢查更新…** 在所有平台都提供可操作的更新提示：帶標籤的 Windows x86_64 NSIS 安裝與 Linux AppImage 啟動可進行經過 cargo-packager Minisign 加密驗證的一鍵下載並安裝——Linux 上會原地替換執行中的 AppImage 並自動重新啟動 Markion——且當任一文件存在未儲存變更時拒絕啟動；macOS 與 Linux `.deb`/`.rpm` 安裝會在系統瀏覽器中開啟對應的發佈檔案。Apple Silicon 與 Intel Mac 各有原生 DMG；目前尚不提供通用二進位和 Apple 公證。
+Windows 發佈包未簽章，SmartScreen 可能要求選擇「更多資訊 → 仍要執行」。在維護者於 CI 中設定 Apple 憑證後，macOS 發佈包會以 Apple Developer ID 簽章並經過公證；否則只帶免費的 ad-hoc 簽章，透過瀏覽器下載後會被目前的 macOS 以「已損毀，無法打開」攔截（因應方式詳見主 README 的 macOS 首次啟動說明）。**說明 → 檢查更新…** 在所有平台都提供可操作的更新提示：帶標籤的 Windows x86_64 NSIS 安裝與 Linux AppImage 啟動可進行經過 cargo-packager Minisign 加密驗證的一鍵下載並安裝——Linux 上會原地替換執行中的 AppImage 並自動重新啟動 Markion——且當任一文件存在未儲存變更時拒絕啟動；macOS 與 Linux `.deb`/`.rpm` 安裝會在系統瀏覽器中開啟對應的發佈檔案。Apple Silicon 與 Intel Mac 各有原生 DMG；目前尚不提供通用二進位。
 
 ## 編輯模式
 
