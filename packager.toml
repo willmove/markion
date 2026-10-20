@@ -62,8 +62,6 @@ product-name = "Markion"
 # Providing `name` skips that buggy path entirely.
 name = "markion"
 identifier = "dev.markion.app"
-[package]
-name = "markion"
 version = "0.4.12"
 category = "Productivity"
 publisher = "Willmove"
