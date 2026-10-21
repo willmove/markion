@@ -111,6 +111,10 @@ pub fn bundled_resource_path(relative: impl AsRef<Path>) -> Option<PathBuf> {
         candidates.push(binary_dir.join("resources").join(relative));
         if let Some(contents_dir) = binary_dir.parent() {
             candidates.push(contents_dir.join("Resources").join(relative));
+            // cargo-packager DEB/AppImage layout: binary at /usr/bin/markion,
+            // resources at /usr/lib/markion/. When binary_dir is /usr/bin,
+            // contents_dir is /usr, so check contents_dir/lib/markion/.
+            candidates.push(contents_dir.join("lib").join("markion").join(relative));
         }
     }
     candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative));
