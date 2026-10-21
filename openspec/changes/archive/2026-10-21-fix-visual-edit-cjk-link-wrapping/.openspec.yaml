@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-21
+goal: Preserve source-backed editing and link navigation while fixing linked CJK
+  list wrapping.

@@ -28,6 +28,7 @@ mod highlight;
 pub mod i18n;
 pub mod image_operations;
 pub mod image_transfer;
+mod incremental_stats;
 mod inline_edit;
 #[cfg(test)]
 mod inline_html_tests;
@@ -1414,6 +1415,35 @@ impl MarkdownDocument {
     fn replace_source_range_unchecked(&mut self, range: Range<usize>, replacement: &str) {
         let old_version = self.text_version;
         let new_version = old_version.wrapping_add(1);
+        let next_line_count = self
+            .cached_line_count
+            .get()
+            .filter(|(version, _)| *version == old_version)
+            .map(|(_, count)| {
+                (
+                    new_version,
+                    count
+                        - self.text[range.clone()]
+                            .bytes()
+                            .filter(|&b| b == b'\n')
+                            .count()
+                        + replacement.bytes().filter(|&b| b == b'\n').count(),
+                )
+            });
+        let next_stats = self
+            .cached_basic_stats
+            .borrow()
+            .as_ref()
+            .filter(|cached| cached.version == old_version)
+            .map(|cached| Cached {
+                version: new_version,
+                value: incremental_stats::after_edit(
+                    &self.text,
+                    range.clone(),
+                    replacement,
+                    cached.value,
+                ),
+            });
         let edit = source_mapped::SourceEdit::new(
             &self.text,
             range.clone(),
@@ -1427,8 +1457,8 @@ impl MarkdownDocument {
         *self.cached_preview_blocks.borrow_mut() = None;
         *self.cached_outline.borrow_mut() = None;
         *self.cached_stats.borrow_mut() = None;
-        *self.cached_basic_stats.borrow_mut() = None;
-        self.cached_line_count.set(None);
+        *self.cached_basic_stats.borrow_mut() = next_stats;
+        self.cached_line_count.set(next_line_count);
         if let Some(edit) = edit {
             self.pending_source_edits.borrow_mut().record(edit);
         } else {
@@ -10527,6 +10557,31 @@ Intro.
             !breakdown.site("outline").unwrap().populated,
             "basic_stats must not trigger the outline parse"
         );
+    }
+
+    #[test]
+    fn range_edit_keeps_basic_stats_warm_without_changing_markdown() {
+        let mut doc = MarkdownDocument::from_text("# 日本語\r\n\r\n本文 **太字**\n");
+        let _ = doc.basic_stats();
+        let _ = doc.line_count();
+        let start = doc.text().find("本文").unwrap();
+        doc.replace_range(start..start + "本文".len(), "日本語入力");
+        {
+            let cached = doc.cached_basic_stats.borrow();
+            let cached = cached.as_ref().expect("range edits keep statistics warm");
+            assert_eq!(cached.version, doc.version());
+            assert_eq!(cached.value.chars, doc.text().chars().count());
+            assert_eq!(cached.value.words, doc.text().split_whitespace().count());
+            assert_eq!(cached.value.lines, doc.text().lines().count().max(1));
+        }
+        assert_eq!(doc.text(), "# 日本語\r\n\r\n日本語入力 **太字**\n");
+        assert_eq!(doc.cached_line_count.get(), Some((doc.version(), 4)));
+        doc.replace_range(0..0, "追加\n");
+        assert_eq!(doc.cached_line_count.get(), Some((doc.version(), 5)));
+        doc.set_text("全文置換\n");
+        assert!(doc.cached_basic_stats.borrow().is_none());
+        assert!(doc.cached_line_count.get().is_none());
+        assert_eq!(doc.line_count(), 2);
     }
 
     #[test]

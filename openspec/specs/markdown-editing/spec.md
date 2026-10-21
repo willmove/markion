@@ -3,9 +3,7 @@
 ## Purpose
 
 Covers canonical Markdown source editing, parsing and formatting together with the source-backed, WYSIWYG-oriented Visual Edit surface. Edit and Split modes retain complete raw-source access; Visual Edit keeps exactly mapped constructs rendered or directly editable, progressively reveals only necessary syntax, and preserves complete source islands whenever a lossless mutation cannot be proven.
-
 ## Requirements
-
 ### Requirement: Markdown parsing via CommonMark + GFM
 The parser SHALL parse Markdown using `pulldown-cmark` configured for CommonMark conformance plus the GitHub Flavored Markdown extensions in use (tables, task lists, strikethrough, footnotes, superscript/subscript, highlight, autolinks). Parsing SHALL produce structured data consumed by the preview, Visual Edit, outline, stats, and search subsystems. Source-mapped Visual Edit derivation SHALL incrementally reuse independently parseable top-level regions after a localized source edit and SHALL fall back to a full-document parse whenever global Markdown context, region boundaries, or exact source ranges are uncertain. Incremental and fallback output SHALL be semantically and byte-range equivalent to a full parse of the current canonical source.
 
@@ -2515,3 +2513,20 @@ Heading prefixes, blockquote markers, callout title lines, TOC tokens, code fenc
 - **WHEN** Keep inline syntax hidden is on and the caret enters an inline image
 - **THEN** the image source is not spliced into the surrounding prose
 - **AND** the existing image source toggle can still show the authored image span
+
+### Requirement: Incremental basic statistics for range edits
+The document SHALL update populated character, word, text-line and logical-line counters from the replaced span and bounded adjacent context after a validated range edit. Results SHALL equal a full recomputation, including Unicode whitespace and trailing newline semantics. Cold caches and whole-document replacements SHALL retain the existing lazy invalidation behavior.
+
+#### Scenario: Japanese composition and local edits
+- **WHEN** a validated range edit inserts, replaces or removes Japanese text, Unicode whitespace, emoji, CR or LF
+- **THEN** cached counters equal full recomputation without changing the canonical text
+- **AND** Visual Edit, IME and mutation validation continue through their existing code paths
+
+### Requirement: Visual Edit shapes ordinary linked prose
+Visual Edit SHALL lay out ordinary URL and heading link prose through the source-backed shaped text surface when the block has no rendered atom, script alignment, authored HTML break, footnote navigation tooltip, or stable-mode link edit affordance requiring mixed layout. The shaped label SHALL retain source-mapped caret placement, editing, and secondary-modifier navigation.
+
+#### Scenario: Japanese linked list wraps with its marker
+- **WHEN** a Visual Edit list item contains Japanese prose and an ordinary inline URL or heading link
+- **THEN** the text wraps at the available width on shaped text lines aligned with the list marker
+- **AND** clicking the label places the caret in its mapped source range
+- **AND** secondary-modifier clicking the label activates its destination

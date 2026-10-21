@@ -6395,9 +6395,10 @@ mod tests {
         let (a, cx) = setup(cx);
         a.update(cx, |a, cx| {
             a.preferences_path = recovery.path().join("config.toml");
-            a.workspace_root = work.path().to_path_buf();
+            a.workspace_root = grant.root.clone();
             a.ai_ui.plan = Default::default();
-            a.tabs[0] = EditorTab::new(MarkdownDocument::open(&work.path().join("a.md")).unwrap());
+            // Production opens canonical paths; TEMP may use a Windows short name.
+            a.tabs[0] = EditorTab::new(MarkdownDocument::open(grant.scope.join("a.md")).unwrap());
             let buffers = a.ai_buffers();
             let c = a.ai_ui.conversation().id;
             a.ai_ui.grants.insert(c, grant.clone());
@@ -6413,6 +6414,11 @@ mod tests {
                     20,
                 )
                 .unwrap();
+            assert!(matches!(
+                &a.ai_ui.plan.operations[0].operation,
+                markion_ai::proposals::Operation::EditText { baseline, .. }
+                    if baseline.buffer.is_some()
+            ));
             a.ai_apply_plan(cx);
         });
         cx.run_until_parked();

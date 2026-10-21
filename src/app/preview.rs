@@ -3305,9 +3305,15 @@ pub(super) fn visual_text_with_math_element(
         .any(|run| run.html_image.is_some());
     // Open icons are not painted. Link edit icons appear only while inline
     // syntax stays hidden; Ctrl/Cmd-click opens every navigation target.
-    // Navigation targets still use the mixed row so authored line breaks stay
-    // stacked, matching the layout that used to host the open icon.
-    let has_navigation = block_has_inline_navigation(block);
+    // Stable-mode link edit icons and footnote tooltips live in the mixed row.
+    // Ordinary URL and heading links need only source-mapped shaped text, which
+    // lets CJK labels wrap at natural character boundaries.
+    let has_footnote_navigation = block.editable_runs.iter().any(|run| {
+        matches!(
+            run.navigation.as_ref(),
+            Some(VisualNavigationTarget::Footnote { .. })
+        )
+    });
     let nav_icons = visual_navigation_icons(block, app.stable_visual_inline);
     // Reveal groups have already proven the tag syntax. Only authored HTML
     // breaks need explicit empty rows; ordinary prose keeps its shaped flow.
@@ -3324,7 +3330,7 @@ pub(super) fn visual_text_with_math_element(
     if !has_math
         && !has_html_image
         && !has_html_break
-        && !has_navigation
+        && !has_footnote_navigation
         && nav_icons.is_empty()
         && !block
             .editable_runs
@@ -3654,19 +3660,6 @@ pub(super) fn visual_text_with_math_element(
                 .children(line)
         }))
         .into_any_element()
-}
-
-fn block_has_inline_navigation(block: &VisualBlock) -> bool {
-    block
-        .editable_runs
-        .iter()
-        .any(|run| match run.navigation.as_ref() {
-            Some(VisualNavigationTarget::Url(url)) => !url.trim().is_empty(),
-            Some(
-                VisualNavigationTarget::Heading { .. } | VisualNavigationTarget::Footnote { .. },
-            ) => true,
-            None => false,
-        })
 }
 
 fn visual_run_footnote_label<'a>(

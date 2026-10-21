@@ -930,6 +930,8 @@ mod tests {
         });
         policies.upsert(saved.clone());
         store.save(&policies).unwrap();
+        // Loading canonicalizes existing paths, including Windows short names.
+        normalize_identity_paths(&mut saved.identity);
         assert_eq!(store.load().unwrap().repositories[0], saved);
 
         let text = fs::read_to_string(dir.path().join("git-sync.toml")).unwrap();

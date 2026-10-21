@@ -9021,6 +9021,7 @@ API Key: `BSA2IC_xxxxxxx`\n";
         app.active_tab_mut().selected_range = 0..0;
         app.view_mode = ViewMode::VisualEdit;
         app.preview_adaptive_width = false;
+        app.sidebar_visible = false;
         app
     });
     cx.simulate_resize(size(px(1200.), px(760.)));
@@ -9048,78 +9049,240 @@ API Key: `BSA2IC_xxxxxxx`\n";
         index
     });
 
-    let line0 = cx
-        .debug_bounds(test_debug_selector(format!(
-            "visual-mixed-line-{paragraph}-0"
-        )))
-        .expect("first mixed line");
-    let line1 = cx
-        .debug_bounds(test_debug_selector(format!(
-            "visual-mixed-line-{paragraph}-1"
-        )))
-        .expect("second mixed line");
-    let line2 = cx
-        .debug_bounds(test_debug_selector(format!(
-            "visual-mixed-line-{paragraph}-2"
-        )))
-        .expect("third mixed line");
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let snapshot = tab
+            .visual_navigation_snapshots
+            .get(&paragraph)
+            .expect("linked paragraph registers shaped navigation geometry");
+        assert_eq!(snapshot.lines.len(), 3, "fixture has three authored lines");
+        assert!(
+            f32::from(snapshot.lines[1].y) > f32::from(snapshot.lines[0].y) + 1.0,
+            "account line must sit below the URL line: {:?}",
+            snapshot.lines.iter().map(|line| line.y).collect::<Vec<_>>()
+        );
+        assert!(
+            f32::from(snapshot.lines[2].y) > f32::from(snapshot.lines[1].y) + 1.0,
+            "API key line must sit below the account line: {:?}",
+            snapshot.lines.iter().map(|line| line.y).collect::<Vec<_>>()
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_edit_linked_japanese_list_wraps_with_its_marker(cx: &mut TestAppContext) {
+    const SOURCE: &str = "- 日本語の説明を長く続けて、項目の本文とリンクラベルが利用可能な幅に合わせて自然な文字境界で複数行へ折り返されることを確認します。 [詳しい案内はこちらを確認してください](#destination) さらに日本語の説明を項目の最後まで追加します。\n\n## Destination\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        let cursor = SOURCE.find("## Destination").unwrap();
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::VisualEdit;
+        app.sidebar_visible = false;
+        app.preview_adaptive_width = false;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    let block_index = app.update(cx, |app, _| {
+        app.active_tab()
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .position(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .expect("fixture should have one list item")
+    });
+
+    let mut wrapped_lines = Vec::new();
+    for width in [px(280.), px(620.)] {
+        cx.simulate_resize(size(width, px(760.)));
+        cx.run_until_parked();
+        let marker = cx
+            .debug_bounds(test_debug_selector(format!(
+                "visual-task-checkbox-{block_index}"
+            )))
+            .expect("list marker column should be painted");
+        let (line_count, first_line_y) = app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            let snapshot = tab
+                .visual_navigation_snapshots
+                .get(&block_index)
+                .expect("linked list item registers shaped navigation geometry");
+            // Snapshots retain geometry from earlier paints. Inspect the most
+            // recently painted layout, rather than counting accumulated rows.
+            let layout = &snapshot.lines[0].windows.last().unwrap().layout;
+            let bounds = layout.bounds();
+            let line_count = (bounds.size.height / layout.line_height()).round() as usize;
+            assert!(line_count > 1, "long Japanese item must wrap");
+            assert!(
+                bounds.right() <= width,
+                "text must fit the viewport: {bounds:?}"
+            );
+            (line_count, bounds.top())
+        });
+        assert!(
+            (f32::from(first_line_y) - f32::from(marker.top())).abs() < 2.0,
+            "first shaped text line should align with the marker row: text={first_line_y:?}, marker={marker:?}"
+        );
+        wrapped_lines.push(line_count);
+    }
     assert!(
-        f32::from(line1.top()) > f32::from(line0.top()) + 1.0,
-        "account line must sit below the URL line: {line0:?} vs {line1:?}"
-    );
-    assert!(
-        f32::from(line2.top()) > f32::from(line1.top()) + 1.0,
-        "API key line must sit below the account line: {line1:?} vs {line2:?}"
-    );
-    assert!(
-        cx.debug_bounds(test_debug_selector(format!(
-            "visual-mixed-line-{paragraph}-3"
-        )))
-        .is_none(),
-        "fixture has exactly three authored lines"
+        wrapped_lines[0] > wrapped_lines[1],
+        "narrower text should produce more shaped lines: {wrapped_lines:?}"
     );
 }
 
 #[gpui::test]
-fn visual_edit_single_line_mixed_prose_stays_one_row(cx: &mut TestAppContext) {
-    const SOURCE: &str = "See [Brave Search - API](https://example.com/keys) for the token.\n";
+fn visual_edit_shaped_link_label_keeps_secondary_navigation_source_mapping(
+    cx: &mut TestAppContext,
+) {
+    const SOURCE: &str = "- 前置きの日本語 [詳しいリンク案内](#destination) の後ろにも文章があります。\n\n## Destination\n";
+    let click_source = SOURCE.find("詳しいリンク案内").unwrap() + "詳しい".len();
+    let heading_offset = SOURCE.find("## Destination").unwrap();
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
         app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
         app.active_tab_mut().selected_range = 0..0;
         app.view_mode = ViewMode::VisualEdit;
-        app.preview_adaptive_width = false;
         app
     });
-    cx.simulate_resize(size(px(1200.), px(760.)));
+    cx.simulate_resize(size(px(420.), px(700.)));
     cx.update(|window, cx| {
         window.focus(&app.read(cx).focus_handle);
         window.activate_window();
     });
     cx.run_until_parked();
 
-    let paragraph = app.update(cx, |app, _| {
-        app.active_tab()
+    let click_position = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let block_index = tab
             .document
             .visual_blocks_shared()
             .iter()
-            .position(|block| matches!(block.kind, VisualBlockKind::Paragraph))
-            .expect("single-line fixture should have one paragraph")
+            .position(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .expect("fixture should have one list item");
+        let snapshot = tab
+            .visual_navigation_snapshots
+            .get(&block_index)
+            .expect("list item should register shaped navigation geometry");
+        let next_source = click_source + "リンク".chars().next().unwrap().len_utf8();
+        snapshot.lines[0]
+            .windows
+            .iter()
+            .rev()
+            .find_map(|window| {
+                let display_start = window.projection.display_for_source(click_source)?;
+                let display_end = window.projection.display_for_source(next_source)?;
+                let start = window.layout.position_for_index(display_start)?;
+                let end = window.layout.position_for_index(display_end)?;
+                let position = point(
+                    (start.x + end.x) / 2.,
+                    start.y + window.layout.line_height() / 2.,
+                );
+                Some(position)
+            })
+            .expect("link label source range should map into the shaped text layout")
     });
-    assert!(
-        cx.debug_bounds(test_debug_selector(format!(
-            "visual-mixed-line-{paragraph}-0"
-        )))
-        .is_some(),
-        "linked prose still uses the mixed fragment layout"
+
+    let version = app.update(cx, |app, _| app.active_tab().document.version());
+    cx.simulate_mouse_down(
+        click_position,
+        MouseButton::Left,
+        Modifiers {
+            control: !cfg!(target_os = "macos"),
+            platform: cfg!(target_os = "macos"),
+            ..Modifiers::none()
+        },
     );
-    assert!(
-        cx.debug_bounds(test_debug_selector(format!(
-            "visual-mixed-line-{paragraph}-1"
-        )))
-        .is_none(),
-        "a single authored line must not invent a second mixed row"
-    );
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.selected_range, heading_offset..heading_offset);
+        assert_eq!(tab.document.text(), SOURCE);
+        assert_eq!(tab.document.version(), version);
+    });
+}
+
+#[gpui::test]
+fn visual_edit_shaped_link_label_ime_edit_maps_to_canonical_source(cx: &mut TestAppContext) {
+    const SOURCE: &str = "- 前置きの日本語 [詳しいリンク案内](https://example.com) の後ろにも文章があります。\n\nTail\n";
+    let click_source = SOURCE.find("詳しいリンク案内").unwrap() + "詳しい".len();
+    let next_source = click_source + "リ".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        let cursor = SOURCE.find("Tail").unwrap();
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::VisualEdit;
+        app.sidebar_visible = false;
+        app
+    });
+    cx.simulate_resize(size(px(420.), px(700.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let click_position = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let block_index = tab
+            .document
+            .visual_blocks_shared()
+            .iter()
+            .position(|block| matches!(block.kind, VisualBlockKind::ListItem { .. }))
+            .expect("fixture should have one list item");
+        let snapshot = tab
+            .visual_navigation_snapshots
+            .get(&block_index)
+            .expect("list item should register shaped navigation geometry");
+        let mut mapped = None;
+        for window in snapshot.lines[0].windows.iter().rev() {
+            let Some(display_start) = window.projection.display_for_source(click_source) else {
+                continue;
+            };
+            let Some(display_end) = window.projection.display_for_source(next_source) else {
+                continue;
+            };
+            let (Some(start), Some(end)) = (
+                window.layout.position_for_index(display_start),
+                window.layout.position_for_index(display_end),
+            ) else {
+                continue;
+            };
+            mapped = Some(point(
+                (start.x + end.x) / 2.,
+                start.y + window.layout.line_height() / 2.,
+            ));
+            break;
+        }
+        mapped.expect("link label source range should map into shaped text")
+    });
+
+    cx.simulate_click(click_position, Modifiers::none());
+    cx.run_until_parked();
+    let cursor = app.update(cx, |app, _| {
+        let cursor = app.active_tab().cursor_offset();
+        assert!(
+            (click_source..=next_source).contains(&cursor),
+            "label click must map inside its canonical source range: {cursor}"
+        );
+        cursor
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "新", None, window, cx);
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "新語", None, window, cx);
+            EntityInputHandler::replace_text_in_range(app, None, "新語", window, cx);
+        });
+    });
+    app.update(cx, |app, _| {
+        let mut expected = SOURCE.to_string();
+        expected.insert_str(cursor, "新語");
+        assert_eq!(app.active_tab().document.text(), expected);
+    });
 }
 
 #[gpui::test]
@@ -24496,7 +24659,14 @@ fn run_git(directory: &Path, arguments: &[&str]) -> String {
     let mut attempts = 0;
     let output = loop {
         attempts += 1;
-        let output = std::process::Command::new("git")
+        let mut command = std::process::Command::new("git");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            // The GUI-subsystem test harness has no console to inherit.
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let output = command
             .current_dir(directory)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env(
