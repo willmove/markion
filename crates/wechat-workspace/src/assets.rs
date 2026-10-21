@@ -118,6 +118,16 @@ pub fn discover_workspace_assets() -> Result<PathBuf, BundleError> {
                     .join("assets")
                     .join("marknice-workspace"),
             );
+            // cargo-packager DEB/AppImage layout: binary at /usr/bin/markion,
+            // resources at /usr/lib/markion/. When binary_dir is /usr/bin,
+            // contents_dir is /usr, so check contents_dir/lib/markion/.
+            candidates.push(
+                contents_dir
+                    .join("lib")
+                    .join("markion")
+                    .join("assets")
+                    .join("marknice-workspace"),
+            );
         }
     }
 

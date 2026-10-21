@@ -45,11 +45,16 @@ AutoReqProv:    no
 # Fedora/RHEL-style runtime libraries matching packager.toml [deb] depends.
 Requires:       wayland
 Requires:       libxkbcommon
+Requires:       libxkbcommon-x11
 Requires:       libxcb
 Requires:       vulkan-loader
 Requires:       fontconfig
 Requires:       alsa-lib
 Requires:       glib2
+# Software Vulkan fallback: mesa-vulkan-drivers (or an alternative Vulkan ICD)
+# enables the app to run on llvmpipe when no hardware GPU is present. This is
+# a Recommends-equivalent: strongly suggested but not strictly required.
+Recommends:     mesa-vulkan-drivers
 
 %description
 Markion is a Rust + GPUI Markdown editor with live preview, themes, and i18n.
