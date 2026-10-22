@@ -655,18 +655,27 @@ pub fn highlight_data_document(text: &str, extension: &str) -> Option<Vec<Highli
     let mut spans: Vec<HighlightedSpan> = Vec::new();
     let mut cursor = 0usize;
     for line_spans in lines {
+        // `syntect_highlight` walks `text.lines()`, which strips each line's
+        // terminator (`\n` and a preceding `\r`). Slice the separator straight
+        // out of the source instead of assuming `\n`, so CRLF (and bare CR)
+        // documents keep the concatenated spans byte-identical to `text` —
+        // run boundaries derived from span ends must stay on char boundaries.
+        let line_len = text[cursor..].lines().next().map_or(0, str::len);
+        let mut line_end = cursor + line_len;
+        if text[line_end..].starts_with("\r\n") {
+            line_end += 2;
+        } else if text[line_end..].starts_with('\r') || text[line_end..].starts_with('\n') {
+            line_end += 1;
+        }
         for span in line_spans {
             push_highlight_span(&mut spans, &span.text, span.kind);
         }
-        // `syntect_highlight` parses line-by-line without the terminator in
-        // its span text; re-attach each line's newline as a plain separator
-        // so the concatenated spans rebuild the document byte-for-byte.
-        let line_len = text[cursor..].lines().next().map_or(0, str::len);
-        cursor += line_len;
-        if text[cursor..].starts_with('\n') {
-            push_highlight_span(&mut spans, "\n", HighlightKind::Plain);
-            cursor += 1;
-        }
+        push_highlight_span(
+            &mut spans,
+            &text[cursor + line_len..line_end],
+            HighlightKind::Plain,
+        );
+        cursor = line_end;
     }
     Some(spans)
 }
@@ -744,6 +753,37 @@ mod tests {
             let spans =
                 highlight_data_document(source, "json").expect("grammar handles empty input");
             assert_eq!(joined_text(&spans), source, "round-trips {source:?}");
+        }
+    }
+
+    /// CRLF (and bare-CR) documents: the per-line separator must be sliced
+    /// from the source so the concatenated spans stay byte-identical to the
+    /// text. A drifted reconstruction puts span ends inside multi-byte
+    /// characters, which crashes GPUI's DirectWrite run shaping (the
+    /// Windows-CRLF xray-config crash).
+    #[test]
+    fn crlf_and_multibyte_documents_round_trip_byte_for_byte() {
+        // Real-world shape: CRLF terminators, Chinese comments, deep JSON.
+        let source = "{\r\n  // \u{670d}\u{52a1}\u{5668}\u{5165}\u{7ad9}\u{914d}\u{7f6e}\r\n  \"listen\": \"127.0.0.1\"\r\n}\r\n";
+        let json_spans =
+            highlight_data_document(source, "json").expect("json grammar covers it");
+        assert_eq!(joined_text(&json_spans), source, "CRLF + CJK round-trips exactly");
+
+        // Mixed terminators and a bare CR also stay byte-identical.
+        let mixed = "a = 1\nb = \"\u{4e8c}\"\rc = 3\r\n";
+        let mixed_spans =
+            highlight_data_document(mixed, "toml").expect("toml grammar covers it");
+        assert_eq!(joined_text(&mixed_spans), mixed, "mixed terminators round-trip");
+
+        // Every span boundary is a char boundary of its own document — the
+        // invariant the editor's run splitting relies on.
+        for (text, spans) in [(source, &json_spans), (mixed, &mixed_spans)] {
+            let mut cumulative = 0usize;
+            for span in spans {
+                assert!(text.is_char_boundary(cumulative));
+                cumulative += span.text.len();
+            }
+            assert_eq!(cumulative, text.len());
         }
     }
 }

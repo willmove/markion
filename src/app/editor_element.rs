@@ -43,7 +43,20 @@ pub(super) fn build_text_runs(
     }
     cuts.sort_unstable();
     cuts.dedup();
-
+    // GPUI shapes runs by slicing the text at byte offsets, so every run
+    // boundary must fall on a UTF-8 char boundary — DirectWrite panics on a
+    // mid-character split. Span lists are reconstructed from the document and
+    // should already be aligned, but snap every cut forward defensively so a
+    // misaligned span (or marked range) can never split a character. Snapped
+    // cuts stay within the text (its own length is a boundary), so the
+    // segments still tile exactly [0, text_len].
+    for cut in &mut cuts {
+        while *cut < text_len && !text.is_char_boundary(*cut) {
+            *cut += 1;
+        }
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
     // Both `cuts` and `span_bounds` are sorted, so a walking index finds the
     // span covering each segment start in O(segments + spans).
     let mut segments: Vec<RunSegment> = Vec::new();
@@ -1461,5 +1474,36 @@ mod tests {
         // placeholder path never reaches here, but the invariant holds).
         let segments = build_text_runs("", None, None);
         assert_eq!(segments, vec![RunSegment { len: 0, kind: None, marked: false }]);
+    }
+
+    /// Even a misaligned span list — whose cumulative byte ends drift inside
+    /// a multi-byte character, as the CRLF reconstruction bug produced — must
+    /// never split a run mid-character: cuts snap forward to char boundaries
+    /// and the segments still tile the whole text (GPUI's DirectWrite shaping
+    /// panics otherwise).
+    #[test]
+    fn text_runs_snap_misaligned_span_cuts_to_char_boundaries() {
+        // Source has CRLF; the span list is what the buggy CRLF-less
+        // reconstruction used to emit (missing the `\r` bytes), so its
+        // cumulative end at 5 lands inside `置` (bytes 3..6).
+        let text = "a\r\n置b";
+        assert!(!text.is_char_boundary(5));
+        let drifted = [
+            span("a", HighlightKind::Plain),
+            span("\n", HighlightKind::Plain),
+            span("置", HighlightKind::String),
+            span("b", HighlightKind::String),
+        ];
+        let segments = build_text_runs(text, Some(&drifted), None);
+        assert_eq!(total_len(&segments), text.len(), "segments still tile the text");
+        let mut offset = 0usize;
+        for segment in &segments {
+            assert!(
+                text.is_char_boundary(offset),
+                "segment boundary {offset} must be a char boundary"
+            );
+            offset += segment.len;
+        }
+        assert!(offset == text.len() && text.is_char_boundary(offset));
     }
 }
