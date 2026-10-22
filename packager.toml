@@ -65,6 +65,10 @@ identifier = "dev.markion.app"
 version = "0.5.1"
 category = "Productivity"
 publisher = "Willmove"
+# cargo-packager 0.11.8 writes the Debian control `Maintainer` from this
+# top-level list (joined with ", "). `[deb]` has no `maintainer` field;
+# `deny_unknown_fields` rejects it and the release job fails at config parse.
+authors = ["Willmove <willmove@qq.com>"]
 homepage = "https://github.com/willmove/markion"
 description = "A Rust + GPUI Markdown editor with live preview, themes, and i18n."
 long-description = "Markion is a Rust + GPUI Markdown editor with live preview, themes, and i18n."
@@ -133,15 +137,13 @@ depends = [
     "libasound2",
     "libglib2.0-0",
 ]
-# Software Vulkan fallback: mesa-vulkan-drivers provides lavapipe (llvmpipe)
-# for systems without a hardware GPU. Recommends is appropriate (not Depends)
-# because: (1) users with a working GPU don't need it, (2) alternative Vulkan
-# ICDs exist, and (3) without it the app prints a clear diagnostic before
-# exiting. The AppImage bundles lavapipe and auto-restarts on it; the deb/rpm
-# rely on the user's system drivers.
-recommends = ["mesa-vulkan-drivers | vulkan-icd"]
-# DEB maintainer metadata (required by Debian policy).
-maintainer = "Willmove <willmove@qq.com>"
+# cargo-packager 0.11.8 DebianConfig accepts only:
+#   depends, desktop-template, section, priority, files, package-name
+# (plus the camelCase / snake_case aliases of those names). It has no
+# `recommends` field, so a DEB Recommends line cannot be set here.
+# mesa-vulkan-drivers stays a soft suggestion on the RPM spec
+# (scripts/build-linux-rpm.sh). The AppImage bundles lavapipe; deb users
+# without a GPU install a Vulkan ICD themselves (docs/linux-gpu-troubleshooting.md).
 
 # ---------------------------------------------------------------------------
 # Windows options
