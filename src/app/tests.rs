@@ -13038,6 +13038,44 @@ fn replace_active_router_switches_between_document_and_image_content(cx: &mut Te
     });
 }
 
+/// Regression: `open_supported_path` is the single interactive open gate
+/// (file-tree click, File → Open, Open Recent, drop landing) and must accept
+/// every openable text kind — data/config files included — instead of
+/// rejecting them with the unsupported-file-type status.
+#[gpui::test]
+fn open_supported_path_opens_data_files_through_the_interactive_gate(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("config.json");
+    let yaml = dir.path().join("strings.yaml");
+    let toml = dir.path().join("settings.toml");
+    let exe = dir.path().join("program.exe");
+    fs::write(&json, "{\"a\": 1}\n").unwrap();
+    fs::write(&yaml, "a: 1\n").unwrap();
+    fs::write(&toml, "a = 1\n").unwrap();
+    fs::write(&exe, "binary").unwrap();
+
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        for (path, expected) in [
+            (&json, "{\"a\": 1}\n"),
+            (&yaml, "a: 1\n"),
+            (&toml, "a = 1\n"),
+        ] {
+            app.open_supported_path(path.clone(), app.default_open_intent(), cx)
+                .unwrap_or_else(|error| panic!("{} should open: {error}", path.display()));
+            assert_eq!(app.active_tab().document.text(), expected);
+            assert_eq!(app.active_tab().path(), Some(path.as_path()));
+        }
+
+        // Unsupported extensions are still rejected with the localized
+        // unsupported-file status.
+        let error = app
+            .open_supported_path(exe.clone(), app.default_open_intent(), cx)
+            .expect_err("unsupported extension must be rejected");
+        assert!(error.contains("program.exe"), "names the file: {error}");
+    });
+}
+
 #[gpui::test]
 fn image_tree_and_open_recent_entry_points_follow_open_target_preference(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();

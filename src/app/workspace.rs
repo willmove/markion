@@ -448,7 +448,7 @@ impl MarkionApp {
                 }
                 OpenPathIntent::OpenInNewTab => self.open_image_in_new_tab(path.clone(), cx),
             }
-        } else if is_markdown_path(&path) || is_text_path(&path) {
+        } else if is_openable_text_path(&path) {
             let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
             match intent {
                 OpenPathIntent::ReplaceActive => self.replace_active_tab(document, cx),
