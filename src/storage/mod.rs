@@ -22,9 +22,9 @@ pub mod theme_file;
 pub use atomic::atomic_write;
 
 pub use file_tree::{
-    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, MARKDOWN_EXTENSIONS,
-    TEXT_EXTENSIONS, file_tree_watch_path_is_relevant, is_markdown_path, is_text_path,
-    workspace_relative_path,
+    DATA_EXTENSIONS, DocumentKind, FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind,
+    MARKDOWN_EXTENSIONS, TEXT_EXTENSIONS, document_kind_for_path, file_tree_watch_path_is_relevant,
+    is_data_path, is_markdown_path, is_openable_text_path, is_text_path, workspace_relative_path,
 };
 pub use image_recovery::{
     ImageRecoveryEntry, default_image_recovery_dir, discard_image_recovery_record,

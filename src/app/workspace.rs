@@ -14,7 +14,7 @@ pub(super) enum ExternalDropIntent {
 }
 
 pub(super) fn classify_external_drop_path(path: &Path) -> ExternalDropIntent {
-    if is_markdown_path(path) {
+    if is_openable_text_path(path) {
         ExternalDropIntent::OpenDocument
     } else if image_extension_supported(path) {
         ExternalDropIntent::ImportImage
@@ -24,7 +24,24 @@ pub(super) fn classify_external_drop_path(path: &Path) -> ExternalDropIntent {
 }
 
 impl MarkionApp {
+    /// The view mode the layout should render for the currently active tab:
+    /// data-text documents clamp every non-source mode to `Edit` (their
+    /// surface decisions must never read the stored mode directly).
+    pub(super) fn rendered_view_mode(&self) -> ViewMode {
+        effective_view_mode(self.view_mode, self.active_document_kind())
+    }
+
     pub(super) fn set_view_mode(&mut self, view_mode: ViewMode, cx: &mut Context<Self>) {
+        // Data-text documents have no Markdown derivation: Read, Visual Edit,
+        // and Split Preview are not offered for them. While such a tab is
+        // active, non-source targets are no-ops — the document stays on its
+        // source surface and the stored app-level mode is kept so a Markdown
+        // tab resumes it when reactivated.
+        if self.active_document_kind() == DocumentKind::Data
+            && !matches!(view_mode, ViewMode::Edit)
+        {
+            return;
+        }
         assign_view_mode(&mut self.view_mode, view_mode);
         if let Some(tab) = self.active_tab_mut().document_tab_mut() {
             tab.sync_scroll_state.reset();
@@ -457,12 +474,14 @@ impl MarkionApp {
     /// into an internal drag on `Entered`, then fires `on_drop::<ExternalPaths>`
     /// on `Submit`); this handler is registered on both pane `div`s.
     ///
-    /// The first dropped Markdown file follows the default open-target
-    /// preference (replacing a safe-to-replace active tab when the
-    /// open-in-current-tab preference is on); every subsequent one opens in
-    /// its own new tab, so a multi-file drop cannot strand earlier files by
-    /// thrashing replace. Non-Markdown files and directories are skipped
-    /// silently; if nothing was opened the status bar is left untouched.
+    /// The first dropped text document (Markdown, curated plain text, or
+    /// data/config text) follows the default open-target preference (replacing
+    /// a safe-to-replace active tab when the open-in-current-tab preference is
+    /// on); every subsequent one opens in its own new tab, so a multi-file drop
+    /// cannot strand earlier files by thrashing replace. Supported images are
+    /// staged through the image-import flow; other files and directories are
+    /// skipped silently; if nothing was opened the status bar is left
+    /// untouched.
     ///
     /// A multi-file drop arrives as a single event with all paths bundled in
     /// one `ExternalPaths`, so this loops rather than taking the first path.

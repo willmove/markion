@@ -2298,7 +2298,7 @@ impl MarkionApp {
             return;
         }
         let tab = self.active_tab();
-        if selection && matches!(self.view_mode, ViewMode::Read) {
+        if selection && matches!(self.rendered_view_mode(), ViewMode::Read) {
             let blocks = tab.document.preview_blocks_shared();
             let text = tab
                 .preview_selection
@@ -2377,7 +2377,7 @@ impl MarkionApp {
             Some(2) => 0..caret,
             Some(3) => caret..caret,
             _ if action == WritingAction::Draft => caret..caret,
-            _ if matches!(self.view_mode, ViewMode::Read) && tab.preview_selection.is_some() => {
+            _ if matches!(self.rendered_view_mode(), ViewMode::Read) && tab.preview_selection.is_some() => {
                 0..0
             }
             _ if !selected.is_empty() => selected,
@@ -2394,9 +2394,9 @@ impl MarkionApp {
             source: tab.document.text()[range.clone()].into(),
             range,
             caret,
-            editable: !matches!(self.view_mode, ViewMode::Read),
+            editable: !matches!(self.rendered_view_mode(), ViewMode::Read),
         };
-        if matches!(self.view_mode, ViewMode::Read) && scope.is_none() {
+        if matches!(self.rendered_view_mode(), ViewMode::Read) && scope.is_none() {
             let blocks = tab.document.preview_blocks_shared();
             if let Some(text) = tab
                 .preview_selection
@@ -2408,7 +2408,7 @@ impl MarkionApp {
                 target.editable = false;
             }
         }
-        if matches!(self.view_mode, ViewMode::VisualEdit)
+        if matches!(self.rendered_view_mode(), ViewMode::VisualEdit)
             && scope.is_none()
             && !target.range.is_empty()
         {

@@ -44,12 +44,65 @@ pub const TEXT_EXTENSIONS: &[&str] = &[
 /// Returns `true` when `path` has one of the curated plain-text extensions
 /// (`txt`/`text`/`log`/`csv`/…), compared case-insensitively. This governs
 /// which non-Markdown files appear in the file tree. It is intentionally
-/// separate from `is_markdown_path` (which is still the gate for the
-/// drag-and-drop open path and for marking a file as Markdown).
+/// separate from `is_markdown_path` (which is still the gate for marking a
+/// file as Markdown).
 pub fn is_text_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| TEXT_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
+}
+
+/// The curated data/config file extensions the file tree lists alongside
+/// Markdown and plain text. These are structured data formats (JSON, YAML,
+/// TOML) opened as data-text documents: they are edited on the source surface
+/// only and are never parsed as Markdown. Comparison is case-insensitive
+/// (ASCII-lowercased), matching the other extension lists.
+pub const DATA_EXTENSIONS: &[&str] = &["json", "yaml", "yml", "toml"];
+
+/// Returns `true` when `path` has one of the curated data/config extensions
+/// (`json`/`yaml`/`yml`/`toml`), compared case-insensitively. This governs
+/// which files open as data-text documents (source-only editing, whole-file
+/// highlighting, no Markdown derivation).
+pub fn is_data_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| DATA_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
+}
+
+/// Which editing surface and derivation pipeline a document gets. Markdown
+/// and curated plain text share the `Markdown` kind (both run the existing
+/// preview pipeline); data/config text gets the `Data` kind (source-only,
+/// no Markdown derivation). Derived from the file path, so untitled or
+/// extension-less documents are `Markdown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentKind {
+    /// Parsed through the Markdown pipeline (preview, outline, stats, Visual
+    /// Edit). Covers Markdown files and curated plain text.
+    Markdown,
+    /// Structured data/config text: never parsed as Markdown, edited on the
+    /// source surface only, highlighted as one unit by extension.
+    Data,
+}
+
+/// The document kind a tab should carry for `path`. Data extensions map to
+/// [`DocumentKind::Data`]; everything else (including untitled documents with
+/// no path) maps to [`DocumentKind::Markdown`] so existing behavior is the
+/// default.
+pub fn document_kind_for_path(path: Option<&Path>) -> DocumentKind {
+    if path.is_some_and(is_data_path) {
+        DocumentKind::Data
+    } else {
+        DocumentKind::Markdown
+    }
+}
+
+/// Returns `true` when `path` may be opened as a text document (Markdown,
+/// curated plain text, or data/config text), compared case-insensitively.
+/// This is the single gate every open path (file-tree click, external
+/// drag-and-drop, CLI open intent, session restore, workspace switch, git
+/// panel) routes through so the surfaces can never drift apart again.
+pub fn is_openable_text_path(path: &Path) -> bool {
+    is_markdown_path(path) || is_text_path(path) || is_data_path(path)
 }
 
 /// The category of a regular file listed in the tree. Only meaningful when
@@ -58,6 +111,7 @@ pub fn is_text_path(path: &Path) -> bool {
 pub enum FileTreeFileKind {
     Markdown,
     Text,
+    Data,
     Image,
 }
 
@@ -368,12 +422,14 @@ pub fn workspace_relative_path(root: &Path, path: &Path) -> Option<PathBuf> {
     path.strip_prefix(root).ok().map(Path::to_path_buf)
 }
 
-/// Recursively collects Markdown and curated plain-text files, plus the
-/// folders that contain them, into `entries`.
+/// Recursively collects Markdown, curated plain-text, curated data/config,
+/// and supported image files, plus the folders that contain them, into
+/// `entries`.
 ///
 /// Regular files are classified once by extension: Markdown
-/// (`md`/`markdown`/`mdown`), curated plain text (`txt`/`text`/`log`/…), or a
-/// supported image. Everything else (`.rs`, `.toml`, other binaries, …) is skipped so the sidebar stays
+/// (`md`/`markdown`/`mdown`), curated plain text (`txt`/`text`/`log`/…),
+/// curated data/config text (`json`/`yaml`/`yml`/`toml`), or a
+/// supported image. Everything else (`.rs`, other binaries, …) is skipped so the sidebar stays
 /// low-noise. Directories are kept as nesting rows whenever they exist on disk
 /// — empty folders (and folders containing only non-text files) are **not**
 /// pruned, so the tree mirrors real workspace structure. The hard-coded
@@ -417,11 +473,14 @@ fn collect_file_tree_entries(
         }
 
         // Regular file: classify once by extension. Markdown, curated text,
-        // and supported images are collected; everything else is skipped.
+        // curated data, and supported images are collected; everything else
+        // is skipped.
         let file_kind = if is_markdown_path(&path) {
             FileTreeFileKind::Markdown
         } else if is_text_path(&path) {
             FileTreeFileKind::Text
+        } else if is_data_path(&path) {
+            FileTreeFileKind::Data
         } else if image_extension_supported(&path) {
             FileTreeFileKind::Image
         } else {
@@ -724,11 +783,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
 
-        // A mix of Markdown, plain-text, image, and unsupported files.
+        // A mix of Markdown, plain-text, data, image, and unsupported files.
         write(root, "intro.md", "# Intro");
         write(root, "notes.markdown", "# Notes");
         write(root, "todo.txt", "- buy milk");
         write(root, "run.csv", "a,b\n1,2");
+        write(root, "config.json", "{\"a\": 1}");
+        write(root, "strings.yaml", "a: 1");
+        write(root, "cargo_style.yml", "a: 1");
+        write(root, "settings.toml", "a = 1");
         write(root, "image.png", "png-bytes");
         write(root, "src/main.rs", "fn main() {}");
         write(root, "docs/guide.md", "# Guide");
@@ -745,6 +808,11 @@ mod tests {
         assert!(names.contains(&"todo.txt"));
         assert!(names.contains(&"run.csv"));
         assert!(names.contains(&"debug.log"));
+        // Curated data/config files are listed and classified as Data.
+        assert!(names.contains(&"config.json"));
+        assert!(names.contains(&"strings.yaml"));
+        assert!(names.contains(&"cargo_style.yml"));
+        assert!(names.contains(&"settings.toml"));
         // Supported images appear; unrelated source files remain absent.
         assert!(names.contains(&"image.png"));
         assert!(!names.contains(&"main.rs"));
@@ -757,6 +825,7 @@ mod tests {
             match entry.file_kind {
                 Some(FileTreeFileKind::Markdown) => assert!(is_markdown_path(&entry.path)),
                 Some(FileTreeFileKind::Text) => assert!(is_text_path(&entry.path)),
+                Some(FileTreeFileKind::Data) => assert!(is_data_path(&entry.path)),
                 Some(FileTreeFileKind::Image) => assert!(image_extension_supported(&entry.path)),
                 None => panic!("file entry missing file_kind: {:?}", entry.path),
             }
@@ -770,6 +839,11 @@ mod tests {
             tree.entries
                 .iter()
                 .any(|e| e.name == "todo.txt" && e.file_kind == Some(FileTreeFileKind::Text))
+        );
+        assert!(
+            tree.entries
+                .iter()
+                .any(|e| e.name == "config.json" && e.file_kind == Some(FileTreeFileKind::Data))
         );
         assert!(
             tree.entries
@@ -1114,62 +1188,174 @@ mod tests {
         assert!(!is_text_path(Path::new("docs/")));
     }
 
+    /// `is_data_path` is the gate that admits curated data/config files into
+    /// the tree and classifies them as data-text documents. Checks its
+    /// extension rule in isolation and the disjointness of the three
+    /// extension lists (Markdown / plain text / data) that the scan relies on.
+    #[test]
+    fn is_data_path_recognises_data_extensions_case_insensitively() {
+        for ext in ["json", "yaml", "yml", "toml"] {
+            assert!(
+                is_data_path(Path::new(&format!("config.{ext}"))),
+                "{ext} should count"
+            );
+        }
+        // Case-insensitive (Windows filesystems are case-insensitive).
+        assert!(is_data_path(Path::new("UPPER.JSON")));
+        assert!(is_data_path(Path::new("Mixed.Yaml")));
+        // Path with directories still resolves by final extension.
+        assert!(is_data_path(Path::new("docs/sub/settings.toml")));
+
+        // The three curated lists stay disjoint: Markdown and plain-text
+        // extensions are not data, and data extensions are neither of the
+        // other two, so the scan's if/else chain classifies unambiguously.
+        assert!(!is_data_path(Path::new("note.md")));
+        assert!(!is_data_path(Path::new("notes.markdown")));
+        assert!(!is_data_path(Path::new("readme.txt")));
+        assert!(!is_data_path(Path::new("run.csv")));
+        assert!(!is_text_path(Path::new("config.json")));
+        assert!(!is_text_path(Path::new("settings.toml")));
+        assert!(!is_markdown_path(Path::new("config.json")));
+        assert!(!is_markdown_path(Path::new("strings.yaml")));
+
+        // Non-data extensions.
+        assert!(!is_data_path(Path::new("image.png")));
+        assert!(!is_data_path(Path::new("code.rs")));
+        assert!(!is_data_path(Path::new("style.css")));
+
+        // No extension.
+        assert!(!is_data_path(Path::new("README")));
+        assert!(!is_data_path(Path::new("docs/")));
+    }
+
+    /// `document_kind_for_path` decides which editing pipeline a tab carries:
+    /// data extensions get the source-only `Data` kind; everything else —
+    /// including Markdown, curated text, and paths with no data extension —
+    /// keeps the `Markdown` kind, and an untitled tab (no path) is `Markdown`.
+    #[test]
+    fn document_kind_for_path_splits_data_from_markdown_pipeline() {
+        for path in ["config.json", "strings.yaml", "cargo.yml", "settings.toml"] {
+            assert_eq!(
+                document_kind_for_path(Some(Path::new(path))),
+                DocumentKind::Data,
+                "{path} should be Data"
+            );
+        }
+        // Case-insensitive via is_data_path.
+        assert_eq!(
+            document_kind_for_path(Some(Path::new("UPPER.JSON"))),
+            DocumentKind::Data
+        );
+
+        for path in ["note.md", "readme.txt", "run.csv", "image.png", "code.rs"] {
+            assert_eq!(
+                document_kind_for_path(Some(Path::new(path))),
+                DocumentKind::Markdown,
+                "{path} should stay Markdown"
+            );
+        }
+        // Untitled documents default to the Markdown pipeline.
+        assert_eq!(document_kind_for_path(None), DocumentKind::Markdown);
+    }
+
+    /// `is_openable_text_path` is the single union gate every open path
+    /// (tree click, external drop, CLI intent, session restore, workspace
+    /// switch, git panel) routes through.
+    #[test]
+    fn is_openable_text_path_unions_all_three_curated_lists() {
+        for path in [
+            "note.md",
+            "notes.markdown",
+            "old.mdown",
+            "readme.txt",
+            "trace.log",
+            "run.csv",
+            "config.json",
+            "strings.yaml",
+            "cargo.yml",
+            "settings.toml",
+        ] {
+            assert!(
+                is_openable_text_path(Path::new(path)),
+                "{path} should be openable"
+            );
+        }
+        // Case-insensitive.
+        assert!(is_openable_text_path(Path::new("UPPER.MD")));
+        assert!(is_openable_text_path(Path::new("Data.JSON")));
+
+        // Non-text content is not openable as a document.
+        assert!(!is_openable_text_path(Path::new("image.png")));
+        assert!(!is_openable_text_path(Path::new("code.rs")));
+        assert!(!is_openable_text_path(Path::new("style.css")));
+        assert!(!is_openable_text_path(Path::new("README")));
+        assert!(!is_openable_text_path(Path::new("docs/")));
+    }
+
     /// Exercises the exact drop-filter predicate the external-drag handler in
-    /// `main.rs` applies — `path.is_file() && is_markdown_path(path)` — against
-    /// a real temp directory. This covers the substance of the "mixed drop
-    /// opens only Markdown files; directories and non-Markdown files are
-    /// skipped" requirement at the logic level. (Synthesizing a full GPUI
+    /// `main.rs` applies — `path.is_file() && is_openable_text_path(path)` —
+    /// against a real temp directory. This covers the substance of the "mixed
+    /// drop opens every openable text kind; directories and unsupported files
+    /// are skipped" requirement at the logic level. (Synthesizing a full GPUI
     /// `ExternalPaths` drop event would need a window/render harness the
     /// codebase does not have; the end-to-end path is verified manually per
-    /// task 4.4 instead.)
+    /// task 6.1 instead.)
     #[test]
-    fn drop_filter_opens_only_real_markdown_files() {
+    fn drop_filter_opens_every_openable_text_kind() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
 
-        // A mix of drop candidates: two Markdown files, non-Markdown files
-        // (an image and now plain-text types), and a directory. The OS can hand
-        // all of them over in a single drag.
-        let md_a = root.join("a.md");
-        let md_b = root.join("b.mdown");
-        let png = root.join("logo.png");
+        // A mix of drop candidates: Markdown, curated text, data files, an
+        // image, an unsupported file, and a directory. The OS can hand all of
+        // them over in a single drag.
+        let md = root.join("a.md");
         let txt = root.join("readme.txt");
         let csv = root.join("data.csv");
+        let json = root.join("config.json");
+        let yaml = root.join("strings.yaml");
+        let toml = root.join("settings.toml");
+        let png = root.join("logo.png");
+        let bin = root.join("program.exe");
         let folder = root.join("notes");
-        fs::write(&md_a, "# A").unwrap();
-        fs::write(&md_b, "# B").unwrap();
-        fs::write(&png, "png-bytes").unwrap();
-        fs::write(&txt, "plain text").unwrap();
-        fs::write(&csv, "a,b\n1,2").unwrap();
+        for path in [&md, &txt, &csv, &json, &yaml, &toml, &png, &bin] {
+            fs::write(path, "bytes").unwrap();
+        }
         fs::create_dir(&folder).unwrap();
 
         let dropped: Vec<PathBuf> = vec![
-            md_a.clone(),
-            md_b.clone(),
-            png,
+            md.clone(),
             txt.clone(),
             csv.clone(),
+            json.clone(),
+            yaml.clone(),
+            toml.clone(),
+            png,
+            bin,
             folder.clone(),
         ];
 
-        // The predicate the handler runs per path. Mirrors
-        // `handle_external_drop` exactly so this test fails if the two drift.
-        // Drag-and-drop stays Markdown-only even though `.txt`/`.csv` now appear
-        // in (and are openable from) the file tree.
+        // The document-open predicate the handler runs per path (the image
+        // import intent is classified separately). Mirrors
+        // `classify_external_drop_path`'s document branch exactly so this test
+        // fails if the two drift.
         let opened: Vec<PathBuf> = dropped
             .into_iter()
-            .filter(|p| p.is_file() && is_markdown_path(p))
+            .filter(|p| p.is_file() && is_openable_text_path(p))
             .collect();
 
-        assert_eq!(opened, vec![md_a, md_b]);
-        // The PNG, the plain-text files, and the directory are all skipped.
+        assert_eq!(opened, vec![md, txt, csv, json, yaml, toml]);
+        // The image (imported through a separate intent), the unsupported
+        // file, and the directory are all skipped by the document predicate.
         assert!(
             !opened
                 .iter()
                 .any(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
         );
-        assert!(!opened.iter().any(|p| p == &txt));
-        assert!(!opened.iter().any(|p| p == &csv));
+        assert!(
+            !opened
+                .iter()
+                .any(|p| p.extension().and_then(|e| e.to_str()) == Some("exe"))
+        );
         assert!(!opened.iter().any(|p| p == &folder));
     }
 

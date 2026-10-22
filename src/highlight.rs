@@ -639,3 +639,111 @@ fn is_type_word(word: &str, language: &str) -> bool {
         _ => word.chars().next().is_some_and(char::is_uppercase),
     }
 }
+
+/// Highlights a whole data/config document (`json` / `yaml` / `yml` / `toml`,
+/// matched case-insensitively by file extension) as one unit through the same
+/// grammar registry and scope classifier as fenced code blocks, so colors
+/// come from the same theme-mapped `HighlightKind` token classes. Returns a
+/// flat span list whose concatenated bytes reproduce `text` exactly
+/// (newline separators included) — the editor element turns spans into text
+/// runs by cumulative length. `None` when the extension has no data-language
+/// mapping, no grammar covers it, or parsing fails; callers render plain
+/// text then.
+pub fn highlight_data_document(text: &str, extension: &str) -> Option<Vec<HighlightedSpan>> {
+    let language = data_document_language(extension)?;
+    let lines = syntect_highlight(text, language)?;
+    let mut spans: Vec<HighlightedSpan> = Vec::new();
+    let mut cursor = 0usize;
+    for line_spans in lines {
+        for span in line_spans {
+            push_highlight_span(&mut spans, &span.text, span.kind);
+        }
+        // `syntect_highlight` parses line-by-line without the terminator in
+        // its span text; re-attach each line's newline as a plain separator
+        // so the concatenated spans rebuild the document byte-for-byte.
+        let line_len = text[cursor..].lines().next().map_or(0, str::len);
+        cursor += line_len;
+        if text[cursor..].starts_with('\n') {
+            push_highlight_span(&mut spans, "\n", HighlightKind::Plain);
+            cursor += 1;
+        }
+    }
+    Some(spans)
+}
+
+/// The grammar-language identifier for a data-document file extension, or
+/// `None` when the extension is not a curated data format.
+fn data_document_language(extension: &str) -> Option<&'static str> {
+    match extension.to_ascii_lowercase().as_str() {
+        "json" => Some("json"),
+        "yaml" | "yml" => Some("yaml"),
+        "toml" => Some("toml"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span_kinds(spans: &[HighlightedSpan]) -> Vec<HighlightKind> {
+        spans.iter().map(|span| span.kind).collect()
+    }
+
+    fn joined_text(spans: &[HighlightedSpan]) -> String {
+        spans.iter().map(|span| span.text.as_str()).collect()
+    }
+
+    #[test]
+    fn json_document_produces_classified_spans() {
+        let source = "{\n  \"name\": \"markion\",\n  \"count\": 3,\n  \"ok\": true\n}\n";
+        let spans = highlight_data_document(source, "json").expect("json grammar covers it");
+        assert_eq!(joined_text(&spans), source, "spans rebuild the document");
+        let kinds = span_kinds(&spans);
+        assert!(kinds.contains(&HighlightKind::String), "quoted values");
+        assert!(kinds.contains(&HighlightKind::Number), "numeric value");
+        assert!(
+            kinds.contains(&HighlightKind::Keyword),
+            "true maps through constant.language to Keyword"
+        );
+    }
+
+    #[test]
+    fn toml_document_classifies_comments_and_strings() {
+        let source = "# title comment\nkey = \"value\"\n[table]\n";
+        let spans = highlight_data_document(source, "toml").expect("toml grammar covers it");
+        assert_eq!(joined_text(&spans), source, "spans rebuild the document");
+        let kinds = span_kinds(&spans);
+        assert!(kinds.contains(&HighlightKind::Comment), "# comment");
+        assert!(kinds.contains(&HighlightKind::String), "quoted value");
+    }
+
+    #[test]
+    fn yaml_extension_aliases_map_to_the_yaml_grammar() {
+        for extension in ["yaml", "yml", "YAML", "Yml"] {
+            let spans = highlight_data_document("name: markion\n", extension);
+            assert!(spans.is_some(), "{extension} resolves to the grammar");
+        }
+        let spans =
+            highlight_data_document("name: markion\n", "yml").expect("yml maps to yaml");
+        assert_eq!(joined_text(&spans), "name: markion\n");
+        assert!(span_kinds(&spans).contains(&HighlightKind::String));
+    }
+
+    #[test]
+    fn unresolvable_extension_and_parse_trouble_yield_plain_none() {
+        // Not a curated data extension at all.
+        assert!(highlight_data_document("fn main() {}", "rs").is_none());
+        assert!(highlight_data_document("hello", "txt").is_none());
+        assert!(highlight_data_document("hello", "").is_none());
+    }
+
+    #[test]
+    fn empty_and_newline_only_documents_round_trip() {
+        for source in ["", "\n", "\n\n"] {
+            let spans =
+                highlight_data_document(source, "json").expect("grammar handles empty input");
+            assert_eq!(joined_text(&spans), source, "round-trips {source:?}");
+        }
+    }
+}

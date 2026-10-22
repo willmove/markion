@@ -460,6 +460,15 @@ impl MarkionApp {
         &mut self.tabs[idx]
     }
 
+    /// The document kind of the active tab's editing pipeline. Image tabs
+    /// report `Markdown` (the default pipeline); callers gating text surfaces
+    /// only ever care whether the active tab is a `Data` document.
+    pub(super) fn active_document_kind(&self) -> DocumentKind {
+        self.active_tab()
+            .document_kind()
+            .unwrap_or(DocumentKind::Markdown)
+    }
+
     pub(super) fn focus_existing_tab_for_path(
         &mut self,
         path: &Path,
@@ -1992,7 +2001,7 @@ impl MarkionApp {
             return;
         }
 
-        let domain = if matches!(self.view_mode, ViewMode::Read) {
+        let domain = if matches!(self.rendered_view_mode(), ViewMode::Read) {
             SearchDomain::ReadPreview
         } else {
             SearchDomain::Source
@@ -2105,7 +2114,7 @@ impl MarkionApp {
                     tab.marked_range = None;
                     tab.visual_cursor_reveal_pending = true;
                     tab.visual_caret_bounds = None;
-                    match self.view_mode {
+                    match self.rendered_view_mode() {
                         ViewMode::VisualEdit => {
                             let blocks = self.active_tab().document.visual_blocks_shared();
                             if let Some(item_ix) = visual_block_index_for_offset(
@@ -2168,7 +2177,7 @@ impl MarkionApp {
     pub(super) fn navigate_to_outline_heading(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = clamp_to_text_boundary(self.active_tab().document.text(), offset);
         self.jump_to_offset(offset, cx);
-        match self.view_mode {
+        match self.rendered_view_mode() {
             ViewMode::Read => {
                 let target = preview_heading_index_for_source_offset(
                     &self.active_tab().preview_list_blocks,
@@ -2490,7 +2499,7 @@ impl MarkionApp {
     /// Open one snapshot path for restore/switch. Reuses an already-open tab.
     /// When `replaced_initial` is false and the active tab is clean, may replace
     /// it in place for the first document; images always append unless reused.
-    fn open_restored_snapshot_path(
+    pub(super) fn open_restored_snapshot_path(
         &mut self,
         path: PathBuf,
         replaced_initial: &mut bool,
@@ -2510,7 +2519,7 @@ impl MarkionApp {
             return Ok(());
         }
 
-        if is_markdown_path(&path) || is_text_path(&path) {
+        if is_openable_text_path(&path) {
             let document = MarkdownDocument::open(&path).map_err(|error| error.to_string())?;
             if !*replaced_initial
                 && !self.active_tab().is_dirty()
@@ -2581,9 +2590,7 @@ impl MarkionApp {
             .iter()
             .filter(|path| {
                 path.is_file()
-                    && (is_markdown_path(path)
-                        || is_text_path(path)
-                        || image_extension_supported(path))
+                    && (is_openable_text_path(path) || image_extension_supported(path))
             })
             .cloned()
             .collect();

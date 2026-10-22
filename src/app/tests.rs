@@ -1678,10 +1678,16 @@ fn startup_open_intent_classifies_paths_and_ignores_extra_args() {
     let absolute_md = root.join("absolute.markdown");
     let folder = root.join("workspace");
     let unsupported = root.join("image.png");
+    let toml = root.join("settings.toml");
+    let json = root.join("config.json");
+    let txt = root.join("readme.txt");
     std::fs::write(&relative_md, "# Notes").unwrap();
     std::fs::write(&absolute_md, "# Absolute").unwrap();
     std::fs::create_dir(&folder).unwrap();
     std::fs::write(&unsupported, "png").unwrap();
+    std::fs::write(&toml, "a = 1").unwrap();
+    std::fs::write(&json, "{}").unwrap();
+    std::fs::write(&txt, "plain").unwrap();
 
     assert_eq!(
         StartupOpenIntent::from_args(Vec::new(), root),
@@ -1695,6 +1701,20 @@ fn startup_open_intent_classifies_paths_and_ignores_extra_args() {
         StartupOpenIntent::from_args(vec![absolute_md.clone().into_os_string()], root),
         StartupOpenIntent::File(absolute_md.clone())
     );
+    // Every openable text kind — curated plain text and data/config files
+    // included — resolves to a File intent, matching the file tree and the
+    // external drag-and-drop gate.
+    for (name, path) in [
+        ("settings.toml", &toml),
+        ("config.json", &json),
+        ("readme.txt", &txt),
+    ] {
+        assert_eq!(
+            StartupOpenIntent::from_args(vec![name.into()], root),
+            StartupOpenIntent::File(path.clone()),
+            "{name} should open as a file intent"
+        );
+    }
     assert_eq!(
         StartupOpenIntent::from_args(vec![folder.clone().into_os_string()], root),
         StartupOpenIntent::Folder(folder.clone())
@@ -1737,8 +1757,18 @@ fn interactive_image_open_does_not_change_external_drop_import_semantics() {
         classify_external_drop_path(Path::new("photo.PNG")),
         ExternalDropIntent::ImportImage
     );
+    // Curated plain-text and data/config files open as documents alongside
+    // Markdown (gates aligned with the file tree); other files are ignored.
     assert_eq!(
         classify_external_drop_path(Path::new("notes.txt")),
+        ExternalDropIntent::OpenDocument
+    );
+    assert_eq!(
+        classify_external_drop_path(Path::new("config.json")),
+        ExternalDropIntent::OpenDocument
+    );
+    assert_eq!(
+        classify_external_drop_path(Path::new("program.xyz")),
         ExternalDropIntent::Ignore
     );
 }
@@ -6191,6 +6221,63 @@ fn view_modes_have_distinct_status_and_expected_pane_layouts() {
     assert_eq!(view_mode_pane_widths(ViewMode::VisualEdit, 0.4), (1.0, 0.0));
     assert_eq!(view_mode_pane_widths(ViewMode::Split, 0.4), (0.4, 0.6));
     assert_eq!(view_mode_pane_widths(ViewMode::Read, 0.4), (0.0, 1.0));
+}
+
+/// Data-text documents clamp every non-source view mode to `Edit` for
+/// rendering, while Markdown/plain-text tabs render the stored mode as-is.
+#[test]
+fn effective_view_mode_clamps_data_documents_to_source() {
+    for mode in [
+        ViewMode::Edit,
+        ViewMode::VisualEdit,
+        ViewMode::Split,
+        ViewMode::Read,
+    ] {
+        assert_eq!(
+            effective_view_mode(mode, DocumentKind::Markdown),
+            mode,
+            "Markdown tabs render the stored mode unchanged"
+        );
+        assert_eq!(
+            effective_view_mode(mode, DocumentKind::Data),
+            ViewMode::Edit,
+            "data tabs clamp {mode:?} to the source surface"
+        );
+    }
+}
+
+/// While a data-text document is active, non-source `set_view_mode` targets
+/// are no-ops that keep the stored app-level mode untouched, so switching
+/// back to a Markdown tab resumes it.
+#[gpui::test]
+fn set_view_mode_no_ops_non_source_targets_for_data_documents(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("config.json");
+    fs::write(&json, "{\"a\": 1}\n").unwrap();
+
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        // Store Split while the untitled (Markdown) tab is active.
+        app.set_view_mode(ViewMode::Split, cx);
+        assert_eq!(app.view_mode, ViewMode::Split);
+
+        // Open the data document; the stored mode stays Split.
+        let document = MarkdownDocument::open(&json).unwrap();
+        app.replace_active_tab(document, cx);
+        assert_eq!(app.view_mode, ViewMode::Split);
+        assert_eq!(app.rendered_view_mode(), ViewMode::Edit);
+
+        // Every non-source target is a no-op.
+        for mode in [ViewMode::VisualEdit, ViewMode::Split, ViewMode::Read] {
+            app.set_view_mode(mode, cx);
+            assert_eq!(app.view_mode, ViewMode::Split, "{mode:?} must be a no-op");
+            assert_eq!(app.rendered_view_mode(), ViewMode::Edit);
+        }
+
+        // Switching back to a Markdown tab resumes the stored mode.
+        app.open_in_new_tab(MarkdownDocument::new(), cx);
+        assert_eq!(app.rendered_view_mode(), ViewMode::Split);
+    });
 }
 
 #[test]
@@ -16058,15 +16145,29 @@ fn filter_restorable_session_accepts_text_and_images() {
     let md = root.join("a.md");
     let txt = root.join("b.txt");
     let png = root.join("c.png");
+    let json = root.join("d.json");
+    let toml = root.join("e.toml");
+    let unsupported = root.join("f.rs");
     let missing = root.join("gone.md");
     fs::write(&md, "# a\n").unwrap();
     fs::write(&txt, "plain\n").unwrap();
     fs::write(&png, [0x89, b'P', b'N', b'G']).unwrap();
+    fs::write(&json, "{}\n").unwrap();
+    fs::write(&toml, "a = 1\n").unwrap();
+    fs::write(&unsupported, "fn main() {}\n").unwrap();
 
     let session = SessionState {
         workspaces: vec![WorkspaceSnapshot::new(
             root.clone(),
-            vec![md.clone(), txt.clone(), png.clone(), missing],
+            vec![
+                md.clone(),
+                txt.clone(),
+                png.clone(),
+                json.clone(),
+                toml.clone(),
+                unsupported,
+                missing,
+            ],
             Some(txt.clone()),
         )],
         workspace_root: Some(root.clone()),
@@ -16077,8 +16178,180 @@ fn filter_restorable_session_accepts_text_and_images() {
     };
     let (restored_root, open_files, active) = filter_restorable_session(&session);
     assert_eq!(restored_root.as_deref(), Some(root.as_path()));
-    assert_eq!(open_files, vec![md, txt.clone(), png]);
+    assert_eq!(open_files, vec![md, txt.clone(), png, json, toml]);
     assert_eq!(active, Some(txt));
+}
+
+/// The session/workspace restore open path accepts every openable text kind
+/// (curated plain text and data/config files included) and still rejects
+/// unsupported extensions, mirroring the tree-click and drop gates.
+#[gpui::test]
+fn session_restore_opens_data_and_text_and_rejects_unsupported(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let json = root.join("config.json");
+    let txt = root.join("notes.txt");
+    let exe = root.join("program.exe");
+    fs::write(&json, "{\"a\": 1}\n").unwrap();
+    fs::write(&txt, "plain\n").unwrap();
+    fs::write(&exe, "binary").unwrap();
+
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        let mut replaced = false;
+        app.open_restored_snapshot_path(json.clone(), &mut replaced, cx)
+            .expect("data file opens through the restore path");
+        assert_eq!(app.active_tab().document.text(), "{\"a\": 1}\n");
+
+        app.open_restored_snapshot_path(txt.clone(), &mut replaced, cx)
+            .expect("plain-text file opens through the restore path");
+        assert_eq!(app.active_tab().document.text(), "plain\n");
+
+        let err = app
+            .open_restored_snapshot_path(exe.clone(), &mut replaced, cx)
+            .expect_err("unsupported extension must be rejected");
+        assert!(err.contains("unsupported session path"), "got: {err}");
+    });
+}
+
+/// Data-text documents never run the Markdown pipeline: their per-version
+/// derived lists stay empty (no preview/visual sync ever ran), and the
+/// status-bar counts come from plain text via `basic_stats`.
+#[gpui::test]
+fn data_tab_skips_markdown_derivation_and_counts_plain_text(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    // A `# comment` line: a Markdown parse would derive an H1 heading from
+    // it, so keeping it out of the derived state is exactly the gate under
+    // test.
+    let toml = dir.path().join("settings.toml");
+    let body = "# title comment\nkey = \"hello world\"\n";
+    fs::write(&toml, body).unwrap();
+
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    app.update(cx, |app, cx| {
+        // Store a non-source mode while the untitled (Markdown) tab is
+        // active; opening the data document must still leave its derived
+        // Markdown state untouched (the render clamp keeps it on Edit).
+        app.set_view_mode(ViewMode::Split, cx);
+        let document = MarkdownDocument::open(&toml).unwrap();
+        app.replace_active_tab(document, cx);
+
+        let tab = app.active_tab();
+        assert_eq!(tab.document_kind(), Some(DocumentKind::Data));
+        assert!(
+            tab.preview_list_blocks.is_empty(),
+            "no preview sync may run for a data document"
+        );
+        assert!(
+            tab.visual_list_blocks.is_empty(),
+            "no visual sync may run for a data document"
+        );
+        assert_eq!(tab.preview_reflects_version, None);
+        // `preview_seen_version` starts at the document's construction
+        // version; no render observation may have advanced it since.
+        assert_eq!(tab.preview_seen_version, tab.document.version());
+
+        // Status-bar counts come from plain text, matching `basic_stats`
+        // (chars/words of the raw bytes), not from a Markdown parse.
+        let status = app.current_status_bar_context();
+        let basic = tab.document.basic_stats();
+        assert_eq!(status.characters, basic.chars);
+        assert_eq!(status.words, basic.words);
+        assert!(status.words >= 3, "counts the plain words: {:?}", status);
+
+        // The gate is load-bearing: a Markdown parse of the same bytes
+        // derives a heading from the `#` line. The outline panel's Data
+        // branch (empty outline) is what keeps that out of the sidebar.
+        assert!(
+            !tab.document.outline().is_empty(),
+            "sanity: the sample would parse as Markdown headings"
+        );
+    });
+}
+
+/// Whole-file data highlighting is memoized per document version: renders
+/// across one version reuse the memoized span `Arc`, and an edit recomputes
+/// exactly once for the new version.
+#[test]
+fn data_highlight_memoizes_per_document_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("config.json");
+    fs::write(&json, "{\n  \"name\": \"markion\"\n}\n").unwrap();
+
+    let mut tab = WorkspaceTab::new(MarkdownDocument::open(&json).unwrap());
+    let tab = tab.document_tab_mut().unwrap();
+    let version = tab.document.version();
+
+    let first = tab.data_highlight_spans();
+    assert!(!first.is_empty(), "json grammar classifies the sample");
+    let second = tab.data_highlight_spans();
+    assert!(
+        std::sync::Arc::ptr_eq(&first, &second),
+        "same version reuses the memoized spans"
+    );
+
+    // An edit bumps the version; the next call recomputes once for it and
+    // memoizes again.
+    tab.document.insert(0, "{\"edited\": true}\n");
+    assert_ne!(tab.document.version(), version);
+    let third = tab.data_highlight_spans();
+    assert!(
+        !std::sync::Arc::ptr_eq(&first, &third),
+        "edit recomputes the spans"
+    );
+    let fourth = tab.data_highlight_spans();
+    assert!(
+        std::sync::Arc::ptr_eq(&third, &fourth),
+        "new version memoizes again"
+    );
+
+    // Markdown-kind tabs (and extension-less documents) get an empty list,
+    // which renders as today's plain runs.
+    let mut plain = WorkspaceTab::new(MarkdownDocument::new());
+    assert!(plain
+        .document_tab_mut()
+        .unwrap()
+        .data_highlight_spans()
+        .is_empty());
+}
+
+/// A tab's document kind is derived from its current path on demand, so it is
+/// `Data` for data/config files, `Markdown` for untitled documents, and flips
+/// in place through Save As in both directions (no stale stored field).
+#[test]
+fn document_kind_tracks_tab_path_through_save_as() {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("config.json");
+    fs::write(&json, "{\"a\": 1}\n").unwrap();
+
+    // A tab built for a data path carries the Data pipeline.
+    let doc = MarkdownDocument::open(&json).unwrap();
+    let tab = WorkspaceTab::new(doc);
+    assert_eq!(tab.document_kind(), Some(DocumentKind::Data));
+
+    // An untitled tab keeps the Markdown pipeline.
+    let mut untitled = WorkspaceTab::new(MarkdownDocument::new());
+    assert_eq!(untitled.document_kind(), Some(DocumentKind::Markdown));
+
+    // Save As to a Markdown name keeps the Markdown pipeline...
+    let md_path = dir.path().join("note.md");
+    untitled
+        .document_tab_mut()
+        .unwrap()
+        .document
+        .save_as(&md_path)
+        .unwrap();
+    assert_eq!(untitled.document_kind(), Some(DocumentKind::Markdown));
+
+    // ...and Save As to a data name reclassifies the tab in place.
+    let other_json = dir.path().join("renamed.json");
+    untitled
+        .document_tab_mut()
+        .unwrap()
+        .document
+        .save_as(&other_json)
+        .unwrap();
+    assert_eq!(untitled.document_kind(), Some(DocumentKind::Data));
 }
 
 #[gpui::test]

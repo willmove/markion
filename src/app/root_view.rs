@@ -12,8 +12,19 @@ impl Render for MarkionApp {
         // Dropdown anchors follow the rendered labels; re-measure only when
         // the interface language changed since the cached table was built.
         self.ensure_menu_dropdown_offsets(window);
+        // Data-text documents have no Markdown derivation, so every non-source
+        // view mode clamps to Edit for this render. The stored app-level mode
+        // is untouched: switching back to a Markdown/plain-text tab resumes it.
+        let view_mode = effective_view_mode(self.view_mode, self.active_document_kind());
+        let active_kind = self.active_document_kind();
+        // Data-text documents render their source surface in the code font
+        // slot (monospace fallback chain); prose keeps the editor slot.
+        let source_font_family = match active_kind {
+            DocumentKind::Data => self.resolved_font_families.code.clone(),
+            DocumentKind::Markdown => self.resolved_font_families.editor.clone(),
+        };
         #[cfg(test)]
-        if matches!(self.view_mode, ViewMode::VisualEdit)
+        if matches!(view_mode, ViewMode::VisualEdit)
             && let Some(tab) = self.active_tab_mut().document_tab_mut()
         {
             tab.visual_frame_generation = tab.visual_frame_generation.wrapping_add(1);
@@ -37,7 +48,7 @@ impl Render for MarkionApp {
         // (~4ms at 100 KB, ~25ms at 600 KB); paying it while nothing renders it
         // is pure waste. Split/Read still parse eagerly as before.
         let preview_blocks: std::sync::Arc<Vec<PreviewBlock>> =
-            if active_is_image || matches!(self.view_mode, ViewMode::Edit | ViewMode::VisualEdit) {
+            if active_is_image || matches!(view_mode, ViewMode::Edit | ViewMode::VisualEdit) {
                 std::sync::Arc::new(Vec::new())
             } else {
                 // Debounced: mid-typing renders reuse the previous parse and a
@@ -50,7 +61,7 @@ impl Render for MarkionApp {
                 // pointer-compare no-op).
                 self.active_tab_mut().sync_preview_list(&blocks);
                 if self.search_visible
-                    && matches!(self.view_mode, ViewMode::Read)
+                    && matches!(view_mode, ViewMode::Read)
                     && matches!(self.search_result, SearchResultState::PendingPreview)
                     && self.active_tab().preview_reflects_version
                         == Some(self.active_tab().document.version())
@@ -61,7 +72,7 @@ impl Render for MarkionApp {
                 blocks
             };
         let visual_blocks: std::sync::Arc<Vec<VisualBlock>> =
-            if !active_is_image && matches!(self.view_mode, ViewMode::VisualEdit) {
+            if !active_is_image && matches!(view_mode, ViewMode::VisualEdit) {
                 let blocks = self.active_tab().document.visual_blocks_shared();
                 self.active_tab_mut().sync_visual_list(&blocks);
                 let padding_changed = self.active_tab_mut().refresh_visual_end_padding();
@@ -156,9 +167,9 @@ impl Render for MarkionApp {
         } = self.current_status_bar_context().localized(self.language);
         let has_status_branch = status_branch.is_some();
         let (editor_width, preview_width) =
-            view_mode_pane_widths(self.view_mode, self.editor_split_ratio);
+            view_mode_pane_widths(view_mode, self.editor_split_ratio);
         let constrain_read_preview =
-            read_mode_preview_is_constrained(self.view_mode, self.preview_adaptive_width);
+            read_mode_preview_is_constrained(view_mode, self.preview_adaptive_width);
         // Captured by value into the virtualized preview `list`'s per-item
         // render closure, which must be `'static` and cannot borrow `self`.
         let preview_items = preview_blocks.clone();
@@ -185,7 +196,7 @@ impl Render for MarkionApp {
             .map(|tab| tab.editor_scroll.clone())
             .unwrap_or_else(ScrollHandle::new);
         let source_typewriter_boundary_space =
-            if self.typewriter_mode && matches!(self.view_mode, ViewMode::Edit | ViewMode::Split) {
+            if self.typewriter_mode && matches!(view_mode, ViewMode::Edit | ViewMode::Split) {
                 typewriter_trailing_space(
                     editor_scroll.bounds().size.height,
                     px(typography.editor_line_height),
@@ -476,7 +487,7 @@ impl Render for MarkionApp {
                             .min_w_0()
                             .min_h_0()
                             .p(px(PANE_OUTER_PADDING))
-                            .when(matches!(self.view_mode, ViewMode::Split), |style| {
+                            .when(matches!(view_mode, ViewMode::Split), |style| {
                                 style.border_r_1()
                             })
                             .border_color(palette.border)
@@ -486,7 +497,7 @@ impl Render for MarkionApp {
                             // The preview pane registers the same handler; the
                             // sidebar/file-tree area deliberately does not.
                             .on_drop::<ExternalPaths>(cx.listener(Self::handle_external_drop))
-                            .child(if matches!(self.view_mode, ViewMode::VisualEdit) {
+                            .child(if matches!(view_mode, ViewMode::VisualEdit) {
                                 visual_edit_surface_view(
                                     visual_items,
                                     visual_items_doc_dir,
@@ -517,9 +528,7 @@ impl Render for MarkionApp {
                                             .border_color(palette.border)
                                             .line_height(px(typography.editor_line_height))
                                             .text_size(px(typography.editor_font_size))
-                                            .font_family(
-                                                self.resolved_font_families.editor.clone(),
-                                            )
+                                            .font_family(source_font_family.clone())
                                             .cursor(CursorStyle::IBeam)
                                             .id("editor-scroll")
                                             .overflow_y_scroll()
@@ -579,14 +588,14 @@ impl Render for MarkionApp {
                                         cx,
                                     ))
                             })
-                            .when(matches!(self.view_mode, ViewMode::Read), |style| {
+                            .when(matches!(view_mode, ViewMode::Read), |style| {
                                 style.hidden()
                             }),
                     )
                     // Editor/preview divider: only in Split view, where both
                     // panes are visible. In Edit/Read the hidden pane is
                     // display:none and the divider would have nothing to split.
-                    .when(matches!(self.view_mode, ViewMode::Split), |d| {
+                    .when(matches!(view_mode, ViewMode::Split), |d| {
                         d.child(editor_split_handle_view(palette.border, cx))
                     })
                     .child(
@@ -708,7 +717,7 @@ impl Render for MarkionApp {
                                     )),
                             )
                             .when(
-                                matches!(self.view_mode, ViewMode::Edit | ViewMode::VisualEdit),
+                                matches!(view_mode, ViewMode::Edit | ViewMode::VisualEdit),
                                 |style| style.hidden(),
                             ),
                                     ),
@@ -2532,7 +2541,7 @@ pub(super) fn search_panel_view(
             })
             .when(
                 app.search_form == SearchPanelForm::Replace
-                    && matches!(app.view_mode, ViewMode::Read),
+                    && matches!(app.rendered_view_mode(), ViewMode::Read),
                 |panel| {
                     panel.child(
                         div()
@@ -3742,8 +3751,18 @@ pub(super) fn reveal_in_system_file_manager(path: &Path, select_file: bool) -> i
 pub(super) fn outline_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
     let palette = app.palette();
     let tab = app.active_tab();
-    let outline = tab.document.outline();
-    let current = tab.document.current_heading_index(tab.cursor_offset());
+    // Data documents never derive Markdown structure: an empty outline keeps
+    // the panel blank for them instead of parsing `#` comments as headings
+    // (and paying a Markdown parse on their source surface).
+    let outline = match tab.document_kind() {
+        Some(DocumentKind::Data) => Vec::new(),
+        _ => tab.document.outline(),
+    };
+    let current = if outline.is_empty() {
+        None
+    } else {
+        tab.document.current_heading_index(tab.cursor_offset())
+    };
     let projection = tab.outline_projection(&outline, current);
     let app_entity = cx.entity();
 

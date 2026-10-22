@@ -602,7 +602,7 @@ impl MarkionApp {
     /// independent scroll states, resolves one driver, maps its top content
     /// edge through preview block source ranges, and writes only the follower.
     pub(super) fn reconcile_sync_scroll(&mut self, cx: &mut Context<Self>) {
-        if !sync_scroll_is_active(self.view_mode, self.sync_scroll) {
+        if !sync_scroll_is_active(self.rendered_view_mode(), self.sync_scroll) {
             return;
         }
         let Some(tab) = self.tabs[self.active_tab].document_tab_mut() else {

@@ -1119,7 +1119,7 @@ impl MarkionApp {
         if inspection.copy.as_ref().is_none_or(|bytes| {
             bytes.contains(&0)
                 || std::str::from_utf8(bytes).is_err()
-                || !(is_markdown_path(&path) || is_text_path(&path))
+                || !is_openable_text_path(&path)
         }) {
             self.status = self.git_label(GitMsg::BinaryContent).into();
             cx.notify();
@@ -3833,7 +3833,7 @@ pub(super) fn inspection_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
             && inspection
                 .path
                 .as_deref()
-                .is_some_and(|path| is_markdown_path(path) || is_text_path(path))
+                .is_some_and(is_openable_text_path)
     });
     div()
         .absolute()

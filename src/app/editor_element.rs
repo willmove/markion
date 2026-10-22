@@ -1,5 +1,84 @@
 use super::*;
 
+/// One styled segment of the editor surface's display text: a byte length
+/// plus the styling decisions the paint path needs. `kind` carries the
+/// theme-mapped token class for data-document highlighting (`None` uses the
+/// surface's base style); `marked` marks IME composition bytes (underline
+/// overlay, color preserved).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RunSegment {
+    pub(super) len: usize,
+    pub(super) kind: Option<HighlightKind>,
+    pub(super) marked: bool,
+}
+
+/// Splits `text` into styled segments for the source editor surface.
+/// `spans` (whole-file data-document highlighting; their concatenated bytes
+/// reproduce `text`) drive token-class boundaries, and `marked_range` (IME
+/// composition) overlays an underline split on top while preserving each
+/// segment's token color. Without `spans` this degrades to the plain/marked
+/// split the surface has always used; focus-mode paragraph dimming is a
+/// prose aid and is not composed with token spans.
+pub(super) fn build_text_runs(
+    text: &str,
+    spans: Option<&[HighlightedSpan]>,
+    marked_range: Option<&Range<usize>>,
+) -> Vec<RunSegment> {
+    let text_len = text.len();
+    let mut cuts: Vec<usize> = vec![0, text_len];
+    if let Some(marked) = marked_range {
+        cuts.push(marked.start.min(text_len));
+        cuts.push(marked.end.min(text_len));
+    }
+    // Span end boundaries (cumulative over span text lengths), clamped to the
+    // text so a defensive caller can never push out-of-range cuts.
+    let mut span_bounds: Vec<(usize, HighlightKind)> = Vec::new();
+    if let Some(spans) = spans {
+        let mut cursor = 0usize;
+        for span in spans {
+            cursor += span.text.len();
+            span_bounds.push((cursor.min(text_len), span.kind));
+        }
+        cuts.extend(span_bounds.iter().map(|(end, _)| *end));
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+
+    // Both `cuts` and `span_bounds` are sorted, so a walking index finds the
+    // span covering each segment start in O(segments + spans).
+    let mut segments: Vec<RunSegment> = Vec::new();
+    let mut span_pos = 0usize;
+    for pair in cuts.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        while span_pos < span_bounds.len() && span_bounds[span_pos].0 <= start {
+            span_pos += 1;
+        }
+        let kind = span_bounds.get(span_pos).map(|(_, kind)| *kind);
+        let marked =
+            marked_range.is_some_and(|marked| start >= marked.start && start < marked.end);
+        if let Some(last) = segments.last_mut()
+            && last.kind == kind
+            && last.marked == marked
+        {
+            last.len += end - start;
+        } else {
+            segments.push(RunSegment {
+                len: end - start,
+                kind,
+                marked,
+            });
+        }
+    }
+    if segments.is_empty() {
+        segments.push(RunSegment {
+            len: text_len,
+            kind: None,
+            marked: false,
+        });
+    }
+    segments
+}
+
 pub(super) fn visual_ime_bounds(
     caret: Option<Bounds<Pixels>>,
     surface: Option<Bounds<Pixels>>,
@@ -783,13 +862,19 @@ impl Element for EditorElement {
                 }
                 let font_size = text_style.font_size.to_pixels(window.rem_size());
                 // Skip the whole-document measure when nothing that affects the
-                // wrapped height has changed since the last pass.
+                // wrapped height has changed since the last pass. The family
+                // follows the active tab's kind: data documents render in the
+                // code font slot, prose in the editor slot.
+                let measured_font_family = match app.active_document_kind() {
+                    DocumentKind::Data => app.resolved_font_families.code.clone(),
+                    DocumentKind::Markdown => app.resolved_font_families.editor.clone(),
+                };
                 let cache_key = MeasuredHeightKey {
                     version: app.active_tab().document.version(),
                     wrap_width: width,
                     font_size,
                     line_height,
-                    font_family: app.resolved_font_families.editor.clone(),
+                    font_family: measured_font_family,
                 };
                 if let Some((key, height)) = app.active_tab().measured_height_cache.borrow().clone()
                     && key == cache_key
@@ -865,7 +950,53 @@ impl Element for EditorElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = if let Some(marked_range) = marked_range.as_ref() {
+        // Whole-file token spans for data documents (memoized per version by
+        // the tab). Empty/absent for Markdown-kind tabs, which keep the
+        // plain / marked-range / focus-mode runs below.
+        let data_spans: Option<std::sync::Arc<Vec<HighlightedSpan>>> = if is_empty {
+            None
+        } else {
+            match tab.document_tab().map(DocumentTabState::kind) {
+                Some(DocumentKind::Data) => {
+                    let spans = tab.document_tab().map(|tab| tab.data_highlight_spans());
+                    spans.filter(|spans| !spans.is_empty())
+                }
+                _ => None,
+            }
+        };
+        let code_colors = code_palette(app.code_theme);
+        let runs = if let Some(spans) = data_spans.as_deref() {
+            // Token-colored runs with the IME marked range overlaid as an
+            // underline split (the composition keeps its token color). Colors
+            // come from the same code-palette token classes as fenced code
+            // blocks — no second color table.
+            build_text_runs(&display_text, Some(spans), marked_range.as_ref())
+                .into_iter()
+                .filter(|segment| segment.len > 0)
+                .map(|segment| {
+                    let color = match segment.kind {
+                        Some(kind) => code_colors.token_color(kind).into(),
+                        None => text_color,
+                    };
+                    TextRun {
+                        len: segment.len,
+                        font: style.font(),
+                        color,
+                        background_color: None,
+                        underline: if segment.marked {
+                            Some(UnderlineStyle {
+                                color: Some(color),
+                                thickness: px(1.0),
+                                wavy: false,
+                            })
+                        } else {
+                            None
+                        },
+                        strikethrough: None,
+                    }
+                })
+                .collect()
+        } else if let Some(marked_range) = marked_range.as_ref() {
             vec![
                 TextRun {
                     len: marked_range.start,
@@ -1223,5 +1354,112 @@ impl Element for EditorElement {
                 app.reconcile_sync_scroll(cx);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(text: &str, kind: HighlightKind) -> HighlightedSpan {
+        HighlightedSpan {
+            text: text.to_string(),
+            kind,
+        }
+    }
+
+    fn total_len(segments: &[RunSegment]) -> usize {
+        segments.iter().map(|segment| segment.len).sum()
+    }
+
+    #[test]
+    fn text_runs_without_spans_match_the_plain_and_marked_split() {
+        let text = "hello world";
+        let segments = build_text_runs(text, None, None);
+        assert_eq!(segments, vec![RunSegment { len: 11, kind: None, marked: false }]);
+
+        // IME marked range splits plain/marked/plain, exactly like the
+        // run-splitting the surface has always applied.
+        let marked = 2..7;
+        let segments = build_text_runs(text, None, Some(&marked));
+        assert_eq!(
+            segments,
+            vec![
+                RunSegment { len: 2, kind: None, marked: false },
+                RunSegment { len: 5, kind: None, marked: true },
+                RunSegment { len: 4, kind: None, marked: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn text_runs_split_at_span_boundaries_and_keep_total_length() {
+        let text = "# note\nkey = 1\n";
+        let spans = [
+            span("# note", HighlightKind::Comment),
+            span("\n", HighlightKind::Plain),
+            span("key = ", HighlightKind::Plain),
+            span("1", HighlightKind::Number),
+            span("\n", HighlightKind::Plain),
+        ];
+        let segments = build_text_runs(text, Some(&spans), None);
+        assert_eq!(total_len(&segments), text.len());
+        assert_eq!(
+            segments,
+            vec![
+                RunSegment { len: 6, kind: Some(HighlightKind::Comment), marked: false },
+                // Adjacent Plain spans merge into one segment.
+                RunSegment { len: 7, kind: Some(HighlightKind::Plain), marked: false },
+                RunSegment { len: 1, kind: Some(HighlightKind::Number), marked: false },
+                RunSegment { len: 1, kind: Some(HighlightKind::Plain), marked: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn text_runs_overlay_the_marked_range_on_top_of_span_colors() {
+        let text = "key = \"value\"";
+        let spans = [
+            span("key = ", HighlightKind::Plain),
+            span("\"value\"", HighlightKind::String),
+        ];
+        // The composition range starts inside the plain run and ends inside
+        // the string run: both split at the marked edges, and marked segments
+        // keep their token color.
+        let marked = 4..11;
+        let segments = build_text_runs(text, Some(&spans), Some(&marked));
+        assert_eq!(total_len(&segments), text.len());
+        assert_eq!(
+            segments,
+            vec![
+                RunSegment { len: 4, kind: Some(HighlightKind::Plain), marked: false },
+                RunSegment { len: 2, kind: Some(HighlightKind::Plain), marked: true },
+                RunSegment { len: 5, kind: Some(HighlightKind::String), marked: true },
+                RunSegment { len: 2, kind: Some(HighlightKind::String), marked: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn text_runs_clamp_out_of_range_marked_ranges_and_cover_empty_text() {
+        let text = "ab";
+        let spans = [span("ab", HighlightKind::Keyword)];
+        // A defensively out-of-range marked range clamps instead of
+        // panicking; the full keyword span stays covered.
+        let marked = 1..99;
+        let segments = build_text_runs(text, Some(&spans), Some(&marked));
+        assert_eq!(total_len(&segments), 2);
+        assert_eq!(
+            segments,
+            vec![
+                RunSegment { len: 1, kind: Some(HighlightKind::Keyword), marked: false },
+                RunSegment { len: 1, kind: Some(HighlightKind::Keyword), marked: true },
+            ]
+        );
+
+        // Empty text yields a single zero-length plain segment (the caller's
+        // placeholder path never reaches here, but the invariant holds).
+        let segments = build_text_runs("", None, None);
+        assert_eq!(segments, vec![RunSegment { len: 0, kind: None, marked: false }]);
     }
 }

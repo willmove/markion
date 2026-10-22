@@ -20,6 +20,17 @@ pub(super) fn assign_view_mode(current: &mut ViewMode, target: ViewMode) {
     *current = target;
 }
 
+/// The view mode the layout should render for a tab of `kind`: data-text
+/// documents have no Markdown derivation, so every non-source mode clamps to
+/// `Edit`. The stored app-level mode is untouched by this clamp and resumes
+/// when a Markdown/plain-text tab becomes active again.
+pub(super) fn effective_view_mode(view_mode: ViewMode, kind: DocumentKind) -> ViewMode {
+    match kind {
+        DocumentKind::Data => ViewMode::Edit,
+        DocumentKind::Markdown => view_mode,
+    }
+}
+
 pub(super) fn view_mode_pane_widths(view_mode: ViewMode, split_ratio: f32) -> (f32, f32) {
     match view_mode {
         ViewMode::Edit | ViewMode::VisualEdit => (1.0, 0.0),

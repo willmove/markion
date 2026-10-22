@@ -238,6 +238,19 @@ mod tests {
         assert_eq!(icon_for(Path::new("pkg"), true), IconKind::Folder);
         assert_eq!(icon_for(Path::new("Cargo.toml"), false), IconKind::Config);
         assert_eq!(icon_for(Path::new("data.json"), false), IconKind::Json);
+        // Data/config text files the file tree lists keep their distinct
+        // glyphs: JSON gets its own kind, YAML/TOML share the config kind.
+        for extension in markion::DATA_EXTENSIONS {
+            let expected = match *extension {
+                "json" => IconKind::Json,
+                _ => IconKind::Config,
+            };
+            assert_eq!(
+                icon_for(Path::new(&format!("file.{extension}")), false),
+                expected,
+                ".{extension} should map to {expected:?}"
+            );
+        }
         for extension in markion::IMAGE_EXTENSIONS {
             assert_eq!(
                 icon_for(Path::new(&format!("logo.{extension}")), false),

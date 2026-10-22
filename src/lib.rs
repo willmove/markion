@@ -257,7 +257,9 @@ pub use emoji::{
     EmojiQuery, emoji_confirm_replacement, emoji_for_shortcode, emoji_query_at,
     emoji_shortcodes_matching, emoji_tokens_in,
 };
-pub use highlight::{highlight_code, supported_highlight_languages, warm_highlighter};
+pub use highlight::{
+    highlight_code, highlight_data_document, supported_highlight_languages, warm_highlighter,
+};
 pub use i18n::{
     Language, MarkdownReferenceSection, Msg, P0Msg, P1Msg, ShortcutAction, ShortcutCatalog,
     ShortcutCategory, ShortcutPlatform, ShortcutSection, markdown_reference, p0_t, p0_tf, p1_t,
@@ -283,14 +285,15 @@ pub use image_operations::{
     build_image_application_plan, plan_image_operation, prepare_image_recovery_action,
 };
 pub use storage::{
-    FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind, IMAGE_EXTENSIONS,
-    ImageRecoveryEntry, ImportedImage, MARKDOWN_EXTENSIONS, OrganizeCandidate, PublishedDocxImport,
-    RecoveryInventoryEntry, RecoverySourceState, ResourceDirectory, StagedImagePublication,
-    TEXT_EXTENSIONS, default_image_recovery_dir, delete_recovery_file,
-    discard_image_recovery_record, document_asset_dir, document_scope_root,
-    file_tree_watch_path_is_relevant, image_extension_supported, import_image_bytes,
-    import_image_bytes_to, import_image_file, import_image_file_to, init_logging,
-    inspect_recovery_files, is_markdown_path, is_text_path, list_image_recovery_records,
+    DATA_EXTENSIONS, DocumentKind, FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind,
+    IMAGE_EXTENSIONS, ImageRecoveryEntry, ImportedImage, MARKDOWN_EXTENSIONS, OrganizeCandidate,
+    PublishedDocxImport, RecoveryInventoryEntry, RecoverySourceState, ResourceDirectory,
+    StagedImagePublication, TEXT_EXTENSIONS, default_image_recovery_dir,
+    delete_recovery_file, discard_image_recovery_record, document_asset_dir, document_scope_root,
+    document_kind_for_path, file_tree_watch_path_is_relevant, image_extension_supported,
+    import_image_bytes, import_image_bytes_to, import_image_file, import_image_file_to,
+    init_logging, inspect_recovery_files, is_data_path, is_markdown_path, is_openable_text_path,
+    is_text_path, list_image_recovery_records,
     list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
     load_session_state, load_theme_definition, organize_candidates, parse_app_preferences,
     parse_legacy_app_preferences, parse_session_state, parse_theme_definition, publish_docx_import,

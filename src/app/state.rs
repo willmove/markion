@@ -952,6 +952,12 @@ pub(super) struct DocumentTabState {
     /// line; this memo makes repeat measures O(1). (`text_version` values are
     /// globally unique, so a replaced document can never alias a stale entry.)
     pub(super) measured_height_cache: RefCell<Option<(MeasuredHeightKey, Pixels)>>,
+    /// Whole-file syntax-highlight spans for data documents, cached per
+    /// document version (same memoization contract as code blocks: renders
+    /// reuse the memoized spans; an edit bumps the version and recomputes
+    /// once). Unused for Markdown-kind tabs.
+    pub(super) data_highlight_cache:
+        RefCell<Option<(u64, std::sync::Arc<Vec<HighlightedSpan>>)>>,
     /// Byte offset of each logical line start, cached per document version:
     /// prepaint needs the table every frame and rebuilding it is an
     /// O(document) `match_indices` scan.
@@ -1040,6 +1046,12 @@ impl WorkspaceTab {
         }
     }
 
+    /// The document kind of this tab's editing pipeline, or `None` for image
+    /// tabs (which carry no text pipeline at all).
+    pub(super) fn document_kind(&self) -> Option<DocumentKind> {
+        self.document_tab().map(DocumentTabState::kind)
+    }
+
     pub(super) fn document_tab_mut(&mut self) -> Option<&mut DocumentTabState> {
         match self {
             Self::Document(tab) => Some(tab),
@@ -1115,6 +1127,38 @@ impl std::ops::DerefMut for WorkspaceTab {
 }
 
 impl DocumentTabState {
+    /// The editing pipeline this tab carries, derived on demand from the
+    /// document's current path so it can never go stale after Save As or a
+    /// rename/remap reload: data/config text gets the source-only `Data`
+    /// pipeline (no Markdown derivation), everything else — including
+    /// untitled documents — keeps the `Markdown` pipeline.
+    pub(super) fn kind(&self) -> DocumentKind {
+        document_kind_for_path(self.document.path())
+    }
+
+    /// Memoized whole-file highlight spans for data documents. Recomputed
+    /// only when the document version changes (renders across one version
+    /// reuse the memoized `Arc`; an edit bumps the version and recomputes
+    /// once). Non-data or grammar-less documents get an empty list, which
+    /// renders as today's plain runs.
+    pub(super) fn data_highlight_spans(&self) -> std::sync::Arc<Vec<HighlightedSpan>> {
+        let version = self.document.version();
+        if let Some((cached_version, spans)) = self.data_highlight_cache.borrow().as_ref()
+            && *cached_version == version
+        {
+            return spans.clone();
+        }
+        let spans = self
+            .document
+            .path()
+            .and_then(|path| path.extension().and_then(|extension| extension.to_str()))
+            .and_then(|extension| highlight_data_document(&self.document.text(), extension))
+            .unwrap_or_default();
+        let spans = std::sync::Arc::new(spans);
+        *self.data_highlight_cache.borrow_mut() = Some((version, spans.clone()));
+        spans
+    }
+
     /// Explicit-discard cleanup: cancel any in-flight autosave (removing a
     /// recovery snapshot it already wrote) and delete the known snapshot.
     pub(super) fn discard_recovery_state(&mut self) {
@@ -1206,6 +1250,7 @@ impl DocumentTabState {
             is_selecting: false,
             display_text_cache: RefCell::new(None),
             measured_height_cache: RefCell::new(None),
+            data_highlight_cache: RefCell::new(None),
             line_offsets_cache: RefCell::new(None),
             last_recovery_file: None,
             autosave_generation: 0,
@@ -2391,7 +2436,7 @@ impl StartupOpenIntent {
 
     pub(super) fn from_path(path: PathBuf) -> Self {
         if path.is_file() {
-            if is_markdown_path(&path) {
+            if is_openable_text_path(&path) {
                 Self::File(path)
             } else {
                 Self::Invalid {
@@ -2436,7 +2481,7 @@ pub(super) fn filter_restorable_session(
         .iter()
         .filter(|path| {
             path.is_file()
-                && (is_markdown_path(path) || is_text_path(path) || image_extension_supported(path))
+                && (is_openable_text_path(path) || image_extension_supported(path))
         })
         .cloned()
         .collect();
