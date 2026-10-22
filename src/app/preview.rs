@@ -8883,6 +8883,20 @@ pub(super) fn code_palette(theme: CodeTheme) -> &'static CodePalette {
     }
 }
 
+/// The code palette matching the active app theme's lightness. Preview code
+/// blocks draw the palette's own panel background behind the tokens, so the
+/// `code_theme` preference works there; the data-document source surface
+/// instead paints token colors directly on the editor background, so its
+/// palette must follow the app theme — a dark palette's light-green strings
+/// are unreadable on a light editor background (and vice versa).
+pub(super) fn app_theme_code_palette(theme: &ThemeDefinition) -> &'static CodePalette {
+    code_palette(if theme.is_dark {
+        CodeTheme::Dark
+    } else {
+        CodeTheme::Light
+    })
+}
+
 impl CodePalette {
     pub(super) fn token_color(&self, kind: HighlightKind) -> Rgba {
         match kind {

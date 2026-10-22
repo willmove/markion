@@ -977,7 +977,10 @@ impl Element for EditorElement {
                 _ => None,
             }
         };
-        let code_colors = code_palette(app.code_theme);
+        // Token colors follow the active app theme's lightness (the tokens
+        // paint straight onto the editor background), not the code-theme
+        // preference reserved for preview code blocks with their own panel.
+        let code_colors = app_theme_code_palette(&app.active_theme_definition());
         let runs = if let Some(spans) = data_spans.as_deref() {
             // Token-colored runs with the IME marked range overlaid as an
             // underline split (the composition keeps its token color). Colors

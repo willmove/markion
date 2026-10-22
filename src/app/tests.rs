@@ -6199,6 +6199,70 @@ fn read_mode_preview_width_cap_only_applies_without_adaptive_width() {
     assert!(!read_mode_preview_is_constrained(ViewMode::Edit, true));
 }
 
+/// The data-document source surface paints token colors straight onto the
+/// editor background, so its palette must follow the active app theme's
+/// lightness — the code-theme preference (default Dark) would put the dark
+/// palette's light-green strings on a light editor background, where they
+/// are unreadable.
+#[test]
+fn app_theme_code_palette_follows_the_active_theme_lightness() {
+    let builtins = builtin_theme_definitions();
+    let find = |name: &str| {
+        builtins
+            .iter()
+            .find(|theme| theme.name == name)
+            .unwrap_or_else(|| panic!("{name} should be built in"))
+    };
+
+    let kinds = [
+        HighlightKind::Plain,
+        HighlightKind::Keyword,
+        HighlightKind::String,
+        HighlightKind::Number,
+        HighlightKind::Comment,
+        HighlightKind::Type,
+    ];
+    let matches = |theme: &ThemeDefinition, expected: &CodePalette| {
+        kinds.iter().all(|kind| {
+            app_theme_code_palette(theme).token_color(*kind) == expected.token_color(*kind)
+        })
+    };
+
+    for name in ["Paper", "Solar", "Forest", "Rose", "Graphite"] {
+        let theme = find(name);
+        assert!(!theme.is_dark);
+        assert!(
+            matches(theme, &CODE_PALETTE_LIGHT),
+            "{name} is light, so the light palette applies"
+        );
+    }
+    for name in ["Ink", "GitHub Dark", "Tokyo Night"] {
+        let theme = find(name);
+        assert!(theme.is_dark);
+        assert!(
+            matches(theme, &CODE_PALETTE_DARK),
+            "{name} is dark, so the dark palette applies"
+        );
+    }
+
+    // The readable-on-light invariant the switch buys: light-palette token
+    // colors are dark enough, and dark-palette ones light enough, relative
+    // to their backgrounds.
+    fn luminance(color: gpui::Rgba) -> f32 {
+        0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+    }
+    for kind in kinds {
+        assert!(
+            luminance(CODE_PALETTE_LIGHT.token_color(kind)) < 0.7,
+            "light-palette {kind:?} must stay dark on a light background"
+        );
+        assert!(
+            luminance(CODE_PALETTE_DARK.token_color(kind)) > 0.35,
+            "dark-palette {kind:?} must stay light on a dark background"
+        );
+    }
+}
+
 #[test]
 fn view_modes_have_distinct_status_and_expected_pane_layouts() {
     assert_eq!(
