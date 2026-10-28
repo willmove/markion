@@ -19,9 +19,7 @@ fn small_file_tree(root: &Path) -> FileTree {
 }
 
 #[gpui::test]
-fn sidebar_tab_bar_keeps_content_gap_across_themes_widths_and_tabs(
-    cx: &mut TestAppContext,
-) {
+fn sidebar_tab_bar_keeps_content_gap_across_themes_widths_and_tabs(cx: &mut TestAppContext) {
     let root = PathBuf::from("/tmp/markion-sidebar-tab-gap");
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
