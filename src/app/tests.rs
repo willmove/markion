@@ -11475,6 +11475,145 @@ fn visual_edit_click_on_visible_lower_row_does_not_pin_to_top(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn visual_edit_undo_redo_preserves_visible_edit_viewport(cx: &mut TestAppContext) {
+    let source = visual_edit_paragraph_source(24);
+    let edit_offset = source.find("Paragraph 4").unwrap() + "Paragraph 4".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 2,
+            offset_in_item: px(0.),
+        });
+        app.move_to(edit_offset, cx);
+    });
+    cx.run_until_parked();
+    let anchor = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert!(tab.visual_caret_bounds.is_some());
+        assert!(tab.visual_list.logical_scroll_top().item_ix > 0);
+        tab.visual_list.logical_scroll_top()
+    });
+    cx.simulate_input("X");
+    cx.run_until_parked();
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), source);
+        assert_eq!(tab.cursor_offset(), edit_offset);
+        let top = tab.visual_list.logical_scroll_top();
+        assert_eq!(
+            top.item_ix, anchor.item_ix,
+            "Undo lost the visible editing location"
+        );
+        assert_eq!(top.offset_in_item, anchor.offset_in_item);
+        assert!(
+            tab.visual_caret_bounds.is_some(),
+            "restored caret must be painted"
+        );
+    });
+    cx.dispatch_action(Redo);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        let top = tab.visual_list.logical_scroll_top();
+        assert_eq!(
+            top.item_ix, anchor.item_ix,
+            "Redo lost the visible editing location"
+        );
+        assert_eq!(top.offset_in_item, anchor.offset_in_item);
+        assert_eq!(tab.cursor_offset(), edit_offset + 1);
+    });
+    cx.simulate_input("Y");
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert!(matches!(app.active_tab().undo_stack[0], UndoEntry::Diff(_)));
+    });
+    for (undo, suffix) in [(true, "X"), (true, ""), (false, "X"), (false, "XY")] {
+        if undo {
+            cx.dispatch_action(Undo);
+        } else {
+            cx.dispatch_action(Redo);
+        }
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            let mut expected = source.clone();
+            expected.insert_str(edit_offset, suffix);
+            assert_eq!(tab.document.text(), expected);
+            assert_eq!(tab.cursor_offset(), edit_offset + suffix.len());
+            let top = tab.visual_list.logical_scroll_top();
+            assert_eq!(
+                top.item_ix, anchor.item_ix,
+                "history must preserve the viewport"
+            );
+            assert_eq!(top.offset_in_item, anchor.offset_in_item);
+            let caret = tab.visual_caret_bounds.expect("restored caret must paint");
+            assert!(tab.visual_list.viewport_bounds().contains(&caret.center()));
+        });
+    }
+    // A structural edit changes row count, but rows above it still anchor
+    // the viewport through undo and redo.
+    let before_split = app.update(cx, |app, _| app.active_tab().document.text().to_string());
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    let after_split = app.update(cx, |app, _| app.active_tab().document.text().to_string());
+    assert_ne!(before_split, after_split);
+    for undo in [true, false] {
+        if undo {
+            cx.dispatch_action(Undo);
+        } else {
+            cx.dispatch_action(Redo);
+        }
+        cx.run_until_parked();
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert_eq!(
+                tab.document.text(),
+                if undo { &before_split } else { &after_split }
+            );
+            assert_eq!(tab.visual_list.logical_scroll_top().item_ix, anchor.item_ix);
+            assert_eq!(
+                tab.visual_list.logical_scroll_top().offset_in_item,
+                anchor.offset_in_item
+            );
+        });
+    }
+    // After manually scrolling away, undo must reveal the restored caret.
+    app.update(cx, |app, cx| {
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 36,
+            offset_in_item: px(0.),
+        });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        assert_eq!(tab.document.text(), before_split);
+        let caret = tab
+            .visual_caret_bounds
+            .expect("undo must reveal an offscreen caret");
+        assert!(tab.visual_list.viewport_bounds().contains(&caret.center()));
+    });
+}
+
+#[gpui::test]
 fn visual_edit_typing_in_visible_mid_row_does_not_scroll(cx: &mut TestAppContext) {
     let source = visual_edit_paragraph_source(24);
     let click_offset = source.find("Paragraph 4").unwrap();
@@ -17515,6 +17654,104 @@ fn visual_selection_format_actions_live_in_the_context_menu(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn visual_selection_context_copy_is_non_mutating(cx: &mut TestAppContext) {
+    const SOURCE: &str = "选择 **文本**\n\nsecond paragraph\n";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(SOURCE))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(700.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    for selection in [0.."选择".len(), 0..SOURCE.trim_end().len()] {
+        app.update(cx, |app, _| {
+            app.active_tab_mut().selected_range = selection.clone();
+        });
+        let (version, blocks, anchor) = app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            (
+                tab.document.version(),
+                tab.document.visual_blocks_shared(),
+                tab.visual_list.logical_scroll_top(),
+            )
+        });
+        let row = cx.debug_bounds("visual-block-row-0").unwrap();
+        cx.simulate_event(MouseUpEvent {
+            button: MouseButton::Right,
+            position: row.center(),
+            modifiers: Modifiers::none(),
+            click_count: 1,
+        });
+        cx.run_until_parked();
+        let copy = cx
+            .debug_bounds("visual-selection-copy")
+            .expect("selected text must expose Copy");
+        cx.simulate_click(copy.center(), Modifiers::none());
+        cx.run_until_parked();
+        let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert_eq!(copied.as_deref(), Some(&SOURCE[selection.clone()]));
+        app.update(cx, |app, _| {
+            let tab = app.active_tab();
+            assert!(app.block_menu.is_none());
+            assert_eq!(tab.document.text(), SOURCE);
+            assert_eq!(tab.document.version(), version);
+            assert_eq!(tab.selected_range, selection);
+            assert!(!tab.document.is_dirty());
+            assert!(tab.undo_stack.is_empty());
+            assert!(tab.redo_stack.is_empty());
+            assert!(Arc::ptr_eq(&blocks, &tab.document.visual_blocks_shared()));
+            assert_eq!(tab.visual_list.logical_scroll_top().item_ix, anchor.item_ix);
+            assert_eq!(
+                tab.visual_list.logical_scroll_top().offset_in_item,
+                anchor.offset_in_item
+            );
+        });
+    }
+    // The keyboard uses the same command, even for a cross-block selection.
+    cx.dispatch_action(ShowVisualBlockContextMenu);
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        app.select_visual_block_menu_root(0, false, cx)
+    });
+    cx.dispatch_action(InsertNewline);
+    cx.run_until_parked();
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(copied.as_deref(), Some(SOURCE.trim_end()));
+    app.update(cx, |app, cx| {
+        assert!(app.block_menu.is_none());
+        app.active_tab_mut().selected_range = 0..0;
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let target = BlockTarget::from_block(app.active_tab().document.version(), &blocks[0]);
+        app.open_visual_block_menu(target, point(px(60.), px(100.)), cx);
+        let menu = app.block_menu.as_ref().expect("empty-selection block menu");
+        assert!(menu.selection_copy.is_none());
+        assert!(!menu.root_items().contains(&BlockMenuItem::CopySelection));
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().selected_range = 0.."选择".len();
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let target = BlockTarget::from_block(app.active_tab().document.version(), &blocks[0]);
+        app.open_visual_block_menu(target, point(px(60.), px(100.)), cx);
+        app.active_tab_mut().selected_range = 0..0;
+        cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+        app.activate_visual_block_menu_item(BlockMenuItem::CopySelection, cx);
+        assert!(app.block_menu.is_none());
+    });
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(
+        copied.as_deref(),
+        Some("unchanged"),
+        "stale selection must not be copied"
+    );
+}
+
+#[gpui::test]
 fn visual_selection_format_actions_support_keyboard_context_invocation(cx: &mut TestAppContext) {
     const SOURCE: &str = "selected prose";
     let (app, cx) = cx.add_window_view(|_, cx| {
@@ -17538,11 +17775,14 @@ fn visual_selection_format_actions_support_keyboard_context_invocation(cx: &mut 
             .as_ref()
             .expect("keyboard selection context menu");
         assert!(menu.selection_format.is_some());
-        assert_eq!(menu.root_selected, BLOCK_MENU_SELECTION_FORMAT_ITEMS.len());
+        assert_eq!(
+            menu.root_selected,
+            BLOCK_MENU_SELECTION_FORMAT_ITEMS.len() + 1
+        );
     });
     assert!(cx.debug_bounds("visual-selection-format-bold").is_some());
     app.update(cx, |app, cx| {
-        app.select_visual_block_menu_root(0, false, cx)
+        app.select_visual_block_menu_root(1, false, cx)
     });
     cx.dispatch_action(InsertNewline);
     cx.run_until_parked();

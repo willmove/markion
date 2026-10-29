@@ -1892,26 +1892,19 @@ impl DocumentTabState {
     /// snapshot's older `text_version`, and a version number that names two
     /// different texts poisons every tab-level per-version cache (display
     /// text, source layout, measured height) that assumes versions are
-    /// globally unique. Applying the snapshot text as an authorized
-    /// whole-document mutation keeps the instance identity and only ever
-    /// advances the version. Returns false when the boundary rejected the
-    /// restoration, leaving text, version, and history untouched.
+    /// globally unique. Restore only the changed UTF-8-safe range so unchanged
+    /// visual rows retain their source lineage and the list's scroll anchor.
+    /// A whole-document mutation would discard all row identities and splice
+    /// the entire list, moving its anchor to row zero. The checked range edit
+    /// keeps instance identity and monotonic versions. Returns false when the
+    /// boundary rejects restoration.
     pub(super) fn restore_snapshot(
         &mut self,
         snapshot: EditorSnapshot,
         origin: MutationOrigin,
     ) -> bool {
-        let replacement = snapshot.document.text().to_string();
-        let mutation = self.document.prepare_whole_mutation(origin, replacement);
-        let Ok(receipt) = self.document.apply_checked_mutation(mutation) else {
-            return false;
-        };
-        let _ = receipt;
-        self.document.refresh_dirty_against_known_disk();
-        self.selected_range = snapshot.selected_range;
-        self.selection_reversed = snapshot.selection_reversed;
-        self.marked_range = None;
-        true
+        let diff = compact_history_entry(&snapshot, self.document.text());
+        self.apply_history_diff(diff, origin).is_some()
     }
 
     /// Apply a compact history record and return its inverse — the record

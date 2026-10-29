@@ -1523,6 +1523,7 @@ const EMOJI_PALETTE_LIMIT: usize = 12;
 #[derive(Clone, Debug)]
 struct BlockMenuState {
     target: BlockTarget,
+    selection_copy: Option<Range<usize>>,
     selection_format: Option<VisualSelectionFormatTarget>,
     is_image: bool,
     anchor: Point<Pixels>,
@@ -1567,6 +1568,7 @@ enum BlockMenuSubmenu {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockMenuItem {
+    CopySelection,
     SelectionFormat(SelectionFormatAction),
     Submenu(BlockMenuSubmenu),
     Transform(BlockTransform),
@@ -1662,11 +1664,15 @@ fn block_menu_root_items(has_selection_format: bool) -> Vec<BlockMenuItem> {
 
 impl BlockMenuState {
     fn root_items(&self) -> Vec<BlockMenuItem> {
-        if self.is_image {
+        let mut items = if self.is_image {
             BLOCK_MENU_IMAGE_ROOT_ITEMS.to_vec()
         } else {
             block_menu_root_items(self.selection_format.is_some())
+        };
+        if self.selection_copy.is_some() {
+            items.insert(0, BlockMenuItem::CopySelection);
         }
+        items
     }
 }
 
@@ -1694,6 +1700,7 @@ struct BlockMenuPresentation {
 impl BlockMenuPresentation {
     fn item_enabled(self, item: BlockMenuItem) -> bool {
         match item {
+            BlockMenuItem::CopySelection => true,
             BlockMenuItem::MoveUp => self.can_move_up,
             BlockMenuItem::MoveDown => self.can_move_down,
             BlockMenuItem::Duplicate | BlockMenuItem::Delete => self.can_duplicate_or_delete,

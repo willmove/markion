@@ -650,6 +650,8 @@ impl MarkionApp {
             }
             return;
         };
+        let selected = self.active_tab().safe_selected_range();
+        let selection_copy = (!selected.is_empty()).then_some(selected);
         let selection_format = {
             let tab = self.active_tab();
             let blocks = tab.document.visual_blocks_shared();
@@ -668,9 +670,11 @@ impl MarkionApp {
                     0
                 }
         };
+        let root_selected = root_selected + usize::from(selection_copy.is_some());
         self.visual_table_menu = None;
         self.block_menu = Some(BlockMenuState {
             target,
+            selection_copy,
             selection_format,
             is_image: presentation.is_image,
             anchor,
@@ -916,6 +920,17 @@ impl MarkionApp {
             return;
         };
         match item {
+            BlockMenuItem::CopySelection => {
+                let selected = self.active_tab().safe_selected_range();
+                let current = self.block_menu.as_ref().is_some_and(|menu| {
+                    menu.selection_copy.as_ref() == Some(&selected) && !selected.is_empty()
+                });
+                self.dismiss_visual_block_menu();
+                if current {
+                    self.copy_editor_selection(cx);
+                }
+                cx.notify();
+            }
             BlockMenuItem::SelectionFormat(action) => {
                 let selection_format = self
                     .block_menu
@@ -4375,6 +4390,11 @@ impl MarkionApp {
             cx.notify();
             return;
         }
+        self.copy_editor_selection(cx);
+        cx.notify();
+    }
+
+    fn copy_editor_selection(&mut self, cx: &mut Context<Self>) {
         let selected = self.active_tab().safe_selected_range();
         if !selected.is_empty() {
             let text = self.active_tab().document.text()[selected].to_string();
@@ -4383,7 +4403,6 @@ impl MarkionApp {
         } else {
             self.status = t(self.language, Msg::StatusNothingToCopy).into();
         }
-        cx.notify();
     }
 
     pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {

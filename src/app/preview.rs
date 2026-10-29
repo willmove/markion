@@ -5241,6 +5241,7 @@ pub(super) fn visual_block_menu(
 
 fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
     match item {
+        BlockMenuItem::CopySelection => "visual-selection-copy",
         BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold) => {
             "visual-selection-format-bold"
         }
@@ -5280,6 +5281,7 @@ fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
 
 fn block_menu_item_label(language: Language, item: BlockMenuItem) -> String {
     match item {
+        BlockMenuItem::CopySelection => t(language, Msg::ItemCopy).to_string(),
         BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold) => {
             t(language, Msg::ItemBold).to_string()
         }
@@ -5347,7 +5349,8 @@ fn block_menu_item_is_current(item: BlockMenuItem, presentation: BlockMenuPresen
         BlockMenuItem::ImageAlignment(alignment) => presentation
             .image
             .is_some_and(|image| image.alignment == alignment),
-        BlockMenuItem::SelectionFormat(_)
+        BlockMenuItem::CopySelection
+        | BlockMenuItem::SelectionFormat(_)
         | BlockMenuItem::ImageEditSource
         | BlockMenuItem::ImageReplace
         | BlockMenuItem::ImageSaveLocal
@@ -5362,7 +5365,8 @@ fn block_menu_item_is_current(item: BlockMenuItem, presentation: BlockMenuPresen
 fn block_menu_item_is_followed_by_separator(item: BlockMenuItem) -> bool {
     matches!(
         item,
-        BlockMenuItem::SelectionFormat(SelectionFormatAction::Link)
+        BlockMenuItem::CopySelection
+            | BlockMenuItem::SelectionFormat(SelectionFormatAction::Link)
             | BlockMenuItem::ImageUpload
             | BlockMenuItem::Transform(BlockTransform::Table)
             | BlockMenuItem::MoveDown
