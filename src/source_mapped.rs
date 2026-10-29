@@ -399,7 +399,9 @@ fn partition_full_derivation(
         }
         let mut local_headings = Vec::new();
         for heading in headings {
-            if heading.offset >= start && heading.offset <= end {
+            // Regions own [start, end). A heading at `end` belongs only to
+            // the next region; retaining it here duplicates it on reuse.
+            if heading.offset >= start && heading.offset < end {
                 let mut heading = heading.clone();
                 shift_heading(&mut heading, -(isize::try_from(start).ok()?))?;
                 local_headings.push(heading);
@@ -925,6 +927,113 @@ mod tests {
         assert_eq!(end_insert.map_containing_range(&(0..5)), Some(0..6));
         let start_insert = SourceEdit::new(source, 0..0, 1, 1, 2).unwrap();
         assert_eq!(start_insert.map_containing_range(&(0..5)), Some(0..6));
+    }
+
+    #[test]
+    fn cached_region_outline_contains_each_source_heading_once() {
+        for source in [
+            "# One\n\n## Two\n",
+            "# 根\n\n正文。\n\n## 末尾",
+            "One\n===\n\nTwo\n---\n",
+            "# Same\n\n## Same\n\n### Same",
+            "#\n\n##\n",
+            "# One\r\n\r\n## Two\r\n",
+        ] {
+            let parts = split_regions(source);
+            let full = MarkdownDocument::derive_preview_and_outline(source);
+            let cached_blocks = Arc::new(full.0);
+            for cache in [
+                SourceMappedCache::derive_full(source, 1),
+                SourceMappedCache::from_cached_full(
+                    source,
+                    1,
+                    cached_blocks.clone(),
+                    full.1.clone(),
+                ),
+            ] {
+                let (blocks, headings) = assemble_regions(&cache.regions, &parts).unwrap();
+                assert_eq!(headings, full.1, "{source:?}");
+                assert_eq!(&blocks, cached_blocks.as_ref(), "{source:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn heading_rename_stays_incremental_without_outline_duplicates() {
+        let mut document = MarkdownDocument::from_text("# One\n\n## Two\n\n### Three\n");
+        document.visual_blocks_shared();
+        let before = document.source_mapped_derivation_counters();
+        let start = document.text().find("Two").unwrap();
+        document.replace_range(start..start + 3, "Changed");
+        document.visual_blocks_shared();
+        let fresh = MarkdownDocument::from_text(document.text());
+        assert_eq!(document.outline(), fresh.outline());
+        let after = document.source_mapped_derivation_counters();
+        assert_eq!(after.full_fallbacks, before.full_fallbacks);
+        assert!(after.reused_regions > before.reused_regions);
+    }
+
+    #[test]
+    fn heading_edits_match_full_outline_without_oracle_repair() {
+        let source = "# 根\n\n正文。\n\n## 中间\n\n正文二。\n\n### 末尾\n";
+        let middle = source.find("## 中间").unwrap();
+        let mut edits = vec![
+            (middle..middle, "## 新节\n\n"),
+            (middle..middle + "## 中间\n\n".len(), ""),
+        ];
+        for title in ["根", "中间", "末尾"] {
+            let start = source.find(title).unwrap();
+            for replacement in ["改", "更长的新标题", ""] {
+                edits.push((start..start + title.len(), replacement));
+            }
+        }
+        for (range, replacement) in edits {
+            let mut document = MarkdownDocument::from_text(source);
+            // Cover both cold derivation and seeding from a background/full
+            // preview result already installed for the current version.
+            let (blocks, headings) = MarkdownDocument::derive_preview_and_outline(source);
+            document.install_derived(document.version(), Arc::new(blocks), headings);
+            document.visual_blocks_shared();
+            let before = document.source_mapped_derivation_counters();
+            document.replace_range(range.clone(), replacement);
+            document.visual_blocks_shared();
+            let fresh = MarkdownDocument::from_text(document.text());
+            assert_eq!(
+                document.outline(),
+                fresh.outline(),
+                "{range:?} -> {replacement:?}"
+            );
+            assert_eq!(document.preview_blocks(), fresh.preview_blocks());
+            let after = document.source_mapped_derivation_counters();
+            assert_eq!(after.full_fallbacks, before.full_fallbacks);
+            assert!(after.reused_regions > before.reused_regions);
+        }
+
+        let mut document = MarkdownDocument::from_text("# Same\n\n## Same\n\n### 末尾\n");
+        document.visual_blocks_shared();
+        let before = document.source_mapped_derivation_counters();
+        for (old, new) in [
+            ("末尾", "三、新标题"),
+            ("三、新标题", "再次修改"),
+            ("再次修改", "末尾"),
+        ] {
+            let start = document.text().find(old).unwrap();
+            document.replace_range(start..start + old.len(), new);
+            document.visual_blocks_shared();
+            assert_eq!(
+                document.outline(),
+                MarkdownDocument::from_text(document.text()).outline()
+            );
+            assert_eq!(
+                document.outline().len(),
+                3,
+                "authored duplicate titles must remain"
+            );
+            assert_eq!(
+                document.source_mapped_derivation_counters().full_fallbacks,
+                before.full_fallbacks
+            );
+        }
     }
 
     #[test]
