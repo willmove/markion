@@ -62,7 +62,7 @@ product-name = "Markion"
 # Providing `name` skips that buggy path entirely.
 name = "markion"
 identifier = "dev.markion.app"
-version = "0.5.1"
+version = "0.5.2"
 category = "Productivity"
 publisher = "Willmove"
 # cargo-packager 0.11.8 writes the Debian control `Maintainer` from this
