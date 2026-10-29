@@ -3487,6 +3487,7 @@ pub(super) fn file_tree_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp
         .child(
             div()
                 .id("file-tree-workspace-root")
+                .debug_selector(|| "file-tree-workspace-root".to_string())
                 .mb_1()
                 .can_drop({
                     let dest = header_root.clone();
@@ -3935,7 +3936,8 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
         // highlight as tree rows so the two stay visually consistent.
         .child(
             div()
-                .mb(px(PANE_OUTER_PADDING))
+                .debug_selector(|| "sidebar-tab-bar".to_string())
+                .mb(px(SIDEBAR_TAB_CONTENT_GAP))
                 .flex()
                 .gap_1()
                 .child(

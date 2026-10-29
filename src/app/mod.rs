@@ -1852,6 +1852,7 @@ const PANE_INNER_PADDING: f32 = 9.;
 const PREVIEW_SCROLLBAR_SAFE_RIGHT_PADDING: f32 =
     PANE_INNER_PADDING + PANE_SCROLLBAR_RESERVED_WIDTH;
 const SIDEBAR_COMPACT_PADDING: f32 = 2.5;
+const SIDEBAR_TAB_CONTENT_GAP: f32 = 4.;
 const OUTLINE_ROW_VERTICAL_PADDING: f32 = 1.;
 const OUTLINE_ROW_LINE_HEIGHT: f32 = 17.;
 const OUTLINE_ROW_GAP: f32 = 0.;
@@ -2488,6 +2489,8 @@ mod deferred_caret_tests;
 mod focus_mode_tests;
 #[cfg(test)]
 mod mutation_tests;
+#[cfg(test)]
+mod sidebar_layout_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
