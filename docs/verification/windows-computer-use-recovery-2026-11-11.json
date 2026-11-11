@@ -1,6 +1,6 @@
 {
   "date": "2026-11-11",
-  "status": "user_environment_corrected_waiting_for_host_restart",
+  "status": "automation_recovered_final_native_retest_waiting_for_unlocked_desktop",
   "observed_error": "failed to launch codex app-server: 拒绝访问。 (os error 5)",
   "diagnosis": {
     "incorrect_user_variable": "CODEX_CLI_PATH",
@@ -14,15 +14,24 @@
   },
   "verification": {
     "user_environment_readback_matches_executable": true,
-    "existing_host_environment_still_points_to_directory": true,
+    "existing_host_environment_still_points_to_directory": false,
     "sky_list_apps_after_kernel_reset": "same app-server launch error",
     "cua_get_state": "same app-server launch error",
-    "real_mouse_keyboard_and_system_ime_verified": false
+    "sky_list_apps_after_host_restart": "success",
+    "cua_get_state_after_host_restart": "success",
+    "real_mouse_keyboard_and_system_ime_verified": "Physical Windows Pinyin delayed commit, Undo/Redo and Escape passed on the repaired release. Mouse text selection, subtree drag/drop, table rectangle clear/undo, final-cell Tab and folding exercised; two visual layout defects found and being retested.",
+    "observed_native_regression": "Pinyin intermediate text reappears after Undo if candidate selection pauses beyond the ordinary typing timeout",
+    "focused_regressions": "2 new failures before fix; 37 IME, 2 semantic undo and 6 mutation tests passed after fix",
+    "full_desktop_regression_before_table_fix": "787 passed; 2 existing ignored",
+    "final_desktop_regression": "788 passed; 2 existing ignored; 0 failed",
+    "final_release_build": "success; SHA256 C6FB42C23ED2F9CA2D2B26BFADA201EBF928328BE4F475A9AFB41947A9E0A158",
+    "final_native_replay": "Two attempts blocked at clipboard access (0x80070005); official screenshot subsequently confirmed Windows lock screen at 20:36. Cause of clipboard contention not established; no passing final replay claimed."
   },
   "pending": [
-    "Completely exit and reopen the Codex desktop application so the tool host inherits the corrected user environment.",
-    "Retry the official sky.list_apps and cua.getState entry points before considering the automation interface recovered.",
-    "Use an isolated Markion profile and scratch fixtures to verify real mouse, keyboard, Microsoft Pinyin candidate UI and continuous large-document typing.",
-    "Record evidence and implement fixes through OpenSpec if application bugs are found."
+    "User unlock of the same Windows desktop; request pending.",
+    "Retest final release visible-table viewport stability and Copy alignment with actual mouse input.",
+    "Rerun final native callback replay with clipboard available.",
+    "Measure large-document continuous OS keyboard input and process memory without compilation load.",
+    "Validate and archive fix-windows-ime-undo-grouping only after the pending verification is complete."
   ]
 }

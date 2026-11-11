@@ -213,6 +213,70 @@ async fn replay(
     .map_err(|error| error.to_string())??;
     observations.push(serde_json::json!({"case":"block selection, native text/HTML clipboard, delete and undo", "passed":true}));
 
+    let table_index = this
+        .update_in(cx, |app, _, cx| {
+            let blocks = app.active_tab().document.visual_blocks_shared();
+            let index = blocks
+                .iter()
+                .position(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+                .ok_or("missing visible table")?;
+            app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+                item_ix: index.saturating_sub(2),
+                offset_in_item: px(0.),
+            });
+            cx.notify();
+            Ok::<_, String>(index)
+        })
+        .map_err(|error| error.to_string())??;
+    settle(this, cx).await?;
+    let table_anchor = this
+        .update_in(cx, |app, _, cx| {
+            let list = &app.active_tab().visual_list;
+            let bounds = list
+                .bounds_for_item(table_index)
+                .ok_or("table not painted")?;
+            ensure(
+                visual_caret_pixel_delta(
+                    list.viewport_bounds(),
+                    bounds,
+                    px(app.typography_metrics().preview_row_line_height),
+                )
+                .is_none(),
+                "native test table is not fully inside the viewport inset",
+            )?;
+            app.select_table_cells(table_index, (1, 0), CellSelectionAxis::Rectangle, false, cx);
+            app.select_table_cells(table_index, (2, 1), CellSelectionAxis::Rectangle, true, cx);
+            Ok::<_, String>(app.active_tab().visual_list.logical_scroll_top())
+        })
+        .map_err(|error| error.to_string())??;
+    settle(this, cx).await?;
+    this.update_in(cx, |app, _, cx| app.delete_source_selection(cx))
+        .map_err(|error| error.to_string())?;
+    settle(this, cx).await?;
+    this.update_in(cx, |app, window, cx| {
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        ensure(
+            top.item_ix == table_anchor.item_ix
+                && top.offset_in_item == table_anchor.offset_in_item,
+            "clearing visible cells jumped the native viewport",
+        )?;
+        app.undo(&Undo, window, cx);
+        Ok::<_, String>(())
+    })
+    .map_err(|error| error.to_string())??;
+    settle(this, cx).await?;
+    this.update_in(cx, |app, _, _| {
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        ensure(
+            top.item_ix == table_anchor.item_ix
+                && top.offset_in_item == table_anchor.offset_in_item
+                && app.active_tab().document.text() == original,
+            "visible table undo lost the native viewport or source",
+        )
+    })
+    .map_err(|error| error.to_string())??;
+    observations.push(serde_json::json!({"case":"visible table rectangle clear and undo preserve native viewport", "passed":true}));
+
     this.update_in(cx, |app, _, cx| {
         let blocks = app.active_tab().document.visual_blocks_shared();
         let index = blocks
@@ -362,6 +426,11 @@ async fn replay(
     })
     .map_err(|error| error.to_string())?;
     settle(this, cx).await?;
+    // A real user can stop to choose a candidate. Keep this replay from
+    // silently covering only immediate commits below the typing timeout.
+    cx.background_executor()
+        .timer(SEMANTIC_UNDO_TIMEOUT + Duration::from_millis(200))
+        .await;
     this.update_in(cx, |app, window, cx| {
         ensure(
             app.active_tab().marked_range.is_some(),
@@ -384,7 +453,7 @@ async fn replay(
         )
     })
     .map_err(|error| error.to_string())??;
-    observations.push(serde_json::json!({"case":"IME callbacks, real shaped candidate bounds and composition undo", "passed":true, "system_candidate_window_tested":false}));
+    observations.push(serde_json::json!({"case":"IME callbacks after candidate-selection pause, real shaped candidate bounds and composition undo", "passed":true, "candidate_pause_ms":(SEMANTIC_UNDO_TIMEOUT + Duration::from_millis(200)).as_millis(), "system_candidate_window_tested":false}));
     settle(this, cx).await?;
     Ok(())
 }

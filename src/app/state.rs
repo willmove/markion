@@ -1457,6 +1457,48 @@ impl DocumentTabState {
         true
     }
 
+    /// A cell edit invalidates table measurements before the next layout.
+    /// Preserve an already-visible source owner until fresh caret geometry
+    /// can refine the viewport; do not mistake it for an off-screen new row.
+    pub(super) fn visible_table_remeasure_pending(
+        &self,
+        blocks: &[VisualBlock],
+        inset: Pixels,
+    ) -> bool {
+        if !self.visual_cursor_reveal_pending {
+            return false;
+        }
+        let Some(index) =
+            visual_block_index_for_offset(blocks, self.cursor_offset(), self.document.text().len())
+        else {
+            return false;
+        };
+        let Some(old) = self.visual_list_blocks.get(index) else {
+            return false;
+        };
+        let new = &blocks[index];
+        let Some(change) = self.document.last_change_set() else {
+            return false;
+        };
+        if !matches!(old.kind, VisualBlockKind::Table { .. })
+            || !matches!(new.kind, VisualBlockKind::Table { .. })
+            || old.source_range.start != new.source_range.start
+            || change.old_range.start < old.source_range.start
+            || change.old_range.end > old.source_range.end
+            || change.new_range.start < new.source_range.start
+            || change.new_range.end > new.source_range.end
+        {
+            return false;
+        }
+        let Some(bounds) = self.visual_list.bounds_for_item(index) else {
+            return false;
+        };
+        let viewport = self.visual_list.viewport_bounds();
+        viewport.size.height > px(0.)
+            && bounds.size.height > px(0.)
+            && visual_caret_pixel_delta(viewport, bounds, inset).is_none()
+    }
+
     pub(super) fn take_visual_cursor_reveal_index(
         &mut self,
         blocks: &[VisualBlock],
@@ -1944,7 +1986,12 @@ impl DocumentTabState {
         let compatible = self.undo_capture.is_some_and(|capture| {
             capture.kind == kind
                 && !matches!(kind, UndoCaptureKind::Atomic)
-                && now.saturating_duration_since(capture.last_edit_at) <= SEMANTIC_UNDO_TIMEOUT
+                // Candidate selection can pause arbitrarily long. An IME
+                // capture ends at commit/unmark or an explicit edit boundary,
+                // rather than at the ordinary typing coalescing timeout.
+                && (matches!(kind, UndoCaptureKind::Ime)
+                    || now.saturating_duration_since(capture.last_edit_at)
+                        <= SEMANTIC_UNDO_TIMEOUT)
                 && match kind {
                     UndoCaptureKind::Insert => {
                         range.is_empty() && range.start == capture.next_cursor

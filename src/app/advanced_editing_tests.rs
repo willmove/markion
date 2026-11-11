@@ -2,6 +2,141 @@ use super::*;
 use gpui::TestAppContext;
 use markion::selection::{CellSelectionAxis, SelectionState};
 
+#[gpui::test]
+fn visual_table_rectangle_clear_and_undo_preserve_visible_viewport(cx: &mut TestAppContext) {
+    let source = format!(
+        "{}| Name | Kind | Value |\n| --- | --- | --- |\n| first | bold | 10 |\n| second | emoji 😀 | 20 |\n| last | Tab | tail |\n\nending paragraph\n",
+        "leading paragraph\n\n".repeat(5)
+    );
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(900.), px(720.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        app.active_tab().visual_list.scroll_to(gpui::ListOffset {
+            item_ix: 2,
+            offset_in_item: px(0.),
+        });
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        let blocks = app.active_tab().document.visual_blocks_shared();
+        let table = blocks
+            .iter()
+            .position(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+            .unwrap();
+        let list = &app.active_tab().visual_list;
+        let bounds = list.bounds_for_item(table).expect("table is painted");
+        assert_eq!(
+            visual_caret_pixel_delta(
+                list.viewport_bounds(),
+                bounds,
+                px(app.typography_metrics().preview_row_line_height),
+            ),
+            None,
+            "test table must be fully inside the viewport inset"
+        );
+        app.select_table_cells(table, (1, 0), CellSelectionAxis::Rectangle, false, cx);
+        app.select_table_cells(table, (2, 1), CellSelectionAxis::Rectangle, true, cx);
+    });
+    cx.run_until_parked();
+    let anchor = app.update(cx, |app, cx| {
+        let anchor = app.active_tab().visual_list.logical_scroll_top();
+        assert!(app.delete_source_selection(cx));
+        anchor
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(
+            (top.item_ix, top.offset_in_item),
+            (anchor.item_ix, anchor.offset_in_item)
+        );
+        assert!(!app.active_tab().document.text().contains("emoji"));
+    });
+    cx.dispatch_action(Undo);
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        let top = app.active_tab().visual_list.logical_scroll_top();
+        assert_eq!(
+            (top.item_ix, top.offset_in_item),
+            (anchor.item_ix, anchor.offset_in_item)
+        );
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(matches!(
+            app.active_tab().structured_selection,
+            Some(SelectionState::Cells(_))
+        ));
+    });
+}
+
+fn assert_native_ime_pause_is_one_undo(cx: &mut TestAppContext, pause_before_update: bool) {
+    let source = "中 **bold** 😀 e\u{301} suffix";
+    let cursor = source.find("bold").unwrap() + "bold".len();
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = cursor..cursor;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+        app.update(cx, |app, cx| {
+            EntityInputHandler::replace_and_mark_text_in_range(app, None, "ni", None, window, cx);
+            app.active_tab_mut()
+                .undo_capture
+                .as_mut()
+                .unwrap()
+                .last_edit_at -= SEMANTIC_UNDO_TIMEOUT + Duration::from_secs(1);
+            if pause_before_update {
+                EntityInputHandler::replace_and_mark_text_in_range(
+                    app, None, "ni hao", None, window, cx,
+                );
+            }
+            EntityInputHandler::replace_text_in_range(app, None, "你好", window, cx);
+            assert_eq!(
+                app.active_tab().undo_stack.len(),
+                1,
+                "candidate-selection pauses must not snapshot transient Pinyin"
+            );
+            assert!(app.active_tab().marked_range.is_none());
+            assert!(app.active_tab().undo_capture.is_none());
+        });
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+        assert_eq!(app.active_tab().selected_range, cursor..cursor);
+    });
+    cx.dispatch_action(Redo);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            format!("{}你好{}", &source[..cursor], &source[cursor..])
+        );
+    });
+}
+
+#[gpui::test]
+fn native_ime_pause_before_mark_update_keeps_one_undo(cx: &mut TestAppContext) {
+    assert_native_ime_pause_is_one_undo(cx, true);
+}
+
+#[gpui::test]
+fn native_ime_pause_before_commit_keeps_one_undo(cx: &mut TestAppContext) {
+    assert_native_ime_pause_is_one_undo(cx, false);
+}
+
 fn insert_checked_for_test(app: &mut MarkionApp, text: &str) {
     let mutation = app.active_tab().document.prepare_range_mutation(
         MutationOrigin::PlatformTextInput,

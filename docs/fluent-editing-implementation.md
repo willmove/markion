@@ -112,7 +112,7 @@ rustc --edition=2024 --test vendor/zed/crates/gpui/src/platform/windows/clipboar
 - 混合性能 fixture 包含标题、行内格式、链接、列表、引用、代码与表格，编辑发生在文档中部。它不代表所有 Markdown 形态。
 - 未变区域不再重复解析和发现编辑器，但平面快照中的后缀绝对范围仍须线性重定位；当前实现没有承诺任意大小文档每键恒定成本。
 - 引用定义、部分 HTML 或无法证明局部语义的源码仍会完整解析。超大单块、重型图片和全局依赖文档需要按实际内容另外测量。
-- Windows 的两个计算机控制入口均返回 `os error 5`（拒绝访问）。原生回放能够验证实际 GPUI 窗口、布局、paint、剪贴板和应用输入回调，不能替代真实 OS 鼠标拖动、系统键盘事件或中文/日文输入法候选窗口的人工验收。
+- 首次回放时，Windows 的两个计算机控制入口均返回 `os error 5`。后续已修正 `CODEX_CLI_PATH` 指向目录的问题，并在重启后恢复接口；真实 OS 鼠标、键盘和中文候选窗的补充验证见 [Windows 实机输入验证](verification/windows-native-input-2026-11-11.md)。本节首次回放数据仍只代表应用输入回调。
 - 本轮运行和测量的平台为 Windows 11；macOS、Linux/X11、Linux/Wayland 的原生构建及跨应用互操作未验证。
 - RSS/commit 是进程内存计数；显存未单独测量。
 

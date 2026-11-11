@@ -75,6 +75,10 @@ impl Render for MarkionApp {
         let visual_blocks: std::sync::Arc<Vec<VisualBlock>> =
             if !active_is_image && matches!(view_mode, ViewMode::VisualEdit) {
                 let blocks = self.active_tab().document.visual_blocks_shared();
+                let inset = px(self.typography_metrics().preview_row_line_height);
+                let visible_table_remeasure = self
+                    .active_tab()
+                    .visible_table_remeasure_pending(&blocks, inset);
                 self.active_tab_mut().sync_visual_list(&blocks);
                 let padding_changed = self.active_tab_mut().refresh_visual_end_padding();
                 if self.typewriter_mode && padding_changed {
@@ -85,10 +89,15 @@ impl Render for MarkionApp {
                     .active_tab_mut()
                     .take_visual_cursor_reveal_index(&blocks)
                 {
-                    let inset = px(self.typography_metrics().preview_row_line_height);
                     let list = self.active_tab().visual_list.clone();
                     let caret = self.active_tab().visual_caret_bounds;
-                    apply_visual_caret_reveal(&list, index, caret, inset);
+                    if !visible_table_remeasure {
+                        apply_visual_caret_reveal(&list, index, caret, inset);
+                    } else {
+                        // Structured selection may leave geometry from a
+                        // different field. Follow only the newly painted cell.
+                        self.active_tab_mut().visual_caret_bounds = None;
+                    }
                     self.active_tab_mut().visual_caret_follow_frames = 2;
                 }
                 if self.typewriter_mode && self.active_tab_mut().reconcile_visual_typewriter() {

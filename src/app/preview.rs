@@ -7802,6 +7802,7 @@ fn code_copy_button(
     let typography = app.typography_metrics();
     div()
         .flex_none()
+        .ml_auto()
         .px_2()
         .py_1()
         .rounded_sm()
