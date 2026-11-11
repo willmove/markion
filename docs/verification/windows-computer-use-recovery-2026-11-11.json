@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-11",
+  "status": "user_environment_corrected_waiting_for_host_restart",
+  "observed_error": "failed to launch codex app-server: 拒绝访问。 (os error 5)",
+  "diagnosis": {
+    "incorrect_user_variable": "CODEX_CLI_PATH",
+    "original_value": "C:\\Users\\weimuma\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin",
+    "corrected_value": "C:\\Users\\weimuma\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe",
+    "directory_launch_probe_native_error": 5,
+    "executable_launch_probe_exit_code": 0,
+    "cli_version": "0.166.0",
+    "executable_acl_changed": false,
+    "security_or_privacy_settings_changed": false
+  },
+  "verification": {
+    "user_environment_readback_matches_executable": true,
+    "existing_host_environment_still_points_to_directory": true,
+    "sky_list_apps_after_kernel_reset": "same app-server launch error",
+    "cua_get_state": "same app-server launch error",
+    "real_mouse_keyboard_and_system_ime_verified": false
+  },
+  "pending": [
+    "Completely exit and reopen the Codex desktop application so the tool host inherits the corrected user environment.",
+    "Retry the official sky.list_apps and cua.getState entry points before considering the automation interface recovered.",
+    "Use an isolated Markion profile and scratch fixtures to verify real mouse, keyboard, Microsoft Pinyin candidate UI and continuous large-document typing.",
+    "Record evidence and implement fixes through OpenSpec if application bugs are found."
+  ]
+}
