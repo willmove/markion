@@ -1033,7 +1033,7 @@ impl Platform for MacPlatform {
                 match item.entries.first() {
                     Some(entry) => match entry {
                         ClipboardEntry::String(string) => {
-                            self.write_plaintext_to_clipboard(string);
+                            self.write_plaintext_to_clipboard(string, item.html());
                         }
                         ClipboardEntry::Image(image) => {
                             self.write_image_to_clipboard(image);
@@ -1291,10 +1291,21 @@ impl MacPlatform {
         }
     }
 
-    unsafe fn write_plaintext_to_clipboard(&self, string: &ClipboardString) {
+    unsafe fn write_plaintext_to_clipboard(&self, string: &ClipboardString, html: Option<&str>) {
         unsafe {
             let state = self.0.lock();
             state.pasteboard.clearContents();
+
+            if let Some(html) = html {
+                let html_bytes = NSData::dataWithBytes_length_(
+                    nil,
+                    html.as_ptr() as *const c_void,
+                    html.len() as u64,
+                );
+                state
+                    .pasteboard
+                    .setData_forType(html_bytes, ns_string("public.html"));
+            }
 
             let text_bytes = NSData::dataWithBytes_length_(
                 nil,

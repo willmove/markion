@@ -2390,6 +2390,30 @@ pub fn p1_tf(lang: Language, msg: P1Msg, args: &[&str]) -> String {
     substitute(p1_t(lang, msg), args)
 }
 
+#[derive(Clone, Copy)]
+pub enum AdvancedMsg {
+    FoldCode,
+    ExpandCode,
+    CodeLines,
+}
+
+pub fn advanced_t(lang: Language, msg: AdvancedMsg) -> &'static str {
+    let labels = match lang {
+        Language::En => ["Fold code", "Expand code", "{0} lines"],
+        Language::ZhHans => ["折叠代码", "展开代码", "{0} 行"],
+        Language::ZhHant => ["摺疊程式碼", "展開程式碼", "{0} 行"],
+        Language::Ja => ["コードを折りたたむ", "コードを展開", "{0} 行"],
+        Language::Fr => ["Replier le code", "Déplier le code", "{0} lignes"],
+        Language::De => ["Code einklappen", "Code ausklappen", "{0} Zeilen"],
+        Language::Es => ["Plegar código", "Desplegar código", "{0} líneas"],
+    };
+    labels[match msg {
+        AdvancedMsg::FoldCode => 0,
+        AdvancedMsg::ExpandCode => 1,
+        AdvancedMsg::CodeLines => 2,
+    }]
+}
+
 /// Look up a static (non-parameterised) message for `lang`.
 pub fn t(lang: Language, msg: Msg) -> &'static str {
     match lang {

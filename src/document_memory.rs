@@ -70,7 +70,7 @@ pub(crate) fn rich_text_bytes(text: &RichText) -> usize {
                 + option_string_bytes(image.title.as_deref());
         }
     }
-    total
+    std::mem::size_of::<RichText>() + total / text.shared_owners().max(1)
 }
 
 fn heading_bytes(heading: &Heading) -> usize {
@@ -121,7 +121,8 @@ pub(crate) fn preview_blocks_bytes(blocks: &[PreviewBlock]) -> usize {
 }
 
 fn visual_run_bytes(run: &VisualInlineRun) -> usize {
-    let mut total = string_bytes(&run.visible_text) + std::mem::size_of::<VisualInlineRun>();
+    let mut total = string_bytes(&run.visible_text) / run.visible_text.shared_owners().max(1)
+        + std::mem::size_of::<VisualInlineRun>();
     if let Some(math) = &run.math {
         total += math_source_bytes(math);
     }
@@ -147,7 +148,7 @@ fn visual_reveal_bytes(group: &VisualRevealGroup) -> usize {
 }
 
 pub(crate) fn visual_block_bytes(block: &VisualBlock) -> usize {
-    let mut total = std::mem::size_of::<VisualBlock>();
+    let mut total = std::mem::size_of::<crate::model::VisualBlockContent>();
     total += block
         .editable_runs
         .iter()
@@ -190,7 +191,7 @@ pub(crate) fn visual_block_bytes(block: &VisualBlock) -> usize {
         }
         _ => {}
     }
-    total
+    std::mem::size_of::<VisualBlock>() + total / block.shared_owners().max(1)
 }
 
 pub(crate) fn visual_blocks_bytes(blocks: &[VisualBlock]) -> usize {

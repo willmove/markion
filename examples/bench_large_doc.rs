@@ -178,6 +178,19 @@ fn report_visual(bytes: usize, samples: &[VisualSample]) {
         "  stages P50: semantic={semantic:.1}us visual-build={visual:.1}us identity={identity:.1}us; identity-candidates={candidates:.0}; blocks={}",
         samples[0].profile.visual_blocks,
     );
+    println!(
+        "  visual work P50: rebuilt={} reused={}",
+        median(
+            samples
+                .iter()
+                .map(|sample| sample.profile.rebuilt_visual_blocks as f64)
+        ),
+        median(
+            samples
+                .iter()
+                .map(|sample| sample.profile.reused_visual_blocks as f64)
+        )
+    );
 }
 
 fn configured_sizes() -> Vec<usize> {
@@ -216,6 +229,25 @@ fn main() {
     println!("Source-mapped Visual Edit (localized edit + visual block read):");
     for target in sizes.iter().copied() {
         let doc = make_doc(target);
+        if let Ok(directory) = std::env::var("BENCH_FIXTURE_DIR") {
+            std::fs::create_dir_all(&directory).expect("create benchmark fixture directory");
+            std::fs::write(
+                std::path::Path::new(&directory).join(format!("mixed-{}kb.md", target / 1024)),
+                &doc,
+            )
+            .expect("write benchmark fixture");
+        }
+        let opened = Instant::now();
+        let model = MarkdownDocument::from_text(&doc);
+        let _ = model.visual_blocks_shared();
+        let opening = opened.elapsed();
+        println!(
+            "  opening model: size={} KB elapsed={:.2}ms retained={:.2}MiB (estimated, excludes GPUI/GPU)",
+            doc.len() / 1024,
+            opening.as_secs_f64() * 1000.,
+            model.memory_breakdown().owned_total() as f64 / 1048576.
+        );
+        drop(model);
         let samples = bench_visual_edits(&doc, configured_visual_strokes());
         report_visual(doc.len(), &samples);
     }

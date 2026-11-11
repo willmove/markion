@@ -254,6 +254,10 @@ impl EntityInputHandler for MarkionApp {
         }
 
         let visual_edit = matches!(self.view_mode, ViewMode::VisualEdit);
+        self.begin_visual_input_profile();
+        self.reveal_visual_code_at(self.cursor_offset());
+        self.active_tab_mut().structured_selection = None;
+        self.active_tab_mut().cell_drag_anchor = None;
         let (active_marked_range, committing_ime) = {
             let tab = self.active_tab();
             let active_marked_range = tab
@@ -522,6 +526,10 @@ impl EntityInputHandler for MarkionApp {
         }
 
         let visual_edit = matches!(self.view_mode, ViewMode::VisualEdit);
+        self.reveal_visual_code_at(self.cursor_offset());
+        self.active_tab_mut().structured_selection = None;
+        self.active_tab_mut().cell_drag_anchor = None;
+        self.begin_visual_input_profile();
         let tab = self.active_tab_mut();
         let range = range_utf16
             .as_ref()

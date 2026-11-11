@@ -4,7 +4,12 @@
 //! whose boundaries and source lineage are unambiguous. Full derivation stays
 //! the correctness fallback.
 
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::Arc,
+};
 
 use crate::{
     Heading, InlineSpan, MarkdownDocument, MathSource, PreviewBlock, RichText, VisualBlock,
@@ -144,9 +149,13 @@ pub(crate) struct SourceMappedCache {
     pub version: u64,
     pub source: Arc<str>,
     regions: Vec<CachedRegion>,
-    pub blocks: Arc<Vec<PreviewBlock>>,
+    blocks: RefCell<Option<Arc<Vec<PreviewBlock>>>>,
     pub headings: Vec<Heading>,
     pub counters: DerivationCounters,
+    // Shares the published flat allocation; region ranges are views into it,
+    // not another retained copy of every visual payload.
+    visual: Option<Arc<Vec<VisualBlock>>>,
+    visual_regions: Vec<Range<usize>>,
 }
 
 impl SourceMappedCache {
@@ -167,6 +176,12 @@ impl SourceMappedCache {
             }
         }
         total += headings_bytes(&self.headings);
+        if let Some(blocks) = self.blocks.borrow().as_ref()
+            && Arc::strong_count(blocks) == 1
+        {
+            total += preview_blocks_bytes(blocks);
+        }
+        total += self.visual_regions.capacity() * std::mem::size_of::<Range<usize>>();
         (total, self.regions.len())
     }
 
@@ -193,8 +208,10 @@ impl SourceMappedCache {
             version,
             source: Arc::from(source),
             regions,
-            blocks,
+            blocks: RefCell::new(Some(blocks)),
             headings,
+            visual: None,
+            visual_regions: Vec::new(),
             counters: DerivationCounters {
                 parsed_regions: 0,
                 reused_regions: 0,
@@ -208,6 +225,9 @@ impl SourceMappedCache {
             return previous.clone();
         }
         if !valid_edit_chain(previous, source, version, edits)
+            || crate::frontmatter::split_front_matter(&previous.source)
+                .map(|(_, end)| &previous.source[..end])
+                != crate::frontmatter::split_front_matter(source).map(|(_, end)| &source[..end])
             || requires_full_parse(previous.source.as_ref())
             || requires_full_parse(source)
         {
@@ -263,14 +283,24 @@ impl SourceMappedCache {
             }
         }
 
-        let Some((blocks, headings)) = assemble_regions(&regions, &parts) else {
-            return Self::full_fallback(source, version, counters);
-        };
+        let mut headings = Vec::new();
+        for (region, &(offset, _)) in regions.iter().zip(&parts) {
+            for heading in region.headings.iter() {
+                let mut heading = heading.clone();
+                if shift_heading(&mut heading, offset as isize).is_none() {
+                    return Self::full_fallback(source, version, counters);
+                }
+                headings.push(heading);
+            }
+        }
 
         // In test/debug builds, full derivation is the executable correctness
         // oracle. A mismatch is never published as an incremental mapping.
         #[cfg(debug_assertions)]
         {
+            let Some((blocks, _)) = assemble_regions(&regions, &parts) else {
+                return Self::full_fallback(source, version, counters);
+            };
             let full = MarkdownDocument::derive_preview_and_outline(source);
             if blocks != full.0 || headings != full.1 {
                 return Self::seed_from_full(
@@ -287,10 +317,212 @@ impl SourceMappedCache {
             version,
             source: Arc::from(source),
             regions,
-            blocks: Arc::new(blocks),
+            blocks: RefCell::new(None),
             headings,
             counters,
+            visual: None,
+            visual_regions: Vec::new(),
         }
+    }
+
+    pub fn preview_count(&self) -> usize {
+        self.regions.iter().map(|region| region.blocks.len()).sum()
+    }
+
+    pub fn cached_blocks(&self) -> Option<Arc<Vec<PreviewBlock>>> {
+        self.blocks.borrow().clone()
+    }
+
+    pub fn blocks(&self) -> Arc<Vec<PreviewBlock>> {
+        if let Some(blocks) = self.cached_blocks() {
+            return blocks;
+        }
+        let mut offset = 0;
+        let parts: Vec<_> = self
+            .regions
+            .iter()
+            .map(|region| {
+                let start = offset;
+                offset += region.text.len();
+                (start, region.text.as_ref())
+            })
+            .collect();
+        let blocks = assemble_regions(&self.regions, &parts)
+            .map(|(blocks, _)| blocks)
+            .unwrap_or_else(|| MarkdownDocument::derive_preview_and_outline(&self.source).0);
+        let blocks = Arc::new(blocks);
+        *self.blocks.borrow_mut() = Some(blocks.clone());
+        blocks
+    }
+
+    pub fn reconcile_visual(
+        &self,
+        previous: &Self,
+        old: &[VisualBlock],
+        new: &mut [VisualBlock],
+        edits: &[SourceEdit],
+    ) -> usize {
+        if self.visual_regions.len() != self.regions.len()
+            || previous.visual_regions.len() != previous.regions.len()
+        {
+            return reconcile_visual_block_ids(&previous.source, &self.source, old, new, edits);
+        }
+        let old_regions: HashSet<usize> = previous
+            .regions
+            .iter()
+            .map(|region| Arc::as_ptr(&region.blocks) as usize)
+            .collect();
+        let new_regions: HashSet<usize> = self
+            .regions
+            .iter()
+            .map(|region| Arc::as_ptr(&region.blocks) as usize)
+            .collect();
+        let old_changed: Vec<_> = previous
+            .regions
+            .iter()
+            .zip(&previous.visual_regions)
+            .filter(|(region, _)| !new_regions.contains(&(Arc::as_ptr(&region.blocks) as usize)))
+            .flat_map(|(_, range)| old[range.clone()].iter().cloned())
+            .collect();
+        let new_indices: Vec<usize> = self
+            .regions
+            .iter()
+            .zip(&self.visual_regions)
+            .filter(|(region, _)| !old_regions.contains(&(Arc::as_ptr(&region.blocks) as usize)))
+            .flat_map(|(_, range)| range.clone())
+            .collect();
+        let mut new_changed: Vec<_> = new_indices
+            .iter()
+            .map(|&index| new[index].clone())
+            .collect();
+        let candidates = reconcile_visual_block_ids(
+            &previous.source,
+            &self.source,
+            &old_changed,
+            &mut new_changed,
+            edits,
+        );
+        for (index, block) in new_indices.into_iter().zip(new_changed) {
+            new[index].id = block.id;
+        }
+        candidates
+    }
+
+    /// Reuse already-derived visual slices by region lineage. Only absolute
+    /// source offsets are relocated; unchanged inline text is never reparsed.
+    /// The public vector is shared with the document's per-version cache.
+    pub fn build_visual(&mut self, previous: Option<&Self>) -> (Vec<VisualBlock>, usize, usize) {
+        if requires_full_parse(&self.source)
+            || self
+                .regions
+                .iter()
+                .skip(1)
+                .any(|region| crate::frontmatter::split_front_matter(&region.text).is_some())
+        {
+            let blocks = crate::visual::build_visual_blocks(
+                &self.source,
+                &self.blocks(),
+                crate::VisualBlockId::fresh,
+            );
+            let rebuilt = blocks.len();
+            return (blocks, rebuilt, 0);
+        }
+        let mut previous_regions = HashMap::new();
+        if let Some(previous) = previous
+            && previous.visual_regions.len() == previous.regions.len()
+            && let Some(visual) = previous.visual.as_ref()
+        {
+            let mut offset = 0;
+            for (region, range) in previous.regions.iter().zip(&previous.visual_regions) {
+                previous_regions.insert(
+                    Arc::as_ptr(&region.blocks) as usize,
+                    (offset, &visual[range.clone()]),
+                );
+                offset += region.text.len();
+            }
+        }
+        let mut blocks = Vec::with_capacity(self.preview_count() * 2);
+        let mut ranges = Vec::with_capacity(self.regions.len());
+        let mut offset = 0;
+        let mut rebuilt = 0;
+        let mut reused = 0;
+        for (index, region) in self.regions.iter().enumerate() {
+            let start = blocks.len();
+            if let Some(&(old_offset, old_blocks)) =
+                previous_regions.get(&(Arc::as_ptr(&region.blocks) as usize))
+            {
+                let delta = offset as isize - old_offset as isize;
+                for old in old_blocks {
+                    let mut block = old.clone();
+                    // Both offsets originate in valid source slices.
+                    shift_visual_block(&mut block, delta).expect("region relocation");
+                    blocks.push(block);
+                }
+                reused += old_blocks.len();
+            } else {
+                let mut local = crate::visual::build_visual_blocks(
+                    &region.text,
+                    &region.blocks,
+                    crate::VisualBlockId::fresh,
+                );
+                // Only the document's final region owns an EOF insertion row.
+                if index + 1 < self.regions.len()
+                    && local.last().is_some_and(|block| {
+                        block.source_range.is_empty()
+                            && block.source_range.start == region.text.len()
+                    })
+                {
+                    local.pop();
+                }
+                rebuilt += local.len();
+                for mut block in local {
+                    shift_visual_block(&mut block, offset as isize).expect("region relocation");
+                    blocks.push(block);
+                }
+            }
+            ranges.push(start..blocks.len());
+            offset += region.text.len();
+        }
+        // A region end is an artificial EOF. Whitespace height depends on
+        // whether that endpoint is the real document end.
+        for block in &mut blocks {
+            if matches!(block.kind, crate::VisualBlockKind::Whitespace) {
+                let signature = Some(crate::visual::whitespace_visible_line_count(
+                    &self.source,
+                    block.source_range.clone(),
+                ) as u32);
+                if block.height_signature != signature {
+                    block.height_signature = signature;
+                }
+            }
+        }
+        // Retain the full construction as an executable oracle, including
+        // visual whitespace and container metadata rather than just semantics.
+        #[cfg(debug_assertions)]
+        {
+            let full = crate::visual::build_visual_blocks(
+                &self.source,
+                &self.blocks(),
+                crate::VisualBlockId::fresh,
+            );
+            let equivalent = blocks.len() == full.len()
+                && blocks.iter().zip(&full).all(|(block, expected)| {
+                    let mut expected = expected.clone();
+                    expected.id = block.id;
+                    block == &expected
+                });
+            if !equivalent {
+                self.visual_regions.clear();
+                let rebuilt = full.len();
+                return (full, rebuilt, 0);
+            }
+        }
+        self.visual_regions = ranges;
+        (blocks, rebuilt, reused)
+    }
+
+    pub fn retain_visual(&mut self, blocks: Arc<Vec<VisualBlock>>) {
+        self.visual = Some(blocks);
     }
 
     fn full_fallback(source: &str, version: u64, mut counters: DerivationCounters) -> Self {
@@ -322,8 +554,10 @@ impl SourceMappedCache {
             version,
             source: Arc::from(source),
             regions,
-            blocks: Arc::new(blocks),
+            blocks: RefCell::new(Some(Arc::new(blocks))),
             headings,
+            visual: None,
+            visual_regions: Vec::new(),
             counters: DerivationCounters {
                 parsed_regions: 1,
                 reused_regions: 0,
@@ -384,11 +618,16 @@ fn partition_full_derivation(
         return Some(Vec::new());
     }
     let mut regions = Vec::with_capacity(parts.len());
+    let mut block_index = 0;
+    let mut heading_index = 0;
     for &(start, text) in parts {
         let end = start.checked_add(text.len())?;
         let mut local_blocks = Vec::new();
-        for block in blocks {
+        while let Some(block) = blocks.get(block_index) {
             let range = block.source_range();
+            if range.start >= end {
+                break;
+            }
             if range.start >= start && range.end <= end {
                 let mut block = block.clone();
                 shift_preview_block(&mut block, -(isize::try_from(start).ok()?))?;
@@ -396,9 +635,13 @@ fn partition_full_derivation(
             } else if range.start < end && range.end > start {
                 return None;
             }
+            block_index += 1;
         }
         let mut local_headings = Vec::new();
-        for heading in headings {
+        while let Some(heading) = headings.get(heading_index) {
+            if heading.offset >= end {
+                break;
+            }
             // Regions own [start, end). A heading at `end` belongs only to
             // the next region; retaining it here duplicates it on reuse.
             if heading.offset >= start && heading.offset < end {
@@ -406,6 +649,7 @@ fn partition_full_derivation(
                 shift_heading(&mut heading, -(isize::try_from(start).ok()?))?;
                 local_headings.push(heading);
             }
+            heading_index += 1;
         }
         regions.push(CachedRegion {
             text: Arc::from(text),
@@ -446,9 +690,14 @@ fn split_regions(source: &str) -> Vec<(usize, &str)> {
     let mut offset = 0usize;
     let mut in_fence: Option<(char, usize)> = None;
     let mut pending_break = false;
+    let front_matter_end = crate::frontmatter::split_front_matter(source).map_or(0, |(_, end)| end);
     for line in source.split_inclusive('\n') {
         let line_start = offset;
         offset += line.len();
+        if line_start < front_matter_end {
+            pending_break = true;
+            continue;
+        }
         let raw = line.trim_end_matches(['\n', '\r']);
         let trimmed = raw.trim_start();
         if let Some((marker, min_len)) = in_fence {
@@ -541,11 +790,9 @@ fn starts_with_continuation(raw: &str) -> bool {
 }
 
 fn requires_full_parse(source: &str) -> bool {
-    if crate::frontmatter::split_front_matter(source).is_some() {
-        return true;
-    }
+    let body_start = crate::frontmatter::split_front_matter(source).map_or(0, |(_, end)| end);
     let mut fence: Option<(char, usize)> = None;
-    for line in source.lines() {
+    for line in source[body_start..].lines() {
         let trimmed = line.trim_start();
         if let Some((marker, minimum)) = fence {
             if is_closing_fence(trimmed, marker, minimum) {
@@ -635,6 +882,13 @@ pub(crate) fn reconcile_visual_block_ids(
         };
         candidates += 1;
         if claimed[index] {
+            continue;
+        }
+        // A regional cache can publish the old identity only after proving
+        // source lineage and relocating every piece of its metadata.
+        if old.id == new_blocks[index].id {
+            claimed[index] = true;
+            matched_old[old_index] = true;
             continue;
         }
         let Some(delta) = isize::try_from(mapped_range.start)
@@ -744,6 +998,9 @@ fn shift_inline_span(span: &mut InlineSpan, delta: isize) -> Option<()> {
 }
 
 fn shift_rich_text(text: &mut RichText, delta: isize) -> Option<()> {
+    if delta == 0 || !text.spans.iter().any(|span| span.math.is_some()) {
+        return Some(());
+    }
     for span in &mut text.spans {
         shift_inline_span(span, delta)?;
     }
@@ -782,9 +1039,16 @@ pub(crate) fn shift_preview_block(block: &mut PreviewBlock, delta: isize) -> Opt
         | PreviewBlock::Html { source_range, .. }
         | PreviewBlock::Image { source_range, .. }
         | PreviewBlock::Rule { source_range }
-        | PreviewBlock::Table { source_range, .. }
         | PreviewBlock::TableOfContents { source_range } => {
             *source_range = shift_range(source_range, delta)?;
+        }
+        PreviewBlock::Table {
+            source_range, rows, ..
+        } => {
+            *source_range = shift_range(source_range, delta)?;
+            for cell in rows.iter_mut().flatten() {
+                shift_rich_text(cell, delta)?;
+            }
         }
     }
     Some(())
@@ -874,7 +1138,16 @@ fn shift_block_editor(editor: &mut VisualBlockEditor, delta: isize) -> Option<()
 }
 
 pub(crate) fn shift_visual_block(block: &mut VisualBlock, delta: isize) -> Option<()> {
+    if delta == 0 {
+        return Some(());
+    }
+    let block = block.content_mut();
     block.source_range = shift_range(&block.source_range, delta)?;
+    if let crate::VisualBlockKind::Table { rows, .. } = &mut block.kind {
+        for cell in rows.iter_mut().flatten() {
+            shift_rich_text(cell, delta)?;
+        }
+    }
     for run in &mut block.editable_runs {
         shift_run(run, delta)?;
     }
@@ -923,6 +1196,52 @@ pub(crate) fn shift_structural_edit(edit: &mut VisualStructuralEdit, delta: isiz
 mod tests {
     use super::*;
     use crate::VisualBlockId;
+
+    #[test]
+    fn local_visual_edit_rebuilds_only_the_changed_region() {
+        let text: String = (0..500)
+            .map(|index| format!("Paragraph {index} with **bold** and 中文.\n\n"))
+            .collect();
+        let mut document = MarkdownDocument::from_text(&text);
+        let old = document.visual_blocks_shared();
+        let offset = text.find("Paragraph 250").unwrap() + "Paragraph ".len();
+        document.insert(offset, "new ");
+        let (actual, profile) = document.visual_blocks_shared_with_profile();
+        assert!(profile.rebuilt_visual_blocks <= 4, "{profile:?}");
+        assert!(profile.reused_visual_blocks >= 998, "{profile:?}");
+        let fresh = MarkdownDocument::from_text(document.text()).visual_blocks_shared();
+        assert_eq!(actual.len(), fresh.len());
+        for (actual, fresh) in actual.iter().zip(fresh.iter()) {
+            let mut fresh = fresh.clone();
+            fresh.id = actual.id;
+            assert_eq!(actual, &fresh);
+        }
+        assert_eq!(old[0].id, actual[0].id);
+        assert!(Arc::ptr_eq(&actual, &document.visual_blocks_shared()));
+    }
+
+    #[test]
+    fn stable_front_matter_does_not_make_body_edits_global() {
+        let body: String = (0..300)
+            .map(|index| format!("Paragraph {index} **内容**.\n\n"))
+            .collect();
+        let mut doc = MarkdownDocument::from_text(format!(
+            "---\ntitle: Test\n\ncustom: value\n---\n\n{body}"
+        ));
+        let old = doc.visual_blocks_shared();
+        let offset = doc.text().find("Paragraph 150").unwrap() + 10;
+        doc.insert(offset, "new ");
+        let (actual, profile) = doc.visual_blocks_shared_with_profile();
+        assert!(profile.rebuilt_visual_blocks < 10, "{profile:?}");
+        assert!(profile.reused_visual_blocks >= 590, "{profile:?}");
+        assert_eq!(old[0].id, actual[0].id);
+        let fresh = MarkdownDocument::from_text(doc.text()).visual_blocks_shared();
+        for (actual, fresh) in actual.iter().zip(fresh.iter()) {
+            let mut expected = fresh.clone();
+            expected.id = actual.id;
+            assert_eq!(actual, &expected);
+        }
+    }
 
     #[test]
     fn edit_chain_maps_utf8_safe_prefix_and_suffix_ranges() {
@@ -1084,7 +1403,7 @@ mod tests {
         let edit = SourceEdit::new(old, start..start + 5, 7, 10, 11).unwrap();
         let next = SourceMappedCache::update(&previous, &current, 11, &[edit]);
         let full = MarkdownDocument::derive_preview_and_outline(&current);
-        assert_eq!(next.blocks.as_ref(), &full.0);
+        assert_eq!(next.blocks().as_ref(), &full.0);
         assert_eq!(next.headings, full.1);
         assert!(next.counters.reused_regions >= 2);
     }
@@ -1376,7 +1695,7 @@ mod tests {
             info_range,
             info,
             closing_fence,
-        } = shifted.editor.unwrap()
+        } = shifted.editor.clone().unwrap()
         else {
             unreachable!()
         };
@@ -1458,6 +1777,28 @@ mod tests {
     }
 
     #[test]
+    fn shifted_table_math_keeps_absolute_source_ranges_without_full_fallback() {
+        let source = "intro\n\n| $a$ | $b$ |\n| --- | --- |\n| $中$ | tail |\n\nafter\n";
+        let mut document = MarkdownDocument::from_text(source);
+        document.visual_blocks_shared();
+        document.preview_blocks_shared();
+        let before = document.source_mapped_derivation_counters();
+        document.insert(0, "前缀 ");
+        let actual = document.visual_blocks_shared();
+        let after = document.source_mapped_derivation_counters();
+        assert_eq!(after.full_fallbacks, before.full_fallbacks);
+        let full = MarkdownDocument::from_text(document.text());
+        assert_eq!(document.preview_blocks(), full.preview_blocks());
+        let expected = full.visual_blocks_shared();
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            let mut normalized = actual.clone();
+            normalized.id = expected.id;
+            assert_eq!(&normalized, expected);
+        }
+    }
+
+    #[test]
     fn large_local_edit_reuses_bounded_regions() {
         let source = (0..500)
             .map(|index| format!("paragraph {index}\n\n"))
@@ -1489,19 +1830,23 @@ mod tests {
 
     #[test]
     fn duplicate_empty_ranges_do_not_steal_occurrence_ids() {
-        let make_block = |id| VisualBlock {
-            id,
-            kind: crate::VisualBlockKind::Whitespace,
-            source_range: 1..1,
-            editable_runs: Vec::new(),
-            reveal_groups: Vec::new(),
-            marker_ranges: Vec::new(),
-            block_prefix: None,
-            height_signature: Some(1),
-            quote_context: None,
-            list_depth: 0,
-            source_island: None,
-            editor: None,
+        let make_block = |id| {
+            VisualBlock::new(
+                id,
+                crate::model::VisualBlockContent {
+                    kind: crate::VisualBlockKind::Whitespace,
+                    source_range: 1..1,
+                    editable_runs: Vec::new(),
+                    reveal_groups: Vec::new(),
+                    marker_ranges: Vec::new(),
+                    block_prefix: None,
+                    height_signature: Some(1),
+                    quote_context: None,
+                    list_depth: 0,
+                    source_island: None,
+                    editor: None,
+                },
+            )
         };
         let old_blocks = vec![
             make_block(VisualBlockId::fresh()),

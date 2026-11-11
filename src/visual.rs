@@ -1195,35 +1195,39 @@ fn gap_block(
         let quote_context = quote_group
             .map(|group| quote_context_for_row(text, range.clone(), range.clone(), group));
         let line_count = whitespace_visible_line_count(text, range.clone());
-        VisualBlock {
-            id: allocate_id(),
-            kind: VisualBlockKind::Whitespace,
-            source_range: range,
-            editable_runs: Vec::new(),
-            reveal_groups: Vec::new(),
-            marker_ranges: Vec::new(),
-            block_prefix: None,
-            height_signature: Some(line_count as u32),
-            quote_context,
-            list_depth: 0,
-            source_island: None,
-            editor: None,
-        }
+        VisualBlock::new(
+            allocate_id(),
+            crate::model::VisualBlockContent {
+                kind: VisualBlockKind::Whitespace,
+                source_range: range,
+                editable_runs: Vec::new(),
+                reveal_groups: Vec::new(),
+                marker_ranges: Vec::new(),
+                block_prefix: None,
+                height_signature: Some(line_count as u32),
+                quote_context,
+                list_depth: 0,
+                source_island: None,
+                editor: None,
+            },
+        )
     } else if is_link_reference_definition_gap(slice) {
-        VisualBlock {
-            id: allocate_id(),
-            kind: VisualBlockKind::ReferenceDefinition,
-            source_range: range,
-            editable_runs: Vec::new(),
-            reveal_groups: Vec::new(),
-            marker_ranges: Vec::new(),
-            block_prefix: None,
-            height_signature: None,
-            quote_context: None,
-            list_depth: 0,
-            source_island: None,
-            editor: None,
-        }
+        VisualBlock::new(
+            allocate_id(),
+            crate::model::VisualBlockContent {
+                kind: VisualBlockKind::ReferenceDefinition,
+                source_range: range,
+                editable_runs: Vec::new(),
+                reveal_groups: Vec::new(),
+                marker_ranges: Vec::new(),
+                block_prefix: None,
+                height_signature: None,
+                quote_context: None,
+                list_depth: 0,
+                source_island: None,
+                editor: None,
+            },
+        )
     } else {
         source_island(range, VisualSourceIslandKind::Unsupported, allocate_id)
     }
@@ -1248,20 +1252,22 @@ fn callout_title_block(
         .find('\n')
         .map_or(range.end, |relative| range.start + relative);
     quote_context.marker_ranges = vec![range.start..line_end];
-    VisualBlock {
-        id: allocate_id(),
-        kind: VisualBlockKind::CalloutTitle { kind, title },
-        source_range: range,
-        editable_runs: Vec::new(),
-        reveal_groups: Vec::new(),
-        marker_ranges: Vec::new(),
-        block_prefix: None,
-        height_signature: None,
-        quote_context: Some(quote_context),
-        list_depth: 0,
-        source_island: None,
-        editor: None,
-    }
+    VisualBlock::new(
+        allocate_id(),
+        crate::model::VisualBlockContent {
+            kind: VisualBlockKind::CalloutTitle { kind, title },
+            source_range: range,
+            editable_runs: Vec::new(),
+            reveal_groups: Vec::new(),
+            marker_ranges: Vec::new(),
+            block_prefix: None,
+            height_signature: None,
+            quote_context: Some(quote_context),
+            list_depth: 0,
+            source_island: None,
+            editor: None,
+        },
+    )
 }
 
 fn front_matter_visual_block(
@@ -1271,25 +1277,27 @@ fn front_matter_visual_block(
 ) -> VisualBlock {
     let title = parse_front_matter(raw).ok().and_then(|matter| matter.title);
     let payload = 0..body_start;
-    VisualBlock {
-        id: allocate_id(),
-        kind: VisualBlockKind::FrontMatter { title },
-        source_range: payload.clone(),
-        editable_runs: Vec::new(),
-        reveal_groups: Vec::new(),
-        marker_ranges: Vec::new(),
-        block_prefix: None,
-        height_signature: None,
-        quote_context: None,
-        list_depth: 0,
-        source_island: None,
-        editor: Some(VisualBlockEditor::FrontMatter {
-            payload: VisualEditorField {
-                kind: VisualEditorFieldKind::FrontMatterSource,
-                source_range: payload,
-            },
-        }),
-    }
+    VisualBlock::new(
+        allocate_id(),
+        crate::model::VisualBlockContent {
+            kind: VisualBlockKind::FrontMatter { title },
+            source_range: payload.clone(),
+            editable_runs: Vec::new(),
+            reveal_groups: Vec::new(),
+            marker_ranges: Vec::new(),
+            block_prefix: None,
+            height_signature: None,
+            quote_context: None,
+            list_depth: 0,
+            source_island: None,
+            editor: Some(VisualBlockEditor::FrontMatter {
+                payload: VisualEditorField {
+                    kind: VisualEditorFieldKind::FrontMatterSource,
+                    source_range: payload,
+                },
+            }),
+        },
+    )
 }
 
 fn source_island(
@@ -1297,20 +1305,22 @@ fn source_island(
     kind: VisualSourceIslandKind,
     allocate_id: &mut impl FnMut() -> VisualBlockId,
 ) -> VisualBlock {
-    VisualBlock {
-        id: allocate_id(),
-        kind: VisualBlockKind::Unsupported,
-        source_range: range,
-        editable_runs: Vec::new(),
-        reveal_groups: Vec::new(),
-        marker_ranges: Vec::new(),
-        block_prefix: None,
-        height_signature: None,
-        quote_context: None,
-        list_depth: 0,
-        source_island: Some(kind),
-        editor: None,
-    }
+    VisualBlock::new(
+        allocate_id(),
+        crate::model::VisualBlockContent {
+            kind: VisualBlockKind::Unsupported,
+            source_range: range,
+            editable_runs: Vec::new(),
+            reveal_groups: Vec::new(),
+            marker_ranges: Vec::new(),
+            block_prefix: None,
+            height_signature: None,
+            quote_context: None,
+            list_depth: 0,
+            source_island: Some(kind),
+            editor: None,
+        },
+    )
 }
 
 fn visual_block_from_preview(
@@ -1460,20 +1470,22 @@ fn visual_block_from_preview(
     } else {
         source_island
     };
-    VisualBlock {
-        id: allocate_id(),
-        kind,
-        source_range,
-        editable_runs,
-        reveal_groups,
-        marker_ranges,
-        block_prefix,
-        height_signature: None,
-        quote_context,
-        list_depth: block.list_depth(),
-        source_island,
-        editor,
-    }
+    VisualBlock::new(
+        allocate_id(),
+        crate::model::VisualBlockContent {
+            kind,
+            source_range,
+            editable_runs,
+            reveal_groups,
+            marker_ranges,
+            block_prefix,
+            height_signature: None,
+            quote_context,
+            list_depth: block.list_depth(),
+            source_island,
+            editor,
+        },
+    )
 }
 
 fn visual_block_editor(
@@ -2009,7 +2021,7 @@ fn append_trailing_horizontal_whitespace_run(
 
     let range = whitespace_start..line_end;
     runs.push(VisualInlineRun {
-        visible_text: text[range.clone()].to_string(),
+        visible_text: (text[range.clone()].to_string()).into(),
         source_range: range.clone(),
         content_range: range,
         style: InlineStyle::default(),
@@ -2224,7 +2236,7 @@ fn inline_runs(
                             link_target_range: None,
                         });
                         runs.push(VisualInlineRun {
-                            visible_text: text[range.clone()].to_string(),
+                            visible_text: (text[range.clone()].to_string()).into(),
                             source_range: range.clone(),
                             content_range: range.clone(),
                             style,
@@ -2367,7 +2379,7 @@ fn inline_runs(
                     link_target_range: None,
                 });
                 runs.push(VisualInlineRun {
-                    visible_text: authored.clone(),
+                    visible_text: (authored.clone()).into(),
                     source_range: event_range.clone(),
                     content_range: event_range.clone(),
                     style,
@@ -2402,7 +2414,7 @@ fn inline_runs(
                         link_target_range: None,
                     });
                     runs.push(VisualInlineRun {
-                        visible_text: authored,
+                        visible_text: (authored).into(),
                         source_range: event_range.clone(),
                         content_range: event_range,
                         style,
@@ -2424,7 +2436,7 @@ fn inline_runs(
                                 link_target_range: None,
                             });
                             runs.push(VisualInlineRun {
-                                visible_text: "\n".to_string(),
+                                visible_text: ("\n".to_string()).into(),
                                 source_range: event_range.clone(),
                                 content_range: event_range,
                                 style,
@@ -2467,7 +2479,7 @@ fn inline_runs(
                                 // A stray or crossing close spoils the block.
                                 html_pairing_failed = true;
                                 runs.push(VisualInlineRun {
-                                    visible_text: authored,
+                                    visible_text: (authored).into(),
                                     source_range: event_range.clone(),
                                     content_range: event_range,
                                     style,
@@ -2493,7 +2505,7 @@ fn inline_runs(
                     contains_non_image_html = true;
                     if !authored.is_empty() {
                         runs.push(VisualInlineRun {
-                            visible_text: authored,
+                            visible_text: (authored).into(),
                             source_range: event_range.clone(),
                             content_range: event_range,
                             style,
@@ -2551,7 +2563,7 @@ fn inline_runs(
         });
         for range in hidden_html_tag_ranges {
             runs.push(VisualInlineRun {
-                visible_text: text[range.clone()].to_string(),
+                visible_text: (text[range.clone()].to_string()).into(),
                 source_range: range.clone(),
                 content_range: range,
                 style: InlineStyle::default(),
@@ -2773,7 +2785,7 @@ fn push_decoded_entity_run(
     navigation: Option<VisualNavigationTarget>,
 ) {
     runs.push(VisualInlineRun {
-        visible_text: decoded.to_string(),
+        visible_text: (decoded.to_string()).into(),
         source_range: token_range.clone(),
         content_range: token_range,
         style,
@@ -3308,7 +3320,7 @@ fn push_run(
     let conservative_fallback = force_fallback || exact.is_none() || escaped_source;
     let content_range = exact.unwrap_or_else(|| event_range.clone());
     runs.push(VisualInlineRun {
-        visible_text: visible.to_string(),
+        visible_text: (visible.to_string()).into(),
         source_range: event_range,
         content_range,
         style,
@@ -3839,7 +3851,7 @@ fn synthesize_quote_softbreak_runs(
     }
     for range in newline_ranges {
         runs.push(VisualInlineRun {
-            visible_text: "\n".to_string(),
+            visible_text: ("\n".to_string()).into(),
             source_range: range.clone(),
             content_range: range,
             style: InlineStyle::default(),
@@ -6557,7 +6569,7 @@ mod tests {
             info_range,
             info,
             closing_fence,
-        }) = block.editor
+        }) = block.editor.clone()
         else {
             panic!("ordinary closed fence should have direct metadata");
         };
@@ -6586,7 +6598,7 @@ mod tests {
             info,
             closing_fence,
             ..
-        }) = block.editor
+        }) = block.editor.clone()
         else {
             panic!("unclosed fence payload editor");
         };
@@ -6605,7 +6617,7 @@ mod tests {
             .into_iter()
             .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
             .expect("code block");
-        let Some(VisualBlockEditor::Code { payload, .. }) = block.editor else {
+        let Some(VisualBlockEditor::Code { payload, .. }) = block.editor.clone() else {
             panic!("malformed fence payload editor");
         };
         assert_eq!(&source[payload.source_range], "code\n``` not-a-close\n");
@@ -6626,7 +6638,7 @@ mod tests {
             opening_fence,
             closing_fence,
             ..
-        }) = block.editor
+        }) = block.editor.clone()
         else {
             panic!("indented code payload editor");
         };
@@ -6692,6 +6704,7 @@ mod tests {
             closing_fence,
         } = block
             .editor
+            .clone()
             .expect("diagram fence should have a payload editor")
         else {
             panic!("expected Code editor for diagram fence");
@@ -6729,7 +6742,7 @@ mod tests {
                 opening_delimiter,
                 payload,
                 closing_delimiter,
-            }) = block.editor
+            }) = block.editor.clone()
             else {
                 panic!("exact block math should have direct metadata: {source:?}");
             };
@@ -7140,7 +7153,7 @@ mod tests {
         let block = MarkdownDocument::from_text(source)
             .visual_blocks()
             .remove(0);
-        let Some(VisualBlockEditor::Table { cells }) = block.editor else {
+        let Some(VisualBlockEditor::Table { cells }) = block.editor.clone() else {
             panic!("exact GFM table should have direct metadata");
         };
         assert_eq!(cells.len(), 4);
@@ -7163,7 +7176,7 @@ mod tests {
             .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
             .expect("table");
         assert!(block.source_island.is_none());
-        let Some(VisualBlockEditor::Table { cells }) = block.editor else {
+        let Some(VisualBlockEditor::Table { cells }) = block.editor.clone() else {
             panic!("ragged table should keep a Table editor");
         };
         assert_eq!(cells.len(), 6);
@@ -7181,7 +7194,7 @@ mod tests {
             .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
             .expect("table");
         assert!(block.source_island.is_none());
-        let Some(VisualBlockEditor::Table { cells }) = block.editor else {
+        let Some(VisualBlockEditor::Table { cells }) = block.editor.clone() else {
             panic!("extra-cell table should keep a Table editor");
         };
         assert!(
@@ -7220,7 +7233,7 @@ mod tests {
                 .into_iter()
                 .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
                 .unwrap_or_else(|| panic!("expected block image for {source:?}"));
-            let Some(VisualBlockEditor::Image { payload, .. }) = block.editor else {
+            let Some(VisualBlockEditor::Image { payload, .. }) = block.editor.clone() else {
                 panic!("proven image span should carry an Image editor for {source:?}");
             };
             assert_eq!(payload.kind, VisualEditorFieldKind::ImageSource);
@@ -7240,7 +7253,7 @@ mod tests {
                 .into_iter()
                 .find(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
                 .unwrap_or_else(|| panic!("expected block image for {source:?}"));
-            let Some(VisualBlockEditor::Image { payload, .. }) = block.editor else {
+            let Some(VisualBlockEditor::Image { payload, .. }) = block.editor.clone() else {
                 panic!("reference-style image should carry an Image editor for {source:?}");
             };
             let authored = &source[payload.source_range.clone()];
@@ -7279,7 +7292,7 @@ mod tests {
             opening_fence,
             info,
             ..
-        }) = block.editor
+        }) = block.editor.clone()
         else {
             panic!("bare fence should have direct metadata");
         };
@@ -7298,7 +7311,7 @@ mod tests {
                 .into_iter()
                 .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
                 .expect("code block");
-            let Some(VisualBlockEditor::Code { info, .. }) = block.editor else {
+            let Some(VisualBlockEditor::Code { info, .. }) = block.editor.clone() else {
                 panic!("fence should have direct metadata for {source:?}");
             };
             assert_eq!(&source[info.source_range.clone()], token);
@@ -8738,7 +8751,7 @@ Reference-style links work too: [Markion repository][markion-repo].\n\n\
     }
 
     fn image_payload_tokens(source: &str) -> Vec<std::ops::Range<usize>> {
-        match image_block_for(source).editor {
+        match image_block_for(source).editor.clone() {
             Some(VisualBlockEditor::Image { payload, .. }) => {
                 data_uri_payload_ranges(source, payload.source_range)
             }

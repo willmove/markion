@@ -412,6 +412,9 @@ impl MarkionApp {
             current_search_index: None,
             search_result: SearchResultState::Idle,
             search_generation: None,
+            search_debounce_generation: 0,
+            visual_drag_scroll: None,
+            visual_drag_epoch: 0,
             search_field_bounds: [None; 13],
             search_field_drag: None,
             overlay_text_drag: None,
@@ -924,8 +927,23 @@ impl MarkionApp {
         let tab = self.active_tab_mut();
         tab.clear_visual_caret_affinity();
         tab.clear_visual_navigation_intent();
-        tab.visual_navigation_snapshots.clear();
-        tab.visual_navigation_snapshot_ids.clear();
+        let keep_selection = match tab.structured_selection.as_ref() {
+            Some(markion::selection::SelectionState::Blocks(selection)) => {
+                selection.version == tab.document.version()
+            }
+            Some(markion::selection::SelectionState::Cells(selection)) => {
+                selection.target.document_version == tab.document.version()
+            }
+            _ => false,
+        };
+        if !keep_selection {
+            tab.structured_selection = None;
+        }
+        tab.cell_drag_anchor = None;
+        let document_version = tab.document.version();
+        if let Some((version, _)) = tab.visual_input_profile.as_mut() {
+            *version = document_version;
+        }
         tab.visual_cursor_reveal_pending = true;
         tab.visual_marked_range_bounds = None;
         #[cfg(test)]
@@ -933,7 +951,7 @@ impl MarkionApp {
             tab.visual_last_projection = None;
             tab.visual_last_projection_styles = None;
         }
-        self.refresh_search_matches();
+        self.schedule_edit_search_refresh(cx);
         self.center_cursor_if_typewriter();
         self.schedule_autosave(cx);
     }
@@ -1995,7 +2013,83 @@ impl MarkionApp {
         }
     }
 
+    fn schedule_edit_search_refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.search_visible
+            || self.search_query.buffer.is_empty()
+            || self.active_tab().document.text().len() < 64 * 1024
+            || matches!(self.rendered_view_mode(), ViewMode::Read)
+        {
+            self.refresh_search_matches();
+            return;
+        }
+        self.search_debounce_generation = self.search_debounce_generation.wrapping_add(1);
+        let generation = self.search_debounce_generation;
+        let target = self.active_document_target();
+        self.search_matches.clear();
+        self.current_search_index = None;
+        self.search_generation = None;
+        self.search_result = SearchResultState::Idle;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let work = this
+                .update(cx, |app, _| {
+                    if app.active_tab().is_image()
+                        || app.search_debounce_generation != generation
+                        || app.active_document_target() != target
+                        || !app.search_visible
+                        || matches!(app.rendered_view_mode(), ViewMode::Read)
+                    {
+                        return None;
+                    }
+                    let key = SearchGenerationKey {
+                        tab_index: app.active_tab,
+                        document_version: target.1,
+                        domain: SearchDomain::Source,
+                        query: app.search_query.buffer.clone(),
+                        case_sensitive: app.search_case_sensitive,
+                        regex: app.search_regex,
+                    };
+                    Some((app.active_tab().document.clone(), app.search_options(), key))
+                })
+                .ok()
+                .flatten();
+            let Some((document, options, key)) = work else {
+                return;
+            };
+            let matches = cx
+                .background_spawn(async move {
+                    document
+                        .find_matches(&options)
+                        .map(|matches| matches.into_iter().map(SearchTarget::Source).collect())
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                if app.active_tab().is_document()
+                    && app.search_debounce_generation == generation
+                    && app.active_document_target() == target
+                    && app.search_visible
+                    && app.search_query.buffer == key.query
+                    && app.search_case_sensitive == key.case_sensitive
+                    && app.search_regex == key.regex
+                {
+                    app.replace_visible = app.search_form == SearchPanelForm::Replace;
+                    app.install_search_matches(key, matches);
+                    if app.search_focus == Some(SearchField::Find)
+                        && let Some(index) = app.current_search_index
+                    {
+                        app.select_search_match(index, cx);
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn refresh_search_matches(&mut self) {
+        self.search_debounce_generation = self.search_debounce_generation.wrapping_add(1);
         if !self.search_visible {
             self.search_matches.clear();
             self.current_search_index = None;
@@ -2065,6 +2159,15 @@ impl MarkionApp {
             }),
         };
 
+        self.install_search_matches(key, matches);
+    }
+
+    fn install_search_matches(
+        &mut self,
+        key: SearchGenerationKey,
+        matches: Result<Vec<SearchTarget>, markion::SearchError>,
+    ) {
+        let domain = key.domain;
         self.search_generation = Some(key);
         match matches {
             Ok(matches) if matches.is_empty() => {
@@ -2119,7 +2222,14 @@ impl MarkionApp {
             self.current_search_index = Some(index);
             match found {
                 SearchTarget::Source(found) => {
+                    self.reveal_visual_code_at(found.range.start);
                     let tab = self.active_tab_mut();
+                    tab.structured_selection = None;
+                    tab.cell_drag_anchor = None;
+                    tab.finish_undo_capture();
+                    if let Some(dormant) = tab.dormant_visual_state.as_mut() {
+                        dormant.selection = None;
+                    }
                     tab.selected_range = found.range.clone();
                     tab.selection_reversed = false;
                     tab.marked_range = None;
@@ -2167,7 +2277,9 @@ impl MarkionApp {
 
     pub(super) fn jump_to_offset(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = clamp_to_text_boundary(self.active_tab().document.text(), offset);
+        self.reveal_visual_code_at(offset);
         let tab = self.active_tab_mut();
+        tab.structured_selection = None;
         tab.selected_range = offset..offset;
         tab.selection_reversed = false;
         tab.marked_range = None;
@@ -2824,7 +2936,7 @@ impl MarkionApp {
         } else if self.file_tree_query_focused {
             self.status = self.file_tree_summary().into();
         } else {
-            self.refresh_search_matches();
+            self.schedule_edit_search_refresh(cx);
             if self.search_focus == Some(SearchField::Find)
                 && let Some(index) = self.current_search_index
             {

@@ -1836,28 +1836,7 @@ fn table_alignment_jc(alignment: &TableAlignment) -> Option<&'static str> {
 
 /// Clone with `bold` forced on every span (table header cells).
 fn bolded(rich: &RichText) -> RichText {
-    let mut rich = rich.clone();
-    if rich.spans.is_empty() {
-        if !rich.text.is_empty() {
-            rich.spans.push(InlineSpan {
-                hard_break: false,
-                text: rich.text.clone(),
-                style: InlineStyle {
-                    bold: true,
-                    ..InlineStyle::default()
-                },
-                link: None,
-                math: None,
-                image: None,
-                footnote: None,
-            });
-        }
-        return rich;
-    }
-    for span in &mut rich.spans {
-        span.style.bold = true;
-    }
-    rich
+    rich.emboldened()
 }
 
 /// Emits an embedded `w:drawing` for a resolvable local PNG/JPEG, or the
@@ -2829,9 +2808,9 @@ mod tests {
     #[test]
     fn nested_inline_styles_compose_on_one_run() {
         let mut state = DocxRenderState::default();
-        let rich = RichText {
-            text: "bold italic".to_string(),
-            spans: vec![crate::model::InlineSpan {
+        let rich = RichText::new(
+            "bold italic".to_string(),
+            vec![crate::model::InlineSpan {
                 hard_break: false,
                 text: "bold italic".to_string(),
                 style: InlineStyle {
@@ -2844,7 +2823,7 @@ mod tests {
                 image: None,
                 footnote: None,
             }],
-        };
+        );
         let runs = state.rich_runs(&rich);
         assert!(runs.contains("<w:b/>"));
         assert!(runs.contains("<w:i/>"));
@@ -2855,9 +2834,9 @@ mod tests {
     #[test]
     fn empty_link_target_falls_back_to_styled_text() {
         let mut state = DocxRenderState::default();
-        let rich = RichText {
-            text: "label".to_string(),
-            spans: vec![crate::model::InlineSpan {
+        let rich = RichText::new(
+            "label".to_string(),
+            vec![crate::model::InlineSpan {
                 hard_break: false,
                 text: "label".to_string(),
                 style: InlineStyle::default(),
@@ -2866,7 +2845,7 @@ mod tests {
                 image: None,
                 footnote: None,
             }],
-        };
+        );
         let runs = state.rich_runs(&rich);
         assert!(!runs.contains("<w:hyperlink"));
         assert!(runs.contains(">label</w:t>"));

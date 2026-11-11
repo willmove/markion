@@ -16,6 +16,7 @@ pub mod ai_credentials;
 pub mod ai_i18n;
 mod auto_pair;
 pub mod block_edit;
+pub mod change_set;
 mod diagram;
 mod document_memory;
 mod editing;
@@ -40,6 +41,7 @@ mod parse;
 mod paths;
 mod publishing;
 mod render;
+pub mod selection;
 mod source_mapped;
 mod storage;
 mod table;
@@ -678,6 +680,7 @@ pub struct MutationReceipt {
     pub before_version: u64,
     pub after_version: u64,
     pub changed: bool,
+    pub changes: Option<change_set::ChangeSet>,
 }
 
 /// Content-free evidence for one accepted or rejected canonical mutation.
@@ -732,6 +735,7 @@ pub struct MarkdownDocument {
     pending_source_edits: std::cell::RefCell<source_mapped::PendingSourceEdits>,
     mutation_sequence: u64,
     mutation_journal: VecDeque<MutationJournalEntry>,
+    last_change: Option<change_set::ChangeSet>,
 }
 
 /// Cloning a document (undo/redo snapshots take one per edit) must stay cheap:
@@ -757,6 +761,7 @@ impl Clone for MarkdownDocument {
             mutation_sequence: self.mutation_sequence,
             // Undo snapshots are authored-state clones, not diagnostic logs.
             mutation_journal: VecDeque::new(),
+            last_change: None,
         }
     }
 }
@@ -772,6 +777,8 @@ pub struct VisualDerivationProfile {
     pub preview_blocks: usize,
     pub visual_blocks: usize,
     pub identity_candidates: usize,
+    pub rebuilt_visual_blocks: usize,
+    pub reused_visual_blocks: usize,
 }
 
 /// A value paired with the `text_version` it was computed for. A request with
@@ -827,6 +834,7 @@ impl MarkdownDocument {
             pending_source_edits: std::cell::RefCell::new(source_mapped::PendingSourceEdits::Full),
             mutation_sequence: 0,
             mutation_journal: VecDeque::with_capacity(MUTATION_JOURNAL_CAPACITY),
+            last_change: None,
         }
     }
 
@@ -1328,6 +1336,7 @@ impl MarkdownDocument {
             return self.reject_checked_mutation(entry, MutationRejectionReason::StaleVersion);
         }
 
+        let mut changes = None;
         let changed = match mutation.edit {
             CheckedMutationEdit::Range {
                 range,
@@ -1359,6 +1368,12 @@ impl MarkdownDocument {
                 if observed == replacement {
                     false
                 } else {
+                    changes = Some(change_set::ChangeSet::range(
+                        &self.text,
+                        range.clone(),
+                        &replacement,
+                        before_version,
+                    ));
                     self.replace_source_range_unchecked(range, &replacement);
                     true
                 }
@@ -1374,6 +1389,11 @@ impl MarkdownDocument {
                 if self.text == replacement {
                     false
                 } else {
+                    changes = Some(change_set::ChangeSet::whole(
+                        self.text.len(),
+                        replacement.len(),
+                        before_version,
+                    ));
                     self.text = replacement;
                     self.invalidate_derived();
                     true
@@ -1381,6 +1401,12 @@ impl MarkdownDocument {
             }
         };
 
+        if let Some(change) = changes.as_mut() {
+            change.after_version = self.text_version;
+        }
+        if changed {
+            self.last_change = changes.clone();
+        }
         entry.after_version = self.text_version;
         self.push_mutation_journal(entry);
         Ok(MutationReceipt {
@@ -1390,7 +1416,14 @@ impl MarkdownDocument {
             before_version,
             after_version: self.text_version,
             changed,
+            changes,
         })
+    }
+
+    pub fn last_change_set(&self) -> Option<&change_set::ChangeSet> {
+        self.last_change
+            .as_ref()
+            .filter(|change| change.after_version == self.text_version)
     }
 
     /// Whole-document replacement attributed to the trusted origin. Test and
@@ -3135,8 +3168,16 @@ impl MarkdownDocument {
         // One pulldown pass yields both the preview blocks and the outline
         // headings; cache both so an open outline panel this frame is a cache
         // hit rather than a second full parse.
-        let (blocks, headings) = Self::derive_preview_and_outline(&self.text);
-        let blocks = std::sync::Arc::new(blocks);
+        let regional = self.source_mapped_cache.borrow();
+        let (blocks, headings) = if let Some(cache) = regional
+            .as_ref()
+            .filter(|cache| cache.version == self.text_version)
+        {
+            (cache.blocks(), cache.headings.clone())
+        } else {
+            let (blocks, headings) = Self::derive_preview_and_outline(&self.text);
+            (std::sync::Arc::new(blocks), headings)
+        };
         let version = self.text_version;
         *self.cached_preview_blocks.borrow_mut() = Some(Cached {
             version,
@@ -3235,7 +3276,7 @@ impl MarkdownDocument {
                 .source_mapped_cache
                 .borrow()
                 .as_ref()
-                .map_or(0, |cache| cache.blocks.len());
+                .map_or(0, |cache| cache.preview_count());
             return (cached.value.clone(), profile);
         }
         let semantic_started = std::time::Instant::now();
@@ -3253,7 +3294,7 @@ impl MarkdownDocument {
                     .filter(|cached| cached.version == self.text_version)
                     .map(|outline| (preview.value.clone(), outline.value.clone()))
             });
-        let cache = match (previous_cache.as_ref(), pending.edits()) {
+        let mut cache = match (previous_cache.as_ref(), pending.edits()) {
             (Some(previous), Some(edits)) if !edits.is_empty() => {
                 source_mapped::SourceMappedCache::update(
                     previous,
@@ -3281,13 +3322,14 @@ impl MarkdownDocument {
             ),
         };
         profile.semantic_update = semantic_started.elapsed();
-        profile.preview_blocks = cache.blocks.len();
+        profile.preview_blocks = cache.preview_count();
 
         let visual_started = std::time::Instant::now();
-        let mut blocks = with_image_identity_interner(|| {
-            visual::build_visual_blocks(&self.text, &cache.blocks, VisualBlockId::fresh)
-        });
+        let (mut blocks, rebuilt, reused) =
+            with_image_identity_interner(|| cache.build_visual(previous_cache.as_ref()));
         profile.visual_build = visual_started.elapsed();
+        profile.rebuilt_visual_blocks = rebuilt;
+        profile.reused_visual_blocks = reused;
 
         let identity_started = std::time::Instant::now();
         if let (Some(previous), Some(edits)) = (previous_cache.as_ref(), pending.edits())
@@ -3295,20 +3337,16 @@ impl MarkdownDocument {
             && let Some(old_visual) = self.cached_visual_blocks.borrow().as_ref()
             && old_visual.version == previous.version
         {
-            profile.identity_candidates = source_mapped::reconcile_visual_block_ids(
-                previous.source.as_ref(),
-                &self.text,
-                &old_visual.value,
-                &mut blocks,
-                edits,
-            );
+            profile.identity_candidates =
+                cache.reconcile_visual(previous, &old_visual.value, &mut blocks, edits);
         }
         profile.identity_reconcile = identity_started.elapsed();
         profile.visual_blocks = blocks.len();
         let blocks = std::sync::Arc::new(blocks);
-        *self.cached_preview_blocks.borrow_mut() = Some(Cached {
+        cache.retain_visual(blocks.clone());
+        *self.cached_preview_blocks.borrow_mut() = cache.cached_blocks().map(|blocks| Cached {
             version: self.text_version,
-            value: cache.blocks.clone(),
+            value: blocks,
         });
         *self.cached_outline.borrow_mut() = Some(Cached {
             version: self.text_version,
@@ -3353,35 +3391,65 @@ impl MarkdownDocument {
             replacement,
         );
         if let VisualEditorFieldKind::TableCell { row, column } = field.kind {
-            let table_source = self.text.get(block.source_range.clone())?;
+            let block_source = self.text.get(block.source_range.clone())?;
+            let prefix_len = table_column_width_prefix_len(block_source);
+            let table_source = &block_source[prefix_len..];
             let authored_cells = table_cell_source_ranges(table_source)?;
             let authored_cell = authored_cells
                 .iter()
                 .find(|cell| cell.row == row && cell.column == column)?;
-            let authored_range = block.source_range.start + authored_cell.source_range.start
-                ..block.source_range.start + authored_cell.source_range.end;
+            let authored_range =
+                block.source_range.start + prefix_len + authored_cell.source_range.start
+                    ..block.source_range.start + prefix_len + authored_cell.source_range.end;
             if authored_range != field.source_range {
                 return None;
             }
-            let relative =
-                range.start - field.source_range.start..range.end - field.source_range.start;
-            let mut value = self.text[field.source_range.clone()].to_string();
-            value.replace_range(relative.clone(), &replacement);
             let mut table = parse_markdown_table(table_source)?;
             if table.rows.get(row)?.get(column)? != &self.text[field.source_range.clone()] {
                 return None;
             }
-            table.rows.get_mut(row)?.get_mut(column)?.clone_from(&value);
-            let formatted = format_markdown_table(&table);
-            let new_cell = formatted_table_cell_range(&table, row, column)?;
-            let inserted_start = block.source_range.start + new_cell.start + relative.start;
+            let line = table_source
+                .lines()
+                .nth(if row == 0 { 0 } else { row + 1 })?;
+            if column >= table::markdown_table_cell_ranges(line).len() {
+                if block.quote_context.is_some() || block.list_depth > 0 {
+                    return None;
+                }
+                // A parser-padded missing cell has no authored delimiter to
+                // patch. Materialize that row through the proven table path.
+                let relative =
+                    range.start - field.source_range.start..range.end - field.source_range.start;
+                table.rows[row][column].replace_range(relative.clone(), &replacement);
+                let mut formatted = format_markdown_table(&table);
+                if block_source.contains("\r\n") {
+                    formatted = formatted.replace('\n', "\r\n");
+                }
+                let cell = table_cell_source_ranges(&formatted)?
+                    .into_iter()
+                    .find(|cell| cell.row == row && cell.column == column)?;
+                let inserted_start = block.source_range.start
+                    + prefix_len
+                    + cell.source_range.start
+                    + relative.start;
+                let inserted_end = inserted_start + replacement.len();
+                return Some(VisualBlockEdit {
+                    document_version: self.text_version,
+                    block_id: block.id,
+                    field: field.clone(),
+                    range: block.source_range.clone(),
+                    replacement: format!("{}{formatted}", &block_source[..prefix_len]),
+                    inserted_range_after: inserted_start..inserted_end,
+                    selection_after: inserted_end..inserted_end,
+                });
+            }
+            let inserted_start = range.start;
             let inserted_end = inserted_start + replacement.len();
             return Some(VisualBlockEdit {
                 document_version: self.text_version,
                 block_id: block.id,
                 field: field.clone(),
-                range: block.source_range.clone(),
-                replacement: formatted,
+                range,
+                replacement,
                 inserted_range_after: inserted_start..inserted_end,
                 selection_after: inserted_end..inserted_end,
             });
@@ -3454,7 +3522,11 @@ impl MarkdownDocument {
                     return false;
                 }
                 match edit.field.kind {
-                    VisualEditorFieldKind::TableCell { .. } => edit.range == block.source_range,
+                    VisualEditorFieldKind::TableCell { .. } => {
+                        edit.range == block.source_range
+                            || (edit.range.start >= edit.field.source_range.start
+                                && edit.range.end <= edit.field.source_range.end)
+                    }
                     _ => {
                         edit.range.start >= edit.field.source_range.start
                             && edit.range.end <= edit.field.source_range.end
@@ -4562,10 +4634,58 @@ impl MarkdownDocument {
             return Ok(Vec::new());
         }
 
-        Ok(SearchPattern::compile(options)?
-            .find_ranges(&self.text)
+        let ranges = SearchPattern::compile(options)?.find_ranges(&self.text);
+        let line_ends: Vec<_> = self
+            .text
+            .match_indices('\n')
+            .map(|(offset, _)| offset)
+            .chain(std::iter::once(self.text.len()))
+            .collect();
+        let mut offset = 0;
+        let mut line = 1;
+        let mut column = 1;
+        let mut line_start = 0;
+        Ok(ranges
             .into_iter()
-            .map(|range| self.search_match_for_range(range))
+            .map(|range| {
+                // Matches are ordered. Advance character/line metadata once over
+                // the source instead of rescanning its prefix for every match.
+                for (relative, ch) in self.text[offset..range.start].char_indices() {
+                    if ch == '\n' {
+                        line += 1;
+                        column = 1;
+                        line_start = offset + relative + 1;
+                    } else {
+                        column += 1;
+                    }
+                }
+                offset = range.start;
+                let line_end = line_ends[line - 1];
+                let mut start = range.start.saturating_sub(120).max(line_start);
+                let mut end = range.end.saturating_add(120).min(line_end);
+                // A huge regex match must not turn its entire source line into
+                // a retained snippet for every result.
+                end = end.min(start.saturating_add(240));
+                while !self.text.is_char_boundary(start) {
+                    start += 1;
+                }
+                while !self.text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let mut snippet = self.text[start..end].trim().to_string();
+                if start > line_start {
+                    snippet.insert(0, '…');
+                }
+                if end < line_end {
+                    snippet.push('…');
+                }
+                SearchMatchRange {
+                    range,
+                    line,
+                    column,
+                    snippet,
+                }
+            })
             .collect())
     }
 
@@ -4684,6 +4804,7 @@ impl MarkdownDocument {
         })
     }
 
+    #[cfg(test)]
     fn search_match_for_range(&self, range: Range<usize>) -> SearchMatchRange {
         let (line, column) = line_column_at(&self.text, range.start);
         SearchMatchRange {
@@ -4943,10 +5064,12 @@ fn escape_html_attribute(text: &str) -> String {
     crate::escape::escape_html_attribute(text)
 }
 
+#[cfg(test)]
 fn line_column_at(text: &str, offset: usize) -> (usize, usize) {
     crate::text_util::line_column_at(text, offset)
 }
 
+#[cfg(test)]
 fn line_snippet_at(text: &str, line_number: usize) -> String {
     crate::text_util::line_snippet_at(text, line_number)
 }
@@ -6590,9 +6713,9 @@ mod tests {
         };
         assert_eq!(
             para,
-            &RichText {
-                text: "Paragraph with bold text.".into(),
-                spans: vec![
+            &RichText::new(
+                "Paragraph with bold text.".into(),
+                vec![
                     InlineSpan {
                         hard_break: false,
                         text: "Paragraph with ".into(),
@@ -6615,8 +6738,8 @@ mod tests {
                         text: " text.".into(),
                         ..InlineSpan::default()
                     },
-                ],
-            }
+                ]
+            )
         );
         assert!(matches!(
             &blocks[2],
@@ -8233,7 +8356,7 @@ mod tests {
     }
 
     #[test]
-    fn table_ranges_editing_index_skips_one_column_tables() {
+    fn table_ranges_editing_index_includes_one_column_tables() {
         let source = "\
 | A | B |
 | --- | --- |
@@ -8248,11 +8371,12 @@ mod tests {
 ";
         let doc = MarkdownDocument::from_text(source);
         let edit_ranges = doc.table_ranges();
-        assert_eq!(edit_ranges.len(), 2, "editing index stays 2+-column");
+        assert_eq!(edit_ranges.len(), 3, "all GFM column counts stay editable");
         assert!(source[edit_ranges[0].clone()].contains("| A | B |"));
-        assert!(source[edit_ranges[1].clone()].contains("| C | D |"));
+        assert!(source[edit_ranges[1].clone()].contains("only-one"));
+        assert!(source[edit_ranges[2].clone()].contains("| C | D |"));
         assert!(!source[edit_ranges[0].clone()].contains("only-one"));
-        assert!(!source[edit_ranges[1].clone()].contains("only-one"));
+        assert!(!source[edit_ranges[2].clone()].contains("only-one"));
 
         let preview_headers: Vec<String> = doc
             .preview_blocks()
@@ -10670,7 +10794,7 @@ Intro.
             .into_iter()
             .find(|block| matches!(block.editor, Some(VisualBlockEditor::Code { .. })))
             .expect("direct code block");
-        let VisualBlockEditor::Code { payload, .. } = block.editor.unwrap() else {
+        let VisualBlockEditor::Code { payload, .. } = block.editor.clone().unwrap() else {
             unreachable!()
         };
         let name_start = doc.text()[payload.source_range.clone()]
@@ -10691,7 +10815,7 @@ Intro.
     }
 
     #[test]
-    fn direct_table_edit_reflows_once_preserves_alignment_and_restores_logical_cell() {
+    fn direct_table_edit_patches_only_cell_preserves_alignment_and_restores_logical_cell() {
         let source = "before\n\n| A | B |\n| :--- | ---: |\n| x | y |\n\nafter";
         let mut doc = MarkdownDocument::from_text(source);
         let block = doc
@@ -10699,7 +10823,7 @@ Intro.
             .into_iter()
             .find(|block| matches!(block.editor, Some(VisualBlockEditor::Table { .. })))
             .expect("direct table");
-        let VisualBlockEditor::Table { cells } = block.editor.unwrap() else {
+        let VisualBlockEditor::Table { cells } = block.editor.clone().unwrap() else {
             unreachable!()
         };
         let cell = cells
@@ -10709,10 +10833,9 @@ Intro.
         let edit = doc
             .direct_visual_block_edit(cell.field.source_range.clone(), "宽字符|值")
             .expect("table edit");
-        assert_eq!(edit.range, block.source_range);
-        assert_eq!(edit.replacement.matches('\n').count(), 2);
+        assert_eq!(edit.range, cell.field.source_range);
+        assert_eq!(edit.replacement.matches('\n').count(), 0);
         assert!(edit.replacement.contains("宽字符\\|值"));
-        assert!(edit.replacement.lines().nth(1).unwrap().contains(':'));
         assert!(doc.validate_visual_block_edit(&edit));
 
         doc.replace_range(edit.range, &edit.replacement);
@@ -10728,7 +10851,7 @@ Intro.
             .into_iter()
             .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
             .unwrap();
-        let VisualBlockKind::Table { alignments, .. } = table.kind else {
+        let VisualBlockKind::Table { alignments, .. } = table.kind.clone() else {
             unreachable!()
         };
         assert_eq!(
@@ -10737,6 +10860,57 @@ Intro.
         );
         assert!(doc.text().starts_with("before\n\n"));
         assert!(doc.text().ends_with("\n\nafter"));
+    }
+
+    #[test]
+    fn advanced_table_input_preserves_width_comment_crlf_and_materializes_ragged_cells() {
+        for source in [
+            "<!-- markion-cols:30,70 -->\r\n| A | B |\r\n| --- | --- |\r\n| x | y |",
+            "| A | B |\r\n| --- | --- |\r\n| x |",
+            "| A |\n| --- |\n| x |",
+        ] {
+            let mut document = MarkdownDocument::from_text(source);
+            let blocks = document.visual_blocks_shared();
+            let block = blocks
+                .iter()
+                .find(|block| matches!(block.kind, VisualBlockKind::Table { .. }))
+                .unwrap();
+            let Some(VisualBlockEditor::Table { cells }) = block.editor.as_ref() else {
+                panic!("direct table for {source}");
+            };
+            let field = &cells.last().unwrap().field;
+            let edit = document
+                .direct_visual_block_edit(field.source_range.clone(), "中文|值")
+                .unwrap();
+            assert!(document.validate_visual_block_edit(&edit));
+            document.replace_range(edit.range, &edit.replacement);
+            assert_eq!(&document.text()[edit.inserted_range_after], "中文\\|值");
+            if source.starts_with("<!--") {
+                assert!(document.text().starts_with(source.lines().next().unwrap()));
+            }
+            if source.contains("\r\n") {
+                assert!(!document.text().replace("\r\n", "").contains('\n'));
+            }
+            assert!(
+                document
+                    .visual_editor_field_at(&edit.selection_after)
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn advanced_many_search_matches_keep_bounded_context_and_exact_unicode_columns() {
+        let source = format!("header\r\n{}", "中文 needle 😀 ".repeat(2_000));
+        let doc = MarkdownDocument::from_text(&source);
+        let matches = doc.find_matches(&SearchOptions::literal("needle")).unwrap();
+        assert_eq!(matches.len(), 2_000);
+        assert!(matches.iter().all(|found| found.snippet.len() <= 246));
+        for found in matches.iter().step_by(137) {
+            let expected = doc.search_match_for_range(found.range.clone());
+            assert_eq!((found.line, found.column), (expected.line, expected.column));
+            assert_eq!(&source[found.range.clone()], "needle");
+        }
     }
 
     #[test]
@@ -10837,8 +11011,10 @@ Intro.
             .into_iter()
             .find(|block| matches!(block.kind, VisualBlockKind::CodeBlock { .. }))
             .expect("visual code block");
-        let VisualBlockEditor::Code { payload, .. } =
-            visual.editor.expect("diagram fence carries a Code editor")
+        let VisualBlockEditor::Code { payload, .. } = visual
+            .editor
+            .clone()
+            .expect("diagram fence carries a Code editor")
         else {
             unreachable!()
         };

@@ -281,6 +281,8 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new("shift-right", SelectRight, None),
         KeyBinding::new("shift-up", SelectUp, None),
         KeyBinding::new("shift-down", SelectDown, None),
+        KeyBinding::new("secondary-shift-up", MoveBlocksUp, None),
+        KeyBinding::new("secondary-shift-down", MoveBlocksDown, None),
         KeyBinding::new(
             if cfg!(target_os = "macos") {
                 "alt-left"
@@ -611,6 +613,7 @@ fn run_application(startup_intent: StartupOpenIntent) {
                 app.arm_git_recovery(cx);
                 app.arm_git_background_checks(cx);
                 app.arm_git_details_refresh(window, cx);
+                app.start_native_visual_smoke(window, cx);
                 // File-tree scanning is driven by session restore, CLI folder
                 // open, or opening a document — not by the process CWD.
                 cx.activate(true);

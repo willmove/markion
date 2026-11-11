@@ -37,12 +37,16 @@ impl MarkionApp {
         // active, non-source targets are no-ops — the document stays on its
         // source surface and the stored app-level mode is kept so a Markdown
         // tab resumes it when reactivated.
-        if self.active_document_kind() == DocumentKind::Data
-            && !matches!(view_mode, ViewMode::Edit)
+        if self.active_document_kind() == DocumentKind::Data && !matches!(view_mode, ViewMode::Edit)
         {
             return;
         }
         assign_view_mode(&mut self.view_mode, view_mode);
+        self.active_tab_mut().structured_selection = None;
+        if let Some(dormant) = self.active_tab_mut().dormant_visual_state.as_mut() {
+            dormant.selection = None;
+        }
+        self.active_tab_mut().cell_drag_anchor = None;
         if let Some(tab) = self.active_tab_mut().document_tab_mut() {
             tab.sync_scroll_state.reset();
         }
@@ -380,6 +384,9 @@ impl MarkionApp {
             self.close_search_overlay(cx);
             return;
         }
+        if self.escape_source_selection(cx) {
+            return;
+        }
         self.file_tree_query.clear();
         self.file_tree_query_focused = false;
         self.pending_name_input = None;
@@ -432,6 +439,7 @@ impl MarkionApp {
         intent: OpenPathIntent,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        let opening_started = Instant::now();
         let display_path = path.display().to_string();
         if self.focus_existing_tab_for_path(&path, cx) {
             self.record_recent_path(&path);
@@ -461,6 +469,9 @@ impl MarkionApp {
         }
 
         self.update_workspace_root_from_document(cx);
+        if self.active_tab().is_document() {
+            self.begin_visual_open_profile(opening_started);
+        }
         self.record_recent_path(&path);
         self.active_menu = None;
         self.status = self.trf(Msg::StatusOpened, &[&display_path]);

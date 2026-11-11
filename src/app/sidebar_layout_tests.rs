@@ -1,5 +1,5 @@
 use super::*;
-use gpui::{TestAppContext, VisualTestContext};
+use gpui::TestAppContext;
 use markion::FileTreeFileKind;
 
 fn small_file_tree(root: &Path) -> FileTree {

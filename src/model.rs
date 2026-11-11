@@ -1512,8 +1512,26 @@ pub struct MathSource {
 /// DOCX, tests) can keep using `text`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RichText {
+    content: Arc<RichTextContent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RichTextContent {
     pub text: String,
     pub spans: Vec<InlineSpan>,
+}
+
+impl std::ops::Deref for RichText {
+    type Target = RichTextContent;
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+
+impl std::ops::DerefMut for RichText {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.content)
+    }
 }
 
 /// Source-backed block rendered by Visual Edit. Unlike [`PreviewBlock`], this
@@ -1524,6 +1542,11 @@ pub struct VisualBlock {
     /// Ephemeral identity used to retain row-local UI state across source
     /// versions when this block is proven to be unchanged.
     pub id: VisualBlockId,
+    content: Arc<VisualBlockContent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualBlockContent {
     pub kind: VisualBlockKind,
     pub source_range: Range<usize>,
     pub editable_runs: Vec<VisualInlineRun>,
@@ -1551,6 +1574,32 @@ pub struct VisualBlock {
     /// Exact editable fields for a dedicated complex-block editor. Absent
     /// when the authored syntax cannot be mapped losslessly.
     pub editor: Option<VisualBlockEditor>,
+}
+
+impl VisualBlock {
+    pub(crate) fn new(id: VisualBlockId, content: VisualBlockContent) -> Self {
+        Self {
+            id,
+            content: Arc::new(content),
+        }
+    }
+    pub(crate) fn content_mut(&mut self) -> &mut VisualBlockContent {
+        Arc::make_mut(&mut self.content)
+    }
+    pub(crate) fn shared_owners(&self) -> usize {
+        Arc::strong_count(&self.content)
+    }
+}
+impl std::ops::Deref for VisualBlock {
+    type Target = VisualBlockContent;
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+impl std::ops::DerefMut for VisualBlock {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.content_mut()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1630,7 +1679,7 @@ pub enum VisualBlockKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisualInlineRun {
-    pub visible_text: String,
+    pub visible_text: SharedText,
     /// Source extent emitted by the Markdown parser for this run.
     pub source_range: Range<usize>,
     /// Exact editable content within `source_range` when it can be identified.
@@ -1647,6 +1696,42 @@ pub struct VisualInlineRun {
     pub html_image: Option<VisualHtmlImage>,
     /// True when the parser's visible text does not map byte-for-byte to source.
     pub conservative_fallback: bool,
+}
+
+/// Immutable text shared by source-relocated visual snapshots.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SharedText(Arc<String>);
+
+impl From<String> for SharedText {
+    fn from(text: String) -> Self {
+        Self(Arc::new(text))
+    }
+}
+impl From<&str> for SharedText {
+    fn from(text: &str) -> Self {
+        text.to_string().into()
+    }
+}
+impl std::ops::Deref for SharedText {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.0
+    }
+}
+impl std::fmt::Display for SharedText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl PartialEq<&str> for SharedText {
+    fn eq(&self, text: &&str) -> bool {
+        self.as_str() == *text
+    }
+}
+impl SharedText {
+    pub(crate) fn shared_owners(&self) -> usize {
+        Arc::strong_count(&self.0)
+    }
 }
 
 /// A CSS length authored on an HTML `<img>` `width` or `height` attribute.
@@ -1972,13 +2057,29 @@ pub enum VisualSourceIslandKind {
 }
 
 impl RichText {
+    pub fn new(text: String, spans: Vec<InlineSpan>) -> Self {
+        Self {
+            content: Arc::new(RichTextContent { text, spans }),
+        }
+    }
+
+    pub(crate) fn shared_owners(&self) -> usize {
+        Arc::strong_count(&self.content)
+    }
+
+    pub(crate) fn into_spans(self) -> Vec<InlineSpan> {
+        Arc::try_unwrap(self.content)
+            .unwrap_or_else(|content| (*content).clone())
+            .spans
+    }
     /// The same text with every span (or the whole unstyled text) bold, for
     /// exporters that render definition-list terms as bold paragraphs.
     pub fn emboldened(&self) -> RichText {
         let mut rich = self.clone();
         if rich.spans.is_empty() && !rich.text.is_empty() {
+            let text = rich.text.clone();
             rich.spans.push(InlineSpan {
-                text: rich.text.clone(),
+                text,
                 ..InlineSpan::default()
             });
         }
@@ -1993,8 +2094,9 @@ impl RichText {
         if text.is_empty() {
             return Self::default();
         }
-        Self {
-            spans: vec![InlineSpan {
+        Self::new(
+            text.clone(),
+            vec![InlineSpan {
                 hard_break: false,
                 text: text.clone(),
                 style: InlineStyle::default(),
@@ -2003,8 +2105,7 @@ impl RichText {
                 image: None,
                 footnote: None,
             }],
-            text,
-        }
+        )
     }
 
     pub fn is_empty(&self) -> bool {

@@ -521,6 +521,13 @@ pub(super) struct EditorSnapshot {
     pub(super) document: MarkdownDocument,
     pub(super) selected_range: Range<usize>,
     pub(super) selection_reversed: bool,
+    pub(super) structured_selection: Option<markion::selection::SelectionBookmark>,
+}
+
+pub(super) struct DormantVisualState {
+    pub(super) version: u64,
+    pub(super) selection: Option<markion::selection::SelectionBookmark>,
+    pub(super) folded_code: HashSet<Range<usize>>,
 }
 
 /// One entry in the undo/redo history.
@@ -546,6 +553,7 @@ pub(super) struct UndoDiff {
     pub(super) insert: String,
     pub(super) selected_range: Range<usize>,
     pub(super) selection_reversed: bool,
+    pub(super) structured_selection: Option<markion::selection::SelectionBookmark>,
 }
 
 /// Push a history entry onto `stack`, compacting the previous top into a
@@ -603,6 +611,7 @@ pub(super) fn compact_history_entry(older: &EditorSnapshot, newer_text: &str) ->
         insert: old_text[prefix..old_text.len() - suffix].to_string(),
         selected_range: older.selected_range.clone(),
         selection_reversed: older.selection_reversed,
+        structured_selection: older.structured_selection.clone(),
     }
 }
 
@@ -928,6 +937,12 @@ pub(super) struct DocumentTabState {
     /// replaced meanwhile (`reset_preview_list` clears the marker) is dropped.
     pub(super) preview_parse_inflight: Option<u64>,
     pub(super) selected_range: Range<usize>,
+    pub(super) structured_selection: Option<markion::selection::SelectionState>,
+    pub(super) cell_drag_anchor: Option<markion::selection::CellSelection>,
+    pub(super) folded_visual_code_blocks: HashSet<VisualBlockId>,
+    pub(super) visual_input_profile: Option<(u64, Instant)>,
+    pub(super) visual_open_profile: Option<Instant>,
+    pub(super) dormant_visual_state: Option<DormantVisualState>,
     pub(super) selection_reversed: bool,
     pub(super) marked_range: Option<Range<usize>>,
     pub(super) last_lines: Vec<WrappedLine>,
@@ -956,8 +971,7 @@ pub(super) struct DocumentTabState {
     /// document version (same memoization contract as code blocks: renders
     /// reuse the memoized spans; an edit bumps the version and recomputes
     /// once). Unused for Markdown-kind tabs.
-    pub(super) data_highlight_cache:
-        RefCell<Option<(u64, std::sync::Arc<Vec<HighlightedSpan>>)>>,
+    pub(super) data_highlight_cache: RefCell<Option<(u64, std::sync::Arc<Vec<HighlightedSpan>>)>>,
     /// Byte offset of each logical line start, cached per document version:
     /// prepaint needs the table every frame and rebuilding it is an
     /// O(document) `match_indices` scan.
@@ -1238,6 +1252,12 @@ impl DocumentTabState {
             preview_debounce_generation: 0,
             preview_parse_inflight: None,
             selected_range: 0..0,
+            structured_selection: None,
+            cell_drag_anchor: None,
+            folded_visual_code_blocks: HashSet::new(),
+            visual_input_profile: None,
+            visual_open_profile: None,
+            dormant_visual_state: None,
             selection_reversed: false,
             marked_range: None,
             last_lines: Vec::new(),
@@ -1305,6 +1325,7 @@ impl DocumentTabState {
         if std::sync::Arc::ptr_eq(&self.visual_list_blocks, blocks) {
             return;
         }
+        let previous_blocks = self.visual_list_blocks.clone();
         let (range, count) = visual_block_splice(&self.visual_list_blocks, blocks);
         if !range.is_empty() || count != 0 {
             self.visual_list.splice(range, count);
@@ -1312,7 +1333,25 @@ impl DocumentTabState {
         self.visual_list_blocks = blocks.clone();
         ensure_visual_list_spacer(&self.visual_list, blocks.len());
         let live_ids: HashSet<VisualBlockId> = blocks.iter().map(|block| block.id).collect();
+        if let Some(dormant) = self.dormant_visual_state.take()
+            && dormant.version == self.document.version()
+        {
+            self.structured_selection = dormant
+                .selection
+                .and_then(|selection| selection.restore(&self.document));
+            self.folded_visual_code_blocks.extend(
+                blocks
+                    .iter()
+                    .filter(|block| {
+                        matches!(block.kind, VisualBlockKind::CodeBlock { .. })
+                            && dormant.folded_code.contains(&block.source_range)
+                    })
+                    .map(|block| block.id),
+            );
+        }
         self.expanded_visual_source_blocks
+            .retain(|id| live_ids.contains(id));
+        self.folded_visual_code_blocks
             .retain(|id| live_ids.contains(id));
         if self
             .hovered_visual_source_block
@@ -1356,10 +1395,37 @@ impl DocumentTabState {
         {
             self.retain_visual_source_expand = None;
         }
+        let change = self.document.last_change_set();
         self.visual_navigation_snapshots.retain(|index, snapshot| {
-            snapshot.document_version == self.document.version()
-                && self.visual_navigation_snapshot_ids.get(index)
-                    == blocks.get(*index).map(|block| &block.id)
+            let same_id = self.visual_navigation_snapshot_ids.get(index)
+                == blocks.get(*index).map(|block| &block.id);
+            if !same_id {
+                return false;
+            }
+            if snapshot.document_version == self.document.version() {
+                return true;
+            }
+            let Some(change) = change else {
+                return false;
+            };
+            let Some(old) = previous_blocks.get(*index) else {
+                return false;
+            };
+            // Prefix geometry cannot move when a later row reflows. Suffix
+            // absolute Y positions must be measured again even for stable IDs.
+            if snapshot.document_version == change.before_version
+                && old.source_range.end <= change.old_range.start
+                && old.source_range == blocks[*index].source_range
+                && (snapshot.source_selection.end <= old.source_range.start
+                    || snapshot.source_selection.start >= old.source_range.end)
+            {
+                snapshot.document_version = self.document.version();
+                snapshot.source_selection = self.selected_range.clone();
+                snapshot.marked_range = None;
+                true
+            } else {
+                false
+            }
         });
         self.visual_navigation_snapshot_ids
             .retain(|index, id| blocks.get(*index).is_some_and(|block| block.id == *id));
@@ -1440,6 +1506,25 @@ impl DocumentTabState {
     /// Returns preview-image keys that were claimed by this tab so the app can
     /// release them from `PreviewImageCache` (same path as tab close).
     pub(super) fn enter_dormant(&mut self) -> HashSet<PreviewImageKey> {
+        if self.dormant_visual_state.is_none()
+            && (self.structured_selection.is_some() || !self.folded_visual_code_blocks.is_empty())
+        {
+            let blocks = self.document.visual_blocks_shared();
+            self.dormant_visual_state = Some(DormantVisualState {
+                version: self.document.version(),
+                selection: self
+                    .structured_selection
+                    .as_ref()
+                    .and_then(|selection| selection.bookmark(&self.document)),
+                folded_code: blocks
+                    .iter()
+                    .filter(|block| self.folded_visual_code_blocks.contains(&block.id))
+                    .map(|block| block.source_range.clone())
+                    .collect(),
+            });
+        }
+        self.structured_selection = None;
+        self.folded_visual_code_blocks.clear();
         self.document.evict_derived_caches();
         self.invalidate_source_layout();
         *self.display_text_cache.borrow_mut() = None;
@@ -1824,6 +1909,10 @@ impl DocumentTabState {
             document: self.document.clone(),
             selected_range: self.selected_range.clone(),
             selection_reversed: self.selection_reversed,
+            structured_selection: self
+                .structured_selection
+                .as_ref()
+                .and_then(|selection| selection.bookmark(&self.document)),
         }
     }
 
@@ -1922,6 +2011,10 @@ impl DocumentTabState {
             insert: expected,
             selected_range: self.selected_range.clone(),
             selection_reversed: self.selection_reversed,
+            structured_selection: self
+                .structured_selection
+                .as_ref()
+                .and_then(|selection| selection.bookmark(&self.document)),
         };
         let mutation = self
             .document
@@ -1930,6 +2023,9 @@ impl DocumentTabState {
         self.document.refresh_dirty_against_known_disk();
         self.selected_range = diff.selected_range;
         self.selection_reversed = diff.selection_reversed;
+        self.structured_selection = diff
+            .structured_selection
+            .and_then(|selection| selection.restore(&self.document));
         self.marked_range = None;
         Some(inverse)
     }
@@ -2473,8 +2569,7 @@ pub(super) fn filter_restorable_session(
     let open_files: Vec<PathBuf> = candidate_files
         .iter()
         .filter(|path| {
-            path.is_file()
-                && (is_openable_text_path(path) || image_extension_supported(path))
+            path.is_file() && (is_openable_text_path(path) || image_extension_supported(path))
         })
         .cloned()
         .collect();

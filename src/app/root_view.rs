@@ -373,6 +373,8 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::select_right))
                     .on_action(cx.listener(Self::select_up))
                     .on_action(cx.listener(Self::select_down))
+                    .on_action(cx.listener(Self::move_blocks_up))
+                    .on_action(cx.listener(Self::move_blocks_down))
                     .on_action(cx.listener(Self::select_all))
                     .on_action(cx.listener(Self::home))
                     .on_action(cx.listener(Self::end))
@@ -512,6 +514,7 @@ impl Render for MarkionApp {
                     // Its drag coordinate therefore remains relative to this outer
                     // row, whose left edge is the window's left edge.
                     .on_drag_move::<DraggedSidebarHandle>(cx.listener(Self::on_sidebar_resize_drag))
+                    .on_drag_move::<DraggedVisualBlock>(cx.listener(Self::on_visual_block_drag_move))
                     .on_drop::<DraggedSidebarHandle>(cx.listener(|_, _, _, cx| {
                         cx.notify();
                     }))

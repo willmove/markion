@@ -1,0 +1,568 @@
+{
+  "date": "2026-11-11",
+  "hardware": {
+    "os": "Windows 11 Pro 10.0.26200",
+    "cpu": "Intel Core Ultra 5 225U",
+    "physical_cores": 12,
+    "logical_processors": 14,
+    "visible_ram_gib": 31.43
+  },
+  "configuration": {
+    "model": "repository release profile, opt-level=3, Thin LTO, codegen-units=1",
+    "native": "release, opt-level=3, Thin LTO, application codegen-units=16",
+    "workspace_tests": "cargo test --workspace --config profile.dev.package.markion.opt-level=0 -- --quiet",
+    "windows_followup": "cargo test --bin markion --config profile.dev.package.markion.opt-level=0 -- --quiet",
+    "measurement_load": "no concurrent compiler; model and native replay run sequentially"
+  },
+  "verification": {
+    "workspace_passed": 2122,
+    "workspace_ignored": 5,
+    "windows_followup_passed": 785,
+    "windows_followup_ignored": 2,
+    "cf_html_codec_passed": 3,
+    "formatting": "cargo fmt --all -- --check; rustfmt --check for modified vendored files; git diff --check",
+    "openspec_strict_items_passed": 103
+  },
+  "model": [
+    {
+      "fixture_kb": 100,
+      "opening_ms": 10.77,
+      "estimated_model_mib": 7.79,
+      "strokes": 100,
+      "input_p50_ms": 0.6388,
+      "input_mean_ms": 0.7156,
+      "input_p95_ms": 1.2142,
+      "identity_candidates": 4,
+      "visual_blocks": 2125,
+      "rebuilt_visual_blocks": 4,
+      "reused_visual_blocks": 2121
+    },
+    {
+      "fixture_kb": 300,
+      "opening_ms": 28.67,
+      "estimated_model_mib": 23.14,
+      "strokes": 100,
+      "input_p50_ms": 2.5539,
+      "input_mean_ms": 2.6502,
+      "input_p95_ms": 3.6852,
+      "identity_candidates": 4,
+      "visual_blocks": 6324,
+      "rebuilt_visual_blocks": 4,
+      "reused_visual_blocks": 6320
+    },
+    {
+      "fixture_kb": 600,
+      "opening_ms": 55.03,
+      "estimated_model_mib": 46.06,
+      "strokes": 100,
+      "input_p50_ms": 5.8132,
+      "input_mean_ms": 5.9619,
+      "input_p95_ms": 6.8567,
+      "identity_candidates": 11,
+      "visual_blocks": 12597,
+      "rebuilt_visual_blocks": 11,
+      "reused_visual_blocks": 12586
+    },
+    {
+      "fixture_kb": 1024,
+      "opening_ms": 96.84,
+      "estimated_model_mib": 78.33,
+      "strokes": 100,
+      "input_p50_ms": 10.3251,
+      "input_mean_ms": 10.452,
+      "input_p95_ms": 11.2424,
+      "identity_candidates": 10,
+      "visual_blocks": 21419,
+      "rebuilt_visual_blocks": 10,
+      "reused_visual_blocks": 21409
+    }
+  ],
+  "native": {
+    "passed": true,
+    "error": null,
+    "platform": "windows",
+    "version": "0.5.2",
+    "evidence": "real native GPUI window and paint; application input callbacks; no OS mouse/keyboard/IME injection",
+    "observations": [
+      {
+        "fixture_kb": 100,
+        "resident_bytes": 152518656,
+        "commit_bytes": 115064832,
+        "paint_samples": [
+          {
+            "kind": "open",
+            "bytes": 102665,
+            "elapsed_us": 53438
+          },
+          {
+            "kind": "input",
+            "bytes": 102666,
+            "elapsed_us": 15729
+          },
+          {
+            "kind": "input",
+            "bytes": 102667,
+            "elapsed_us": 16441
+          },
+          {
+            "kind": "input",
+            "bytes": 102668,
+            "elapsed_us": 5238
+          },
+          {
+            "kind": "input",
+            "bytes": 102669,
+            "elapsed_us": 7230
+          },
+          {
+            "kind": "input",
+            "bytes": 102670,
+            "elapsed_us": 10737
+          },
+          {
+            "kind": "input",
+            "bytes": 102671,
+            "elapsed_us": 13380
+          },
+          {
+            "kind": "input",
+            "bytes": 102672,
+            "elapsed_us": 14725
+          },
+          {
+            "kind": "input",
+            "bytes": 102673,
+            "elapsed_us": 16916
+          },
+          {
+            "kind": "input",
+            "bytes": 102674,
+            "elapsed_us": 4370
+          },
+          {
+            "kind": "input",
+            "bytes": 102675,
+            "elapsed_us": 7315
+          },
+          {
+            "kind": "input",
+            "bytes": 102676,
+            "elapsed_us": 8964
+          },
+          {
+            "kind": "input",
+            "bytes": 102677,
+            "elapsed_us": 10944
+          },
+          {
+            "kind": "input",
+            "bytes": 102678,
+            "elapsed_us": 13853
+          },
+          {
+            "kind": "input",
+            "bytes": 102679,
+            "elapsed_us": 16975
+          },
+          {
+            "kind": "input",
+            "bytes": 102680,
+            "elapsed_us": 5499
+          },
+          {
+            "kind": "input",
+            "bytes": 102681,
+            "elapsed_us": 6731
+          },
+          {
+            "kind": "input",
+            "bytes": 102682,
+            "elapsed_us": 8872
+          },
+          {
+            "kind": "input",
+            "bytes": 102683,
+            "elapsed_us": 12232
+          },
+          {
+            "kind": "input",
+            "bytes": 102684,
+            "elapsed_us": 14867
+          },
+          {
+            "kind": "input",
+            "bytes": 102685,
+            "elapsed_us": 18010
+          }
+        ]
+      },
+      {
+        "fixture_kb": 300,
+        "resident_bytes": 179048448,
+        "commit_bytes": 142086144,
+        "paint_samples": [
+          {
+            "kind": "open",
+            "bytes": 307922,
+            "elapsed_us": 57471
+          },
+          {
+            "kind": "input",
+            "bytes": 307923,
+            "elapsed_us": 20440
+          },
+          {
+            "kind": "input",
+            "bytes": 307924,
+            "elapsed_us": 20116
+          },
+          {
+            "kind": "input",
+            "bytes": 307925,
+            "elapsed_us": 8786
+          },
+          {
+            "kind": "input",
+            "bytes": 307926,
+            "elapsed_us": 11518
+          },
+          {
+            "kind": "input",
+            "bytes": 307927,
+            "elapsed_us": 13507
+          },
+          {
+            "kind": "input",
+            "bytes": 307928,
+            "elapsed_us": 16430
+          },
+          {
+            "kind": "input",
+            "bytes": 307929,
+            "elapsed_us": 19414
+          },
+          {
+            "kind": "input",
+            "bytes": 307930,
+            "elapsed_us": 8670
+          },
+          {
+            "kind": "input",
+            "bytes": 307931,
+            "elapsed_us": 10385
+          },
+          {
+            "kind": "input",
+            "bytes": 307932,
+            "elapsed_us": 14249
+          },
+          {
+            "kind": "input",
+            "bytes": 307933,
+            "elapsed_us": 15310
+          },
+          {
+            "kind": "input",
+            "bytes": 307934,
+            "elapsed_us": 18408
+          },
+          {
+            "kind": "input",
+            "bytes": 307935,
+            "elapsed_us": 19234
+          },
+          {
+            "kind": "input",
+            "bytes": 307936,
+            "elapsed_us": 8611
+          },
+          {
+            "kind": "input",
+            "bytes": 307937,
+            "elapsed_us": 11472
+          },
+          {
+            "kind": "input",
+            "bytes": 307938,
+            "elapsed_us": 14121
+          },
+          {
+            "kind": "input",
+            "bytes": 307939,
+            "elapsed_us": 17998
+          },
+          {
+            "kind": "input",
+            "bytes": 307940,
+            "elapsed_us": 18516
+          },
+          {
+            "kind": "input",
+            "bytes": 307941,
+            "elapsed_us": 7966
+          },
+          {
+            "kind": "input",
+            "bytes": 307942,
+            "elapsed_us": 10894
+          }
+        ]
+      },
+      {
+        "fixture_kb": 600,
+        "resident_bytes": 213962752,
+        "commit_bytes": 178282496,
+        "paint_samples": [
+          {
+            "kind": "open",
+            "bytes": 614561,
+            "elapsed_us": 83249
+          },
+          {
+            "kind": "input",
+            "bytes": 614562,
+            "elapsed_us": 18775
+          },
+          {
+            "kind": "input",
+            "bytes": 614563,
+            "elapsed_us": 17409
+          },
+          {
+            "kind": "input",
+            "bytes": 614564,
+            "elapsed_us": 20811
+          },
+          {
+            "kind": "input",
+            "bytes": 614565,
+            "elapsed_us": 22005
+          },
+          {
+            "kind": "input",
+            "bytes": 614566,
+            "elapsed_us": 23275
+          },
+          {
+            "kind": "input",
+            "bytes": 614567,
+            "elapsed_us": 22269
+          },
+          {
+            "kind": "input",
+            "bytes": 614568,
+            "elapsed_us": 12676
+          },
+          {
+            "kind": "input",
+            "bytes": 614569,
+            "elapsed_us": 15714
+          },
+          {
+            "kind": "input",
+            "bytes": 614570,
+            "elapsed_us": 19078
+          },
+          {
+            "kind": "input",
+            "bytes": 614571,
+            "elapsed_us": 22341
+          },
+          {
+            "kind": "input",
+            "bytes": 614572,
+            "elapsed_us": 23207
+          },
+          {
+            "kind": "input",
+            "bytes": 614573,
+            "elapsed_us": 11808
+          },
+          {
+            "kind": "input",
+            "bytes": 614574,
+            "elapsed_us": 15213
+          },
+          {
+            "kind": "input",
+            "bytes": 614575,
+            "elapsed_us": 17460
+          },
+          {
+            "kind": "input",
+            "bytes": 614576,
+            "elapsed_us": 20472
+          },
+          {
+            "kind": "input",
+            "bytes": 614577,
+            "elapsed_us": 23614
+          },
+          {
+            "kind": "input",
+            "bytes": 614578,
+            "elapsed_us": 11373
+          },
+          {
+            "kind": "input",
+            "bytes": 614579,
+            "elapsed_us": 15829
+          },
+          {
+            "kind": "input",
+            "bytes": 614580,
+            "elapsed_us": 17945
+          },
+          {
+            "kind": "input",
+            "bytes": 614581,
+            "elapsed_us": 19882
+          }
+        ]
+      },
+      {
+        "fixture_kb": 1024,
+        "resident_bytes": 261472256,
+        "commit_bytes": 228282368,
+        "paint_samples": [
+          {
+            "kind": "open",
+            "bytes": 1048710,
+            "elapsed_us": 134622
+          },
+          {
+            "kind": "input",
+            "bytes": 1048711,
+            "elapsed_us": 34062
+          },
+          {
+            "kind": "input",
+            "bytes": 1048712,
+            "elapsed_us": 23267
+          },
+          {
+            "kind": "input",
+            "bytes": 1048713,
+            "elapsed_us": 22544
+          },
+          {
+            "kind": "input",
+            "bytes": 1048714,
+            "elapsed_us": 26096
+          },
+          {
+            "kind": "input",
+            "bytes": 1048715,
+            "elapsed_us": 28554
+          },
+          {
+            "kind": "input",
+            "bytes": 1048716,
+            "elapsed_us": 33764
+          },
+          {
+            "kind": "input",
+            "bytes": 1048717,
+            "elapsed_us": 34273
+          },
+          {
+            "kind": "input",
+            "bytes": 1048718,
+            "elapsed_us": 21536
+          },
+          {
+            "kind": "input",
+            "bytes": 1048719,
+            "elapsed_us": 26619
+          },
+          {
+            "kind": "input",
+            "bytes": 1048720,
+            "elapsed_us": 27867
+          },
+          {
+            "kind": "input",
+            "bytes": 1048721,
+            "elapsed_us": 31222
+          },
+          {
+            "kind": "input",
+            "bytes": 1048722,
+            "elapsed_us": 21980
+          },
+          {
+            "kind": "input",
+            "bytes": 1048723,
+            "elapsed_us": 23985
+          },
+          {
+            "kind": "input",
+            "bytes": 1048724,
+            "elapsed_us": 28039
+          },
+          {
+            "kind": "input",
+            "bytes": 1048725,
+            "elapsed_us": 35510
+          },
+          {
+            "kind": "input",
+            "bytes": 1048726,
+            "elapsed_us": 35842
+          },
+          {
+            "kind": "input",
+            "bytes": 1048727,
+            "elapsed_us": 21687
+          },
+          {
+            "kind": "input",
+            "bytes": 1048728,
+            "elapsed_us": 24793
+          },
+          {
+            "kind": "input",
+            "bytes": 1048729,
+            "elapsed_us": 28607
+          },
+          {
+            "kind": "input",
+            "bytes": 1048730,
+            "elapsed_us": 30525
+          }
+        ]
+      },
+      {
+        "case": "block selection, native text/HTML clipboard, delete and undo",
+        "passed": true
+      },
+      {
+        "case": "native table rectangle, matrix paste, final-cell Tab and undo",
+        "passed": true
+      },
+      {
+        "case": "native code folding geometry and navigation expansion",
+        "passed": true
+      },
+      {
+        "case": "IME callbacks, real shaped candidate bounds and composition undo",
+        "passed": true,
+        "system_candidate_window_tested": false
+      }
+    ],
+    "build_profile": "release",
+    "process_peaks": {
+      "private_sampled_bytes": 227766272,
+      "resident_bytes": 266747904,
+      "sample_interval_ms": 100
+    }
+  },
+  "limitations": [
+    "Model timing excludes GPUI; native timing measures application callback to caret paint, not OS keyboard transport or GPU presentation.",
+    "Native replay uses the actual Windows GPUI renderer and clipboard; OS pointer input and system IME candidate windows were not exercised because both computer-control entry points failed with OS error 5.",
+    "macOS, X11 and Wayland clipboard publication code was updated but not built or tested natively on this Windows host.",
+    "Flat suffix range relocation remains linear; globally dependent or ambiguous Markdown can require full derivation.",
+    "Process resident peak is an OS peak counter; private peak is sampled every 100 ms."
+  ],
+  "source_checkpoint": "fbd0253"
+}

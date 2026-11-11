@@ -1125,7 +1125,12 @@ impl Element for VisualEditableText {
                         caret_emitted,
                     });
                 }
+                app.finish_visual_input_profile();
             });
+        }
+        if super::performance::enabled() {
+            self.entity
+                .update(cx, |app, _| app.finish_visual_open_profile());
         }
         if let (Some(marked_range), Some(layout)) = (self.marked_range.clone(), layout.as_ref()) {
             let mut marked_bounds: Option<Bounds<Pixels>> = None;
@@ -1294,6 +1299,9 @@ impl Element for VisualEditableText {
             let focus_handle = entity.read(cx).focus_handle.clone();
             window.focus(&focus_handle);
             entity.update(cx, |app, cx| {
+                if app.structured_pointer_down(block_index, source, event, cx) {
+                    return;
+                }
                 app.file_tree_query_focused = false;
                 app.search_focus = None;
                 app.search_control_focus = None;
@@ -1372,6 +1380,7 @@ impl Element for VisualEditableText {
             if phase == DispatchPhase::Bubble {
                 entity.update(cx, |app, _| {
                     app.active_tab_mut().is_selecting = false;
+                    app.active_tab_mut().cell_drag_anchor = None;
                 });
             }
         });
@@ -3935,6 +3944,9 @@ pub(super) fn visual_whitespace_caret_element(
 /// overlaps, even intersect), so ownership is resolved through the same
 /// first-match lookup that drives caret reveal scrolling.
 pub(super) fn visual_block_owns_caret(app: &MarkionApp, block_index: usize) -> bool {
+    if app.active_tab().structured_selection.is_some() {
+        return false;
+    }
     let tab = app.active_tab();
     visual_block_index_for_offset(
         &tab.visual_list_blocks,
@@ -4480,6 +4492,14 @@ pub(super) fn visual_block_view(
         document_dir,
         display_scale,
         cx,
+    )
+    .when(
+        matches!(&app.active_tab().structured_selection,
+        Some(markion::selection::SelectionState::Blocks(selection))
+            if selection.version == app.active_tab().document.version()
+                && block.source_range.start < app.active_tab().selected_range.end
+                && block.source_range.end > app.active_tab().selected_range.start),
+        |row| row.bg(app.palette().active_bg),
     )
     .when(app.focus_mode && !owns_caret, |row| row.opacity(0.4))
 }
@@ -5063,6 +5083,7 @@ fn visual_block_content_view(
 
 fn block_has_context_menu_at(blocks: &[VisualBlock], index: usize) -> bool {
     block_can_transform_at(blocks, index)
+        || block_can_reorder_at(blocks, index)
         || blocks
             .get(index)
             .is_some_and(|block| matches!(block.kind, VisualBlockKind::Image { .. }))
@@ -5083,6 +5104,9 @@ fn visual_block_chrome(
     let before_target = target.clone();
     let after_target = target.clone();
     let drag_target = target.clone();
+    let drag_label: SharedString = p1_t(app.language, P1Msg::DragBlock).into();
+    let drop_version = target.document_version;
+    let drop_id = target.block_id;
     let menu_target = target.clone();
     let hover_group = format!("visual-block-row-hover-{}", block.id.as_u64());
 
@@ -5132,11 +5156,36 @@ fn visual_block_chrome(
                     .justify_center()
                     .hover(move |style| style.bg(palette.surface_bg))
                     .child("⠿")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |app, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            window.focus(&app.focus_handle);
+                            let already_selected = matches!(
+                                app.active_tab().structured_selection,
+                                Some(markion::selection::SelectionState::Blocks(_))
+                            ) && app.active_tab().selected_range.contains(
+                                &app.active_tab().visual_list_blocks[block_index]
+                                    .source_range
+                                    .start,
+                            );
+                            if event.modifiers.shift || !already_selected {
+                                app.select_source_blocks(block_index, event.modifiers.shift, cx);
+                            }
+                        }),
+                    )
                     .on_drag(
                         DraggedVisualBlock {
                             target: drag_target,
                         },
-                        move |_, _, _, cx| cx.new(|_| Empty),
+                        move |_, _, _, cx| {
+                            cx.new(|_| VisualBlockDragPreview {
+                                label: drag_label.clone(),
+                                background: palette.panel_bg.into(),
+                                foreground: palette.text.into(),
+                                border: palette.border.into(),
+                            })
+                        },
                     ),
             )
             .child(
@@ -5148,6 +5197,18 @@ fn visual_block_chrome(
                     .left_0()
                     .right_0()
                     .h(px(6.))
+                    .drag_over::<DraggedVisualBlock>(move |style, dragged, _, _| {
+                        if dragged.target.document_version == drop_version
+                            && dragged.target.block_id != drop_id
+                        {
+                            style
+                                .bg(palette.active_bg)
+                                .border_t_1()
+                                .border_color(palette.text)
+                        } else {
+                            style
+                        }
+                    })
                     .on_drop::<DraggedVisualBlock>(cx.listener(
                         move |app, dragged: &DraggedVisualBlock, _, cx| {
                             app.reorder_visual_block(
@@ -5168,6 +5229,18 @@ fn visual_block_chrome(
                     .left_0()
                     .right_0()
                     .h(px(6.))
+                    .drag_over::<DraggedVisualBlock>(move |style, dragged, _, _| {
+                        if dragged.target.document_version == drop_version
+                            && dragged.target.block_id != drop_id
+                        {
+                            style
+                                .bg(palette.active_bg)
+                                .border_b_1()
+                                .border_color(palette.text)
+                        } else {
+                            style
+                        }
+                    })
                     .on_drop::<DraggedVisualBlock>(cx.listener(
                         move |app, dragged: &DraggedVisualBlock, _, cx| {
                             app.reorder_visual_block(
@@ -6029,6 +6102,57 @@ fn visual_code_editor(
     let typography = app.typography_metrics();
     let palette = code_palette(app.code_theme);
     let authored = &app.active_tab().document.text()[payload.source_range.clone()];
+    let fold_target = BlockTarget::from_block(
+        app.active_tab().document.version(),
+        &app.active_tab().visual_list_blocks[block_index],
+    );
+    let folded = app
+        .active_tab()
+        .folded_visual_code_blocks
+        .contains(&block_id);
+    let fold_label = markion::i18n::advanced_t(
+        app.language,
+        if folded {
+            markion::i18n::AdvancedMsg::ExpandCode
+        } else {
+            markion::i18n::AdvancedMsg::FoldCode
+        },
+    );
+    let fold_button = div()
+        .id(("visual-code-fold", block_id.as_u64()))
+        .debug_selector(move || format!("visual-code-fold-{block_index}"))
+        .px_2()
+        .py_1()
+        .text_size(px(11.))
+        .text_color(app.palette().muted)
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_, _, _, cx| cx.stop_propagation()),
+        )
+        .on_click(
+            cx.listener(move |app, _, _, cx| app.toggle_visual_code_fold(fold_target.clone(), cx)),
+        )
+        .child(fold_label);
+    if folded {
+        let count = markion::i18n::advanced_t(app.language, markion::i18n::AdvancedMsg::CodeLines)
+            .replace("{0}", &authored.lines().count().to_string());
+        return div()
+            .id(("visual-code", block_id.as_u64()))
+            .mb_3()
+            .p_2()
+            .rounded_md()
+            .bg(palette.bg)
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(fold_button)
+            .child(
+                div()
+                    .text_color(app.palette().muted)
+                    .child(format!("{} · {count}", language.unwrap_or(""))),
+            );
+    }
     // An indented code body is highlighted (and copied) as its display text,
     // with each line's indentation removed, so highlight ranges line up with
     // the dedented projection.
@@ -6077,6 +6201,7 @@ fn visual_code_editor(
             tab.hovered_visual_code_block = next;
             cx.notify();
         }))
+        .child(fold_button)
         .child(code_block_header_with_language(
             app,
             language,
@@ -6918,6 +7043,15 @@ pub(super) fn visual_table_view(
     let table_hovered = app.active_tab().hovered_visual_table_block == Some(block_id);
     let append_row = axis_target(VisualTableAxis::Row(row_count.saturating_sub(1)));
     let append_column = axis_target(VisualTableAxis::Column(column_count.saturating_sub(1)));
+    let selected_cells = match app.active_tab().structured_selection.as_ref() {
+        Some(markion::selection::SelectionState::Cells(selection))
+            if selection.target.block_id == block_id
+                && selection.target.document_version == document_version =>
+        {
+            Some(selection.bounds(row_count, column_count))
+        }
+        _ => None,
+    };
 
     let grid = div()
         .debug_selector(move || format!("visual-table-chrome-{block_index}"))
@@ -6980,6 +7114,9 @@ pub(super) fn visual_table_view(
                         })
                         .relative()
                         .p_2()
+                        .when(selected_cells.as_ref().is_some_and(|(rows, columns)|
+                            rows.contains(&row_index) && columns.contains(&cell_index)),
+                            |style| style.bg(app.palette().active_bg))
                         .when(!is_last_cell, |style| {
                             style.border_r_1().border_color(rgb(0xe2e8f0))
                         })
@@ -6998,6 +7135,7 @@ pub(super) fn visual_table_view(
                                 cx.listener(move |app, event: &MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
                                     window.focus(&app.focus_handle);
+                                    if app.structured_pointer_down(block_index, insertion, event, cx) { return; }
                                     app.file_tree_query_focused = false;
                                     app.search_focus = None;
                                     app.search_control_focus = None;
@@ -7013,7 +7151,22 @@ pub(super) fn visual_table_view(
                             )
                         })
                         .when(cells.is_some(), |view| {
-                            view.on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+                            view.on_mouse_move(cx.listener(move |app, event: &MouseMoveEvent, _, cx| {
+                                if event.dragging() && app.active_tab().cell_drag_anchor.as_ref().is_some_and(|selection|
+                                    selection.target.block_id == block_id
+                                        && selection.target.document_version == app.active_tab().document.version()
+                                        && (selection.anchor != (row_index, cell_index)
+                                            || matches!(app.active_tab().structured_selection,
+                                                Some(markion::selection::SelectionState::Cells(_)))))
+                                {
+                                    app.select_table_cells(block_index, (row_index, cell_index),
+                                        markion::selection::CellSelectionAxis::Rectangle, true, cx);
+                                }
+                            }))
+                            .on_mouse_up(MouseButton::Left, cx.listener(|app, _, _, _| {
+                                app.active_tab_mut().cell_drag_anchor = None;
+                            }))
+                            .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
                                 let key = (block_id, row_index, cell_index);
                                 let tab = app.active_tab_mut();
                                 if *hovered {
@@ -7250,9 +7403,10 @@ fn visual_table_grip(
         )
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(|app, _: &MouseDownEvent, window, cx| {
+            cx.listener(move |app, event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 window.focus(&app.focus_handle);
+                app.select_table_axis(target, event.modifiers.shift, cx);
             }),
         )
         .on_click(cx.listener(move |app, event: &ClickEvent, _, cx| {

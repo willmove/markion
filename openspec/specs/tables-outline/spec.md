@@ -3,9 +3,7 @@
 ## Purpose
 
 Covers GFM table rendering, the row/column editing toolbars, and the document outline panel. Direct cell-level visual table editing is **not** part of this capability — it is a future candidate.
-
 ## Requirements
-
 ### Requirement: Document outline navigation
 The editor SHALL provide a toggleable outline panel that lists the document's heading hierarchy, supports context-aware click-to-jump navigation, highlights the heading for the section containing the canonical cursor, and updates as headings change. In Read mode, clicking an outline heading label SHALL move the canonical cursor to that heading's source position, highlight that outline item, and bring the corresponding rendered heading into view in the preview pane. In Edit, Visual Edit, and Split Preview modes, heading-label clicks SHALL retain their existing editable-surface source-position navigation.
 
@@ -188,7 +186,7 @@ A row handle SHALL be shown only while the pointer is over a cell of that row, a
 
 The row menu SHALL offer Insert above, Insert below, Move up, Move down, Duplicate, Clear contents, and Delete. For the header row, only Insert below and Clear contents SHALL be enabled. For the first body row, Move up SHALL be disabled; for the last row, Move down SHALL be disabled. The column menu SHALL offer Insert left, Insert right, Move left, Move right, Align left, Align center, Align right, Duplicate, Clear contents, and Delete. Move left SHALL be disabled for the first column, Move right SHALL be disabled for the last column, and Delete SHALL be disabled when the table has one column. The alignment item matching the column's declared alignment SHALL be marked current; choosing it again SHALL reset the column to the default (undeclared) alignment. Disabled items SHALL be visibly and interactively disabled.
 
-Each handle, menu, drag, or edge action SHALL target the row or column index captured when the handle or affordance was rendered. It SHALL be revalidated against the current document version, table identity, and row and column counts before it is applied, and it SHALL do nothing if that validation fails. Each successful action SHALL produce one deterministic GFM table source replacement through the existing history and dirty-state path: exactly one undo step and one document version increment. It SHALL preserve the declared alignments of unaffected columns and the contents and order of unaffected rows, and it SHALL place the canonical source selection in a cell of the affected row or column. Each cell edit SHALL produce one deterministic GFM table source replacement, preserve row ordering and declared alignments, escape field-terminating input safely, and return the exact new source selection for the active cell. Table cell alignment is parsed from the separator row and used by the LaTeX/HTML exporters.
+Each handle, menu, drag, or edge action SHALL target the row or column index captured when the handle or affordance was rendered. It SHALL be revalidated against the current document version, table identity, and row and column counts before it is applied, and it SHALL do nothing if that validation fails. Each successful action SHALL produce one deterministic GFM table source replacement through the existing history and dirty-state path: exactly one undo step and one document version increment. It SHALL preserve the declared alignments of unaffected columns and the contents and order of unaffected rows, and it SHALL place the canonical source selection in a cell of the affected row or column. Ordinary cell text edits SHALL patch only the exact cell field range, preserve unrelated table bytes, row ordering and declared alignments, escape field-terminating input safely, and return the exact new source selection. Explicit Format and structural table commands MAY reformat the table. Table cell alignment is parsed from the separator row and used by the LaTeX/HTML exporters.
 
 Inline formatting inside table cells (bold, italic, strikethrough, inline code, highlight, superscript, subscript, and links) SHALL render in Split Preview, Read mode, and Visual Edit. In Visual Edit, an unfocused table cell SHALL display rendered inline formatting; a focused cell SHALL reveal the authored source markup (e.g. `**bold**`, `[text](url)`) so the user edits the canonical Markdown directly. Editing a cell continues to target the cell's exact source range and produce one deterministic table replacement through the existing history and dirty-state path.
 
@@ -224,7 +222,7 @@ Inline formatting inside table cells (bold, italic, strikethrough, inline code, 
 #### Scenario: Cell traversal remains inside the visual grid
 - **WHEN** the user presses Tab or Shift-Tab from a directly editable table cell
 - **THEN** focus and the canonical source selection move to the next or previous logical cell
-- **AND** traversal at the grid boundary hands control to the adjacent visual block without creating an implicit row
+- **AND** Tab at the final cell appends one empty body row as one undoable source edit and selects its first cell; Shift-Tab at the first cell hands control to the preceding visual block
 
 #### Scenario: No in-flow editing header
 - **WHEN** the pointer enters, moves within, or leaves a Visual Edit table, or the canonical caret enters or leaves one of its cells
@@ -357,3 +355,15 @@ No column in a table of `n` columns (`n` ≥ 2) SHALL receive more than three eq
 
 - **WHEN** a table header cell’s unwrapped content is wider than three times a single-line glyph run
 - **THEN** that column’s recommended minimum is at least one third of the unwrapped header content width plus cell padding
+
+### Requirement: Rectangular GFM cell selection and matrix editing
+Visual Edit SHALL support rectangular cell selection, including whole rows and columns. Single-column GFM tables SHALL support the same direct-cell, row and matrix editing commands. Selected cells SHALL be visibly highlighted and carry exact table identity/version. Copy SHALL publish a TSV matrix and HTML table; Delete SHALL clear only selected cells without removing table structure. Pasting a TSV matrix into a selected rectangle or active cell SHALL fill cells in row order, escape cell delimiters/newlines, and append required body rows without removing the GFM header. Each clear or paste SHALL be one checked undoable edit. Stale targets and unproven cell ranges SHALL remain unchanged.
+
+#### Scenario: Clear and restore a rectangle
+- **WHEN** the user selects a rectangle and presses Delete
+- **THEN** only the selected cells are cleared and one Undo restores all original cells and alignments
+
+#### Scenario: Paste a spreadsheet matrix
+- **WHEN** a two-by-two TSV matrix is pasted at a selected cell
+- **THEN** four target cells receive the corresponding escaped values in one undoable operation
+- **AND** required rows are added without changing unrelated cells

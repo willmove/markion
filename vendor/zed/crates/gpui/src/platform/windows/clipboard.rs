@@ -1,10 +1,10 @@
-use std::sync::LazyLock;
+use std::{sync::LazyLock, time::Duration};
 
 use anyhow::Result;
 use collections::{FxHashMap, FxHashSet};
 use itertools::Itertools;
 use windows::Win32::{
-    Foundation::{HANDLE, HGLOBAL},
+    Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND},
     System::{
         DataExchange::{
             CloseClipboard, CountClipboardFormats, EmptyClipboard, EnumClipboardFormats,
@@ -18,6 +18,7 @@ use windows::Win32::{
 };
 use windows_core::PCWSTR;
 
+use super::clipboard_html::{encode_cf_html, extract_cf_html_fragment};
 use crate::{ClipboardEntry, ClipboardItem, ClipboardString, Image, ImageFormat, hash};
 
 // https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-dragqueryfilew
@@ -76,12 +77,14 @@ enum ClipboardFormatType {
     Files,
 }
 
-pub(crate) fn write_to_clipboard(item: ClipboardItem) {
-    with_clipboard(|| write_to_clipboard_inner(item));
+pub(crate) fn write_to_clipboard(item: ClipboardItem, owner: Option<HWND>) {
+    if let Some(Err(error)) = with_clipboard(owner, || write_to_clipboard_inner(item)) {
+        log::error!("Failed to write clipboard: {error}");
+    }
 }
 
 pub(crate) fn read_from_clipboard() -> Option<ClipboardItem> {
-    with_clipboard(|| {
+    with_clipboard(None, || {
         let mut item = with_best_match_format(|item_format| match format_to_type(item_format) {
             ClipboardFormatType::Text => read_string_from_clipboard(),
             ClipboardFormatType::Image => read_image_from_clipboard(item_format),
@@ -121,23 +124,35 @@ where
     }
 }
 
-fn with_clipboard<F, T>(f: F) -> Option<T>
+fn with_clipboard<F, T>(owner: Option<HWND>, f: F) -> Option<T>
 where
     F: FnOnce() -> T,
 {
-    match unsafe { OpenClipboard(None) } {
-        Ok(()) => {
-            let result = f();
-            if let Err(e) = unsafe { CloseClipboard() } {
-                log::error!("Failed to close clipboard: {e}",);
+    struct ClipboardGuard;
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            if let Err(error) = unsafe { CloseClipboard() } {
+                log::error!("Failed to close clipboard: {error}");
             }
-            Some(result)
-        }
-        Err(e) => {
-            log::error!("Failed to open clipboard: {e}",);
-            None
         }
     }
+    let mut last_error = None;
+    // Clipboard history and other consumers can briefly hold the shared lock.
+    // Bound explicit copy/paste contention to 75 ms; never retry indefinitely.
+    for delay_ms in [0, 5, 10, 20, 40] {
+        if delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
+        match unsafe { OpenClipboard(owner) } {
+            Ok(()) => {
+                let _guard = ClipboardGuard;
+                return Some(f());
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    log::error!("Failed to open clipboard: {:?}", last_error);
+    None
 }
 
 fn register_clipboard_format(format: PCWSTR) -> u32 {
@@ -164,6 +179,11 @@ fn write_to_clipboard_inner(item: ClipboardItem) -> Result<()> {
     match item.entries().first() {
         Some(entry) => match entry {
             ClipboardEntry::String(string) => {
+                // Publish the richest representation first, as required by
+                // consumers that select their first recognized native format.
+                if let Some(html) = item.html() {
+                    set_data_to_clipboard(&encode_cf_html(html), *CLIPBOARD_HTML_FORMAT)?;
+                }
                 write_string_to_clipboard(string)?;
             }
             ClipboardEntry::Image(image) => {
@@ -200,9 +220,18 @@ fn set_data_to_clipboard<T>(data: &[T], format: u32) -> Result<()> {
     unsafe {
         let global = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(data))?;
         let handle = GlobalLock(global);
+        if handle.is_null() {
+            let error = windows::core::Error::from_win32();
+            let _ = GlobalFree(Some(global));
+            return Err(error.into());
+        }
         std::ptr::copy_nonoverlapping(data.as_ptr(), handle as _, data.len());
         let _ = GlobalUnlock(global);
-        SetClipboardData(format, Some(HANDLE(global.0)))?;
+        if let Err(error) = SetClipboardData(format, Some(HANDLE(global.0))) {
+            // Ownership transfers only after SetClipboardData succeeds.
+            let _ = GlobalFree(Some(global));
+            return Err(error.into());
+        }
     }
     Ok(())
 }
@@ -349,36 +378,6 @@ fn read_html_from_clipboard() -> Option<String> {
     })?
 }
 
-/// CF_HTML payloads are UTF-8 and start with an ASCII header carrying byte
-/// offsets (`StartHTML`/`EndHTML`/`StartFragment`/`EndFragment`); the fragment
-/// is the meaningful slice. Fall back to the whole payload when the header is
-/// missing or invalid. Invalid UTF-8 returns `None` so paste can use Unicode
-/// text (including TSV→GFM) instead of a replacement-character HTML string.
-fn extract_cf_html_fragment(bytes: &[u8]) -> Option<String> {
-    let text = String::from_utf8(bytes.to_vec()).ok()?;
-    let (mut start, mut end) = (None, None);
-    for line in text.lines().take(16) {
-        if let Some(value) = line.strip_prefix("StartFragment:") {
-            start = value.trim().parse::<usize>().ok();
-        } else if let Some(value) = line.strip_prefix("EndFragment:") {
-            end = value.trim().parse::<usize>().ok();
-        } else if line.starts_with('<') {
-            break;
-        }
-    }
-    match (start, end) {
-        (Some(start), Some(end))
-            if start <= end
-                && end <= text.len()
-                && text.is_char_boundary(start)
-                && text.is_char_boundary(end) =>
-        {
-            Some(text[start..end].to_string())
-        }
-        _ => Some(text),
-    }
-}
-
 fn read_image_from_clipboard(format: u32) -> Option<ClipboardEntry> {
     let image_format = format_number_to_image_format(format)?;
     read_image_for_type(format, *image_format)
@@ -420,6 +419,9 @@ where
     let global = HGLOBAL(unsafe { GetClipboardData(format).ok() }?.0);
     let size = unsafe { GlobalSize(global) };
     let data_ptr = unsafe { GlobalLock(global) };
+    if data_ptr.is_null() {
+        return None;
+    }
     let result = f(data_ptr, size);
     unsafe { GlobalUnlock(global).ok() };
     Some(result)

@@ -733,8 +733,7 @@ mod tests {
             let spans = highlight_data_document("name: markion\n", extension);
             assert!(spans.is_some(), "{extension} resolves to the grammar");
         }
-        let spans =
-            highlight_data_document("name: markion\n", "yml").expect("yml maps to yaml");
+        let spans = highlight_data_document("name: markion\n", "yml").expect("yml maps to yaml");
         assert_eq!(joined_text(&spans), "name: markion\n");
         assert!(span_kinds(&spans).contains(&HighlightKind::String));
     }
@@ -765,15 +764,21 @@ mod tests {
     fn crlf_and_multibyte_documents_round_trip_byte_for_byte() {
         // Real-world shape: CRLF terminators, Chinese comments, deep JSON.
         let source = "{\r\n  // \u{670d}\u{52a1}\u{5668}\u{5165}\u{7ad9}\u{914d}\u{7f6e}\r\n  \"listen\": \"127.0.0.1\"\r\n}\r\n";
-        let json_spans =
-            highlight_data_document(source, "json").expect("json grammar covers it");
-        assert_eq!(joined_text(&json_spans), source, "CRLF + CJK round-trips exactly");
+        let json_spans = highlight_data_document(source, "json").expect("json grammar covers it");
+        assert_eq!(
+            joined_text(&json_spans),
+            source,
+            "CRLF + CJK round-trips exactly"
+        );
 
         // Mixed terminators and a bare CR also stay byte-identical.
         let mixed = "a = 1\nb = \"\u{4e8c}\"\rc = 3\r\n";
-        let mixed_spans =
-            highlight_data_document(mixed, "toml").expect("toml grammar covers it");
-        assert_eq!(joined_text(&mixed_spans), mixed, "mixed terminators round-trip");
+        let mixed_spans = highlight_data_document(mixed, "toml").expect("toml grammar covers it");
+        assert_eq!(
+            joined_text(&mixed_spans),
+            mixed,
+            "mixed terminators round-trip"
+        );
 
         // Every span boundary is a char boundary of its own document — the
         // invariant the editor's run splitting relies on.

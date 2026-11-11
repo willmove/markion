@@ -981,10 +981,27 @@ impl Clipboard {
         selection: ClipboardKind,
         wait: WaitConfig,
     ) -> Result<()> {
-        let data = vec![ClipboardData {
+        self.set_text_and_html(message, None, selection, wait)
+    }
+
+    pub(crate) fn set_text_and_html(
+        &self,
+        message: Cow<'_, str>,
+        html: Option<&str>,
+        selection: ClipboardKind,
+        wait: WaitConfig,
+    ) -> Result<()> {
+        let mut data = Vec::with_capacity(2);
+        if let Some(html) = html {
+            data.push(ClipboardData {
+                bytes: html.as_bytes().to_vec(),
+                format: self.inner.atoms.HTML_MIME,
+            });
+        }
+        data.push(ClipboardData {
             bytes: message.into_owned().into_bytes(),
             format: self.inner.atoms.UTF8_STRING,
-        }];
+        });
         self.inner.write(data, selection, wait)
     }
 

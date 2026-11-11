@@ -587,7 +587,9 @@ impl Platform for WindowsPlatform {
     }
 
     fn write_to_clipboard(&self, item: ClipboardItem) {
-        write_to_clipboard(item);
+        // The message-only platform window remains valid even when no editor
+        // window is active. A NULL owner cannot reliably publish native data.
+        write_to_clipboard(item, Some(self.handle));
     }
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
@@ -1174,15 +1176,15 @@ mod tests {
     #[test]
     fn test_clipboard() {
         let item = ClipboardItem::new_string("你好，我是张小白".to_string());
-        write_to_clipboard(item.clone());
+        write_to_clipboard(item.clone(), None);
         assert_eq!(read_from_clipboard(), Some(item));
 
         let item = ClipboardItem::new_string("12345".to_string());
-        write_to_clipboard(item.clone());
+        write_to_clipboard(item.clone(), None);
         assert_eq!(read_from_clipboard(), Some(item));
 
         let item = ClipboardItem::new_string_with_json_metadata("abcdef".to_string(), vec![3, 4]);
-        write_to_clipboard(item.clone());
+        write_to_clipboard(item.clone(), None);
         assert_eq!(read_from_clipboard(), Some(item));
     }
 }

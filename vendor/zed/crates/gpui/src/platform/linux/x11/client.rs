@@ -1581,8 +1581,9 @@ impl LinuxClient for X11Client {
         let mut state = self.0.borrow_mut();
         state
             .clipboard
-            .set_text(
+            .set_text_and_html(
                 std::borrow::Cow::Owned(item.text().unwrap_or_default()),
+                item.html(),
                 clipboard::ClipboardKind::Clipboard,
                 clipboard::WaitConfig::None,
             )

@@ -2,7 +2,7 @@
 
 Markion's keyboard shortcuts are registered with platform-aware modifiers. On Windows and Linux the primary modifier is **Ctrl**; on macOS it is **Cmd** (⌘). In the tables below, `Ctrl` stands for that platform modifier. Bindings that include `Alt` use **Option** (⌥) on macOS.
 
-> Every action below (except raw navigation/editing keys like arrows, Backspace, and Tab) can be rebound in **Preferences → Shortcuts**, or by editing the `[shortcuts]` table in `config.toml` (action id → GPUI keystroke string). The bindings shown here are the defaults.
+> Menu actions can be rebound in **Preferences → Shortcuts**, or by editing the `[shortcuts]` table in `config.toml` (action id → GPUI keystroke string). Core text and structured-selection navigation keys are fixed. The bindings shown here are the defaults.
 
 ## Notation
 
@@ -62,6 +62,13 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 | Page up / down | PageUp / PageDown |
 | Select page up / down | Shift+PageUp / Shift+PageDown |
 | Line start / end | Home / End |
+| Enter / leave visual block selection | Esc (after closing an open overlay) |
+| Extend block or cell selection | Shift+Arrow keys |
+| Move selected visual blocks / subtrees | Ctrl+Shift+Up / Ctrl+Shift+Down |
+| Extend a visual cell rectangle | Shift+click; drag across cells; Alt+click starts a cell selection |
+| Add a body row from the final visual table cell | Tab |
+
+Click a visual block grip to select its complete source unit; Shift+click another grip to extend. Drag any selected grip to move the whole selection. Table row and column grips select their corresponding cells and expose the structural menu. Delete clears selected cells while retaining the table structure; Ctrl+C copies TSV and HTML, and Ctrl+V pastes a matrix. Ordinary code blocks provide a Fold code / Expand code control; navigation into a folded payload expands it.
 
 ## View
 

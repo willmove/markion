@@ -135,6 +135,200 @@ pub enum BlockEditError {
     Ambiguous,
 }
 
+/// A complete canonical unit, including a list subtree or an enclosing quote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceBlockUnit {
+    pub blocks: Range<usize>,
+    pub source_range: Range<usize>,
+}
+
+pub fn source_block_unit(
+    source: &str,
+    blocks: &[VisualBlock],
+    index: usize,
+) -> Result<SourceBlockUnit, BlockEditError> {
+    let block = blocks.get(index).ok_or(BlockEditError::Stale)?;
+    let mut first = index;
+    let mut last = index + 1;
+    let mut range = block.source_range.clone();
+    if let Some(quote) = &block.quote_context {
+        range = quote.group_source_range.clone();
+        while first > 0 && blocks[first - 1].source_range.start >= range.start {
+            first -= 1;
+        }
+        while last < blocks.len() && blocks[last].source_range.start < range.end {
+            last += 1;
+        }
+    } else if let VisualBlockKind::ListItem { level, .. } = block.kind {
+        while let Some(candidate) = blocks.get(last) {
+            let nested = match candidate.kind {
+                VisualBlockKind::Whitespace => true,
+                VisualBlockKind::ListItem { level: next, .. } => next > level,
+                _ => candidate.list_depth >= level,
+            };
+            if !nested {
+                break;
+            }
+            range.end = range.end.max(candidate.source_range.end);
+            last += 1;
+        }
+    } else if block.list_depth > 0 {
+        return Err(BlockEditError::Unsupported);
+    }
+    while last < blocks.len() && matches!(blocks[last].kind, VisualBlockKind::Whitespace) {
+        last += 1;
+    }
+    range.end = blocks
+        .get(last)
+        .map_or(source.len(), |next| next.source_range.start);
+    if range.start > range.end
+        || range.end > source.len()
+        || !source.is_char_boundary(range.start)
+        || !source.is_char_boundary(range.end)
+        || (range.start > 0 && !source[..range.start].ends_with('\n'))
+    {
+        return Err(BlockEditError::Ambiguous);
+    }
+    Ok(SourceBlockUnit {
+        blocks: first..last,
+        source_range: range,
+    })
+}
+
+/// Move a complete range using only the span between the old and new sites.
+pub fn move_source_units(
+    source: &str,
+    version: u64,
+    moving: Range<usize>,
+    insertion: usize,
+) -> Result<BlockEdit, BlockEditError> {
+    if moving.is_empty()
+        || insertion > source.len()
+        || (insertion >= moving.start && insertion <= moving.end)
+        || source.get(moving.clone()).is_none()
+        || !source.is_char_boundary(insertion)
+    {
+        return Err(BlockEditError::Ambiguous);
+    }
+    let moved = &source[moving.clone()];
+    let line_ending = preferred_line_ending(source);
+    let join = |left: &str, right: &str| {
+        let separator = if !left.is_empty() && !right.is_empty() && !left.ends_with('\n') {
+            line_ending.repeat(2)
+        } else {
+            String::new()
+        };
+        (format!("{left}{separator}{right}"), separator.len())
+    };
+    let (range, replacement, selected_start) = if insertion < moving.start {
+        let (replacement, _) = join(moved, &source[insertion..moving.start]);
+        (insertion..moving.end, replacement, insertion)
+    } else {
+        let between = &source[moving.end..insertion];
+        let (replacement, separator) = join(between, moved);
+        (
+            moving.start..insertion,
+            replacement,
+            moving.start + between.len() + separator,
+        )
+    };
+    Ok(BlockEdit {
+        document_version: version,
+        range,
+        replacement,
+        selection_after: selected_start..selected_start,
+    })
+}
+
+pub fn indent_subtree(
+    source: &str,
+    version: u64,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+    caret: usize,
+    outdent: bool,
+) -> Result<BlockEdit, BlockEditError> {
+    let (index, block) = validate_block_target(version, blocks, target)?;
+    let VisualBlockKind::ListItem { level, .. } = block.kind else {
+        return Err(BlockEditError::Unsupported);
+    };
+    if block.quote_context.is_some() {
+        return Err(BlockEditError::Unsupported);
+    }
+    let unit = source_block_unit(source, blocks, index)?;
+    let first_line = source[unit.source_range.clone()]
+        .lines()
+        .next()
+        .unwrap_or("");
+    let indent = first_line
+        .bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    if outdent && indent == 0 {
+        return Err(BlockEditError::Unsupported);
+    }
+    if !outdent {
+        let mut predecessor = false;
+        for candidate in blocks[..index].iter().rev() {
+            match candidate.kind {
+                VisualBlockKind::Whitespace => continue,
+                VisualBlockKind::ListItem {
+                    level: previous, ..
+                } if previous > level => continue,
+                VisualBlockKind::ListItem {
+                    level: previous, ..
+                } => {
+                    predecessor = previous == level;
+                    break;
+                }
+                _ if candidate.list_depth > 0 => continue,
+                _ => break,
+            }
+        }
+        if !predecessor {
+            return Err(BlockEditError::Unsupported);
+        }
+    }
+    let remove = if first_line.starts_with('\t') {
+        1
+    } else {
+        indent.min(4)
+    };
+    let mut replacement = String::new();
+    let mut old_offset = unit.source_range.start;
+    let mut new_caret = caret;
+    for line in source[unit.source_range.clone()].split_inclusive('\n') {
+        if line.trim().is_empty() {
+            replacement.push_str(line);
+        } else if outdent {
+            if !line
+                .as_bytes()
+                .get(..remove)
+                .is_some_and(|prefix| prefix.iter().all(|b| matches!(b, b' ' | b'\t')))
+            {
+                return Err(BlockEditError::Ambiguous);
+            }
+            replacement.push_str(&line[remove..]);
+            if old_offset < caret {
+                new_caret = new_caret.saturating_sub(remove.min(caret - old_offset));
+            }
+        } else {
+            replacement.push_str("    ");
+            replacement.push_str(line);
+            if old_offset <= caret {
+                new_caret += 4;
+            }
+        }
+        old_offset += line.len();
+    }
+    Ok(BlockEdit {
+        document_version: version,
+        range: unit.source_range,
+        replacement,
+        selection_after: new_caret..new_caret,
+    })
+}
+
 pub fn slash_query_at(source: &str, cursor: usize, document_version: u64) -> Option<SlashQuery> {
     if cursor > source.len() || !source.is_char_boundary(cursor) {
         return None;
@@ -233,7 +427,7 @@ pub fn block_can_transform(block: &VisualBlock) -> bool {
         return false;
     }
     if let Some(quote) = &block.quote_context
-        && (quote.depth != 1 || quote.edge != VisualQuoteGroupEdge::Only)
+        && quote.depth != 1
     {
         return false;
     }
@@ -251,9 +445,10 @@ pub fn block_can_transform(block: &VisualBlock) -> bool {
 }
 
 pub fn block_can_reorder(block: &VisualBlock) -> bool {
-    block_can_transform(block)
-        && block.quote_context.is_none()
-        && !matches!(block.kind, VisualBlockKind::Whitespace)
+    !matches!(
+        block.kind,
+        VisualBlockKind::Whitespace | VisualBlockKind::Unsupported
+    ) && (block.list_depth == 0 || matches!(block.kind, VisualBlockKind::ListItem { .. }))
 }
 
 pub fn block_can_transform_at(blocks: &[VisualBlock], index: usize) -> bool {
@@ -261,7 +456,7 @@ pub fn block_can_transform_at(blocks: &[VisualBlock], index: usize) -> bool {
 }
 
 pub fn block_can_reorder_at(blocks: &[VisualBlock], index: usize) -> bool {
-    blocks.get(index).is_some_and(block_can_reorder) && !block_has_nested_children(blocks, index)
+    blocks.get(index).is_some_and(block_can_reorder)
 }
 
 pub fn transform_block(
@@ -286,6 +481,21 @@ pub fn transform_block(
     let start = block.source_range.start;
     let selection_after = transform_caret(transform, &replacement, start, line_ending);
     replacement.push_str(trailing);
+    let selection_after = if block
+        .quote_context
+        .as_ref()
+        .is_some_and(|quote| quote.edge != VisualQuoteGroupEdge::Only)
+        && !matches!(transform, BlockTransform::Quote)
+    {
+        replacement.insert_str(0, line_ending);
+        if !replacement.ends_with('\n') {
+            replacement.push_str(line_ending);
+        }
+        replacement.push_str(line_ending);
+        selection_after.start + line_ending.len()..selection_after.end + line_ending.len()
+    } else {
+        selection_after
+    };
     Ok(BlockEdit {
         document_version: current_version,
         range: block.source_range.clone(),
@@ -364,69 +574,46 @@ pub fn reorder_block(
         return Err(BlockEditError::Ambiguous);
     }
 
-    let mut moved = source
-        .get(moving_unit.clone())
-        .ok_or(BlockEditError::Ambiguous)?
-        .to_string();
     let raw_insertion = match placement {
         BlockPlacement::Before => destination_unit.start,
         BlockPlacement::After => destination_unit.end,
     };
-    let mut replacement = source.to_string();
-    replacement.replace_range(moving_unit.clone(), "");
-    let insertion = if moving_unit.start < raw_insertion {
-        raw_insertion - moving_unit.len()
-    } else {
-        raw_insertion
-    };
-    let line_ending = preferred_line_ending(source);
-    if matches!(placement, BlockPlacement::After)
-        && insertion > 0
-        && !replacement[..insertion].ends_with('\n')
-    {
-        moved.insert_str(0, &line_ending.repeat(2));
-    }
-    if insertion < replacement.len()
-        && !moved.ends_with(['\n', '\r'])
-        && !replacement[insertion..].starts_with(['\n', '\r'])
-    {
-        moved.push_str(&line_ending.repeat(2));
-    }
-    let selected_start = insertion
-        + moved
-            .bytes()
-            .take_while(|byte| matches!(byte, b'\r' | b'\n'))
-            .count();
-    replacement.insert_str(insertion, &moved);
-    Ok(BlockEdit {
-        document_version: current_version,
-        range: 0..source.len(),
-        replacement,
-        selection_after: selected_start..selected_start,
-    })
+    move_source_units(source, current_version, moving_unit, raw_insertion)
 }
 
 pub fn adjacent_reorder_target(
+    source: &str,
     current_version: u64,
     blocks: &[VisualBlock],
     target: &BlockTarget,
     forward: bool,
 ) -> Result<BlockTarget, BlockEditError> {
-    let (index, _) = validate_block_target(current_version, blocks, target)?;
+    let (index, block) = validate_block_target(current_version, blocks, target)?;
+    let unit = source_block_unit(source, blocks, index)?;
+    let depth = |block: &VisualBlock| match block.kind {
+        VisualBlockKind::ListItem { level, .. } => level.saturating_sub(1),
+        _ => block.list_depth,
+    };
+    let eligible = |candidate_index: usize| {
+        block_can_reorder_at(blocks, candidate_index)
+            && depth(&blocks[candidate_index]) == depth(block)
+            && source_block_unit(source, blocks, candidate_index)
+                .is_ok_and(|candidate| !ranges_overlap(&unit.source_range, &candidate.source_range))
+    };
     let candidate = if forward {
         blocks
             .iter()
             .enumerate()
-            .skip(index + 1)
-            .find(|(candidate_index, _)| block_can_reorder_at(blocks, *candidate_index))
+            .skip(unit.blocks.end)
+            .find(|(candidate_index, _)| eligible(*candidate_index))
             .map(|(_, block)| block)
     } else {
         blocks
             .iter()
             .enumerate()
-            .take(index)
+            .take(unit.blocks.start)
             .rev()
-            .find(|(candidate_index, _)| block_can_reorder_at(blocks, *candidate_index))
+            .find(|(candidate_index, _)| eligible(*candidate_index))
             .map(|(_, block)| block)
     }
     .ok_or(BlockEditError::Unsupported)?;
@@ -609,31 +796,11 @@ fn source_unit(
     blocks: &[VisualBlock],
     index: usize,
 ) -> Result<Range<usize>, BlockEditError> {
-    let block = blocks.get(index).ok_or(BlockEditError::Stale)?;
-    if block.source_range.start > block.source_range.end
-        || block.source_range.end > source.len()
-        || !source.is_char_boundary(block.source_range.start)
-        || !source.is_char_boundary(block.source_range.end)
-        || (block.source_range.start > 0 && !source[..block.source_range.start].ends_with('\n'))
-    {
-        return Err(BlockEditError::Ambiguous);
-    }
-    let end = blocks
-        .iter()
-        .skip(index + 1)
-        .find(|candidate| !matches!(candidate.kind, VisualBlockKind::Whitespace))
-        .map_or(source.len(), |candidate| candidate.source_range.start);
-    if end < block.source_range.end || end > source.len() || !source.is_char_boundary(end) {
-        return Err(BlockEditError::Ambiguous);
-    }
-    Ok(block.source_range.start..end)
+    Ok(source_block_unit(source, blocks, index)?.source_range)
 }
 
 fn block_has_nested_children(blocks: &[VisualBlock], index: usize) -> bool {
-    let Some(VisualBlock {
-        kind: VisualBlockKind::ListItem { level, .. },
-        ..
-    }) = blocks.get(index)
+    let Some(VisualBlockKind::ListItem { level, .. }) = blocks.get(index).map(|block| &block.kind)
     else {
         return false;
     };
@@ -658,6 +825,88 @@ fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
 mod tests {
     use super::*;
     use crate::MarkdownDocument;
+
+    #[test]
+    fn advanced_subtree_moves_keep_nested_code_and_reject_self_drops() {
+        let source = "intro\n\n- parent\n  - child\n\n  ```rust\n  let x = 1;\n  ```\n\nlast";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let index = blocks
+            .iter()
+            .position(|b| matches!(b.kind, VisualBlockKind::ListItem { level: 1, .. }))
+            .unwrap();
+        let unit = source_block_unit(source, &blocks, index).unwrap();
+        assert!(source[unit.source_range.clone()].contains("let x = 1;"));
+        assert!(
+            move_source_units(
+                source,
+                doc.version(),
+                unit.source_range.clone(),
+                unit.source_range.start + 2
+            )
+            .is_err()
+        );
+        let edit =
+            move_source_units(source, doc.version(), unit.source_range, source.len()).unwrap();
+        let mut result = source.to_string();
+        result.replace_range(edit.range, &edit.replacement);
+        assert!(result.starts_with("intro\n\nlast\n\n- parent\n  - child"));
+        assert!(result.ends_with("  ```\n\n"));
+    }
+
+    #[test]
+    fn advanced_quote_extraction_splits_containers_and_subtree_outdent_is_crlf_safe() {
+        let source = "> before\n>\n> middle\n>\n> after\n\nlast";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let middle = blocks
+            .iter()
+            .find(|b| {
+                b.editable_runs
+                    .iter()
+                    .any(|run| run.visible_text == "middle")
+            })
+            .unwrap();
+        let edit = transform_block(
+            source,
+            doc.version(),
+            &blocks,
+            &BlockTarget::from_block(doc.version(), middle),
+            BlockTransform::Text,
+        )
+        .unwrap();
+        let mut result = source.to_string();
+        result.replace_range(edit.range, &edit.replacement);
+        let parsed = MarkdownDocument::from_text(result).preview_blocks();
+        assert_eq!(
+            parsed
+                .iter()
+                .filter(|b| matches!(b, crate::PreviewBlock::BlockQuote { .. }))
+                .count(),
+            2
+        );
+        assert!(parsed.iter().any(|b| matches!(b, crate::PreviewBlock::Paragraph { text, .. } if text.text.trim() == "middle")));
+
+        let source = "- root\r\n  - parent\r\n    - 子项\r\n\r\nend";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let parent = blocks
+            .iter()
+            .find(|b| matches!(b.kind, VisualBlockKind::ListItem { level: 2, .. }))
+            .unwrap();
+        let edit = indent_subtree(
+            source,
+            doc.version(),
+            &blocks,
+            &BlockTarget::from_block(doc.version(), parent),
+            source.find("parent").unwrap(),
+            true,
+        )
+        .unwrap();
+        let mut result = source.to_string();
+        result.replace_range(edit.range, &edit.replacement);
+        assert_eq!(result, "- root\r\n- parent\r\n  - 子项\r\n\r\nend");
+    }
 
     fn target_for(doc: &MarkdownDocument, index: usize) -> (Vec<VisualBlock>, BlockTarget) {
         let blocks = doc.visual_blocks_shared().as_ref().clone();
@@ -833,7 +1082,10 @@ mod tests {
             BlockPlacement::After,
         )
         .unwrap();
-        assert_eq!(moved.replacement, "two\n\none\n\nthree");
+        let mut result = doc.text().to_string();
+        result.replace_range(moved.range.clone(), &moved.replacement);
+        assert_eq!(result, "two\n\none\n\nthree");
+        assert!(moved.range.end < doc.text().len());
 
         let two_blocks = MarkdownDocument::from_text("one\n\ntwo");
         let blocks = two_blocks.visual_blocks_shared();
@@ -941,7 +1193,7 @@ mod tests {
             .position(|block| matches!(block.kind, VisualBlockKind::ListItem { level: 1, .. }))
             .unwrap();
         assert!(!block_can_transform_at(&blocks, parent_index));
-        assert!(!block_can_reorder_at(&blocks, parent_index));
+        assert!(block_can_reorder_at(&blocks, parent_index));
 
         let quote = MarkdownDocument::from_text("> one\n>\n> two");
         let blocks = quote.visual_blocks_shared();
@@ -963,6 +1215,6 @@ mod tests {
             ),
             Err(BlockEditError::Stale)
         );
-        assert!(!block_can_transform(first));
+        assert!(block_can_transform(first));
     }
 }

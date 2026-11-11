@@ -228,7 +228,7 @@ pub(crate) fn table_cell_source_ranges(source: &str) -> Option<Vec<TableCellSour
         .max()
         .unwrap_or(0)
         .max(separator_columns);
-    if column_count < 2 {
+    if column_count == 0 {
         return None;
     }
 
@@ -378,12 +378,13 @@ fn next_line_bounds(text: &str, line_end: usize) -> Option<(usize, usize)> {
 
 fn is_markdown_table_candidate(line: &str) -> bool {
     let trimmed = line.trim();
-    trimmed.contains('|') && split_markdown_table_row(line).len() >= 2
+    trimmed.contains('|') && !split_markdown_table_row(line).is_empty()
 }
 
 pub(crate) fn is_markdown_table_separator_line(line: &str) -> bool {
     let cells = split_markdown_table_row(line);
-    cells.len() >= 2
+    !cells.is_empty()
+        && line.contains('|')
         && cells.iter().all(|cell| {
             let trimmed = cell.trim();
             trimmed.chars().filter(|ch| *ch == '-').count() >= 3
@@ -398,7 +399,7 @@ fn split_markdown_table_row(line: &str) -> Vec<String> {
         .collect()
 }
 
-fn markdown_table_cell_ranges(line: &str) -> Vec<Range<usize>> {
+pub(crate) fn markdown_table_cell_ranges(line: &str) -> Vec<Range<usize>> {
     let content_start = line.len() - line.trim_start().len();
     let content_end = line.trim_end().len();
     if content_start >= content_end {

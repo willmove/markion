@@ -4770,7 +4770,7 @@ fn stable_visual_inline_edits_links_math_and_tokens_off_the_line(cx: &mut TestAp
         .visual_blocks()
         .into_iter()
         .find_map(|block| {
-            block.editable_runs.into_iter().find_map(|run| {
+            block.editable_runs.iter().cloned().find_map(|run| {
                 run.math
                     .filter(|math| math.latex.contains("mc"))
                     .map(|_| run.content_range)
@@ -4824,7 +4824,7 @@ fn stable_visual_inline_edits_links_math_and_tokens_off_the_line(cx: &mut TestAp
     let image_id = image_doc
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Image { .. }) => Some(block.id),
             _ => None,
         })
@@ -6375,7 +6375,7 @@ fn visual_and_preview_tables_share_content_column_weights() {
     let visual_rows = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.kind {
+        .find_map(|block| match block.kind.clone() {
             VisualBlockKind::Table { rows, .. } => Some(rows),
             _ => None,
         })
@@ -6417,7 +6417,7 @@ fn visual_table_cell_range(
     document
         .visual_blocks()
         .into_iter()
-        .filter_map(|block| match block.editor {
+        .filter_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Table { cells }) => Some(cells),
             _ => None,
         })
@@ -8175,7 +8175,7 @@ fn visual_direct_code_editor_hides_fences_highlights_and_edits_only_payload(
     let payload = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Code { payload, .. }) => Some(payload.source_range),
             _ => None,
         })
@@ -8246,7 +8246,7 @@ fn visual_direct_code_editor_hides_fences_highlights_and_edits_only_payload(
             .document
             .visual_blocks()
             .into_iter()
-            .find_map(|block| match block.editor {
+            .find_map(|block| match block.editor.clone() {
                 Some(VisualBlockEditor::Code { payload, .. }) => Some(payload.source_range.start),
                 _ => None,
             })
@@ -8340,7 +8340,7 @@ fn visual_direct_math_editor_keeps_invalid_payload_ime_and_one_undo(cx: &mut Tes
     let payload = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Math { payload, .. }) => Some(payload.source_range),
             _ => None,
         })
@@ -8407,7 +8407,7 @@ fn visual_block_math_source_expands_and_collapses_without_editing(cx: &mut TestA
     let math_id = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.kind {
+        .find_map(|block| match block.kind.clone() {
             VisualBlockKind::MathBlock { .. } => Some(block.id),
             _ => None,
         })
@@ -8458,7 +8458,7 @@ fn visual_yaml_header_is_not_a_source_island_and_stays_version_stable(cx: &mut T
         .find(|block| matches!(block.kind, VisualBlockKind::FrontMatter { .. }))
         .expect("YAML header");
     let header_id = header.id;
-    let payload_start = match header.editor {
+    let payload_start = match header.editor.clone() {
         Some(VisualBlockEditor::FrontMatter { payload }) => payload.source_range.start,
         _ => panic!("YAML header must carry a FrontMatter payload editor"),
     };
@@ -8524,7 +8524,7 @@ fn visual_reference_image_stays_rendered_when_focused(cx: &mut TestAppContext) {
     let image_start = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.kind {
+        .find_map(|block| match block.kind.clone() {
             VisualBlockKind::Image { .. } => Some(block.source_range.start),
             _ => None,
         })
@@ -8581,7 +8581,7 @@ fn visual_ragged_table_stays_a_grid_when_focused(cx: &mut TestAppContext) {
     let cell_start = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Table { cells }) => cells
                 .into_iter()
                 .next()
@@ -8633,7 +8633,7 @@ fn visual_math_pending_or_error_is_not_a_source_island(cx: &mut TestAppContext) 
     let payload_start = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Math { payload, .. }) => Some(payload.source_range.start),
             _ => None,
         })
@@ -8719,7 +8719,7 @@ fn visual_direct_table_cell_edit_reflows_traverses_and_undoes_once(cx: &mut Test
     let first = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Table { cells }) => cells
                 .into_iter()
                 .find(|cell| cell.row == 0 && cell.column == 0)
@@ -8864,7 +8864,7 @@ fn direct_field_projection_hides_only_protective_escapes_and_keeps_exact_boundar
     let field = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Table { cells }) => cells
                 .into_iter()
                 .find(|cell| cell.row == 0 && cell.column == 0)
@@ -18011,11 +18011,18 @@ fn flow_neutral_drag_reorders_only_on_drop_and_keeps_one_step_undo(cx: &mut Test
             .filter(|(_, block)| matches!(block.kind, VisualBlockKind::Paragraph))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
+        let drag_selection = markion::selection::BlockSelection::new(
+            &tab.document,
+            blocks[paragraphs[0]].id,
+            blocks[paragraphs[0]].id,
+        )
+        .range(&tab.document)
+        .unwrap();
         (
             paragraphs[0],
             paragraphs[1],
             tab.document.version(),
-            tab.selected_range.clone(),
+            drag_selection,
             blocks,
         )
     });
@@ -18044,6 +18051,10 @@ fn flow_neutral_drag_reorders_only_on_drop_and_keeps_one_step_undo(cx: &mut Test
     cx.run_until_parked();
     app.update(cx, |app, _| {
         assert_block_menu_presentation_state(app, SOURCE, version, &selection, 0, false, &blocks);
+        assert!(matches!(
+            app.active_tab().structured_selection,
+            Some(markion::selection::SelectionState::Blocks(_))
+        ));
     });
     cx.simulate_event(MouseUpEvent {
         button: MouseButton::Left,
@@ -18377,7 +18388,7 @@ fn link_editor_drag_selects_text_and_token_editor_closes_on_outside_click(cx: &m
         .visual_blocks()
         .into_iter()
         .find_map(|block| {
-            block.editable_runs.into_iter().find_map(|run| {
+            block.editable_runs.iter().cloned().find_map(|run| {
                 run.math
                     .filter(|math| math.latex.contains("mc"))
                     .map(|_| run.content_range)
@@ -19057,7 +19068,7 @@ fn visual_image_source_toggle_expands_collapses_and_edits_exactly(cx: &mut TestA
     let (image_id, payload_range) = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Image { payload, .. }) => {
                 Some((block.id, payload.source_range))
             }
@@ -19137,7 +19148,7 @@ fn visual_image_failed_load_forces_the_source_payload(cx: &mut TestAppContext) {
     let image_id = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Image { .. }) => Some(block.id),
             _ => None,
         })
@@ -19307,7 +19318,7 @@ fn visual_data_uri_html_block_payload_elides_src_token(cx: &mut TestAppContext) 
     let (block_id, field_range) = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Html { payload }) => {
                 Some((block.id, payload.source_range.clone()))
             }
@@ -19419,7 +19430,7 @@ fn visual_data_uri_html_block_backspace_removes_whole_token(cx: &mut TestAppCont
     let field_range = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Html { payload }) => Some(payload.source_range.clone()),
             _ => None,
         })
@@ -19463,7 +19474,7 @@ fn visual_data_uri_source_toggle_paints_elided_token_and_edits_atomically(cx: &m
     let image_id = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Image { .. }) => Some(block.id),
             _ => None,
         })
@@ -19537,7 +19548,7 @@ fn visual_data_uri_decode_failure_forces_payload_via_fingerprint(cx: &mut TestAp
     let fingerprint = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Image {
                 data_uri_fingerprint,
                 ..
@@ -19618,7 +19629,7 @@ Trailing paragraph."
     let image_id = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Image { .. }) => Some(block.id),
             _ => None,
         })
@@ -19722,7 +19733,7 @@ fn visual_fence_language_field_edits_only_the_info_token(cx: &mut TestAppContext
     let (info_range, payload_range) = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Code { payload, info, .. }) => {
                 Some((info.source_range, payload.source_range))
             }
@@ -19774,7 +19785,7 @@ fn visual_fence_language_inserts_on_a_bare_fence(cx: &mut TestAppContext) {
     let (info_range, opening_end) = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Code {
                 opening_fence,
                 info,
@@ -19813,7 +19824,7 @@ fn visual_fence_language_retyped_token_redispatches(cx: &mut TestAppContext) {
     let info_range = document
         .visual_blocks()
         .into_iter()
-        .find_map(|block| match block.editor {
+        .find_map(|block| match block.editor.clone() {
             Some(VisualBlockEditor::Code { info, .. }) => Some(info.source_range),
             _ => None,
         })

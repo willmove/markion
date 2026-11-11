@@ -40,6 +40,7 @@ pub fn line_column_at(text: &str, offset: usize) -> (usize, usize) {
 }
 
 /// Trimmed text of the 1-based `line_number`, or empty if out of range.
+#[cfg(test)]
 pub fn line_snippet_at(text: &str, line_number: usize) -> String {
     text.lines()
         .nth(line_number.saturating_sub(1))

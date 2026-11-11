@@ -1085,7 +1085,7 @@ A supported Visual Edit block SHALL expose a compact contextual menu to turn it 
 - **AND** Quote, Code Block, Divider, Table, Duplicate, Move Up, Move Down, and separated Delete remain reachable from the root menu according to their availability
 
 ### Requirement: Visual Edit SHALL support source-safe block reordering
-Supported non-overlapping Visual Edit blocks SHALL be reorderable through Move Up, Move Down, and a hover/focus-only drag grip with before/after drop targets. The drag grip SHALL be positioned outside normal document content flow and SHALL NOT alter content width, row height, or wrapping when shown, hidden, or dragged. All reorder paths SHALL use the same exact source-unit operation, SHALL preserve the moved block bytes and deterministic separator whitespace, and SHALL create one undo entry. Nested list items, quote-group leaves, overlapping ranges, and stale targets SHALL not expose or accept guessed reordering.
+Supported non-overlapping Visual Edit source units SHALL be reorderable through Move Up, Move Down, and a hover/focus-only drag grip with before/after drop targets. A complete list parent SHALL carry its nested descendants; a quote group and a contiguous block selection SHALL move as complete source units. The drag grip SHALL be positioned outside normal document content flow and SHALL NOT alter content width, row height, or wrapping when shown, hidden, or dragged. All reorder paths SHALL use the same exact source-unit operation, SHALL preserve moved source bytes and deterministic separator whitespace, and SHALL create one undo entry. Drops inside the moved subtree, overlapping ownership and stale targets SHALL be rejected. Safe list indentation changes SHALL apply to the complete selected subtree.
 
 #### Scenario: Block moves with button action
 - **WHEN** the user invokes Move Down on a supported paragraph before another supported block
@@ -1102,9 +1102,13 @@ Supported non-overlapping Visual Edit blocks SHALL be reorderable through Move U
 - **THEN** its grip appears in the leading interaction area without shifting or narrowing the block content
 - **AND** hiding the grip restores no layout because the content geometry never changed
 
+#### Scenario: Parent list item moves with descendants
+- **WHEN** a list parent with nested items or nested code is moved
+- **THEN** its complete subtree moves without leaving descendants behind or changing their internal indentation
+
 #### Scenario: Unsafe reorder is unavailable
-- **WHEN** the focused row is nested, part of an overlapping quote group, or lacks a complete exact source unit
-- **THEN** reorder controls are disabled or absent and drops are ignored
+- **WHEN** the target lacks a complete exact source unit, is inside the moving subtree, or is stale
+- **THEN** reorder controls are disabled or the drop is ignored
 - **AND** source mode remains the lossless fallback
 
 ### Requirement: Visual Edit renders HTML images
@@ -2632,3 +2636,55 @@ A canonical document change SHALL suppress hover/focus Visual block grips until 
 - **WHEN** the user types in a Visual block
 - **THEN** transient block grips remain hidden until the pointer moves over the Visual surface again
 - **AND** all block operations remain available through existing keyboard and context-menu paths
+
+### Requirement: Explicit structured Visual Edit selection
+Visual Edit SHALL distinguish text, contiguous source-block and rectangular GFM cell selections. Structured selections SHALL be isolated per tab, carry the document version and exact block identity, and be rejected when stale. Escape SHALL enter current-block selection from text and return to text from a structured selection. Shift with block navigation or block/cell pointer selection SHALL extend the corresponding selection. Ordinary text navigation, input and mode changes SHALL exit structured selection without changing document text merely to select content.
+
+#### Scenario: Select and extend source blocks
+- **WHEN** the user enters block selection and extends to an adjacent block
+- **THEN** both complete source units are visibly selected, including owned nested descendants
+- **AND** no document version or history entry is created
+
+#### Scenario: Stale selection is not applied
+- **WHEN** source changes after a structured selection target was captured
+- **THEN** its destructive command is rejected or the selection is cleared without guessing ranges
+
+### Requirement: Structured commands use one checked edit transaction
+Copy, delete and move of a selected block range SHALL resolve the same complete canonical source units. Successful deletion or movement SHALL be one versioned mutation and one undo entry, preserve unrelated bytes and line endings, and provide an exact resulting text selection. A rejected transaction MUST NOT create an undo entry or change selection.
+
+#### Scenario: Delete several blocks and undo
+- **WHEN** a valid multi-block selection is deleted
+- **THEN** its complete source units are removed once and one Undo restores exact source and prior selection
+
+### Requirement: Structured copy publishes portable clipboard formats
+Copy of selected visual blocks or cells SHALL publish Unicode visible text and equivalent HTML together when supported by the platform. Explicit Markdown copy SHALL retain authored Markdown. A cell rectangle SHALL copy a tab/newline matrix and HTML table. Copy alone MUST NOT mutate source, version, history or cache identity.
+
+#### Scenario: Copy selected visual blocks
+- **WHEN** the user copies selected formatted blocks
+- **THEN** plain-text consumers receive readable text and HTML consumers receive formatting from the same selected source
+
+#### Scenario: Copy a cell rectangle
+- **WHEN** a rectangular cell selection is copied
+- **THEN** its selected cells appear in row/column order in TSV and an HTML table
+
+#### Scenario: Windows native clipboard retains both formats
+- **WHEN** selected formatted blocks are copied on Windows
+- **THEN** the native clipboard contains Unicode text and HTML Format with UTF-8 byte-correct fragment offsets
+- **AND** brief clipboard contention is handled with bounded retries and native allocations transfer ownership only on successful publication
+
+#### Scenario: macOS and Linux advertise the rich representation
+- **WHEN** a text clipboard item carries HTML on macOS, X11 or Wayland
+- **THEN** the existing native transport publishes `public.html` or `text/html` alongside the plain-text representation
+- **AND** replacing it with an ordinary text-only copy does not retain stale HTML
+
+### Requirement: Exact container splitting preserves surrounding content
+Turning an exactly mapped quoted leaf into ordinary text SHALL remove only its own quote prefixes, separate preceding and following quoted content into valid containers, and preserve unrelated authored text and line endings. Complete nested list indentation/outdent commands SHALL update every owned source line together. Each successful operation SHALL be one checked undoable edit; ambiguous or stale mappings SHALL remain unchanged.
+
+#### Scenario: Extract a middle quote paragraph
+- **WHEN** the user turns the middle paragraph of a multi-paragraph quote into text
+- **THEN** the preceding quote, unquoted paragraph and following quote are separate containers with their original payloads
+- **AND** one Undo restores the exact original quote source
+
+#### Scenario: Outdent a list subtree
+- **WHEN** the user outdents a nested list parent with descendants
+- **THEN** the whole subtree loses one legal indentation level and retains its internal nesting

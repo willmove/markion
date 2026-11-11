@@ -1,4 +1,5 @@
 mod clipboard;
+mod clipboard_html;
 mod destination_list;
 mod direct_write;
 mod directx_atlas;

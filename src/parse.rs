@@ -692,17 +692,17 @@ pub(crate) fn finish_rich_text(spans: Vec<InlineSpan>) -> RichText {
     let mut pending = Vec::new();
     for span in spans {
         if span.hard_break {
-            merged.extend(finish_soft_rich_text(std::mem::take(&mut pending)).spans);
+            merged.extend(finish_soft_rich_text(std::mem::take(&mut pending)).into_spans());
             merged.push(span);
         } else {
             pending.push(span);
         }
     }
-    merged.extend(finish_soft_rich_text(pending).spans);
-    RichText {
-        text: merged.iter().map(|span| span.text.as_str()).collect(),
-        spans: merged,
-    }
+    merged.extend(finish_soft_rich_text(pending).into_spans());
+    RichText::new(
+        merged.iter().map(|span| span.text.as_str()).collect(),
+        merged,
+    )
 }
 
 fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
@@ -779,10 +779,7 @@ fn finish_soft_rich_text(spans: Vec<InlineSpan>) -> RichText {
     }
 
     let text = merged.iter().map(|span| span.text.as_str()).collect();
-    RichText {
-        text,
-        spans: merged,
-    }
+    RichText::new(text, merged)
 }
 
 /// Parses a titled alert marker line (`[!NOTE] Title`): one of the five GFM
@@ -1095,7 +1092,7 @@ pub fn html_preview_plain_text(html: &str) -> String {
     html_preview_parts(html)
         .into_iter()
         .filter_map(|part| match part {
-            HtmlPreviewPart::Text { text, .. } if !text.is_empty() => Some(text.text),
+            HtmlPreviewPart::Text { text, .. } if !text.is_empty() => Some(text.text.clone()),
             HtmlPreviewPart::Image { alt, url, .. } => {
                 if alt.is_empty() {
                     Some(url)
@@ -2336,10 +2333,7 @@ impl<'a> HtmlPreviewBuilder<'a> {
         let spans = std::mem::take(&mut self.spans);
         let text = if pre {
             let joined: String = spans.iter().map(|span| span.text.as_str()).collect();
-            RichText {
-                text: joined,
-                spans,
-            }
+            RichText::new(joined, spans)
         } else {
             finish_rich_text(spans)
         };

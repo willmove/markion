@@ -106,6 +106,8 @@ actions!(
         SelectRight,
         SelectUp,
         SelectDown,
+        MoveBlocksUp,
+        MoveBlocksDown,
         SelectAll,
         Home,
         End,
@@ -2144,6 +2146,29 @@ struct DraggedVisualBlock {
     target: BlockTarget,
 }
 
+struct VisualBlockDragPreview {
+    label: SharedString,
+    background: Hsla,
+    foreground: Hsla,
+    border: Hsla,
+}
+
+impl gpui::Render for VisualBlockDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .shadow_md()
+            .border_1()
+            .bg(self.background)
+            .text_color(self.foreground)
+            .border_color(self.border)
+            .text_size(px(12.))
+            .child(self.label.clone())
+    }
+}
+
 #[derive(Debug, Clone)]
 struct DraggedFileTreeEntry {
     path: PathBuf,
@@ -2488,8 +2513,10 @@ mod image_preferences;
 pub(super) mod layout;
 mod math_render;
 mod memory;
+mod native_smoke;
 mod network;
 mod overlay;
+mod performance;
 mod preview;
 mod preview_image;
 mod process_memory;
@@ -2502,6 +2529,7 @@ mod shortcuts;
 mod startup_alert;
 mod state;
 mod status_bar;
+mod structured_editing;
 mod update;
 mod window_controls;
 mod workspace;
@@ -2510,6 +2538,8 @@ use workspace::OpenPathIntent;
 #[cfg(test)]
 use workspace::{ExternalDropIntent, classify_external_drop_path};
 
+#[cfg(test)]
+mod advanced_editing_tests;
 #[cfg(test)]
 mod code_scroll_tests;
 #[cfg(test)]
@@ -2788,6 +2818,9 @@ struct MarkionApp {
     current_search_index: Option<usize>,
     search_result: SearchResultState,
     search_generation: Option<SearchGenerationKey>,
+    search_debounce_generation: u64,
+    visual_drag_scroll: Option<(DocumentInstanceId, u64, f32, u64)>,
+    visual_drag_epoch: u64,
     search_field_bounds: [Option<Bounds<Pixels>>; 13],
     /// The single-line field a left-button drag selection started in; moves
     /// extend that field's selection until the button is released.

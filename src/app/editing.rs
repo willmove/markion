@@ -826,10 +826,15 @@ impl MarkionApp {
         let blocks = tab.document.visual_blocks_shared();
         let (index, block) = validate_block_target(tab.document.version(), &blocks, target).ok()?;
         let is_image = matches!(block.kind, VisualBlockKind::Image { .. });
-        if !is_image && !block_can_transform_at(&blocks, index) {
+        if !is_image
+            && !block_can_transform_at(&blocks, index)
+            && !block_can_reorder_at(&blocks, index)
+        {
             return None;
         }
-        let current = visual_block_transform(block);
+        let current = block_can_transform_at(&blocks, index)
+            .then(|| visual_block_transform(block))
+            .flatten();
         let image = if is_image {
             inline_image_at(tab.document.text(), target.source_range.start)
                 .map(|image| image.presentation.unwrap_or_default())
@@ -843,9 +848,23 @@ impl MarkionApp {
             image,
             can_duplicate_or_delete,
             can_move_up: can_duplicate_or_delete
-                && adjacent_reorder_target(tab.document.version(), &blocks, target, false).is_ok(),
+                && adjacent_reorder_target(
+                    tab.document.text(),
+                    tab.document.version(),
+                    &blocks,
+                    target,
+                    false,
+                )
+                .is_ok(),
             can_move_down: can_duplicate_or_delete
-                && adjacent_reorder_target(tab.document.version(), &blocks, target, true).is_ok(),
+                && adjacent_reorder_target(
+                    tab.document.text(),
+                    tab.document.version(),
+                    &blocks,
+                    target,
+                    true,
+                )
+                .is_ok(),
         })
     }
 
@@ -1156,16 +1175,13 @@ impl MarkionApp {
                 target.axis,
                 blocks.iter().find(|block| block.id == target.block_id),
             ) {
-                (
-                    VisualTableAxis::Column(column),
-                    Some(VisualBlock {
-                        kind: VisualBlockKind::Table { alignments, .. },
-                        ..
-                    }),
-                ) => alignments
-                    .get(column)
-                    .copied()
-                    .unwrap_or(TableAlignment::Default),
+                (VisualTableAxis::Column(column), Some(block)) => match &block.kind {
+                    VisualBlockKind::Table { alignments, .. } => alignments
+                        .get(column)
+                        .copied()
+                        .unwrap_or(TableAlignment::Default),
+                    _ => TableAlignment::Default,
+                },
                 _ => TableAlignment::Default,
             }
         };
@@ -1323,6 +1339,7 @@ impl MarkionApp {
     ) {
         let blocks = self.active_tab().document.visual_blocks_shared();
         let destination = match adjacent_reorder_target(
+            self.active_tab().document.text(),
             self.active_tab().document.version(),
             &blocks,
             &target,
@@ -1349,7 +1366,33 @@ impl MarkionApp {
         placement: BlockPlacement,
         cx: &mut Context<Self>,
     ) {
+        self.visual_drag_scroll = None;
         let blocks = self.active_tab().document.visual_blocks_shared();
+        if let Some(markion::selection::SelectionState::Blocks(selection)) =
+            self.active_tab().structured_selection.as_ref()
+            && selection
+                .indices(&self.active_tab().document, &blocks)
+                .ok()
+                .is_some_and(|indices| {
+                    blocks[indices]
+                        .iter()
+                        .any(|block| block.id == moving.block_id)
+                })
+        {
+            match selection.move_to(
+                &self.active_tab().document,
+                &destination,
+                placement == BlockPlacement::After,
+            ) {
+                Ok(edit) => self.apply_exact_block_edit(
+                    edit,
+                    p1_t(self.language, P1Msg::BlockMoved).into(),
+                    cx,
+                ),
+                Err(error) => self.report_block_edit_error(error, cx),
+            }
+            return;
+        }
         match reorder_block(
             self.active_tab().document.text(),
             self.active_tab().document.version(),
@@ -1365,7 +1408,7 @@ impl MarkionApp {
         }
     }
 
-    fn apply_exact_block_edit(
+    pub(super) fn apply_exact_block_edit(
         &mut self,
         edit: BlockEdit,
         status: SharedString,
@@ -1379,35 +1422,30 @@ impl MarkionApp {
             document_version = edit.document_version,
             "block menu edit"
         );
+        let transaction =
+            match markion::selection::EditTransaction::from_edit(&self.active_tab().document, edit)
+            {
+                Ok(transaction) => transaction,
+                Err(error) => {
+                    self.report_block_edit_error(error, cx);
+                    return;
+                }
+            };
         self.active_tab_mut().finish_undo_capture();
         let snapshot = self.snapshot();
         // The edit is bound to the version it was computed against; the
         // checked boundary rejects a block command that outlived an edit.
-        let mutation = {
-            let tab = self.active_tab_mut();
-            CheckedMutation::range(
-                tab.document.instance_id(),
-                edit.document_version,
-                MutationOrigin::ExactBlockEdit,
-                edit.range.clone(),
-                tab.document
-                    .text()
-                    .get(edit.range.clone())
-                    .map(str::to_string)
-                    .unwrap_or_default(),
-                edit.replacement.clone(),
-            )
-        };
-        if self
-            .apply_document_mutation("exact_block_edit", mutation)
-            .is_none()
-        {
+        let Some(receipt) = self.apply_document_mutation("exact_block_edit", transaction.mutation)
+        else {
             cx.notify();
+            return;
+        };
+        if !receipt.changed {
             return;
         }
         self.commit_undo_snapshot(snapshot);
         let tab = self.active_tab_mut();
-        tab.selected_range = edit.selection_after;
+        tab.selected_range = transaction.selection_after;
         tab.selection_reversed = false;
         tab.marked_range = None;
         self.slash_commands = None;
@@ -3703,6 +3741,13 @@ impl MarkionApp {
     }
 
     pub(super) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        if matches!(
+            self.active_tab().structured_selection,
+            Some(markion::selection::SelectionState::Cells(_))
+        ) && self.navigate_source_selection(false, false, true, cx)
+        {
+            return;
+        }
         if self.move_search_caret(SearchCaretMove::Left, cx) {
             return;
         }
@@ -3740,6 +3785,13 @@ impl MarkionApp {
     }
 
     pub(super) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        if matches!(
+            self.active_tab().structured_selection,
+            Some(markion::selection::SelectionState::Cells(_))
+        ) && self.navigate_source_selection(true, false, true, cx)
+        {
+            return;
+        }
         if self.move_search_caret(SearchCaretMove::Right, cx) {
             return;
         }
@@ -3844,6 +3896,9 @@ impl MarkionApp {
     }
 
     pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.navigate_source_selection(false, true, true, cx) {
+            return;
+        }
         if self.move_search_caret(SearchCaretMove::SelectLeft, cx) {
             return;
         }
@@ -3868,6 +3923,9 @@ impl MarkionApp {
     }
 
     pub(super) fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.navigate_source_selection(true, true, true, cx) {
+            return;
+        }
         if self.move_search_caret(SearchCaretMove::SelectRight, cx) {
             return;
         }
@@ -3902,6 +3960,9 @@ impl MarkionApp {
         if self.move_emoji_selection(false, cx) {
             return;
         }
+        if self.navigate_source_selection(false, false, false, cx) {
+            return;
+        }
         if self.move_visual_vertical(VisualNavigationDirection::Up, false, cx) {
             return;
         }
@@ -3929,6 +3990,9 @@ impl MarkionApp {
         if self.move_emoji_selection(true, cx) {
             return;
         }
+        if self.navigate_source_selection(true, false, false, cx) {
+            return;
+        }
         if self.move_visual_vertical(VisualNavigationDirection::Down, false, cx) {
             return;
         }
@@ -3946,6 +4010,9 @@ impl MarkionApp {
     }
 
     pub(super) fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.navigate_source_selection(false, true, false, cx) {
+            return;
+        }
         if self.move_visual_vertical(VisualNavigationDirection::Up, true, cx) {
             return;
         }
@@ -3955,6 +4022,9 @@ impl MarkionApp {
     }
 
     pub(super) fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.navigate_source_selection(true, true, false, cx) {
+            return;
+        }
         if self.move_visual_vertical(VisualNavigationDirection::Down, true, cx) {
             return;
         }
@@ -4425,6 +4495,12 @@ impl MarkionApp {
         if self.confirm_selected_emoji(cx) {
             return;
         }
+        if self.append_final_table_row(cx) {
+            return;
+        }
+        if self.indent_visual_subtree(false, cx) {
+            return;
+        }
         let selected = self.active_tab().selected_range.clone();
         if matches!(self.view_mode, ViewMode::VisualEdit)
             && let Some(target) = self
@@ -4459,6 +4535,9 @@ impl MarkionApp {
     }
 
     pub(super) fn outdent(&mut self, _: &Outdent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.indent_visual_subtree(true, cx) {
+            return;
+        }
         if let Some(SearchField::Git(index)) = self.search_focus {
             self.search_focus = Some(SearchField::Git(
                 (index + super::git_panel::GIT_SETTINGS_FIELDS - 1)
@@ -4501,6 +4580,9 @@ impl MarkionApp {
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_text_input_focus() && self.delete_source_selection(cx) {
+            return;
+        }
         if self.pop_text_input(cx) {
             return;
         }
@@ -4566,6 +4648,9 @@ impl MarkionApp {
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_text_input_focus() && self.delete_source_selection(cx) {
+            return;
+        }
         if self.delete_text_input_forward(cx) {
             return;
         }
@@ -4713,6 +4798,9 @@ impl MarkionApp {
                 cx,
             );
         } else if let Some(text) = item.text() {
+            if !self.has_text_input_focus() && !plain && self.paste_table_matrix(&text, cx) {
+                return;
+            }
             if self.has_text_input_focus() {
                 self.push_text_input(&text, cx);
                 return;
@@ -4793,6 +4881,9 @@ impl MarkionApp {
     }
 
     fn copy_editor_selection(&mut self, cx: &mut Context<Self>) {
+        if self.copy_source_selection(cx) {
+            return;
+        }
         let selected = self.active_tab().safe_selected_range();
         if !selected.is_empty() {
             let text = self.active_tab().document.text()[selected].to_string();
@@ -4804,6 +4895,11 @@ impl MarkionApp {
     }
 
     pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_text_input_focus() && self.active_tab().structured_selection.is_some() {
+            self.copy_source_selection(cx);
+            self.delete_source_selection(cx);
+            return;
+        }
         if self.search_focus.is_some() {
             if let Some(text) = self
                 .focused_search_field()
@@ -5582,7 +5678,9 @@ impl MarkionApp {
     }
 
     pub(super) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.reveal_visual_code_at(offset);
         let tab = self.active_tab_mut();
+        tab.structured_selection = None;
         tab.selected_range = offset..offset;
         tab.selection_reversed = false;
         tab.clear_visual_caret_affinity();
@@ -5689,7 +5787,9 @@ impl MarkionApp {
         range: Range<usize>,
         cx: &mut Context<Self>,
     ) {
+        self.reveal_visual_code_at(range.start);
         let tab = self.active_tab_mut();
+        tab.structured_selection = None;
         tab.selected_range = range;
         tab.selection_reversed = false;
         tab.clear_visual_caret_affinity();
@@ -5703,6 +5803,8 @@ impl MarkionApp {
     }
 
     pub(super) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.reveal_visual_code_at(offset);
+        self.active_tab_mut().structured_selection = None;
         self.selection_toolbar_suppressed = false;
         let tab = self.active_tab_mut();
         tab.clear_visual_caret_affinity();
