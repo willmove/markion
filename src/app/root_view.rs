@@ -1,3 +1,4 @@
+use super::window_controls;
 use super::*;
 use crate::ui::icon::IconKind;
 
@@ -145,6 +146,23 @@ impl Render for MarkionApp {
             self.reconcile_sync_scroll(cx);
         }
         self.sync_window_title(window);
+        // Client-side decorations (GNOME Wayland, as on Ubuntu 26.04): the
+        // platform draws no title bar, so the menu bar additionally hosts
+        // the window-control cluster and a drag region. Server-side-decorated
+        // platforms (macOS, Windows, X11, KDE Wayland) keep the bar — and
+        // test fixtures — unchanged.
+        let csd_decorated = matches!(
+            window.window_decorations(),
+            gpui::Decorations::Client { .. }
+        );
+        let (csd_drag, csd_controls) = if csd_decorated {
+            (
+                Some(window_controls::csd_drag_region(cx)),
+                Some(window_controls::csd_window_controls(self, window, cx)),
+            )
+        } else {
+            (None, None)
+        };
         let is_dirty = self.active_tab().is_dirty();
         let save_state = t(
             self.language,
@@ -405,7 +423,9 @@ impl Render for MarkionApp {
                             cx.listener(|app, _: &MouseMoveEvent, _, cx| {
                                 app.hover_menu(AppMenu::Help, cx);
                             }),
-                        )),
+                        ))
+                        .when_some(csd_drag, |row, drag| row.child(drag))
+                        .when_some(csd_controls, |row, controls| row.child(controls)),
                 ),
             )
             .child(
@@ -2939,9 +2959,9 @@ fn search_toolbar_button(
         .child(label)
 }
 
-struct SearchTooltip {
-    palette: ThemePalette,
-    label: SharedString,
+pub(super) struct SearchTooltip {
+    pub(super) palette: ThemePalette,
+    pub(super) label: SharedString,
 }
 
 impl Render for SearchTooltip {

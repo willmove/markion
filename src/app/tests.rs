@@ -13546,6 +13546,50 @@ fn unsaved_close_and_quit_use_three_way_save_prompt() {
     assert!(bootstrap.contains("UnsavedExitKind::WindowClose"));
 }
 
+/// Client-side window controls (Linux CSD) must exist only where the platform
+/// reports client-side decorations, and the CSD close button must reuse the
+/// unsaved-exit decision instead of removing the window unconditionally.
+#[test]
+fn csd_window_controls_follow_decorations_and_close_guard() {
+    let root_view = include_str!("root_view.rs");
+    let gate = root_view
+        .split_once("let csd_decorated =")
+        .expect("csd gate")
+        .1
+        .split_once(';')
+        .expect("csd gate end")
+        .0;
+    assert!(
+        gate.contains("window.window_decorations()")
+            && gate.contains("gpui::Decorations::Client"),
+        "the menu-bar cluster must be gated on Decorations::Client, not on platform cfgs"
+    );
+    assert!(root_view.contains("when_some(csd_controls"));
+
+    let window_controls = include_str!("window_controls.rs");
+    assert!(window_controls.contains("window.minimize_window()"));
+    assert!(window_controls.contains("window.zoom_window()"));
+    assert!(window_controls.contains("window.start_window_move()"));
+
+    let documents = include_str!("documents.rs");
+    let close = documents
+        .split_once("pub(super) fn request_window_close(")
+        .expect("request_window_close")
+        .1
+        .split_once("pub(super) fn new_tab(")
+        .expect("request_window_close end")
+        .0;
+    assert!(
+        close.contains("EditorTab::is_dirty"),
+        "CSD close must consider dirty tabs like the native close guard"
+    );
+    assert!(close.contains("capture_window_layout"));
+    assert!(close.contains("flush_layout"));
+    assert!(close.contains("remove_window"));
+    assert!(close.contains("begin_unsaved_exit"));
+    assert!(close.contains("UnsavedExitKind::WindowClose"));
+}
+
 #[gpui::test]
 fn save_named_dirty_tab_then_close_writes_and_removes(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();

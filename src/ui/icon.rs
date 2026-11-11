@@ -70,6 +70,7 @@ icon_set! {
     TriangleAlert => "triangle-alert",
     OctagonAlert => "octagon-alert",
     Close => "x",
+    Minus => "minus",
     Plus => "plus",
     Settings => "settings",
     Send => "arrow-up",

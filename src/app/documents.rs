@@ -117,6 +117,25 @@ impl MarkionApp {
         self.request_quit(window, cx);
     }
 
+    /// Client-side-decorations close button: mirrors the decision
+    /// `install_window_close_guard` makes for the native close. A clean or
+    /// already-allowed window closes immediately with its layout persisted;
+    /// a dirty one enters the unsaved-changes flow instead. Wayland offers no
+    /// client-requested toplevel close, so app-level removal is the close
+    /// mechanism here.
+    pub(super) fn request_window_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dirty = self.tabs.iter().any(EditorTab::is_dirty) || self.git_ui.running.is_some();
+        if self.allow_close || !dirty {
+            self.capture_window_layout(window);
+            self.flush_layout();
+            window.remove_window();
+            return;
+        }
+        if !self.confirming_close {
+            self.begin_unsaved_exit(window, cx, UnsavedExitKind::WindowClose);
+        }
+    }
+
     /// Action: open a fresh empty document in a brand-new tab. Unlike
     /// `NewDocument` (which replaces the active tab), this always adds a tab, so
     /// it is the only way to get a blank tab without going through a file.

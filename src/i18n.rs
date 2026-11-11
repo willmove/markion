@@ -1713,6 +1713,16 @@ pub enum Msg {
     TitleModified,
     /// "Saved" save-state token in the title bar.
     TitleSaved,
+
+    // --- Client-side window controls (Linux client-side decorations) ---
+    /// Window-control tooltip: minimize the window.
+    TooltipMinimizeWindow,
+    /// Window-control tooltip: maximize the window.
+    TooltipMaximizeWindow,
+    /// Window-control tooltip: restore the window from maximized.
+    TooltipRestoreWindow,
+    /// Window-control tooltip: close the window.
+    TooltipCloseWindow,
 }
 
 /// P0 document-resource/link/conflict workflow strings. Kept as a compact
@@ -4521,6 +4531,10 @@ fn en(msg: Msg) -> &'static str {
         Msg::EditSource => "Edit source",
         Msg::TitleModified => "Modified",
         Msg::TitleSaved => "Saved",
+        Msg::TooltipMinimizeWindow => "Minimize",
+        Msg::TooltipMaximizeWindow => "Maximize",
+        Msg::TooltipRestoreWindow => "Restore",
+        Msg::TooltipCloseWindow => "Close",
     }
 }
 
@@ -5200,6 +5214,10 @@ fn ja(msg: Msg) -> &'static str {
         Msg::EditSource => "ソースを編集",
         Msg::TitleModified => "変更あり",
         Msg::TitleSaved => "保存済み",
+        Msg::TooltipMinimizeWindow => "最小化",
+        Msg::TooltipMaximizeWindow => "最大化",
+        Msg::TooltipRestoreWindow => "元に戻す",
+        Msg::TooltipCloseWindow => "閉じる",
     }
 }
 
@@ -5905,6 +5923,10 @@ fn fr(msg: Msg) -> &'static str {
         Msg::EditSource => "Modifier la source",
         Msg::TitleModified => "Modifié",
         Msg::TitleSaved => "Enregistré",
+        Msg::TooltipMinimizeWindow => "Réduire",
+        Msg::TooltipMaximizeWindow => "Agrandir",
+        Msg::TooltipRestoreWindow => "Restaurer",
+        Msg::TooltipCloseWindow => "Fermer",
     }
 }
 
@@ -6592,6 +6614,10 @@ fn de(msg: Msg) -> &'static str {
         Msg::EditSource => "Quelle bearbeiten",
         Msg::TitleModified => "Geändert",
         Msg::TitleSaved => "Gespeichert",
+        Msg::TooltipMinimizeWindow => "Minimieren",
+        Msg::TooltipMaximizeWindow => "Maximieren",
+        Msg::TooltipRestoreWindow => "Wiederherstellen",
+        Msg::TooltipCloseWindow => "Schließen",
     }
 }
 
@@ -7269,6 +7295,10 @@ fn es(msg: Msg) -> &'static str {
         Msg::EditSource => "Editar fuente",
         Msg::TitleModified => "Modificado",
         Msg::TitleSaved => "Guardado",
+        Msg::TooltipMinimizeWindow => "Minimizar",
+        Msg::TooltipMaximizeWindow => "Maximizar",
+        Msg::TooltipRestoreWindow => "Restaurar",
+        Msg::TooltipCloseWindow => "Cerrar",
     }
 }
 
@@ -7911,6 +7941,10 @@ fn zh(msg: Msg) -> &'static str {
         Msg::EditSource => "编辑源码",
         Msg::TitleModified => "已修改",
         Msg::TitleSaved => "已保存",
+        Msg::TooltipMinimizeWindow => "最小化",
+        Msg::TooltipMaximizeWindow => "最大化",
+        Msg::TooltipRestoreWindow => "还原",
+        Msg::TooltipCloseWindow => "关闭",
     }
 }
 
@@ -8555,6 +8589,10 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::EditSource => "編輯原始碼",
         Msg::TitleModified => "已修改",
         Msg::TitleSaved => "已儲存",
+        Msg::TooltipMinimizeWindow => "最小化",
+        Msg::TooltipMaximizeWindow => "最大化",
+        Msg::TooltipRestoreWindow => "還原",
+        Msg::TooltipCloseWindow => "關閉",
     }
 }
 
@@ -9555,6 +9593,10 @@ mod tests {
             Msg::PrefPanelClose,
             Msg::TitleModified,
             Msg::TitleSaved,
+            Msg::TooltipMinimizeWindow,
+            Msg::TooltipMaximizeWindow,
+            Msg::TooltipRestoreWindow,
+            Msg::TooltipCloseWindow,
         ];
         for &msg in all.iter() {
             assert!(!t(Language::En, msg).is_empty(), "empty En for {msg:?}");

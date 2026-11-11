@@ -308,6 +308,7 @@ impl MarkionApp {
             git_ui: git_panel::GitUi::default(),
             confirming_close: false,
             allow_close: false,
+            csd_drag: None,
             preferences_path,
             session_path,
             session,

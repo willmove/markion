@@ -2475,6 +2475,7 @@ mod startup_alert;
 mod state;
 mod status_bar;
 mod update;
+mod window_controls;
 mod workspace;
 
 use workspace::OpenPathIntent;
@@ -2575,6 +2576,10 @@ struct MarkionApp {
     git_ui: git_panel::GitUi,
     confirming_close: bool,
     allow_close: bool,
+    /// Press origin for the client-side-decorations drag region on the menu
+    /// bar, held between press and move-start/click. `None` when no drag is
+    /// in progress (and on every server-side-decorated platform).
+    csd_drag: Option<Point<Pixels>>,
     preferences_path: PathBuf,
     session_path: PathBuf,
     /// Last workspace root, open saved tabs, and recent files.
