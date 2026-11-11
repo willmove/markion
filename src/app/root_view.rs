@@ -248,6 +248,7 @@ impl Render for MarkionApp {
         ) - 32.0)
             .max(120.0)
             .min(520.0));
+        let selection_toolbar = self.selection_toolbar_presentation();
 
         div()
             .size_full()
@@ -360,6 +361,12 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::delete))
                     .on_action(cx.listener(Self::left))
                     .on_action(cx.listener(Self::right))
+                    .on_action(cx.listener(Self::word_left))
+                    .on_action(cx.listener(Self::word_right))
+                    .on_action(cx.listener(Self::select_word_left))
+                    .on_action(cx.listener(Self::select_word_right))
+                    .on_action(cx.listener(Self::delete_word_left))
+                    .on_action(cx.listener(Self::delete_word_right))
                     .on_action(cx.listener(Self::up))
                     .on_action(cx.listener(Self::down))
                     .on_action(cx.listener(Self::select_left))
@@ -369,6 +376,12 @@ impl Render for MarkionApp {
                     .on_action(cx.listener(Self::select_all))
                     .on_action(cx.listener(Self::home))
                     .on_action(cx.listener(Self::end))
+                    .on_action(cx.listener(Self::select_home))
+                    .on_action(cx.listener(Self::select_end))
+                    .on_action(cx.listener(Self::page_up))
+                    .on_action(cx.listener(Self::page_down))
+                    .on_action(cx.listener(Self::select_page_up))
+                    .on_action(cx.listener(Self::select_page_down))
                     .on_action(cx.listener(Self::insert_newline))
                     .on_action(cx.listener(Self::search_previous_or_newline))
                     .on_action(cx.listener(Self::indent))
@@ -626,9 +639,7 @@ impl Render for MarkionApp {
                                                 cx.listener(Self::on_mouse_up),
                                             )
                                             .on_mouse_up(MouseButton::Right,cx.listener(|a,e:&MouseUpEvent,_,cx|{
-                                                if a.ai_preferences.enabled && !a.active_tab().safe_selected_range().is_empty() {
-                                                    a.show_preview_context_menu(e.position,None,cx);
-                                                }
+                                                a.show_editor_context_menu(e.position,cx);
                                             }))
                                             .on_mouse_up_out(
                                                 MouseButton::Left,
@@ -946,8 +957,14 @@ impl Render for MarkionApp {
             .when(self.preview_context_menu.is_some(), |root| {
                 root.child(preview_context_menu_view(self, cx))
             })
+            .when(self.editor_context_menu.is_some(), |root| {
+                root.child(editor_context_menu_view(self, cx))
+            })
             .when(self.tab_context_menu.is_some(), |root| {
                 root.child(tab_context_menu_view(self, cx))
+            })
+            .when_some(selection_toolbar, |root, (target, anchor)| {
+                root.child(selection_toolbar_view(self, target, anchor, cx))
             })
             .when(self.block_menu.is_some(), |root| {
                 root.child(visual_block_menu_overlay_view(
@@ -1438,6 +1455,75 @@ fn visual_block_menu_overlay_view(
         )
 }
 
+fn selection_toolbar_view(
+    app: &MarkionApp,
+    target: VisualSelectionFormatTarget,
+    anchor: Point<Pixels>,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    let palette = app.palette();
+    let app_entity = cx.entity();
+    let actions = [
+        (
+            SelectionFormatAction::Bold,
+            Msg::ItemBold,
+            "selection-toolbar-bold",
+        ),
+        (
+            SelectionFormatAction::Italic,
+            Msg::ItemItalic,
+            "selection-toolbar-italic",
+        ),
+        (
+            SelectionFormatAction::InlineCode,
+            Msg::ItemInlineCode,
+            "selection-toolbar-code",
+        ),
+        (
+            SelectionFormatAction::Link,
+            Msg::ItemLink,
+            "selection-toolbar-link",
+        ),
+    ];
+    anchored()
+        .position(anchor)
+        .offset(point(px(0.), px(-36.)))
+        .child(
+            div()
+                .id("visual-selection-toolbar")
+                .debug_selector(|| "visual-selection-toolbar".to_string())
+                .occlude()
+                .p_1()
+                .rounded_md()
+                .border_1()
+                .border_color(palette.border)
+                .bg(palette.surface_bg)
+                .shadow_md()
+                .flex()
+                .items_center()
+                .gap_1()
+                .children(actions.into_iter().map(|(action, label, id)| {
+                    let app_entity = app_entity.clone();
+                    let target = target.clone();
+                    div()
+                        .id(id)
+                        .debug_selector(|| id.to_string())
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .text_size(px(11.))
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(palette.active_bg))
+                        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                            app_entity.update(cx, |app, cx| {
+                                app.activate_selection_toolbar_action(action, target.clone(), cx);
+                            });
+                        })
+                        .child(t(app.language, label))
+                })),
+        )
+}
+
 fn slash_command_palette_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
     let palette = app.palette();
     let state = app
@@ -1445,69 +1531,77 @@ fn slash_command_palette_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
         .clone()
         .expect("slash palette is rendered only while its state is present");
     let commands = localized_slash_commands(app.language, &state.query.query);
+    let block_index = visual_block_index_for_offset(
+        &app.active_tab().document.visual_blocks_shared(),
+        state.query.source_range.start,
+        app.active_tab().document.text().len(),
+    );
+    let anchor = app.document_overlay_anchor(block_index, overlay::OverlayPlacement::BelowSource);
     let query = state.query;
-    div()
-        .id("slash-command-palette")
-        .debug_selector(|| "slash-command-palette".to_string())
-        .absolute()
-        .right(px(28.))
-        .top(px(72.))
-        .w(px(280.))
-        .max_h(px(520.))
-        .occlude()
-        .p_2()
-        .bg(palette.panel_bg)
-        .border_1()
-        .border_color(palette.border)
-        .rounded_lg()
-        .shadow_lg()
-        .flex()
-        .flex_col()
-        .gap_1()
+    anchored()
+        .position(anchor)
+        .offset(point(px(8.), px(8.)))
         .child(
             div()
-                .px_2()
-                .py_1()
-                .text_size(px(11.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(palette.muted)
-                .child(p1_t(app.language, P1Msg::SlashCommands)),
-        )
-        .when(commands.is_empty(), |panel| {
-            panel.child(
-                div()
-                    .px_2()
-                    .py_2()
-                    .text_size(px(12.))
-                    .text_color(palette.muted)
-                    .child(p1_t(app.language, P1Msg::NoCommands)),
-            )
-        })
-        .children(commands.into_iter().enumerate().map(|(index, command)| {
-            let selected = index == state.selected;
-            let query = query.clone();
-            div()
-                .id(slash_command_element_id(index))
-                .debug_selector(move || slash_command_element_id(index).to_string())
-                .px_2()
-                .py_2()
-                .rounded_md()
-                .text_size(px(12.))
-                .cursor_pointer()
-                .when(selected, |row| {
-                    row.bg(palette.active_bg).text_color(palette.active_text)
-                })
-                .when(!selected, |row| {
-                    row.hover(move |style| style.bg(palette.surface_bg))
-                })
-                .child(slash_command_label(app.language, command))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                        app.execute_slash_command(query.clone(), command, cx);
-                    }),
+                .id("slash-command-palette")
+                .debug_selector(|| "slash-command-palette".to_string())
+                .w(px(280.))
+                .max_h(px(520.))
+                .occlude()
+                .p_2()
+                .bg(palette.panel_bg)
+                .border_1()
+                .border_color(palette.border)
+                .rounded_lg()
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(palette.muted)
+                        .child(p1_t(app.language, P1Msg::SlashCommands)),
                 )
-        }))
+                .when(commands.is_empty(), |panel| {
+                    panel.child(
+                        div()
+                            .px_2()
+                            .py_2()
+                            .text_size(px(12.))
+                            .text_color(palette.muted)
+                            .child(p1_t(app.language, P1Msg::NoCommands)),
+                    )
+                })
+                .children(commands.into_iter().enumerate().map(|(index, command)| {
+                    let selected = index == state.selected;
+                    let query = query.clone();
+                    div()
+                        .id(slash_command_element_id(index))
+                        .debug_selector(move || slash_command_element_id(index).to_string())
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .text_size(px(12.))
+                        .cursor_pointer()
+                        .when(selected, |row| {
+                            row.bg(palette.active_bg).text_color(palette.active_text)
+                        })
+                        .when(!selected, |row| {
+                            row.hover(move |style| style.bg(palette.surface_bg))
+                        })
+                        .child(slash_command_label(app.language, command))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                app.execute_slash_command(query.clone(), command, cx);
+                            }),
+                        )
+                })),
+        )
 }
 
 fn slash_command_element_id(index: usize) -> &'static str {
@@ -1903,7 +1997,8 @@ fn recovery_manager_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div 
         )
 }
 
-fn token_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+fn token_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
+    let palette = app.palette();
     let editor = app.token_editor.as_ref().expect("token editor visible");
     let title = match editor.kind {
         TokenEditorKind::MathPayload => app.tr(Msg::VisualInlineEditFormula),
@@ -1913,85 +2008,99 @@ fn token_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
         TokenEditorKind::MathPayload => app.tr(Msg::VisualInlineFormulaLabel),
         TokenEditorKind::Raw => app.tr(Msg::VisualInlineSourceLabel),
     };
+    let source_block = visual_block_index_for_offset(
+        &app.active_tab().document.visual_blocks_shared(),
+        editor.source_range.start,
+        app.active_tab().document.text().len(),
+    );
+    let overlay_anchor =
+        app.document_overlay_anchor(source_block, overlay::OverlayPlacement::BelowSource);
     let draft = editor.draft.clone();
     let cursor = editor.cursor;
     let anchor = editor.anchor;
-    div()
-        .absolute()
-        .top(px(62.))
-        .right(px(24.))
-        .w(px(420.))
-        .p_3()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(0xcbd5e1))
-        .bg(rgb(0xffffff))
-        .shadow_lg()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
-        })
-        .on_mouse_down_out(cx.listener(|app, _: &MouseDownEvent, _, cx| {
-            if app.token_editor.take().is_some() {
-                app.input_marked_len = 0;
-                cx.notify();
-            }
-        }))
+    anchored()
+        .position(overlay_anchor)
+        .offset(point(px(8.), px(8.)))
         .child(
             div()
-                .text_size(px(14.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
-        )
-        .child(
-            div()
-                .p_2()
-                .rounded_sm()
+                .id("document-token-editor")
+                .debug_selector(|| "document-token-editor".to_string())
+                .w(px(420.))
+                .p_3()
+                .rounded_md()
                 .border_1()
-                .border_color(rgb(0x2563eb))
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(rgb(0x64748b))
-                        .child(field_label),
-                )
-                .child(overlay_caret_value(
-                    "token-editor-text",
-                    &draft,
-                    cursor,
-                    anchor,
-                    true,
-                    OverlayTextDrag::Token,
-                    |app, offset, extend, clicks, cx| {
-                        app.place_token_editor_caret(offset, extend, clicks, cx);
-                    },
-                    cx,
-                )),
-        )
-        .child(
-            div()
+                .border_color(palette.border)
+                .bg(palette.surface_bg)
+                .text_color(palette.text)
+                .shadow_lg()
                 .flex()
-                .justify_end()
+                .flex_col()
                 .gap_2()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_mouse_down_out(cx.listener(|app, _: &MouseDownEvent, _, cx| {
+                    if app.token_editor.take().is_some() {
+                        app.input_marked_len = 0;
+                        cx.notify();
+                    }
+                }))
                 .child(
                     div()
-                        .id("token-editor-cancel")
-                        .px_3()
-                        .py_1()
-                        .cursor(CursorStyle::PointingHand)
-                        .child(t(app.language, Msg::DialogButtonCancel))
-                        .on_click(cx.listener(|app, _, _, cx| app.cancel_token_editor(cx))),
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
                 )
                 .child(
                     div()
-                        .id("token-editor-apply")
-                        .px_3()
-                        .py_1()
-                        .cursor(CursorStyle::PointingHand)
-                        .child(t(app.language, Msg::DialogButtonOk))
-                        .on_click(cx.listener(|app, _, _, cx| app.confirm_token_editor(cx))),
+                        .p_2()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(rgb(0x2563eb))
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(palette.muted)
+                                .child(field_label),
+                        )
+                        .child(overlay_caret_value(
+                            "token-editor-text",
+                            &draft,
+                            cursor,
+                            anchor,
+                            true,
+                            OverlayTextDrag::Token,
+                            |app, offset, extend, clicks, cx| {
+                                app.place_token_editor_caret(offset, extend, clicks, cx);
+                            },
+                            cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("token-editor-cancel")
+                                .px_3()
+                                .py_1()
+                                .cursor(CursorStyle::PointingHand)
+                                .child(t(app.language, Msg::DialogButtonCancel))
+                                .on_click(cx.listener(|app, _, _, cx| app.cancel_token_editor(cx))),
+                        )
+                        .child(
+                            div()
+                                .id("token-editor-apply")
+                                .px_3()
+                                .py_1()
+                                .cursor(CursorStyle::PointingHand)
+                                .child(t(app.language, Msg::DialogButtonOk))
+                                .on_click(
+                                    cx.listener(|app, _, _, cx| app.confirm_token_editor(cx)),
+                                ),
+                        ),
                 ),
         )
 }
@@ -2134,7 +2243,8 @@ fn overlay_caret_value(
         })
 }
 
-fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
+    let palette = app.palette();
     let editor = app.link_editor.as_ref().expect("link editor visible");
     let preference_editor = matches!(
         editor.kind,
@@ -2162,7 +2272,11 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
             .p_2()
             .rounded_sm()
             .border_1()
-            .border_color(if active { rgb(0x2563eb) } else { rgb(0xcbd5e1) })
+            .border_color(if active {
+                rgb(0x2563eb)
+            } else {
+                palette.border
+            })
             .cursor(CursorStyle::IBeam)
             .on_mouse_up(
                 MouseButton::Left,
@@ -2171,7 +2285,7 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
             .child(
                 div()
                     .text_size(px(10.))
-                    .text_color(rgb(0x64748b))
+                    .text_color(palette.muted)
                     .child(label),
             )
             .child(overlay_caret_value(
@@ -2191,91 +2305,112 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
                 cx,
             ))
     };
-    div()
-        .absolute()
-        .top(px(62.))
-        .right(px(24.))
-        .w(px(420.))
-        .p_3()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(0xcbd5e1))
-        .bg(rgb(0xffffff))
-        .shadow_lg()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
+    let source_block = (!preference_editor)
+        .then(|| {
+            visual_block_index_for_offset(
+                &app.active_tab().document.visual_blocks_shared(),
+                editor.source_range.start,
+                app.active_tab().document.text().len(),
+            )
         })
+        .flatten();
+    let overlay_anchor =
+        app.document_overlay_anchor(source_block, overlay::OverlayPlacement::BelowSource);
+    anchored()
+        .position(overlay_anchor)
+        .offset(point(px(8.), px(8.)))
         .child(
             div()
-                .text_size(px(14.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(match editor.kind {
-                    LinkEditorKind::Image => image_t(app.language, ImageMsg::EditImage),
-                    LinkEditorKind::ImageDirectory => image_t(app.language, ImageMsg::Directory),
-                    LinkEditorKind::PicGoEndpoint => image_t(app.language, ImageMsg::Endpoint),
-                    LinkEditorKind::PicGoCoreArguments | LinkEditorKind::ImageCommandArguments => {
-                        image_t(app.language, ImageMsg::Arguments)
-                    }
-                    LinkEditorKind::Link => p0_t(app.language, P0Msg::EditLink),
-                }),
-        )
-        .when(!preference_editor, |panel| {
-            panel.child(field(
-                "link-editor-label",
-                p0_t(app.language, P0Msg::LinkText),
-                &editor.label,
-                LinkEditorField::Label,
-                editor.field == LinkEditorField::Label,
-                cx,
-            ))
-        })
-        .child(field(
-            "link-editor-url",
-            value_label,
-            &editor.url,
-            LinkEditorField::Url,
-            editor.field == LinkEditorField::Url,
-            cx,
-        ))
-        .when(!preference_editor, |panel| {
-            panel.child(field(
-                "link-editor-title",
-                p0_t(app.language, P0Msg::OptionalTitle),
-                &editor.title,
-                LinkEditorField::Title,
-                editor.field == LinkEditorField::Title,
-                cx,
-            ))
-        })
-        .child(
-            div()
+                .id("document-link-editor")
+                .debug_selector(|| "document-link-editor".to_string())
+                .w(px(420.))
+                .p_3()
+                .rounded_md()
+                .border_1()
+                .border_color(palette.border)
+                .bg(palette.surface_bg)
+                .text_color(palette.text)
+                .shadow_lg()
                 .flex()
-                .justify_end()
+                .flex_col()
                 .gap_2()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .child(
                     div()
-                        .id("link-editor-cancel")
-                        .px_3()
-                        .py_1()
-                        .cursor(CursorStyle::PointingHand)
-                        .child(t(app.language, Msg::DialogButtonCancel))
-                        .on_click(cx.listener(|app, _, _, cx| app.cancel_link_editor(cx))),
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(match editor.kind {
+                            LinkEditorKind::Image => image_t(app.language, ImageMsg::EditImage),
+                            LinkEditorKind::ImageDirectory => {
+                                image_t(app.language, ImageMsg::Directory)
+                            }
+                            LinkEditorKind::PicGoEndpoint => {
+                                image_t(app.language, ImageMsg::Endpoint)
+                            }
+                            LinkEditorKind::PicGoCoreArguments
+                            | LinkEditorKind::ImageCommandArguments => {
+                                image_t(app.language, ImageMsg::Arguments)
+                            }
+                            LinkEditorKind::Link => p0_t(app.language, P0Msg::EditLink),
+                        }),
                 )
+                .when(!preference_editor, |panel| {
+                    panel.child(field(
+                        "link-editor-label",
+                        p0_t(app.language, P0Msg::LinkText),
+                        &editor.label,
+                        LinkEditorField::Label,
+                        editor.field == LinkEditorField::Label,
+                        cx,
+                    ))
+                })
+                .child(field(
+                    "link-editor-url",
+                    value_label,
+                    &editor.url,
+                    LinkEditorField::Url,
+                    editor.field == LinkEditorField::Url,
+                    cx,
+                ))
+                .when(!preference_editor, |panel| {
+                    panel.child(field(
+                        "link-editor-title",
+                        p0_t(app.language, P0Msg::OptionalTitle),
+                        &editor.title,
+                        LinkEditorField::Title,
+                        editor.field == LinkEditorField::Title,
+                        cx,
+                    ))
+                })
                 .child(
                     div()
-                        .id("link-editor-apply")
-                        .px_3()
-                        .py_1()
-                        .rounded_sm()
-                        .bg(rgb(0x2563eb))
-                        .text_color(rgb(0xffffff))
-                        .cursor(CursorStyle::PointingHand)
-                        .child(p0_t(app.language, P0Msg::Apply))
-                        .on_click(
-                            cx.listener(|app, _, window, cx| app.confirm_link_editor(window, cx)),
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("link-editor-cancel")
+                                .px_3()
+                                .py_1()
+                                .cursor(CursorStyle::PointingHand)
+                                .child(t(app.language, Msg::DialogButtonCancel))
+                                .on_click(cx.listener(|app, _, _, cx| app.cancel_link_editor(cx))),
+                        )
+                        .child(
+                            div()
+                                .id("link-editor-apply")
+                                .px_3()
+                                .py_1()
+                                .rounded_sm()
+                                .bg(rgb(0x2563eb))
+                                .text_color(rgb(0xffffff))
+                                .cursor(CursorStyle::PointingHand)
+                                .child(p0_t(app.language, P0Msg::Apply))
+                                .on_click(cx.listener(|app, _, window, cx| {
+                                    app.confirm_link_editor(window, cx)
+                                })),
                         ),
                 ),
         )
@@ -2342,6 +2477,12 @@ pub(super) fn visual_edit_surface_view(
         .min_h_0()
         .on_scroll_wheel(cx.listener(|app, _, _, cx| {
             app.close_visual_block_menu(cx);
+        }))
+        .on_mouse_move(cx.listener(|app, _: &MouseMoveEvent, _, cx| {
+            if app.typing_chrome_suppressed {
+                app.typing_chrome_suppressed = false;
+                cx.notify();
+            }
         }))
         .child(
             div()
@@ -4622,6 +4763,63 @@ pub(super) fn tab_context_menu_view(
             .bg(palette.surface_bg)
             .shadow_md()
             .children(items),
+    )
+}
+
+fn editor_context_menu_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
+    let palette = app.palette();
+    let menu = app
+        .editor_context_menu
+        .as_ref()
+        .expect("editor context menu is rendered only while open");
+    let has_selection = !menu.selection.is_empty();
+    let items = [
+        (EditorContextAction::Cut, Msg::ItemCut, has_selection),
+        (EditorContextAction::Copy, Msg::ItemCopy, has_selection),
+        (EditorContextAction::Paste, Msg::ItemPaste, true),
+        (EditorContextAction::SelectAll, Msg::ItemSelectAll, true),
+    ];
+    let app_entity = cx.entity();
+    anchored().position(menu.position).child(
+        div()
+            .w(px(220.))
+            .occlude()
+            .p_1()
+            .rounded_md()
+            .border_1()
+            .border_color(palette.border)
+            .bg(palette.surface_bg)
+            .shadow_md()
+            .when(app.ai_preferences.enabled && has_selection, |panel| {
+                panel.child(ai_panel::selection_actions(app, cx))
+            })
+            .children(items.into_iter().map(move |(action, label, enabled)| {
+                let app_entity = app_entity.clone();
+                let id = match action {
+                    EditorContextAction::Cut => "editor-context-cut",
+                    EditorContextAction::Copy => "editor-context-copy",
+                    EditorContextAction::Paste => "editor-context-paste",
+                    EditorContextAction::SelectAll => "editor-context-select-all",
+                };
+                div()
+                    .id(id)
+                    .debug_selector(|| id.to_string())
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_size(px(12.))
+                    .text_color(if enabled { palette.text } else { palette.muted })
+                    .when(enabled, |row| {
+                        row.cursor_pointer()
+                            .hover(move |style| style.bg(palette.active_bg))
+                            .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                                app_entity.update(cx, |app, cx| {
+                                    app.handle_editor_context_action(action, window, cx);
+                                });
+                            })
+                    })
+                    .child(t(app.language, label))
+            })),
     )
 }
 

@@ -372,6 +372,7 @@ impl MarkionApp {
         self.dismiss_visual_block_menu();
         self.file_tree_context_menu = None;
         self.preview_context_menu = None;
+        self.editor_context_menu = None;
         self.tab_context_menu = None;
         self.status = t(self.language, Msg::StatusKeyboardShortcuts).into();
         self.active_menu = None;

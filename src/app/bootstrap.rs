@@ -281,6 +281,66 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new("shift-right", SelectRight, None),
         KeyBinding::new("shift-up", SelectUp, None),
         KeyBinding::new("shift-down", SelectDown, None),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "alt-left"
+            } else {
+                "ctrl-left"
+            },
+            WordLeft,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "alt-right"
+            } else {
+                "ctrl-right"
+            },
+            WordRight,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "alt-shift-left"
+            } else {
+                "ctrl-shift-left"
+            },
+            SelectWordLeft,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "alt-shift-right"
+            } else {
+                "ctrl-shift-right"
+            },
+            SelectWordRight,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "alt-backspace"
+            } else {
+                "ctrl-backspace"
+            },
+            DeleteWordLeft,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "alt-delete"
+            } else {
+                "ctrl-delete"
+            },
+            DeleteWordRight,
+            None,
+        ),
+        KeyBinding::new("shift-home", SelectHome, None),
+        KeyBinding::new("shift-end", SelectEnd, None),
+        KeyBinding::new("pageup", PageUp, None),
+        KeyBinding::new("pagedown", PageDown, None),
+        KeyBinding::new("shift-pageup", SelectPageUp, None),
+        KeyBinding::new("shift-pagedown", SelectPageDown, None),
         // `secondary-` maps to `cmd` on macOS and `ctrl` on Windows/Linux,
         // so shortcuts match each platform's convention.
         registry_binding(cx, eff(&menu_shortcuts::SELECT_ALL), SelectAll),
@@ -290,6 +350,7 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         registry_binding(cx, eff(&menu_shortcuts::CUT), Cut),
         registry_binding(cx, eff(&menu_shortcuts::UNDO), Undo),
         registry_binding(cx, eff(&menu_shortcuts::REDO), Redo),
+        KeyBinding::new("secondary-shift-z", Redo, None),
         registry_binding(cx, eff(&menu_shortcuts::BOLD), Bold),
         registry_binding(cx, eff(&menu_shortcuts::ITALIC), Italic),
         registry_binding(cx, eff(&menu_shortcuts::INLINE_CODE), InlineCode),
@@ -353,7 +414,7 @@ pub(super) fn bind_app_keys(cx: &mut App, overrides: &BTreeMap<String, String>) 
         KeyBinding::new("secondary-alt-n", CreateTreeFile, None),
         KeyBinding::new("secondary-alt-shift-n", CreateTreeFolder, None),
         KeyBinding::new("f2", RenameTreeEntry, None),
-        KeyBinding::new("secondary-delete", DeleteTreeEntry, None),
+        KeyBinding::new("secondary-shift-delete", DeleteTreeEntry, None),
         registry_binding(cx, eff(&menu_shortcuts::TOGGLE_OUTLINE), ToggleOutline),
         registry_binding(cx, eff(&menu_shortcuts::CYCLE_THEME), CycleTheme),
         registry_binding(cx, eff(&menu_shortcuts::TOGGLE_FOCUS_MODE), ToggleFocusMode),

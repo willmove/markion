@@ -389,6 +389,93 @@ fn separate_pasted_tables(insertion: &str, line_before: &str, line_after: &str) 
 }
 
 impl MarkionApp {
+    pub(super) fn document_overlay_anchor(
+        &self,
+        block_index: Option<usize>,
+        placement: overlay::OverlayPlacement,
+    ) -> Point<Pixels> {
+        let tab = self.active_tab();
+        let block = block_index.and_then(|index| tab.visual_list.bounds_for_item(index));
+        overlay::overlay_anchor(
+            tab.visual_caret_bounds,
+            block,
+            tab.visual_input_bounds,
+            placement,
+        )
+        .unwrap_or_else(|| point(px(24.), px(62.)))
+    }
+
+    pub(super) fn selection_toolbar_presentation(
+        &self,
+    ) -> Option<(VisualSelectionFormatTarget, Point<Pixels>)> {
+        if self.active_tab().is_image() {
+            return None;
+        }
+        if self.selection_toolbar_suppressed
+            || self.active_tab().is_selecting
+            || self.block_menu.is_some()
+            || self.slash_commands.is_some()
+            || self.link_editor.is_some()
+            || self.token_editor.is_some()
+            || self.editor_context_menu.is_some()
+            || self.preview_context_menu.is_some()
+            || self.visual_table_menu.is_some()
+            || self.recovery_manager.is_some()
+            || self.preferences_panel_open
+            || self.search_visible
+            || !matches!(self.view_mode, ViewMode::VisualEdit)
+        {
+            return None;
+        }
+        let selected = self.active_tab().safe_selected_range();
+        if selected.is_empty() {
+            return None;
+        }
+        let tab = self.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let index =
+            visual_block_index_for_offset(&blocks, selected.start, tab.document.text().len())?;
+        let target = BlockTarget::from_block(tab.document.version(), &blocks[index]);
+        let selection = visual_selection_format_target_for_block(tab, &blocks, &target)?;
+        let anchor =
+            self.document_overlay_anchor(Some(index), overlay::OverlayPlacement::AboveSource);
+        Some((selection, anchor))
+    }
+
+    pub(super) fn activate_selection_toolbar_action(
+        &mut self,
+        action: SelectionFormatAction,
+        captured: VisualSelectionFormatTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((current, _)) = self.selection_toolbar_presentation() else {
+            cx.notify();
+            return;
+        };
+        if current != captured {
+            cx.notify();
+            return;
+        }
+        match action {
+            SelectionFormatAction::Bold => self.apply_markdown_format(
+                MarkdownFormat::Bold,
+                self.tr(Msg::StatusFmtBold).into(),
+                cx,
+            ),
+            SelectionFormatAction::Italic => self.apply_markdown_format(
+                MarkdownFormat::Italic,
+                self.tr(Msg::StatusFmtItalic).into(),
+                cx,
+            ),
+            SelectionFormatAction::InlineCode => self.apply_markdown_format(
+                MarkdownFormat::InlineCode,
+                self.tr(Msg::StatusFmtInlineCode).into(),
+                cx,
+            ),
+            SelectionFormatAction::Link => self.open_link_editor(cx),
+        }
+    }
+
     pub(super) fn sync_slash_command_state(&mut self, cx: &mut Context<Self>) {
         let query = if self.block_menu.is_none()
             && self.recovery_manager.is_none()
@@ -685,6 +772,7 @@ impl MarkionApp {
         self.slash_commands = None;
         self.emoji_completer = None;
         self.preview_context_menu = None;
+        self.editor_context_menu = None;
         self.file_tree_context_menu = None;
         self.tab_context_menu = None;
         self.active_menu = None;
@@ -1082,6 +1170,7 @@ impl MarkionApp {
             }
         };
         self.preview_context_menu = None;
+        self.editor_context_menu = None;
         self.active_menu = None;
         self.visual_table_menu = Some(VisualTableMenuState {
             target,
@@ -3159,6 +3248,7 @@ impl MarkionApp {
         let had_transient_ui = self.active_menu.is_some()
             || self.file_tree_context_menu.is_some()
             || self.preview_context_menu.is_some()
+            || self.editor_context_menu.is_some()
             || self.tab_context_menu.is_some()
             || self.block_menu.is_some()
             || self.workspace_switcher_open;
@@ -3170,6 +3260,7 @@ impl MarkionApp {
             self.advanced_git_submenu_open = false;
             self.file_tree_context_menu = None;
             self.preview_context_menu = None;
+            self.editor_context_menu = None;
             self.tab_context_menu = None;
             self.dismiss_visual_block_menu();
             self.close_workspace_switcher();
@@ -3186,6 +3277,46 @@ impl MarkionApp {
         }
         if had_transient_ui || self.name_editor_click_away {
             cx.notify();
+        }
+    }
+
+    pub(super) fn show_editor_context_menu(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_menu = None;
+        self.file_tree_context_menu = None;
+        self.tab_context_menu = None;
+        self.preview_context_menu = None;
+        self.editor_context_menu = None;
+        self.dismiss_visual_block_menu();
+        self.editor_context_menu = Some(EditorContextMenu {
+            position,
+            selection: self.active_tab().safe_selected_range(),
+        });
+        cx.notify();
+    }
+
+    pub(super) fn handle_editor_context_action(
+        &mut self,
+        action: EditorContextAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = self.editor_context_menu.take() else {
+            return;
+        };
+        if self.active_tab().safe_selected_range() != menu.selection {
+            self.status = t(self.language, Msg::StatusCanceled).into();
+            cx.notify();
+            return;
+        }
+        match action {
+            EditorContextAction::Cut => self.cut(&Cut, window, cx),
+            EditorContextAction::Copy => self.copy(&Copy, window, cx),
+            EditorContextAction::Paste => self.paste(&Paste, window, cx),
+            EditorContextAction::SelectAll => self.select_all(&SelectAll, window, cx),
         }
     }
 
@@ -3228,6 +3359,7 @@ impl MarkionApp {
         self.active_menu = None;
         self.file_tree_context_menu = None;
         self.preview_context_menu = None;
+        self.editor_context_menu = None;
         self.dismiss_visual_block_menu();
         self.pending_name_input = None;
         self.tab_context_menu = Some(TabContextMenu { target, position });
@@ -3381,6 +3513,7 @@ impl MarkionApp {
             .as_ref()
             .and_then(|menu| menu.link_url.clone());
         self.preview_context_menu = None;
+        self.editor_context_menu = None;
         match action {
             PreviewContextAction::SelectAll => {
                 self.select_all_preview_text(cx);
@@ -3643,6 +3776,73 @@ impl MarkionApp {
         }
     }
 
+    fn move_by_word(&mut self, forward: bool, extend: bool, cx: &mut Context<Self>) {
+        let offset = self.cursor_offset();
+        let text = self.active_tab().document.text();
+        let target = if forward {
+            next_word_boundary(text, offset)
+        } else {
+            previous_word_boundary(text, offset)
+        };
+        if extend {
+            self.select_to(target, cx);
+        } else {
+            self.move_to(target, cx);
+        }
+    }
+
+    pub(super) fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_by_word(false, false, cx);
+    }
+
+    pub(super) fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_by_word(true, false, cx);
+    }
+
+    pub(super) fn select_word_left(
+        &mut self,
+        _: &SelectWordLeft,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_by_word(false, true, cx);
+    }
+
+    pub(super) fn select_word_right(
+        &mut self,
+        _: &SelectWordRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_by_word(true, true, cx);
+    }
+
+    fn delete_by_word(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_tab().selected_range.is_empty() {
+            self.move_by_word(forward, true, cx);
+        }
+        self.active_tab_mut().pending_text_edit_intent = Some(UndoCaptureKind::Delete);
+        self.replace_text_in_range(None, "", window, cx);
+    }
+
+    pub(super) fn delete_word_left(
+        &mut self,
+        _: &DeleteWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delete_by_word(false, window, cx);
+    }
+
+    pub(super) fn delete_word_right(
+        &mut self,
+        _: &DeleteWordRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delete_by_word(true, window, cx);
+    }
+
     pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         if self.move_search_caret(SearchCaretMove::SelectLeft, cx) {
             return;
@@ -3763,6 +3963,53 @@ impl MarkionApp {
         self.select_to(target, cx);
     }
 
+    pub(super) fn visual_block_text_range_at(
+        &self,
+        block_index: usize,
+        offset: usize,
+    ) -> Option<Range<usize>> {
+        let blocks = self.active_tab().document.visual_blocks_shared();
+        let block = blocks.get(block_index)?;
+        if let Some(editor) = &block.editor {
+            for field in editor.fields() {
+                if field.source_range.contains(&offset) || offset == field.source_range.end {
+                    return Some(field.source_range.clone());
+                }
+            }
+        }
+        let start = block
+            .editable_runs
+            .iter()
+            .map(|run| run.content_range.start)
+            .min();
+        let end = block
+            .editable_runs
+            .iter()
+            .map(|run| run.content_range.end)
+            .max();
+        Some(match (start, end) {
+            (Some(start), Some(end)) => start..end,
+            _ => block.source_range.clone(),
+        })
+    }
+
+    fn current_text_block_range(&self) -> Range<usize> {
+        let offset = self.cursor_offset();
+        if matches!(self.view_mode, ViewMode::VisualEdit) {
+            let blocks = self.active_tab().document.visual_blocks_shared();
+            if let Some(index) = visual_block_index_for_offset(
+                &blocks,
+                offset,
+                self.active_tab().document.text().len(),
+            ) {
+                if let Some(range) = self.visual_block_text_range_at(index, offset) {
+                    return range;
+                }
+            }
+        }
+        self.active_tab().document.paragraph_range_at(offset)
+    }
+
     pub(super) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         if self.move_search_caret(SearchCaretMove::SelectAll, cx) {
             return;
@@ -3774,9 +4021,15 @@ impl MarkionApp {
             self.move_name_caret(NameCaretMove::SelectAll, cx);
             return;
         }
-        self.move_to(0, cx);
-        let len = self.active_tab().document.text().len();
-        self.select_to(len, cx);
+        let local = self.current_text_block_range();
+        let selected = self.active_tab().safe_selected_range();
+        let target = if selected == local {
+            0..self.active_tab().document.text().len()
+        } else {
+            local
+        };
+        self.move_to(target.start, cx);
+        self.select_to(target.end, cx);
     }
 
     pub(super) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
@@ -3817,6 +4070,88 @@ impl MarkionApp {
         let cursor = self.cursor_offset();
         let target = self.active_tab().document.line_end_at(cursor);
         self.move_to(target, cx);
+    }
+
+    pub(super) fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
+        let target = self.visual_painted_line_boundary(false).unwrap_or_else(|| {
+            self.active_tab()
+                .document
+                .line_start_at(self.cursor_offset())
+        });
+        self.select_to(target, cx);
+    }
+
+    pub(super) fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
+        let target = self
+            .visual_painted_line_boundary(true)
+            .unwrap_or_else(|| self.active_tab().document.line_end_at(self.cursor_offset()));
+        self.select_to(target, cx);
+    }
+
+    fn move_by_page(&mut self, forward: bool, extend: bool, cx: &mut Context<Self>) {
+        let visual = matches!(self.view_mode, ViewMode::VisualEdit);
+        let viewport_height = if visual {
+            self.active_tab().visual_list.viewport_bounds().size.height
+        } else {
+            self.active_tab().editor_scroll.bounds().size.height
+        };
+        let line_height = if visual {
+            px(self.typography_metrics().preview_row_line_height)
+        } else {
+            self.active_tab().line_height
+        };
+        let count = if line_height > Pixels::ZERO {
+            (f32::from(viewport_height / line_height).floor() as usize).clamp(1, 50)
+        } else {
+            1
+        };
+        for _ in 0..count {
+            let direction = if forward {
+                VisualNavigationDirection::Down
+            } else {
+                VisualNavigationDirection::Up
+            };
+            if visual && self.move_visual_vertical(direction, extend, cx) {
+                continue;
+            }
+            let cursor = self.cursor_offset();
+            let target = if forward {
+                self.active_tab().document.next_line_offset(cursor)
+            } else {
+                self.active_tab().document.previous_line_offset(cursor)
+            };
+            if extend {
+                self.select_to(target, cx);
+            } else {
+                self.move_to(target, cx);
+            }
+        }
+    }
+
+    pub(super) fn page_up(&mut self, _: &PageUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_by_page(false, false, cx);
+    }
+
+    pub(super) fn page_down(&mut self, _: &PageDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_by_page(true, false, cx);
+    }
+
+    pub(super) fn select_page_up(
+        &mut self,
+        _: &SelectPageUp,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_by_page(false, true, cx);
+    }
+
+    pub(super) fn select_page_down(
+        &mut self,
+        _: &SelectPageDown,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_by_page(true, true, cx);
     }
 
     pub(super) fn insert_newline(
@@ -3978,6 +4313,88 @@ impl MarkionApp {
         }
     }
 
+    pub(super) fn visual_list_indent_allowed(&self, forward: bool) -> Option<bool> {
+        let blocks = self.active_tab().document.visual_blocks_shared();
+        let index = visual_block_index_for_offset(
+            &blocks,
+            self.cursor_offset(),
+            self.active_tab().document.text().len(),
+        )?;
+        let block = blocks.get(index)?;
+        let VisualBlockKind::ListItem { level, .. } = block.kind else {
+            return None;
+        };
+        let has_nested_children = blocks
+            .iter()
+            .skip(index + 1)
+            .find_map(|candidate| match candidate.kind {
+                VisualBlockKind::Whitespace => None,
+                VisualBlockKind::ListItem {
+                    level: candidate_level,
+                    ..
+                } => Some(candidate_level > level),
+                _ => Some(false),
+            })
+            .unwrap_or(false);
+        if has_nested_children {
+            return Some(false);
+        }
+        if forward {
+            let has_list_predecessor = blocks[..index]
+                .iter()
+                .rev()
+                .find_map(|candidate| {
+                    (!matches!(candidate.kind, VisualBlockKind::Whitespace))
+                        .then_some(matches!(candidate.kind, VisualBlockKind::ListItem { .. }))
+                })
+                .unwrap_or(false);
+            Some(has_list_predecessor)
+        } else {
+            Some(
+                block
+                    .block_prefix
+                    .as_ref()
+                    .is_some_and(|prefix| !prefix.indentation_range.is_empty()),
+            )
+        }
+    }
+
+    fn apply_line_indentation(
+        &mut self,
+        selected: Range<usize>,
+        outdent: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.snapshot();
+        let tab = self.active_tab_mut();
+        tab.selected_range = if outdent {
+            tab.document.outdent_lines(selected)
+        } else {
+            tab.document.indent_lines(selected)
+        };
+        let changed = tab.document.text() != snapshot.document.text();
+        if changed {
+            self.commit_undo_snapshot(snapshot);
+        }
+        let tab = self.active_tab_mut();
+        tab.selection_reversed = false;
+        tab.marked_range = None;
+        self.status = t(
+            self.language,
+            match (outdent, changed) {
+                (false, true) => Msg::StatusIndentedSelection,
+                (false, false) => Msg::StatusNoEdit,
+                (true, true) => Msg::StatusOutdentedSelection,
+                (true, false) => Msg::StatusNothingToOutdent,
+            },
+        )
+        .into();
+        if changed {
+            self.after_document_changed(cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn indent(&mut self, _: &Indent, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(SearchField::Git(index)) = self.search_focus {
             self.search_focus = Some(SearchField::Git(
@@ -4023,25 +4440,21 @@ impl MarkionApp {
             return;
         }
 
-        if self.active_tab().selected_range.is_empty() {
-            self.replace_text_in_range(None, "    ", window, cx);
+        if selected.is_empty() {
+            if matches!(self.view_mode, ViewMode::VisualEdit) {
+                match self.visual_list_indent_allowed(true) {
+                    Some(true) => self.apply_line_indentation(selected, false, cx),
+                    Some(false) => {
+                        self.status = t(self.language, Msg::StatusNoEdit).into();
+                        cx.notify();
+                    }
+                    None => self.replace_text_in_range(None, "    ", window, cx),
+                }
+            } else {
+                self.replace_text_in_range(None, "    ", window, cx);
+            }
         } else {
-            let snapshot = self.snapshot();
-            let selected = self.active_tab().selected_range.clone();
-            let tab = self.active_tab_mut();
-            tab.selected_range = tab.document.indent_lines(selected);
-            let changed = tab.document.text() != snapshot.document.text();
-            if changed {
-                self.commit_undo_snapshot(snapshot);
-            }
-            let tab = self.active_tab_mut();
-            tab.selection_reversed = false;
-            tab.marked_range = None;
-            self.status = t(self.language, Msg::StatusIndentedSelection).into();
-            if changed {
-                self.after_document_changed(cx);
-            }
-            cx.notify();
+            self.apply_line_indentation(selected, false, cx);
         }
     }
 
@@ -4076,30 +4489,15 @@ impl MarkionApp {
             self.move_to_visual_editor_target(target, cx);
             return;
         }
-        let snapshot = self.snapshot();
-        let selected = self.active_tab().selected_range.clone();
-        let tab = self.active_tab_mut();
-        tab.selected_range = tab.document.outdent_lines(selected);
-        let changed = tab.document.text() != snapshot.document.text();
-        if changed {
-            self.commit_undo_snapshot(snapshot);
+        if selected.is_empty()
+            && matches!(self.view_mode, ViewMode::VisualEdit)
+            && self.visual_list_indent_allowed(false) == Some(false)
+        {
+            self.status = t(self.language, Msg::StatusNothingToOutdent).into();
+            cx.notify();
+            return;
         }
-        let tab = self.active_tab_mut();
-        tab.selection_reversed = false;
-        tab.marked_range = None;
-        self.status = t(
-            self.language,
-            if changed {
-                Msg::StatusOutdentedSelection
-            } else {
-                Msg::StatusNothingToOutdent
-            },
-        )
-        .into();
-        if changed {
-            self.after_document_changed(cx);
-        }
-        cx.notify();
+        self.apply_line_indentation(selected, true, cx);
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -4461,10 +4859,18 @@ impl MarkionApp {
         // back to the editor.
         self.active_tab_mut().clear_preview_selection();
         self.active_tab_mut().is_selecting = true;
+        let offset = self.index_for_mouse_position(event.position);
         if event.modifiers.shift {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+            self.select_to(offset, cx);
+        } else if event.click_count >= 3 {
+            self.move_to(offset, cx);
+            let range = self.current_text_block_range();
+            self.move_to_visual_editor_target(range, cx);
+        } else if event.click_count == 2 {
+            let range = search_word_range(self.active_tab().document.text(), offset);
+            self.move_to_visual_editor_target(range, cx);
         } else {
-            self.move_to(self.index_for_mouse_position(event.position), cx);
+            self.move_to(offset, cx);
         }
     }
 
@@ -5297,6 +5703,7 @@ impl MarkionApp {
     }
 
     pub(super) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.selection_toolbar_suppressed = false;
         let tab = self.active_tab_mut();
         tab.clear_visual_caret_affinity();
         tab.clear_visual_navigation_intent();

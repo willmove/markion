@@ -1227,7 +1227,7 @@ impl Element for VisualEditableText {
             {
                 return;
             }
-            let mut double_click_word = None;
+            let mut block_click_selection = None;
             let (source, affinity) = if let Some(whitespace) = whitespace_click.as_ref() {
                 let text = entity.read(cx).active_tab().document.text().to_string();
                 (
@@ -1242,8 +1242,13 @@ impl Element for VisualEditableText {
                 )
             } else if let Some(text_layout) = text_layout.as_ref() {
                 let visible = preview_index_for_position(text_layout, event.position);
-                if event.click_count >= 2 && !event.modifiers.shift {
-                    double_click_word = projection.word_selection_range(visible);
+                if event.click_count >= 3 && !event.modifiers.shift {
+                    let source = projection.boundary_candidates(visible).downstream_source;
+                    block_click_selection = entity
+                        .read(cx)
+                        .visual_block_text_range_at(block_index, source);
+                } else if event.click_count == 2 && !event.modifiers.shift {
+                    block_click_selection = projection.word_selection_range(visible);
                 }
                 let candidates = projection.boundary_candidates(visible);
                 let affinity =
@@ -1305,7 +1310,7 @@ impl Element for VisualEditableText {
                     && app.activate_visual_navigation_at(source, cx)
                 {
                     app.active_tab_mut().is_selecting = false;
-                } else if let Some(range) = double_click_word {
+                } else if let Some(range) = block_click_selection {
                     // move_to_visual_editor_target clears caret affinity
                     // itself; a selection has no collapsed-affinity side.
                     app.move_to_visual_editor_target(range, cx);
@@ -5115,7 +5120,11 @@ fn visual_block_chrome(
                     .text_size(px(12.))
                     .text_color(palette.muted)
                     .cursor(CursorStyle::OpenHand)
-                    .opacity(if owns_caret { 1. } else { 0. })
+                    .opacity(if owns_caret && !app.typing_chrome_suppressed {
+                        1.
+                    } else {
+                        0.
+                    })
                     .group_hover(hover_group, |style| style.opacity(1.))
                     .active(|style| style.opacity(1.))
                     .flex()

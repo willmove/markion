@@ -61,24 +61,25 @@ use markion::{
     builtin_theme_definitions, bundled_resource_path, check_path_state, clamp_image_width_percent,
     data_uri_payload_ranges, default_git_sync_policy_path, default_preferences_path,
     default_recovery_dir, default_session_path, default_themes_dir, delete_block,
-    delete_recovery_file, diagram_backend_id, document_kind_for_path, duplicate_block, elided_payload_token,
-    emoji_confirm_replacement, emoji_query_at, emoji_shortcodes_matching, highlight_code,
-    highlight_data_document, html_preview_parts, html_preview_plain_text,
-    html_table_column_weights,
-    html_table_grid_line_end, html_table_row_has_visible_header, image_extension_supported,
-    inline_image_at, inline_link_at, inspect_recovery_files, is_auto_pair_restricted_field,
-    is_openable_text_path, layout_rect_is_visible, list_theme_definitions,
-    load_app_preferences, load_recovery_file, load_session_state, markdown_reference,
-    normalize_auto_save_delay_secs, normalize_code_font_size, normalize_editor_font_size,
-    normalize_heading_menu_max_level, normalize_paragraph_spacing, normalize_rendered_font_size,
-    organize_candidates, p0_t, p0_tf, p1_t, p1_tf, pandoc_available, percents_from_flex_weights,
+    delete_recovery_file, diagram_backend_id, document_kind_for_path, duplicate_block,
+    elided_payload_token, emoji_confirm_replacement, emoji_query_at, emoji_shortcodes_matching,
+    highlight_code, highlight_data_document, html_preview_parts, html_preview_plain_text,
+    html_table_column_weights, html_table_grid_line_end, html_table_row_has_visible_header,
+    image_extension_supported, inline_image_at, inline_link_at, inspect_recovery_files,
+    is_auto_pair_restricted_field, is_openable_text_path, layout_rect_is_visible,
+    list_theme_definitions, load_app_preferences, load_recovery_file, load_session_state,
+    markdown_reference, next_word_boundary, normalize_auto_save_delay_secs,
+    normalize_code_font_size, normalize_editor_font_size, normalize_heading_menu_max_level,
+    normalize_paragraph_spacing, normalize_rendered_font_size, organize_candidates, p0_t, p0_tf,
+    p1_t, p1_tf, pandoc_available, percents_from_flex_weights, previous_word_boundary,
     read_document_source, redistribute_adjacent_column_percents, reorder_block,
     resolve_font_family, resolve_html_img_display_size, save_app_preferences, save_session_state,
     save_text_snapshot, save_theme_definition, serialize_html_anchor, serialize_inline_image,
     serialize_inline_link, shortcut_catalog, sidebar_tab_label, simple_html_anchor_at,
     slash_command_edit, slash_query_at, snap_image_width_percent, t, table_column_flex_weights,
     table_column_flex_weights_with_authored, table_column_width_prefix_len, task_checkbox_toggle,
-    tf, title_from_path, transform_block, validate_block_target, workspace_relative_path,
+    tf, title_from_path, transform_block, url_auto_link_action, validate_block_target,
+    workspace_relative_path,
 };
 use markion_git_sync::{
     BackgroundFetchScheduler, ConflictClaim, GitOperationRegistry, PolicyStore, ReadEpoch,
@@ -93,6 +94,12 @@ actions!(
         Delete,
         Left,
         Right,
+        WordLeft,
+        WordRight,
+        SelectWordLeft,
+        SelectWordRight,
+        DeleteWordLeft,
+        DeleteWordRight,
         Up,
         Down,
         SelectLeft,
@@ -102,6 +109,12 @@ actions!(
         SelectAll,
         Home,
         End,
+        SelectHome,
+        SelectEnd,
+        PageUp,
+        PageDown,
+        SelectPageUp,
+        SelectPageDown,
         InsertNewline,
         SearchPreviousOrNewline,
         Indent,
@@ -2280,6 +2293,20 @@ struct PreviewContextMenu {
     link_url: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct EditorContextMenu {
+    position: Point<Pixels>,
+    selection: Range<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorContextAction {
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreviewContextAction {
     CopyPlain,
@@ -2462,6 +2489,7 @@ pub(super) mod layout;
 mod math_render;
 mod memory;
 mod network;
+mod overlay;
 mod preview;
 mod preview_image;
 mod process_memory;
@@ -2656,6 +2684,10 @@ struct MarkionApp {
     /// When enabled, Visual Edit keeps non-empty inline syntax out of the
     /// text flow. Persisted; disabled by default.
     stable_visual_inline: bool,
+    /// Presentation-only suppression after a canonical edit or until selection changes.
+    selection_toolbar_suppressed: bool,
+    /// Presentation-only suppression of transient block grips after typing.
+    typing_chrome_suppressed: bool,
     /// When enabled, non-explicit opens (File → Open, file-tree click,
     /// drag-drop, Open Recent) replace a safe-to-replace active tab instead
     /// of appending a new tab. Persisted; enabled by default.
@@ -2714,6 +2746,8 @@ struct MarkionApp {
     file_tree_context_menu: Option<FileTreeContextMenu>,
     /// Right-click menu for the rendered preview pane.
     preview_context_menu: Option<PreviewContextMenu>,
+    /// Ordinary editing menu for the source surface.
+    editor_context_menu: Option<EditorContextMenu>,
     /// Right-click menu for a tab-bar item.
     tab_context_menu: Option<TabContextMenu>,
     /// Open inline name editor for a file-tree create/rename action; reuses

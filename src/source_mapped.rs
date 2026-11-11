@@ -4,7 +4,7 @@
 //! whose boundaries and source lineage are unambiguous. Full derivation stays
 //! the correctness fallback.
 
-use std::{ops::Range, sync::Arc};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use crate::{
     Heading, InlineSpan, MarkdownDocument, MathSource, PreviewBlock, RichText, VisualBlock,
@@ -602,9 +602,18 @@ pub(crate) fn reconcile_visual_block_ids(
     old_blocks: &[VisualBlock],
     new_blocks: &mut [VisualBlock],
     edits: &[SourceEdit],
-) {
+) -> usize {
+    let mut candidates = 0usize;
+    let mut by_range: HashMap<Range<usize>, Vec<usize>> = HashMap::with_capacity(new_blocks.len());
+    for (index, block) in new_blocks.iter().enumerate() {
+        by_range
+            .entry(block.source_range.clone())
+            .or_default()
+            .push(index);
+    }
     let mut claimed = vec![false; new_blocks.len()];
-    for old in old_blocks {
+    let mut matched_old = vec![false; old_blocks.len()];
+    for (old_index, old) in old_blocks.iter().enumerate() {
         let Some(mapped_range) = map_range_through_edits(&old.source_range, edits) else {
             continue;
         };
@@ -617,16 +626,17 @@ pub(crate) fn reconcile_visual_block_ids(
         if old_slice != new_slice {
             continue;
         }
-        let Some(index) = new_blocks
-            .iter()
-            .position(|block| block.source_range == mapped_range)
+        let Some(index) = by_range
+            .get(&mapped_range)
+            .and_then(|indices| indices.first())
+            .copied()
         else {
             continue;
         };
+        candidates += 1;
         if claimed[index] {
             continue;
         }
-        let mut shifted = old.clone();
         let Some(delta) = isize::try_from(mapped_range.start)
             .ok()
             .and_then(|new_start| {
@@ -637,6 +647,26 @@ pub(crate) fn reconcile_visual_block_ids(
         else {
             continue;
         };
+        let quote_group_matches = match (&old.quote_context, &new_blocks[index].quote_context) {
+            (None, None) => true,
+            (Some(old_quote), Some(new_quote)) => {
+                old_quote.group_source_range == new_quote.group_source_range
+            }
+            _ => false,
+        };
+        if delta == 0 && quote_group_matches {
+            let fresh_id = new_blocks[index].id;
+            new_blocks[index].id = old.id;
+            if old == &new_blocks[index] {
+                claimed[index] = true;
+                matched_old[old_index] = true;
+            } else {
+                new_blocks[index].id = fresh_id;
+            }
+            continue;
+        }
+
+        let mut shifted = old.clone();
         if shift_visual_block(&mut shifted, delta).is_none() {
             continue;
         }
@@ -654,32 +684,39 @@ pub(crate) fn reconcile_visual_block_ids(
         if shifted == new_blocks[index] {
             new_blocks[index].id = old.id;
             claimed[index] = true;
+            matched_old[old_index] = true;
         }
     }
 
-    for old in old_blocks {
-        if new_blocks.iter().any(|block| block.id == old.id) {
+    for (old_index, old) in old_blocks.iter().enumerate() {
+        if matched_old[old_index] {
             continue;
         }
         let Some(mapped_range) = map_containing_range_through_edits(&old.source_range, edits)
         else {
             continue;
         };
-        let matches: Vec<usize> = new_blocks
-            .iter()
-            .enumerate()
-            .filter(|(index, block)| {
-                !claimed[*index] && block.source_range == mapped_range && block.kind == old.kind
-            })
-            .map(|(index, _)| index)
-            .collect();
-        if matches.len() != 1 {
+        let Some(indices) = by_range.get(&mapped_range) else {
             continue;
+        };
+        let mut matched = None;
+        for &index in indices {
+            candidates += 1;
+            if claimed[index] || new_blocks[index].kind != old.kind {
+                continue;
+            }
+            if matched.is_some() {
+                matched = None;
+                break;
+            }
+            matched = Some(index);
         }
-        let index = matches[0];
-        new_blocks[index].id = old.id;
-        claimed[index] = true;
+        if let Some(index) = matched {
+            new_blocks[index].id = old.id;
+            claimed[index] = true;
+        }
     }
+    candidates
 }
 
 pub(crate) fn shift_range(range: &Range<usize>, delta: isize) -> Option<Range<usize>> {
@@ -885,6 +922,7 @@ pub(crate) fn shift_structural_edit(edit: &mut VisualStructuralEdit, delta: isiz
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VisualBlockId;
 
     #[test]
     fn edit_chain_maps_utf8_safe_prefix_and_suffix_ranges() {
@@ -1430,11 +1468,12 @@ mod tests {
         let before = document.source_mapped_derivation_counters();
         let edit = document.text().find("paragraph 250").unwrap() + "paragraph ".len();
         document.replace_range(edit..edit + 3, "middle");
-        let incremental = document.visual_blocks_shared();
+        let (incremental, profile) = document.visual_blocks_shared_with_profile();
         let after = document.source_mapped_derivation_counters();
         assert!(after.reused_regions - before.reused_regions >= 499);
         assert!(after.parsed_regions - before.parsed_regions <= 1);
         assert_eq!(incremental.last().unwrap().id, unchanged_suffix_id);
+        assert!(profile.identity_candidates <= original.len() * 2);
 
         let full = MarkdownDocument::from_text(document.text()).visual_blocks();
         assert_eq!(incremental.len(), full.len());
@@ -1443,6 +1482,48 @@ mod tests {
             normalized.id = full.id;
             assert_eq!(&normalized, full);
         }
+        let (cached, cache_profile) = document.visual_blocks_shared_with_profile();
+        assert!(cache_profile.cache_hit);
+        assert!(std::sync::Arc::ptr_eq(&incremental, &cached));
+    }
+
+    #[test]
+    fn duplicate_empty_ranges_do_not_steal_occurrence_ids() {
+        let make_block = |id| VisualBlock {
+            id,
+            kind: crate::VisualBlockKind::Whitespace,
+            source_range: 1..1,
+            editable_runs: Vec::new(),
+            reveal_groups: Vec::new(),
+            marker_ranges: Vec::new(),
+            block_prefix: None,
+            height_signature: Some(1),
+            quote_context: None,
+            list_depth: 0,
+            source_island: None,
+            editor: None,
+        };
+        let old_blocks = vec![
+            make_block(VisualBlockId::fresh()),
+            make_block(VisualBlockId::fresh()),
+            make_block(VisualBlockId::fresh()),
+        ];
+        let old_ids: Vec<VisualBlockId> = old_blocks.iter().map(|block| block.id).collect();
+        let mut new_blocks = vec![
+            make_block(VisualBlockId::fresh()),
+            make_block(VisualBlockId::fresh()),
+            make_block(VisualBlockId::fresh()),
+        ];
+        let fresh_ids: Vec<VisualBlockId> = new_blocks.iter().map(|block| block.id).collect();
+        let edits = vec![SourceEdit::new("x", 1..1, 1, 1, 2).unwrap()];
+        let candidates =
+            reconcile_visual_block_ids("x", "xy", &old_blocks, &mut new_blocks, &edits);
+        let new_ids: Vec<VisualBlockId> = new_blocks.iter().map(|block| block.id).collect();
+        assert_eq!(new_ids[0], old_ids[0]);
+        assert_eq!(new_ids[1..], fresh_ids[1..]);
+        assert!(!old_ids[1..].contains(&new_ids[1]));
+        assert!(!old_ids[1..].contains(&new_ids[2]));
+        assert_eq!(candidates, 3);
     }
 
     #[test]

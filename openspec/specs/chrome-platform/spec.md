@@ -3,9 +3,7 @@
 ## Purpose
 
 Covers the application chrome: view modes, menus, status bar, themes, focus/typewriter modes, find/replace, preferences, cross-platform behavior, performance characteristics, and error feedback. Interface internationalization is tracked separately under the `ui-i18n` capability. Font-family/size configuration, per-theme code-highlight themes, extension-syntax toggles, error logging to file, and crash-report prompts are **not** part of this capability — they are future candidates.
-
 ## Requirements
-
 ### Requirement: View modes and application chrome
 The editor SHALL provide source, split, and preview view modes, a toggleable sidebar (file tree / outline), a visible in-window menu bar (File, Edit, View, Format, Export, Help) with click-outside-to-close behavior, and a status bar. When the sidebar is visible, its column SHALL begin directly below the menu bar and extend through both the document-tab band and main content region, while document-tab controls and document panes remain in the adjacent document-workspace column.
 
@@ -1013,3 +1011,11 @@ The Find / Replace overlay SHALL provide a visible move grip. Dragging the grip 
 #### Scenario: Double-clicking the grip resets the position
 - **WHEN** the overlay has been moved and the user double-clicks its grip
 - **THEN** the overlay returns to its default upper-right position
+
+### Requirement: Document overlay presentation uses active theme and viewport bounds
+Document overlay surfaces introduced or repositioned by `anchor-visual-editing-overlays` SHALL use the active theme palette and GPUI anchored positioning with viewport clamping. Overlay positioning and visibility SHALL NOT change document layout, text, selection, version, history, dirty state, or derived caches.
+
+#### Scenario: Dark theme and constrained viewport
+- **WHEN** a document overlay opens in a dark theme or near a viewport edge
+- **THEN** text, borders, backgrounds, and controls remain readable and the overlay stays within the usable viewport
+- **AND** no document row is inserted, resized, or reparsed to accommodate the overlay

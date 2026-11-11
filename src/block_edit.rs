@@ -144,15 +144,30 @@ pub fn slash_query_at(source: &str, cursor: usize, document_version: u64) -> Opt
         .find('\n')
         .map_or(source.len(), |relative| cursor + relative);
     let line = source.get(line_start..line_end)?;
-    let trimmed = line.trim_start_matches([' ', '\t']);
-    let indentation = line.len() - trimmed.len();
-    let query = trimmed.strip_prefix('/')?;
+    let before_caret = &line[..cursor - line_start];
+    let (marker_index, marker_len) =
+        before_caret
+            .char_indices()
+            .rev()
+            .find_map(|(index, character)| {
+                let valid_prefix = index == 0
+                    || before_caret[..index]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace);
+                (matches!(character, '/' | '、') && valid_prefix)
+                    .then_some((index, character.len_utf8()))
+            })?;
+    if before_caret[..marker_index].contains("://") {
+        return None;
+    }
+    let query = &line[marker_index + marker_len..];
     if query.contains(['\r', '\n']) || query.chars().any(char::is_whitespace) {
         return None;
     }
     Some(SlashQuery {
         document_version,
-        source_range: line_start + indentation..line_end,
+        source_range: line_start + marker_index..line_end,
         query: query.to_string(),
     })
 }
@@ -173,7 +188,7 @@ pub fn slash_command_edit(
 ) -> Result<BlockEdit, BlockEditError> {
     if query.document_version != current_version
         || source.get(query.source_range.clone()).is_none()
-        || !source[query.source_range.clone()].starts_with('/')
+        || !source[query.source_range.clone()].starts_with(['/', '、'])
     {
         return Err(BlockEditError::Stale);
     }
@@ -663,6 +678,18 @@ mod tests {
             slash_command_edit(source, 8, &query, SlashCommand::Heading(2)),
             Err(BlockEditError::Stale)
         );
+    }
+
+    #[test]
+    fn slash_query_accepts_chinese_marker_and_rejects_urls() {
+        let source = "前文 、h2";
+        let query = slash_query_at(source, source.len(), 7).unwrap();
+        assert_eq!(query.query, "h2");
+        let edit = slash_command_edit(source, 7, &query, SlashCommand::Heading(2)).unwrap();
+        assert_eq!(edit.replacement, "## ");
+        assert!(slash_query_at("https://example.com", 19, 7).is_none());
+        assert!(slash_query_at("prefix/query", 12, 7).is_none());
+        assert!(slash_query_at("/has space", 10, 7).is_none());
     }
 
     #[test]

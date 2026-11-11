@@ -52,9 +52,15 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 | Action | Shortcut |
 |---|---|
 | Undo | Ctrl+Z |
-| Redo | Ctrl+Y |
+| Redo | Ctrl+Y / Ctrl+Shift+Z |
 | Cut / Copy / Paste | Ctrl+X / Ctrl+C / Ctrl+V |
-| Select all | Ctrl+A |
+| Select current block / whole document | Ctrl+A (press repeatedly) |
+| Move by word | Alt+Left / Alt+Right on macOS; Ctrl+Left / Ctrl+Right on Windows/Linux |
+| Select by word | Alt+Shift+Left / Alt+Shift+Right on macOS; Ctrl+Shift+Left / Ctrl+Shift+Right on Windows/Linux |
+| Delete previous / next word | Alt+Backspace / Alt+Delete on macOS; Ctrl+Backspace / Ctrl+Delete on Windows/Linux |
+| Select to line start / end | Shift+Home / Shift+End |
+| Page up / down | PageUp / PageDown |
+| Select page up / down | Shift+PageUp / Shift+PageDown |
 | Line start / end | Home / End |
 
 ## View
@@ -83,7 +89,7 @@ Markion's keyboard shortcuts are registered with platform-aware modifiers. On Wi
 | New file in tree | Ctrl+Alt+N |
 | New folder in tree | Ctrl+Alt+Shift+N |
 | Rename tree entry | F2 |
-| Delete tree entry | Ctrl+Delete |
+| Delete tree entry | Ctrl+Shift+Delete |
 | Open clicked file in a new tab | Ctrl+click (Cmd+click on macOS) |
 
 ## Sidebar — Outline panel

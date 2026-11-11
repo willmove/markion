@@ -3059,7 +3059,7 @@ struct ShortcutLabels {
     sections: [&'static str; 7],
     files: [&'static str; 6],
     tabs: [&'static str; 4],
-    editing: [&'static str; 7],
+    editing: [&'static str; 8],
     view: [&'static str; 13],
     search: [&'static str; 3],
     tables: [&'static str; 4],
@@ -3085,7 +3085,7 @@ const TAB_IDS: [&[&str]; 4] = [
     &["next-tab", "prev-tab"],
 ];
 
-const EDITING_IDS: [&[&str]; 7] = [
+const EDITING_IDS: [&[&str]; 8] = [
     &["bold"],
     &["italic"],
     &["inline-code"],
@@ -3100,9 +3100,10 @@ const EDITING_IDS: [&[&str]; 7] = [
         "heading-5",
     ],
     &["undo", "redo"],
+    &["redo"],
 ];
 
-const EDITING_IDS_EXTENDED: [&[&str]; 7] = [
+const EDITING_IDS_EXTENDED: [&[&str]; 8] = [
     &["bold"],
     &["italic"],
     &["inline-code"],
@@ -3118,6 +3119,7 @@ const EDITING_IDS_EXTENDED: [&[&str]; 7] = [
         "heading-6",
     ],
     &["undo", "redo"],
+    &["redo"],
 ];
 
 const VIEW_IDS: [&[&str]; 13] = [
@@ -3205,7 +3207,7 @@ const TAB_KEYS: [ShortcutKeys; 4] = [
     },
 ];
 
-const EDITING_KEYS: [ShortcutKeys; 7] = [
+const EDITING_KEYS: [ShortcutKeys; 8] = [
     ShortcutKeys {
         windows_linux: &["Ctrl+B"],
         macos: &["Cmd+B"],
@@ -3234,9 +3236,13 @@ const EDITING_KEYS: [ShortcutKeys; 7] = [
         windows_linux: &["Ctrl+Z", "Ctrl+Y"],
         macos: &["Cmd+Z", "Cmd+Y"],
     },
+    ShortcutKeys {
+        windows_linux: &["Ctrl+Shift+Z"],
+        macos: &["Cmd+Shift+Z"],
+    },
 ];
 
-const EDITING_KEYS_EXTENDED: [ShortcutKeys; 7] = [
+const EDITING_KEYS_EXTENDED: [ShortcutKeys; 8] = [
     ShortcutKeys {
         windows_linux: &["Ctrl+B"],
         macos: &["Cmd+B"],
@@ -3268,6 +3274,10 @@ const EDITING_KEYS_EXTENDED: [ShortcutKeys; 7] = [
     ShortcutKeys {
         windows_linux: &["Ctrl+Z", "Ctrl+Y"],
         macos: &["Cmd+Z", "Cmd+Y"],
+    },
+    ShortcutKeys {
+        windows_linux: &["Ctrl+Shift+Z"],
+        macos: &["Cmd+Shift+Z"],
     },
 ];
 
@@ -3506,6 +3516,7 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
                 "Image",
                 "Paragraph / Headings",
                 "Undo/Redo",
+                "Redo",
             ],
             view: [
                 "Cycle View Mode",
@@ -3548,6 +3559,7 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
                 "图片",
                 "段落 / 标题",
                 "撤销/重做",
+                "重做",
             ],
             view: [
                 "切换视图模式",
@@ -3585,6 +3597,7 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
                 "圖片",
                 "段落 / 標題",
                 "復原/重做",
+                "重做",
             ],
             view: [
                 "切換檢視模式",
@@ -3637,6 +3650,7 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
                 "画像",
                 "段落 / 見出し",
                 "元に戻す/やり直す",
+                "やり直す",
             ],
             view: [
                 "表示モード切替",
@@ -3697,6 +3711,7 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
                 "Image",
                 "Paragraphe / Titres",
                 "Annuler/Retablir",
+                "Retablir",
             ],
             view: [
                 "Changer le mode",
@@ -3758,6 +3773,7 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
                 "Bild",
                 "Absatz / Ueberschriften",
                 "Rueckgaengig/Wiederholen",
+                "Wiederholen",
             ],
             view: [
                 "Ansichtsmodus wechseln",
@@ -3817,6 +3833,7 @@ fn shortcut_labels(lang: Language) -> ShortcutLabels {
                 "Imagen",
                 "Párrafo / Encabezados",
                 "Deshacer/Rehacer",
+                "Rehacer",
             ],
             view: [
                 "Cambiar modo de vista",
@@ -8903,24 +8920,33 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_catalog_documents_only_ctrl_or_cmd_y_for_redo() {
+    fn shortcut_catalog_documents_both_redo_aliases() {
         for &language in Language::all() {
             for heading_depth in [5, 6] {
                 let catalog = shortcut_catalog(language, heading_depth);
-                let undo_redo = catalog
+                let editing = catalog
                     .section(ShortcutCategory::Editing)
-                    .expect("editing shortcut category")
-                    .actions
-                    .last()
-                    .expect("undo/redo shortcut row");
-                assert_eq!(
-                    undo_redo.combinations(ShortcutPlatform::WindowsLinux),
-                    &["Ctrl+Z", "Ctrl+Y"]
-                );
-                assert_eq!(
-                    undo_redo.combinations(ShortcutPlatform::MacOS),
-                    &["Cmd+Z", "Cmd+Y"]
-                );
+                    .expect("editing shortcut category");
+                for platform in ShortcutPlatform::ALL {
+                    let combinations: Vec<&str> = editing
+                        .actions
+                        .iter()
+                        .filter(|action| action.ids().contains(&"redo"))
+                        .flat_map(|action| action.combinations(platform).iter().copied())
+                        .filter(|combo| {
+                            *combo
+                                != match platform {
+                                    ShortcutPlatform::WindowsLinux => "Ctrl+Z",
+                                    ShortcutPlatform::MacOS => "Cmd+Z",
+                                }
+                        })
+                        .collect();
+                    let expected: &[&str] = match platform {
+                        ShortcutPlatform::WindowsLinux => &["Ctrl+Y", "Ctrl+Shift+Z"],
+                        ShortcutPlatform::MacOS => &["Cmd+Y", "Cmd+Shift+Z"],
+                    };
+                    assert_eq!(combinations, expected);
+                }
             }
         }
     }

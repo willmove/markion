@@ -5,7 +5,7 @@ use std::{
     io,
     ops::Range,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use pulldown_cmark::{Alignment, CodeBlockKind, CowStr, Event, Parser, Tag, TagEnd, html};
@@ -32,6 +32,7 @@ mod incremental_stats;
 mod inline_edit;
 #[cfg(test)]
 mod inline_html_tests;
+mod input_rules;
 pub mod keystroke;
 mod math;
 pub mod model;
@@ -265,6 +266,7 @@ pub use i18n::{
     ShortcutCategory, ShortcutPlatform, ShortcutSection, markdown_reference, p0_t, p0_tf, p1_t,
     p1_tf, shortcut_catalog, sidebar_tab_label, t, tf,
 };
+pub use input_rules::url_auto_link_action;
 pub use math::{render_math, validate_latex};
 pub use parse::{
     HtmlAlign, HtmlListMarker, HtmlPreviewPart, HtmlTableCell, HtmlTableCellImage, HtmlTableGrid,
@@ -273,6 +275,7 @@ pub use parse::{
     resolve_html_img_display_size,
 };
 pub use publishing::build_publishing_snapshot;
+pub use text_util::{next_word_boundary, previous_word_boundary};
 
 pub use image_operations::{
     CancellationGeneration, ImageApplicationPlan, ImageInput, ImageInputGroup, ImageItemResult,
@@ -288,19 +291,19 @@ pub use storage::{
     DATA_EXTENSIONS, DocumentKind, FileTree, FileTreeEntry, FileTreeEntryKind, FileTreeFileKind,
     IMAGE_EXTENSIONS, ImageRecoveryEntry, ImportedImage, MARKDOWN_EXTENSIONS, OrganizeCandidate,
     PublishedDocxImport, RecoveryInventoryEntry, RecoverySourceState, ResourceDirectory,
-    StagedImagePublication, TEXT_EXTENSIONS, default_image_recovery_dir,
-    delete_recovery_file, discard_image_recovery_record, document_asset_dir, document_scope_root,
-    document_kind_for_path, file_tree_watch_path_is_relevant, image_extension_supported,
-    import_image_bytes, import_image_bytes_to, import_image_file, import_image_file_to,
-    init_logging, inspect_recovery_files, is_data_path, is_markdown_path, is_openable_text_path,
-    is_text_path, list_image_recovery_records,
-    list_recovery_files, list_theme_definitions, load_app_preferences, load_recovery_file,
-    load_session_state, load_theme_definition, organize_candidates, parse_app_preferences,
-    parse_legacy_app_preferences, parse_session_state, parse_theme_definition, publish_docx_import,
-    publish_staged_image, render_app_preferences, render_session_state, render_theme_definition,
-    resolve_local_reference, resolve_resource_directory, save_app_preferences,
-    save_image_recovery_record, save_session_state, save_theme_definition, stage_image_bytes,
-    stage_image_file, workspace_relative_path,
+    StagedImagePublication, TEXT_EXTENSIONS, default_image_recovery_dir, delete_recovery_file,
+    discard_image_recovery_record, document_asset_dir, document_kind_for_path, document_scope_root,
+    file_tree_watch_path_is_relevant, image_extension_supported, import_image_bytes,
+    import_image_bytes_to, import_image_file, import_image_file_to, init_logging,
+    inspect_recovery_files, is_data_path, is_markdown_path, is_openable_text_path, is_text_path,
+    list_image_recovery_records, list_recovery_files, list_theme_definitions, load_app_preferences,
+    load_recovery_file, load_session_state, load_theme_definition, organize_candidates,
+    parse_app_preferences, parse_legacy_app_preferences, parse_session_state,
+    parse_theme_definition, publish_docx_import, publish_staged_image, render_app_preferences,
+    render_session_state, render_theme_definition, resolve_local_reference,
+    resolve_resource_directory, save_app_preferences, save_image_recovery_record,
+    save_session_state, save_theme_definition, stage_image_bytes, stage_image_file,
+    workspace_relative_path,
 };
 
 use table::{
@@ -756,6 +759,19 @@ impl Clone for MarkdownDocument {
             mutation_journal: VecDeque::new(),
         }
     }
+}
+
+/// Diagnostic work attributed to one VisualBlock cache read. Elapsed stages
+/// are informational; candidate checks are deterministic work evidence.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VisualDerivationProfile {
+    pub cache_hit: bool,
+    pub semantic_update: Duration,
+    pub visual_build: Duration,
+    pub identity_reconcile: Duration,
+    pub preview_blocks: usize,
+    pub visual_blocks: usize,
+    pub identity_candidates: usize,
 }
 
 /// A value paired with the `text_version` it was computed for. A request with
@@ -3200,11 +3216,29 @@ impl MarkdownDocument {
     /// Cursor, selection, hover, and focus changes therefore reuse the same
     /// allocation and do not trigger another Markdown parse.
     pub fn visual_blocks_shared(&self) -> std::sync::Arc<Vec<VisualBlock>> {
+        self.visual_blocks_shared_with_profile().0
+    }
+
+    /// Return the same cached VisualBlock model together with diagnostic work
+    /// attribution for benchmarks and deterministic work tests.
+    #[doc(hidden)]
+    pub fn visual_blocks_shared_with_profile(
+        &self,
+    ) -> (std::sync::Arc<Vec<VisualBlock>>, VisualDerivationProfile) {
+        let mut profile = VisualDerivationProfile::default();
         if let Some(cached) = self.cached_visual_blocks.borrow().as_ref()
             && cached.version == self.text_version
         {
-            return cached.value.clone();
+            profile.cache_hit = true;
+            profile.visual_blocks = cached.value.len();
+            profile.preview_blocks = self
+                .source_mapped_cache
+                .borrow()
+                .as_ref()
+                .map_or(0, |cache| cache.blocks.len());
+            return (cached.value.clone(), profile);
         }
+        let semantic_started = std::time::Instant::now();
         let previous_cache = self.source_mapped_cache.borrow_mut().take();
         let pending = self.pending_source_edits.borrow().clone();
         let current_cached_full = self
@@ -3246,16 +3280,22 @@ impl MarkdownDocument {
                 },
             ),
         };
+        profile.semantic_update = semantic_started.elapsed();
+        profile.preview_blocks = cache.blocks.len();
 
+        let visual_started = std::time::Instant::now();
         let mut blocks = with_image_identity_interner(|| {
             visual::build_visual_blocks(&self.text, &cache.blocks, VisualBlockId::fresh)
         });
+        profile.visual_build = visual_started.elapsed();
+
+        let identity_started = std::time::Instant::now();
         if let (Some(previous), Some(edits)) = (previous_cache.as_ref(), pending.edits())
             && !edits.is_empty()
             && let Some(old_visual) = self.cached_visual_blocks.borrow().as_ref()
             && old_visual.version == previous.version
         {
-            source_mapped::reconcile_visual_block_ids(
+            profile.identity_candidates = source_mapped::reconcile_visual_block_ids(
                 previous.source.as_ref(),
                 &self.text,
                 &old_visual.value,
@@ -3263,6 +3303,8 @@ impl MarkdownDocument {
                 edits,
             );
         }
+        profile.identity_reconcile = identity_started.elapsed();
+        profile.visual_blocks = blocks.len();
         let blocks = std::sync::Arc::new(blocks);
         *self.cached_preview_blocks.borrow_mut() = Some(Cached {
             version: self.text_version,
@@ -3278,7 +3320,7 @@ impl MarkdownDocument {
             version: self.text_version,
             value: blocks.clone(),
         });
-        blocks
+        (blocks, profile)
     }
 
     /// Build one validated replacement for a dedicated Visual Edit block

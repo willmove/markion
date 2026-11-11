@@ -31,7 +31,7 @@ const RESERVED_BINDINGS: &[&str] = &[
     "secondary-alt-n",
     "secondary-alt-shift-n",
     "f2",
-    "secondary-delete",
+    "secondary-shift-delete",
     "ctrl-shift-alt-m",
 ];
 

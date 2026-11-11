@@ -15,7 +15,7 @@
 
 use std::time::Instant;
 
-use markion::MarkdownDocument;
+use markion::{MarkdownDocument, VisualDerivationProfile};
 
 /// Build a representative Markdown document of roughly `target_bytes` bytes by
 /// repeating a mixed section (headings, paragraphs with inline styles, lists,
@@ -92,8 +92,14 @@ fn bench_keystrokes(base: &str, strokes: usize) -> Vec<f64> {
     samples
 }
 
+#[derive(Clone, Copy)]
+struct VisualSample {
+    total_us: f64,
+    profile: VisualDerivationProfile,
+}
+
 /// Time localized source edits followed by the source-mapped Visual Edit read.
-fn bench_visual_edits(base: &str, strokes: usize) -> Vec<f64> {
+fn bench_visual_edits(base: &str, strokes: usize) -> Vec<VisualSample> {
     let mut doc = MarkdownDocument::from_text(base);
     let _ = doc.visual_blocks_shared();
 
@@ -106,8 +112,11 @@ fn bench_visual_edits(base: &str, strokes: usize) -> Vec<f64> {
 
         let start = Instant::now();
         doc.insert(mid, if i % 10 == 0 { "x" } else { "a" });
-        let _ = doc.visual_blocks_shared();
-        samples.push(start.elapsed().as_secs_f64() * 1_000_000.0);
+        let (_, profile) = doc.visual_blocks_shared_with_profile();
+        samples.push(VisualSample {
+            total_us: start.elapsed().as_secs_f64() * 1_000_000.0,
+            profile,
+        });
     }
     samples
 }
@@ -128,16 +137,90 @@ fn report(label: &str, bytes: usize, samples: &mut [f64]) {
     );
 }
 
+fn median(values: impl IntoIterator<Item = f64>) -> f64 {
+    let mut values: Vec<f64> = values.into_iter().collect();
+    values.sort_by(|left, right| left.partial_cmp(right).unwrap());
+    values[values.len() / 2]
+}
+
+fn report_visual(bytes: usize, samples: &[VisualSample]) {
+    let mut total: Vec<f64> = samples.iter().map(|sample| sample.total_us).collect();
+    let count = total.len();
+    total.sort_by(|left, right| left.partial_cmp(right).unwrap());
+    let mean = total.iter().sum::<f64>() / count as f64;
+    let semantic = median(
+        samples
+            .iter()
+            .map(|sample| sample.profile.semantic_update.as_secs_f64() * 1_000_000.0),
+    );
+    let visual = median(
+        samples
+            .iter()
+            .map(|sample| sample.profile.visual_build.as_secs_f64() * 1_000_000.0),
+    );
+    let identity = median(
+        samples
+            .iter()
+            .map(|sample| sample.profile.identity_reconcile.as_secs_f64() * 1_000_000.0),
+    );
+    let candidates = median(
+        samples
+            .iter()
+            .map(|sample| sample.profile.identity_candidates as f64),
+    );
+    println!(
+        "source-mapped visual       size={:>6} KB  strokes={count:>4}  median={:>8.1}us  mean={mean:>8.1}us  p95={:>8.1}us",
+        bytes / 1024,
+        total[count / 2],
+        total[(count as f64 * 0.95) as usize],
+    );
+    println!(
+        "  stages P50: semantic={semantic:.1}us visual-build={visual:.1}us identity={identity:.1}us; identity-candidates={candidates:.0}; blocks={}",
+        samples[0].profile.visual_blocks,
+    );
+}
+
+fn configured_sizes() -> Vec<usize> {
+    std::env::var("BENCH_SIZES_KB")
+        .ok()
+        .and_then(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::parse::<usize>)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+        })
+        .filter(|sizes| !sizes.is_empty() && sizes.iter().all(|size| *size > 0))
+        .unwrap_or_else(|| vec![100, 300, 600, 1024])
+        .into_iter()
+        .map(|kb| kb * 1024)
+        .collect()
+}
+
+fn configured_visual_strokes() -> usize {
+    std::env::var("BENCH_STROKES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|strokes| *strokes > 0)
+        .unwrap_or(100)
+}
+
 fn main() {
     println!("Markion large-document keystroke benchmark (release build recommended)\n");
     println!("Diagnostic timing only; CI uses deterministic reuse/work counters instead.\n");
 
+    let sizes = configured_sizes();
+    let visual_only = std::env::var("BENCH_VISUAL_ONLY").is_ok();
     println!("Source-mapped Visual Edit (localized edit + visual block read):");
-    for target in [100 * 1024, 300 * 1024, 600 * 1024, 1024 * 1024] {
+    for target in sizes.iter().copied() {
         let doc = make_doc(target);
-        let bytes = doc.len();
-        let mut samples = bench_visual_edits(&doc, 100);
-        report("source-mapped visual", bytes, &mut samples);
+        let samples = bench_visual_edits(&doc, configured_visual_strokes());
+        report_visual(doc.len(), &samples);
+    }
+    if visual_only {
+        return;
     }
 
     println!("\nPreview + outline + stats (cached full semantic reads):");

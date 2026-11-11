@@ -1,5 +1,7 @@
 //! Small string/offset helpers shared across parsing, editing, and rendering.
 
+use unicode_segmentation::UnicodeSegmentation;
+
 /// Clamp `index` to the nearest UTF-8 character boundary at or before it.
 pub fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
     let mut index = index.min(text.len());
@@ -141,9 +143,57 @@ pub fn char_run_range(text: &str, offset: usize) -> std::ops::Range<usize> {
     start..end
 }
 
+fn logical_line_start(text: &str, offset: usize) -> usize {
+    text[..offset].rfind('\n').map_or(0, |index| index + 1)
+}
+
+fn logical_line_end(text: &str, offset: usize) -> usize {
+    text[offset..]
+        .find('\n')
+        .map_or(text.len(), |index| offset + index)
+}
+
+/// Start of the previous non-whitespace Unicode word segment on the current
+/// logical line, crossing to the preceding line at its boundary.
+pub fn previous_word_boundary(text: &str, offset: usize) -> usize {
+    let offset = clamp_to_char_boundary(text, offset);
+    let line_start = logical_line_start(text, offset);
+    if offset == line_start && offset > 0 {
+        return previous_word_boundary(text, offset - 1);
+    }
+    let mut previous = line_start;
+    for (index, segment) in text[line_start..offset].split_word_bound_indices() {
+        if !segment.trim().is_empty() {
+            previous = line_start + index;
+        }
+    }
+    previous
+}
+
+/// End of the next non-whitespace Unicode word segment on the current logical
+/// line, crossing to the following line at its boundary.
+pub fn next_word_boundary(text: &str, offset: usize) -> usize {
+    let offset = clamp_to_char_boundary(text, offset);
+    let line_end = logical_line_end(text, offset);
+    if offset >= line_end {
+        if line_end < text.len() {
+            return next_word_boundary(text, line_end + 1);
+        }
+        return line_end;
+    }
+    let line_start = logical_line_start(text, offset);
+    for (index, segment) in text[line_start..line_end].split_word_bound_indices() {
+        let end = line_start + index + segment.len();
+        if end > offset && !segment.trim().is_empty() {
+            return end;
+        }
+    }
+    line_end
+}
+
 #[cfg(test)]
 mod tests {
-    use super::char_run_range;
+    use super::{char_run_range, next_word_boundary, previous_word_boundary};
 
     fn run_at(text: &str, offset: usize) -> &str {
         &text[char_run_range(text, offset)]
@@ -222,5 +272,37 @@ mod tests {
     #[test]
     fn offsets_beyond_the_text_clamp_to_the_final_run() {
         assert_eq!(run_at("hello", 100), "hello");
+    }
+
+    #[test]
+    fn word_navigation_covers_scripts_punctuation_and_lines() {
+        let text = "hello, 世界！ next\r\n第二 line🙂";
+        let hello_end = "hello".len();
+        assert_eq!(next_word_boundary(text, 0), hello_end);
+        assert_eq!(previous_word_boundary(text, hello_end), 0);
+        let next_start = text.find("next").unwrap();
+        assert_eq!(
+            previous_word_boundary(text, next_start),
+            text.find('！').unwrap()
+        );
+        let second_line = text.find("第二").unwrap();
+        assert_eq!(previous_word_boundary(text, second_line), next_start);
+        assert_eq!(
+            next_word_boundary(text, second_line),
+            second_line + "第".len()
+        );
+        assert!(text.is_char_boundary(next_word_boundary(text, text.len() - 1)));
+        assert!(text.is_char_boundary(previous_word_boundary(text, text.len())));
+    }
+
+    #[test]
+    fn word_navigation_handles_combining_and_document_edges() {
+        let text = "e\u{301} 🙂";
+        assert_eq!(next_word_boundary(text, 0), "e\u{301}".len());
+        assert_eq!(previous_word_boundary(text, text.len()), "e\u{301} ".len());
+        assert_eq!(previous_word_boundary(text, 0), 0);
+        assert_eq!(next_word_boundary(text, text.len()), text.len());
+        assert_eq!(previous_word_boundary("", 10), 0);
+        assert_eq!(next_word_boundary("", 10), 0);
     }
 }

@@ -67,8 +67,7 @@ pub(super) fn build_text_runs(
             span_pos += 1;
         }
         let kind = span_bounds.get(span_pos).map(|(_, kind)| *kind);
-        let marked =
-            marked_range.is_some_and(|marked| start >= marked.start && start < marked.end);
+        let marked = marked_range.is_some_and(|marked| start >= marked.start && start < marked.end);
         if let Some(last) = segments.last_mut()
             && last.kind == kind
             && last.marked == marked
@@ -301,7 +300,19 @@ impl EntityInputHandler for MarkionApp {
                 .document
                 .visual_editor_field_at(&range)
                 .is_some_and(|field| is_auto_pair_restricted_field(field.kind));
-        if markdown_auto_pair && !skip_ime_pair && !restricted_pair_field {
+        if !skip_ime_pair && !restricted_pair_field {
+            if let Some(AutoPairAction::Replace {
+                range: link_range,
+                replacement,
+                selection_after,
+            }) = url_auto_link_action(tab.document.text(), range.clone(), new_text)
+            {
+                range = link_range;
+                paired_text = Some(replacement);
+                pair_selection = Some(selection_after);
+            }
+        }
+        if markdown_auto_pair && !skip_ime_pair && !restricted_pair_field && paired_text.is_none() {
             match auto_pair_action(tab.document.text(), range.clone(), new_text) {
                 Some(AutoPairAction::Skip { caret }) => {
                     tab.selected_range = caret..caret;
@@ -1392,7 +1403,14 @@ mod tests {
     fn text_runs_without_spans_match_the_plain_and_marked_split() {
         let text = "hello world";
         let segments = build_text_runs(text, None, None);
-        assert_eq!(segments, vec![RunSegment { len: 11, kind: None, marked: false }]);
+        assert_eq!(
+            segments,
+            vec![RunSegment {
+                len: 11,
+                kind: None,
+                marked: false
+            }]
+        );
 
         // IME marked range splits plain/marked/plain, exactly like the
         // run-splitting the surface has always applied.
@@ -1401,9 +1419,21 @@ mod tests {
         assert_eq!(
             segments,
             vec![
-                RunSegment { len: 2, kind: None, marked: false },
-                RunSegment { len: 5, kind: None, marked: true },
-                RunSegment { len: 4, kind: None, marked: false },
+                RunSegment {
+                    len: 2,
+                    kind: None,
+                    marked: false
+                },
+                RunSegment {
+                    len: 5,
+                    kind: None,
+                    marked: true
+                },
+                RunSegment {
+                    len: 4,
+                    kind: None,
+                    marked: false
+                },
             ]
         );
     }
@@ -1423,11 +1453,27 @@ mod tests {
         assert_eq!(
             segments,
             vec![
-                RunSegment { len: 6, kind: Some(HighlightKind::Comment), marked: false },
+                RunSegment {
+                    len: 6,
+                    kind: Some(HighlightKind::Comment),
+                    marked: false
+                },
                 // Adjacent Plain spans merge into one segment.
-                RunSegment { len: 7, kind: Some(HighlightKind::Plain), marked: false },
-                RunSegment { len: 1, kind: Some(HighlightKind::Number), marked: false },
-                RunSegment { len: 1, kind: Some(HighlightKind::Plain), marked: false },
+                RunSegment {
+                    len: 7,
+                    kind: Some(HighlightKind::Plain),
+                    marked: false
+                },
+                RunSegment {
+                    len: 1,
+                    kind: Some(HighlightKind::Number),
+                    marked: false
+                },
+                RunSegment {
+                    len: 1,
+                    kind: Some(HighlightKind::Plain),
+                    marked: false
+                },
             ]
         );
     }
@@ -1448,10 +1494,26 @@ mod tests {
         assert_eq!(
             segments,
             vec![
-                RunSegment { len: 4, kind: Some(HighlightKind::Plain), marked: false },
-                RunSegment { len: 2, kind: Some(HighlightKind::Plain), marked: true },
-                RunSegment { len: 5, kind: Some(HighlightKind::String), marked: true },
-                RunSegment { len: 2, kind: Some(HighlightKind::String), marked: false },
+                RunSegment {
+                    len: 4,
+                    kind: Some(HighlightKind::Plain),
+                    marked: false
+                },
+                RunSegment {
+                    len: 2,
+                    kind: Some(HighlightKind::Plain),
+                    marked: true
+                },
+                RunSegment {
+                    len: 5,
+                    kind: Some(HighlightKind::String),
+                    marked: true
+                },
+                RunSegment {
+                    len: 2,
+                    kind: Some(HighlightKind::String),
+                    marked: false
+                },
             ]
         );
     }
@@ -1468,15 +1530,30 @@ mod tests {
         assert_eq!(
             segments,
             vec![
-                RunSegment { len: 1, kind: Some(HighlightKind::Keyword), marked: false },
-                RunSegment { len: 1, kind: Some(HighlightKind::Keyword), marked: true },
+                RunSegment {
+                    len: 1,
+                    kind: Some(HighlightKind::Keyword),
+                    marked: false
+                },
+                RunSegment {
+                    len: 1,
+                    kind: Some(HighlightKind::Keyword),
+                    marked: true
+                },
             ]
         );
 
         // Empty text yields a single zero-length plain segment (the caller's
         // placeholder path never reaches here, but the invariant holds).
         let segments = build_text_runs("", None, None);
-        assert_eq!(segments, vec![RunSegment { len: 0, kind: None, marked: false }]);
+        assert_eq!(
+            segments,
+            vec![RunSegment {
+                len: 0,
+                kind: None,
+                marked: false
+            }]
+        );
     }
 
     /// Even a misaligned span list — whose cumulative byte ends drift inside
@@ -1498,7 +1575,11 @@ mod tests {
             span("b", HighlightKind::String),
         ];
         let segments = build_text_runs(text, Some(&drifted), None);
-        assert_eq!(total_len(&segments), text.len(), "segments still tile the text");
+        assert_eq!(
+            total_len(&segments),
+            text.len(),
+            "segments still tile the text"
+        );
         let mut offset = 0usize;
         for segment in &segments {
             assert!(

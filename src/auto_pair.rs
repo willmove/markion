@@ -73,6 +73,26 @@ pub fn auto_pair_action(text: &str, range: Range<usize>, new_text: &str) -> Opti
         return None;
     }
     if range.is_empty() {
+        if typed == ' ' && next_char(text, range.end) == Some('*') {
+            let opener_start = range.start.saturating_sub(1);
+            let line_start = text[..opener_start]
+                .rfind('\n')
+                .map_or(0, |index| index + 1);
+            let prefix = &text[line_start..opener_start];
+            if range.start > 0
+                && text.get(opener_start..range.end) == Some("*")
+                && prefix
+                    .chars()
+                    .all(|character| character.is_whitespace() || character == '>')
+            {
+                let caret = opener_start + 2;
+                return Some(AutoPairAction::Replace {
+                    range: opener_start..range.end + 1,
+                    replacement: "* ".to_string(),
+                    selection_after: caret..caret,
+                });
+            }
+        }
         // Skip when the typed character is a closer (including symmetric
         // `*`/`_`/`"` ) and the next source character is already that closer.
         // Typing an opener such as `(` in front of `)` still inserts a pair.
@@ -251,6 +271,27 @@ mod tests {
                 selection_after: 0..0,
             })
         );
+    }
+
+    #[test]
+    fn paired_star_becomes_a_bullet_only_at_a_block_start() {
+        assert_eq!(
+            insert("**", 1, " "),
+            Some(AutoPairAction::Replace {
+                range: 0..2,
+                replacement: "* ".into(),
+                selection_after: 2..2,
+            })
+        );
+        assert_eq!(
+            insert("  **", 3, " "),
+            Some(AutoPairAction::Replace {
+                range: 2..4,
+                replacement: "* ".into(),
+                selection_after: 4..4,
+            })
+        );
+        assert_eq!(insert("text **", 5, " "), None);
     }
 
     #[test]

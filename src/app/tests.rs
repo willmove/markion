@@ -906,8 +906,17 @@ fn shortcut_registry_ids_are_stable_unique_and_fully_catalogued() {
                 .iter()
                 .zip(action.combinations(platform).iter())
             {
+                let expected =
+                    if action.ids() == ["redo"] && action.combinations(platform).len() == 1 {
+                        Some(match platform {
+                            ShortcutPlatform::WindowsLinux => "Ctrl+Shift+Z",
+                            ShortcutPlatform::MacOS => "Cmd+Shift+Z",
+                        })
+                    } else {
+                        shortcut_by_id(action_id).map(|shortcut| shortcut.label(platform))
+                    };
                 assert_eq!(
-                    shortcut_by_id(action_id).map(|shortcut| shortcut.label(platform)),
+                    expected,
                     Some(catalog_label),
                     "catalog and registry default labels diverged for {action_id}"
                 );
@@ -1074,7 +1083,7 @@ fn shortcut_effective_binding_and_label_fall_back_to_defaults() {
 }
 
 #[test]
-fn menu_shortcut_metadata_has_one_redo_binding() {
+fn menu_shortcut_metadata_supports_both_redo_bindings() {
     assert_eq!(menu_shortcuts::SAVE_DOCUMENT.binding, Some("secondary-s"));
     assert_eq!(
         menu_shortcuts::EXPORT_PLAIN_HTML.label(ShortcutPlatform::MacOS),
@@ -1096,7 +1105,7 @@ fn menu_shortcut_metadata_has_one_redo_binding() {
         "Redo must be installed exactly once"
     );
     assert!(!bootstrap.contains("REDO.aliases"));
-    assert!(!bootstrap.contains("secondary-shift-z"));
+    assert_eq!(bootstrap.matches("secondary-shift-z").count(), 1);
 }
 
 #[test]
@@ -1123,7 +1132,7 @@ fn full_rebind_restores_fixed_keys_and_every_registry_action() {
         "escape",
         "f5",
         "f2",
-        "secondary-delete",
+        "secondary-shift-delete",
     ] {
         assert!(
             bind.contains(&format!("KeyBinding::new(\"{fixed}\"")),
@@ -16622,11 +16631,13 @@ fn data_highlight_memoizes_per_document_version() {
     // Markdown-kind tabs (and extension-less documents) get an empty list,
     // which renders as today's plain runs.
     let mut plain = WorkspaceTab::new(MarkdownDocument::new());
-    assert!(plain
-        .document_tab_mut()
-        .unwrap()
-        .data_highlight_spans()
-        .is_empty());
+    assert!(
+        plain
+            .document_tab_mut()
+            .unwrap()
+            .data_highlight_spans()
+            .is_empty()
+    );
 }
 
 /// A tab's document kind is derived from its current path on demand, so it is
@@ -26181,4 +26192,441 @@ fn sync_completion_messages_name_held_back_files(cx: &mut TestAppContext) {
                 .is_mutating(&directory.path().join("x.md"))
         );
     });
+}
+
+#[gpui::test]
+fn baseline_word_actions_and_progressive_select_all_work_on_source(cx: &mut TestAppContext) {
+    let source = "hello world\n\nsecond";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    cx.dispatch_action(WordRight);
+    app.update(cx, |app, _| assert_eq!(app.cursor_offset(), 5));
+    cx.dispatch_action(WordRight);
+    app.update(cx, |app, _| assert_eq!(app.cursor_offset(), 11));
+    cx.dispatch_action(DeleteWordLeft);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "hello \n\nsecond");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source)
+    });
+
+    app.update(cx, |app, _| app.active_tab_mut().selected_range = 0..0);
+    cx.dispatch_action(DeleteWordRight);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), " world\n\nsecond")
+    });
+    cx.dispatch_action(Undo);
+
+    app.update(cx, |app, _| app.active_tab_mut().selected_range = 0..0);
+    cx.dispatch_action(SelectAll);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, 0..11)
+    });
+    cx.dispatch_action(SelectAll);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, 0..source.len())
+    });
+
+    app.update(cx, |app, _| app.active_tab_mut().selected_range = 0..0);
+    cx.dispatch_action(PageDown);
+    app.update(cx, |app, _| assert!(app.cursor_offset() > 0));
+    let line_start = app.update(cx, |app, _| {
+        app.active_tab().document.line_start_at(app.cursor_offset())
+    });
+    cx.dispatch_action(SelectHome);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range.start, line_start);
+    });
+}
+
+#[gpui::test]
+fn visual_list_tab_uses_legal_source_backed_indentation(cx: &mut TestAppContext) {
+    let source = "- parent\n- sibling";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        app.update(cx, |app, _| app.visual_list_indent_allowed(true)),
+        Some(true)
+    );
+
+    cx.dispatch_action(Indent);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "- parent\n    - sibling");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source)
+    });
+
+    cx.dispatch_action(Outdent);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), source);
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "- parent\n    - child",
+        ))];
+        app.active_tab_mut().selected_range =
+            "- parent\n    - child".len().."- parent\n    - child".len();
+    });
+    cx.dispatch_action(Outdent);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "- parent\n- child");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+}
+
+#[gpui::test]
+fn source_mouse_selection_and_editor_context_copy_work(cx: &mut TestAppContext) {
+    let source = "hello world\n\nsecond";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::Edit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let position = app.update(cx, |app, _| {
+        let tab = app.active_tab();
+        tab.layout_point_for_offset(2, tab.last_bounds.unwrap(), tab.line_height)
+            .expect("source text position")
+    });
+    cx.simulate_event(MouseDownEvent {
+        position,
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position,
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 2,
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, 0..5)
+    });
+
+    cx.simulate_event(MouseDownEvent {
+        position,
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 3,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position,
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 3,
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, 0..11)
+    });
+
+    let (version, blocks) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+    app.update(cx, |app, cx| {
+        app.show_editor_context_menu(point(px(40.), px(40.)), cx);
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(Arc::ptr_eq(
+            &blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+    });
+    let copy = cx
+        .debug_bounds("editor-context-copy")
+        .expect("copy menu item");
+    cx.simulate_click(copy.center(), Modifiers::none());
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(copied.as_deref(), Some("hello world"));
+}
+
+#[gpui::test]
+fn visual_triple_click_selects_the_exact_paragraph(cx: &mut TestAppContext) {
+    let source = "alpha beta";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let row = cx
+        .debug_bounds("visual-document-row-0")
+        .expect("visual row");
+    cx.simulate_event(MouseDownEvent {
+        position: row.center(),
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 3,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position: row.center(),
+        modifiers: Modifiers::none(),
+        button: MouseButton::Left,
+        click_count: 3,
+    });
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().selected_range, 0..source.len())
+    });
+}
+
+#[gpui::test]
+fn contextual_bullet_and_url_input_use_one_exact_mutation(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(""))];
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    cx.simulate_input("*");
+    cx.simulate_input(" ");
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "* ");
+        assert_eq!(app.cursor_offset(), 2);
+        assert_eq!(app.active_tab().undo_stack.len(), 2);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "**")
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().document.text().is_empty())
+    });
+
+    app.update(cx, |app, _| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(""))];
+    });
+    cx.simulate_input("https://example.com");
+    cx.simulate_input(" ");
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "[https://example.com](https://example.com) "
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 2);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "https://example.com");
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert!(app.active_tab().document.text().is_empty())
+    });
+}
+
+#[gpui::test]
+fn url_conversion_stays_literal_in_code_payload(cx: &mut TestAppContext) {
+    let source = "```text\n\n```";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 8..8;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    cx.simulate_input("https://example.com ");
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "```text\nhttps://example.com \n```"
+        );
+    });
+}
+
+#[gpui::test]
+fn visual_selection_toolbar_formats_near_selection_and_hides_after_edit(cx: &mut TestAppContext) {
+    let source = "selected prose";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 0..8;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let toolbar = cx
+        .debug_bounds("visual-selection-toolbar")
+        .expect("exact selection should expose the toolbar");
+    let row = cx.debug_bounds("visual-document-row-0").unwrap();
+    assert!(toolbar.origin.y <= row.origin.y + row.size.height);
+    let bold = cx.debug_bounds("selection-toolbar-bold").unwrap();
+    cx.simulate_click(bold.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(app.active_tab().document.text(), "**selected** prose");
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        assert!(app.selection_toolbar_suppressed);
+        assert!(app.selection_toolbar_presentation().is_none());
+    });
+}
+
+#[gpui::test]
+fn visual_selection_toolbar_rejects_stale_selection(cx: &mut TestAppContext) {
+    let source = "selected prose";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = 0..8;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("visual-selection-toolbar").is_some());
+    let (version, captured) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.selection_toolbar_presentation().unwrap().0,
+        )
+    });
+    app.update(cx, |app, cx| {
+        app.active_tab_mut().selected_range = 1..7;
+        app.activate_selection_toolbar_action(SelectionFormatAction::Bold, captured, cx);
+        assert_eq!(app.active_tab().document.text(), source);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+}
+
+#[gpui::test]
+fn slash_and_inline_editors_anchor_near_the_source(cx: &mut TestAppContext) {
+    let source = "/h2";
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+        app.active_tab_mut().selected_range = source.len()..source.len();
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.simulate_resize(size(px(640.), px(480.)));
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+
+    let palette = cx
+        .debug_bounds("slash-command-palette")
+        .expect("slash palette");
+    let row = cx.debug_bounds("visual-document-row-0").unwrap();
+    assert!(palette.origin.x >= row.origin.x);
+    assert!(palette.origin.y >= row.origin.y);
+
+    app.update(cx, |app, cx| {
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("$x$"))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.stable_visual_inline = true;
+        app.selected_theme_name = "One Dark".into();
+        app.open_inline_math_editor(0..3, cx);
+    });
+    cx.run_until_parked();
+    let editor = cx
+        .debug_bounds("document-token-editor")
+        .expect("math editor");
+    let math_row = cx.debug_bounds("visual-document-row-0").unwrap();
+    assert!(editor.origin.y >= math_row.origin.y);
+
+    app.update(cx, |app, cx| {
+        app.cancel_token_editor(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("[label](url)"))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.open_link_editor(cx);
+    });
+    cx.run_until_parked();
+    let editor = cx
+        .debug_bounds("document-link-editor")
+        .expect("link editor");
+    let link_row = cx.debug_bounds("visual-document-row-0").unwrap();
+    assert!(editor.origin.y >= link_row.origin.y);
+}
+
+#[gpui::test]
+fn typing_suppresses_block_chrome_until_pointer_move(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("body"))];
+        app.active_tab_mut().selected_range = 0..0;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    cx.simulate_input("x");
+    app.update(cx, |app, _| assert!(app.typing_chrome_suppressed));
+    let bounds = cx.debug_bounds("visual-document-row-0").unwrap();
+    cx.simulate_event(MouseMoveEvent {
+        position: bounds.center(),
+        modifiers: Modifiers::none(),
+        pressed_button: None,
+    });
+    app.update(cx, |app, _| assert!(!app.typing_chrome_suppressed));
 }

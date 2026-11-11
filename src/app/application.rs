@@ -351,6 +351,8 @@ impl MarkionApp {
             sync_scroll: preferences.sync_scroll,
             show_hidden_files: preferences.show_hidden_files,
             stable_visual_inline: preferences.stable_visual_inline,
+            selection_toolbar_suppressed: false,
+            typing_chrome_suppressed: false,
             open_in_current_tab: preferences.open_in_current_tab,
             markdown_auto_pair: preferences.markdown_auto_pair,
             language,
@@ -383,6 +385,7 @@ impl MarkionApp {
             file_tree_watch_generation: 0,
             file_tree_context_menu: None,
             preview_context_menu: None,
+            editor_context_menu: None,
             tab_context_menu: None,
             pending_name_input: None,
             name_editor_click_away: false,
@@ -521,6 +524,8 @@ impl MarkionApp {
             self.reveal_active_tab_in_strip();
         }
         self.tab_context_menu = None;
+        self.editor_context_menu = None;
+        self.selection_toolbar_suppressed = true;
         self.slash_commands = None;
         self.dismissed_slash_query = None;
         self.emoji_completer = None;
@@ -533,6 +538,7 @@ impl MarkionApp {
             self.search_control_focus = None;
             self.link_editor = None;
             self.preview_context_menu = None;
+            self.editor_context_menu = None;
         }
         if self.active_tab().is_document() {
             self.refresh_search_matches();
@@ -913,6 +919,8 @@ impl MarkionApp {
         self.emoji_completer = None;
         self.dismissed_emoji_query = None;
         self.dismiss_visual_block_menu();
+        self.selection_toolbar_suppressed = true;
+        self.typing_chrome_suppressed = true;
         let tab = self.active_tab_mut();
         tab.clear_visual_caret_affinity();
         tab.clear_visual_navigation_intent();
@@ -1570,6 +1578,7 @@ impl MarkionApp {
             self.search_control_focus = None;
             self.link_editor = None;
             self.preview_context_menu = None;
+            self.editor_context_menu = None;
         }
         if self.active_tab().is_document() {
             self.refresh_search_matches();
@@ -1626,6 +1635,7 @@ impl MarkionApp {
             self.search_control_focus = None;
             self.link_editor = None;
             self.preview_context_menu = None;
+            self.editor_context_menu = None;
         }
         if self.active_tab().is_document() {
             self.refresh_search_matches();
@@ -2590,8 +2600,7 @@ impl MarkionApp {
             .open_files
             .iter()
             .filter(|path| {
-                path.is_file()
-                    && (is_openable_text_path(path) || image_extension_supported(path))
+                path.is_file() && (is_openable_text_path(path) || image_extension_supported(path))
             })
             .cloned()
             .collect();

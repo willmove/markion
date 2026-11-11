@@ -3035,6 +3035,7 @@ pub(super) fn selection_actions(app: &MarkionApp, cx: &mut Context<MarkionApp>) 
     ] {
         view = view.child(button(writing_label(action), app, cx, move |a, w, cx| {
             a.preview_context_menu = None;
+            a.editor_context_menu = None;
             a.dismiss_visual_block_menu();
             a.ai_ui.open = true;
             a.ensure_ai_subscription(cx);
