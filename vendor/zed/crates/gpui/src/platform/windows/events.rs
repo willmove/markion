@@ -27,6 +27,7 @@ pub(crate) const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = WM_USER + 5;
 pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
 pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
 pub(crate) const WM_GPUI_KEYDOWN: u32 = WM_USER + 8;
+pub(crate) const WM_GPUI_INPUT_FRAME: u32 = WM_USER + 9;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 const AUTO_HIDE_TASKBAR_THICKNESS_PX: i32 = 1;
@@ -95,8 +96,14 @@ impl WindowsWindowInner {
             WM_MOUSEHWHEEL => self.handle_mouse_horizontal_wheel_msg(handle, wparam, lparam),
             WM_SYSKEYUP => self.handle_syskeyup_msg(wparam, lparam),
             WM_KEYUP => self.handle_keyup_msg(wparam, lparam),
-            WM_GPUI_KEYDOWN => self.handle_keydown_msg(wparam, lparam),
-            WM_CHAR => self.handle_char_msg(wparam),
+            WM_GPUI_KEYDOWN => {
+                let result = self.handle_keydown_msg(wparam, lparam);
+                if result == Some(0) {
+                    self.request_input_frame(handle);
+                }
+                result
+            }
+            WM_CHAR => self.handle_char_msg(handle, wparam),
             WM_IME_STARTCOMPOSITION => self.handle_ime_position(handle),
             WM_IME_COMPOSITION => self.handle_ime_composition(handle, lparam),
             WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
@@ -105,6 +112,14 @@ impl WindowsWindowInner {
             WM_SHOWWINDOW => self.handle_window_visibility_changed(handle, wparam),
             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
+            WM_GPUI_INPUT_FRAME => {
+                let requested = self.state.borrow_mut().input_frame.take();
+                if requested {
+                    self.draw_window(handle, false)
+                } else {
+                    Some(0)
+                }
+            }
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
             _ => None,
         };
@@ -389,11 +404,16 @@ impl WindowsWindowInner {
         if handled { Some(0) } else { Some(1) }
     }
 
-    fn handle_char_msg(&self, wparam: WPARAM) -> Option<isize> {
+    fn handle_char_msg(&self, handle: HWND, wparam: WPARAM) -> Option<isize> {
         let input = self.parse_char_message(wparam)?;
-        self.with_input_handler(|input_handler| {
-            input_handler.replace_text_in_range(None, &input);
-        });
+        if self
+            .with_input_handler(|input_handler| {
+                input_handler.replace_text_in_range(None, &input);
+            })
+            .is_some()
+        {
+            self.request_input_frame(handle);
+        }
 
         Some(0)
     }
@@ -614,6 +634,9 @@ impl WindowsWindowInner {
         let ctx = unsafe { ImmGetContext(handle) };
         let result = self.handle_ime_composition_inner(ctx, lparam);
         unsafe { ImmReleaseContext(handle, ctx).ok().log_err() };
+        if lparam.0 == 0 || lparam.0 as u32 & (GCS_COMPSTR.0 | GCS_RESULTSTR.0) != 0 {
+            self.request_input_frame(handle);
+        }
         result
     }
 
@@ -1135,6 +1158,19 @@ impl WindowsWindowInner {
         let devices = unsafe { &*devices };
         lock.renderer.handle_device_lost(&devices);
         Some(0)
+    }
+
+    fn request_input_frame(&self, handle: HWND) {
+        // WM_PAINT can wait behind sustained input or accessibility traffic.
+        // Post after restoring the handler, coalesce bursts, and never render
+        // reentrantly from IMM/character dispatch or force a clean frame.
+        self.state
+            .borrow_mut()
+            .input_frame
+            .request(|| unsafe {
+                PostMessageW(Some(handle), WM_GPUI_INPUT_FRAME, WPARAM(0), LPARAM(0))
+            })
+            .log_err();
     }
 
     #[inline]

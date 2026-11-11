@@ -941,7 +941,7 @@ impl MarkionApp {
         }
         tab.cell_drag_anchor = None;
         let document_version = tab.document.version();
-        if let Some((version, _)) = tab.visual_input_profile.as_mut() {
+        if let Some((version, _, _)) = tab.visual_input_profile.as_mut() {
             *version = document_version;
         }
         tab.visual_cursor_reveal_pending = true;
@@ -954,6 +954,7 @@ impl MarkionApp {
         self.schedule_edit_search_refresh(cx);
         self.center_cursor_if_typewriter();
         self.schedule_autosave(cx);
+        self.note_visual_input_stage("mutation_ready");
     }
 
     /// Why edits to the active document are refused, or `None` when allowed.

@@ -1,0 +1,105 @@
+{
+  "date": "2026-11-11",
+  "status": "passed",
+  "source_base_commit": "e0a1501",
+  "binary_sha256": "B65FABEA9B381D21B2E6AC5D07DCDCAA71D4285AF931C06462FD2190319E9871",
+  "build_profile": "release opt-level=3 thin LTO; markion codegen-units=16",
+  "method": "Official Computer Use OS mouse and keyboard events; actual system Pinyin candidate window. Application checkpoints measure callback-to-caret paint, not hardware input transport or GPU presentation.",
+  "text_input_summary": {
+    "Count": 1080,
+    "OpenMs": [
+      167.067
+    ],
+    "P50Ms": 26.634,
+    "P95Ms": 33.135,
+    "MaxMs": 47.951,
+    "PreRenderWaitP95Ms": 0.282,
+    "PreRenderWaitMaxMs": 3.002
+  },
+  "memory_samples": [
+    {
+      "Stage": "before",
+      "TimeUtc": "2026-11-11T13:46:04.1377806Z",
+      "ResidentBytes": 270688256,
+      "PrivateBytes": 227250176,
+      "PeakResidentBytes": 312012800,
+      "CompilerProcesses": 0
+    },
+    {
+      "Stage": "after180",
+      "TimeUtc": "2026-11-11T13:48:23.3283067Z",
+      "ResidentBytes": 301735936,
+      "PrivateBytes": 257536000,
+      "PeakResidentBytes": 312012800,
+      "EntireSavedFileExact": true,
+      "CompilerProcesses": 0
+    },
+    {
+      "Stage": "after360",
+      "TimeUtc": "2026-11-11T13:49:32.2979957Z",
+      "ResidentBytes": 311717888,
+      "PrivateBytes": 267530240,
+      "PeakResidentBytes": 312713216,
+      "EntireSavedFileExact": true,
+      "CompilerProcesses": 0
+    },
+    {
+      "Stage": "after720",
+      "TimeUtc": "2026-11-11T13:51:18.3720218Z",
+      "ResidentBytes": 317939712,
+      "PrivateBytes": 273448960,
+      "PeakResidentBytes": 319987712,
+      "EntireSavedFileExact": true,
+      "CompilerProcesses": 0
+    },
+    {
+      "Stage": "after1080",
+      "TimeUtc": "2026-11-11T13:53:00.5810560Z",
+      "ResidentBytes": 318271488,
+      "PrivateBytes": 273698816,
+      "PeakResidentBytes": 320217088,
+      "EntireSavedFileExact": true,
+      "CompilerProcesses": 0
+    },
+    {
+      "Stage": "after_small",
+      "TimeUtc": "2026-11-11T13:55:25.8076196Z",
+      "ResidentBytes": 208969728,
+      "PrivateBytes": 164503552,
+      "PeakResidentBytes": 320217088
+    }
+  ],
+  "scenarios": {
+    "system_ime_candidates_delayed_commit_undo_redo_cancel": true,
+    "visible_table_rectangle_clear_undo_keeps_viewport": true,
+    "copy_button_right_aligned": true,
+    "code_folding": true,
+    "large_document_wheel_scroll_and_return": true,
+    "whole_saved_fixture_exact_after_180_360_720_1080_keys": true,
+    "small_fixture_exact_after_ime_and_table_undo": true,
+    "native_callback_replay_all_passed": true
+  },
+  "regressions": {
+    "root_desktop_passed": 788,
+    "root_desktop_existing_ignored": 2,
+    "input_frame_integration_passed": 3,
+    "input_frame_contracts": "burst coalescing, failed post recovery, new request during frame",
+    "format_and_change_validation": "passed"
+  },
+  "evidence": {
+    "before": "fluent-editing-input-frame-before-2026-11-11.json",
+    "after": "fluent-editing-input-frame-after-2026-11-11.json",
+    "native_replay": "fluent-editing-native-replay-followup-2026-11-11.json"
+  },
+  "limits": [
+    "1 MiB mixed Markdown on this Windows 11 Intel Graphics machine; no general guarantee for arbitrary size/content or other platforms.",
+    "All 1080 post-fix samples are retained, including outliers.",
+    "Profiling enabled only for the isolated test processes; normal application runs do not sample or log checkpoints.",
+    "Process counters include app/driver allocations; separate GPU memory was not sampled.",
+    "CPU counter granularity observed at approximately 15.625 ms; zero means no discernible counter increment.",
+    "OS injection acknowledgments and screenshots can precede completion; saved fixture content was verified after it reached the exact expected state.",
+    "WPR system recording rejected with 0xc5585011; no Windows policy, security or privilege changes were made."
+  ],
+  "diagnostic_before_binary_sha256": "9616A8D2CF3E729921CE847C8FB22B14F616AACE434C68CB776E18F4D28F3F09",
+  "openspec_archive": "openspec/changes/archive/2026-11-11-fix-windows-ime-undo-grouping"
+}

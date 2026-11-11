@@ -1,0 +1,566 @@
+{
+  "passed": true,
+  "error": null,
+  "platform": "windows",
+  "version": "0.5.2",
+  "evidence": "real native GPUI window and paint; application input callbacks; no OS mouse/keyboard/IME injection",
+  "observations": [
+    {
+      "fixture_kb": 100,
+      "resident_bytes": 151396352,
+      "commit_bytes": 115675136,
+      "paint_samples": [
+        {
+          "kind": "open",
+          "bytes": 102665,
+          "elapsed_us": 177454
+        },
+        {
+          "kind": "input",
+          "bytes": 102666,
+          "elapsed_us": 45345,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 102667,
+          "elapsed_us": 14662,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102668,
+          "elapsed_us": 17581,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102669,
+          "elapsed_us": 18556,
+          "thread_cpu_us": 0
+        },
+        {
+          "kind": "input",
+          "bytes": 102670,
+          "elapsed_us": 24153,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102671,
+          "elapsed_us": 20544,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102672,
+          "elapsed_us": 13085,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102673,
+          "elapsed_us": 18371,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102674,
+          "elapsed_us": 18863,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102675,
+          "elapsed_us": 35396,
+          "thread_cpu_us": 0
+        },
+        {
+          "kind": "input",
+          "bytes": 102676,
+          "elapsed_us": 23539,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102677,
+          "elapsed_us": 15563,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102678,
+          "elapsed_us": 36745,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102679,
+          "elapsed_us": 25717,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102680,
+          "elapsed_us": 27684,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102681,
+          "elapsed_us": 25586,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 102682,
+          "elapsed_us": 14824,
+          "thread_cpu_us": 0
+        },
+        {
+          "kind": "input",
+          "bytes": 102683,
+          "elapsed_us": 9745,
+          "thread_cpu_us": 0
+        },
+        {
+          "kind": "input",
+          "bytes": 102684,
+          "elapsed_us": 11486,
+          "thread_cpu_us": 0
+        },
+        {
+          "kind": "input",
+          "bytes": 102685,
+          "elapsed_us": 14647,
+          "thread_cpu_us": 0
+        }
+      ]
+    },
+    {
+      "fixture_kb": 300,
+      "resident_bytes": 178450432,
+      "commit_bytes": 143159296,
+      "paint_samples": [
+        {
+          "kind": "open",
+          "bytes": 307922,
+          "elapsed_us": 108382
+        },
+        {
+          "kind": "input",
+          "bytes": 307923,
+          "elapsed_us": 27828,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307924,
+          "elapsed_us": 26365,
+          "thread_cpu_us": 0
+        },
+        {
+          "kind": "input",
+          "bytes": 307925,
+          "elapsed_us": 16518,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307926,
+          "elapsed_us": 19721,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307927,
+          "elapsed_us": 23978,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307928,
+          "elapsed_us": 28340,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307929,
+          "elapsed_us": 39570,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307930,
+          "elapsed_us": 21026,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307931,
+          "elapsed_us": 26553,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307932,
+          "elapsed_us": 22765,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307933,
+          "elapsed_us": 18474,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307934,
+          "elapsed_us": 18336,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307935,
+          "elapsed_us": 21385,
+          "thread_cpu_us": 0
+        },
+        {
+          "kind": "input",
+          "bytes": 307936,
+          "elapsed_us": 21793,
+          "thread_cpu_us": 0
+        },
+        {
+          "kind": "input",
+          "bytes": 307937,
+          "elapsed_us": 20625,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 307938,
+          "elapsed_us": 12621,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307939,
+          "elapsed_us": 26883,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307940,
+          "elapsed_us": 11148,
+          "thread_cpu_us": 0
+        },
+        {
+          "kind": "input",
+          "bytes": 307941,
+          "elapsed_us": 16716,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 307942,
+          "elapsed_us": 23563,
+          "thread_cpu_us": 15625
+        }
+      ]
+    },
+    {
+      "fixture_kb": 600,
+      "resident_bytes": 217042944,
+      "commit_bytes": 183345152,
+      "paint_samples": [
+        {
+          "kind": "open",
+          "bytes": 614561,
+          "elapsed_us": 163558
+        },
+        {
+          "kind": "input",
+          "bytes": 614562,
+          "elapsed_us": 30831,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 614563,
+          "elapsed_us": 26743,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 614564,
+          "elapsed_us": 37651,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614565,
+          "elapsed_us": 23566,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614566,
+          "elapsed_us": 41282,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614567,
+          "elapsed_us": 26066,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614568,
+          "elapsed_us": 29699,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614569,
+          "elapsed_us": 22881,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 614570,
+          "elapsed_us": 27226,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614571,
+          "elapsed_us": 26046,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614572,
+          "elapsed_us": 22468,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614573,
+          "elapsed_us": 22206,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614574,
+          "elapsed_us": 22950,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614575,
+          "elapsed_us": 35067,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614576,
+          "elapsed_us": 21814,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 614577,
+          "elapsed_us": 23482,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614578,
+          "elapsed_us": 30574,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614579,
+          "elapsed_us": 35524,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614580,
+          "elapsed_us": 21331,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 614581,
+          "elapsed_us": 22467,
+          "thread_cpu_us": 15625
+        }
+      ]
+    },
+    {
+      "fixture_kb": 1024,
+      "resident_bytes": 268660736,
+      "commit_bytes": 236756992,
+      "paint_samples": [
+        {
+          "kind": "open",
+          "bytes": 1048710,
+          "elapsed_us": 268984
+        },
+        {
+          "kind": "input",
+          "bytes": 1048711,
+          "elapsed_us": 45562,
+          "thread_cpu_us": 46875
+        },
+        {
+          "kind": "input",
+          "bytes": 1048712,
+          "elapsed_us": 40037,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048713,
+          "elapsed_us": 57599,
+          "thread_cpu_us": 46875
+        },
+        {
+          "kind": "input",
+          "bytes": 1048714,
+          "elapsed_us": 45857,
+          "thread_cpu_us": 46875
+        },
+        {
+          "kind": "input",
+          "bytes": 1048715,
+          "elapsed_us": 39923,
+          "thread_cpu_us": 46875
+        },
+        {
+          "kind": "input",
+          "bytes": 1048716,
+          "elapsed_us": 43342,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048717,
+          "elapsed_us": 51318,
+          "thread_cpu_us": 15625
+        },
+        {
+          "kind": "input",
+          "bytes": 1048718,
+          "elapsed_us": 36647,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048719,
+          "elapsed_us": 37080,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048720,
+          "elapsed_us": 49498,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048721,
+          "elapsed_us": 40577,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048722,
+          "elapsed_us": 39877,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048723,
+          "elapsed_us": 41135,
+          "thread_cpu_us": 46875
+        },
+        {
+          "kind": "input",
+          "bytes": 1048724,
+          "elapsed_us": 35677,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048725,
+          "elapsed_us": 42997,
+          "thread_cpu_us": 46875
+        },
+        {
+          "kind": "input",
+          "bytes": 1048726,
+          "elapsed_us": 39134,
+          "thread_cpu_us": 46875
+        },
+        {
+          "kind": "input",
+          "bytes": 1048727,
+          "elapsed_us": 34923,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048728,
+          "elapsed_us": 39978,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048729,
+          "elapsed_us": 32981,
+          "thread_cpu_us": 31250
+        },
+        {
+          "kind": "input",
+          "bytes": 1048730,
+          "elapsed_us": 31800,
+          "thread_cpu_us": 31250
+        }
+      ]
+    },
+    {
+      "case": "block selection, native text/HTML clipboard, delete and undo",
+      "passed": true
+    },
+    {
+      "case": "visible table rectangle clear and undo preserve native viewport",
+      "passed": true
+    },
+    {
+      "case": "native table rectangle, matrix paste, final-cell Tab and undo",
+      "passed": true
+    },
+    {
+      "case": "native code folding geometry and navigation expansion",
+      "passed": true
+    },
+    {
+      "case": "IME callbacks after candidate-selection pause, real shaped candidate bounds and composition undo",
+      "passed": true,
+      "candidate_pause_ms": 1100,
+      "system_candidate_window_tested": false
+    }
+  ],
+  "build_profile": "release",
+  "process_peaks": {
+    "sample_interval_ms": 100,
+    "resident_bytes": 269717504,
+    "private_sampled_bytes": 236650496
+  },
+  "binary_sha256": "B65FABEA9B381D21B2E6AC5D07DCDCAA71D4285AF931C06462FD2190319E9871"
+}

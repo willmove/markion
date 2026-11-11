@@ -256,6 +256,11 @@ When Visual Edit is active, moving the source caret SHALL change the virtualized
 - **WHEN** the user clicks or drag-selects in Visual Edit without changing document text
 - **THEN** the document version, dirty flag, undo history, and derived Markdown caches remain unchanged
 
+#### Scenario: Remeasuring a visible table does not pin it to the top
+- **WHEN** a cell edit or its Undo remeasures a source-owned table that was fully inside the viewport inset
+- **THEN** the pre-layout reveal does not pin that table to the viewport top
+- **AND** post-paint caret follow applies only the minimum overflow delta if the new content needs it
+
 ### Requirement: Pane scroll state with visible scrollbars
 The editor SHALL preserve each tab's source editor, Visual Edit, and rendered preview scroll positions while exposing visible scrollbar controls for those surfaces. Using a scrollbar, mouse wheel, or trackpad SHALL update the same per-tab scroll state for the visible surface without modifying document text or derived Markdown state. Visual Edit SHALL keep its own per-tab virtualized-list scroll state, independent of the rendered preview list, even though both may represent the same document. Visual Edit SHALL include a trailing document-end padding band in its scrollable extent, sized from the current Visual Edit viewport (about half the viewport height), so the last rendered content line can be scrolled away from the pane clip and last-line pointer placement does not have to jump already-visible text. That padding is presentation-only: it SHALL NOT appear in `MarkdownDocument.text`, in cached `VisualBlock` slices, or in other derived Markdown state. When the persisted Sync scroll preference is enabled and the active view mode is Split Preview, scrolling either pane SHALL additionally update the other pane's per-tab scroll position so both viewport anchors represent the same source-backed document location, using rendered preview blocks' source ranges and within-block progress instead of matching whole-document scroll fractions. This coupling SHALL NOT merge the two panes' scroll states into a shared scroll: each pane SHALL retain its own scroll handle or list state, driver/follower observations SHALL remain isolated per tab, and a programmatic follower update SHALL NOT be mistaken for new user input. Synchronization SHALL NOT reset the preview list, reparse the document, mutate document text, or invalidate derived Markdown caches. When Sync scroll is disabled, when the active view mode is not Split Preview, or when no current source mapping is available, the two panes SHALL not be coupled. Scrolling Visual Edit, including by dragging its scrollbar, SHALL NOT establish a Split Preview sync-scroll driver.
 
@@ -770,7 +775,7 @@ When Visual Edit is active, vertical and line-boundary navigation SHALL follow t
 - **AND** explicit source islands retain source-line Home/End behavior
 
 ### Requirement: Visual Edit IME composition fidelity
-Visual Edit SHALL treat the active IME marked range as first-class projection and rendering state. The marked source SHALL remain visibly identified, precisely mapped, and correctly positioned for the platform candidate window throughout composition, including UTF-16 input containing CJK text, emoji, or combining characters.
+Visual Edit SHALL treat the active IME marked range as first-class projection and rendering state. The marked source SHALL remain visibly identified, precisely mapped, and correctly positioned for the platform candidate window throughout composition, including UTF-16 input containing CJK text, emoji, or combining characters. A live composition SHALL retain its semantic undo capture across candidate-selection pauses, independently of the ordinary typing coalescing timeout.
 
 #### Scenario: Marked text is visible in the mixed projection
 - **WHEN** an IME composition creates or updates a non-empty marked range inside rendered inline content
@@ -786,6 +791,11 @@ Visual Edit SHALL treat the active IME marked range as first-class projection an
 - **WHEN** an IME session produces multiple intermediate marked-text replacements and then commits
 - **THEN** one Undo restores the source and selection from before that composition began
 - **AND** one Redo reapplies the committed composition result
+
+#### Scenario: Candidate-selection pauses preserve the same undo entry
+- **WHEN** the user pauses longer than the ordinary typing capture timeout while choosing candidates or between marked-text updates, then commits
+- **THEN** the whole live composition remains one undo entry
+- **AND** Undo restores pre-composition source rather than an intermediate Pinyin or marked-text value
 
 #### Scenario: UTF-16 composition remains UTF-8 safe
 - **WHEN** IME replacement or selection ranges include CJK text, emoji, or combining characters
@@ -2688,3 +2698,17 @@ Turning an exactly mapped quoted leaf into ordinary text SHALL remove only its o
 #### Scenario: Outdent a list subtree
 - **WHEN** the user outdents a nested list parent with descendants
 - **THEN** the whole subtree loses one legal indentation level and retains its internal nesting
+
+### Requirement: Windows text input has a queued frame path
+On Windows, accepted character and composition input and consumed keyboard actions SHALL request a coalesced UI-thread frame without relying exclusively on low-priority `WM_PAINT` delivery. The input callback SHALL finish before that queued frame runs. The existing dirty-frame check and regular paint/vsync path SHALL remain active, and an idle window SHALL not gain a redraw loop.
+
+#### Scenario: Continuous input does not wait exclusively for paint messages
+- **WHEN** native character input changes an editor while other messages keep the Windows queue busy
+- **THEN** a posted application frame request gives the accepted edit an additional path to render
+- **AND** the source, selection, undo and IME lifecycle remain unchanged
+
+#### Scenario: Burst requests remain bounded and recover from post failure
+- **WHEN** several input callbacks request a frame before one has been handled
+- **THEN** at most one input-frame message is pending for that window
+- **AND** a failed post leaves the next request able to retry
+- **AND** consuming the message before drawing permits a later request generated during the frame

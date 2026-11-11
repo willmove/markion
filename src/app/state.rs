@@ -940,7 +940,7 @@ pub(super) struct DocumentTabState {
     pub(super) structured_selection: Option<markion::selection::SelectionState>,
     pub(super) cell_drag_anchor: Option<markion::selection::CellSelection>,
     pub(super) folded_visual_code_blocks: HashSet<VisualBlockId>,
-    pub(super) visual_input_profile: Option<(u64, Instant)>,
+    pub(super) visual_input_profile: Option<(u64, Instant, Option<Duration>)>,
     pub(super) visual_open_profile: Option<Instant>,
     pub(super) dormant_visual_state: Option<DormantVisualState>,
     pub(super) selection_reversed: bool,

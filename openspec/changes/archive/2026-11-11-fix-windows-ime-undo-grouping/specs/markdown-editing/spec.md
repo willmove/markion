@@ -77,3 +77,19 @@ When Visual Edit is active, moving the source caret SHALL change the virtualized
 - **WHEN** a cell edit or its Undo remeasures a source-owned table that was fully inside the viewport inset
 - **THEN** the pre-layout reveal does not pin that table to the viewport top
 - **AND** post-paint caret follow applies only the minimum overflow delta if the new content needs it
+
+## ADDED Requirements
+
+### Requirement: Windows text input has a queued frame path
+On Windows, accepted character and composition input and consumed keyboard actions SHALL request a coalesced UI-thread frame without relying exclusively on low-priority `WM_PAINT` delivery. The input callback SHALL finish before that queued frame runs. The existing dirty-frame check and regular paint/vsync path SHALL remain active, and an idle window SHALL not gain a redraw loop.
+
+#### Scenario: Continuous input does not wait exclusively for paint messages
+- **WHEN** native character input changes an editor while other messages keep the Windows queue busy
+- **THEN** a posted application frame request gives the accepted edit an additional path to render
+- **AND** the source, selection, undo and IME lifecycle remain unchanged
+
+#### Scenario: Burst requests remain bounded and recover from post failure
+- **WHEN** several input callbacks request a frame before one has been handled
+- **THEN** at most one input-frame message is pending for that window
+- **AND** a failed post leaves the next request able to retry
+- **AND** consuming the message before drawing permits a later request generated during the frame

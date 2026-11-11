@@ -10,6 +10,7 @@ impl Focusable for MarkionApp {
 
 impl Render for MarkionApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.note_visual_input_stage("render_begin");
         // Dropdown anchors follow the rendered labels; re-measure only when
         // the interface language changed since the cached table was built.
         self.ensure_menu_dropdown_offsets(window);
@@ -107,6 +108,7 @@ impl Render for MarkionApp {
             } else {
                 std::sync::Arc::new(Vec::new())
             };
+        self.note_visual_input_stage("visual_model_ready");
         let document_dir = (!active_is_image)
             .then(|| self.active_tab().document.path())
             .flatten()

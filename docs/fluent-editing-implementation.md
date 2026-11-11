@@ -161,3 +161,7 @@ Windows 11 Pro 10.0.26200，release 回放 **全部通过**。下表打开时间
 首轮原生回放实际检出了 Windows HTML 写出缺口；修复后重跑上述完整流程通过。最终运行日志位于 `target/tmp/fluent-editing-fixtures/native-20261111-180912`。这份结果支持本机混合 1 MB 文档的快速打开和编辑；OS 输入、GPU 呈现、其他系统以及全局回退文档仍按上文证据边界解释，不能据此承诺任意文档、任意负载下完全零卡顿。
 
 三个实施变更已同步到稳定规范并归档：`2026-11-11-localize-visual-derivation`、`2026-11-11-add-structured-visual-selection`、`2026-11-11-complete-advanced-visual-blocks`。
+
+### Windows 真实输入补充验证
+
+后续已恢复 Windows 自动化接口，补齐系统鼠标/键盘和实际中文候选窗验证，并修复停顿候选选择后 Undo 恢复拼音、表格清空时视口跳动、Copy 按钮位移及 Windows 输入后等待绘制的问题。1 MiB 文档最终 1080 次独立 OS 按键的完整保存文件一致，回调到光标 paint P95 为 33.14 ms、最大 47.95 ms；全部原始峰值、内存和测量边界见 [Windows 实机输入验证](verification/windows-native-input-2026-11-11.md)。本次收尾变更也已同步规范并归档。
