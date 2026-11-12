@@ -2377,7 +2377,9 @@ impl MarkionApp {
             Some(2) => 0..caret,
             Some(3) => caret..caret,
             _ if action == WritingAction::Draft => caret..caret,
-            _ if matches!(self.rendered_view_mode(), ViewMode::Read) && tab.preview_selection.is_some() => {
+            _ if matches!(self.rendered_view_mode(), ViewMode::Read)
+                && tab.preview_selection.is_some() =>
+            {
                 0..0
             }
             _ if !selected.is_empty() => selected,
@@ -4316,7 +4318,7 @@ pub(super) fn panel_view(
     use crate::ui::icon::Icon;
     let p = app.palette();
     let l = app.language;
-    let narrow = f32::from(window.viewport_size().width) < 900.;
+    let narrow = f32::from(window_controls::content_viewport_size(window).width) < 900.;
     let c = app.ai_ui.conversation();
     let running = app.ai_ui.running();
     let mut header = div()
@@ -4806,12 +4808,13 @@ pub(super) fn panel_view(
             .ai_ui
             .width
             .clamp(AI_PANEL_MIN_WIDTH, AI_PANEL_MAX_WIDTH)
-            .min(f32::from(window.viewport_size().width) - 16.)
+            .min(f32::from(window_controls::content_viewport_size(window).width) - 16.)
             .max(AI_PANEL_MIN_WIDTH)))
         .when(narrow, |d| {
-            d.left(px(8.))
-                .right(px(8.))
-                .w(px((f32::from(window.viewport_size().width) - 16.).max(0.)))
+            d.left(px(8.)).right(px(8.)).w(px((f32::from(
+                window_controls::content_viewport_size(window).width,
+            ) - 16.)
+                .max(0.)))
         })
         .occlude()
         .bg(p.panel_bg)
@@ -4857,7 +4860,14 @@ pub(super) fn panel_view(
                                     move_entity.update(cx, |a, cx| {
                                         if a.ai_ui.resize_drag {
                                             a.ai_ui.width = f32::from(
-                                                w.viewport_size().width - event.position.x,
+                                                w.viewport_size().width
+                                                    - window_controls::csd_margin(
+                                                        w.window_decorations(),
+                                                        w.is_maximized(),
+                                                        w.is_fullscreen(),
+                                                    )
+                                                    .right
+                                                    - event.position.x,
                                             )
                                             .clamp(AI_PANEL_MIN_WIDTH, AI_PANEL_MAX_WIDTH);
                                             cx.notify();

@@ -156,10 +156,30 @@ impl Render for MarkionApp {
             window.window_decorations(),
             gpui::Decorations::Client { .. }
         );
+        let csd_radii = window_controls::csd_corner_radii(
+            window.window_decorations(),
+            window.is_maximized(),
+            window.is_fullscreen(),
+        );
+        let csd_margin = window_controls::csd_margin(
+            window.window_decorations(),
+            window.is_maximized(),
+            window.is_fullscreen(),
+        );
+        window.set_client_inset(window_controls::csd_client_inset(
+            window.window_decorations(),
+            window.is_maximized(),
+            window.is_fullscreen(),
+        ));
         let (csd_drag, csd_controls) = if csd_decorated {
             (
                 Some(window_controls::csd_drag_region(cx)),
-                Some(window_controls::csd_window_controls(self, window, cx)),
+                Some(window_controls::csd_window_controls(
+                    self,
+                    window,
+                    cx,
+                    csd_radii.top_right,
+                )),
             )
         } else {
             (None, None)
@@ -223,14 +243,41 @@ impl Render for MarkionApp {
             } else {
                 px(0.)
             };
-        let block_menu_max_height = px((f32::from(window.viewport_size().height) - 32.0)
+        let block_menu_max_height = px((f32::from(
+            window_controls::content_viewport_size(window).height,
+        ) - 32.0)
             .max(120.0)
             .min(520.0));
 
         div()
             .size_full()
             .relative()
+            // The transparent resize/shadow margin: content lives inside it,
+            // while the absolute grips below sit at the surface edges.
+            .pt(csd_margin.top)
+            .pr(csd_margin.right)
+            .pb(csd_margin.bottom)
+            .pl(csd_margin.left)
+            .children(window_controls::csd_resize_grips(cx, csd_margin))
+            .child(
+        div()
+            .size_full()
+            .relative()
             .bg(palette.app_bg)
+            // The rounded silhouette: corner pixels stay unpainted so the
+            // transparent CSD surface shows the desktop through them.
+            .rounded_tl(csd_radii.top_left)
+            .rounded_tr(csd_radii.top_right)
+            .rounded_bl(csd_radii.bottom_left)
+            .rounded_br(csd_radii.bottom_right)
+            .when(csd_decorated, |inner| {
+                inner.shadow(vec![gpui::BoxShadow {
+                    color: gpui::black().opacity(0.28),
+                    offset: point(px(0.), px(2.)),
+                    blur_radius: px(8.),
+                    spread_radius: px(0.),
+                }])
+            })
             .text_color(palette.text)
             .font_family(".SystemUIFont")
             .track_focus(&self.focus_handle(cx))
@@ -371,6 +418,16 @@ impl Render for MarkionApp {
                         .flex()
                         .items_center()
                         .gap_1()
+                        // GPUI cannot clip children to a curve, so the bar
+                        // carries the top radii itself and keeps its painted
+                        // content out of the corner zone: left padding equals
+                        // the radius, and the control cluster sits flush right.
+                        .when(csd_decorated, |row| {
+                            row.pl_3()
+                                .pr_0()
+                                .rounded_tl(csd_radii.top_left)
+                                .rounded_tr(csd_radii.top_right)
+                        })
                         .child(menu_title_button(
                             self.tr(Msg::MenuFile),
                             self.active_menu == Some(AppMenu::File),
@@ -460,7 +517,7 @@ impl Render for MarkionApp {
                         div()
                             .id("document-workspace-column")
                             .when(
-                                self.ai_ui.open && f32::from(window.viewport_size().width) >= 900.,
+                                self.ai_ui.open && f32::from(window_controls::content_viewport_size(window).width) >= 900.,
                                 |d| d.mr(px(self.ai_ui.width)),
                             )
                             .flex_1()
@@ -482,7 +539,7 @@ impl Render for MarkionApp {
                                 |column| column.child(pending_name_prompt_view(self, cx)),
                             )
                             .when(active_is_image, |column| {
-                                column.child(image_tab_view(self, palette, window.viewport_size()))
+                                column.child(image_tab_view(self, palette, window_controls::content_viewport_size(window)))
                             })
                             .when(!active_is_image, |column| {
                                 column.child(
@@ -930,6 +987,22 @@ impl Render for MarkionApp {
             .when(self.markdown_reference_open, |root| {
                 root.child(markdown_reference_view(self, cx))
             })
+            // Hairline window outline, painted above the chrome. No id and no
+            // listeners, so it registers no hitbox and stays input-transparent.
+            .when(csd_decorated, |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded_tl(csd_radii.top_left)
+                        .rounded_tr(csd_radii.top_right)
+                        .rounded_bl(csd_radii.bottom_left)
+                        .rounded_br(csd_radii.bottom_right)
+                        .border_1()
+                        .border_color(palette.border),
+                )
+            })
+            )
     }
 }
 
@@ -2368,7 +2441,7 @@ pub(super) fn search_panel_view(
     let can_replace = can_navigate && app.replace_visible;
     let invalid = matches!(app.search_result, SearchResultState::InvalidPattern(_));
     let top = px(36. + document_tab_band_height(app.tabs.len()));
-    let viewport = window.viewport_size();
+    let viewport = window_controls::content_viewport_size(window);
     let moved_width = px(SEARCH_OVERLAY_MAX_WIDTH)
         .min(viewport.width - px(2. * SEARCH_OVERLAY_MARGIN))
         .max(px(0.));
@@ -2419,7 +2492,7 @@ pub(super) fn search_panel_view(
                     let origin = clamp_search_overlay_origin(
                         event.event.position - app.search_overlay_grab,
                         bounds.size,
-                        window.viewport_size(),
+                        window_controls::content_viewport_size(window),
                     );
                     if app.search_overlay_origin != Some(origin) {
                         app.search_overlay_origin = Some(origin);
@@ -5954,9 +6027,10 @@ pub(super) fn preferences_panel_view(
                 .max_h(px(560.))
                 .when(active_tab == PreferencesTab::Ai, |panel| {
                     panel
-                        .h(px(
-                            (f32::from(window.viewport_size().height) - 32.).clamp(180., 560.)
-                        ))
+                        .h(px((f32::from(
+                            window_controls::content_viewport_size(window).height,
+                        ) - 32.)
+                            .clamp(180., 560.)))
                         .overflow_hidden()
                 })
                 .when(active_tab == PreferencesTab::Shortcuts, |panel| {

@@ -20,6 +20,19 @@ const CSD_DRAG_THRESHOLD: f32 = 3.0;
 /// Edge length of a window-control glyph.
 const CSD_CONTROL_ICON_SIZE: f32 = 12.0;
 
+/// GNOME/Adwaita window corner radius at 1x; GPUI's logical pixels scale it
+/// with the display scale factor like GTK does.
+const CSD_WINDOW_RADIUS: f32 = 12.0;
+
+/// Transparent margin reserved around the visible window on CSD sessions.
+/// Resize grips and the drop shadow live here, outside all content, the same
+/// way GTK's CSD shadow margin doubles as the resize area.
+const CSD_RESIZE_MARGIN: f32 = 10.0;
+
+/// Edge length of the diagonal corner grips. Larger than the margin so corner
+/// grabs are forgiving; they sit below the content layer in hit order.
+const CSD_CORNER_GRIP: f32 = 18.0;
+
 // The embedded icon set already carries the square (maximize), copy
 // (restore: two overlapping squares) and x (close) glyphs; only minimize
 // needed a new asset (`minus`).
@@ -55,6 +68,225 @@ pub(super) fn requested_decorations() -> Option<gpui::WindowDecorations> {
         return Some(gpui::WindowDecorations::Client);
     }
     None
+}
+
+/// Corner radii of the window silhouette. Zero everywhere unless the platform
+/// requires client-side decorations; maximized/fullscreen windows are square,
+/// and each edge the compositor reports tiled keeps its two corners square,
+/// matching GNOME. Every painted surface that touches an outer corner reads
+/// this one decision so the silhouette cannot disagree with itself.
+pub(super) fn csd_corner_radii(
+    decorations: gpui::Decorations,
+    maximized: bool,
+    fullscreen: bool,
+) -> gpui::Corners<Pixels> {
+    let gpui::Decorations::Client { tiling } = decorations else {
+        return gpui::Corners::all(px(0.));
+    };
+    let radius = px(if maximized || fullscreen {
+        0.
+    } else {
+        CSD_WINDOW_RADIUS
+    });
+    let mut corners = gpui::Corners::all(radius);
+    if tiling.top || tiling.left {
+        corners.top_left = px(0.);
+    }
+    if tiling.top || tiling.right {
+        corners.top_right = px(0.);
+    }
+    if tiling.bottom || tiling.left {
+        corners.bottom_left = px(0.);
+    }
+    if tiling.bottom || tiling.right {
+        corners.bottom_right = px(0.);
+    }
+    corners
+}
+
+/// Per-edge transparent margin around the visible window. Zero unless the
+/// platform requires client-side decorations; maximized/fullscreen windows
+/// fill their geometry, and tiled edges have no margin (GPUI's Wayland
+/// geometry insets per non-tiled edge to match).
+pub(super) fn csd_margin(
+    decorations: gpui::Decorations,
+    maximized: bool,
+    fullscreen: bool,
+) -> gpui::Edges<Pixels> {
+    let gpui::Decorations::Client { tiling } = decorations else {
+        return gpui::Edges::all(px(0.));
+    };
+    let margin = px(if maximized || fullscreen {
+        0.
+    } else {
+        CSD_RESIZE_MARGIN
+    });
+    gpui::Edges {
+        top: if tiling.top { px(0.) } else { margin },
+        right: if tiling.right { px(0.) } else { margin },
+        bottom: if tiling.bottom { px(0.) } else { margin },
+        left: if tiling.left { px(0.) } else { margin },
+    }
+}
+
+/// The uniform value for `Window::set_client_inset`; the Wayland backend
+/// applies it per non-tiled edge itself.
+pub(super) fn csd_client_inset(
+    decorations: gpui::Decorations,
+    maximized: bool,
+    fullscreen: bool,
+) -> Pixels {
+    px(
+        if matches!(decorations, gpui::Decorations::Client { .. }) && !maximized && !fullscreen {
+            CSD_RESIZE_MARGIN
+        } else {
+            0.
+        },
+    )
+}
+
+/// Viewport size minus the CSD margin: the space the visible chrome occupies.
+pub(super) fn content_viewport_size(window: &Window) -> gpui::Size<Pixels> {
+    let margin = csd_margin(
+        window.window_decorations(),
+        window.is_maximized(),
+        window.is_fullscreen(),
+    );
+    let viewport = window.viewport_size();
+    gpui::size(
+        viewport.width - margin.left - margin.right,
+        viewport.height - margin.top - margin.bottom,
+    )
+}
+
+/// Resize grips in the transparent margin: four edge bands plus four corner
+/// squares, present only for edges the margin reserves. Rendered below the
+/// content layer so corner overlap can never steal chrome-button clicks; the
+/// edge bands lie wholly outside the content rectangle.
+pub(super) fn csd_resize_grips(
+    cx: &mut Context<MarkionApp>,
+    margin: gpui::Edges<Pixels>,
+) -> Vec<Stateful<Div>> {
+    let zero = px(0.);
+    let corner = px(CSD_CORNER_GRIP);
+    let mut grips = Vec::new();
+    if margin.top > zero {
+        grips.push(resize_grip(
+            "csd-resize-top",
+            cx,
+            gpui::ResizeEdge::Top,
+            |g| {
+                g.cursor_ns_resize()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(margin.top)
+            },
+        ));
+    }
+    if margin.bottom > zero {
+        grips.push(resize_grip(
+            "csd-resize-bottom",
+            cx,
+            gpui::ResizeEdge::Bottom,
+            |g| {
+                g.cursor_ns_resize()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(margin.bottom)
+            },
+        ));
+    }
+    if margin.left > zero {
+        grips.push(resize_grip(
+            "csd-resize-left",
+            cx,
+            gpui::ResizeEdge::Left,
+            |g| {
+                g.cursor_ew_resize()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(margin.left)
+            },
+        ));
+    }
+    if margin.right > zero {
+        grips.push(resize_grip(
+            "csd-resize-right",
+            cx,
+            gpui::ResizeEdge::Right,
+            |g| {
+                g.cursor_ew_resize()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(margin.right)
+            },
+        ));
+    }
+    if margin.top > zero && margin.left > zero {
+        grips.push(resize_grip(
+            "csd-resize-top-left",
+            cx,
+            gpui::ResizeEdge::TopLeft,
+            |g| g.cursor_nwse_resize().top_0().left_0().w(corner).h(corner),
+        ));
+    }
+    if margin.top > zero && margin.right > zero {
+        grips.push(resize_grip(
+            "csd-resize-top-right",
+            cx,
+            gpui::ResizeEdge::TopRight,
+            |g| g.cursor_nesw_resize().top_0().right_0().w(corner).h(corner),
+        ));
+    }
+    if margin.bottom > zero && margin.left > zero {
+        grips.push(resize_grip(
+            "csd-resize-bottom-left",
+            cx,
+            gpui::ResizeEdge::BottomLeft,
+            |g| {
+                g.cursor_nesw_resize()
+                    .bottom_0()
+                    .left_0()
+                    .w(corner)
+                    .h(corner)
+            },
+        ));
+    }
+    if margin.bottom > zero && margin.right > zero {
+        grips.push(resize_grip(
+            "csd-resize-bottom-right",
+            cx,
+            gpui::ResizeEdge::BottomRight,
+            |g| {
+                g.cursor_nwse_resize()
+                    .bottom_0()
+                    .right_0()
+                    .w(corner)
+                    .h(corner)
+            },
+        ));
+    }
+    grips
+}
+
+fn resize_grip(
+    id: &'static str,
+    cx: &mut Context<MarkionApp>,
+    edge: gpui::ResizeEdge,
+    place: impl FnOnce(Stateful<Div>) -> Stateful<Div>,
+) -> Stateful<Div> {
+    // The compositor resize grab needs the current mouse-press serial, so the
+    // request must happen here, on press, not deferred to a move.
+    place(div().id(id).absolute().on_mouse_down(
+        MouseButton::Left,
+        cx.listener(move |_, _, window, _| {
+            window.start_window_resize(edge);
+        }),
+    ))
 }
 
 impl MarkionApp {
@@ -119,6 +351,7 @@ pub(super) fn csd_window_controls(
     app: &MarkionApp,
     window: &mut Window,
     cx: &mut Context<MarkionApp>,
+    top_right_radius: Pixels,
 ) -> Div {
     let palette = app.palette();
     let language = app.language;
@@ -136,6 +369,7 @@ pub(super) fn csd_window_controls(
                 WindowControlArea::Min,
                 language,
                 palette,
+                px(0.),
                 cx.listener(|_, _, window, _| window.minimize_window()),
             ))
         })
@@ -151,6 +385,7 @@ pub(super) fn csd_window_controls(
                 WindowControlArea::Max,
                 language,
                 palette,
+                px(0.),
                 cx.listener(|_, _, window, _| window.zoom_window()),
             ))
         })
@@ -160,6 +395,7 @@ pub(super) fn csd_window_controls(
             WindowControlArea::Close,
             language,
             palette,
+            top_right_radius,
             cx.listener(|app, _, window, cx| app.request_window_close(window, cx)),
         ))
 }
@@ -170,6 +406,7 @@ fn window_control_button(
     area: WindowControlArea,
     language: Language,
     palette: ThemePalette,
+    corner_radius: Pixels,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
     let close = area == WindowControlArea::Close;
@@ -191,6 +428,9 @@ fn window_control_button(
         .justify_center()
         .rounded_sm()
         .cursor_pointer()
+        // Flush against the window's top-right corner: the hover background
+        // must follow the window silhouette, not spill outside it.
+        .when(close, |button| button.rounded_tr(corner_radius))
         .when(close, |button| {
             button.hover(move |style| style.bg(csd_close_hover_bg()))
         })
@@ -222,5 +462,70 @@ mod tests {
         assert!(csd_drag_past_threshold(origin, point(px(100.), px(53.))));
         // Diagonal travel counts as Euclidean distance.
         assert!(csd_drag_past_threshold(origin, point(px(102.2), px(52.2))));
+    }
+
+    #[test]
+    fn corner_radii_follow_window_state() {
+        let client = gpui::Decorations::Client {
+            tiling: gpui::Tiling::default(),
+        };
+        let round = gpui::Corners::all(px(CSD_WINDOW_RADIUS));
+        let square = gpui::Corners::all(px(0.));
+        assert_eq!(csd_corner_radii(client, false, false), round);
+        assert_eq!(csd_corner_radii(client, true, false), square);
+        assert_eq!(csd_corner_radii(client, false, true), square);
+        assert_eq!(
+            csd_corner_radii(gpui::Decorations::Server, false, false),
+            square
+        );
+
+        let left_tiled = gpui::Decorations::Client {
+            tiling: gpui::Tiling {
+                left: true,
+                ..Default::default()
+            },
+        };
+        let corners = csd_corner_radii(left_tiled, false, false);
+        assert_eq!(corners.top_left, px(0.));
+        assert_eq!(corners.bottom_left, px(0.));
+        assert_eq!(corners.top_right, px(CSD_WINDOW_RADIUS));
+        assert_eq!(corners.bottom_right, px(CSD_WINDOW_RADIUS));
+    }
+
+    #[test]
+    fn resize_margin_follows_window_state() {
+        let client = gpui::Decorations::Client {
+            tiling: gpui::Tiling::default(),
+        };
+        let full = gpui::Edges::all(px(CSD_RESIZE_MARGIN));
+        let zero = gpui::Edges::all(px(0.));
+        assert_eq!(csd_margin(client, false, false), full);
+        assert_eq!(
+            csd_client_inset(client, false, false),
+            px(CSD_RESIZE_MARGIN)
+        );
+        assert_eq!(csd_margin(client, true, false), zero);
+        assert_eq!(csd_margin(client, false, true), zero);
+        assert_eq!(csd_client_inset(client, true, false), px(0.));
+        assert_eq!(csd_margin(gpui::Decorations::Server, false, false), zero);
+        assert_eq!(
+            csd_client_inset(gpui::Decorations::Server, false, false),
+            px(0.)
+        );
+
+        let tiled = gpui::Decorations::Client {
+            tiling: gpui::Tiling {
+                top: true,
+                left: true,
+                ..Default::default()
+            },
+        };
+        let margin = csd_margin(tiled, false, false);
+        assert_eq!(margin.top, px(0.));
+        assert_eq!(margin.left, px(0.));
+        assert_eq!(margin.right, px(CSD_RESIZE_MARGIN));
+        assert_eq!(margin.bottom, px(CSD_RESIZE_MARGIN));
+        // The inset stays uniform; the backend applies it per non-tiled edge.
+        assert_eq!(csd_client_inset(tiled, false, false), px(CSD_RESIZE_MARGIN));
     }
 }

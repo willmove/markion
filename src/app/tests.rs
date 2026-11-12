@@ -13583,6 +13583,22 @@ fn csd_window_controls_follow_decorations_and_close_guard() {
         bootstrap.contains("window_decorations: window_controls::requested_decorations()"),
         "the main window must pass the decoration request, or the gate above never fires on GNOME"
     );
+    assert!(
+        root_view.contains("window_controls::csd_corner_radii(")
+            && root_view.contains(".rounded_tl(csd_radii.top_left)"),
+        "the rounded silhouette must read the shared CSD radius decision"
+    );
+    assert!(window_controls.contains("fn csd_corner_radii("));
+    assert!(
+        root_view.contains("window.set_client_inset(window_controls::csd_client_inset(")
+            && root_view.contains("window_controls::csd_resize_grips(cx, csd_margin)"),
+        "the CSD resize margin and grips must be wired into the root view"
+    );
+    assert!(window_controls.contains("window.start_window_resize(edge)"));
+    assert!(
+        root_view.contains("window_controls::content_viewport_size(window)"),
+        "overlay and pane sizing must be margin-aware on CSD sessions"
+    );
 
     let documents = include_str!("documents.rs");
     let close = documents
