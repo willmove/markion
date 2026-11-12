@@ -2,9 +2,10 @@
 //! server-side decorations (GPUI reports `Decorations::Client` — GNOME
 //! Wayland, as on Ubuntu 26.04). The vendored GPUI paints nothing in that
 //! mode, so the in-window menu bar hosts the minimize/maximize/close cluster
-//! and the drag region instead. Server-side-decorated platforms (macOS,
-//! Windows, X11, KDE Wayland) and test windows keep the old menu bar because
-//! the gate in `root_view.rs` stays false there.
+//! and the drag region instead. Platforms reporting server-side decorations
+//! (macOS, Windows, X11, or a Wayland compositor that grants them) and test
+//! windows keep the old menu bar because the gate in `root_view.rs` stays
+//! false there.
 
 use super::root_view::SearchTooltip;
 use super::*;
@@ -37,6 +38,23 @@ fn csd_drag_past_threshold(origin: Point<Pixels>, position: Point<Pixels>) -> bo
     let dx = f32::from(position.x - origin.x);
     let dy = f32::from(position.y - origin.y);
     dx * dx + dy * dy >= CSD_DRAG_THRESHOLD * CSD_DRAG_THRESHOLD
+}
+
+/// Decorations to request when opening the main window.
+///
+/// GPUI defaults to `Server`, and its Wayland backend records that request as
+/// the window's state even when the compositor never advertises
+/// `zxdg_decoration_manager_v1` (GNOME/Mutter). The window then reports
+/// `Decorations::Server` while nothing at all draws a title bar, which hides
+/// the cluster below. Requesting `Client` makes the report match reality;
+/// compositors that do implement the protocol answer with a configure event
+/// that overrides the request, so they keep their native title bar.
+pub(super) fn requested_decorations() -> Option<gpui::WindowDecorations> {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    if gpui::guess_compositor() == "Wayland" {
+        return Some(gpui::WindowDecorations::Client);
+    }
+    None
 }
 
 impl MarkionApp {

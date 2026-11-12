@@ -13570,6 +13570,19 @@ fn csd_window_controls_follow_decorations_and_close_guard() {
     assert!(window_controls.contains("window.minimize_window()"));
     assert!(window_controls.contains("window.zoom_window()"));
     assert!(window_controls.contains("window.start_window_move()"));
+    assert!(
+        window_controls.contains("gpui::guess_compositor()")
+            && window_controls.contains("== \"Wayland\"")
+            && window_controls.contains("gpui::WindowDecorations::Client"),
+        "Wayland must request client decorations: GPUI's default Server request is stored \
+         unnegotiated on compositors without the decoration protocol, which hides the cluster"
+    );
+
+    let bootstrap = include_str!("bootstrap.rs");
+    assert!(
+        bootstrap.contains("window_decorations: window_controls::requested_decorations()"),
+        "the main window must pass the decoration request, or the gate above never fires on GNOME"
+    );
 
     let documents = include_str!("documents.rs");
     let close = documents

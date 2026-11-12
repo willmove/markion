@@ -1,6 +1,6 @@
 ## Context
 
-See `proposal.md` for the platform analysis. GPUI 0.2.2 (vendored) exposes a complete client-side-decoration contract: the platform window reports `Decorations::Client` when the app must paint its own title-bar affordances, `WindowControls` says which buttons the compositor honors, and `minimize_window` / `zoom_window` / `start_window_move` / `remove_window` are the actions behind them. On Wayland the backend neither paints decorations nor consumes `WindowControlArea` hitboxes, so the application owns everything. Zed's own workspace titlebar takes exactly this app-level approach at this GPUI revision; newer upstream GPUI moved the painting into the backend, which is out of scope for the vendored tree.
+See `proposal.md` for the platform analysis. GPUI 0.2.2 (vendored) exposes a complete client-side-decoration contract: the platform window reports `Decorations::Client` when the app must paint its own title-bar affordances, `WindowControls` says which buttons the compositor honors, and `minimize_window` / `zoom_window` / `start_window_move` / `remove_window` are the actions behind them. The report is only meaningful if the app asks for the mode it wants: `Window::new` requests `WindowDecorations::Server` by default and the Wayland backend stores that request as the window's state without any compositor negotiation when no decoration manager exists. On Wayland the backend neither paints decorations nor consumes `WindowControlArea` hitboxes, so the application owns everything. Zed's own workspace titlebar takes exactly this app-level approach at this GPUI revision; newer upstream GPUI moved the painting into the backend, which is out of scope for the vendored tree.
 
 Markion already has a natural CSD host: the in-window menu bar (28 px tall, top row of the root view). GNOME headerbars put window controls at the right edge of that row.
 
@@ -20,9 +20,11 @@ Markion already has a natural CSD host: the in-window menu bar (28 px tall, top 
 
 ## Decisions
 
-### 1. Gate on `Decorations::Client`, not on OS cfg flags
+### 1. Request `Client` on Wayland, then gate on `Decorations::Client`
 
-`matches!(window.window_decorations(), Decorations::Client { .. })` decides per render whether the cluster and drag region exist. This is the API's own signal: false on macOS/Windows/X11 and on Wayland compositors that grant server-side decorations (KDE), true exactly where the app must paint. It also keeps test fixtures on the old layout, because the test platform reports `Decorations::Server`.
+`matches!(window.window_decorations(), Decorations::Client { .. })` decides per render whether the cluster and drag region exist. This is the API's own signal: false on macOS/Windows/X11 and on Wayland compositors that grant server-side decorations, true exactly where the app must paint. It also keeps test fixtures on the old layout, because the test platform reports `Decorations::Server`.
+
+That signal is only correct if the window asks for client decorations first. `window_controls::requested_decorations()` returns `Some(WindowDecorations::Client)` when `gpui::guess_compositor() == "Wayland"` and `None` elsewhere, and `bootstrap.rs` passes it as `WindowOptions.window_decorations`. On GNOME the request is never negotiated, so the state stays `Client` and matches the undecorated window. On a compositor that implements the protocol the request is forwarded and its configure reply overwrites the state: `Server` keeps the native title bar and hides the cluster, `Client` shows it. The `guess_compositor` call is `#[cfg]`-gated to Linux/FreeBSD because the API only exists there; the render gate itself stays platform-agnostic. X11 must not receive the request — its `request_decorations` rewrites Motif hints and would strip the native title bar.
 
 ### 2. Buttons live at the right end of the menu bar; close gets a danger hover
 

@@ -7,6 +7,7 @@ use std::{
 use super::layout::startup_window_bounds;
 use super::renderer_fallback::{self, FallbackUnavailable};
 use super::startup_alert::{self, StartupFailureKind};
+use super::window_controls;
 use super::*;
 
 pub(super) fn install_window_close_guard(
@@ -523,6 +524,7 @@ fn run_application(startup_intent: StartupOpenIntent) {
                     }),
                     window_bounds: Some(window_bounds),
                     app_id: Some(MARKION_APP_ID.to_string()),
+                    window_decorations: window_controls::requested_decorations(),
                     ..Default::default()
                 },
                 |_, cx| cx.new(MarkionApp::new),

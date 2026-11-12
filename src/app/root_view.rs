@@ -148,9 +148,10 @@ impl Render for MarkionApp {
         self.sync_window_title(window);
         // Client-side decorations (GNOME Wayland, as on Ubuntu 26.04): the
         // platform draws no title bar, so the menu bar additionally hosts
-        // the window-control cluster and a drag region. Server-side-decorated
-        // platforms (macOS, Windows, X11, KDE Wayland) keep the bar — and
-        // test fixtures — unchanged.
+        // the window-control cluster and a drag region. Platforms reporting
+        // server-side decorations (macOS, Windows, X11, or a Wayland
+        // compositor that grants them) keep the bar — and test fixtures —
+        // unchanged.
         let csd_decorated = matches!(
             window.window_decorations(),
             gpui::Decorations::Client { .. }
