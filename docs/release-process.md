@@ -43,7 +43,7 @@ The `mirror-oss` job uploads the seven packages (Windows NSIS installer, Windows
 
 Configure these repository secrets with the exact public values; a wrong value fails only at tag time:
 
-- `OSS_ENDPOINT`: the public regional endpoint `oss-cn-heyuan.aliyuncs.com`. The internal endpoint (`oss-cn-heyuan-internal.aliyuncs.com`) resolves to RFC 6598 CGNAT addresses that GitHub-hosted runners cannot route to, so every upload times out (60s) and fails.
+- `OSS_ENDPOINT`: a public OSS upload endpoint. The regional endpoint is `oss-cn-heyuan.aliyuncs.com`; for slow overseas-runner routes, an already-enabled `oss-accelerate.aliyuncs.com` endpoint can be used while retaining the regional `OSS_PUBLIC_BASE` download URLs. v0.5.3 switched upload configuration to the existing acceleration endpoint after regional workers stalled. Acceleration incurs additional traffic fees; see [Alibaba Cloud transfer acceleration](https://www.alibabacloud.com/help/en/oss/user-guide/transfer-acceleration). The internal endpoint (`oss-cn-heyuan-internal.aliyuncs.com`) resolves to RFC 6598 CGNAT addresses that GitHub-hosted runners cannot route to, so every upload times out (60s) and fails.
 - `OSS_BUCKET`: `marknice` — must match the bucket in `OSS_PUBLIC_BASE`'s hostname (`marknice.oss-cn-heyuan.aliyuncs.com`).
 - `OSS_PREFIX`: `markion-releases` — no trailing slash. A trailing slash historically produced double-slash object keys (`markion-releases//latest/...`) that 404'd at the public URLs while the upload job still reported success. The workflow now normalizes the prefix defensively and verifies the result.
 - `OSS_PUBLIC_BASE`: `https://marknice.oss-cn-heyuan.aliyuncs.com`.

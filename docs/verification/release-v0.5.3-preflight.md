@@ -1,6 +1,6 @@
 # v0.5.3 release preflight
 
-Date: 2026-11-13 (Asia/Shanghai). Candidate base: `15fcdf88ea9bc4d72be42492cc41b86442a3b6be`; previous public stable tag: `v0.5.2`. This is a preparation record, not a publication-success report.
+Date: 2026-11-13 (Asia/Shanghai). Candidate base: `15fcdf88ea9bc4d72be42492cc41b86442a3b6be`; previous public stable tag: `v0.5.2`. Publication completed; the following record preserves the original preflight history, final checks and explicitly skipped manual scope.
 
 ## Repository and metadata
 
@@ -20,11 +20,11 @@ Date: 2026-11-13 (Asia/Shanghai). Candidate base: `15fcdf88ea9bc4d72be42492cc41b
 | `cargo clippy --workspace` | Passed (`--offline`), with existing lint suggestions retained |
 | Pinned workspace bundle verification | Passed: 23 files / 3,140,387 bytes, pinned MarkNice `c009c1ec7e7c92f89afa5a32edcb126b5296bda7` |
 | Rustfmt / diff whitespace | Passed |
-| Strict OpenSpec validation | 108 passed / 0 failed before archiving; 106 passed / 0 failed after the AI fix and outline change were archived and synced |
-| README parity and local links | Passed: exact Chinese content parity except navigation; local Markdown links checked in 15 documentation files |
+| Strict OpenSpec validation | 108 passed / 0 failed before archiving; 106 passed / 0 failed after the AI fix and outline change were archived and synced; **105 passed / 0 failed** after final documentation archival |
+| README parity and local links | Passed: exact Chinese content parity except navigation; local Markdown links checked in 16 documentation files |
 | GitHub quality workflow for original base | [Failed before tests on Rustfmt](https://github.com/willmove/markion/actions/runs/43408726698); the single assertion-format mismatch has been corrected locally |
-| Candidate branch packaging | [All four native builds and AppImage smoke passed](https://github.com/willmove/markion/actions/runs/43413836691) at `2d71c07`; tag signing/publication remains to run |
-| Candidate Windows quality gate | [Windows tests reached the new AI regression](https://github.com/willmove/markion/actions/runs/43413836715); its temporary-path assertion compared a short path with a canonical long path. Corrected to use the canonical grant scope; full local suite rerun: 2136 passed / 5 ignored / 0 failed |
+| Candidate branch packaging | [All four native builds and AppImage smoke passed](https://github.com/willmove/markion/actions/runs/43413836691) at `2d71c07`; the tag run subsequently completed signing/publication/mirroring |
+| Candidate Windows quality gate | [Windows tests reached the new AI regression](https://github.com/willmove/markion/actions/runs/43413836715); its temporary-path assertion compared a short path with a canonical long path. Corrected to use the canonical grant scope; full local suite rerun: 2136 passed / 5 ignored / 0 failed; [current Windows quality workflow passed](https://github.com/willmove/markion/actions/runs/43422677821) |
 | Current browser checks | PASS: 15 themes plus formatting, exports, locales, skin, Word import and themed print checks; actual Copy Markdown/HTML/DOCX downloads verified |
 
 The test failure was not ignored or excluded. The directory-only repair keeps filesystem volume/object checks, regular-file hard-link rejection and unchanged version-1 journal serialization. The final workspace run passes without skipped failures. The first all-target pass also exposed missing container Git templates, fixed for the verification process through `GIT_TEMPLATE_DIR`; the PDF SVG spike depended on proprietary Georgia, so that fixture now explicitly loads the project’s bundled Libertinus font and retains its empty/populated fontdb assertions. Application font selection is unchanged. The documentation contract test retains its `VisualBlockEditor::Table` marker. All resulting regressions pass in the final full suite.
@@ -33,7 +33,7 @@ The original base’s [native packaging workflow](https://github.com/willmove/ma
 
 ## Additional browser evidence
 
-The local `preview-workspace` harness ran in the Codex in-app browser on this Linux X11 session (engine/version is not exposed by the interface). The visible result was **PASS (15 themes + formatting + exports + skin + word + pdf)**. [Raw self-test results](marknice-browser-self-test-v0.5.3.json), [screenshot](marknice-browser-self-test-v0.5.3.png), and [download checks](marknice-browser-downloads-v0.5.3.json) are retained. Copy Markdown matched the textarea byte-for-byte; themed HTML contained the heading/table without session/blob/loopback URLs; the downloaded browser DOCX was a valid ZIP with its expected Word/altChunk entries. These checks do not establish Microsoft Word rendering fidelity.
+The local `preview-workspace` harness ran in the Codex in-app browser on this Linux X11 session (engine/version is not exposed by the interface). The visible result was **PASS (15 themes + formatting + exports + skin + word + pdf)**. [Raw self-test results](marknice-browser-self-test-v0.5.3.json), [screenshot](marknice-browser-self-test-v0.5.3.jpg), and [download checks](marknice-browser-downloads-v0.5.3.json) are retained. Copy Markdown matched the textarea byte-for-byte; themed HTML contained the heading/table without session/blob/loopback URLs; the downloaded browser DOCX was a valid ZIP with its expected Word/altChunk entries. These checks do not establish Microsoft Word rendering fidelity.
 
 ## Required manual evidence and release-specific skips
 
@@ -48,7 +48,17 @@ The maintainer explicitly authorized performing available checks and skipping ch
 ## Publication checklist
 
 - [x] Required local checks complete; unavailable manual checks explicitly skipped for this release by the maintainer; authenticated publisher available.
-- [ ] Documentation committed, dedicated `Release Markion v0.5.3` commit created, annotated tag checked and pushed without changing any public tag.
-- [ ] Windows, macOS arm64/x64 and Linux builds, extracted-resource verification, no-GPU AppImage smoke, updater signing, GitHub publication and OSS mirror all succeed.
-- [ ] Seven packages, both updater signatures and `update.json` attached; GitHub and OSS manifests, URLs, signature content, public objects and versions verified.
-- [ ] Curated English-first/Chinese notes, title/tag, stable non-draft metadata, repository synchronization and clean worktree verified.
+- [x] Documentation committed, dedicated `Release Markion v0.5.3` commit created, annotated tag checked and pushed without changing any public tag.
+- [x] Windows, macOS arm64/x64 and Linux builds, extracted-resource verification, no-GPU AppImage smoke, updater signing, GitHub publication and OSS mirror all succeed.
+- [x] Seven packages, both updater signatures and `update.json` attached; GitHub and OSS manifests, URLs, signature content, public objects and versions verified.
+- [x] Curated English-first/Chinese notes, title/tag, stable non-draft metadata, repository synchronization and clean worktree verified.
+
+## Final publication evidence
+
+- [Markion v0.5.3](https://github.com/willmove/markion/releases/tag/v0.5.3) is a published stable, non-draft Release with curated English-first/Chinese notes.
+- [Tag workflow](https://github.com/willmove/markion/actions/runs/43422678230): all four native builds, AppImage smoke, authenticated updater metadata, GitHub publication and OSS mirroring passed.
+- [Windows repository quality](https://github.com/willmove/markion/actions/runs/43422677821): formatting, Clippy, complete workspace tests, source bundle and strict OpenSpec validation passed.
+- [Machine-readable asset verification](release-v0.5.3-assets.json): all seven packages and both signatures attached; GitHub and OSS manifests match apart from channel URLs; all 13 public mirror objects respond successfully; package sizes, versions and signatures match; all seven mirror payloads were downloaded and their SHA-256 values match both GitHub digests and mirror checksums.
+- The first regional-endpoint mirror worker did not complete its first installer after more than 20 minutes, and a fresh worker also stalled. The existing OSS acceleration endpoint was verified reachable and OSS_ENDPOINT switched to it; only the mirror job was retried. The final attempt reused successful build/sign/publish results and preserved the public tag.
+- Both macOS jobs verified ad-hoc signing with `notarize: false`. The release notes retain the Gatekeeper instructions.
+- The immutable annotated tag targets `4f2f63ac8ba4d49044e68f24c62878666bedaab2`. Any subsequent documentation-only commit records completed verification without changing the tagged application sources or public tag.

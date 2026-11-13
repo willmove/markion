@@ -1,0 +1,198 @@
+{
+  "version": "0.5.3",
+  "tag": "v0.5.3",
+  "release_url": "https://github.com/willmove/markion/releases/tag/v0.5.3",
+  "published_at": "2026-11-13T12:23:34Z",
+  "release_commit": "4f2f63ac8ba4d49044e68f24c62878666bedaab2",
+  "annotated_tag_object": "fe7263acb4e6d23e3a1d44344ac5c6c5bac10db8",
+  "workflow_url": "https://github.com/willmove/markion/actions/runs/43422678230",
+  "workflow_attempt": 3,
+  "mirror_retry": "Two regional-endpoint workers did not complete the first public installer. The existing OSS acceleration endpoint was verified reachable and OSS_ENDPOINT was switched to it; only the mirror job was retried, preserving all package bytes and the public tag.",
+  "jobs": [
+    {
+      "name": "Build & package (ubuntu-22.04)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Mirror installers to Aliyun OSS",
+      "conclusion": "success"
+    },
+    {
+      "name": "Build & package (macos-latest)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Sign updater installers and build metadata",
+      "conclusion": "success"
+    },
+    {
+      "name": "Publish GitHub Release",
+      "conclusion": "success"
+    },
+    {
+      "name": "Build & package (windows-latest)",
+      "conclusion": "success"
+    },
+    {
+      "name": "AppImage smoke test (no GPU, no Vulkan driver)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Build & package (macos-latest)",
+      "conclusion": "success"
+    }
+  ],
+  "github_assets": [
+    {
+      "name": "markion_0.5.3_x64-setup.exe",
+      "bytes": 23005467,
+      "digest": "sha256:ae1c1154f8abf51c507f176b43646234ea17f5735c7d8da9a5a11522f771b274"
+    },
+    {
+      "name": "markion_0.5.3_x64-portable.zip",
+      "bytes": 31775260,
+      "digest": "sha256:b6897ce5245e071154a7f0c885238a125dc1aa540c587890559a710273ffcf80"
+    },
+    {
+      "name": "Markion_0.5.3_aarch64.dmg",
+      "bytes": 28224419,
+      "digest": "sha256:0cf21c567832ced6a0324ebb6530324585e8a26bf7c5d05001a9e5032b30a50a"
+    },
+    {
+      "name": "Markion_0.5.3_x64.dmg",
+      "bytes": 29969735,
+      "digest": "sha256:e6eddab4e8f2a813d18f966f83c13b1c843d28fd38f472f46148b95d766aa39c"
+    },
+    {
+      "name": "markion_0.5.3_amd64.deb",
+      "bytes": 33923490,
+      "digest": "sha256:954cb71e7176a20c1d2e51eb3c1078009d30b2e9fd795d5274121d8fbb0ad89d"
+    },
+    {
+      "name": "markion_0.5.3_x86_64.rpm",
+      "bytes": 33759293,
+      "digest": "sha256:c478b106199ad4c086c2ed0849df5405b0014459153100562d985f897d45d17c"
+    },
+    {
+      "name": "markion_0.5.3_x86_64.AppImage",
+      "bytes": 54789312,
+      "digest": "sha256:78d6ac7f6c043f922a321e4b7dc080e1043ee3981a954bb0ecf7b08eca862933"
+    },
+    {
+      "name": "markion_0.5.3_x64-setup.exe.sig",
+      "bytes": 428,
+      "digest": "sha256:3493c38d7f4d19ba3220c0f2448947267cc37e90f11a18e7005658e0d1a9fd09"
+    },
+    {
+      "name": "markion_0.5.3_x86_64.AppImage.sig",
+      "bytes": 432,
+      "digest": "sha256:e1adfa8f7123c39741d39e893adb248c45b87c257dfcc7994747af739d0c056b"
+    },
+    {
+      "name": "update.json",
+      "bytes": 1347,
+      "digest": "sha256:67e99ef27ff2601299b24425cba7d02976c6d3b1affcfaea56a6050271e4e1a9"
+    }
+  ],
+  "mirror_base": "https://marknice.oss-cn-heyuan.aliyuncs.com/markion-releases/latest",
+  "mirror_objects": [
+    {
+      "name": "markion_0.5.3_x64-setup.exe",
+      "status": 200,
+      "bytes": 23005467
+    },
+    {
+      "name": "markion_0.5.3_x64-portable.zip",
+      "status": 200,
+      "bytes": 31775260
+    },
+    {
+      "name": "Markion_0.5.3_aarch64.dmg",
+      "status": 200,
+      "bytes": 28224419
+    },
+    {
+      "name": "Markion_0.5.3_x64.dmg",
+      "status": 200,
+      "bytes": 29969735
+    },
+    {
+      "name": "markion_0.5.3_amd64.deb",
+      "status": 200,
+      "bytes": 33923490
+    },
+    {
+      "name": "markion_0.5.3_x86_64.rpm",
+      "status": 200,
+      "bytes": 33759293
+    },
+    {
+      "name": "markion_0.5.3_x86_64.AppImage",
+      "status": 200,
+      "bytes": 54789312
+    },
+    {
+      "name": "markion_0.5.3_x64-setup.exe.sig",
+      "status": 200,
+      "bytes": 428
+    },
+    {
+      "name": "markion_0.5.3_x86_64.AppImage.sig",
+      "status": 200,
+      "bytes": 432
+    },
+    {
+      "name": "update.json",
+      "status": 200,
+      "bytes": 1361
+    },
+    {
+      "name": "packager.toml",
+      "status": 200,
+      "bytes": 8402
+    },
+    {
+      "name": "manifest.json",
+      "status": 200,
+      "bytes": 648
+    },
+    {
+      "name": "sha256sums.txt",
+      "status": 200,
+      "bytes": 648
+    }
+  ],
+  "package_checksums": {
+    "markion_0.5.3_x64-setup.exe": "GitHub SHA-256 equals OSS checksum",
+    "markion_0.5.3_x64-portable.zip": "GitHub SHA-256 equals OSS checksum",
+    "Markion_0.5.3_aarch64.dmg": "GitHub SHA-256 equals OSS checksum",
+    "Markion_0.5.3_x64.dmg": "GitHub SHA-256 equals OSS checksum",
+    "markion_0.5.3_amd64.deb": "GitHub SHA-256 equals OSS checksum",
+    "markion_0.5.3_x86_64.rpm": "GitHub SHA-256 equals OSS checksum",
+    "markion_0.5.3_x86_64.AppImage": "GitHub SHA-256 equals OSS checksum"
+  },
+  "mirror_payload_sha256": {
+    "markion_0.5.3_x64-setup.exe": "ae1c1154f8abf51c507f176b43646234ea17f5735c7d8da9a5a11522f771b274",
+    "markion_0.5.3_x64-portable.zip": "b6897ce5245e071154a7f0c885238a125dc1aa540c587890559a710273ffcf80",
+    "Markion_0.5.3_aarch64.dmg": "0cf21c567832ced6a0324ebb6530324585e8a26bf7c5d05001a9e5032b30a50a",
+    "Markion_0.5.3_x64.dmg": "e6eddab4e8f2a813d18f966f83c13b1c843d28fd38f472f46148b95d766aa39c",
+    "markion_0.5.3_amd64.deb": "954cb71e7176a20c1d2e51eb3c1078009d30b2e9fd795d5274121d8fbb0ad89d",
+    "markion_0.5.3_x86_64.rpm": "c478b106199ad4c086c2ed0849df5405b0014459153100562d985f897d45d17c",
+    "markion_0.5.3_x86_64.AppImage": "78d6ac7f6c043f922a321e4b7dc080e1043ee3981a954bb0ecf7b08eca862933"
+  },
+  "channel_manifests_match_except_urls": true,
+  "signatures_match_all_channels": true,
+  "manual_checks": "Unavailable native/default-browser/WeChat/Word/updater-installation environments skipped with maintainer authorization; not claimed as passed.",
+  "quality_workflow_url": "https://github.com/willmove/markion/actions/runs/43422677821",
+  "quality_workflow_conclusion": "success",
+  "macos_signing": {
+    "aarch64": "adhoc; notarize: false",
+    "x86_64": "adhoc; notarize: false"
+  },
+  "verified_at_utc": "2026-11-13T13:00:56.545310+00:00",
+  "release_metadata": {
+    "name": "Markion v0.5.3",
+    "draft": false,
+    "prerelease": false
+  }
+}
