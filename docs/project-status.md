@@ -6,7 +6,7 @@ Updated / 更新：2026-11-13。This snapshot describes repository implementatio
 
 - Latest verified public stable tag / 当前公开稳定版本：[`v0.5.2`](https://github.com/willmove/markion/releases/tag/v0.5.2).
 - Next patch under preparation / 正在准备的补丁版本：`v0.5.3`, comparing / 对比 [`v0.5.2...main`](https://github.com/willmove/markion/compare/v0.5.2...main).
-- Current preflight: **2136 passed / 5 ignored / 0 failed**, bundle verification and build/lint/spec checks pass; publication still awaits credentials and manual evidence. 本次全量回归已通过，发布仍待认证环境与人工记录；详见 [v0.5.3 preflight](verification/release-v0.5.3-preflight.md)。
+- Current preflight: **2136 passed / 5 ignored / 0 failed**, bundle verification and build/lint/spec checks pass; the maintainer has supplied publishing login and authorized release-specific skips for unavailable manual environments. 本次全量回归已通过，发布认证已配置；缺少环境的人工项按维护者授权记录为跳过；详见 [v0.5.3 preflight](verification/release-v0.5.3-preflight.md)。
 - Follow the [release process](release-process.md). A prepared version or successful build alone does not establish publication: native packages, updater signatures and manifests, the AppImage smoke test, OSS mirror, release notes, and required manual evidence must be verified. 准备版本号或构建成功不等于发布完成；安装包、签名、元数据、冒烟测试、镜像与人工验证均须核实。
 
 ## Implemented progress / 已实现进展

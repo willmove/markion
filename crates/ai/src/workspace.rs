@@ -515,7 +515,7 @@ mod tests {
         grant.validate().unwrap();
         assert_eq!(
             grant.resolve("n.md", true, true).unwrap(),
-            scope.join("n.md")
+            grant.scope.join("n.md")
         );
         fs::remove_dir(scope.join("child")).unwrap();
         fs::remove_dir(dir.path().join("sibling")).unwrap();

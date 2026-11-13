@@ -1,0 +1,110 @@
+{
+  "results": [
+    {
+      "digest": "8674f7cb7927739999b2e1ffb2dc3b2fbcf5a06d08589adcae8421d0200ccbb8",
+      "expected": "8674f7cb7927739999b2e1ffb2dc3b2fbcf5a06d08589adcae8421d0200ccbb8",
+      "missing": [],
+      "pass": true,
+      "theme": "claude"
+    },
+    {
+      "digest": "4d440f65f36d347709bf969c93f9b41bc96df3f6d6ccee7c7a7bee4600be8603",
+      "expected": "4d440f65f36d347709bf969c93f9b41bc96df3f6d6ccee7c7a7bee4600be8603",
+      "missing": [],
+      "pass": true,
+      "theme": "minimal"
+    },
+    {
+      "digest": "6a63df2e9d473d5e788a6e87227280d192f04b2e020fb65915529cbd45100fa9",
+      "expected": "6a63df2e9d473d5e788a6e87227280d192f04b2e020fb65915529cbd45100fa9",
+      "missing": [],
+      "pass": true,
+      "theme": "night"
+    },
+    {
+      "digest": "20b5f18385c885f64d86ae119a25f71fe9533b3a76c03fd4bbe2f31bd5bdf977",
+      "expected": "20b5f18385c885f64d86ae119a25f71fe9533b3a76c03fd4bbe2f31bd5bdf977",
+      "missing": [],
+      "pass": true,
+      "theme": "simple"
+    },
+    {
+      "digest": "b8af0581c2e10eb92e6761138d16b8b8841b8f73b5ff683db33b8d0f276ff6f5",
+      "expected": "b8af0581c2e10eb92e6761138d16b8b8841b8f73b5ff683db33b8d0f276ff6f5",
+      "missing": [],
+      "pass": true,
+      "theme": "elegant"
+    },
+    {
+      "digest": "bcc7bc20a3624679bf5f34ea1458a55679498726ef000c8494487642d7d6d1b9",
+      "expected": "bcc7bc20a3624679bf5f34ea1458a55679498726ef000c8494487642d7d6d1b9",
+      "missing": [],
+      "pass": true,
+      "theme": "vivid"
+    },
+    {
+      "digest": "f0b4ac7fdd88db1cc3f6b0d675c4dc1d8440c737cd56ef4d04996b1fecc674f0",
+      "expected": "f0b4ac7fdd88db1cc3f6b0d675c4dc1d8440c737cd56ef4d04996b1fecc674f0",
+      "missing": [],
+      "pass": true,
+      "theme": "amber"
+    },
+    {
+      "digest": "0aa8645482d441e9dcd6189ead3b72b0de84ab69eb6a9aa155ab975f38ff6d92",
+      "expected": "0aa8645482d441e9dcd6189ead3b72b0de84ab69eb6a9aa155ab975f38ff6d92",
+      "missing": [],
+      "pass": true,
+      "theme": "green"
+    },
+    {
+      "digest": "96bdda3bb6e52d48ab217a7d1074fe913034de91f2a538c48a89738bbd2557ee",
+      "expected": "96bdda3bb6e52d48ab217a7d1074fe913034de91f2a538c48a89738bbd2557ee",
+      "missing": [],
+      "pass": true,
+      "theme": "health"
+    },
+    {
+      "digest": "24fdc66a9abffe8eb61b13d9f8107a46971ef7249d54ed794480bbc8cd03643c",
+      "expected": "24fdc66a9abffe8eb61b13d9f8107a46971ef7249d54ed794480bbc8cd03643c",
+      "missing": [],
+      "pass": true,
+      "theme": "magazine"
+    },
+    {
+      "digest": "af2cb800477b07d6350057a47c71b4ccc4fa0780b9d091d4d6a03b766cf4eef9",
+      "expected": "af2cb800477b07d6350057a47c71b4ccc4fa0780b9d091d4d6a03b766cf4eef9",
+      "missing": [],
+      "pass": true,
+      "theme": "retro"
+    },
+    {
+      "digest": "e939818df48ed00205e6544f3cefe7edea523d6eacc366bc063c886a2208a873",
+      "expected": "e939818df48ed00205e6544f3cefe7edea523d6eacc366bc063c886a2208a873",
+      "missing": [],
+      "pass": true,
+      "theme": "ocean"
+    },
+    {
+      "digest": "848337e6f9c990b28a43a3ca6769ca120d03890adf8717de740d8f0e70d443d8",
+      "expected": "848337e6f9c990b28a43a3ca6769ca120d03890adf8717de740d8f0e70d443d8",
+      "missing": [],
+      "pass": true,
+      "theme": "tech"
+    },
+    {
+      "digest": "f7e84e57d8698892115d688251fdebcc07b36e4390267938ef1e876e55e0385b",
+      "expected": "f7e84e57d8698892115d688251fdebcc07b36e4390267938ef1e876e55e0385b",
+      "missing": [],
+      "pass": true,
+      "theme": "newspaper"
+    },
+    {
+      "digest": "8b52423b021505cf7fc230a44ea8069798ae8be5798d085161cf055e5fe4217d",
+      "expected": "8b52423b021505cf7fc230a44ea8069798ae8be5798d085161cf055e5fe4217d",
+      "missing": [],
+      "pass": true,
+      "theme": "warmred"
+    }
+  ],
+  "status": "PASS (15 themes + formatting + exports + skin + word + pdf)"
+}

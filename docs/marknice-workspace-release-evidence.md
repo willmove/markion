@@ -25,3 +25,7 @@ For each applicable browser, also record clipboard permission denial, cancelled 
 Source and extracted-package verification checks the pinned manifest, local dependencies and digests through `verify-bundle` and the release workflow. Record the actual tag workflow and package checks in the version's release preflight report; do not fill the manual rows from CI success.
 
 The [content-export checklist](../openspec/changes/add-marknice-workspace-content-exports/tasks.md) still has pending manual/browser/viewer tasks. Under the canonical release process, pending required rows block a release-readiness claim.
+
+## v0.5.3 follow-up
+
+The [release preflight](verification/release-v0.5.3-preflight.md) records the maintainer’s release-specific authorization to skip unavailable manual environments. The Codex in-app browser passed the 15-theme compatibility self-test and formatting/export/locale/skin/Word/print checks; actual Markdown copy and HTML/DOCX downloads also passed. See [raw results](verification/marknice-browser-self-test-v0.5.3.json), [screenshot](verification/marknice-browser-self-test-v0.5.3.png) and [download checks](verification/marknice-browser-downloads-v0.5.3.json). The interface did not expose an engine/version, and this is not the default-browser or WeChat/Word-client matrix. The remaining rows above stay unverified and are skipped for v0.5.3, without being marked as passed.

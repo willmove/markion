@@ -1,0 +1,24 @@
+{
+  "html": {
+    "bytes": 57130,
+    "sha256": "03b78f421b4629c189b6df4e4c10bf517636a59d8b096f01485bcecff2dbf8f3",
+    "heading_present": true,
+    "table_present": true,
+    "no_session_or_local_url": true
+  },
+  "docx": {
+    "bytes": 61308,
+    "sha256": "1103b9389d13df8772d945f940e5964c6d68f4db2d1a57a0289265f01b484fd5",
+    "zip_valid": true,
+    "entries": [
+      "[Content_Types].xml",
+      "_rels/",
+      "_rels/.rels",
+      "word/",
+      "word/document.xml",
+      "word/afchunk.mht",
+      "word/_rels/",
+      "word/_rels/document.xml.rels"
+    ]
+  }
+}
