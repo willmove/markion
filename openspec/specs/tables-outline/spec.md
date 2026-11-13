@@ -79,6 +79,11 @@ The outline SHALL render compact rows with no extra inter-row margin and no more
 - **AND** the expanded heading rows fit in the visible sidebar height, or the active tab is an image
 - **THEN** no vertical scrollbar thumb is shown for the outline
 
+#### Scenario: Incremental heading edits match fresh derivation
+- **WHEN** headings are renamed, inserted, or deleted across cached semantic-region boundaries
+- **THEN** the outline matches fresh full derivation in document order without stale or duplicated cache entries
+- **AND** legitimately repeated authored headings remain separate outline entries
+
 ### Requirement: Outline heading anchors match in-document hash links
 Each outline heading SHALL expose a stable `anchor` string that in-document `#fragment` links resolve against. The id SHALL be the authored heading attribute `{#id}` when pulldown-cmark reports one; otherwise a Unicode-preserving slug of the visible title. Empty titles SHALL use `section`. Duplicate ids in document order SHALL uniquify with a numeric suffix (`hello`, `hello-1`). Changing folding, hovering, or clicking the outline SHALL still not mutate Markdown.
 

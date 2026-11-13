@@ -1,5 +1,7 @@
 # Visual Edit P1：编辑基线与就近交互报告
 
+> 历史阶段报告。P1 后已完成结构选区与事务、多块/子树操作、区域局部派生、表格矩阵及代码折叠；见 [P0–P3 最终结果](fluent-editing-implementation.md)、[Windows 真实输入验证](verification/windows-native-input-2026-11-11.md)和[项目进展](project-status.md)。下文的阶段测试数及操作范围保留为历史证据。
+
 ## 范围
 
 P1 由两个 OpenSpec change 组成：
@@ -170,8 +172,8 @@ cargo run --release
 
 ## 边界与后续工作
 
-- 字符/块/单元格的完整 SelectionState、EditTransaction、多块/子树操作仍属于 P2。
-- VisualBlock 区域级派生和 ChangeSet 副作用调度仍属于 P2 性能工作；P0 只优化了已证明的身份协调热点。
-- 合并表格单元格、富文本多块单元格、图片裁剪、复杂容器拆分和整棵子树移动不在 P1 范围内。
+- P1 当时未包含的 SelectionState、EditTransaction 与多块/子树操作已在 P2/P3 完成。
+- P1 当时未包含的 VisualBlock 区域级派生和 ChangeSet 副作用调度已在 P2 完成；P0 的身份协调优化仍作为前序基础。
+- 引用容器拆分与整棵列表子树移动已在 P3 完成；GFM 合并格、任意多块单元格与图片像素裁剪仍不受支持。
 - 本阶段只隐藏块 grip，没有隐藏系统鼠标指针，也没有重写 overlay 文本字段为多行富文本编辑器。
 - 人工 GPUI 输入到屏幕结果与模型基准是不同证据，不能用其中一个替代另一个。

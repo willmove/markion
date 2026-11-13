@@ -1,5 +1,7 @@
 # Visual Edit P0：诊断与身份协调优化报告
 
+> 历史阶段报告。P0 的测量与范围保留如下；原列为后续工作的区域局部派生、共享载荷和 ChangeSet 调度已在 P2 完成。当前结果见 [P0–P3 实施与验证](fluent-editing-implementation.md)、[Windows 真实输入与帧调度验证](verification/windows-native-input-2026-11-11.md)及[项目进展](project-status.md)。本报告的耗时不能代替后续实机结果。
+
 ## 范围
 
 P0 对应 OpenSpec change `profile-visual-edit-hotspots`，目标是找出大文档 Visual Edit 局部输入后的主要成本，并在不改变文档模型、VisualBlock 内容或身份语义的前提下优化明确热点。
@@ -87,6 +89,8 @@ BENCH_SIZES_KB=100,300,600 BENCH_STROKES=20 BENCH_VISUAL_ONLY=1 \
 完整 workspace 测试、格式化和 OpenSpec 验证结果见下文质量门禁记录。
 
 ## 剩余问题
+
+以下是 **P0 结束时** 的历史问题清单；其中区域局部派生及副作用调度已在上述 P2 报告中收尾。`String`、后缀绝对偏移重定位和保守完整回退仍有成本。
 
 P0 已消除当前最大热点，但没有把整个 Visual Edit 输入路径变成恒定或局部工作量：
 

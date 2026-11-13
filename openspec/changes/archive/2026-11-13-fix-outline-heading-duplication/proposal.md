@@ -18,7 +18,7 @@ None.
 
 ### Modified Capabilities
 
-None. This restores existing `tables-outline` navigation and `markdown-editing` incremental/full equivalence requirements; no requirement changes.
+`tables-outline`: make the existing outline-update contract explicit for incremental heading edits, including repeated authored headings and cached-region boundaries.
 
 ## Impact
 

@@ -2,7 +2,7 @@ schema: spec-driven
 
 # Project context (shown to AI when creating artifacts)
 context: |
-  Markion — a Rust + GPUI Markdown editor prototype.
+  Markion — a native Rust + GPUI Markdown editor.
   Tech stack: Rust (stable), GPUI (Zed's GPU-accelerated UI crate), pulldown-cmark (CommonMark + GFM).
   Root-package Cargo workspace: the GPUI application crate lives at the repository root, while
   GPUI-free library members live under crates/*. Entry points: src/main.rs (bootstrap/window/menus),

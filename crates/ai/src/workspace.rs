@@ -14,6 +14,13 @@ pub struct FileIdentity {
     pub file: u64,
     pub links: u64,
 }
+impl FileIdentity {
+    /// Directory link counts change with child folders; only the object identity
+    /// is stable. Regular-file baselines must continue using full equality.
+    pub fn same_directory(&self, other: &Self) -> bool {
+        self.volume == other.volume && self.file == other.file
+    }
+}
 #[cfg(unix)]
 pub fn identity(path: &Path) -> Result<FileIdentity, AiError> {
     use std::os::unix::fs::MetadataExt;
@@ -167,8 +174,8 @@ impl ReadGrant {
     pub fn validate(&self) -> Result<(), AiError> {
         ordinary(&self.root)?;
         ordinary(&self.scope)?;
-        if identity(&self.root)? != self.root_identity
-            || identity(&self.scope)? != self.scope_identity
+        if !identity(&self.root)?.same_directory(&self.root_identity)
+            || !identity(&self.scope)?.same_directory(&self.scope_identity)
         {
             return Err(AiError::Stale);
         }
@@ -495,6 +502,31 @@ mod tests {
             ),
             Err(AiError::Limit)
         ));
+    }
+    #[test]
+    fn child_directories_do_not_invalidate_directory_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let scope = dir.path().join("scope");
+        fs::create_dir(&scope).unwrap();
+        fs::write(scope.join("n.md"), "note").unwrap();
+        let grant = ReadGrant::new(dir.path(), &scope).unwrap();
+        fs::create_dir(dir.path().join("sibling")).unwrap();
+        fs::create_dir(scope.join("child")).unwrap();
+        grant.validate().unwrap();
+        assert_eq!(
+            grant.resolve("n.md", true, true).unwrap(),
+            scope.join("n.md")
+        );
+        fs::remove_dir(scope.join("child")).unwrap();
+        fs::remove_dir(dir.path().join("sibling")).unwrap();
+        grant.validate().unwrap();
+
+        let mut recorded = grant.scope_identity.clone();
+        recorded.links += 1;
+        assert_ne!(grant.scope_identity, recorded);
+        assert!(grant.scope_identity.same_directory(&recorded));
+        recorded.file += 1;
+        assert!(!grant.scope_identity.same_directory(&recorded));
     }
     #[test]
     fn replaced_scope_and_sibling_prefix_fail() {

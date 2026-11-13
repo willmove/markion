@@ -296,16 +296,19 @@ fn spike_svg_with_text_element() {
     let out_dir = repo_root().join("target").join("tmp");
     fs::create_dir_all(&out_dir).expect("create target/tmp");
 
-    let text_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="40"><text x="10" y="28" font-family="Georgia" font-size="20">Hi 世界</text></svg>"#;
+    let text_svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="40"><text x="10" y="28" font-family="Libertinus Serif" font-size="20">Hi 世界</text></svg>"#;
 
     // Variant b1: empty default fontdb → the text node resolves no font.
     let tree_no_fonts = usvg::Tree::from_str(text_svg, &usvg::Options::default())
         .expect("parse SVG with text, empty fontdb");
     let spans_no_fonts = count_text_spans(&tree_no_fonts);
 
-    // Variant b2: fontdb with system fonts → text is laid out and drawable.
+    // Variant b2: an explicitly populated fontdb lays out drawable text,
+    // including on Linux hosts without the proprietary Georgia family.
     let mut fontdb = usvg::fontdb::Database::new();
-    fontdb.load_system_fonts();
+    for data in typst_assets::fonts() {
+        fontdb.load_font_data(data.to_vec());
+    }
     let options = usvg::Options {
         fontdb: Arc::new(fontdb),
         ..Default::default()
@@ -313,7 +316,7 @@ fn spike_svg_with_text_element() {
     let tree = usvg::Tree::from_str(text_svg, &options).expect("parse SVG with text");
     let spans_with_fonts = count_text_spans(&tree);
     eprintln!(
-        "[spike] text spans laid out: empty fontdb = {spans_no_fonts}, system fontdb = {spans_with_fonts}"
+        "[spike] text spans laid out: empty fontdb = {spans_no_fonts}, bundled fontdb = {spans_with_fonts}"
     );
     assert!(
         spans_with_fonts > spans_no_fonts,

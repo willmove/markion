@@ -13569,8 +13569,7 @@ fn csd_window_controls_follow_decorations_and_close_guard() {
         .expect("csd gate end")
         .0;
     assert!(
-        gate.contains("window.window_decorations()")
-            && gate.contains("gpui::Decorations::Client"),
+        gate.contains("window.window_decorations()") && gate.contains("gpui::Decorations::Client"),
         "the menu-bar cluster must be gated on Decorations::Client, not on platform cfgs"
     );
     assert!(root_view.contains("when_some(csd_controls"));

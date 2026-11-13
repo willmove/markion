@@ -50,7 +50,8 @@ fn err(_: impl std::fmt::Debug) -> AiError {
 impl Journal {
     pub fn grant(&self) -> Result<ReadGrant, AiError> {
         let grant = ReadGrant::new(&self.root, &self.scope)?;
-        if grant.root_identity != self.root_identity || grant.scope_identity != self.scope_identity
+        if !grant.root_identity.same_directory(&self.root_identity)
+            || !grant.scope_identity.same_directory(&self.scope_identity)
         {
             return Err(AiError::Stale);
         }
@@ -645,6 +646,8 @@ mod tests {
         for i in 0..j.records.len() {
             j.execute_one(i).unwrap();
         }
+        // Persisted version-1 identities retain the pre-folder link counts.
+        let mut j = inventory(recovery.path()).remove(0).unwrap();
         assert_eq!(
             fs::read_to_string(work.path().join("n.md")).unwrap(),
             "after"

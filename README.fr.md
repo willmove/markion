@@ -12,14 +12,18 @@
 
 Markion est un éditeur Markdown de bureau natif, construit avec Rust et GPUI. Il réunit dans une application légère une édition de source réactive, un mode d'édition visuelle adossé au source, un aperçu en direct, des outils d'espace de travail et une exportation multiformat. Le Markdown reste le format canonique du document — ni Electron, ni Tauri, ni WebView.
 
+## Avancement du projet (2026-11-13)
+
+L’édition visuelle propose la sélection et le déplacement de plusieurs blocs et sous-arbres de liste, les sélections rectangulaires de tableaux, la copie TSV/HTML, le collage de matrices, l’ajout d’une ligne par Tab dans la dernière cellule et le repli du code. Les modifications locales réutilisent les régions inchangées ; les correctifs de rendu après saisie et d’annulation IME Windows disposent de preuves de saisie réelle. JSON/YAML/TOML s’ouvrent dans un éditeur source ; Wayland dispose de boutons de fenêtre, de coins arrondis et de zones de redimensionnement. L’arborescence permet de déplacer fichiers et dossiers par glisser-déposer et de copier les chemins absolus ou relatifs. [Implémentation, preuves et vérifications restantes](docs/project-status.md).
+
 ## Installation
 
 Téléchargez la dernière version depuis [GitHub Releases](https://github.com/willmove/markion/releases).
 
 | Plateforme | Paquets de publication | Cible |
 |---|---|---|
-| Windows | Installeur NSIS `.exe` | x86_64 |
-| Linux | `.deb` et AppImage | x86_64 |
+| Windows | Installeur NSIS `.exe` et archive portable `.zip` | x86_64 |
+| Linux | `.deb`, `.rpm` et AppImage | x86_64 |
 | macOS | `.app` et `.dmg` | Apple Silicon (arm64) et Intel (x64), macOS 11+ |
 
 Les publications Windows ne sont pas signées ; SmartScreen peut exiger **Informations complémentaires → Exécuter quand même**. Les publications macOS sont signées avec un Developer ID Apple et notarisées dès que les identifiants Apple du mainteneur sont configurés dans la CI ; sinon elles ne portent qu'une signature ad hoc gratuite, que macOS bloque après un téléchargement par navigateur (« endommagé et ne peut pas être ouvert » ; voir le README principal pour la marche à suivre). **Aide → Rechercher des mises à jour…** propose une invite de mise à jour exploitable sur toutes les plateformes : les installations NSIS Windows x86_64 étiquetées et les lancements Linux via AppImage bénéficient d'un téléchargement-installation en un clic vérifié cryptographiquement (Minisign via cargo-packager) — sous Linux, l'AppImage en cours d'exécution est remplacée sur place et Markion redémarre automatiquement — qui refuse de démarrer tant qu'un document comporte des modifications non enregistrées, tandis que macOS et les installations Linux `.deb`/`.rpm` ouvrent le fichier de publication correspondant dans le navigateur système. Les Mac Apple Silicon et Intel disposent chacun d'un DMG natif ; un binaire universel n'est pas fourni actuellement.
@@ -29,7 +33,7 @@ Les publications Windows ne sont pas signées ; SmartScreen peut exiger **Inform
 Markion propose quatre modes d'affichage. L'aperçu fractionné est le mode par défaut.
 
 - **Édition** — un éditeur de code source Markdown brut et concentré.
-- **Édition visuelle** — une surface WYSIWYG d'abord, adossée au source. Le texte reste rendu avec révélation progressive de la syntaxe ; les contenus de blocs de code ordinaires, les formules mathématiques en bloc, les diagrammes enregistrés (Mermaid), les champs d'images en ligne et les cellules de tableaux GFM disposent d'éditeurs directs exacts. Les constructions dont le rendu WYSIWYG n'est pas encore implémenté — front matter YAML, code indenté et syntaxe malformée ou ambiguë en octets — conservent une possibilité d'édition exacte adossée au source à titre transitoire, suivie dans la [matrice de couverture WYSIWYG et la feuille de route de l'édition visuelle](docs/visual-editing-quality.md). Une palette de commandes slash et un menu contextuel de bloc compact au clic droit offrent des transformations de bloc exactes (paragraphe, titres, listes, citation, bloc de code, séparateur, tableau), la duplication, le déplacement vers le haut/bas, le réordonnancement par glisser sans risque pour le source et la suppression ; une barre d'outils de formatage contextuelle à la sélection et un éditeur de liens visuel effectuent une mutation exacte du source par action. Les délimiteurs Markdown s'apparient automatiquement par défaut, `:shortcode` ouvre la complétion d'emoji, les cases des listes de tâches se basculent directement, et quitter une ligne de titre, de liste, de tâche ou de citation la ramène immédiatement à sa forme rendue. Il ne s'agit pas d'un modèle de document riche séparé — le Markdown sous-jacent reste toujours la source de vérité.
+- **Édition visuelle** — une surface WYSIWYG d'abord, adossée au source. Le texte reste rendu avec révélation progressive de la syntaxe ; les contenus de blocs de code ordinaires, les formules mathématiques en bloc, les diagrammes enregistrés (Mermaid), les champs d'images en ligne et les cellules de tableaux GFM disposent d'éditeurs directs exacts. Les constructions dont le rendu WYSIWYG n'est pas encore implémenté — images multilignes ou malformées et syntaxe ambiguë en octets — conservent une possibilité d'édition exacte adossée au source à titre transitoire, suivie dans la [matrice de couverture WYSIWYG et la feuille de route de l'édition visuelle](docs/visual-editing-quality.md). Une palette de commandes slash et un menu contextuel de bloc compact au clic droit offrent des transformations de bloc exactes (paragraphe, titres, listes, citation, bloc de code, séparateur, tableau), la duplication, le déplacement vers le haut/bas, le réordonnancement par glisser sans risque pour le source et la suppression ; une barre d'outils de formatage contextuelle à la sélection et un éditeur de liens visuel effectuent une mutation exacte du source par action. Les délimiteurs Markdown s'apparient automatiquement par défaut, `:shortcode` ouvre la complétion d'emoji, les cases des listes de tâches se basculent directement, et quitter une ligne de titre, de liste, de tâche ou de citation la ramène immédiatement à sa forme rendue. Il ne s'agit pas d'un modèle de document riche séparé — le Markdown sous-jacent reste toujours la source de vérité.
 - **Aperçu fractionné** — le source et l'aperçu rendu côte à côte, avec un réglage optionnel de défilement synchronisé fondé sur le source qui maintient les deux panneaux au même emplacement du document plutôt que de défiler selon un pourcentage du document entier.
 - **Lecture** — une vue rendue, non éditable, centrée avec une largeur maximale de 860 px confortable par défaut ; la largeur adaptative de l'aperçu peut utiliser tout le panneau.
 
@@ -116,7 +120,8 @@ delay_secs = 5
 background_check = false
 
 [export]
-pdf_engine = "xelatex"
+backend = "builtin"              # builtin / pandoc
+pdf_engine = "xelatex"            # pandoc
 ```
 
 Configuration, fichiers de récupération, thèmes et journaux de diagnostic à rotation utilisent les répertoires de données Markion appropriés à chaque plateforme. Définissez `RUST_LOG=debug` avant le lancement pour des journaux plus détaillés.
@@ -131,9 +136,9 @@ Markion exporte vers :
 - LaTeX
 - DOCX
 - PDF
-- Instantanés texte PNG et JPEG
+- Instantanés de document PNG et JPEG
 
-PDF et DOCX essaient d'abord le moteur d'exportation Typune/pandoc intégré. Si pandoc ou le moteur PDF choisi est indisponible, Markion se replie sur un rédacteur intégré plus simple et indique le moteur utilisé dans la barre d'état. Installer pandoc et un moteur PDF adapté produit des sorties plus riches. Les sorties PNG/JPEG et PDF intégrées restent volontairement de simples instantanés texte.
+PDF et DOCX utilisent par défaut les exporteurs intégrés, sans convertisseur externe. `backend = "pandoc"` active Pandoc avec repli intégré en cas d’échec ; la barre d’état indique le moteur réel. Le PDF intégré gère pagination, polices incorporées avec repli CJK, titres, code, tableaux, images et formules. PNG/JPEG utilisent le même moteur de mise en page. La fidélité varie selon le format ; les blocs de diagrammes peuvent conserver leur présentation en code.
 
 ## Import Word
 
@@ -152,12 +157,12 @@ L'édition visuelle cartographiée au source réutilise incrémentalement les r�
 
 ## Limites actuelles
 
-- L'édition visuelle est WYSIWYG d'abord tout en conservant le Markdown canonique ; les constructions sans rendu exact à l'octet prouvé exposent le source exact à titre transitoire (suivi sur la [feuille de route de couverture WYSIWYG](docs/visual-editing-quality.md)) plutôt que d'accepter une mutation d'arbre riche devinée, et le réordonnancement de blocs n'est proposé que lorsque des frontières de source non chevauchantes sont prouvables. Les principales lacunes actuelles incluent les entités HTML décodées, le front matter et les blocs de code indentés ; les constructions secondaires malformées ou non prises en charge restent listées dans la matrice.
-- Le rendu à l'écran (aperçus fractionné/lecture et édition visuelle) compose les mathématiques avec le moteur RaTeX embarqué ; l'exportation LaTeX conserve le source natif `$...$`/`$$...$$` pour la chaîne d'outils du lecteur, et le repli d'exportation DOCX intégré (utilisé seulement quand pandoc est indisponible) dégrade encore les formules en une approximation texte lisible au lieu d'embarquer des glyphes composés.
-- Les cellules de tableau de l'édition visuelle prennent en charge l'édition directe plus Gras/Italique/Code en ligne/Lien sur une sélection qui reste dans une seule cellule. Les largeurs de colonnes GFM se déplacent à la souris et persistent comme commentaire HTML (`<!-- markion-cols:… -->`) immédiatement avant le tableau. Les images en ligne acceptent des largeurs entières de 10 à 100 % et se redimensionnent par glisser. Les images par référence/multilignes et les tableaux malformés restent des lacunes connues de la feuille de route de couverture WYSIWYG qui conservent des chemins d'édition adossés au source.
+- Les lacunes WYSIWYG restantes concernent les images multilignes ou malformées et les plages source dont l’appartenance exacte ne peut être prouvée. Le front matter YAML, le code indenté et les entités HTML démontrées disposent déjà de parcours d’édition et de rendu. Voir la [matrice de couverture](docs/visual-editing-quality.md).
+- L’affichage et le PDF intégré composent les formules hors ligne avec RaTeX. La sortie LaTeX conserve les sources ; le DOCX intégré convertit les formules prises en charge en équations Word et conserve un source lisible pour les autres.
+- Les cellules de tableau de l'édition visuelle prennent en charge l'édition directe plus Gras/Italique/Code en ligne/Lien sur une sélection qui reste dans une seule cellule. Les largeurs de colonnes GFM se déplacent à la souris et persistent comme commentaire HTML (`<!-- markion-cols:… -->`) immédiatement avant le tableau. Les images en ligne acceptent des largeurs entières de 10 à 100 % et se redimensionnent par glisser. Les images multilignes ou malformées et les tableaux non analysables restent des lacunes connues de la feuille de route de couverture WYSIWYG qui conservent des chemins d'édition adossés au source.
 - Les mises à jour en un clic installent la distribution NSIS Windows et remplacent sur place l'AppImage Linux en cours d'exécution après vérification Minisign (relance automatique après le remplacement) ; le remplacement du bundle macOS et l'auto-remplacement des `.deb`/`.rpm` Linux restent des travaux futurs, et l'authentification des mises à jour n'est ni Windows Authenticode ni la notarisation Apple.
-- Le déplacement par glisser-déposer dans l'arborescence de fichiers et une UI complète d'installation de thèmes personnalisés ne sont pas implémentés.
-- L'exportation d'images est un instantané texte basique, et les très gros documents n'utilisent pas encore de rope ni une analyse entièrement incrémentale dans tous les sous-systèmes dérivés.
+- Une interface complète d’installation de thèmes personnalisés n’est pas encore implémentée.
+- L’export applique une mise en page propre au format plutôt qu’une capture de l’éditeur ; les très grands documents n’utilisent pas encore de rope ni d’analyse totalement incrémentale dans tous les sous-systèmes.
 
 ## Développement
 

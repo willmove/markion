@@ -12,14 +12,18 @@
 
 Markion ist ein nativer Desktop-Markdown-Editor, gebaut mit Rust und GPUI. Er vereint reaktionsschnelle Quelltextbearbeitung, einen quellgestützten visuellen Bearbeitungsmodus, Live-Vorschau, Arbeitsbereichswerkzeuge und Mehrformat-Export in einer leichtgewichtigen Anwendung. Markdown bleibt das kanonische Dokumentformat — kein Electron, Tauri oder WebView.
 
+## Projektfortschritt (2026-11-13)
+
+Visual Edit unterstützt Auswahl und Verschieben mehrerer Blöcke und ganzer Listenunterbäume, rechteckige Tabellenauswahl, TSV/HTML-Kopieren, Matrixeinfügen, eine neue Zeile mit Tab in der letzten Zelle und Codefaltung. Lokale Änderungen verwenden unveränderte Regionen weiter. Für Windows-Eingabeframes und IME-Undo liegen echte Eingabenachweise vor. JSON/YAML/TOML öffnen sich im Quelltexteditor; Wayland bietet Fenstertasten, abgerundete Ecken und Größenänderungsränder. Der Dateibaum unterstützt das Verschieben von Dateien und Ordnern per Ziehen sowie das Kopieren absoluter und relativer Pfade. [Implementierung, Nachweise und offene Prüfungen](docs/project-status.md).
+
 ## Installation
 
 Lade den aktuellen Build von [GitHub Releases](https://github.com/willmove/markion/releases) herunter.
 
 | Plattform | Release-Pakete | Ziel |
 |---|---|---|
-| Windows | NSIS-`.exe`-Installer | x86_64 |
-| Linux | `.deb` und AppImage | x86_64 |
+| Windows | NSIS-Installer `.exe` und portable `.zip` | x86_64 |
+| Linux | `.deb`, `.rpm` und AppImage | x86_64 |
 | macOS | `.app` und `.dmg` | Apple Silicon (arm64) und Intel (x64), macOS 11+ |
 
 Windows-Releases sind nicht codesigniert; SmartScreen verlangt eventuell **Weitere Informationen → Trotzdem ausführen**. macOS-Releases werden mit einer Apple Developer ID signiert und notarisiert, sobald die Apple-Zugangsdaten des Maintainers in der CI hinterlegt sind; andernfalls tragen sie nur eine kostenlose Ad-hoc-Signatur, die aktuelles macOS nach einem Browser-Download blockiert („ist beschädigt und kann nicht geöffnet werden“; Abhilfe im Haupt-README). **Hilfe → Nach Updates suchen…** bietet auf jeder Plattform eine umsetzbare Update-Aufforderung: Getaggte Windows-x86_64-NSIS-Installationen und per AppImage gestartete Linux-Installationen erhalten einen kryptografisch verifizierten (cargo-packager-Minisign) Ein-Klick-Download mit Installation — unter Linux wird das laufende AppImage an Ort und Stelle ersetzt und Markion startet automatisch neu —, der den Start verweigert, solange ein Dokument ungespeicherte Änderungen enthält; macOS und Linux-`.deb`/`.rpm`-Installationen öffnen die passende Release-Datei im Systembrowser. Apple-Silicon- und Intel-Macs erhalten jeweils ein natives DMG; ein Universal-Binary wird derzeit nicht bereitgestellt.
@@ -29,7 +33,7 @@ Windows-Releases sind nicht codesigniert; SmartScreen verlangt eventuell **Weite
 Markion hat vier Ansichtsmodi. Standard ist die geteilte Vorschau.
 
 - **Bearbeiten** — ein fokussierter Editor für rohen Markdown-Quelltext.
-- **Visuelle Bearbeitung** — eine WYSIWYG-first, quellgestützte Oberfläche. Fließtext bleibt gerendert mit progressiver Syntaxeinblendung; gewöhnliche Fenced-Code-Inhalte, Blockformeln, registrierte Diagramme (Mermaid), Inline-Bildfelder und GFM-Tabellenzellen haben exakte Direkteditoren. Konstrukte, deren WYSIWYG-Rendering noch nicht implementiert ist — YAML-Frontmatter, eingerückter Code sowie fehlerhafte oder byte-mehrdeutige Syntax — behalten als Übergangslösung eine exakte quellgestützte Bearbeitungsmöglichkeit, verfolgt in der [WYSIWYG-Abdeckungsmatrix und Roadmap der visuellen Bearbeitung](docs/visual-editing-quality.md). Eine Slash-Befehlspalette und ein kompaktes Block-Kontextmenü bieten exakte Blockumwandlungen (Absatz, Überschriften, Listen, Zitat, Fenced Code, Trennlinie, Tabelle), Duplizieren, Nach-oben/unten-Verschieben, quellsicheres Ziehen zum Umordnen und Löschen; eine auswahlkontextbezogene Formatierungsleiste und ein visueller Link-Editor führen pro Aktion genau eine quellgestützte Mutation aus. Markdown-Begrenzer werden standardmäßig automatisch gepaart, `:shortcode` öffnet die Emoji-Vervollständigung, Aufgabenlisten-Kästchen lassen sich direkt umschalten, und das Verlassen einer Überschriften-, Listen-, Aufgaben- oder Zitatzeile stellt sie sofort wieder gerendert dar. Dies ist kein separates Rich-Text-Dokumentmodell — das zugrunde liegende Markdown bleibt stets die Wahrheitsquelle.
+- **Visuelle Bearbeitung** — eine WYSIWYG-first, quellgestützte Oberfläche. Fließtext bleibt gerendert mit progressiver Syntaxeinblendung; gewöhnliche Fenced-Code-Inhalte, Blockformeln, registrierte Diagramme (Mermaid), Inline-Bildfelder und GFM-Tabellenzellen haben exakte Direkteditoren. Konstrukte, deren WYSIWYG-Rendering noch nicht implementiert ist — mehrzeilige oder fehlerhafte Bilder sowie byte-mehrdeutige Syntax — behalten als Übergangslösung eine exakte quellgestützte Bearbeitungsmöglichkeit, verfolgt in der [WYSIWYG-Abdeckungsmatrix und Roadmap der visuellen Bearbeitung](docs/visual-editing-quality.md). Eine Slash-Befehlspalette und ein kompaktes Block-Kontextmenü bieten exakte Blockumwandlungen (Absatz, Überschriften, Listen, Zitat, Fenced Code, Trennlinie, Tabelle), Duplizieren, Nach-oben/unten-Verschieben, quellsicheres Ziehen zum Umordnen und Löschen; eine auswahlkontextbezogene Formatierungsleiste und ein visueller Link-Editor führen pro Aktion genau eine quellgestützte Mutation aus. Markdown-Begrenzer werden standardmäßig automatisch gepaart, `:shortcode` öffnet die Emoji-Vervollständigung, Aufgabenlisten-Kästchen lassen sich direkt umschalten, und das Verlassen einer Überschriften-, Listen-, Aufgaben- oder Zitatzeile stellt sie sofort wieder gerendert dar. Dies ist kein separates Rich-Text-Dokumentmodell — das zugrunde liegende Markdown bleibt stets die Wahrheitsquelle.
 - **Geteilte Vorschau** — Quelltext und gerenderte Vorschau nebeneinander, mit optionaler quellbasierter Sync-Scroll-Einstellung, die beide Bereiche an derselben Dokumentposition hält, statt nach Prozent des Gesamtdokuments zu scrollen.
 - **Lesen** — eine gerenderte, nicht editierbare Ansicht, standardmäßig zentriert auf eine lesbare Maximalbreite von 860 px; die adaptive Vorschaubreite kann den ganzen Bereich nutzen.
 
@@ -116,7 +120,8 @@ delay_secs = 5
 background_check = false
 
 [export]
-pdf_engine = "xelatex"
+backend = "builtin"              # builtin / pandoc
+pdf_engine = "xelatex"            # pandoc
 ```
 
 Konfiguration, Wiederherstellungsdateien, Designs und rotierende Diagnoseprotokolle nutzen plattformgerechte Markion-Datenverzeichnisse. Setze `RUST_LOG=debug` vor dem Start für ausführlichere Protokolle.
@@ -131,9 +136,9 @@ Markion exportiert nach:
 - LaTeX
 - DOCX
 - PDF
-- PNG- und JPEG-Textschnappschüssen
+- PNG- und JPEG-Dokumentschnappschüssen
 
-PDF und DOCX versuchen zuerst die übernommene Typune/pandoc-Export-Engine. Falls pandoc oder die gewählte PDF-Engine nicht verfügbar ist, fällt Markion auf einen einfacheren eingebauten Writer zurück und meldet das Backend in der Statusleiste. Die Installation von pandoc und einer geeigneten PDF-Engine erzeugt reichhaltigere Ausgaben. PNG/JPEG- und eingebaute PDF-Ausgaben sind bewusst einfache Textschnappschüsse.
+PDF und DOCX verwenden standardmäßig die eingebauten Exporteure ohne externe Konverter. `backend = "pandoc"` aktiviert Pandoc mit eingebautem Rückfall bei Fehlern; die Statusleiste nennt das verwendete Backend. Das eingebaute PDF unterstützt Seitenumbrüche, eingebettete Schriften mit CJK-Rückfall, Überschriften, Code, Tabellen, Bilder und Formeln. PNG/JPEG nutzen dieselbe Layout-Engine. Die Wiedergabetreue hängt vom Format ab; Diagrammblöcke können als Code erscheinen.
 
 ## Word-Import
 
@@ -152,12 +157,12 @@ Die quellbasierte visuelle Bearbeitung verwendet nach lokalen Eingriffen unabhä
 
 ## Aktuelle Einschränkungen
 
-- Die visuelle Bearbeitung ist WYSIWYG-first bei Beibehaltung des kanonischen Markdown; Konstrukte ohne nachgewiesenes byte-exaktes Rendering zeigen als Übergangslösung exakten Quelltext (verfolgt auf der [WYSIWYG-Abdeckungsroadmap](docs/visual-editing-quality.md)), statt eine geratene Rich-Tree-Mutation zu akzeptieren, und das Umordnen von Blöcken wird nur angeboten, wenn nicht überlappende Quellgrenzen beweisbar sind. Aktuelle Hauptlücken sind dekodierte HTML-Entities, Frontmatter und eingerückte Codeblöcke; sekundäre fehlerhafte oder nicht unterstützte Konstrukte bleiben in der Matrix gelistet.
-- Die Bildschirmdarstellung (geteilte/Lese-Vorschau und visuelle Bearbeitung) setzt Formeln mit der eingebetteten RaTeX-Engine; der LaTeX-Export behält natives `$...$`/`$$...$$`-Quellmaterial für die eigene Werkzeugkette des Lesers, und der eingebaute DOCX-Export-Fallback (nur bei fehlendem pandoc) stuft Formeln weiterhin auf eine lesbare Klartext-Annäherung herab, statt gesetzte Glyphen einzubetten.
-- Tabellenzellen der visuellen Bearbeitung unterstützen direkte Bearbeitung plus Fett/Kursiv/Inline-Code/Link auf einer Auswahl, die innerhalb einer Zelle bleibt. GFM-Spaltenbreiten lassen sich ziehen und werden als HTML-Kommentar (`<!-- markion-cols:… -->`) unmittelbar vor der Tabelle persistiert. Inline-Bilder akzeptieren ganzzahlige Breiten von 10–100 % und lassen sich per Ziehen skalieren. Referenz-/mehrzeilige Bilder und fehlerhafte Tabellen bleiben bekannte Lücken der WYSIWYG-Abdeckungsroadmap mit quellgestützten Bearbeitungspfaden.
+- Offene WYSIWYG-Lücken betreffen mehrzeilige oder fehlerhafte Bilder und Quellbereiche ohne nachweisbar genaue Zuordnung. YAML-Frontmatter, eingerückter Code und nachgewiesene HTML-Entitäten besitzen bereits Bearbeitungs- und Darstellungspfade. Siehe [Abdeckungsmatrix](docs/visual-editing-quality.md).
+- Bildschirmdarstellung und eingebautes PDF setzen Formeln offline mit RaTeX. LaTeX erhält den Formelquelltext; eingebautes DOCX wandelt unterstützte Formeln in Word-Gleichungen um und erhält für andere lesbaren Quelltext.
+- Tabellenzellen der visuellen Bearbeitung unterstützen direkte Bearbeitung plus Fett/Kursiv/Inline-Code/Link auf einer Auswahl, die innerhalb einer Zelle bleibt. GFM-Spaltenbreiten lassen sich ziehen und werden als HTML-Kommentar (`<!-- markion-cols:… -->`) unmittelbar vor der Tabelle persistiert. Inline-Bilder akzeptieren ganzzahlige Breiten von 10–100 % und lassen sich per Ziehen skalieren. Mehrzeilige oder fehlerhafte Bilder und nicht parsebare Tabellen bleiben bekannte Lücken der WYSIWYG-Abdeckungsroadmap mit quellgestützten Bearbeitungspfaden.
 - Ein-Klick-Updates installieren die Windows-NSIS-Distribution und ersetzen ein laufendes Linux-AppImage nach Minisign-Verifikation an Ort und Stelle (danach automatischer Neustart); der Austausch des macOS-Bundles und die Selbstersetzung von Linux-`.deb`/`.rpm` bleiben zukünftige Arbeit, und die Update-Authentifizierung ist weder Windows Authenticode noch Apple-Notarisierung.
-- Drag-and-drop-Verschiebungen im Dateibaum und eine vollständige Installations-UI für eigene Designs sind nicht implementiert.
-- Der Bildexport ist ein einfacher Textschnappschuss, und sehr große Dokumente verwenden noch kein Rope oder vollständig inkrementelles Parsen über alle abgeleiteten Subsysteme hinweg.
+- Eine vollständige Installations-UI für eigene Designs ist noch nicht implementiert.
+- Der Export verwendet formatspezifisches Layout statt Editorpixel aufzunehmen; sehr große Dokumente verwenden noch kein Rope und nicht in allen abgeleiteten Teilsystemen vollständig inkrementelles Parsen.
 
 ## Entwicklung
 

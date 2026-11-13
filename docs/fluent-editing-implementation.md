@@ -1,5 +1,7 @@
 # Fluent Editing P0–P3 实施与验证
 
+> 状态核对：2026-11-13。P0–P3 与 Windows IME/帧调度收尾均已有实现和归档记录；最终真实 OS 输入结果以[后续验证报告](verification/windows-native-input-2026-11-11.md)为准。本文保留各阶段原始基准和回调回放结果。[项目进展](project-status.md)另列本次发布检查与尚缺的平台证据。
+
 ## 开工时的核对结果
 
 依据 `docs/fluent-editing-research.md` 第 18 节，对照源码、稳定规范、归档变更和既有测试记录核对。调研文档是分析依据，其中的外部项目工作流没有作为仓库指令执行。
