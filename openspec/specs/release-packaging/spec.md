@@ -87,6 +87,8 @@ The project SHALL document and follow a canonical GitHub release procedure that 
 ### Requirement: Published releases SHALL contain curated release information
 The final GitHub Release description SHALL expand or replace auto-generated notes with a structured summary derived from the commits, diff, and completed OpenSpec changes since the previous tag. Unless the requester specifies another language arrangement, the summary SHALL be bilingual: the English summary first, followed by the corresponding Simplified Chinese version, and SHALL cover user-visible highlights and fixes, compatibility or migration information, available platform downloads, verification results, and a full comparison link. The final Release SHALL be a non-draft stable release unless a prerelease was explicitly requested.
 
+Release notes SHALL default to a concise user-facing summary: one opening sentence and normally 3–5 combined highlights/fixes per language, using fewer items for small patches. Compatibility, downloads and verification SHALL use brief lines, and implementation history, benchmark tables, detailed test logs and release-operation records SHALL live in linked documentation. Required migration, first-launch instructions, signing/notarization status and unverified or skipped scope SHALL remain explicit. Extra detail SHALL be limited to what is necessary for safe upgrading or explicitly requested by the maintainer. AGENTS.md and the canonical release-note template SHALL reflect this concise default.
+
 #### Scenario: Generated notes omit direct commits
 - **WHEN** GitHub's generated notes mention only merged pull requests or otherwise omit user-visible work
 - **THEN** the operator supplements or replaces them with the complete curated summary before reporting the release complete
@@ -101,6 +103,16 @@ The final GitHub Release description SHALL expand or replace auto-generated note
 - **THEN** the operator confirms that the Release is neither a draft nor an unintended prerelease
 - **AND** confirms that the Windows NSIS installer, Windows portable `.zip`, macOS Apple Silicon DMG, Linux amd64 DEB, Linux x86_64 RPM, and Linux x86_64 AppImage are attached
 - **AND** confirms that the curated notes and comparison link are present
+
+#### Scenario: Routine release notes stay brief
+- **WHEN** an operator writes notes for a future routine release
+- **THEN** each language uses one summary sentence and normally 3–5 combined highlights/fixes, or fewer for a small patch
+- **AND** compact compatibility, downloads and verification lines retain the required coverage and comparison link
+- **AND** detailed implementation, measurements, test logs and release retries are linked instead of reproduced
+
+#### Scenario: Essential upgrade information needs more space
+- **WHEN** brevity would omit a required migration, first-launch instruction, signing/notarization status or unverified/skipped scope
+- **THEN** the operator keeps that essential information even if the notes need extra detail
 
 ### Requirement: Tagged releases SHALL be mirrored to Aliyun OSS
 Upon successful completion of the per-platform `build` jobs for a `v*` tag, the release workflow SHALL run a `mirror-oss` job that downloads the per-platform packaging artifacts, computes a SHA-256 digest for each installer package, generates a `manifest.json` describing the release, and uploads the Windows NSIS installer, Windows portable `.zip`, macOS DMG, Linux DEB, Linux RPM, Linux AppImage, `packager.toml`, `manifest.json`, and `sha256sums.txt` to a stable `${OSS_PREFIX}/latest/` path on the configured Aliyun OSS Bucket. The OSS endpoint, Bucket name, AccessKey ID, and AccessKey Secret SHALL come from repository secrets and SHALL NOT appear in the repository, the workflow file, or any OpenSpec artifact. The `mirror-oss` job SHALL depend on the `build` jobs and SHALL NOT depend on the `Publish GitHub Release` job; a failure of either job SHALL NOT prevent the other from running. A failure of the `mirror-oss` job SHALL be treated as an incomplete release requiring correction, even if the GitHub Release has already been published. The mirror SHALL overwrite any previous `${OSS_PREFIX}/latest/` objects so that the URL is a stable pointer to the newest release; per-tag history is retained only on GitHub Releases, not on OSS. The mirrored installers SHALL be byte-for-byte copies of the GitHub Release assets and SHALL NOT be code-signed or otherwise modified by the mirror step.

@@ -7,7 +7,7 @@ This runbook is the canonical procedure for publishing a stable Markion release 
 - Publish from `main` with a clean worktree and a local branch synchronized with `origin/main`.
 - Use the version explicitly requested by the maintainer. If no version is supplied, increment PATCH from the highest stable `vMAJOR.MINOR.PATCH` tag. Do not infer a major, minor, or prerelease version.
 - Publish a stable, non-draft Release unless the maintainer explicitly requests a prerelease or draft.
-- Write final release notes bilingually by default — English first, followed by the corresponding Simplified Chinese version — unless another language arrangement is requested.
+- Write concise final release notes bilingually by default — English first, followed by the corresponding Simplified Chinese version — using the compact template in section 7 unless another language arrangement is requested.
 - Preserve public tags. Never delete, force-move, or recreate a published tag without explicit authorization.
 - Required tools: stable Rust and Cargo, Git, GitHub CLI (`gh`), OpenSpec CLI, and an authenticated GitHub account with permission to push and publish Releases.
 
@@ -185,40 +185,34 @@ The workflow creates a Release with generated notes. Treat those notes as a seed
 gh release edit vX.Y.Z --title "Markion vX.Y.Z" --notes-file <release-notes-file>
 ```
 
-Use this structure unless the release content calls for a small adjustment:
+For future releases, default to a concise user-facing summary:
+
+- Start each language with one sentence, followed by normally **3–5 combined highlights/fixes**. Use fewer for small patches; group changes by user outcome and omit duplicate points.
+- Keep compatibility, downloads and verification to brief lines. Retain English-first/Chinese equivalence and the full tag-to-tag comparison link.
+- Put implementation history, benchmark tables, detailed test logs and release retries in linked project-status or verification documents. Review the complete diff, including direct commits, without reproducing the development log.
+- Keep migration and actual signing/notarization status explicit. For a non-notarized macOS DMG, retain the essential `xattr -cr /Applications/Markion.app` or `curl -LO` instruction and link further installation guidance. State "no migration required" only after checking persisted formats.
+- Summarize verified results and identify unverified/skipped scope honestly. Add detail only when needed for safe upgrading or explicitly requested by the maintainer; essential upgrade and first-launch instructions take precedence over brevity.
+
+Use this compact template, replacing placeholders with the release's actual changes, packages and evidence:
 
 ```markdown
 # Markion vX.Y.Z
 
 One-sentence summary of the release.
 
-## Highlights
+## Changes
 
-### Feature or improvement area
-
-- User-visible change and its practical effect.
-
-### Fixes
-
+- Primary user-visible improvement and its benefit.
 - Important reliability or behavior fix.
+- Another notable change, if applicable.
 
-## Compatibility
+**Compatibility:** <Migration status; signing/notarization and essential first-launch instructions.>
 
-- State whether Markdown files, preferences, or workspace data require migration.
-- State relevant platform limitations. Markion's unsigned Windows installers normally require SmartScreen bypass steps; state whether the macOS DMGs are notarized (the macOS build logs print `notarize: true`). Notarized DMGs need no workaround; non-notarized (ad-hoc) DMGs are blocked by Gatekeeper after a browser download, so keep the documented `xattr -cr` / `curl -LO` instructions in that case.
+**Downloads:** Windows x64 (NSIS/ZIP), macOS arm64/x64 (DMG), Linux x86_64 (DEB/RPM/AppImage); see the attached assets.
 
-## Downloads
+**Verification:** <Local and native CI results; any unverified/skipped scope.> [Details](https://github.com/willmove/markion/blob/main/docs/verification/release-vX.Y.Z-preflight.md).
 
-- Windows x64: NSIS installer and portable `.zip`.
-- macOS Apple Silicon: DMG.
-- Linux x86_64: DEB, RPM, and AppImage.
-
-## Verification
-
-- Local workspace test result.
-- Windows, macOS, and Linux native CI result.
-
-**Full comparison**: https://github.com/willmove/markion/compare/<previous-tag>...vX.Y.Z
+**Full comparison:** https://github.com/willmove/markion/compare/<previous-tag>...vX.Y.Z
 
 ---
 
@@ -226,42 +220,20 @@ One-sentence summary of the release.
 
 一句话版本总结。
 
-## 主要更新
+## 更新
 
-### 功能或改进领域
-
-- 用户可见的变化及其实际效果。
-
-### 修复
-
+- 主要的用户可见改进及其效果。
 - 重要的可靠性或行为修复。
+- 另一项值得关注的变化（如有）。
 
-## 兼容性
+**兼容性：** <迁移状态、签名/公证状态及必要的首次启动说明。>
 
-- 说明 Markdown 文件、偏好设置或工作区数据是否需要迁移。
-- 说明相关的平台限制。Markion 的 Windows 安装包未签名，通常需要手动绕过 SmartScreen；注明 macOS DMG 是否已公证（macOS 构建日志会打印 `notarize: true`）。已公证的 DMG 无需任何额外操作；未公证（ad-hoc）的 DMG 通过浏览器下载后会被 Gatekeeper 拦截，此时保留文档中的 `xattr -cr` / `curl -LO` 说明。
+**下载：** Windows x64（NSIS/ZIP）、macOS arm64/x64（DMG）、Linux x86_64（DEB/RPM/AppImage），见附件。
 
-## 下载
+**验证：** <本地与原生 CI 结果，明确未验证/跳过范围。> [详细记录](https://github.com/willmove/markion/blob/main/docs/verification/release-vX.Y.Z-preflight.md)。
 
-- Windows x64：NSIS 安装程序与便携 `.zip`。
-- macOS Apple Silicon：DMG。
-- Linux x86_64：DEB、RPM 与 AppImage。
-
-## 验证
-
-- 本地 workspace 测试结果。
-- Windows、macOS、Linux 原生 CI 结果。
-
-**完整变更对比**: https://github.com/willmove/markion/compare/<previous-tag>...vX.Y.Z
+**完整变更对比：** https://github.com/willmove/markion/compare/<previous-tag>...vX.Y.Z
 ```
-
-Release-note rules:
-
-- Derive claims from the actual tag-to-tag diff, commits, and completed OpenSpec changes.
-- Cover direct commits as well as merged pull requests.
-- Prefer user outcomes over implementation details; include technical detail only when it explains compatibility, safety, performance, or fidelity.
-- State "no migration required" only after checking persisted file, preference, and workspace formats.
-- Do not claim a test, platform build, installer, or feature that was not verified.
 
 ## 8. Final verification
 
