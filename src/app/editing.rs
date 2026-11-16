@@ -480,6 +480,7 @@ impl MarkionApp {
         let query = if self.block_menu.is_none()
             && self.recovery_manager.is_none()
             && self.link_editor.is_none()
+            && self.token_editor.is_none()
             && matches!(self.view_mode, ViewMode::VisualEdit)
             && self.active_tab().selected_range.is_empty()
             && self.active_tab().marked_range.is_none()
@@ -489,6 +490,31 @@ impl MarkionApp {
                 self.active_tab().cursor_offset(),
                 self.active_tab().document.version(),
             )
+            .filter(|query| {
+                // The marker is inside its owning block even when the caret
+                // sits exactly on a payload boundary. Reuse the versioned
+                // derivation rather than parsing Markdown for the popup.
+                self.active_tab()
+                    .document
+                    .visual_blocks_shared()
+                    .iter()
+                    .find(|block| block.source_range.contains(&query.source_range.start))
+                    .is_some_and(|block| {
+                        block.source_island.is_none()
+                            && block.editor.is_none()
+                            && matches!(
+                                block.kind,
+                                VisualBlockKind::Paragraph
+                                    | VisualBlockKind::Heading { .. }
+                                    | VisualBlockKind::ListItem { .. }
+                                    | VisualBlockKind::BlockQuote
+                                    | VisualBlockKind::DefinitionTerm
+                                    | VisualBlockKind::DefinitionDetail
+                                    | VisualBlockKind::FootnoteDefinition { .. }
+                                    | VisualBlockKind::Whitespace
+                            )
+                    })
+            })
         } else {
             None
         };
@@ -550,22 +576,70 @@ impl MarkionApp {
     pub(super) fn execute_slash_command(
         &mut self,
         query: SlashQuery,
-        command: SlashCommand,
+        command: SlashPaletteCommand,
         cx: &mut Context<Self>,
     ) {
-        match slash_command_edit(
+        let block_command = match command {
+            SlashPaletteCommand::Block(command) => command,
+            _ => SlashCommand::Text,
+        };
+        let edit = match slash_command_edit(
             self.active_tab().document.text(),
             self.active_tab().document.version(),
             &query,
-            command,
+            block_command,
         ) {
-            Ok(edit) => self.apply_exact_block_edit(
-                edit,
-                p1_t(self.language, P1Msg::SlashCommands).into(),
-                cx,
-            ),
-            Err(error) => self.report_block_edit_error(error, cx),
+            Ok(edit) => edit,
+            Err(error) => {
+                self.report_block_edit_error(error, cx);
+                return;
+            }
+        };
+        if matches!(command, SlashPaletteCommand::Block(_)) {
+            self.apply_exact_block_edit(edit, p1_t(self.language, P1Msg::SlashCommands).into(), cx);
+            return;
         }
+
+        // Capture the query as the editor's replacement range. Opening and
+        // canceling settings must not first delete it or add an undo entry.
+        self.slash_commands = None;
+        self.dismissed_slash_query = Some(query.clone());
+        self.emoji_completer = None;
+        self.input_marked_len = 0;
+        match command {
+            SlashPaletteCommand::Link | SlashPaletteCommand::Image => {
+                self.token_editor = None;
+                self.link_editor = Some(LinkEditorState {
+                    kind: if command == SlashPaletteCommand::Image {
+                        LinkEditorKind::Image
+                    } else {
+                        LinkEditorKind::Link
+                    },
+                    source_range: query.source_range,
+                    document_version: query.document_version,
+                    label: slash_command_label(self.language, command),
+                    url: String::new(),
+                    title: String::new(),
+                    field: LinkEditorField::Url,
+                    html_anchor: false,
+                    cursor: 0,
+                    anchor: 0,
+                });
+            }
+            SlashPaletteCommand::Formula => {
+                self.link_editor = None;
+                self.token_editor = Some(TokenEditorState {
+                    kind: TokenEditorKind::MathPayload,
+                    source_range: query.source_range,
+                    document_version: query.document_version,
+                    draft: String::new(),
+                    cursor: 0,
+                    anchor: 0,
+                });
+            }
+            SlashPaletteCommand::Block(_) => unreachable!(),
+        }
+        cx.notify();
     }
 
     pub(super) fn sync_emoji_completer_state(&mut self, cx: &mut Context<Self>) {
@@ -576,6 +650,7 @@ impl MarkionApp {
             return;
         }
         let query = if self.link_editor.is_none()
+            && self.token_editor.is_none()
             && matches!(self.view_mode, ViewMode::Edit | ViewMode::VisualEdit)
             && self.active_tab().selected_range.is_empty()
             && self.active_tab().marked_range.is_none()
@@ -2212,6 +2287,14 @@ impl MarkionApp {
             .get(editor.source_range.clone())
             .unwrap_or("")
             .to_string();
+        if editor.kind == TokenEditorKind::MathPayload
+            && current.starts_with(['/', '、'])
+            && editor.draft.trim().is_empty()
+        {
+            self.token_editor = Some(editor);
+            cx.notify();
+            return;
+        }
         let replacement = match editor.kind {
             TokenEditorKind::Raw => editor.draft,
             TokenEditorKind::MathPayload => wrap_inline_math_payload(&current, &editor.draft),
@@ -2692,6 +2775,48 @@ impl MarkionApp {
     ) {
         let document = self.active_tab().document.instance_id();
         let selection = self.active_tab().selected_range.clone();
+        self.choose_image_files_at(document, selection, None, window, cx);
+    }
+
+    pub(super) fn choose_image_from_settings(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(editor) = self
+            .link_editor
+            .as_ref()
+            .filter(|editor| editor.kind == LinkEditorKind::Image)
+        else {
+            return;
+        };
+        if editor.document_version != self.active_tab().document.version() {
+            self.link_editor = None;
+            self.status = p0_t(self.language, P0Msg::LinkStale).into();
+            cx.notify();
+            return;
+        }
+        let selection = editor.source_range.clone();
+        let metadata = Some((
+            editor.label.clone(),
+            (!editor.title.trim().is_empty()).then(|| editor.title.trim().to_owned()),
+        ));
+        let document = self.active_tab().document.instance_id();
+        self.link_editor = None;
+        self.input_marked_len = 0;
+        self.choose_image_files_at(document, selection, metadata, window, cx);
+        cx.notify();
+    }
+
+    fn choose_image_files_at(
+        &mut self,
+        document: DocumentInstanceId,
+        selection: Range<usize>,
+        metadata: Option<(String, Option<String>)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let document_version = self.active_tab().document.version();
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -2706,12 +2831,17 @@ impl MarkionApp {
                 .into_iter()
                 .filter(|path| image_extension_supported(path))
                 .map(|path| PendingImageInput {
-                    label: path
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .unwrap_or("image")
-                        .to_owned(),
-                    title: None,
+                    label: metadata
+                        .as_ref()
+                        .map(|(label, _)| label.clone())
+                        .filter(|label| !label.trim().is_empty())
+                        .unwrap_or_else(|| {
+                            path.file_stem()
+                                .and_then(|stem| stem.to_str())
+                                .unwrap_or("image")
+                                .to_owned()
+                        }),
+                    title: metadata.as_ref().and_then(|(_, title)| title.clone()),
                     input: markion::ImageInput::Local(path),
                     source_kind: PendingImageSourceKind::Local,
                 })
@@ -2720,6 +2850,15 @@ impl MarkionApp {
                 return;
             }
             let _ = this.update_in(cx, |app, window, cx| {
+                if !app.tabs.iter().any(|tab| {
+                    tab.is_document()
+                        && tab.document.instance_id() == document
+                        && tab.document.version() == document_version
+                }) {
+                    app.status = p0_t(app.language, P0Msg::LinkStale).into();
+                    cx.notify();
+                    return;
+                }
                 app.request_image_batch(
                     PendingImageBatch {
                         document,

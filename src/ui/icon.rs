@@ -80,6 +80,14 @@ icon_set! {
     Trash => "trash",
     Attach => "paperclip",
     Check => "check",
+    Text => "text",
+    List => "list",
+    ListOrdered => "list-ordered",
+    ListTodo => "list-todo",
+    Quote => "quote",
+    Table => "table",
+    Link => "link",
+    Sigma => "sigma",
 }
 
 /// GPUI asset source for embedded icons. Install once on `Application::with_assets`.

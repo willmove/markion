@@ -16854,6 +16854,412 @@ fn visual_link_editor_commits_one_exact_undoable_mutation(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn visual_slash_recognizes_prose_contexts_and_excludes_structured_payloads(
+    cx: &mut TestAppContext,
+) {
+    let app = cx.new(MarkionApp::new);
+    for (source, expected) in [
+        ("/", true),
+        ("/\r\n\r\nnext", true),
+        ("before\r\n\r\n/Existing paragraph with spaces\r\n", true),
+        ("before\n/continuation with spaces", true),
+        ("# /Heading with spaces", true),
+        ("- /List with spaces", true),
+        ("1. /Numbered list", true),
+        ("- [ ] /Task item", true),
+        ("> /Quote text", true),
+        ("> - /Nested item", true),
+        ("    /indented code", false),
+        ("```rust\n/\n```", false),
+        ("~~~mermaid\n/\n~~~", false),
+        ("$$\n/\n$$", false),
+        ("---\nkey: /\n---\n\nbody", false),
+        ("<div>\n/\n</div>", false),
+        ("![alt /](image.png)", false),
+        ("| cell / | other |\n| --- | --- |", false),
+    ] {
+        app.update(cx, |app, cx| {
+            let cursor = source.find('/').unwrap() + 1;
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.active_tab_mut().selected_range = cursor..cursor;
+            app.view_mode = ViewMode::VisualEdit;
+            app.dismissed_slash_query = None;
+            app.sync_slash_command_state(cx);
+            assert_eq!(app.slash_commands.is_some(), expected, "{source:?}");
+            assert_eq!(app.active_tab().document.text(), source);
+            assert!(app.active_tab().undo_stack.is_empty());
+            if expected {
+                app.active_tab_mut().marked_range = Some(cursor - 1..cursor);
+                app.sync_slash_command_state(cx);
+                assert!(app.slash_commands.is_none(), "IME: {source:?}");
+                app.active_tab_mut().marked_range = None;
+                app.active_tab_mut().selected_range = cursor - 1..cursor;
+                app.sync_slash_command_state(cx);
+                assert!(app.slash_commands.is_none(), "selection: {source:?}");
+            }
+        });
+    }
+}
+
+#[test]
+fn slash_palette_catalog_limits_headings_and_localizes_insertion_settings() {
+    assert_eq!(localized_slash_commands(Language::En, "hea").len(), 5);
+    assert!(localized_slash_commands(Language::En, "h6").is_empty());
+    assert!(SlashCommand::ALL.contains(&SlashCommand::Heading(6)));
+    for (query, command) in [
+        ("link", SlashPaletteCommand::Link),
+        ("latex", SlashPaletteCommand::Formula),
+        ("image", SlashPaletteCommand::Image),
+    ] {
+        assert_eq!(localized_slash_commands(Language::En, query), vec![command]);
+        for &language in Language::all() {
+            let label = slash_command_label(language, command);
+            assert!(!label.is_empty());
+            assert!(localized_slash_commands(language, &label).contains(&command));
+        }
+    }
+}
+
+#[gpui::test]
+fn slash_settings_open_cancel_and_stale_targets_preserve_canonical_source(cx: &mut TestAppContext) {
+    let app = cx.new(MarkionApp::new);
+    for command in [
+        SlashPaletteCommand::Link,
+        SlashPaletteCommand::Formula,
+        SlashPaletteCommand::Image,
+    ] {
+        app.update(cx, |app, cx| {
+            let source = "/原段落 with spaces\r\n";
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(source))];
+            app.active_tab_mut().selected_range = 1..1;
+            app.view_mode = ViewMode::VisualEdit;
+            app.link_editor = None;
+            app.token_editor = None;
+            app.dismissed_slash_query = None;
+            let version = app.active_tab().document.version();
+            let blocks = app.active_tab().document.visual_blocks_shared();
+            app.sync_slash_command_state(cx);
+            let query = app.slash_commands.as_ref().unwrap().query.clone();
+            app.execute_slash_command(query.clone(), command, cx);
+            app.sync_slash_command_state(cx);
+            app.sync_emoji_completer_state(cx);
+            assert!(app.slash_commands.is_none());
+            assert!(app.emoji_completer.is_none());
+            if command == SlashPaletteCommand::Formula {
+                assert_eq!(app.token_editor.as_ref().unwrap().source_range, 0..1);
+                app.cancel_token_editor(cx);
+            } else {
+                let editor = app.link_editor.as_ref().unwrap();
+                assert_eq!(editor.source_range, 0..1);
+                assert_eq!(
+                    editor.kind == LinkEditorKind::Image,
+                    command == SlashPaletteCommand::Image
+                );
+                app.cancel_link_editor(cx);
+            }
+            app.sync_slash_command_state(cx);
+            assert!(app.slash_commands.is_none());
+            assert_eq!(app.active_tab().document.text(), source);
+            assert_eq!(app.active_tab().selected_range, 1..1);
+            assert_eq!(app.active_tab().document.version(), version);
+            assert!(!app.active_tab().document.is_dirty());
+            assert!(app.active_tab().undo_stack.is_empty());
+            assert!(Arc::ptr_eq(
+                &blocks,
+                &app.active_tab().document.visual_blocks_shared()
+            ));
+
+            let mut stale = query;
+            stale.document_version = version + 1;
+            app.execute_slash_command(stale, command, cx);
+            assert!(app.link_editor.is_none() && app.token_editor.is_none());
+            assert_eq!(app.active_tab().document.text(), source);
+        });
+    }
+}
+
+#[gpui::test]
+fn slash_link_and_formula_settings_confirm_once_preserve_suffix_and_undo(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    for command in [SlashPaletteCommand::Link, SlashPaletteCommand::Formula] {
+        for marker in ["/", "、"] {
+            for ending in ["\n", "\r\n"] {
+                let source = format!("{marker}原段落 with spaces{ending}next");
+                app.update_in(cx, |app, window, cx| {
+                    app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+                    app.active_tab_mut().selected_range = marker.len()..marker.len();
+                    app.view_mode = ViewMode::VisualEdit;
+                    app.link_editor = None;
+                    app.token_editor = None;
+                    let query =
+                        slash_query_at(&source, marker.len(), app.active_tab().document.version())
+                            .unwrap();
+                    app.execute_slash_command(query, command, cx);
+                    let prefix = if command == SlashPaletteCommand::Formula {
+                        app.confirm_token_editor(cx);
+                        assert_eq!(
+                            app.active_tab().document.text(),
+                            source,
+                            "empty formula stays in settings"
+                        );
+                        app.token_editor.as_mut().unwrap().draft = "E=mc^2".into();
+                        app.confirm_token_editor(cx);
+                        "$E=mc^2$"
+                    } else {
+                        let editor = app.link_editor.as_mut().unwrap();
+                        editor.label = "文档".into();
+                        editor.url = "https://example.test/guide".into();
+                        editor.title = "说明".into();
+                        app.confirm_link_editor(window, cx);
+                        "[文档](https://example.test/guide \"说明\")"
+                    };
+                    assert_eq!(
+                        app.active_tab().document.text(),
+                        format!("{prefix}原段落 with spaces{ending}next")
+                    );
+                    assert_eq!(app.active_tab().undo_stack.len(), 1);
+                    app.undo(&Undo, window, cx);
+                    assert_eq!(app.active_tab().document.text(), source);
+                    assert_eq!(app.active_tab().selected_range, marker.len()..marker.len());
+                });
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn slash_settings_reject_document_changes_after_opening(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| MarkionApp::new(cx));
+    for command in [
+        SlashPaletteCommand::Link,
+        SlashPaletteCommand::Formula,
+        SlashPaletteCommand::Image,
+    ] {
+        app.update_in(cx, |app, window, cx| {
+            app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("/原段落\r\n"))];
+            app.active_tab_mut().selected_range = 1..1;
+            app.view_mode = ViewMode::VisualEdit;
+            app.link_editor = None;
+            app.token_editor = None;
+            let query = slash_query_at(
+                app.active_tab().document.text(),
+                1,
+                app.active_tab().document.version(),
+            )
+            .unwrap();
+            app.execute_slash_command(query, command, cx);
+            app.active_tab_mut()
+                .document
+                .set_text("changed while settings were open");
+            if command == SlashPaletteCommand::Formula {
+                app.token_editor.as_mut().unwrap().draft = "x^2".into();
+                app.confirm_token_editor(cx);
+            } else {
+                app.link_editor.as_mut().unwrap().url = "https://example.test/image.png".into();
+                app.confirm_link_editor(window, cx);
+            }
+            assert_eq!(
+                app.active_tab().document.text(),
+                "changed while settings were open"
+            );
+            assert!(app.active_tab().undo_stack.is_empty());
+            assert!(app.link_editor.is_none() && app.token_editor.is_none());
+            assert!(app.image_cancellations.is_empty());
+        });
+    }
+}
+
+#[gpui::test]
+fn slash_image_settings_reuse_resource_policy_and_preserve_query_on_undo(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "/原段落 with spaces\r\n",
+        ))];
+        app.active_tab_mut().selected_range = 1..1;
+        app.view_mode = ViewMode::VisualEdit;
+        app.image_preferences.remote_policy = markion::RemoteImagePolicy::Keep;
+        app
+    });
+    app.update_in(cx, |app, window, cx| {
+        let query = slash_query_at(
+            app.active_tab().document.text(),
+            1,
+            app.active_tab().document.version(),
+        )
+        .unwrap();
+        app.execute_slash_command(query, SlashPaletteCommand::Image, cx);
+        let editor = app.link_editor.as_mut().unwrap();
+        editor.label = "图片".into();
+        editor.url = "https://cdn.example.test/image.png?sig=keep".into();
+        editor.title = "说明".into();
+        app.confirm_link_editor(window, cx);
+    });
+    wait_for_image_operations(&app, cx);
+    app.update_in(cx, |app, window, cx| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "![图片](https://cdn.example.test/image.png?sig=keep \"说明\")原段落 with spaces\r\n"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+        app.undo(&Undo, window, cx);
+        assert_eq!(app.active_tab().document.text(), "/原段落 with spaces\r\n");
+        assert_eq!(app.active_tab().selected_range, 1..1);
+    });
+}
+
+#[gpui::test]
+fn visual_slash_before_existing_paragraph_preserves_suffix_and_atomic_undo(
+    cx: &mut TestAppContext,
+) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    for marker in ["/", "、"] {
+        for ending in ["\n", "\r\n"] {
+            let prefix = format!("before{ending}{ending}");
+            let suffix = format!("Existing 中文 **paragraph** with spaces{ending}{ending}after");
+            let source = format!("{prefix}{marker}h2{suffix}");
+            let cursor = prefix.len() + marker.len() + 2;
+            app.update(cx, |app, cx| {
+                app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(&source))];
+                app.active_tab_mut().selected_range = cursor..cursor;
+                app.dismissed_slash_query = None;
+                let version = app.active_tab().document.version();
+                let blocks = app.active_tab().document.visual_blocks_shared();
+                app.sync_slash_command_state(cx);
+                assert!(app.slash_commands.is_some());
+                assert_eq!(app.active_tab().document.version(), version);
+                assert!(Arc::ptr_eq(
+                    &blocks,
+                    &app.active_tab().document.visual_blocks_shared()
+                ));
+                assert!(app.confirm_selected_slash_command(cx));
+                assert_eq!(
+                    app.active_tab().document.text(),
+                    format!("{prefix}## {suffix}")
+                );
+                assert_eq!(app.active_tab().undo_stack.len(), 1);
+                assert_eq!(
+                    app.active_tab().selected_range,
+                    prefix.len() + 3..prefix.len() + 3
+                );
+            });
+            cx.dispatch_action(Undo);
+            app.update(cx, |app, _| {
+                assert_eq!(app.active_tab().document.text(), source);
+                assert_eq!(app.active_tab().selected_range, cursor..cursor);
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn visual_slash_compact_filtering_and_hover_preserve_document_state(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("/hea"))];
+        app.active_tab_mut().selected_range = 4..4;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    for index in 0..5 {
+        assert!(
+            cx.debug_bounds(super::root_view::slash_command_element_id(index))
+                .is_some()
+        );
+    }
+    assert!(cx.debug_bounds("slash-command-5").is_none());
+    let h2 = cx.debug_bounds("slash-command-1").unwrap();
+    let (version, blocks) = app.update(cx, |app, _| {
+        (
+            app.active_tab().document.version(),
+            app.active_tab().document.visual_blocks_shared(),
+        )
+    });
+    cx.simulate_event(MouseMoveEvent {
+        position: h2.center(),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    app.update(cx, |app, cx| {
+        assert_eq!(app.slash_commands.as_ref().unwrap().selected, 1);
+        assert_eq!(app.active_tab().document.version(), version);
+        assert!(Arc::ptr_eq(
+            &blocks,
+            &app.active_tab().document.visual_blocks_shared()
+        ));
+        assert!(app.active_tab().undo_stack.is_empty());
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text("/zzzz"))];
+        app.active_tab_mut().selected_range = 5..5;
+        app.dismissed_slash_query = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("slash-command-palette").is_some());
+    // GPUI retains debug selectors from older frames, so absence cannot be
+    // inferred from their cached bounds after switching queries.
+    app.update(cx, |app, _| {
+        let state = app.slash_commands.as_ref().unwrap();
+        assert!(localized_slash_commands(app.language, &state.query.query).is_empty());
+        assert_eq!(app.active_tab().document.text(), "/zzzz");
+        assert!(app.active_tab().undo_stack.is_empty());
+    });
+}
+
+#[gpui::test]
+fn visual_slash_filtered_table_pointer_preserves_paragraph_and_undo(cx: &mut TestAppContext) {
+    let (app, cx) = cx.add_window_view(|_, cx| {
+        let mut app = MarkionApp::new(cx);
+        app.tabs = vec![EditorTab::new(MarkdownDocument::from_text(
+            "/table原段落 with spaces\r\n",
+        ))];
+        app.active_tab_mut().selected_range = 6..6;
+        app.view_mode = ViewMode::VisualEdit;
+        app
+    });
+    cx.update(|window, cx| {
+        window.focus(&app.read(cx).focus_handle);
+        window.activate_window();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("slash-command-grid").is_none());
+    let table = cx
+        .debug_bounds("slash-command-0")
+        .expect("filtered labeled Table action");
+    assert!(table.size.width > px(200.));
+    cx.simulate_click(table.center(), Modifiers::none());
+    cx.run_until_parked();
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "|  |  |\r\n| --- | --- |\r\n|  |  |\r\n\r\n原段落 with spaces\r\n"
+        );
+        assert_eq!(app.active_tab().undo_stack.len(), 1);
+    });
+    cx.dispatch_action(Undo);
+    app.update(cx, |app, _| {
+        assert_eq!(
+            app.active_tab().document.text(),
+            "/table原段落 with spaces\r\n"
+        );
+        assert_eq!(app.active_tab().selected_range, 6..6);
+    });
+}
+
+#[gpui::test]
 fn p1_visual_slash_keyboard_and_escape_preserve_atomic_history(cx: &mut TestAppContext) {
     let (app, cx) = cx.add_window_view(|_, cx| {
         let mut app = MarkionApp::new(cx);
@@ -16927,8 +17333,33 @@ fn p1_visual_slash_pointer_and_block_menu_apply_exact_commands(cx: &mut TestAppC
     });
     cx.run_until_parked();
 
-    cx.debug_bounds("slash-command-palette")
+    let panel = cx
+        .debug_bounds("slash-command-palette")
         .expect("slash command palette should be rendered");
+    assert!(panel.size.width <= px(248.));
+    assert!(panel.size.height < px(300.), "compact palette: {panel:?}");
+    let grid = cx
+        .debug_bounds("slash-command-grid")
+        .expect("compact buttons");
+    for (index, command) in SlashPaletteCommand::ALL.into_iter().enumerate() {
+        let button = cx
+            .debug_bounds(super::root_view::slash_command_element_id(index))
+            .expect("every slash command remains reachable");
+        assert!(button.left() >= panel.left() && button.right() <= panel.right());
+        assert!(button.top() >= panel.top() && button.bottom() <= panel.bottom());
+        if command.is_compact() {
+            assert!(button.size.width <= px(36.));
+            assert_eq!(button.size.height, px(30.));
+            assert!(button.bottom() <= grid.bottom());
+        } else {
+            assert!(button.top() > grid.bottom());
+        }
+    }
+    let h1 = cx.debug_bounds("slash-command-1").unwrap();
+    let h5 = cx.debug_bounds("slash-command-5").unwrap();
+    assert_eq!(h1.top(), h5.top(), "headings share one compact row");
+    let h2 = cx.debug_bounds("slash-command-2").unwrap();
+    assert_eq!(h2.left() - h1.right(), px(2.));
     let heading = cx
         .debug_bounds("slash-command-1")
         .expect("H1 slash command should be rendered");
@@ -18101,12 +18532,11 @@ fn p1_localized_slash_query_supports_ime_and_one_step_confirmation_undo(cx: &mut
         assert_eq!(
             localized_slash_commands(app.language, "标题"),
             vec![
-                SlashCommand::Heading(1),
-                SlashCommand::Heading(2),
-                SlashCommand::Heading(3),
-                SlashCommand::Heading(4),
-                SlashCommand::Heading(5),
-                SlashCommand::Heading(6),
+                SlashPaletteCommand::Block(SlashCommand::Heading(1)),
+                SlashPaletteCommand::Block(SlashCommand::Heading(2)),
+                SlashPaletteCommand::Block(SlashCommand::Heading(3)),
+                SlashPaletteCommand::Block(SlashCommand::Heading(4)),
+                SlashPaletteCommand::Block(SlashCommand::Heading(5)),
             ]
         );
         let query_version = app.active_tab().document.version();

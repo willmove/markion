@@ -334,11 +334,10 @@ pub fn slash_query_at(source: &str, cursor: usize, document_version: u64) -> Opt
         return None;
     }
     let line_start = source[..cursor].rfind('\n').map_or(0, |index| index + 1);
-    let line_end = source[cursor..]
-        .find('\n')
-        .map_or(source.len(), |relative| cursor + relative);
-    let line = source.get(line_start..line_end)?;
-    let before_caret = &line[..cursor - line_start];
+    // Existing paragraph content and CRLF after the caret are not part of
+    // the typed command. Including them made opening depend on the suffix
+    // and could consume that suffix when the command was confirmed.
+    let before_caret = source.get(line_start..cursor)?;
     let (marker_index, marker_len) =
         before_caret
             .char_indices()
@@ -355,13 +354,13 @@ pub fn slash_query_at(source: &str, cursor: usize, document_version: u64) -> Opt
     if before_caret[..marker_index].contains("://") {
         return None;
     }
-    let query = &line[marker_index + marker_len..];
-    if query.contains(['\r', '\n']) || query.chars().any(char::is_whitespace) {
+    let query = &before_caret[marker_index + marker_len..];
+    if query.contains(['/', '\\', '、']) || query.chars().any(char::is_whitespace) {
         return None;
     }
     Some(SlashQuery {
         document_version,
-        source_range: line_start + marker_index..line_end,
+        source_range: line_start + marker_index..cursor,
         query: query.to_string(),
     })
 }
@@ -380,14 +379,34 @@ pub fn slash_command_edit(
     query: &SlashQuery,
     command: SlashCommand,
 ) -> Result<BlockEdit, BlockEditError> {
+    let authored_query = source.get(query.source_range.clone());
     if query.document_version != current_version
-        || source.get(query.source_range.clone()).is_none()
-        || !source[query.source_range.clone()].starts_with(['/', '、'])
+        || !authored_query.is_some_and(|authored| {
+            authored
+                .strip_prefix('/')
+                .or_else(|| authored.strip_prefix('、'))
+                == Some(query.query.as_str())
+        })
     {
         return Err(BlockEditError::Stale);
     }
     let line_ending = preferred_line_ending(source);
-    let (replacement, caret) = slash_template(command, line_ending);
+    let (mut replacement, caret) = slash_template(command, line_ending);
+    if matches!(
+        command,
+        SlashCommand::CodeBlock | SlashCommand::Divider | SlashCommand::Table
+    ) && source[query.source_range.end..]
+        .split('\n')
+        .next()
+        .is_some_and(|suffix| !suffix.trim_end_matches('\r').is_empty())
+    {
+        replacement.push_str(line_ending);
+        // GFM accepts pipe-less body rows. A blank line prevents the
+        // existing paragraph from becoming an extra row of the new table.
+        if command == SlashCommand::Table {
+            replacement.push_str(line_ending);
+        }
+    }
     let start = query.source_range.start;
     Ok(BlockEdit {
         document_version: current_version,
@@ -939,6 +958,79 @@ mod tests {
         assert!(slash_query_at("https://example.com", 19, 7).is_none());
         assert!(slash_query_at("prefix/query", 12, 7).is_none());
         assert!(slash_query_at("/has space", 10, 7).is_none());
+        assert!(slash_query_at("/https://example.com", 20, 7).is_none());
+        assert!(slash_query_at("/usr/bin", 8, 7).is_none());
+        assert!(slash_query_at("/foo\\bar", 8, 7).is_none());
+    }
+
+    #[test]
+    fn slash_queries_stop_at_caret_and_preserve_paragraph_suffix_and_crlf() {
+        for ending in ["\n", "\r\n"] {
+            for (marker, typed) in [("/", ""), ("/", "h2"), ("、", "标题")] {
+                for suffix in ["", "Existing paragraph with spaces", "中文 **段落** 🙂"] {
+                    let prefix = format!("前文{ending}{ending}  ");
+                    let source = format!("{prefix}{marker}{typed}{suffix}{ending}next");
+                    let cursor = prefix.len() + marker.len() + typed.len();
+                    let query = slash_query_at(&source, cursor, 7).unwrap();
+                    assert_eq!(query.query, typed);
+                    assert_eq!(query.source_range, prefix.len()..cursor);
+                    let edit =
+                        slash_command_edit(&source, 7, &query, SlashCommand::Heading(2)).unwrap();
+                    let mut result = source.clone();
+                    result.replace_range(edit.range, &edit.replacement);
+                    assert_eq!(result, format!("{prefix}## {suffix}{ending}next"));
+                    assert_eq!(edit.selection_after, prefix.len() + 3..prefix.len() + 3);
+                }
+            }
+        }
+        assert!(slash_query_at("/中文", 2, 7).is_none());
+        assert!(slash_query_at("/", 2, 7).is_none());
+    }
+
+    #[test]
+    fn slash_standalone_templates_separate_existing_prose_without_consuming_it() {
+        for ending in ["\n", "\r\n"] {
+            for command in [
+                SlashCommand::CodeBlock,
+                SlashCommand::Divider,
+                SlashCommand::Table,
+            ] {
+                let source = format!("/{suffix}{ending}next", suffix = "原段落 with spaces");
+                let query = slash_query_at(&source, 1, 7).unwrap();
+                let edit = slash_command_edit(&source, 7, &query, command).unwrap();
+                let (template, caret) = slash_template(command, ending);
+                let separator = ending.repeat(if command == SlashCommand::Table { 2 } else { 1 });
+                assert_eq!(edit.replacement, format!("{template}{separator}"));
+                assert_eq!(edit.selection_after, caret..caret);
+                let mut result = source;
+                result.replace_range(edit.range, &edit.replacement);
+                assert_eq!(
+                    result,
+                    format!("{template}{separator}原段落 with spaces{ending}next")
+                );
+                let document = MarkdownDocument::from_text(result);
+                assert!(document.visual_blocks_shared().iter().any(|block| {
+                    matches!(block.kind, VisualBlockKind::Paragraph)
+                        && document.text()[block.source_range.clone()]
+                            .contains("原段落 with spaces")
+                }));
+
+                let empty_line = format!("/{ending}next");
+                let query = slash_query_at(&empty_line, 1, 7).unwrap();
+                let edit = slash_command_edit(&empty_line, 7, &query, command).unwrap();
+                assert_eq!(edit.replacement, template);
+            }
+        }
+    }
+
+    #[test]
+    fn slash_confirmation_rejects_a_mismatched_query_even_at_the_same_version() {
+        let mut query = slash_query_at("/h2", 3, 7).unwrap();
+        query.query = "h1".into();
+        assert_eq!(
+            slash_command_edit("/h2", 7, &query, SlashCommand::Heading(2)),
+            Err(BlockEditError::Stale)
+        );
     }
 
     #[test]

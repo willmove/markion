@@ -1527,6 +1527,48 @@ struct SlashCommandState {
     selected: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlashPaletteCommand {
+    Block(SlashCommand),
+    Link,
+    Formula,
+    Image,
+}
+
+impl SlashPaletteCommand {
+    const ALL: [Self; 16] = [
+        Self::Block(SlashCommand::Text),
+        Self::Block(SlashCommand::Heading(1)),
+        Self::Block(SlashCommand::Heading(2)),
+        Self::Block(SlashCommand::Heading(3)),
+        Self::Block(SlashCommand::Heading(4)),
+        Self::Block(SlashCommand::Heading(5)),
+        Self::Block(SlashCommand::BulletedList),
+        Self::Block(SlashCommand::NumberedList),
+        Self::Block(SlashCommand::TaskList),
+        Self::Block(SlashCommand::Quote),
+        Self::Block(SlashCommand::CodeBlock),
+        Self::Block(SlashCommand::Divider),
+        Self::Block(SlashCommand::Table),
+        Self::Link,
+        Self::Formula,
+        Self::Image,
+    ];
+
+    fn is_compact(self) -> bool {
+        matches!(self, Self::Block(command) if command != SlashCommand::Table)
+    }
+
+    fn search_terms(self) -> &'static str {
+        match self {
+            Self::Block(command) => command.search_terms(),
+            Self::Link => "link url hyperlink insert",
+            Self::Formula => "formula math latex equation insert",
+            Self::Image => "image picture photo insert",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct EmojiCompleterState {
     query: EmojiQuery,
@@ -1731,7 +1773,15 @@ impl BlockMenuPresentation {
     }
 }
 
-fn slash_command_label(language: Language, command: SlashCommand) -> String {
+fn slash_command_label(language: Language, command: SlashPaletteCommand) -> String {
+    let command = match command {
+        SlashPaletteCommand::Link => return t(language, Msg::ItemLink).to_string(),
+        SlashPaletteCommand::Formula => {
+            return t(language, Msg::VisualInlineFormulaLabel).to_string();
+        }
+        SlashPaletteCommand::Image => return t(language, Msg::ItemImage).to_string(),
+        SlashPaletteCommand::Block(command) => command,
+    };
     match command {
         SlashCommand::Text => p1_t(language, P1Msg::TextBlock).to_string(),
         SlashCommand::Heading(level) => {
@@ -1747,12 +1797,12 @@ fn slash_command_label(language: Language, command: SlashCommand) -> String {
     }
 }
 
-fn localized_slash_commands(language: Language, query: &str) -> Vec<SlashCommand> {
+fn localized_slash_commands(language: Language, query: &str) -> Vec<SlashPaletteCommand> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
-        return SlashCommand::ALL.to_vec();
+        return SlashPaletteCommand::ALL.to_vec();
     }
-    SlashCommand::ALL
+    SlashPaletteCommand::ALL
         .into_iter()
         .filter(|command| {
             command.search_terms().contains(&needle)

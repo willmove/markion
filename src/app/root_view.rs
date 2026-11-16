@@ -1547,6 +1547,24 @@ fn slash_command_palette_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
         .clone()
         .expect("slash palette is rendered only while its state is present");
     let commands = localized_slash_commands(app.language, &state.query.query);
+    let mut format_commands: Vec<_> = commands
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, command)| command.is_compact())
+        .collect();
+    // H1–H5 and Text form the first six-button row; retain each command's index
+    // in the filtered results so keyboard navigation keeps its usual order.
+    format_commands.sort_by_key(|(_, command)| match command {
+        SlashPaletteCommand::Block(SlashCommand::Heading(level)) => usize::from(*level) - 1,
+        _ => {
+            SlashPaletteCommand::ALL
+                .iter()
+                .position(|item| item == command)
+                .unwrap()
+                + 6
+        }
+    });
     let block_index = visual_block_index_for_offset(
         &app.active_tab().document.visual_blocks_shared(),
         state.query.source_range.start,
@@ -1561,18 +1579,18 @@ fn slash_command_palette_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
             div()
                 .id("slash-command-palette")
                 .debug_selector(|| "slash-command-palette".to_string())
-                .w(px(280.))
-                .max_h(px(520.))
+                .w(px(248.))
                 .occlude()
                 .p_2()
                 .bg(palette.panel_bg)
+                .text_color(palette.text)
                 .border_1()
                 .border_color(palette.border)
                 .rounded_lg()
                 .shadow_lg()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap_2()
                 .child(
                     div()
                         .px_2()
@@ -1592,36 +1610,169 @@ fn slash_command_palette_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
                             .child(p1_t(app.language, P1Msg::NoCommands)),
                     )
                 })
-                .children(commands.into_iter().enumerate().map(|(index, command)| {
-                    let selected = index == state.selected;
-                    let query = query.clone();
-                    div()
-                        .id(slash_command_element_id(index))
-                        .debug_selector(move || slash_command_element_id(index).to_string())
-                        .px_2()
-                        .py_2()
-                        .rounded_md()
-                        .text_size(px(12.))
-                        .cursor_pointer()
-                        .when(selected, |row| {
-                            row.bg(palette.active_bg).text_color(palette.active_text)
-                        })
-                        .when(!selected, |row| {
-                            row.hover(move |style| style.bg(palette.surface_bg))
-                        })
-                        .child(slash_command_label(app.language, command))
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                                app.execute_slash_command(query.clone(), command, cx);
-                            }),
+                .when(!format_commands.is_empty(), |panel| {
+                    panel.child(
+                        div()
+                            .id("slash-command-grid")
+                            .debug_selector(|| "slash-command-grid".to_string())
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(2.))
+                            .children(format_commands.into_iter().map(|(index, command)| {
+                                slash_command_button(
+                                    app,
+                                    command,
+                                    index,
+                                    state.selected,
+                                    query.clone(),
+                                    cx,
+                                )
+                            })),
+                    )
+                })
+                .when(
+                    commands.iter().any(|command| !command.is_compact()),
+                    |panel| {
+                        panel.child(
+                            div()
+                                .pt_2()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .when(
+                                    commands.iter().any(|command| command.is_compact()),
+                                    |section| section.border_t_1().border_color(palette.border),
+                                )
+                                .children(
+                                    commands
+                                        .iter()
+                                        .copied()
+                                        .enumerate()
+                                        .filter(|(_, command)| !command.is_compact())
+                                        .map(|(index, command)| {
+                                            slash_command_button(
+                                                app,
+                                                command,
+                                                index,
+                                                state.selected,
+                                                query.clone(),
+                                                cx,
+                                            )
+                                        }),
+                                ),
                         )
-                })),
+                    },
+                )
+                .when(!commands.is_empty(), |panel| {
+                    panel.child(
+                        div()
+                            .id("slash-command-caption")
+                            .debug_selector(|| "slash-command-caption".to_string())
+                            .px_2()
+                            .text_size(px(11.))
+                            .text_color(palette.muted)
+                            .child(slash_command_label(app.language, commands[state.selected])),
+                    )
+                }),
         )
 }
 
-fn slash_command_element_id(index: usize) -> &'static str {
-    const IDS: [&str; 14] = [
+fn slash_command_button(
+    app: &MarkionApp,
+    command: SlashPaletteCommand,
+    index: usize,
+    selected: usize,
+    query: SlashQuery,
+    cx: &mut Context<MarkionApp>,
+) -> Stateful<Div> {
+    use crate::ui::icon::{Icon, icon};
+
+    let palette = app.palette();
+    let selected = index == selected;
+    let label = SharedString::from(slash_command_label(app.language, command));
+    let tooltip_label = label.clone();
+    let hover_query = query.clone();
+    let color = if selected {
+        palette.active_text
+    } else {
+        palette.text
+    };
+    div()
+        .id(slash_command_element_id(index))
+        .debug_selector(move || slash_command_element_id(index).to_string())
+        .tooltip(move |_, cx| {
+            cx.new(|_| SearchTooltip {
+                palette,
+                label: tooltip_label.clone(),
+            })
+            .into()
+        })
+        .h(px(30.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .when(!command.is_compact(), |button| {
+            button.w_full().px_2().justify_start()
+        })
+        .when(command.is_compact(), |button| button.w(px(36.)))
+        .rounded_md()
+        .text_size(px(15.))
+        .cursor_pointer()
+        .when(selected, |row| {
+            row.bg(palette.active_bg).text_color(palette.active_text)
+        })
+        .when(!selected, |row| {
+            row.hover(move |style| style.bg(palette.surface_bg))
+        })
+        .child(match command {
+            SlashPaletteCommand::Block(SlashCommand::Heading(level)) => {
+                div().child(format!("H{level}")).into_any_element()
+            }
+            _ => icon(
+                match command {
+                    SlashPaletteCommand::Block(SlashCommand::Text) => Icon::Text,
+                    SlashPaletteCommand::Block(SlashCommand::BulletedList) => Icon::List,
+                    SlashPaletteCommand::Block(SlashCommand::NumberedList) => Icon::ListOrdered,
+                    SlashPaletteCommand::Block(SlashCommand::TaskList) => Icon::ListTodo,
+                    SlashPaletteCommand::Block(SlashCommand::Quote) => Icon::Quote,
+                    SlashPaletteCommand::Block(SlashCommand::CodeBlock) => Icon::Braces,
+                    SlashPaletteCommand::Block(SlashCommand::Divider) => Icon::Minus,
+                    SlashPaletteCommand::Block(SlashCommand::Table) => Icon::Table,
+                    SlashPaletteCommand::Link => Icon::Link,
+                    SlashPaletteCommand::Formula => Icon::Sigma,
+                    SlashPaletteCommand::Image => Icon::FileImage,
+                    SlashPaletteCommand::Block(SlashCommand::Heading(_)) => unreachable!(),
+                },
+                18.,
+                color,
+            )
+            .into_any_element(),
+        })
+        .when(!command.is_compact(), |button| {
+            button.child(div().text_size(px(13.)).child(label))
+        })
+        .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+            if *hovered
+                && let Some(state) = &mut app.slash_commands
+                && state.query == hover_query
+                && state.selected != index
+            {
+                state.selected = index;
+                cx.notify();
+            }
+        }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                app.execute_slash_command(query.clone(), command, cx);
+            }),
+        )
+}
+
+pub(super) fn slash_command_element_id(index: usize) -> &'static str {
+    const IDS: [&str; 16] = [
         "slash-command-0",
         "slash-command-1",
         "slash-command-2",
@@ -1636,6 +1787,8 @@ fn slash_command_element_id(index: usize) -> &'static str {
         "slash-command-11",
         "slash-command-12",
         "slash-command-13",
+        "slash-command-14",
+        "slash-command-15",
     ];
     IDS[index.min(IDS.len() - 1)]
 }
@@ -2372,6 +2525,24 @@ fn link_editor_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl Into
                             LinkEditorKind::Link => p0_t(app.language, P0Msg::EditLink),
                         }),
                 )
+                .when(editor.kind == LinkEditorKind::Image, |panel| {
+                    panel.child(
+                        div()
+                            .id("link-editor-choose-image")
+                            .debug_selector(|| "link-editor-choose-image".to_string())
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(palette.border)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(palette.active_bg))
+                            .child(image_t(app.language, ImageMsg::ChooseFile))
+                            .on_click(cx.listener(|app, _, window, cx| {
+                                app.choose_image_from_settings(window, cx);
+                            })),
+                    )
+                })
                 .when(!preference_editor, |panel| {
                     panel.child(field(
                         "link-editor-label",
