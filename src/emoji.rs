@@ -1,14 +1,14 @@
 //! Maintained emoji shortcode table and `:` completer query.
 //!
 //! Canonical source stays `:name:`; preview and Visual Edit render the glyph
-//! through this table. No network, no extra crate.
+//! through the shared catalog. No network, no extra crate.
 
-use std::ops::Range;
+use std::{collections::BTreeMap, ops::Range, sync::LazyLock};
 
-/// Queryable shortcode table: current Preview names plus a modest set of
-/// common GitHub-style aliases. Names use the ASCII shortcode charset
+/// Existing application aliases override the shared catalog's glyph choices
+/// for compatibility. Names use the ASCII shortcode charset
 /// (lowercase, digits, `_`, `-`, `+`).
-const EMOJI_SHORTCODES: &[(&str, &str)] = &[
+const LEGACY_EMOJI_SHORTCODES: &[(&str, &str)] = &[
     ("+1", "👍"),
     ("-1", "👎"),
     ("100", "💯"),
@@ -43,6 +43,13 @@ const EMOJI_SHORTCODES: &[(&str, &str)] = &[
     ("zap", "⚡"),
 ];
 
+static EMOJI_SHORTCODES: LazyLock<Vec<(&'static str, &'static str)>> = LazyLock::new(|| {
+    let mut catalog: BTreeMap<_, _> = typune_markdown::emoji::shortcodes().collect();
+    // Preserve existing document glyphs and aliases when adding the broader catalog.
+    catalog.extend(LEGACY_EMOJI_SHORTCODES.iter().copied());
+    catalog.into_iter().collect()
+});
+
 /// Open `:query` token used by the emoji completer palette.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmojiQuery {
@@ -58,9 +65,9 @@ pub fn emoji_for_shortcode(shortcode: &str) -> Option<&'static str> {
         return None;
     }
     EMOJI_SHORTCODES
-        .iter()
-        .find(|(name, _)| *name == shortcode)
-        .map(|(_, glyph)| *glyph)
+        .binary_search_by_key(&shortcode, |(name, _)| *name)
+        .ok()
+        .map(|index| EMOJI_SHORTCODES[index].1)
 }
 
 /// Prefix-filter the shortcode table. An empty prefix returns the full table
@@ -174,12 +181,31 @@ mod tests {
     }
 
     #[test]
+    fn shared_catalog_preserves_aliases_and_expands_rendering() {
+        let all = emoji_shortcodes_matching("");
+        assert!(all.len() >= 250);
+        assert!(all.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        for (name, glyph) in &all {
+            assert_eq!(emoji_for_shortcode(name), Some(*glyph));
+            assert_eq!(emoji_confirm_replacement(name), Some(format!(":{name}:")));
+        }
+        for (name, glyph) in LEGACY_EMOJI_SHORTCODES {
+            assert_eq!(emoji_for_shortcode(name), Some(*glyph));
+        }
+        assert_eq!(emoji_for_shortcode("rofl"), Some("🤣"));
+        assert_eq!(emoji_for_shortcode("cat"), Some("🐱"));
+        assert_eq!(emoji_for_shortcode("coffee"), Some("☕"));
+        eprintln!("Resolved emoji catalog: {} shortcodes", all.len());
+    }
+
+    #[test]
     fn prefix_filter_includes_empty_and_no_match() {
         let all = emoji_shortcodes_matching("");
         assert!(all.len() >= 16);
         assert!(all.iter().any(|(name, _)| *name == "smile"));
         let smi = emoji_shortcodes_matching("smi");
-        assert_eq!(smi, vec![("smile", "🙂")]);
+        assert!(smi.contains(&("smile", "🙂")));
+        assert!(smi.contains(&("smiley", "😃")));
         assert!(emoji_shortcodes_matching("zzz").is_empty());
         assert!(emoji_shortcodes_matching("smi!").is_empty());
         assert!(emoji_shortcodes_matching("Smile").is_empty());

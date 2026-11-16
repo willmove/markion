@@ -1348,6 +1348,7 @@ impl Element for EditorElement {
         self.app.update(cx, |app, cx| {
             let typewriter_source_active =
                 app.typewriter_mode && matches!(app.view_mode, ViewMode::Edit | ViewMode::Split);
+            let completion_open = app.emoji_completer.is_some();
             let tab = app.active_tab_mut();
             let source_layout_key = SourceLayoutKey {
                 version: tab.document.version(),
@@ -1367,6 +1368,7 @@ impl Element for EditorElement {
             tab.line_heights = line_heights;
             tab.line_tops = line_tops;
             tab.source_layout_key = Some(source_layout_key);
+            let bounds_changed = tab.last_bounds != Some(bounds);
             tab.last_bounds = Some(bounds);
             tab.line_height = line_height;
             let boundary_space_changed = tab.source_typewriter_inset != typewriter_boundary_space;
@@ -1381,6 +1383,9 @@ impl Element for EditorElement {
             };
             if layout_changed {
                 tab.sync_scroll_state.invalidate_geometry();
+            }
+            if completion_open && bounds_changed {
+                cx.defer_in(window, |_, _, cx| cx.notify());
             }
             if layout_changed || typewriter_following {
                 cx.notify();

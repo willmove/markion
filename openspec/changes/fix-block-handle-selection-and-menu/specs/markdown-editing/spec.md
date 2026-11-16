@@ -54,6 +54,30 @@ A supported Visual Edit block SHALL expose a compact contextual menu to turn it 
 
 ## ADDED Requirements
 
+### Requirement: Reordering SHALL preserve independent paragraph boundaries
+
+Dragging, menu movement and structured multi-block movement SHALL preserve the boundaries of independent Markdown source units. At a new join, a missing or single terminal LF/CRLF SHALL be supplemented as needed to prevent adjacent paragraphs or independent containers from merging. Existing authored bytes and separator whitespace SHALL be preserved; intact sibling items in the same list SHALL retain their tight adjacency rather than being made loose by unconditional blank-line insertion. Complete list subtrees and quote groups SHALL remain intact. Planning SHALL reuse the document's versioned block ownership, and a successful move SHALL remain one checked source mutation with exact selection and one-step undo.
+
+#### Scenario: A paragraph moves after a terminal paragraph
+- **WHEN** the user moves a paragraph after a final paragraph ending with no newline or one LF/CRLF
+- **THEN** the result parses as two independent paragraphs in the requested order
+- **AND** the existing text and line endings are preserved with only necessary separator insertion
+
+#### Scenario: A terminal paragraph moves before another paragraph
+- **WHEN** a paragraph ending with one LF/CRLF is moved before an earlier paragraph
+- **THEN** both remain independent paragraphs
+- **AND** one Undo restores the exact original text and selection
+
+#### Scenario: Multiple selected paragraphs move together
+- **WHEN** a contiguous selection of complete source units is moved past another paragraph
+- **THEN** internal selection bytes remain unchanged and the new neighboring paragraphs do not merge
+- **AND** selection follows the moved range without including a newly preceding separator
+
+#### Scenario: Tight list siblings retain their container
+- **WHEN** a list item and its complete nested subtree are moved beside a sibling in the same original list container
+- **THEN** the item order changes while the original tight adjacency and descendant bytes are preserved
+- **AND** boundaries between containers and unrelated prose, and between independent quote groups, retain the required blank-line separation
+
 ### Requirement: Exclusive block-selection ends SHALL leave the following block inactive
 
 A selected block range SHALL own complete canonical source units and their deterministic separators, excluding the next unselected block's structural prefix. A non-empty selection whose exclusive end equals the next block's start SHALL NOT reveal or highlight that next block's heading, list or quote markers or their following spaces solely because of that endpoint. The selected block's own markers and descendants SHALL remain part of its complete source unit for copy, delete and move. Collapsed caret editing, selection that actually intersects a marker, and IME composition SHALL retain their documented syntax-reveal behavior. Selecting or projecting a range SHALL NOT mutate source, version, history or shared derived caches.

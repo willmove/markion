@@ -466,6 +466,10 @@ pub struct AppPreferences {
     /// When enabled, Visual Edit keeps non-empty inline syntax out of the
     /// text flow. Disabled by default, which preserves caret-triggered reveal.
     pub stable_visual_inline: bool,
+    /// Show quick block settings after an ordinary Visual Edit grip click.
+    pub block_handle_menu: bool,
+    /// Show quick commands for `/` and `、` queries in Visual Edit. Enabled by default.
+    pub slash_commands_enabled: bool,
     /// When enabled, opening a supported document or image through a
     /// non-explicit entry (File → Open, file-tree click, drag-and-drop,
     /// Open Recent) replaces the active tab when that is safe (an image or
@@ -537,6 +541,8 @@ impl Default for AppPreferences {
             sync_scroll: false,
             show_hidden_files: false,
             stable_visual_inline: false,
+            block_handle_menu: true,
+            slash_commands_enabled: true,
             open_in_current_tab: true,
             markdown_auto_pair: true,
             sidebar_visible: true,

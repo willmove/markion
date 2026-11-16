@@ -9430,6 +9430,8 @@ Intro.
             sync_scroll: true,
             show_hidden_files: true,
             stable_visual_inline: true,
+            block_handle_menu: false,
+            slash_commands_enabled: false,
             open_in_current_tab: false,
             markdown_auto_pair: false,
             sidebar_visible: false,

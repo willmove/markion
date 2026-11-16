@@ -199,6 +199,7 @@ pub fn source_block_unit(
 pub fn move_source_units(
     source: &str,
     version: u64,
+    blocks: &[VisualBlock],
     moving: Range<usize>,
     insertion: usize,
 ) -> Result<BlockEdit, BlockEditError> {
@@ -210,22 +211,42 @@ pub fn move_source_units(
     {
         return Err(BlockEditError::Ambiguous);
     }
-    let moved = &source[moving.clone()];
     let line_ending = preferred_line_ending(source);
-    let join = |left: &str, right: &str| {
-        let separator = if !left.is_empty() && !right.is_empty() && !left.ends_with('\n') {
-            line_ending.repeat(2)
+    let join = |left_range: Range<usize>, right_range: Range<usize>| {
+        let left = &source[left_range.clone()];
+        let right = &source[right_range.clone()];
+        let minimum: usize = if tight_list_join(source, blocks, &left_range, &right_range) {
+            1
+        } else {
+            2
+        };
+        // Count logical line endings across whitespace-only separator lines,
+        // retaining all authored spaces/tabs and any already larger gap.
+        let trailing = &left[left.trim_end_matches([' ', '\t', '\r', '\n']).len()..];
+        let leading_len = right.len() - right.trim_start_matches([' ', '\t', '\r', '\n']).len();
+        let existing = trailing
+            .bytes()
+            .chain(right[..leading_len].bytes())
+            .filter(|b| *b == b'\n')
+            .count();
+        let needs_line_start = !left.ends_with('\n') && !right.starts_with(['\r', '\n']);
+        let separator = if !left.is_empty() && !right.is_empty() {
+            line_ending.repeat(
+                minimum
+                    .saturating_sub(existing)
+                    .max(usize::from(needs_line_start)),
+            )
         } else {
             String::new()
         };
         (format!("{left}{separator}{right}"), separator.len())
     };
     let (range, replacement, selected_start) = if insertion < moving.start {
-        let (replacement, _) = join(moved, &source[insertion..moving.start]);
+        let (replacement, _) = join(moving.clone(), insertion..moving.start);
         (insertion..moving.end, replacement, insertion)
     } else {
-        let between = &source[moving.end..insertion];
-        let (replacement, separator) = join(between, moved);
+        let between = moving.end..insertion;
+        let (replacement, separator) = join(between.clone(), moving.clone());
         (
             moving.start..insertion,
             replacement,
@@ -238,6 +259,66 @@ pub fn move_source_units(
         replacement,
         selection_after: selected_start..selected_start,
     })
+}
+
+/// A single line ending is sufficient only inside the same original list.
+/// Use canonical subtree ownership: the last visible row may be nested code
+/// or a child item rather than the parent whose sibling is on the other side.
+fn tight_list_join(
+    source: &str,
+    blocks: &[VisualBlock],
+    left: &Range<usize>,
+    right: &Range<usize>,
+) -> bool {
+    let Some((right_index, right_block)) = blocks.iter().enumerate().find(|(_, block)| {
+        block.source_range.start >= right.start
+            && block.source_range.start < right.end
+            && !matches!(block.kind, VisualBlockKind::Whitespace)
+    }) else {
+        return false;
+    };
+    let Some(signature) = list_signature(source, right_block) else {
+        return false;
+    };
+    let left_index = blocks
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, block)| {
+            block.source_range.start >= left.start && block.source_range.start < left.end
+        })
+        .find_map(|(index, block)| {
+            (list_signature(source, block) == Some(signature)
+                && source_block_unit(source, blocks, index)
+                    .is_ok_and(|unit| unit.source_range.end == left.end))
+            .then_some(index)
+        });
+    let Some(left_index) = left_index else {
+        return false;
+    };
+    let start = left_index.min(right_index);
+    let end = left_index.max(right_index);
+    blocks[start..=end].iter().all(|block| match block.kind {
+        VisualBlockKind::Whitespace => true,
+        VisualBlockKind::ListItem { level, .. } if block.quote_context.is_none() => {
+            level > signature.0 || list_signature(source, block) == Some(signature)
+        }
+        _ => block.list_depth >= signature.0,
+    })
+}
+
+fn list_signature(source: &str, block: &VisualBlock) -> Option<(usize, bool, u8)> {
+    let VisualBlockKind::ListItem { level, ordered, .. } = block.kind else {
+        return None;
+    };
+    if block.quote_context.is_some() {
+        return None;
+    }
+    let prefix = source
+        .get(block.block_prefix.as_ref()?.source_range.clone())?
+        .trim_start_matches([' ', '\t']);
+    let marker = prefix.bytes().find(|b| !b.is_ascii_digit())?;
+    Some((level, ordered, marker))
 }
 
 pub fn indent_subtree(
@@ -569,6 +650,39 @@ pub fn delete_block(
     })
 }
 
+/// Insert an editable empty paragraph after the complete source unit.
+pub fn add_paragraph_below(
+    source: &str,
+    current_version: u64,
+    blocks: &[VisualBlock],
+    target: &BlockTarget,
+) -> Result<BlockEdit, BlockEditError> {
+    let (index, _) = validate_block_target(current_version, blocks, target)?;
+    if !block_can_reorder_at(blocks, index) {
+        return Err(BlockEditError::Unsupported);
+    }
+    let unit = source_block_unit(source, blocks, index)?;
+    let authored = source
+        .get(unit.source_range.clone())
+        .ok_or(BlockEditError::Ambiguous)?;
+    let ending = preferred_line_ending(source);
+    let trailing = authored
+        .chars()
+        .rev()
+        .take_while(|c| matches!(c, '\r' | '\n'))
+        .filter(|c| *c == '\n')
+        .count();
+    let padding = 2usize.saturating_sub(trailing);
+    let insertion = unit.source_range.end;
+    let caret = insertion + padding * ending.len();
+    Ok(BlockEdit {
+        document_version: current_version,
+        range: insertion..insertion,
+        replacement: ending.repeat(padding + 1),
+        selection_after: caret..caret,
+    })
+}
+
 pub fn reorder_block(
     source: &str,
     current_version: u64,
@@ -597,7 +711,7 @@ pub fn reorder_block(
         BlockPlacement::Before => destination_unit.start,
         BlockPlacement::After => destination_unit.end,
     };
-    move_source_units(source, current_version, moving_unit, raw_insertion)
+    move_source_units(source, current_version, blocks, moving_unit, raw_insertion)
 }
 
 pub fn adjacent_reorder_target(
@@ -860,13 +974,20 @@ mod tests {
             move_source_units(
                 source,
                 doc.version(),
+                &blocks,
                 unit.source_range.clone(),
                 unit.source_range.start + 2
             )
             .is_err()
         );
-        let edit =
-            move_source_units(source, doc.version(), unit.source_range, source.len()).unwrap();
+        let edit = move_source_units(
+            source,
+            doc.version(),
+            &blocks,
+            unit.source_range,
+            source.len(),
+        )
+        .unwrap();
         let mut result = source.to_string();
         result.replace_range(edit.range, &edit.replacement);
         assert!(result.starts_with("intro\n\nlast\n\n- parent\n  - child"));
@@ -925,6 +1046,53 @@ mod tests {
         let mut result = source.to_string();
         result.replace_range(edit.range, &edit.replacement);
         assert_eq!(result, "- root\r\n- parent\r\n  - 子项\r\n\r\nend");
+    }
+
+    #[test]
+    fn add_below_owns_a_blank_paragraph_after_complete_units() {
+        for ending in ["\n", "\r\n"] {
+            for first in [
+                "段落😀",
+                "- parent\n  - child",
+                "> before\n>\n> after",
+                "## First",
+            ] {
+                let first = first.replace('\n', ending);
+                let source = format!("{first}{ending}{ending}### Next{ending}");
+                let doc = MarkdownDocument::from_text(&source);
+                let blocks = doc.visual_blocks_shared();
+                let target = BlockTarget::from_block(doc.version(), &blocks[0]);
+                let edit = add_paragraph_below(&source, doc.version(), &blocks, &target).unwrap();
+                assert_eq!(
+                    edit.range,
+                    source.find("### Next").unwrap()..source.find("### Next").unwrap()
+                );
+                assert_eq!(edit.replacement, ending);
+                assert_eq!(edit.selection_after, edit.range.start..edit.range.start);
+                let mut result = source.clone();
+                result.replace_range(edit.range, &edit.replacement);
+                assert_eq!(
+                    result,
+                    format!("{first}{ending}{ending}{ending}### Next{ending}")
+                );
+                let mut stale = target.clone();
+                stale.document_version = doc.version().wrapping_add(1);
+                assert_eq!(
+                    add_paragraph_below(&source, doc.version(), &blocks, &stale),
+                    Err(BlockEditError::Stale)
+                );
+            }
+        }
+        for source in ["tail", "tail\n", "tail\n\n"] {
+            let doc = MarkdownDocument::from_text(source);
+            let blocks = doc.visual_blocks_shared();
+            let target = BlockTarget::from_block(doc.version(), &blocks[0]);
+            let edit = add_paragraph_below(source, doc.version(), &blocks, &target).unwrap();
+            let mut result = source.to_string();
+            result.replace_range(edit.range, &edit.replacement);
+            assert_eq!(result, "tail\n\n\n");
+            assert_eq!(edit.selection_after, 6..6);
+        }
     }
 
     fn target_for(doc: &MarkdownDocument, index: usize) -> (Vec<VisualBlock>, BlockTarget) {
@@ -1200,6 +1368,155 @@ mod tests {
         let duplicate =
             duplicate_block(two_blocks.text(), two_blocks.version(), &blocks, &last).unwrap();
         assert_eq!(duplicate.replacement, "two\n\ntwo");
+    }
+
+    #[test]
+    fn reorder_separators_keep_terminal_paragraphs_distinct() {
+        for ending in ["\n", "\r\n"] {
+            for (tail, added) in [
+                (String::new(), ending.repeat(2)),
+                (ending.to_string(), ending.to_string()),
+                (ending.repeat(2), String::new()),
+                (ending.repeat(3), String::new()),
+                (format!("{ending} \t{ending}"), String::new()),
+                (format!("{ending}  "), ending.to_string()),
+            ] {
+                let source = format!("前段😀{ending}{ending}末段中文{tail}");
+                let doc = MarkdownDocument::from_text(&source);
+                let blocks = doc.visual_blocks_shared();
+                let paragraphs = blocks
+                    .iter()
+                    .filter(|b| matches!(b.kind, VisualBlockKind::Paragraph))
+                    .collect::<Vec<_>>();
+                assert_eq!(paragraphs.len(), 2);
+                let first = BlockTarget::from_block(doc.version(), paragraphs[0]);
+                let last = BlockTarget::from_block(doc.version(), paragraphs[1]);
+                let expected = format!("末段中文{tail}{added}前段😀{ending}{ending}");
+                for (moving, target, placement, caret) in [
+                    (
+                        &first,
+                        &last,
+                        BlockPlacement::After,
+                        format!("末段中文{tail}{added}").len(),
+                    ),
+                    (&last, &first, BlockPlacement::Before, 0),
+                ] {
+                    let edit =
+                        reorder_block(&source, doc.version(), &blocks, moving, target, placement)
+                            .unwrap();
+                    let mut result = source.clone();
+                    result.replace_range(edit.range.clone(), &edit.replacement);
+                    assert_eq!(result, expected, "{ending:?}, {tail:?}, {placement:?}");
+                    assert_eq!(edit.selection_after, caret..caret);
+                    assert_eq!(
+                        MarkdownDocument::from_text(&result)
+                            .preview_blocks()
+                            .iter()
+                            .filter(|b| matches!(b, crate::PreviewBlock::Paragraph { .. }))
+                            .count(),
+                        2
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reorder_separators_keep_tight_list_subtrees_and_quote_groups() {
+        for ending in ["\n", "\r\n"] {
+            for source in [
+                "- parent\n- sibling\n",
+                "- parent\n- sibling",
+                "- parent\n  - child\n  ```rust\n  code\n  ```\n- sibling\n",
+                "- parent\n  > quoted\n- sibling\n",
+                "1. parent\n2. sibling\n",
+                "1) parent\n2) sibling\n",
+                "- parent\n  - first\n  - last\n",
+            ] {
+                let source = source.replace('\n', ending);
+                let doc = MarkdownDocument::from_text(&source);
+                let blocks = doc.visual_blocks_shared();
+                let items = blocks
+                    .iter()
+                    .filter(|b| matches!(b.kind, VisualBlockKind::ListItem { .. }))
+                    .collect::<Vec<_>>();
+                let (first, last) = if source.contains("first") {
+                    (items[1], items[2])
+                } else {
+                    (items[0], *items.last().unwrap())
+                };
+                let first_target = BlockTarget::from_block(doc.version(), first);
+                let last_target = BlockTarget::from_block(doc.version(), last);
+                let first_index = blocks.iter().position(|b| b.id == first.id).unwrap();
+                let last_index = blocks.iter().position(|b| b.id == last.id).unwrap();
+                let a = source_block_unit(&source, &blocks, first_index)
+                    .unwrap()
+                    .source_range;
+                let b = source_block_unit(&source, &blocks, last_index)
+                    .unwrap()
+                    .source_range;
+                let gap = if source[b.clone()].ends_with('\n') {
+                    ""
+                } else {
+                    ending
+                };
+                let expected = format!(
+                    "{}{}{gap}{}{}",
+                    &source[..a.start],
+                    &source[b.clone()],
+                    &source[a.clone()],
+                    &source[b.end..]
+                );
+                for (moving, target, placement) in [
+                    (&first_target, &last_target, BlockPlacement::After),
+                    (&last_target, &first_target, BlockPlacement::Before),
+                ] {
+                    let edit =
+                        reorder_block(&source, doc.version(), &blocks, moving, target, placement)
+                            .unwrap();
+                    let mut result = source.clone();
+                    result.replace_range(edit.range, &edit.replacement);
+                    assert_eq!(result, expected, "tight subtree {source:?}");
+                    assert_eq!(
+                        MarkdownDocument::from_text(&result)
+                            .render_html_fragment()
+                            .matches("<p>")
+                            .count(),
+                        doc.render_html_fragment().matches("<p>").count(),
+                        "reordering must not make a tight list loose: {source:?}"
+                    );
+                }
+            }
+            let source = format!("> first{ending}{ending}> last{ending}");
+            let doc = MarkdownDocument::from_text(&source);
+            let blocks = doc.visual_blocks_shared();
+            let content = blocks
+                .iter()
+                .filter(|b| b.quote_context.is_some())
+                .collect::<Vec<_>>();
+            let edit = reorder_block(
+                &source,
+                doc.version(),
+                &blocks,
+                &BlockTarget::from_block(doc.version(), content[0]),
+                &BlockTarget::from_block(doc.version(), *content.last().unwrap()),
+                BlockPlacement::After,
+            )
+            .unwrap();
+            let mut result = source.clone();
+            result.replace_range(edit.range, &edit.replacement);
+            assert_eq!(
+                result,
+                format!("> last{ending}{ending}> first{ending}{ending}")
+            );
+            assert_eq!(
+                MarkdownDocument::from_text(&result)
+                    .render_html_fragment()
+                    .matches("<blockquote>")
+                    .count(),
+                2
+            );
+        }
     }
 
     #[test]

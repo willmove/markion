@@ -134,6 +134,8 @@ impl MarkionApp {
                     app.heading_menu_max_level = preferences.heading_menu_max_level;
                     app.sync_scroll = preferences.sync_scroll;
                     app.stable_visual_inline = preferences.stable_visual_inline;
+                    app.block_handle_menu = preferences.block_handle_menu;
+                    app.slash_commands_enabled = preferences.slash_commands_enabled;
                     app.open_in_current_tab = preferences.open_in_current_tab;
                     app.markdown_auto_pair = preferences.markdown_auto_pair;
                     app.sidebar_visible = preferences.sidebar_visible;
@@ -505,6 +507,24 @@ impl MarkionApp {
             },
         )
         .into();
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn toggle_block_handle_menu(&mut self, cx: &mut Context<Self>) {
+        self.block_handle_menu = !self.block_handle_menu;
+        if !self.block_handle_menu && self.block_menu.as_ref().is_some_and(|menu| menu.from_grip) {
+            self.dismiss_visual_block_menu();
+        }
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    pub(super) fn toggle_slash_commands(&mut self, cx: &mut Context<Self>) {
+        self.slash_commands_enabled = !self.slash_commands_enabled;
+        self.slash_commands = None;
+        self.dismissed_slash_query = None;
+        self.sync_slash_command_state(cx);
         self.persist_preferences();
         cx.notify();
     }

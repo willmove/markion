@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-16",
+  "platform": "Windows",
+  "binary_sha256": "6DB88C16ACD60D5480BB41CE04DA93B2E8B9554E48071E148CFCBBEE03C7D248",
+  "original_sha256": "B525D877E19DB741EA3BC6868226ED905CF683848E68203DA6523EF48228EE28",
+  "moved_sha256": "79FE3CA9798E6EF92EF27C8832EC9914D3BF780A4220DF95A7DF742A757C1C8A",
+  "restored_sha256": "B525D877E19DB741EA3BC6868226ED905CF683848E68203DA6523EF48228EE28",
+  "added_crlf": 1,
+  "os_drag_source_exact": true,
+  "os_single_undo_exact": true,
+  "root_tests": {
+    "library_passed": 752,
+    "desktop_passed": 818,
+    "integration_passed": 5,
+    "ignored": 3,
+    "failed": 0
+  },
+  "gpui_drag_cases": 8,
+  "native_scope": "Downward single-block OS drag, save and one Undo; bidirectional and multi-block cases covered by GPUI."
+}

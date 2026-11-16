@@ -182,6 +182,7 @@ impl BlockSelection {
         move_source_units(
             document.text(),
             self.version,
+            &blocks,
             self.range(document)?,
             if after {
                 destination.source_range.end
@@ -607,5 +608,63 @@ mod tests {
         assert_eq!(table.rows[1][1], "😀");
         assert_eq!(table.alignments[1], crate::TableAlignment::Right);
         assert!(cells.clear(&doc).is_err());
+    }
+
+    #[test]
+    fn selected_blocks_move_without_merging_neighbor_paragraphs() {
+        for ending in ["\n", "\r\n"] {
+            let source = format!("one{ending}{ending}two{ending}{ending}last{ending}");
+            let doc = MarkdownDocument::from_text(&source);
+            let blocks = doc.visual_blocks_shared();
+            let content = blocks
+                .iter()
+                .filter(|b| matches!(b.kind, crate::VisualBlockKind::Paragraph))
+                .collect::<Vec<_>>();
+            for (anchor, head, destination, after, caret) in [
+                (
+                    content[0].id,
+                    content[1].id,
+                    content[2],
+                    true,
+                    4 + 2 * ending.len(),
+                ),
+                (content[2].id, content[2].id, content[0], false, 0),
+            ] {
+                let selection = BlockSelection::new(&doc, anchor, head);
+                let edit = selection
+                    .move_to(
+                        &doc,
+                        &BlockTarget::from_block(doc.version(), destination),
+                        after,
+                    )
+                    .unwrap();
+                assert_eq!(edit.selection_after, caret..caret);
+                let mut moved = doc.clone();
+                EditTransaction::from_edit(&moved, edit)
+                    .unwrap()
+                    .apply(&mut moved)
+                    .unwrap();
+                let expected =
+                    format!("last{ending}{ending}one{ending}{ending}two{ending}{ending}");
+                assert_eq!(moved.text(), expected);
+                assert_eq!(
+                    moved
+                        .preview_blocks()
+                        .iter()
+                        .filter(|b| matches!(b, crate::PreviewBlock::Paragraph { .. }))
+                        .count(),
+                    3
+                );
+                assert!(
+                    selection
+                        .move_to(
+                            &moved,
+                            &BlockTarget::from_block(doc.version(), destination),
+                            after
+                        )
+                        .is_err()
+                );
+            }
+        }
     }
 }

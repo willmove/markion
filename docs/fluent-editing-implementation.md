@@ -48,8 +48,8 @@ GFM 不表达合并格、任意多块单元格或图片像素裁剪，这些不�
 
 使用 `docs/fixtures/visual-p3-smoke.md`：
 
-1. Esc 进入块选择，Shift+Up/Down 扩展；再次 Esc 回到文字。点击 grip 选择，Shift+点击另一个 grip 扩展。
-2. Ctrl/Cmd+Shift+Up/Down 移动选中块；拖动选中范围内任一 grip 移动整个范围。靠近编辑区上下边缘自动滚动。
+1. Esc 进入块选择，Shift+Up/Down 扩展；再次 Esc 回到文字。普通点击 grip 选择当前完整块并打开快捷菜单，可直接转换块类型、复制/剪切或在下方新增段落；“文件 → 首选项 → 常规 → 点击块首时显示快捷菜单”可关闭自动弹出。Shift+点击另一个 grip 只扩选，拖动不弹菜单；选区终点不会误展开下一块的标题标记。新增行为及验证范围见[块菜单验证记录](verification/block-grip-menu-windows-2026-11-16.md)。
+2. Ctrl/Cmd+Shift+Up/Down 移动选中块；拖动选中范围内任一 grip 移动整个范围。靠近编辑区上下边缘自动滚动。段落向前或向末尾移动时，连接处会保留或补足必要空行，避免段落合并；同一列表内的紧凑兄弟项保留原有排列。一次撤销恢复精确原文和块选区；LF/CRLF、单块/多块与原生拖动核对见[分隔修复记录](verification/block-grip-menu-windows-2026-11-16.md#拖动分隔后续修复)。
 3. 单元格中拖到另一格形成矩形；Shift+点击扩展，Alt+点击直接进入单元格选择。行列 grip 选择相应区域并打开结构菜单。
 4. Ctrl/Cmd+C 复制可读格式；Delete 清空选中格；Ctrl/Cmd+V 粘贴 TSV 矩阵。最后一格 Tab 添加行。
 5. 点击代码 Fold/Expand 控制。搜索、光标导航或输入需要编辑折叠代码时展开它。

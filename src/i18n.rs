@@ -1607,6 +1607,8 @@ pub enum Msg {
     PrefPanelOpenInCurrentTab,
     /// "Markdown auto-pair" row label.
     PrefPanelMarkdownAutoPair,
+    /// Show the quick-command popup when typing `/`.
+    PrefPanelSlashCommands,
     /// "Sidebar" row label.
     PrefPanelSidebar,
     /// Outline docking side and its two choices in General preferences.
@@ -2378,6 +2380,40 @@ const P1_ES: [&str; 41] = [
     "Emoji",
     "No hay emojis coincidentes",
 ];
+
+#[derive(Clone, Copy, Debug)]
+pub enum BlockGripMsg {
+    ShowMenu,
+    AddBelow,
+}
+
+pub fn block_grip_t(lang: Language, msg: BlockGripMsg) -> &'static str {
+    let labels = match lang {
+        Language::En => ["Show block menu on grip click", "Add below"],
+        Language::ZhHans => ["点击块首时显示快捷菜单", "在下方添加段落"],
+        Language::ZhHant => ["點擊區塊開頭時顯示快捷選單", "在下方新增段落"],
+        Language::Ja => [
+            "ブロックのグリップをクリックしてメニューを表示",
+            "下に段落を追加",
+        ],
+        Language::Fr => [
+            "Afficher le menu au clic sur la poignée du bloc",
+            "Ajouter un paragraphe en dessous",
+        ],
+        Language::De => [
+            "Blockmenü beim Klick auf den Griff anzeigen",
+            "Absatz darunter einfügen",
+        ],
+        Language::Es => [
+            "Mostrar el menú al hacer clic en el asa del bloque",
+            "Añadir párrafo debajo",
+        ],
+    };
+    labels[match msg {
+        BlockGripMsg::ShowMenu => 0,
+        BlockGripMsg::AddBelow => 1,
+    }]
+}
 
 pub fn p1_t(lang: Language, msg: P1Msg) -> &'static str {
     let table = match lang {
@@ -4511,6 +4547,7 @@ fn en(msg: Msg) -> &'static str {
         Msg::VisualInlineSourceLabel => "Source",
         Msg::PrefPanelOpenInCurrentTab => "Open documents in current tab",
         Msg::PrefPanelMarkdownAutoPair => "Markdown auto-pair",
+        Msg::PrefPanelSlashCommands => "Show quick commands when typing /",
         Msg::PrefPanelSidebar => "Sidebar",
         Msg::PrefPanelOutlinePosition => "Outline position",
         Msg::PrefPanelOutlineLeft => "Left",
@@ -5205,6 +5242,7 @@ fn ja(msg: Msg) -> &'static str {
         Msg::VisualInlineSourceLabel => "ソース",
         Msg::PrefPanelOpenInCurrentTab => "現在のタブでドキュメントを開く",
         Msg::PrefPanelMarkdownAutoPair => "Markdown 自動ペア",
+        Msg::PrefPanelSlashCommands => "/ 入力でクイックコマンドを表示",
         Msg::PrefPanelHeadingMenu => "見出しメニュー",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
@@ -5915,6 +5953,7 @@ fn fr(msg: Msg) -> &'static str {
         Msg::VisualInlineSourceLabel => "Source",
         Msg::PrefPanelOpenInCurrentTab => "Ouvrir les documents dans l'onglet actif",
         Msg::PrefPanelMarkdownAutoPair => "Appariement automatique Markdown",
+        Msg::PrefPanelSlashCommands => "Afficher les commandes en tapant /",
         Msg::PrefPanelHeadingMenu => "Menu des titres",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
@@ -6611,6 +6650,7 @@ fn de(msg: Msg) -> &'static str {
         Msg::VisualInlineSourceLabel => "Quelle",
         Msg::PrefPanelOpenInCurrentTab => "Dokumente im aktuellen Tab öffnen",
         Msg::PrefPanelMarkdownAutoPair => "Markdown-Autopaarung",
+        Msg::PrefPanelSlashCommands => "Schnellbefehle bei Eingabe von / anzeigen",
         Msg::PrefPanelHeadingMenu => "Überschriftenmenü",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
@@ -7299,6 +7339,7 @@ fn es(msg: Msg) -> &'static str {
         Msg::VisualInlineSourceLabel => "Código",
         Msg::PrefPanelOpenInCurrentTab => "Abrir documentos en la pestaña actual",
         Msg::PrefPanelMarkdownAutoPair => "Autopareado Markdown",
+        Msg::PrefPanelSlashCommands => "Mostrar comandos rápidos al escribir /",
         Msg::PrefPanelHeadingMenu => "Menú de encabezados",
         Msg::PrefPanelHeadingMenuThree => "H1–H5",
         Msg::PrefPanelHeadingMenuSix => "H1–H6",
@@ -7952,6 +7993,7 @@ fn zh(msg: Msg) -> &'static str {
         Msg::VisualInlineSourceLabel => "源码",
         Msg::PrefPanelOpenInCurrentTab => "在当前标签页打开文档",
         Msg::PrefPanelMarkdownAutoPair => "Markdown 自动配对",
+        Msg::PrefPanelSlashCommands => "输入 / 显示快捷命令",
         Msg::PrefPanelSidebar => "侧边栏",
         Msg::PrefPanelOutlinePosition => "大纲位置",
         Msg::PrefPanelOutlineLeft => "左侧",
@@ -8605,6 +8647,7 @@ fn zh_hant(msg: Msg) -> &'static str {
         Msg::VisualInlineSourceLabel => "原始碼",
         Msg::PrefPanelOpenInCurrentTab => "在目前分頁開啟文件",
         Msg::PrefPanelMarkdownAutoPair => "Markdown 自動配對",
+        Msg::PrefPanelSlashCommands => "輸入 / 顯示快捷命令",
         Msg::PrefPanelSidebar => "側邊欄",
         Msg::PrefPanelOutlinePosition => "大綱位置",
         Msg::PrefPanelOutlineLeft => "左側",
@@ -9669,6 +9712,7 @@ mod tests {
             Msg::VisualInlineSourceLabel,
             Msg::PrefPanelOpenInCurrentTab,
             Msg::PrefPanelMarkdownAutoPair,
+            Msg::PrefPanelSlashCommands,
             Msg::PrefPanelSidebar,
             Msg::PrefPanelOutlinePosition,
             Msg::PrefPanelOutlineLeft,

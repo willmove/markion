@@ -66,3 +66,19 @@ Selection, popup lifecycle and preference toggles do not mutate document text or
 ## Migration Plan
 
 No document migration is required. Existing configuration without `block_handle_menu` enables the new click popup. Users can disable it in General preferences to retain selection-only clicks. Reset restores enabled. Older builds ignore the extra TOML key; documents remain ordinary Markdown. Validate the completed change before any later archive; stable specs are unchanged during planning and implementation.
+
+## Implementation and verification notes
+
+- Non-empty selection endpoints are gated by actual range intersection; the excluded end is not treated as an insertion caret. Fully enclosed inline groups retain their existing styled projection; structural prefixes that actually intersect the selection remain source-backed and editable.
+- Completed-click dispatch clears its pending click when a drag begins, so no additional persistent gesture state is required. Grip events validate a captured target rather than indexing a possibly stale virtual row.
+- The compact popup shares menu command state and a logical keyboard order. A menu-owned scroll handle maps logical commands to their rendered rows (including compact transform groups and separators), keeping keyboard selection visible without moving the document. A generic window autoscroll request did not scroll ordinary menu divs and was replaced after the narrow-window regression exposed it.
+- Native Windows verification uses isolated APPDATA/LOCALAPPDATA and disposable fixtures. The available native APIs do not support a held modifier during a click; Shift-click uses GPUI mouse-event regression coverage, while ordinary click, preference persistence, explicit right-click, drag, Cut/undo and Add Below have OS-input checks. This changes the evidence method, not the specified Shift-click behavior.
+- A pre-existing sidebar layout test used a hard-coded Unix path separator in a file-row selector. The fixture selector now derives from its PathBuf so the full root suite can run on Windows.
+
+## Follow-up: Preserve block boundaries during reordering
+
+The user requested fixing the terminal-separator issue recorded by the first native verification. `move_source_units` currently inserts two newlines only when its left piece does not end in LF. A single terminal LF/CRLF therefore joins two formerly independent paragraphs into one Markdown paragraph. Both movement directions and a contiguous block selection reach this helper.
+
+Pass the document's existing shared VisualBlock slice into the move helper. At the new join, require a blank line between independent source units, adding only missing line endings and preserving existing whitespace and LF/CRLF. Preserve the one-line separation of sibling list items belonging to the same original list container (same level, ordered/bullet delimiter, no intervening parent or non-list block). Resolve a list tail through its complete subtree so nested code and child items do not lose their parent identity. Independent quote groups and boundaries between containers and unrelated prose receive blank-line separation. Do not infer list ownership from a final text line or reparse the document to plan the move.
+
+The returned replacement still covers only the old/new interval, and the caret includes any separator inserted before the moved range. Canonical edit/undo validation, moved bytes and per-version caches remain unchanged. Library tests inspect reparsed paragraph/container structure as well as exact source; desktop tests cover drag, structured movement and exact one-step undo. A Windows OS drag/save/undo check will close the prior recorded follow-up.

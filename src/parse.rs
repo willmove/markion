@@ -8,7 +8,7 @@
 
 use std::{collections::HashMap, ops::Range};
 
-use pulldown_cmark::{BlockQuoteKind, Event, HeadingLevel, Options, Parser};
+use pulldown_cmark::{BlockQuoteKind, CowStr, Event, HeadingLevel, Options, Parser, Tag};
 
 use crate::ImagePresentation;
 use crate::escape::escape_html_attribute;
@@ -2884,9 +2884,108 @@ pub(crate) fn coalesced_offset_events<'a>(
     body: &'a str,
     options: Options,
 ) -> Vec<(Event<'a>, Range<usize>)> {
-    typune_markdown::coalesce_contiguous_text_events(
-        Parser::new_ext(body, options).into_offset_iter(),
-    )
+    let mut protected = Vec::new();
+    let events = typune_markdown::coalesce_contiguous_text_events(
+        Parser::new_ext(body, options)
+            .into_offset_iter()
+            .inspect(|(event, range)| {
+                collect_emoji_definition_marker(body, event, range, &mut protected);
+            }),
+    );
+    if protected.is_empty() {
+        return events;
+    }
+
+    // A definition marker can be adjacent to its content. Protect complete
+    // emoji tokens before block parsing, without shifting any authored byte.
+    // Only actual definition events are guarded, so fenced code and HTML keep
+    // their original parsing. The guard is restored before text coalescing.
+    let mut guarded = body.as_bytes().to_vec();
+    loop {
+        protected.sort_unstable();
+        protected.dedup();
+        for &offset in &protected {
+            guarded[offset] = EMOJI_COLON_GUARD;
+        }
+        let guarded_text = std::str::from_utf8(&guarded).expect("ASCII guards preserve UTF-8");
+        let mut additional = Vec::new();
+        let events = typune_markdown::coalesce_contiguous_text_events(
+            Parser::new_ext(guarded_text, options)
+                .into_offset_iter()
+                .map(|(event, range)| {
+                    collect_emoji_definition_marker(body, &event, &range, &mut additional);
+                    let restore = |text| restore_emoji_colons(text, &range, body, &protected);
+                    let event = match event {
+                        Event::Text(text) => Event::Text(restore(text)),
+                        Event::Code(text) => Event::Code(restore(text)),
+                        Event::InlineMath(text) => Event::InlineMath(restore(text)),
+                        Event::DisplayMath(text) => Event::DisplayMath(restore(text)),
+                        Event::Html(text) => Event::Html(restore(text)),
+                        Event::InlineHtml(text) => Event::InlineHtml(restore(text)),
+                        event => event.into_static(),
+                    };
+                    (event, range)
+                }),
+        );
+        if additional.is_empty() {
+            return events;
+        }
+        protected.extend(additional);
+    }
+}
+
+const EMOJI_COLON_GUARD: u8 = 1;
+
+fn collect_emoji_definition_marker(
+    body: &str,
+    event: &Event<'_>,
+    range: &Range<usize>,
+    protected: &mut Vec<usize>,
+) {
+    let fragment = &body[range.clone()];
+    let token = fragment.trim_start_matches([' ', '\t']);
+    if matches!(event, Event::Start(Tag::DefinitionListDefinition))
+        && let Some(after_colon) = token.strip_prefix(':')
+        && let Some(end) = after_colon.find(':')
+        && crate::emoji::emoji_for_shortcode(&after_colon[..end]).is_some()
+    {
+        protected.push(range.start + fragment.len() - token.len());
+    }
+}
+
+fn restore_emoji_colons(
+    text: CowStr<'_>,
+    range: &Range<usize>,
+    body: &str,
+    protected: &[usize],
+) -> CowStr<'static> {
+    let first = protected.partition_point(|offset| *offset < range.start);
+    if protected
+        .get(first)
+        .is_none_or(|offset| *offset >= range.end)
+    {
+        return text.into_static();
+    }
+    // Literal control characters already in the source are not guards. Raw
+    // parser text events precede entity decoding coalescence; code/math retain
+    // the same control-character order even when newlines are normalized.
+    let mut origins = body[range.clone()]
+        .bytes()
+        .enumerate()
+        .filter_map(|(index, byte)| {
+            let guarded = protected.binary_search(&(range.start + index)).is_ok();
+            (guarded || byte == EMOJI_COLON_GUARD).then_some(guarded)
+        });
+    text.chars()
+        .map(|ch| {
+            if ch == char::from(EMOJI_COLON_GUARD) && origins.next() == Some(true) {
+                ':'
+            } else {
+                ch
+            }
+        })
+        .collect::<String>()
+        .into()
 }
 
 pub(crate) fn markdown_options() -> Options {

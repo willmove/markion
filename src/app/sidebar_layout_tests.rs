@@ -112,9 +112,10 @@ fn outline_position_docks_beside_every_document_mode_and_keeps_files_left(cx: &m
                     let outline = cx.debug_bounds("workspace-outline").unwrap();
                     let outline_divider = cx.debug_bounds("outline-resize-container").unwrap();
                     let file_row = cx
-                        .debug_bounds(
-                            "file-tree-row:/tmp/markion-separated-sidebar-layout/note-0.md",
-                        )
+                        .debug_bounds(Box::leak(
+                            format!("file-tree-row:{}", root.join("note-0.md").display())
+                                .into_boxed_str(),
+                        ))
                         .unwrap();
                     let heading = cx.debug_bounds("outline-heading-label-1").unwrap();
                     assert_eq!(document.right(), outline_divider.left());

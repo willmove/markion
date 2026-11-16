@@ -352,10 +352,18 @@ pub fn build_visual_projection_with_marked_range(
     marked_range: Option<Range<usize>>,
     reveal_inline: bool,
 ) -> VisualProjection {
+    // A non-empty selection's end is exclusive. It is not an insertion
+    // caret in the next block (or in the next inline delimiter group).
+    let cursor_is_active = source_selection.is_empty() || source_selection.contains(&source_cursor);
+    let selection_intersects = |range: &Range<usize>| {
+        !source_selection.is_empty()
+            && source_selection.start < range.end
+            && source_selection.end > range.start
+    };
     let endpoint_is_active = |range: &Range<usize>, include_end: bool| {
-        range.contains(&source_cursor)
-            || (include_end && source_cursor == range.end)
-            || (!source_selection.is_empty()
+        (cursor_is_active
+            && (range.contains(&source_cursor) || (include_end && source_cursor == range.end)))
+            || (selection_intersects(range)
                 && (range.contains(&source_selection.start)
                     || range.contains(&source_selection.end)
                     || (include_end
@@ -405,12 +413,14 @@ pub fn build_visual_projection_with_marked_range(
         // the whole prefix whenever the caret owns the block.
         let empty_payload = block.editable_runs.is_empty();
         let caret_on_empty_row = empty_payload
-            && (block.source_range.contains(&source_cursor)
-                || source_cursor == block.source_range.end
-                || (!source_selection.is_empty()
-                    && source_selection.start < block.source_range.end
-                    && source_selection.end > block.source_range.start));
-        if endpoint_is_active(&prefix.source_range, true) || caret_on_empty_row {
+            && ((cursor_is_active
+                && (block.source_range.contains(&source_cursor)
+                    || source_cursor == block.source_range.end))
+                || selection_intersects(&block.source_range));
+        if endpoint_is_active(&prefix.source_range, true)
+            || selection_intersects(&prefix.source_range)
+            || caret_on_empty_row
+        {
             revealed_source_ranges.push(prefix.source_range.clone());
         }
     }
@@ -4949,6 +4959,69 @@ mod tests {
     }
 
     #[test]
+    fn colon_emoji_lines_do_not_become_definition_markers() {
+        for newline in ["\n", "\r\n"] {
+            for prefix in ["", "> ", "  "] {
+                let source = [":book:", "", ":bug:", ":+1:", ":book:", ":-1:", ":check:"]
+                    .map(|line| format!("{prefix}{line}"))
+                    .join(newline);
+                let doc = MarkdownDocument::from_text(&source);
+                let blocks = doc.visual_blocks();
+                let display = blocks
+                    .iter()
+                    .map(|block| {
+                        build_visual_projection(
+                            &source,
+                            block,
+                            source.len()..source.len(),
+                            source.len(),
+                        )
+                        .text
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(display.contains("🐛"), "{display:?}; blocks: {blocks:?}");
+                assert!(display.contains("👍"), "{display:?}");
+                assert!(display.contains("👎"), "{display:?}");
+                assert!(display.contains("✅"), "{display:?}");
+                let html = doc.render_html_fragment();
+                for glyph in ["📘", "🐛", "👍", "👎", "✅"] {
+                    assert!(html.contains(glyph), "{prefix:?}: {html}");
+                }
+                assert!(
+                    !html.contains("<dl>"),
+                    "emoji must not become definitions: {html}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn emoji_definition_guard_preserves_real_definitions_and_payloads() {
+        let source = "Term\n: real **definition**\n\n:book:\n:bug:\n\n```text\n:bug:\n```\n\n`term\n:book:`\n\nLiteral \u{1} &amp; \"smart\"\n:coffee:\n:cat:\n";
+        let doc = MarkdownDocument::from_text(source);
+        let html = doc.render_html_fragment();
+        assert!(html.contains("<dl>"), "{html}");
+        assert!(html.contains("real <strong>definition</strong>"), "{html}");
+        assert!(html.contains("🐛"), "{html}");
+        assert!(html.contains("☕"), "{html}");
+        assert!(html.contains("🐱"), "{html}");
+        assert!(html.contains(":bug:\n</code>"), "{html}");
+        assert!(html.contains("<code>term :book:</code>"), "{html}");
+        assert_eq!(html.matches('\u{1}').count(), 1, "guard leaked: {html:?}");
+        assert!(html.contains("&amp;"), "{html}");
+        assert!(html.contains("“smart”"), "{html}");
+        for (event, range) in
+            crate::parse::coalesced_offset_events(source, crate::parse::visual_markdown_options())
+        {
+            assert!(
+                source.get(range).is_some(),
+                "invalid source mapping for {event:?}"
+            );
+        }
+    }
+
+    #[test]
     fn task_checkbox_toggle_flips_markers() {
         let source = "- [ ] one\n- [x] two\n- [X] three";
         let doc = MarkdownDocument::from_text(source);
@@ -6387,6 +6460,103 @@ mod tests {
         assert_eq!(doc.version(), version);
         let cached_again = doc.visual_blocks_shared();
         assert!(Arc::ptr_eq(&blocks, &cached_again));
+    }
+
+    #[test]
+    fn block_selection_exclusive_end_does_not_reveal_following_prefix() {
+        use crate::selection::BlockSelection;
+        for source in [
+            "Paragraph\n\n## Heading\n",
+            "段落😀\r\n\r\n### 标题\r\n",
+            "## First\n\n### Next\n",
+            "Paragraph\n\n- next\n",
+            "Paragraph\n\n> next\n",
+            "Paragraph\n\n## \n",
+            "Paragraph\n\n- \n",
+            "First\n\nSecond\n\n### Next\n",
+        ] {
+            let doc = MarkdownDocument::from_text(source);
+            let version = doc.version();
+            let blocks = doc.visual_blocks_shared();
+            let next = blocks
+                .iter()
+                .rev()
+                .find(|b| !matches!(b.kind, VisualBlockKind::Whitespace))
+                .unwrap();
+            let first = &blocks[0];
+            let previous = blocks
+                .iter()
+                .rev()
+                .find(|b| {
+                    b.source_range.start < next.source_range.start
+                        && !matches!(b.kind, VisualBlockKind::Whitespace)
+                })
+                .unwrap();
+            let selection = BlockSelection::new(&doc, first.id, previous.id)
+                .range(&doc)
+                .unwrap();
+            assert_eq!(selection.end, next.source_range.start, "{source:?}");
+            for cursor in [selection.start, selection.end] {
+                let projection = build_visual_projection(source, next, selection.clone(), cursor);
+                if let Some(prefix) = &next.block_prefix {
+                    assert!(
+                        !projection
+                            .revealed_source_ranges
+                            .contains(&prefix.source_range),
+                        "{source:?}: {projection:?}"
+                    );
+                }
+                if let Some(quote) = &next.quote_context {
+                    assert!(
+                        quote
+                            .marker_ranges
+                            .iter()
+                            .all(|range| !projection.revealed_source_ranges.contains(range))
+                    );
+                }
+            }
+            assert_eq!(doc.version(), version);
+            assert!(Arc::ptr_eq(&blocks, &doc.visual_blocks_shared()));
+        }
+    }
+
+    #[test]
+    fn exclusive_selection_boundary_preserves_caret_inline_and_ime_reveal() {
+        let source = "## **标题**\n";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let block = &blocks[0];
+        let prefix = block.block_prefix.as_ref().unwrap().source_range.clone();
+        for cursor in [prefix.start, prefix.end] {
+            let projection = build_visual_projection(source, block, cursor..cursor, cursor);
+            assert!(projection.revealed_source_ranges.contains(&prefix));
+        }
+        let selected = build_visual_projection(source, block, 0..source.len(), source.len());
+        assert!(selected.revealed_source_ranges.contains(&prefix));
+        let marked =
+            build_visual_projection_with_marked_range(source, block, 0..0, 0, Some(1..2), true);
+        assert!(marked.revealed_source_ranges.contains(&prefix));
+
+        let source = "before **bold** after";
+        let doc = MarkdownDocument::from_text(source);
+        let blocks = doc.visual_blocks_shared();
+        let marker = source.find("**").unwrap();
+        let selection = 0..marker;
+        for cursor in [selection.start, selection.end] {
+            let projection = build_visual_projection(source, &blocks[0], selection.clone(), cursor);
+            assert_eq!(projection.text, "before bold after");
+        }
+        let caret = build_visual_projection(source, &blocks[0], marker..marker, marker);
+        assert_eq!(caret.text, source);
+        let marked = build_visual_projection_with_marked_range(
+            source,
+            &blocks[0],
+            selection,
+            marker,
+            Some(marker..marker + 1),
+            true,
+        );
+        assert_eq!(marked.text, source);
     }
 
     #[test]

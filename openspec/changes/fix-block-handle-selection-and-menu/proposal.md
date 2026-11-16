@@ -10,6 +10,7 @@ Clicking a Visual Edit block grip selects the correct half-open source unit, but
 - Preserve Shift-click block-range extension, drag reordering, right-click and keyboard context-menu entry points; a drag or range-extension gesture must not open the click popup.
 - Add a localized General preferences toggle, **Show block menu on grip click**, persisted as `block_handle_menu`, defaulting to on. Disabling it retains click-to-select and drag behavior and leaves explicit context menus available.
 - Retain version/identity validation, atomic edits, exact undo, localized labels and active-theme styling.
+- Follow-up: keep reordered prose blocks separated when either side has no terminal newline or only one terminal LF/CRLF; preserve tight sibling list adjacency, complete subtrees and authored bytes through the same drag/menu/structured-move operation.
 
 Non-goals: reproducing the reference application's entire feature set, adding arbitrary text color/alignment serialization, changing Source/Read behavior, or redesigning Markdown parsing and caches.
 
@@ -21,7 +22,7 @@ None.
 
 ### Modified Capabilities
 
-- `markdown-editing`: correct exclusive-end syntax reveal at block boundaries and add a compact, source-safe grip-click block popup with selection/drag-compatible interactions.
+- `markdown-editing`: correct exclusive-end syntax reveal at block boundaries, add a compact source-safe grip-click block popup, and preserve paragraph separation during shared drag/menu/structured block movement.
 - `theme-preferences`: expose, persist and reset the grip-click menu toggle with safe handling of missing or invalid configuration values.
 
 ## Impact

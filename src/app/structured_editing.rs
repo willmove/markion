@@ -243,6 +243,34 @@ impl MarkionApp {
         };
         self.select_table_cells(index, cell, axis, extend, cx);
     }
+    pub(super) fn select_visual_block_grip(
+        &mut self,
+        target: &BlockTarget,
+        extend: bool,
+        preserve_selected: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.active_tab().is_image() || !matches!(self.view_mode, ViewMode::VisualEdit) {
+            return false;
+        }
+        let tab = self.active_tab();
+        let blocks = tab.document.visual_blocks_shared();
+        let Ok((index, block)) = validate_block_target(tab.document.version(), &blocks, target)
+        else {
+            return false;
+        };
+        let already_selected = matches!(tab.structured_selection.as_ref(),
+            Some(SelectionState::Blocks(selection)) if selection.range(&tab.document)
+                .is_ok_and(|range| range.contains(&block.source_range.start)));
+        self.dismiss_visual_block_menu();
+        if extend || !preserve_selected || !already_selected {
+            self.select_source_blocks(index, extend, cx);
+        } else {
+            cx.notify();
+        }
+        true
+    }
+
     pub(super) fn select_source_blocks(
         &mut self,
         index: usize,

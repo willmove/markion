@@ -29,8 +29,8 @@ use gpui::{
 #[cfg(test)]
 use markion::OrganizeCandidate;
 use markion::i18n::{
-    GitMsg, ImageMsg, ImageRecoveryMsg, ImageStatusMsg, TableMsg, git_t, git_tf, image_recovery_t,
-    image_status_tf, image_t, table_t,
+    BlockGripMsg, GitMsg, ImageMsg, ImageRecoveryMsg, ImageStatusMsg, TableMsg, block_grip_t,
+    git_t, git_tf, image_recovery_t, image_status_tf, image_t, table_t,
 };
 use markion::{
     AlertKind, AppPreferences, AutoPairAction, AutoSavePreferences, BlockEdit, BlockEditError,
@@ -1575,11 +1575,13 @@ struct EmojiCompleterState {
     selected: usize,
 }
 
-const EMOJI_PALETTE_LIMIT: usize = 12;
+const EMOJI_PALETTE_LIMIT: usize = 36;
 
 #[derive(Clone, Debug)]
 struct BlockMenuState {
     target: BlockTarget,
+    from_grip: bool,
+    scroll: ScrollHandle,
     selection_copy: Option<Range<usize>>,
     selection_format: Option<VisualSelectionFormatTarget>,
     is_image: bool,
@@ -1626,6 +1628,9 @@ enum BlockMenuSubmenu {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockMenuItem {
     CopySelection,
+    CopyBlock,
+    CutBlock,
+    AddBelow,
     SelectionFormat(SelectionFormatAction),
     Submenu(BlockMenuSubmenu),
     Transform(BlockTransform),
@@ -1720,7 +1725,45 @@ fn block_menu_root_items(has_selection_format: bool) -> Vec<BlockMenuItem> {
 }
 
 impl BlockMenuState {
+    fn scroll_selection_into_view(&self) {
+        if !self.from_grip || self.submenu.is_some() {
+            return;
+        }
+        let compact = !self.is_image;
+        if compact && self.root_selected < 14 {
+            self.scroll
+                .scroll_to_item(usize::from(self.root_selected >= 7));
+            return;
+        }
+        let start = if compact { 14 } else { 0 };
+        let items = self.root_items();
+        let selected = self.root_selected.min(items.len().saturating_sub(1));
+        let separators = items[start..selected]
+            .iter()
+            .filter(|&&item| preview::block_menu_item_is_followed_by_separator(item))
+            .count();
+        let child = (if compact { 3 } else { 0 }) + selected - start + separators;
+        self.scroll.scroll_to_item(child);
+    }
+
     fn root_items(&self) -> Vec<BlockMenuItem> {
+        if self.from_grip {
+            let mut items = if self.is_image {
+                BLOCK_MENU_IMAGE_ROOT_ITEMS.to_vec()
+            } else {
+                let mut items = BLOCK_MENU_TEXT_ITEMS.to_vec();
+                items.extend(BLOCK_MENU_LIST_ITEMS);
+                items.extend(BLOCK_MENU_ROOT_ITEMS.iter().copied().skip(2));
+                items
+            };
+            let actions = if self.is_image { 6 } else { 14 };
+            items.splice(
+                actions..actions,
+                [BlockMenuItem::CopyBlock, BlockMenuItem::CutBlock],
+            );
+            items.push(BlockMenuItem::AddBelow);
+            return items;
+        }
         let mut items = if self.is_image {
             BLOCK_MENU_IMAGE_ROOT_ITEMS.to_vec()
         } else {
@@ -1760,7 +1803,11 @@ impl BlockMenuPresentation {
             BlockMenuItem::CopySelection => true,
             BlockMenuItem::MoveUp => self.can_move_up,
             BlockMenuItem::MoveDown => self.can_move_down,
-            BlockMenuItem::Duplicate | BlockMenuItem::Delete => self.can_duplicate_or_delete,
+            BlockMenuItem::Duplicate
+            | BlockMenuItem::Delete
+            | BlockMenuItem::CopyBlock
+            | BlockMenuItem::CutBlock
+            | BlockMenuItem::AddBelow => self.can_duplicate_or_delete,
             BlockMenuItem::ImageWidth(_) | BlockMenuItem::ImageAlignment(_) => self.image.is_some(),
             BlockMenuItem::ImageEditSource
             | BlockMenuItem::ImageReplace
@@ -2594,15 +2641,21 @@ use workspace::{ExternalDropIntent, classify_external_drop_path};
 #[cfg(test)]
 mod advanced_editing_tests;
 #[cfg(test)]
+mod block_grip_tests;
+#[cfg(test)]
 mod code_scroll_tests;
 #[cfg(test)]
 mod deferred_caret_tests;
+#[cfg(test)]
+mod emoji_palette_tests;
 #[cfg(test)]
 mod focus_mode_tests;
 #[cfg(test)]
 mod mutation_tests;
 #[cfg(test)]
 mod sidebar_layout_tests;
+#[cfg(test)]
+mod slash_preference_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -2767,6 +2820,8 @@ struct MarkionApp {
     /// When enabled, Visual Edit keeps non-empty inline syntax out of the
     /// text flow. Persisted; disabled by default.
     stable_visual_inline: bool,
+    block_handle_menu: bool,
+    slash_commands_enabled: bool,
     /// Presentation-only suppression after a canonical edit or until selection changes.
     selection_toolbar_suppressed: bool,
     /// Presentation-only suppression of transient block grips after typing.

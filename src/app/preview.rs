@@ -1104,8 +1104,10 @@ impl Element for VisualEditableText {
         }
 
         if let Some(caret_bounds) = caret_bounds {
-            self.entity.update(cx, |app, _| {
+            self.entity.update(cx, |app, cx| {
+                let completion_open = app.slash_commands.is_some() || app.emoji_completer.is_some();
                 let tab = app.active_tab_mut();
+                let caret_changed = tab.visual_caret_bounds != Some(caret_bounds);
                 tab.visual_caret_bounds = Some(caret_bounds);
                 #[cfg(test)]
                 if let Some(block_id) = tab
@@ -1126,6 +1128,9 @@ impl Element for VisualEditableText {
                     });
                 }
                 app.finish_visual_input_profile();
+                if completion_open && caret_changed {
+                    cx.defer_in(window, |_, _, cx| cx.notify());
+                }
             });
         }
         if super::performance::enabled() {
@@ -5108,6 +5113,8 @@ fn visual_block_chrome(
     let drop_version = target.document_version;
     let drop_id = target.block_id;
     let menu_target = target.clone();
+    let press_target = target.clone();
+    let click_target = target.clone();
     let hover_group = format!("visual-block-row-hover-{}", block.id.as_u64());
 
     div()
@@ -5161,19 +5168,24 @@ fn visual_block_chrome(
                         cx.listener(move |app, event: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
                             window.focus(&app.focus_handle);
-                            let already_selected = matches!(
-                                app.active_tab().structured_selection,
-                                Some(markion::selection::SelectionState::Blocks(_))
-                            ) && app.active_tab().selected_range.contains(
-                                &app.active_tab().visual_list_blocks[block_index]
-                                    .source_range
-                                    .start,
+                            app.select_visual_block_grip(
+                                &press_target,
+                                event.modifiers.shift,
+                                true,
+                                cx,
                             );
-                            if event.modifiers.shift || !already_selected {
-                                app.select_source_blocks(block_index, event.modifiers.shift, cx);
-                            }
                         }),
                     )
+                    .on_click(cx.listener(move |app, event: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        if !event.modifiers().modified() {
+                            app.open_visual_block_grip_menu(
+                                click_target.clone(),
+                                event.position(),
+                                cx,
+                            );
+                        }
+                    }))
                     .on_drag(
                         DraggedVisualBlock {
                             target: drag_target,
@@ -5269,7 +5281,12 @@ pub(super) fn visual_block_menu(
     let mut root_panel = div()
         .id("visual-block-menu-root-panel")
         .debug_selector(|| "visual-block-menu-panel".to_string())
-        .w(px(202.))
+        .track_scroll(&state.scroll)
+        .w(px(if state.from_grip && !state.is_image {
+            286.
+        } else {
+            202.
+        }))
         .max_h(max_height)
         .overflow_y_scroll()
         .scrollbar_width(px(8.))
@@ -5282,7 +5299,28 @@ pub(super) fn visual_block_menu(
         .shadow_lg()
         .flex()
         .flex_col();
+    if state.from_grip && !state.is_image {
+        for indices in [0..7, 7..14] {
+            let mut controls = div().flex_none().flex().flex_wrap().gap(px(2.)).p(px(2.));
+            for index in indices {
+                controls = controls.child(block_grip_transform_button(
+                    language,
+                    root_items[index],
+                    index,
+                    &state,
+                    presentation,
+                    palette,
+                    cx,
+                ));
+            }
+            root_panel = root_panel.child(controls);
+        }
+        root_panel = root_panel.child(block_menu_separator(palette));
+    }
     for (index, item) in root_items.iter().copied().enumerate() {
+        if state.from_grip && !state.is_image && index < 14 {
+            continue;
+        }
         root_panel = root_panel.child(block_menu_item_button(
             block_menu_item_element_id(item),
             block_menu_item_label(language, item),
@@ -5321,8 +5359,105 @@ pub(super) fn visual_block_menu(
         })
 }
 
+fn block_grip_transform_button(
+    language: Language,
+    item: BlockMenuItem,
+    index: usize,
+    state: &BlockMenuState,
+    presentation: BlockMenuPresentation,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> impl IntoElement {
+    use crate::ui::icon::{Icon, icon};
+    let id = block_menu_item_element_id(item);
+    let selected = state.root_selected == index;
+    let current = block_menu_item_is_current(item, presentation);
+    let enabled = presentation.item_enabled(item);
+    let label = SharedString::from(block_menu_item_label(language, item));
+    let color = if current {
+        palette.active_text
+    } else {
+        palette.text
+    };
+    let content = match item {
+        BlockMenuItem::Transform(BlockTransform::Heading(level)) => {
+            div().child(format!("H{level}")).into_any_element()
+        }
+        BlockMenuItem::Transform(transform) => icon(
+            match transform {
+                BlockTransform::Text => Icon::Text,
+                BlockTransform::BulletedList => Icon::List,
+                BlockTransform::NumberedList => Icon::ListOrdered,
+                BlockTransform::TaskList => Icon::ListTodo,
+                BlockTransform::Quote => Icon::Quote,
+                BlockTransform::CodeBlock => Icon::Braces,
+                BlockTransform::Divider => Icon::Minus,
+                BlockTransform::Table => Icon::Table,
+                BlockTransform::Heading(_) => unreachable!(),
+            },
+            18.,
+            color,
+        )
+        .into_any_element(),
+        _ => unreachable!("grip quick controls contain only transforms"),
+    };
+    div()
+        .id(id)
+        .relative()
+        .debug_selector(move || {
+            if enabled {
+                id.to_string()
+            } else {
+                format!("{id}-disabled")
+            }
+        })
+        .tooltip(move |_, cx| {
+            cx.new(|_| SearchTooltip {
+                palette,
+                label: label.clone(),
+            })
+            .into()
+        })
+        .w(px(36.))
+        .h(px(30.))
+        .flex_none()
+        .rounded_md()
+        .border_1()
+        .border_color(if selected && enabled {
+            palette.muted
+        } else {
+            palette.panel_bg
+        })
+        .text_size(px(13.))
+        .text_color(color)
+        .opacity(if enabled { 1. } else { 0.42 })
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(current, |button| button.bg(palette.active_bg))
+        .child(content)
+        .when(enabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(move |style| style.bg(palette.surface_bg))
+                .on_mouse_move(cx.listener(move |app, _: &MouseMoveEvent, _, cx| {
+                    app.select_visual_block_menu_root(index, false, cx);
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                        cx.stop_propagation();
+                        app.activate_visual_block_menu_item(item, cx);
+                    }),
+                )
+        })
+}
+
 fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
     match item {
+        BlockMenuItem::CopyBlock => "visual-block-copy",
+        BlockMenuItem::CutBlock => "visual-block-cut",
+        BlockMenuItem::AddBelow => "visual-block-add-below",
         BlockMenuItem::CopySelection => "visual-selection-copy",
         BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold) => {
             "visual-selection-format-bold"
@@ -5363,6 +5498,9 @@ fn block_menu_item_element_id(item: BlockMenuItem) -> &'static str {
 
 fn block_menu_item_label(language: Language, item: BlockMenuItem) -> String {
     match item {
+        BlockMenuItem::CopyBlock => t(language, Msg::ItemCopy).to_string(),
+        BlockMenuItem::CutBlock => t(language, Msg::ItemCut).to_string(),
+        BlockMenuItem::AddBelow => block_grip_t(language, BlockGripMsg::AddBelow).to_string(),
         BlockMenuItem::CopySelection => t(language, Msg::ItemCopy).to_string(),
         BlockMenuItem::SelectionFormat(SelectionFormatAction::Bold) => {
             t(language, Msg::ItemBold).to_string()
@@ -5432,6 +5570,9 @@ fn block_menu_item_is_current(item: BlockMenuItem, presentation: BlockMenuPresen
             .image
             .is_some_and(|image| image.alignment == alignment),
         BlockMenuItem::CopySelection
+        | BlockMenuItem::CopyBlock
+        | BlockMenuItem::CutBlock
+        | BlockMenuItem::AddBelow
         | BlockMenuItem::SelectionFormat(_)
         | BlockMenuItem::ImageEditSource
         | BlockMenuItem::ImageReplace
@@ -5444,7 +5585,7 @@ fn block_menu_item_is_current(item: BlockMenuItem, presentation: BlockMenuPresen
     }
 }
 
-fn block_menu_item_is_followed_by_separator(item: BlockMenuItem) -> bool {
+pub(super) fn block_menu_item_is_followed_by_separator(item: BlockMenuItem) -> bool {
     matches!(
         item,
         BlockMenuItem::CopySelection
@@ -5452,6 +5593,7 @@ fn block_menu_item_is_followed_by_separator(item: BlockMenuItem) -> bool {
             | BlockMenuItem::ImageUpload
             | BlockMenuItem::Transform(BlockTransform::Table)
             | BlockMenuItem::MoveDown
+            | BlockMenuItem::Delete
     )
 }
 
@@ -5504,7 +5646,7 @@ fn visual_block_submenu(
 }
 
 fn block_menu_separator(palette: ThemePalette) -> Div {
-    div().my(px(3.)).h(px(1.)).bg(palette.border)
+    div().flex_none().my(px(3.)).h(px(1.)).bg(palette.border)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5528,6 +5670,8 @@ fn block_menu_item_button(
     };
     div()
         .id(id)
+        .relative()
+        .flex_none()
         .debug_selector(move || {
             if enabled {
                 id.to_string()

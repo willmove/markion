@@ -301,6 +301,11 @@ pub fn shortcode_to_unicode(shortcode: &str) -> Option<&'static str> {
     EMOJI_MAP.get(shortcode).copied()
 }
 
+/// Available shortcode names and glyphs; callers choose their presentation order.
+pub fn shortcodes() -> impl Iterator<Item = (&'static str, &'static str)> {
+    EMOJI_MAP.iter().map(|(name, glyph)| (*name, *glyph))
+}
+
 /// Checks if a shortcode is a valid emoji.
 pub fn is_valid_shortcode(shortcode: &str) -> bool {
     EMOJI_MAP.contains_key(shortcode)

@@ -89,6 +89,10 @@ struct PreferencesFile {
     #[serde(deserialize_with = "deserialize_bool_or_false")]
     stable_visual_inline: bool,
     #[serde(deserialize_with = "deserialize_bool_or_true")]
+    block_handle_menu: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_true")]
+    slash_commands_enabled: bool,
+    #[serde(deserialize_with = "deserialize_bool_or_true")]
     open_in_current_tab: bool,
     #[serde(deserialize_with = "deserialize_bool_or_true")]
     markdown_auto_pair: bool,
@@ -460,6 +464,8 @@ impl From<&AppPreferences> for PreferencesFile {
             sync_scroll: preferences.sync_scroll,
             show_hidden_files: preferences.show_hidden_files,
             stable_visual_inline: preferences.stable_visual_inline,
+            block_handle_menu: preferences.block_handle_menu,
+            slash_commands_enabled: preferences.slash_commands_enabled,
             open_in_current_tab: preferences.open_in_current_tab,
             markdown_auto_pair: preferences.markdown_auto_pair,
             sidebar_visible: preferences.sidebar_visible,
@@ -528,6 +534,8 @@ impl From<PreferencesFile> for AppPreferences {
             sync_scroll: file.sync_scroll,
             show_hidden_files: file.show_hidden_files,
             stable_visual_inline: file.stable_visual_inline,
+            block_handle_menu: file.block_handle_menu,
+            slash_commands_enabled: file.slash_commands_enabled,
             open_in_current_tab: file.open_in_current_tab,
             markdown_auto_pair: file.markdown_auto_pair,
             sidebar_visible: file.sidebar_visible,
@@ -1297,6 +1305,61 @@ mod tests {
     #[test]
     fn stable_visual_inline_defaults_to_false() {
         assert!(!AppPreferences::default().stable_visual_inline);
+    }
+
+    #[test]
+    fn block_handle_menu_round_trips_and_defaults_safely() {
+        assert!(AppPreferences::default().block_handle_menu);
+        for enabled in [true, false] {
+            let preferences = AppPreferences {
+                block_handle_menu: enabled,
+                ..AppPreferences::default()
+            };
+            let rendered = render_app_preferences(&preferences);
+            assert_eq!(
+                parse_app_preferences(&rendered).unwrap().block_handle_menu,
+                enabled
+            );
+        }
+        for value in [
+            "",
+            "block_handle_menu = \"yes\"",
+            "block_handle_menu = 0",
+            "block_handle_menu = []",
+        ] {
+            let parsed = parse_app_preferences(&format!("theme = \"Forest\"\n{value}\n")).unwrap();
+            assert!(parsed.block_handle_menu, "{value}");
+            assert_eq!(parsed.theme, "Forest");
+        }
+    }
+
+    #[test]
+    fn slash_commands_enabled_round_trips_and_defaults_safely() {
+        assert!(AppPreferences::default().slash_commands_enabled);
+        for enabled in [true, false] {
+            let preferences = AppPreferences {
+                slash_commands_enabled: enabled,
+                ..AppPreferences::default()
+            };
+            let rendered = render_app_preferences(&preferences);
+            assert_eq!(
+                parse_app_preferences(&rendered)
+                    .unwrap()
+                    .slash_commands_enabled,
+                enabled
+            );
+        }
+        for value in [
+            "",
+            "slash_commands_enabled = \"yes\"",
+            "slash_commands_enabled = 0",
+            "slash_commands_enabled = []",
+            "slash_commands_enabled = {}",
+        ] {
+            let parsed = parse_app_preferences(&format!("theme = \"Forest\"\n{value}\n")).unwrap();
+            assert!(parsed.slash_commands_enabled, "{value}");
+            assert_eq!(parsed.theme, "Forest");
+        }
     }
 
     #[test]

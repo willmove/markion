@@ -395,6 +395,20 @@ impl MarkionApp {
         placement: overlay::OverlayPlacement,
     ) -> Point<Pixels> {
         let tab = self.active_tab();
+        if !matches!(self.view_mode, ViewMode::VisualEdit) {
+            return tab
+                .last_bounds
+                .and_then(|bounds| {
+                    tab.layout_point_for_offset(tab.cursor_offset(), bounds, tab.line_height)
+                })
+                .map(|position| match placement {
+                    overlay::OverlayPlacement::BelowSource => {
+                        position + point(px(0.), tab.line_height)
+                    }
+                    overlay::OverlayPlacement::AboveSource => position,
+                })
+                .unwrap_or_else(|| point(px(24.), px(62.)));
+        }
         let block = block_index.and_then(|index| tab.visual_list.bounds_for_item(index));
         overlay::overlay_anchor(
             tab.visual_caret_bounds,
@@ -477,7 +491,9 @@ impl MarkionApp {
     }
 
     pub(super) fn sync_slash_command_state(&mut self, cx: &mut Context<Self>) {
-        let query = if self.block_menu.is_none()
+        let query = if self.slash_commands_enabled
+            && !self.active_tab().is_image()
+            && self.block_menu.is_none()
             && self.recovery_manager.is_none()
             && self.link_editor.is_none()
             && self.token_editor.is_none()
@@ -579,6 +595,11 @@ impl MarkionApp {
         command: SlashPaletteCommand,
         cx: &mut Context<Self>,
     ) {
+        if !self.slash_commands_enabled {
+            self.slash_commands = None;
+            cx.notify();
+            return;
+        }
         let block_command = match command {
             SlashPaletteCommand::Block(command) => command,
             _ => SlashCommand::Text,
@@ -697,9 +718,7 @@ impl MarkionApp {
         let Some(state) = &mut self.emoji_completer else {
             return false;
         };
-        let count = emoji_shortcodes_matching(&state.query.query)
-            .len()
-            .min(EMOJI_PALETTE_LIMIT);
+        let count = emoji_shortcodes_matching(&state.query.query).len();
         if count == 0 {
             return true;
         }
@@ -718,10 +737,7 @@ impl MarkionApp {
         let Some(state) = self.emoji_completer.clone() else {
             return false;
         };
-        let matches: Vec<_> = emoji_shortcodes_matching(&state.query.query)
-            .into_iter()
-            .take(EMOJI_PALETTE_LIMIT)
-            .collect();
+        let matches = emoji_shortcodes_matching(&state.query.query);
         let Some((name, _)) = matches.get(state.selected).copied() else {
             return true;
         };
@@ -836,6 +852,8 @@ impl MarkionApp {
         self.visual_table_menu = None;
         self.block_menu = Some(BlockMenuState {
             target,
+            from_grip: false,
+            scroll: ScrollHandle::new(),
             selection_copy,
             selection_format,
             is_image: presentation.is_image,
@@ -884,6 +902,32 @@ impl MarkionApp {
             });
         if let Some(anchor) = anchor {
             self.open_visual_block_menu(target, anchor, cx);
+        }
+    }
+
+    pub(super) fn open_visual_block_grip_menu(
+        &mut self,
+        target: BlockTarget,
+        anchor: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.select_visual_block_grip(&target, false, false, cx) {
+            return;
+        }
+        if !self.block_handle_menu {
+            self.dismiss_visual_block_menu();
+            return;
+        }
+        self.open_visual_block_menu(target, anchor, cx);
+        if let Some(menu) = &mut self.block_menu {
+            menu.from_grip = true;
+            menu.selection_copy = None;
+            menu.selection_format = None;
+            let current = self.block_menu_presentation().and_then(|p| p.current);
+            let menu = self.block_menu.as_mut().unwrap();
+            menu.root_selected = menu.root_items().iter().position(|item| {
+                matches!(item, BlockMenuItem::Transform(transform) if Some(*transform) == current)
+            }).unwrap_or(0);
         }
     }
 
@@ -1032,6 +1076,7 @@ impl MarkionApp {
                 }
             }
         }
+        state.scroll_selection_into_view();
         cx.notify();
         true
     }
@@ -1040,6 +1085,9 @@ impl MarkionApp {
         let Some(state) = self.block_menu.clone() else {
             return false;
         };
+        if state.from_grip && !state.is_image {
+            return self.move_visual_block_menu_selection(true, cx);
+        }
         if state.submenu.is_some() {
             return true;
         }
@@ -1061,6 +1109,13 @@ impl MarkionApp {
     }
 
     pub(super) fn leave_visual_block_menu_submenu(&mut self, cx: &mut Context<Self>) -> bool {
+        if self
+            .block_menu
+            .as_ref()
+            .is_some_and(|menu| menu.from_grip && !menu.is_image)
+        {
+            return self.move_visual_block_menu_selection(false, cx);
+        }
         let Some(state) = &mut self.block_menu else {
             return false;
         };
@@ -1102,6 +1157,26 @@ impl MarkionApp {
             return;
         };
         match item {
+            BlockMenuItem::CopyBlock | BlockMenuItem::CutBlock => {
+                self.copy_visual_block(target, item == BlockMenuItem::CutBlock, cx);
+            }
+            BlockMenuItem::AddBelow => {
+                let tab = self.active_tab();
+                let blocks = tab.document.visual_blocks_shared();
+                match markion::block_edit::add_paragraph_below(
+                    tab.document.text(),
+                    tab.document.version(),
+                    &blocks,
+                    &target,
+                ) {
+                    Ok(edit) => self.apply_exact_block_edit(
+                        edit,
+                        t(self.language, Msg::StatusEditing).into(),
+                        cx,
+                    ),
+                    Err(error) => self.report_block_edit_error(error, cx),
+                }
+            }
             BlockMenuItem::CopySelection => {
                 let selected = self.active_tab().safe_selected_range();
                 let current = self.block_menu.as_ref().is_some_and(|menu| {
@@ -1385,6 +1460,40 @@ impl MarkionApp {
                 p1_t(self.language, P1Msg::BlockDuplicated).into(),
                 cx,
             ),
+            Err(error) => self.report_block_edit_error(error, cx),
+        }
+    }
+
+    fn copy_visual_block(&mut self, target: BlockTarget, cut: bool, cx: &mut Context<Self>) {
+        let result = (|| {
+            let doc = &self.active_tab().document;
+            let blocks = doc.visual_blocks_shared();
+            validate_block_target(doc.version(), &blocks, &target)?;
+            let selection =
+                markion::selection::BlockSelection::new(doc, target.block_id, target.block_id);
+            let copy = selection.clipboard(doc)?;
+            let edit = if cut {
+                Some(selection.delete(doc)?)
+            } else {
+                None
+            };
+            Ok::<_, BlockEditError>((copy, edit))
+        })();
+        match result {
+            Ok((copy, edit)) => {
+                cx.write_to_clipboard(ClipboardItem::new_html(copy.plain, copy.html));
+                if let Some(edit) = edit {
+                    self.apply_exact_block_edit(
+                        edit,
+                        p1_t(self.language, P1Msg::BlockDeleted).into(),
+                        cx,
+                    );
+                } else {
+                    self.dismiss_visual_block_menu();
+                    self.status = t(self.language, Msg::StatusCopiedSelection).into();
+                    cx.notify();
+                }
+            }
             Err(error) => self.report_block_edit_error(error, cx),
         }
     }

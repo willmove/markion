@@ -1540,6 +1540,72 @@ fn selection_toolbar_view(
         )
 }
 
+fn completion_palette_panel(app: &MarkionApp, id: &'static str) -> Stateful<Div> {
+    let palette = app.palette();
+    div()
+        .id(id)
+        .debug_selector(move || id.to_string())
+        .w(px(248.))
+        .occlude()
+        .p_2()
+        .bg(palette.panel_bg)
+        .text_color(palette.text)
+        .border_1()
+        .border_color(palette.border)
+        .rounded_lg()
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .gap_2()
+}
+
+fn completion_palette_button(
+    app: &MarkionApp,
+    id: &'static str,
+    selected: bool,
+    label: SharedString,
+) -> Stateful<Div> {
+    let palette = app.palette();
+    div()
+        .id(id)
+        .debug_selector(move || id.to_string())
+        .tooltip(move |_, cx| {
+            cx.new(|_| SearchTooltip {
+                palette,
+                label: label.clone(),
+            })
+            .into()
+        })
+        .h(px(30.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .rounded_md()
+        .text_size(px(15.))
+        .cursor_pointer()
+        .when(selected, |button| {
+            button.bg(palette.active_bg).text_color(palette.active_text)
+        })
+        .when(!selected, |button| {
+            button.hover(move |style| style.bg(palette.surface_bg))
+        })
+}
+
+fn completion_palette_anchor(app: &MarkionApp, source_offset: usize) -> Point<Pixels> {
+    let block_index = matches!(app.view_mode, ViewMode::VisualEdit)
+        .then(|| {
+            visual_block_index_for_offset(
+                &app.active_tab().document.visual_blocks_shared(),
+                source_offset,
+                app.active_tab().document.text().len(),
+            )
+        })
+        .flatten();
+    app.document_overlay_anchor(block_index, overlay::OverlayPlacement::BelowSource)
+}
+
 fn slash_command_palette_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> impl IntoElement {
     let palette = app.palette();
     let state = app
@@ -1565,32 +1631,13 @@ fn slash_command_palette_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) ->
                 + 6
         }
     });
-    let block_index = visual_block_index_for_offset(
-        &app.active_tab().document.visual_blocks_shared(),
-        state.query.source_range.start,
-        app.active_tab().document.text().len(),
-    );
-    let anchor = app.document_overlay_anchor(block_index, overlay::OverlayPlacement::BelowSource);
+    let anchor = completion_palette_anchor(app, state.query.source_range.start);
     let query = state.query;
     anchored()
         .position(anchor)
         .offset(point(px(8.), px(8.)))
         .child(
-            div()
-                .id("slash-command-palette")
-                .debug_selector(|| "slash-command-palette".to_string())
-                .w(px(248.))
-                .occlude()
-                .p_2()
-                .bg(palette.panel_bg)
-                .text_color(palette.text)
-                .border_1()
-                .border_color(palette.border)
-                .rounded_lg()
-                .shadow_lg()
-                .flex()
-                .flex_col()
-                .gap_2()
+            completion_palette_panel(app, "slash-command-palette")
                 .child(
                     div()
                         .px_2()
@@ -1690,85 +1737,65 @@ fn slash_command_button(
     let palette = app.palette();
     let selected = index == selected;
     let label = SharedString::from(slash_command_label(app.language, command));
-    let tooltip_label = label.clone();
     let hover_query = query.clone();
     let color = if selected {
         palette.active_text
     } else {
         palette.text
     };
-    div()
-        .id(slash_command_element_id(index))
-        .debug_selector(move || slash_command_element_id(index).to_string())
-        .tooltip(move |_, cx| {
-            cx.new(|_| SearchTooltip {
-                palette,
-                label: tooltip_label.clone(),
-            })
-            .into()
-        })
-        .h(px(30.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .when(!command.is_compact(), |button| {
-            button.w_full().px_2().justify_start()
-        })
-        .when(command.is_compact(), |button| button.w(px(36.)))
-        .rounded_md()
-        .text_size(px(15.))
-        .cursor_pointer()
-        .when(selected, |row| {
-            row.bg(palette.active_bg).text_color(palette.active_text)
-        })
-        .when(!selected, |row| {
-            row.hover(move |style| style.bg(palette.surface_bg))
-        })
-        .child(match command {
-            SlashPaletteCommand::Block(SlashCommand::Heading(level)) => {
-                div().child(format!("H{level}")).into_any_element()
-            }
-            _ => icon(
-                match command {
-                    SlashPaletteCommand::Block(SlashCommand::Text) => Icon::Text,
-                    SlashPaletteCommand::Block(SlashCommand::BulletedList) => Icon::List,
-                    SlashPaletteCommand::Block(SlashCommand::NumberedList) => Icon::ListOrdered,
-                    SlashPaletteCommand::Block(SlashCommand::TaskList) => Icon::ListTodo,
-                    SlashPaletteCommand::Block(SlashCommand::Quote) => Icon::Quote,
-                    SlashPaletteCommand::Block(SlashCommand::CodeBlock) => Icon::Braces,
-                    SlashPaletteCommand::Block(SlashCommand::Divider) => Icon::Minus,
-                    SlashPaletteCommand::Block(SlashCommand::Table) => Icon::Table,
-                    SlashPaletteCommand::Link => Icon::Link,
-                    SlashPaletteCommand::Formula => Icon::Sigma,
-                    SlashPaletteCommand::Image => Icon::FileImage,
-                    SlashPaletteCommand::Block(SlashCommand::Heading(_)) => unreachable!(),
-                },
-                18.,
-                color,
-            )
-            .into_any_element(),
-        })
-        .when(!command.is_compact(), |button| {
-            button.child(div().text_size(px(13.)).child(label))
-        })
-        .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
-            if *hovered
-                && let Some(state) = &mut app.slash_commands
-                && state.query == hover_query
-                && state.selected != index
-            {
-                state.selected = index;
-                cx.notify();
-            }
-        }))
-        .on_mouse_up(
-            MouseButton::Left,
-            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                app.execute_slash_command(query.clone(), command, cx);
-            }),
+    completion_palette_button(
+        app,
+        slash_command_element_id(index),
+        selected,
+        label.clone(),
+    )
+    .when(!command.is_compact(), |button| {
+        button.w_full().px_2().justify_start()
+    })
+    .when(command.is_compact(), |button| button.w(px(36.)))
+    .child(match command {
+        SlashPaletteCommand::Block(SlashCommand::Heading(level)) => {
+            div().child(format!("H{level}")).into_any_element()
+        }
+        _ => icon(
+            match command {
+                SlashPaletteCommand::Block(SlashCommand::Text) => Icon::Text,
+                SlashPaletteCommand::Block(SlashCommand::BulletedList) => Icon::List,
+                SlashPaletteCommand::Block(SlashCommand::NumberedList) => Icon::ListOrdered,
+                SlashPaletteCommand::Block(SlashCommand::TaskList) => Icon::ListTodo,
+                SlashPaletteCommand::Block(SlashCommand::Quote) => Icon::Quote,
+                SlashPaletteCommand::Block(SlashCommand::CodeBlock) => Icon::Braces,
+                SlashPaletteCommand::Block(SlashCommand::Divider) => Icon::Minus,
+                SlashPaletteCommand::Block(SlashCommand::Table) => Icon::Table,
+                SlashPaletteCommand::Link => Icon::Link,
+                SlashPaletteCommand::Formula => Icon::Sigma,
+                SlashPaletteCommand::Image => Icon::FileImage,
+                SlashPaletteCommand::Block(SlashCommand::Heading(_)) => unreachable!(),
+            },
+            18.,
+            color,
         )
+        .into_any_element(),
+    })
+    .when(!command.is_compact(), |button| {
+        button.child(div().text_size(px(13.)).child(label))
+    })
+    .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+        if *hovered
+            && let Some(state) = &mut app.slash_commands
+            && state.query == hover_query
+            && state.selected != index
+        {
+            state.selected = index;
+            cx.notify();
+        }
+    }))
+    .on_mouse_up(
+        MouseButton::Left,
+        cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+            app.execute_slash_command(query.clone(), command, cx);
+        }),
+    )
 }
 
 pub(super) fn slash_command_element_id(index: usize) -> &'static str {
@@ -1802,82 +1829,113 @@ fn emoji_completer_palette_view(
         .emoji_completer
         .clone()
         .expect("emoji palette is rendered only while its state is present");
-    let matches: Vec<_> = emoji_shortcodes_matching(&state.query.query)
-        .into_iter()
-        .take(EMOJI_PALETTE_LIMIT)
-        .collect();
+    let matches = emoji_shortcodes_matching(&state.query.query);
+    let visible_start = state.selected / EMOJI_PALETTE_LIMIT * EMOJI_PALETTE_LIMIT;
+    let anchor = completion_palette_anchor(app, state.query.source_range.start);
+    let caption = matches
+        .get(state.selected)
+        .map(|(name, _)| format!(":{name}:  ·  {}/{}", state.selected + 1, matches.len()));
     let query = state.query;
-    div()
-        .id("emoji-completer-palette")
-        .debug_selector(|| "emoji-completer-palette".to_string())
-        .absolute()
-        .right(px(28.))
-        .top(px(72.))
-        .w(px(280.))
-        .max_h(px(520.))
-        .occlude()
-        .p_2()
-        .bg(palette.panel_bg)
-        .border_1()
-        .border_color(palette.border)
-        .rounded_lg()
-        .shadow_lg()
-        .flex()
-        .flex_col()
-        .gap_1()
+    anchored()
+        .position(anchor)
+        .offset(point(px(8.), px(8.)))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_size(px(11.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(palette.muted)
-                .child(p1_t(app.language, P1Msg::EmojiShortcodes)),
-        )
-        .when(matches.is_empty(), |panel| {
-            panel.child(
-                div()
-                    .px_2()
-                    .py_2()
-                    .text_size(px(12.))
-                    .text_color(palette.muted)
-                    .child(p1_t(app.language, P1Msg::NoEmojiMatches)),
-            )
-        })
-        .children(
-            matches
-                .into_iter()
-                .enumerate()
-                .map(|(index, (name, glyph))| {
-                    let selected = index == state.selected;
-                    let query = query.clone();
+            completion_palette_panel(app, "emoji-completer-palette")
+                .on_scroll_wheel(cx.listener(|app, event: &gpui::ScrollWheelEvent, _, cx| {
+                    let delta = event.delta.pixel_delta(px(16.)).y;
+                    if delta != px(0.) {
+                        for _ in 0..EMOJI_PALETTE_LIMIT {
+                            app.move_emoji_selection(delta < px(0.), cx);
+                        }
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
                     div()
-                        .id(emoji_completer_element_id(index))
-                        .debug_selector(move || emoji_completer_element_id(index).to_string())
                         .px_2()
-                        .py_2()
-                        .rounded_md()
-                        .text_size(px(12.))
-                        .cursor_pointer()
-                        .when(selected, |row| {
-                            row.bg(palette.active_bg).text_color(palette.active_text)
-                        })
-                        .when(!selected, |row| {
-                            row.hover(move |style| style.bg(palette.surface_bg))
-                        })
-                        .child(format!("{glyph}  :{name}:"))
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
-                                app.execute_emoji_completion(query.clone(), name, cx);
-                            }),
-                        )
+                        .py_1()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(palette.muted)
+                        .child(p1_t(app.language, P1Msg::EmojiShortcodes)),
+                )
+                .when(matches.is_empty(), |panel| {
+                    panel.child(
+                        div()
+                            .px_2()
+                            .py_2()
+                            .text_size(px(12.))
+                            .text_color(palette.muted)
+                            .child(p1_t(app.language, P1Msg::NoEmojiMatches)),
+                    )
+                })
+                .when(!matches.is_empty(), |panel| {
+                    panel.child(
+                        div()
+                            .id("emoji-completer-grid")
+                            .debug_selector(|| "emoji-completer-grid".to_string())
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(2.))
+                            .children(
+                                matches
+                                    .into_iter()
+                                    .enumerate()
+                                    .skip(visible_start)
+                                    .take(EMOJI_PALETTE_LIMIT)
+                                    .map(|(index, (name, glyph))| {
+                                        let query = query.clone();
+                                        let hover_query = query.clone();
+                                        completion_palette_button(
+                                            app,
+                                            emoji_completer_element_id(index - visible_start),
+                                            index == state.selected,
+                                            format!(":{name}:").into(),
+                                        )
+                                        .w(px(36.))
+                                        .text_size(px(18.))
+                                        .child(glyph)
+                                        .on_hover(cx.listener(move |app, hovered: &bool, _, cx| {
+                                            if *hovered
+                                                && let Some(state) = &mut app.emoji_completer
+                                                && state.query == hover_query
+                                                && state.selected != index
+                                            {
+                                                state.selected = index;
+                                                cx.notify();
+                                            }
+                                        }))
+                                        .on_mouse_up(
+                                            MouseButton::Left,
+                                            cx.listener(move |app, _: &MouseUpEvent, _, cx| {
+                                                app.execute_emoji_completion(
+                                                    query.clone(),
+                                                    name,
+                                                    cx,
+                                                );
+                                            }),
+                                        )
+                                    }),
+                            ),
+                    )
+                })
+                .when_some(caption, |panel, caption| {
+                    panel.child(
+                        div()
+                            .id("emoji-completer-caption")
+                            .debug_selector(|| "emoji-completer-caption".to_string())
+                            .px_2()
+                            .text_size(px(11.))
+                            .text_color(palette.muted)
+                            .truncate()
+                            .child(caption),
+                    )
                 }),
         )
 }
 
-fn emoji_completer_element_id(index: usize) -> &'static str {
-    const IDS: [&str; 12] = [
+pub(super) fn emoji_completer_element_id(index: usize) -> &'static str {
+    const IDS: [&str; EMOJI_PALETTE_LIMIT] = [
         "emoji-completer-0",
         "emoji-completer-1",
         "emoji-completer-2",
@@ -1890,6 +1948,30 @@ fn emoji_completer_element_id(index: usize) -> &'static str {
         "emoji-completer-9",
         "emoji-completer-10",
         "emoji-completer-11",
+        "emoji-completer-12",
+        "emoji-completer-13",
+        "emoji-completer-14",
+        "emoji-completer-15",
+        "emoji-completer-16",
+        "emoji-completer-17",
+        "emoji-completer-18",
+        "emoji-completer-19",
+        "emoji-completer-20",
+        "emoji-completer-21",
+        "emoji-completer-22",
+        "emoji-completer-23",
+        "emoji-completer-24",
+        "emoji-completer-25",
+        "emoji-completer-26",
+        "emoji-completer-27",
+        "emoji-completer-28",
+        "emoji-completer-29",
+        "emoji-completer-30",
+        "emoji-completer-31",
+        "emoji-completer-32",
+        "emoji-completer-33",
+        "emoji-completer-34",
+        "emoji-completer-35",
     ];
     IDS[index.min(IDS.len() - 1)]
 }
@@ -6676,6 +6758,29 @@ pub(super) fn preferences_panel_view(
                                                     },
                                                 ),
                                             ))
+                                            .child(preference_boolean_row(
+                                                block_grip_t(app.language, BlockGripMsg::ShowMenu),
+                                                app.block_handle_menu,
+                                                app.language,
+                                                palette,
+                                                cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                                                    app.toggle_block_handle_menu(cx);
+                                                }),
+                                            ))
+                                            .child(
+                                                preference_boolean_row(
+                                                    app.tr(Msg::PrefPanelSlashCommands),
+                                                    app.slash_commands_enabled,
+                                                    app.language,
+                                                    palette,
+                                                    cx.listener(|app, _: &MouseUpEvent, _, cx| {
+                                                        app.toggle_slash_commands(cx);
+                                                    }),
+                                                )
+                                                .debug_selector(|| {
+                                                    "preference-slash-commands".to_string()
+                                                }),
+                                            )
                                             .child(preference_boolean_row(
                                                 app.tr(Msg::PrefPanelOpenInCurrentTab),
                                                 app.open_in_current_tab,
