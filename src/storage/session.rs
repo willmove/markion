@@ -85,6 +85,12 @@ struct LayoutFile {
         deserialize_with = "deserialize_optional_f32",
         skip_serializing_if = "Option::is_none"
     )]
+    outline_width: Option<f32>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f32",
+        skip_serializing_if = "Option::is_none"
+    )]
     editor_split_ratio: Option<f32>,
 }
 
@@ -97,6 +103,7 @@ impl From<&SessionLayout> for LayoutFile {
             height: layout.height,
             maximized: layout.maximized,
             sidebar_width: layout.sidebar_width,
+            outline_width: layout.outline_width,
             editor_split_ratio: layout.editor_split_ratio,
         }
     }
@@ -111,6 +118,7 @@ impl From<LayoutFile> for SessionLayout {
             height: file.height,
             maximized: file.maximized,
             sidebar_width: file.sidebar_width,
+            outline_width: file.outline_width,
             editor_split_ratio: file.editor_split_ratio,
         }
     }
@@ -388,6 +396,7 @@ mod tests {
                 height: Some(900.0),
                 maximized: false,
                 sidebar_width: Some(280.0),
+                outline_width: Some(250.0),
                 editor_split_ratio: Some(0.42),
             },
         };
@@ -622,6 +631,7 @@ open_files = ["D:/Notes/a.md"]
 [layout]
 width = 1420
 sidebar_width = "wide"
+outline_width = "wide"
 editor_split_ratio = true
 unknown_future_key = 1
 "#,
@@ -630,6 +640,11 @@ unknown_future_key = 1
         assert_eq!(parsed.layout.width, Some(1420.0));
         assert!(parsed.layout.height.is_none());
         assert!(parsed.layout.sidebar_width.is_none());
+        assert!(parsed.layout.outline_width.is_none());
+        assert_eq!(
+            parsed.layout.normalized_outline_width(),
+            crate::model::DEFAULT_SIDEBAR_WIDTH
+        );
         assert!(parsed.layout.editor_split_ratio.is_none());
         assert!(!parsed.layout.maximized);
         assert_eq!(

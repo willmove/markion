@@ -138,6 +138,8 @@ impl MarkionApp {
                     app.markdown_auto_pair = preferences.markdown_auto_pair;
                     app.sidebar_visible = preferences.sidebar_visible;
                     app.sidebar_tab = preferences.sidebar_tab;
+                    app.outline_position = preferences.outline_position;
+                    app.outline_visible = preferences.outline_visible;
                     app.auto_save_preferences = preferences.auto_save;
                     app.image_preferences = preferences.images;
                     app.ai_preferences = preferences.ai;

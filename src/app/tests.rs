@@ -14466,7 +14466,9 @@ fn outline_folding_does_not_mutate_document_or_derived_caches() {
 }
 
 #[gpui::test]
-fn read_mode_outline_click_scrolls_preview_and_preserves_document_state(cx: &mut TestAppContext) {
+fn read_mode_right_outline_click_scrolls_preview_and_preserves_document_state(
+    cx: &mut TestAppContext,
+) {
     const TARGET_HEADING: usize = 3;
     let source = (0..16)
         .map(|index| {
@@ -14483,6 +14485,7 @@ fn read_mode_outline_click_scrolls_preview_and_preserves_document_state(cx: &mut
         app.view_mode = ViewMode::Read;
         app.sidebar_visible = true;
         app.sidebar_tab = SidebarTab::Outline;
+        app.outline_position = OutlinePosition::Right;
         app.active_tab_mut().push_undo_snapshot();
         app
     });
@@ -14773,7 +14776,7 @@ fn footnote_definition_lookup_is_presentation_only(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn outline_disclosures_fold_nested_rows_without_navigation(cx: &mut TestAppContext) {
+fn right_outline_disclosures_fold_nested_rows_without_navigation(cx: &mut TestAppContext) {
     let source = "# Root\n\n## Branch\n\n### Leaf\n\n## Other\n\n# Sibling\n";
     let leaf_offset = source.find("### Leaf").unwrap();
     let (app, cx) = cx.add_window_view(|_, cx| {
@@ -14787,6 +14790,7 @@ fn outline_disclosures_fold_nested_rows_without_navigation(cx: &mut TestAppConte
         app.view_mode = ViewMode::Edit;
         app.sidebar_visible = true;
         app.sidebar_tab = SidebarTab::Outline;
+        app.outline_position = OutlinePosition::Right;
         app
     });
     cx.simulate_resize(size(px(900.), px(600.)));

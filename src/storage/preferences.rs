@@ -16,9 +16,9 @@ use crate::model::{
     CustomImageCommandPreferences, DEFAULT_EDITOR_FONT_SIZE, DEFAULT_PARAGRAPH_SPACING,
     DEFAULT_RENDERED_FONT_SIZE, DocxExportOptions, DocxImagePolicy, DocxPageSize,
     ExportBackendPreference, ExportPreferences, GitPreferences, ImagePreferences,
-    ImageUploaderKind, LocalImagePolicy, PdfExportOptions, PdfPageSize, PicGoCorePreferences,
-    PicGoHttpPreferences, RemoteImagePolicy, SidebarTab, normalize_code_font_size,
-    normalize_editor_font_size, normalize_heading_menu_max_level,
+    ImageUploaderKind, LocalImagePolicy, OutlinePosition, PdfExportOptions, PdfPageSize,
+    PicGoCorePreferences, PicGoHttpPreferences, RemoteImagePolicy, SidebarTab,
+    normalize_code_font_size, normalize_editor_font_size, normalize_heading_menu_max_level,
     normalize_image_transfer_timeout_secs, normalize_paragraph_spacing,
     normalize_rendered_font_size,
 };
@@ -96,6 +96,10 @@ struct PreferencesFile {
     /// "files" or "outline"; unknown values fall back to Files like the
     /// legacy format did.
     sidebar_tab: String,
+    #[serde(deserialize_with = "deserialize_string_or_default_outline_position")]
+    outline_position: String,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    outline_visible: Option<bool>,
     auto_save: AutoSaveFile,
     git: GitFile,
     export: ExportFile,
@@ -463,6 +467,8 @@ impl From<&AppPreferences> for PreferencesFile {
                 SidebarTab::Files => "files".to_string(),
                 SidebarTab::Outline => "outline".to_string(),
             },
+            outline_position: preferences.outline_position.config_value().to_string(),
+            outline_visible: Some(preferences.outline_visible),
             auto_save: AutoSaveFile {
                 enabled: preferences.auto_save.enabled,
                 silent_save: preferences.auto_save.silent_save,
@@ -533,6 +539,8 @@ impl From<PreferencesFile> for AppPreferences {
                 "sync" => SidebarTab::Files,
                 _ => SidebarTab::Files,
             },
+            outline_position: OutlinePosition::from_config(&file.outline_position),
+            outline_visible: file.outline_visible.unwrap_or(file.sidebar_visible),
             auto_save: AutoSavePreferences {
                 enabled: file.auto_save.enabled,
                 silent_save: file.auto_save.silent_save,
@@ -700,6 +708,14 @@ where
     Ok(value.as_bool().unwrap_or(false))
 }
 
+fn deserialize_optional_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value.as_bool())
+}
+
 fn deserialize_bool_or_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -743,6 +759,10 @@ macro_rules! string_or_default_deserializer {
     };
 }
 
+string_or_default_deserializer!(
+    deserialize_string_or_default_outline_position,
+    OutlinePosition::default().config_value().to_string()
+);
 string_or_default_deserializer!(
     deserialize_string_or_default_local_policy,
     LocalImagePolicy::default().config_value().to_string()
@@ -982,6 +1002,75 @@ mod tests {
     #[test]
     fn sync_scroll_defaults_to_false() {
         assert!(!AppPreferences::default().sync_scroll);
+    }
+
+    #[test]
+    fn right_outline_visibility_is_independent_and_legacy_values_inherit_sidebar() {
+        for files_visible in [false, true] {
+            for outline_visible in [false, true] {
+                let preferences = AppPreferences {
+                    outline_position: OutlinePosition::Right,
+                    sidebar_visible: files_visible,
+                    outline_visible,
+                    ..AppPreferences::default()
+                };
+                assert_eq!(
+                    parse_app_preferences(&render_app_preferences(&preferences)).unwrap(),
+                    preferences
+                );
+            }
+            for extra in ["", "outline_visible = 1\n", "outline_visible = \"bad\"\n"] {
+                let parsed = parse_app_preferences(&format!(
+                    "sidebar_visible = {files_visible}\noutline_position = \"right\"\n{extra}"
+                ))
+                .unwrap();
+                assert_eq!(parsed.outline_visible, files_visible);
+                assert_eq!(parsed.sidebar_visible, files_visible);
+            }
+        }
+    }
+
+    #[test]
+    fn outline_position_round_trips_both_sides() {
+        for position in [OutlinePosition::Left, OutlinePosition::Right] {
+            let preferences = AppPreferences {
+                outline_position: position,
+                sidebar_tab: SidebarTab::Outline,
+                ..AppPreferences::default()
+            };
+            let rendered = render_app_preferences(&preferences);
+            assert!(rendered.contains(&format!(
+                "outline_position = \"{}\"",
+                position.config_value()
+            )));
+            assert_eq!(parse_app_preferences(&rendered).unwrap(), preferences);
+        }
+    }
+
+    #[test]
+    fn outline_position_defaults_locally_for_missing_or_invalid_values() {
+        assert_eq!(
+            AppPreferences::default().outline_position,
+            OutlinePosition::Left
+        );
+        for value in [
+            "",
+            "outline_position = \"unknown\"\n",
+            "outline_position = 1\n",
+            "outline_position = true\n",
+            "outline_position = []\n",
+            "outline_position = {}\n",
+        ] {
+            let parsed = parse_app_preferences(&format!("theme = \"Forest\"\n{value}")).unwrap();
+            assert_eq!(parsed.outline_position, OutlinePosition::Left, "{value}");
+            assert_eq!(parsed.theme, "Forest", "{value}");
+        }
+        assert_eq!(
+            parse_app_preferences("outline_position = \"RIGHT\"\n")
+                .unwrap()
+                .outline_position,
+            OutlinePosition::Right
+        );
     }
 
     #[test]

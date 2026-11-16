@@ -517,13 +517,15 @@ impl Render for MarkionApp {
                     .id("workspace-row")
                     .debug_selector(|| "workspace-row".to_string())
                     .flex()
+                    .when(
+                        self.ai_ui.open && f32::from(window_controls::content_viewport_size(window).width) >= 900.,
+                        |row| row.mr(px(self.ai_ui.width)),
+                    )
                     .flex_1()
                     .min_h_0()
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::close_menu))
-                    // The sidebar spans the complete workspace below the menu,
-                    // including the height occupied by document tabs to its right.
-                    // Its drag coordinate therefore remains relative to this outer
-                    // row, whose left edge is the window's left edge.
+                    // Both side panes span the complete workspace height. Divider
+                    // drag coordinates are relative to this outer workspace row.
                     .on_drag_move::<DraggedSidebarHandle>(cx.listener(Self::on_sidebar_resize_drag))
                     .on_drag_move::<DraggedVisualBlock>(cx.listener(Self::on_visual_block_drag_move))
                     .on_drop::<DraggedSidebarHandle>(cx.listener(|_, _, _, cx| {
@@ -538,15 +540,12 @@ impl Render for MarkionApp {
                     .child(sidebar_view(self, cx))
                     // Sidebar/pane divider: only when the sidebar is visible.
                     .when(self.sidebar_visible, |d| {
-                        d.child(sidebar_resize_handle_view(palette.border, cx))
+                        d.child(sidebar_resize_handle_view(palette.border, DraggedSidebarHandle::Left, cx))
                     })
                     .child(
                         div()
                             .id("document-workspace-column")
-                            .when(
-                                self.ai_ui.open && f32::from(window_controls::content_viewport_size(window).width) >= 900.,
-                                |d| d.mr(px(self.ai_ui.width)),
-                            )
+                            .debug_selector(|| "document-workspace-column".to_string())
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
@@ -561,8 +560,7 @@ impl Render for MarkionApp {
                             // redirected keystrokes stay visible.
                             .when(
                                 self.pending_name_input.is_some()
-                                    && (!self.sidebar_visible
-                                        || self.sidebar_tab != SidebarTab::Files),
+                                    && !self.files_panel_visible(),
                                 |column| column.child(pending_name_prompt_view(self, cx)),
                             )
                             .when(active_is_image, |column| {
@@ -826,7 +824,11 @@ impl Render for MarkionApp {
                                     ),
                                 )
                             }),
-                    ),
+                    )
+                    .when(self.outline_position == OutlinePosition::Right && self.outline_visible, |row| {
+                        row.child(sidebar_resize_handle_view(palette.border, DraggedSidebarHandle::RightOutline, cx))
+                            .child(sidebar_panel_view(self, SidebarTab::Outline, true, cx))
+                    }),
             )
             .child(
                 div()
@@ -3566,6 +3568,7 @@ fn file_tree_entry_row(
 
     div()
         .id(SharedString::from(format!("file-tree-row:{row_id}")))
+        .debug_selector(move || format!("file-tree-row:{row_id}"))
         .mb(px(0.))
         .ml(px(entry.depth as f32 * 12.))
         .w_full()
@@ -4134,14 +4137,36 @@ pub(super) fn outline_panel_body(app: &MarkionApp, cx: &mut Context<MarkionApp>)
 }
 
 /// Unified left sidebar: a tab bar switches between the Files panel and the
-/// document Outline, and the whole column can be toggled on/off as one unit.
+/// document Outline for Left placement. Right placement always renders Files
+/// here and places Outline in its own pane after the document workspace.
 pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Div {
+    let active_tab = if app.outline_position == OutlinePosition::Right {
+        SidebarTab::Files
+    } else {
+        app.sidebar_tab
+    };
+    sidebar_panel_view(app, active_tab, false, cx)
+}
+
+fn sidebar_panel_view(
+    app: &MarkionApp,
+    active_tab: SidebarTab,
+    right_outline: bool,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
     let palette = app.palette();
     let app_entity = cx.entity();
-    let active_tab = app.sidebar_tab;
-    // Width is driven by `app.sidebar_width` so the resize divider can change
-    // it; clamped to a sane range in the drag handler.
-    let sidebar_width = app.sidebar_width;
+    let sidebar_width = if right_outline {
+        app.outline_width
+    } else {
+        app.sidebar_width
+    };
+    let visible = if right_outline {
+        app.outline_visible
+    } else {
+        app.sidebar_visible
+    };
+    let detached = app.outline_position == OutlinePosition::Right;
 
     let files_active = active_tab == SidebarTab::Files;
     let outline_active = active_tab == SidebarTab::Outline;
@@ -4168,11 +4193,20 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
     let hover_bg = palette.active_bg;
 
     div()
+        .debug_selector(move || {
+            if right_outline {
+                "workspace-outline"
+            } else {
+                "workspace-sidebar"
+            }
+            .to_string()
+        })
         .w(px(sidebar_width))
         .min_h_0()
         .flex_shrink_0()
         .p(px(SIDEBAR_COMPACT_PADDING))
-        .border_r_1()
+        .when(right_outline, |style| style.border_l_1())
+        .when(!right_outline, |style| style.border_r_1())
         .border_color(palette.border)
         .bg(palette.panel_bg)
         .flex()
@@ -4180,70 +4214,94 @@ pub(super) fn sidebar_view(app: &MarkionApp, cx: &mut Context<MarkionApp>) -> Di
         // NOTE: `.hidden()` must come *after* `.flex()`/`.flex_col()`. In GPUI
         // both set the same `display` field, so a later `.flex()` would clobber
         // an earlier `.hidden()` and the sidebar would never actually hide.
-        .when(!app.sidebar_visible, |style| style.hidden())
+        .when(!visible, |style| style.hidden())
         // Tab bar: Files / Outline. The active tab uses the same active-palette
         // highlight as tree rows so the two stay visually consistent.
-        .child(
-            div()
-                .debug_selector(|| "sidebar-tab-bar".to_string())
-                .mb(px(SIDEBAR_TAB_CONTENT_GAP))
-                .flex()
-                .gap_1()
-                .child(
-                    div()
-                        .flex_1()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(files_bg)
-                        .text_size(px(12.))
-                        .text_color(files_text)
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(hover_bg))
-                        .child(app.tr(Msg::LabelFiles))
-                        .on_mouse_up(MouseButton::Left, {
-                            let app_entity = app_entity.clone();
-                            move |_, _, cx| {
-                                app_entity.update(cx, |app, cx| {
-                                    app.set_sidebar_tab(SidebarTab::Files, cx);
-                                });
-                            }
-                        }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(outline_bg)
-                        .text_size(px(12.))
-                        .text_color(outline_text)
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(hover_bg))
-                        .child(app.tr(Msg::LabelOutline))
-                        .on_mouse_up(MouseButton::Left, {
-                            let app_entity = app_entity.clone();
-                            move |_, _, cx| {
-                                app_entity.update(cx, |app, cx| {
-                                    app.set_sidebar_tab(SidebarTab::Outline, cx);
-                                });
-                            }
-                        }),
-                ),
-        )
+        .when(!detached, |container| {
+            container.child(
+                div()
+                    .debug_selector(|| "sidebar-tab-bar".to_string())
+                    .mb(px(SIDEBAR_TAB_CONTENT_GAP))
+                    .flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(files_bg)
+                            .text_size(px(12.))
+                            .text_color(files_text)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(hover_bg))
+                            .child(app.tr(Msg::LabelFiles))
+                            .on_mouse_up(MouseButton::Left, {
+                                let app_entity = app_entity.clone();
+                                move |_, _, cx| {
+                                    app_entity.update(cx, |app, cx| {
+                                        app.set_sidebar_tab(SidebarTab::Files, cx);
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(outline_bg)
+                            .text_size(px(12.))
+                            .text_color(outline_text)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(hover_bg))
+                            .child(app.tr(Msg::LabelOutline))
+                            .on_mouse_up(MouseButton::Left, {
+                                let app_entity = app_entity.clone();
+                                move |_, _, cx| {
+                                    app_entity.update(cx, |app, cx| {
+                                        app.set_sidebar_tab(SidebarTab::Outline, cx);
+                                    });
+                                }
+                            }),
+                    ),
+            )
+        })
+        .when(detached, |container| {
+            container.child(
+                div()
+                    .debug_selector(move || {
+                        if right_outline {
+                            "outline-pane-header"
+                        } else {
+                            "files-pane-header"
+                        }
+                        .to_string()
+                    })
+                    .mb(px(SIDEBAR_TAB_CONTENT_GAP))
+                    .py_1()
+                    .text_size(px(12.))
+                    .text_center()
+                    .child(app.tr(if right_outline {
+                        Msg::LabelOutline
+                    } else {
+                        Msg::LabelFiles
+                    })),
+            )
+        })
         // Only build the active panel body when the sidebar is actually
         // visible. The whole sidebar is `.hidden()` when collapsed, but the
         // element tree (and, for the Outline tab, the full-document heading
         // parse in `outline_panel_body`) was still constructed every frame.
         // Skipping it here means a collapsed sidebar costs nothing per keystroke.
-        .when(app.sidebar_visible, |container| {
+        .when(visible, |container| {
             container.child(match active_tab {
                 SidebarTab::Files => file_tree_panel_body(app, cx),
                 SidebarTab::Outline if app.active_tab().is_image() => div()
@@ -4606,15 +4664,26 @@ pub(super) fn editor_split_handle_view(
         )
 }
 
-/// Resize divider for the sidebar's right edge: same visual pattern as the
+/// Resize divider for the sidebar's inner edge: same visual pattern as the
 /// editor split handle, but keyed on `DraggedSidebarHandle` and resets to the
 /// default sidebar width on double-click.
 pub(super) fn sidebar_resize_handle_view(
     border_color: Rgba,
+    target: DraggedSidebarHandle,
     cx: &mut Context<MarkionApp>,
 ) -> Stateful<Div> {
     div()
-        .id("sidebar-resize-container")
+        .id(match target {
+            DraggedSidebarHandle::Left => "sidebar-resize-container",
+            DraggedSidebarHandle::RightOutline => "outline-resize-container",
+        })
+        .debug_selector(move || {
+            match target {
+                DraggedSidebarHandle::Left => "sidebar-resize-container",
+                DraggedSidebarHandle::RightOutline => "outline-resize-container",
+            }
+            .to_string()
+        })
         .relative()
         .h_full()
         .flex_shrink_0()
@@ -4622,7 +4691,17 @@ pub(super) fn sidebar_resize_handle_view(
         .bg(border_color)
         .child(
             div()
-                .id("sidebar-resize-handle")
+                .id(match target {
+                    DraggedSidebarHandle::Left => "sidebar-resize-handle",
+                    DraggedSidebarHandle::RightOutline => "outline-resize-handle",
+                })
+                .debug_selector(move || {
+                    match target {
+                        DraggedSidebarHandle::Left => "sidebar-resize-handle",
+                        DraggedSidebarHandle::RightOutline => "outline-resize-handle",
+                    }
+                    .to_string()
+                })
                 .absolute()
                 .left(px(-RESIZE_HANDLE_WIDTH / 2.0))
                 .w(px(RESIZE_HANDLE_WIDTH))
@@ -4631,12 +4710,17 @@ pub(super) fn sidebar_resize_handle_view(
                 .block_mouse_except_scroll()
                 .on_click(cx.listener(move |app, event: &ClickEvent, _, cx| {
                     if event.click_count() >= 2 {
-                        app.sidebar_width = DEFAULT_SIDEBAR_WIDTH;
+                        match target {
+                            DraggedSidebarHandle::Left => app.sidebar_width = DEFAULT_SIDEBAR_WIDTH,
+                            DraggedSidebarHandle::RightOutline => {
+                                app.outline_width = DEFAULT_SIDEBAR_WIDTH
+                            }
+                        }
                         app.schedule_persist_layout(cx);
                         cx.notify();
                     }
                 }))
-                .on_drag(DraggedSidebarHandle, move |_, _, _, cx| cx.new(|_| Empty)),
+                .on_drag(target, move |_, _, _, cx| cx.new(|_| Empty)),
         )
 }
 
@@ -6443,7 +6527,10 @@ pub(super) fn preferences_panel_view(
                                                     },
                                                 ),
                                             ))
-                                            .child(preference_sidebar_row(app, palette, cx)),
+                                            .child(preference_sidebar_row(app, palette, cx))
+                                            .child(preference_outline_position_row(
+                                                app, palette, cx,
+                                            )),
                                     )
                                     // Auto-save (silent write-back + delay).
                                     .child(
@@ -8754,35 +8841,92 @@ pub(super) fn preference_sidebar_row(
                 .child(preference_option_button(
                     t(
                         language,
-                        if app.sidebar_visible {
+                        if app.sidebars_visible() {
                             Msg::PrefOn
                         } else {
                             Msg::PrefOff
                         },
                     )
                     .to_string(),
-                    app.sidebar_visible,
+                    app.sidebars_visible(),
                     palette,
                     cx.listener(|app, _: &MouseUpEvent, window, cx| {
                         app.toggle_sidebar(&ToggleSidebar, window, cx);
                     }),
                 ))
-                .child(preference_option_button(
-                    sidebar_tab_label(language, SidebarTab::Files).to_string(),
-                    app.sidebar_visible && app.sidebar_tab == SidebarTab::Files,
-                    palette,
-                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                        app.select_preferences_sidebar_tab(SidebarTab::Files, cx);
-                    }),
-                ))
-                .child(preference_option_button(
-                    sidebar_tab_label(language, SidebarTab::Outline).to_string(),
-                    app.sidebar_visible && app.sidebar_tab == SidebarTab::Outline,
-                    palette,
-                    cx.listener(|app, _: &MouseUpEvent, _window, cx| {
-                        app.select_preferences_sidebar_tab(SidebarTab::Outline, cx);
-                    }),
-                )),
+                .child(
+                    preference_option_button(
+                        sidebar_tab_label(language, SidebarTab::Files).to_string(),
+                        app.files_panel_visible(),
+                        palette,
+                        cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                            if app.outline_position == OutlinePosition::Right {
+                                app.toggle_file_tree(&ToggleFileTree, window, cx);
+                            } else {
+                                app.select_preferences_sidebar_tab(SidebarTab::Files, cx);
+                            }
+                        }),
+                    )
+                    .debug_selector(|| "preferences-files-visible".to_string()),
+                )
+                .child(
+                    preference_option_button(
+                        sidebar_tab_label(language, SidebarTab::Outline).to_string(),
+                        app.outline_panel_visible(),
+                        palette,
+                        cx.listener(|app, _: &MouseUpEvent, window, cx| {
+                            if app.outline_position == OutlinePosition::Right {
+                                app.toggle_outline(&ToggleOutline, window, cx);
+                            } else {
+                                app.select_preferences_sidebar_tab(SidebarTab::Outline, cx);
+                            }
+                        }),
+                    )
+                    .debug_selector(|| "preferences-outline-visible".to_string()),
+                ),
+        )
+}
+
+fn preference_outline_position_row(
+    app: &MarkionApp,
+    palette: ThemePalette,
+    cx: &mut Context<MarkionApp>,
+) -> Div {
+    div()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_between()
+        .text_size(px(12.))
+        .px_1()
+        .py_1()
+        .gap_3()
+        .child(
+            div()
+                .text_color(palette.muted)
+                .child(app.tr(Msg::PrefPanelOutlinePosition)),
+        )
+        .child(
+            div().flex().items_center().gap_1().children(
+                [
+                    (OutlinePosition::Left, Msg::PrefPanelOutlineLeft),
+                    (OutlinePosition::Right, Msg::PrefPanelOutlineRight),
+                ]
+                .into_iter()
+                .map(|(position, label)| {
+                    preference_option_button(
+                        app.tr(label).to_string(),
+                        app.outline_position == position,
+                        palette,
+                        cx.listener(move |app, _: &MouseUpEvent, _window, cx| {
+                            app.set_outline_position(position, cx);
+                        }),
+                    )
+                    .debug_selector(move || {
+                        format!("preferences-outline-position-{}", position.config_value())
+                    })
+                }),
+            ),
         )
 }
 

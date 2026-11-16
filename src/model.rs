@@ -252,6 +252,7 @@ pub struct SessionLayout {
     pub height: Option<f32>,
     pub maximized: bool,
     pub sidebar_width: Option<f32>,
+    pub outline_width: Option<f32>,
     pub editor_split_ratio: Option<f32>,
 }
 
@@ -264,6 +265,7 @@ impl SessionLayout {
             && self.height.is_none()
             && !self.maximized
             && self.sidebar_width.is_none()
+            && self.outline_width.is_none()
             && self.editor_split_ratio.is_none()
     }
 
@@ -273,6 +275,10 @@ impl SessionLayout {
 
     pub fn normalized_sidebar_width(&self) -> f32 {
         normalize_sidebar_width(self.sidebar_width)
+    }
+
+    pub fn normalized_outline_width(&self) -> f32 {
+        normalize_sidebar_width(self.outline_width)
     }
 
     pub fn normalized_split_ratio(&self) -> f32 {
@@ -472,6 +478,11 @@ pub struct AppPreferences {
     pub markdown_auto_pair: bool,
     pub sidebar_visible: bool,
     pub sidebar_tab: SidebarTab,
+    /// Side of the document workspace used while the Outline tab is active.
+    /// Files always remains on the left.
+    pub outline_position: OutlinePosition,
+    /// Visibility of the independent right outline; unused for Left placement.
+    pub outline_visible: bool,
     /// Interface language preference code (e.g. "en", "zh"). Stored as a
     /// raw string (not a typed [`crate::i18n::Language`]) to keep `model`
     /// dependency-free; the UI layer interprets it via `Language::from_code`.
@@ -530,6 +541,8 @@ impl Default for AppPreferences {
             markdown_auto_pair: true,
             sidebar_visible: true,
             sidebar_tab: SidebarTab::default(),
+            outline_position: OutlinePosition::default(),
+            outline_visible: true,
             language: "en".to_string(),
             check_for_updates_on_startup: false,
             last_update_check: None,
@@ -1264,6 +1277,31 @@ pub enum SidebarTab {
     #[default]
     Files,
     Outline,
+}
+
+/// Preferred side for the document outline, independent of sidebar visibility.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OutlinePosition {
+    #[default]
+    Left,
+    Right,
+}
+
+impl OutlinePosition {
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+
+    pub fn from_config(value: &str) -> Self {
+        if value.trim().eq_ignore_ascii_case("right") {
+            Self::Right
+        } else {
+            Self::Left
+        }
+    }
 }
 
 impl ViewMode {

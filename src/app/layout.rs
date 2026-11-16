@@ -79,6 +79,7 @@ impl MarkionApp {
 
     pub(super) fn sync_layout_panes(&mut self) {
         self.session.layout.sidebar_width = Some(self.sidebar_width);
+        self.session.layout.outline_width = Some(self.outline_width);
         self.session.layout.editor_split_ratio = Some(self.editor_split_ratio);
     }
 

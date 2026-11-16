@@ -136,7 +136,11 @@ impl MarkionApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sidebar_visible = !self.sidebar_visible;
+        let visible = !self.sidebars_visible();
+        self.sidebar_visible = visible;
+        if self.outline_position == OutlinePosition::Right {
+            self.outline_visible = visible;
+        }
         // No lazy scan here: on the welcome document the Files tab shows an
         // empty-state placeholder by design (the tree has no chosen root until
         // a real file is opened). See `update_workspace_root_from_document`.
@@ -171,8 +175,15 @@ impl MarkionApp {
         tab: SidebarTab,
         cx: &mut Context<Self>,
     ) {
-        let changed = !self.sidebar_visible || self.sidebar_tab != tab;
-        self.sidebar_visible = true;
+        let changed = match tab {
+            SidebarTab::Files => !self.files_panel_visible(),
+            SidebarTab::Outline => !self.outline_panel_visible(),
+        } || self.sidebar_tab != tab;
+        if self.outline_position == OutlinePosition::Right && tab == SidebarTab::Outline {
+            self.outline_visible = true;
+        } else {
+            self.sidebar_visible = true;
+        }
         self.sidebar_tab = tab;
         if tab == SidebarTab::Files && self.file_tree.is_none() {
             self.refresh_file_tree(cx);
@@ -226,18 +237,67 @@ impl MarkionApp {
         cx.notify();
     }
 
-    /// Drag handler for the sidebar divider. The sidebar starts at the window's
-    /// left edge, so the cursor x is the new sidebar width (clamped).
+    pub(super) fn files_panel_visible(&self) -> bool {
+        self.sidebar_visible
+            && (self.outline_position == OutlinePosition::Right
+                || self.sidebar_tab == SidebarTab::Files)
+    }
+
+    pub(super) fn outline_panel_visible(&self) -> bool {
+        if self.outline_position == OutlinePosition::Right {
+            self.outline_visible
+        } else {
+            self.sidebar_visible && self.sidebar_tab == SidebarTab::Outline
+        }
+    }
+
+    pub(super) fn sidebars_visible(&self) -> bool {
+        self.sidebar_visible
+            || (self.outline_position == OutlinePosition::Right && self.outline_visible)
+    }
+
+    pub(super) fn set_outline_position(
+        &mut self,
+        position: OutlinePosition,
+        cx: &mut Context<Self>,
+    ) {
+        if self.outline_position == position {
+            return;
+        }
+        if position == OutlinePosition::Right {
+            self.outline_visible = self.sidebar_visible;
+        } else if !self.sidebar_visible && self.outline_visible {
+            self.sidebar_visible = true;
+            self.sidebar_tab = SidebarTab::Outline;
+        }
+        self.outline_position = position;
+        self.persist_preferences();
+        cx.notify();
+    }
+
+    /// Measure from the sidebar's outer edge, using workspace-local bounds
+    /// so the resize direction follows the side on which it is rendered.
     pub(super) fn on_sidebar_resize_drag(
         &mut self,
         event: &DragMoveEvent<DraggedSidebarHandle>,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let new_width =
-            f32::from(event.event.position.x).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
-        if (new_width - self.sidebar_width).abs() > f32::EPSILON {
-            self.sidebar_width = new_width;
+        let pointer_x = event.event.position.x;
+        let right_outline = matches!(event.drag(cx), DraggedSidebarHandle::RightOutline);
+        let width = if right_outline {
+            event.bounds.right() - pointer_x
+        } else {
+            pointer_x - event.bounds.left()
+        };
+        let new_width = f32::from(width).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+        let current_width = if right_outline {
+            &mut self.outline_width
+        } else {
+            &mut self.sidebar_width
+        };
+        if (new_width - *current_width).abs() > f32::EPSILON {
+            *current_width = new_width;
             self.schedule_persist_layout(cx);
             cx.notify();
         }
@@ -249,6 +309,22 @@ impl MarkionApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.outline_position == OutlinePosition::Right {
+            self.outline_visible = !self.outline_visible;
+            self.status = t(
+                self.language,
+                if self.outline_visible {
+                    Msg::StatusOutlineShown
+                } else {
+                    Msg::StatusOutlineHidden
+                },
+            )
+            .into();
+            self.persist_preferences();
+            self.active_menu = None;
+            cx.notify();
+            return;
+        }
         // Smart toggle: if the sidebar is already showing the Outline tab,
         // hide the sidebar; otherwise reveal it and switch to Outline.
         if self.sidebar_visible && self.sidebar_tab == SidebarTab::Outline {
@@ -270,6 +346,25 @@ impl MarkionApp {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.outline_position == OutlinePosition::Right {
+            self.sidebar_visible = !self.sidebar_visible;
+            if self.sidebar_visible && self.file_tree.is_none() {
+                self.refresh_file_tree(cx);
+            }
+            self.status = t(
+                self.language,
+                if self.sidebar_visible {
+                    Msg::StatusFileTreeShown
+                } else {
+                    Msg::StatusFileTreeHidden
+                },
+            )
+            .into();
+            self.persist_preferences();
+            self.active_menu = None;
+            cx.notify();
+            return;
+        }
         // Smart toggle: if the sidebar is already showing the Files tab, hide
         // the sidebar; otherwise reveal it and switch to Files.
         if self.sidebar_visible && self.sidebar_tab == SidebarTab::Files {

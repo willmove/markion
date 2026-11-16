@@ -47,12 +47,12 @@ use markion::{
     MAX_CODE_FONT_SIZE, MAX_EDITOR_FONT_SIZE, MAX_PARAGRAPH_SPACING, MAX_RENDERED_FONT_SIZE,
     MIN_AUTO_SAVE_DELAY_SECS, MIN_CODE_FONT_SIZE, MIN_EDITOR_FONT_SIZE, MIN_PARAGRAPH_SPACING,
     MIN_RENDERED_FONT_SIZE, MarkdownDocument, MarkdownFormat, MathLayoutStyle, Msg, MutationOrigin,
-    MutationReceipt, P0Msg, P1Msg, PdfPageSize, PreviewBlock, RecoveryInventoryEntry,
-    RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange, SearchOptions,
-    SearchPattern, SessionLayout, SessionState, ShortcutCategory, ShortcutPlatform, SidebarTab,
-    SlashCommand, SlashQuery, TableAlignment, TableEdit, TableStructureEdit, ThemeColors,
-    ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor, VisualBlockId,
-    VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
+    MutationReceipt, OutlinePosition, P0Msg, P1Msg, PdfPageSize, PreviewBlock,
+    RecoveryInventoryEntry, RecoverySourceState, RichText, SYSTEM_UI_FONT_FAMILY, SearchMatchRange,
+    SearchOptions, SearchPattern, SessionLayout, SessionState, ShortcutCategory, ShortcutPlatform,
+    SidebarTab, SlashCommand, SlashQuery, TableAlignment, TableEdit, TableStructureEdit,
+    ThemeColors, ThemeDefinition, ThemeFonts, ViewMode, VisualBlock, VisualBlockEditor,
+    VisualBlockId, VisualBlockKind, VisualCaretAffinity, VisualEditorField, VisualEditorFieldKind,
     VisualHtmlImage, VisualNavigationTarget, VisualProjection, VisualQuoteGroupEdge,
     VisualSourceIslandKind, WorkspaceSnapshot, adjacent_reorder_target,
     authored_table_column_percents, auto_pair_action, backend_status_msg, block_can_reorder_at,
@@ -2127,8 +2127,11 @@ struct DraggedEditorSplitHandle;
 #[derive(Debug, Clone)]
 struct DraggedSearchOverlay;
 
-#[derive(Debug, Clone)]
-struct DraggedSidebarHandle;
+#[derive(Debug, Clone, Copy)]
+enum DraggedSidebarHandle {
+    Left,
+    RightOutline,
+}
 #[derive(Debug, Clone)]
 struct DraggedTableColumnHandle {
     block_id: VisualBlockId,
@@ -2730,15 +2733,18 @@ struct MarkionApp {
     // Draggable layout widths. Restored from `session.toml` `[layout]`.
     editor_split_ratio: f32,
     sidebar_width: f32,
+    outline_width: f32,
     /// Keeps `observe_window_bounds` alive for the window lifetime.
     layout_bounds_subscription: Option<Subscription>,
     /// Generation token so only the latest layout-persist debounce writes.
     layout_persist_generation: u64,
     file_tree: Option<FileTree>,
-    // Unified sidebar: a single left column toggled as a whole, whose content
-    // switches between the file tree and the document outline via `sidebar_tab`.
+    // Left placement shares tabs; Right placement keeps Files on the left
+    // and renders an independently visible and resizable Outline on the right.
     sidebar_visible: bool,
     sidebar_tab: SidebarTab,
+    outline_position: OutlinePosition,
+    outline_visible: bool,
     file_tree_query: String,
     file_tree_query_focused: bool,
     file_tree_scroll: ScrollHandle,

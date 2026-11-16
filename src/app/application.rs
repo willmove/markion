@@ -246,6 +246,7 @@ impl MarkionApp {
         };
         let editor_split_ratio = session.layout.normalized_split_ratio();
         let sidebar_width = session.layout.normalized_sidebar_width();
+        let outline_width = session.layout.normalized_outline_width();
         let typography = DocumentTypographyMetrics::new_with_code_font_size(
             preferences.editor_font_size,
             preferences.rendered_font_size,
@@ -362,11 +363,14 @@ impl MarkionApp {
             workspace_root,
             editor_split_ratio,
             sidebar_width,
+            outline_width,
             layout_bounds_subscription: None,
             layout_persist_generation: 0,
             file_tree,
             sidebar_visible: preferences.sidebar_visible,
             sidebar_tab: preferences.sidebar_tab,
+            outline_position: preferences.outline_position,
+            outline_visible: preferences.outline_visible,
             file_tree_query: String::new(),
             file_tree_query_focused: false,
             file_tree_scroll: ScrollHandle::new(),
@@ -2407,6 +2411,8 @@ impl MarkionApp {
             markdown_auto_pair: self.markdown_auto_pair,
             sidebar_visible: self.sidebar_visible,
             sidebar_tab: self.sidebar_tab,
+            outline_position: self.outline_position,
+            outline_visible: self.outline_visible,
             language: self.language.code().to_string(),
             check_for_updates_on_startup: self.check_for_updates_on_startup,
             last_update_check: self.last_update_check.clone(),
